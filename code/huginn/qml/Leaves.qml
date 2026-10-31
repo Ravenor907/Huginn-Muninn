@@ -2,26 +2,33 @@ import QtQuick
 import QtQuick.Window
 import Huginn
 
-// The Autumn look's ground: warm bark, and leaves and maple seeds falling behind the frosted panes.
-// Three leaf shapes (maple, oak and a serrated elm) in seven colors, drawn once each on a small
-// Canvas, then moved by a 30 fps timer: they glide sideways as they fall, rock and tumble, flip
-// edge-on and back, and lean into a gust now and then; the seeds spin like helicopters and orbit as
-// they drop. Nothing is allocated per frame. The timer stops while the window is hidden or minimized,
-// and with Less motion on the leaves lie still, scattered across the ground.
-// Settings › Look: How many (25% to 200% of about 18 leaves and 5 seeds on a 1600x900 window, scaled
-// by the window's area) and Leaf size (50% to 200%).
+// The Seasonal look's ground (Autumn's warm bark, Snow's night blue, or the background picked on the
+// Look page) and what falls behind the frosted panes. One engine for both seasons; kind only picks
+// the shapes. Autumn: three leaf shapes (maple, oak and a serrated elm) in seven colors, and maple
+// seeds. Snow: six-armed crystals and soft round flakes, white and a little see-through, in the
+// leaves' and seeds' places. Each is drawn once on a small Canvas, then moved by a 30 fps timer: they
+// glide sideways as they fall, rock and tumble, flip edge-on and back, and lean into a gust now and
+// then; the seeds (and the flakes in their place) spin and orbit as they drop. Nothing is allocated
+// per frame. The timer stops while the window is hidden or minimized, and with Less motion on
+// everything lies still, scattered across the ground.
+// Settings › Look: Animation (Off draws nothing, Light about half as many), How many (25% to 200% of
+// about 18 leaves and 5 seeds on a 1600x900 window, scaled by the window's area) and size (50% to 200%).
 Item {
     id: leaves
-    visible: Theme.autumn
+    visible: Theme.seasonal
+    // What falls: "leaves" (Autumn) or "snow".
+    readonly property string kind: Theme.snow ? "snow" : "leaves"
+    // Settings › Look › Animation: Off 0, Light about half, Full all.
+    readonly property real amount: Settings.seasonAnimation === "off" ? 0 : Settings.seasonAnimation === "light" ? 0.5 : 1
 
     readonly property real sizeScale: (Number(Settings.leafSize) || 100) / 100 * Theme.s
     readonly property real density: (Number(Settings.leafCount) || 100) / 100
     readonly property real area: Math.max(0.2, (width * height) / (1600 * 900))
-    readonly property int nLeaves: Math.min(140, Math.max(4, Math.round(18 * area * density)))
-    readonly property int nSeeds: Math.min(40, Math.max(1, Math.round(5 * area * density)))
+    readonly property int nLeaves: amount > 0 ? Math.min(140, Math.max(4, Math.round(18 * area * density * amount))) : 0
+    readonly property int nSeeds: amount > 0 ? Math.min(40, Math.max(1, Math.round(5 * area * density * amount))) : 0
     readonly property bool winActive: Window.active
     readonly property bool onScreen: visible && Window.visibility !== Window.Hidden && Window.visibility !== Window.Minimized
-    readonly property bool moving: onScreen && Theme.motion
+    readonly property bool moving: onScreen && Theme.motion && amount > 0
 
     // Where each leaf starts and how it moves. The same index always gets the same leaf, so the
     // sliders add or take away leaves without reshuffling the rest.
@@ -48,13 +55,13 @@ Item {
                  tumbleT: 2.7 + r() * 2.8, zig: 0.65 + r() * 0.75, op: depth === 0 ? 0.6 : depth === 1 ? 0.85 : 1, wx: 0, lastFall: -1 }
     }
 
-    // The ground: bark brown, a little lighter where the light falls near the top.
+    // The ground: the season's (or the picked background), a little lighter near the top.
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#2E1F14" }
-            GradientStop { position: 0.45; color: "#241810" }
-            GradientStop { position: 1.0; color: "#1A110B" }
+            GradientStop { position: 0.0; color: Theme.groundTop }
+            GradientStop { position: 0.45; color: Theme.groundMid }
+            GradientStop { position: 1.0; color: Theme.groundDeep }
         }
     }
 
@@ -81,6 +88,7 @@ Item {
     function settle() { if (!moving) step(37.3, 0) }
     onMovingChanged: settle()
     onPlanChanged: Qt.callLater(settle)
+    onKindChanged: Qt.callLater(settle)
     onWidthChanged: Qt.callLater(settle)
     onHeightChanged: Qt.callLater(settle)
 
@@ -96,8 +104,8 @@ Item {
             readonly property int side: Math.max(8, Math.ceil((p.w || 24) * leaves.sizeScale))
             width: side; height: side
             opacity: p.op || 1
-            // The stem's base, where the leaf turns.
-            readonly property real ox: side * 0.25
+            // The stem's base, where the leaf turns; a snowflake turns about its middle.
+            readonly property real ox: side * (leaves.kind === "snow" ? 0.5 : 0.25)
             readonly property real oy: side * 0.5
             transform: [
                 Scale { id: flipT; origin.x: leaf.ox; origin.y: leaf.oy; xScale: 1 },
@@ -150,6 +158,8 @@ Item {
                 onWidthChanged: requestPaint()
                 readonly property int sym: leaf.p.sym === undefined ? 0 : leaf.p.sym
                 onSymChanged: requestPaint()
+                readonly property string kind: leaves.kind
+                onKindChanged: requestPaint()
                 onPaint: {
                     const ctx = getContext("2d")
                     ctx.reset()
@@ -159,7 +169,8 @@ Item {
                     ctx.translate(12 * k, 24 * k)
                     ctx.scale(k, k)
                     ctx.lineJoin = "round"; ctx.lineCap = "round"
-                    if (sym >= 15) leaves.drawSeed(ctx, sym - 15)
+                    if (kind === "snow") leaves.drawFlake(ctx, sym)
+                    else if (sym >= 15) leaves.drawSeed(ctx, sym - 15)
                     else leaves.drawLeaf(ctx, sym)
                 }
             }
@@ -234,6 +245,42 @@ Item {
         ctx.globalAlpha = 0.35; ctx.fillStyle = dark
         const sp = spots[shape]
         for (let i = 0; i < sp.length; ++i) { const c = sp[i]; ctx.beginPath(); ctx.arc(c[0], c[1], c[2], 0, tau); ctx.fill() }
+        ctx.globalAlpha = 1
+    }
+    // A snowflake in a leaf's or seed's place, centered in the box (12 right of the stem's base): a
+    // big six-armed crystal, a soft round flake or a small crystal for a leaf (by its shape), a small
+    // soft flake for a seed.
+    function drawFlake(ctx, sym) {
+        const type = sym >= 15 ? 1 : (leafShape[sym] || 0)
+        ctx.translate(12, 0)
+        if (type === 1) {
+            const r = sym >= 15 ? 5 : 7
+            const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r)
+            g.addColorStop(0, "rgba(255, 255, 255, 0.85)")
+            g.addColorStop(0.55, "rgba(255, 255, 255, 0.6)")
+            g.addColorStop(1, "rgba(255, 255, 255, 0)")
+            ctx.fillStyle = g
+            ctx.beginPath(); ctx.arc(0, 0, r, 0, tau); ctx.fill()
+            return
+        }
+        const r = type === 0 ? 14 : 9
+        const twigs = type === 0 ? [0.5, 0.75] : [0.55]
+        const third = Math.PI / 3
+        ctx.globalAlpha = 0.85
+        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.8
+        ctx.beginPath()
+        for (let i = 0; i < 6; ++i) {
+            const a = i * third, c = Math.cos(a), n = Math.sin(a)
+            ctx.moveTo(0, 0); ctx.lineTo(c * r, n * r)
+            for (let j = 0; j < twigs.length; ++j) {
+                const at = twigs[j], len = r * (at > 0.6 ? 0.2 : 0.3)
+                for (let side = -1; side <= 1; side += 2) {
+                    const b = a + side * third
+                    ctx.moveTo(c * r * at, n * r * at); ctx.lineTo(c * r * at + Math.cos(b) * len, n * r * at + Math.sin(b) * len)
+                }
+            }
+        }
+        ctx.stroke()
         ctx.globalAlpha = 1
     }
     function drawSeed(ctx, n) {

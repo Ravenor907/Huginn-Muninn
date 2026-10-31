@@ -24,7 +24,7 @@ Window {
     readonly property bool portrait: height > width
     Binding { target: Ui; property: "portrait"; value: app.portrait }
     Binding { target: Ui; property: "windowWidth"; value: app.width }
-    // The Autumn look's ground and falling leaves, behind every pane (Leaves.qml draws nothing in the other looks).
+    // The Seasonal look's ground and falling leaves or snow, behind every pane (Leaves.qml draws nothing in the other looks).
     Leaves { anchors.fill: parent; z: -1 }
 
     // ------------------------------------------------------------- the rail
@@ -737,6 +737,7 @@ Window {
         id: tour
         property int step: 0
         property string savedTheme: "dark"
+        property string savedSeason: "auto"
         property string savedDensity: "cozy"
         property string savedSize: "100"
         property bool savedLabs: false
@@ -765,7 +766,7 @@ Window {
             { page: "settings", section: "devices", file: "22-devices" },
             { page: "g:tour-crew", zone: "messages", theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
             { page: "dms", zone: "messages", theme: "black", file: "24-true-black" },
-            { page: "g:tour-crew", zone: "messages", theme: "seasonal", density: "spacious", file: "25-autumn" },
+            { page: "g:tour-crew", zone: "messages", theme: "seasonal", season: "autumn", density: "spacious", file: "25-autumn" },
             { page: "g:tour-crew", zone: "messages", size: "150", file: "26-size-150" },
             { page: "dms", zone: "messages", portrait: true, file: "27-portrait" },
             { page: "dms", zone: "list", portrait: true, file: "28-portrait-list" },
@@ -778,7 +779,10 @@ Window {
             // Labs mode: its group in About, Report a bug, and Labs reports.
             { page: "settings", section: "about", labs: true, file: "33-labs" },
             { page: "settings", section: "about", labs: true, report: true, file: "34-labs-report" },
-            { page: "dms", labsInbox: true, file: "35-labs-reports" }
+            { page: "dms", labsInbox: true, file: "35-labs-reports" },
+            // Seasonal in Snow: the Look page with the season's settings, then a conversation.
+            { page: "settings", section: "look", theme: "seasonal", season: "snow", file: "36-snow-look" },
+            { page: "g:tour-crew", zone: "messages", theme: "seasonal", season: "snow", file: "37-snow" }
         ]
         interval: 1500
         repeat: true
@@ -787,16 +791,16 @@ Window {
             prompt.visible = false; confirm.visible = false; picker.visible = false
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
             labsReport.visible = false; labsInbox.visible = false
-            if (step === 0) { savedTheme = Settings.theme; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
+            if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
             if (step >= steps.length) {
-                Settings.theme = savedTheme; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
+                Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
                 app.width = 1920; app.height = 1080
                 stop(); System.tourFinished(); return
             }
             const s = steps[step]
             // The look changes once the new page is in (not while the old one is being taken down).
-            const theme = s.theme || savedTheme, density = s.density || savedDensity, size = s.size || savedSize
-            Qt.callLater(() => { Settings.theme = theme; Settings.density = density; Settings.uiSize = size })
+            const theme = s.theme || savedTheme, season = s.season || savedSeason, density = s.density || savedDensity, size = s.size || savedSize
+            Qt.callLater(() => { Settings.theme = theme; Settings.season = season; Settings.density = density; Settings.uiSize = size })
             // A portrait window: the one-column layout.
             if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel

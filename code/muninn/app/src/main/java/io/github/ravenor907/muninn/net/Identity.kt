@@ -130,6 +130,18 @@ class Identity(context: Context, private val vault: Vault) {
     var look: String
         get() = prefs.getString("look", null) ?: if (prefs.getBoolean("trueBlack", false)) "black" else "dark"
         set(v) = prefs.edit().putString("look", v).apply()
+    /** Seasonal's season: "auto" (by the date) or a season's key, like "snow". */
+    var season: String
+        get() = prefs.getString("season", null) ?: "auto"
+        set(v) = prefs.edit().putString("season", v).apply()
+    /** Seasonal's background: "" (the season's own) or a "#RRGGBB" from the Look page's swatches. */
+    var seasonGround: String
+        get() = prefs.getString("seasonGround", null) ?: ""
+        set(v) = prefs.edit().putString("seasonGround", v).apply()
+    /** Seasonal's animation: "off", "light" (about half as much falls) or "full". */
+    var seasonAnim: String
+        get() = prefs.getString("seasonAnim", null) ?: "full"
+        set(v) = prefs.edit().putString("seasonAnim", v).apply()
 
     /** Show the line and lit dots while a pattern is drawn. Off: nothing shows, so nobody watching sees it. */
     var patternTrail: Boolean

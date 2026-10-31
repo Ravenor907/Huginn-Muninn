@@ -59,6 +59,9 @@ class Muninn : Application() {
         io.github.ravenor907.muninn.ui.Access.apply {
             size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
             colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion; look = io.github.ravenor907.muninn.ui.Looks.of(identity.look)
+            season = io.github.ravenor907.muninn.ui.Seasons.choice(identity.season)
+            seasonGround = io.github.ravenor907.muninn.ui.Seasons.ground(identity.seasonGround)
+            seasonAnim = io.github.ravenor907.muninn.ui.Seasons.anim(identity.seasonAnim)
         }
         io.github.ravenor907.muninn.ui.PrivateKeyboard.on = identity.privateKeyboard
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }

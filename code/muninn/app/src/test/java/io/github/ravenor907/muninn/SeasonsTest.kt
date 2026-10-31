@@ -5,12 +5,61 @@ import io.github.ravenor907.muninn.ui.Seasons
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The Seasonal look: which season shows on which date, and saved looks opening as the right one. */
+/** The Seasonal look: which season shows on which date, the season cycle, and saved settings opening as the right one. */
 class SeasonsTest {
     @Test
-    fun autumnShowsAllYearForNow() {
-        for (m in 1..12) for (d in listOf(1, 15, 28)) assertEquals(Seasons.AUTUMN, Seasons.at(m, d))
-        assertEquals(Seasons.AUTUMN, Seasons.at(12, 31))
+    fun snowFromDecemberToFebruaryAutumnOtherwise() {
+        // Autumn up to the end of November, Snow from December 1.
+        assertEquals(Seasons.AUTUMN, Seasons.at(11, 30))
+        assertEquals(Seasons.SNOW, Seasons.at(12, 1))
+        assertEquals(Seasons.SNOW, Seasons.at(12, 31))
+        // Across the new year and to the last day of February, leap years too.
+        assertEquals(Seasons.SNOW, Seasons.at(1, 1))
+        assertEquals(Seasons.SNOW, Seasons.at(2, 28))
+        assertEquals(Seasons.SNOW, Seasons.at(2, 29))
+        assertEquals(Seasons.AUTUMN, Seasons.at(3, 1))
+        for (m in 3..11) for (d in listOf(1, 15, 28)) assertEquals(Seasons.AUTUMN, Seasons.at(m, d))
+        for (m in listOf(12, 1, 2)) for (d in listOf(1, 15, 28)) assertEquals(Seasons.SNOW, Seasons.at(m, d))
+    }
+
+    @Test
+    fun aPickedSeasonWinsOverTheDate() {
+        assertEquals(Seasons.SNOW, Seasons.shown(Seasons.AUTO, 1, 10))
+        assertEquals(Seasons.AUTUMN, Seasons.shown(Seasons.AUTO, 10, 31))
+        assertEquals(Seasons.SNOW, Seasons.shown(Seasons.SNOW, 7, 4))
+        assertEquals(Seasons.AUTUMN, Seasons.shown(Seasons.AUTUMN, 12, 25))
+        // A saved choice that isn't a season follows the date.
+        assertEquals(Seasons.SNOW, Seasons.shown("spring", 2, 1))
+    }
+
+    @Test
+    fun tappingSeasonalAgainCyclesTheSeasons() {
+        assertEquals(Seasons.AUTUMN, Seasons.next(Seasons.AUTO))
+        assertEquals(Seasons.SNOW, Seasons.next(Seasons.AUTUMN))
+        assertEquals(Seasons.AUTO, Seasons.next(Seasons.SNOW))
+        // Every season is in the cycle once, after Auto.
+        var k = Seasons.AUTO
+        val seen = mutableListOf<String>()
+        repeat(Seasons.CHOICES.size) { seen += k; k = Seasons.next(k) }
+        assertEquals(Seasons.AUTO, k)
+        assertEquals(listOf(Seasons.AUTO) + Seasons.NAMES.map { it.first }, seen)
+        assertEquals("Snow", Seasons.name(Seasons.SNOW))
+        assertEquals("Auto", Seasons.name(Seasons.AUTO))
+    }
+
+    @Test
+    fun savedSeasonSettingsFallBackSafely() {
+        assertEquals(Seasons.AUTO, Seasons.choice(null))
+        assertEquals(Seasons.AUTO, Seasons.choice("summer"))
+        assertEquals(Seasons.SNOW, Seasons.choice("snow"))
+        assertEquals("", Seasons.ground("#123456"))
+        assertEquals("", Seasons.ground(null))
+        assertEquals(Seasons.GROUNDS[0], Seasons.ground(Seasons.GROUNDS[0]))
+        assertEquals(Seasons.GROUNDS.size, Seasons.GROUND_NAMES.size)
+        assertEquals(Seasons.FULL, Seasons.anim("nonsense"))
+        assertEquals(0f, Seasons.animScale(Seasons.OFF), 0f)
+        assertEquals(0.5f, Seasons.animScale(Seasons.LIGHT), 0f)
+        assertEquals(1f, Seasons.animScale(Seasons.FULL), 0f)
     }
 
     @Test
@@ -33,6 +82,7 @@ class SeasonsTest {
     fun savedAutumnOpensAsSeasonal() {
         assertEquals(Looks.SEASONAL, Looks.of("autumn"))
         assertEquals(Looks.SEASONAL, Looks.of("seasonal"))
+        assertEquals(Looks.SEASONAL, Looks.of("snow"))
         assertEquals(Looks.DARK, Looks.of("something else"))
         assertEquals("Seasonal", Looks.name(Looks.SEASONAL))
     }

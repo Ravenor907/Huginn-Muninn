@@ -134,8 +134,8 @@ object TvNav {
 fun TvRoot(app: Muninn) {
     val ready by app.ready.collectAsState()
     Box(Modifier.fillMaxSize().background(Palette.ground)) {
-        // The leaves of the Autumn look fall behind everything (nothing is drawn in the other looks).
-        io.github.ravenor907.muninn.ui.AutumnLeaves()
+        // The Seasonal look's leaves or snow fall behind everything (nothing is drawn in the other looks).
+        io.github.ravenor907.muninn.ui.SeasonFall()
         if (!ready) TvStarting(app)
         else {
             val st by KidTv.state.collectAsState()

@@ -1348,7 +1348,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     val replyNow by rememberUpdatedState(onReply)
     val align = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart
     // The corner nearest the sender is the sharp one.
-    val r = if (Palette.autumn) 16.dp else 4.dp
+    val r = if (Palette.seasonal) 16.dp else 4.dp
     val shape = if (m.mine) RoundedCornerShape(r, r, 1.dp, r) else RoundedCornerShape(r, r, r, 1.dp)
     val status = when {
         statusText != null -> statusText

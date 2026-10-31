@@ -371,7 +371,7 @@ Item {
             id: knob
             anchors.verticalCenter: parent.verticalCenter
             x: (sl.width - width) * sl.frac
-            width: Theme.px(18); height: width; radius: Theme.autumn ? width / 2 : Theme.radiusSmall
+            width: Theme.px(18); height: width; radius: Theme.seasonal ? width / 2 : Theme.radiusSmall
             color: slHover.hovered || sl.focused ? Theme.accent : Theme.textSoft
             border.width: sl.focused ? Theme.focusWidth : 0
             border.color: Theme.text

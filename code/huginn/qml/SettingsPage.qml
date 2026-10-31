@@ -7,7 +7,7 @@ import Huginn
 // (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports).
 Rectangle {
     id: page
-    // Autumn: a frosted pane, so the leaves show while Look's sliders are moved.
+    // Seasonal: a frosted pane, so what falls shows while Look's settings change.
     color: Theme.sheet
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
@@ -45,7 +45,8 @@ Rectangle {
     readonly property string status: ""
     readonly property var swatches: ["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"]
 
-    // Each row: { kind: "segmented"|"toggle"|"accent"|"swatches"|"button"|"size"|"slider"|"info", group, title, note, ... }.
+    // Each row: { kind: "segmented"|"toggle"|"accent"|"swatches"|"grounds"|"button"|"size"|"slider"|"info", group, title, note, ... }.
+    // A segmented row's value is Settings[key] (or Chat's), unless the row gives its own value.
     // Rows with the same group sit in one framed section; notes are a few words at most.
     readonly property var rows: {
         switch (section) {
@@ -59,11 +60,19 @@ Rectangle {
             { kind: "toggle", key: "showPreview", chat: true, title: "Show message text", note: "Off: only “New message”" }
         ]
         case "look": return [
-            { group: "Theme", kind: "segmented", key: "theme", title: "Theme",
-              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }, { value: "seasonal", label: "Seasonal" }] },
-            // Autumn only: the leaves.
-            { group: "Theme", kind: "slider", key: "leafSize", hide: Theme.mode !== "autumn", title: "Leaf size: " + Settings.leafSize + "%", from: 50, to: 200, step: 5 },
-            { group: "Theme", kind: "slider", key: "leafCount", hide: Theme.mode !== "autumn", title: "How many leaves: " + Settings.leafCount + "%", from: 25, to: 200, step: 5 },
+            // Seasonal names its season; pressing it again steps to the next season.
+            { group: "Theme", kind: "segmented", key: "theme", title: "Theme", value: Theme.choice,
+              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }, { value: "seasonal", label: "Seasonal: " + Theme.seasonName }] },
+            // Seasonal only: the season, its background, what falls and how much.
+            { group: "Theme", kind: "segmented", key: "season", hide: Theme.choice !== "seasonal", title: "Season", note: "Auto follows the date",
+              value: Theme.seasonPick, options: Theme.seasonChoices },
+            { group: "Theme", kind: "grounds", key: "seasonGround", hide: Theme.choice !== "seasonal", title: "Background" },
+            { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: Theme.choice !== "seasonal", title: "Animation", note: "Less motion holds it still",
+              options: [{ value: "off", label: "Off" }, { value: "light", label: "Light" }, { value: "full", label: "Full" }] },
+            { group: "Theme", kind: "slider", key: "leafSize", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
+              title: (Theme.snow ? "Flake size: " : "Leaf size: ") + Settings.leafSize + "%", from: 50, to: 200, step: 5 },
+            { group: "Theme", kind: "slider", key: "leafCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
+              title: (Theme.snow ? "How many flakes: " : "How many leaves: ") + Settings.leafCount + "%", from: 25, to: 200, step: 5 },
             { group: "Theme", kind: "accent", key: "accent", title: "Accent color" },
             { group: "Theme", kind: "segmented", key: "density", title: "Messages",
               options: [{ value: "compact", label: "Compact" }, { value: "cozy", label: "Default" }, { value: "spacious", label: "Spacious" }] },
@@ -356,6 +365,7 @@ Rectangle {
                  : rowItem.r.kind === "toggle" ? toggleCtl.implicitWidth
                  : rowItem.r.kind === "accent" ? accentCtl.naturalWidth
                  : rowItem.r.kind === "swatches" ? swatchCtl.implicitWidth
+                 : rowItem.r.kind === "grounds" ? groundCtl.naturalWidth
                  : rowItem.r.kind === "size" ? sizeCtl.naturalWidth
                  : rowItem.r.kind === "slider" ? Theme.px(220)
                  : rowItem.r.kind === "raven" ? ravenCtl.width
@@ -377,7 +387,7 @@ Rectangle {
                 Accessible.onPressAction: page.tapRaven()
                 TapHandler { onTapped: page.tapRaven() }
             }
-            // Look › Autumn: Leaf size and How many leaves.
+            // Look › Seasonal: the size of what falls, and how many.
             LookSlider {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
@@ -396,8 +406,9 @@ Rectangle {
                 visible: rowItem.r.kind === "segmented"
                 width: parent.width
                 options: rowItem.r.options || []
-                value: rowItem.r.kind === "segmented" ? (rowItem.r.chat ? String(Chat[rowItem.r.key]) : Settings[rowItem.r.key]) : ""
-                onPicked: v => { if (rowItem.r.chat) Chat[rowItem.r.key] = Number(v); else Settings[rowItem.r.key] = v }
+                value: rowItem.r.kind !== "segmented" ? "" : rowItem.r.value !== undefined ? rowItem.r.value
+                     : rowItem.r.chat ? String(Chat[rowItem.r.key]) : Settings[rowItem.r.key]
+                onPicked: v => page.pickSegment(rowItem.r, v)
             }
             ToggleSwitch {
                 id: toggleCtl
@@ -482,6 +493,55 @@ Rectangle {
                     }
                 }
             }
+            // Look › Background: the season's own ground (Default) or one of the dark grounds.
+            Row {
+                id: groundCtl
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                visible: rowItem.r.kind === "grounds"
+                spacing: Theme.px(6)
+                readonly property real naturalWidth: defaultGround.naturalWidth + Theme.px(26) * Theme.groundSwatches.length + spacing * Theme.groundSwatches.length
+                // Smaller swatches on a narrow window.
+                readonly property int swatch: Math.max(Theme.px(16), Math.min(Theme.px(26),
+                    Math.floor((control.width - defaultGround.width - spacing * Theme.groundSwatches.length) / Math.max(1, Theme.groundSwatches.length))))
+                Rectangle {
+                    id: defaultGround
+                    readonly property bool on: Theme.groundPick === ""
+                    readonly property real naturalWidth: defaultText.implicitWidth + Theme.px(16)
+                    width: naturalWidth; height: groundCtl.swatch
+                    radius: Theme.radiusSmall
+                    color: on ? Theme.accentFill : "transparent"
+                    border.width: on ? Theme.px(2) : 1
+                    border.color: on ? Theme.accent : Theme.lineMuted
+                    Accessible.role: Accessible.RadioButton
+                    Accessible.name: "Default"
+                    Accessible.checked: on
+                    Text {
+                        id: defaultText
+                        anchors.centerIn: parent
+                        text: "Default"
+                        color: parent.on ? Theme.accent : Theme.textSoft
+                        font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+                    }
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: Settings.seasonGround = "" }
+                }
+                Repeater {
+                    model: rowItem.r.kind === "grounds" ? Theme.groundSwatches : []
+                    Rectangle {
+                        readonly property bool on: Theme.groundPick === modelData
+                        width: groundCtl.swatch; height: width; radius: width / 2
+                        color: modelData
+                        border.width: on ? Theme.px(2) : 1
+                        border.color: on ? Theme.accent : Theme.lineMuted
+                        Accessible.role: Accessible.RadioButton
+                        Accessible.name: (Theme.groundNames[index] || "Color") + " background"
+                        Accessible.checked: on
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: Settings.seasonGround = modelData }
+                    }
+                }
+            }
             HButton {
                 id: buttonCtl
                 anchors.right: parent.right
@@ -531,6 +591,12 @@ Rectangle {
     }
     // Where a toggle's value lives.
     function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
+    // A choice in a row of choices. Seasonal picked again (a click, or A on it) steps to the next season.
+    function pickSegment(r, v) {
+        if (r.chat) Chat[r.key] = Number(v)
+        else if (r.key === "theme" && v === "seasonal" && Theme.choice === "seasonal") Settings.season = Theme.nextSeason()
+        else Settings[r.key] = v
+    }
 
     // ------------------------------------------------------------- chat backup
     function startBackup() {
@@ -616,9 +682,18 @@ Rectangle {
         if (r.kind === "toggle") { const o = source(r); o[r.key] = !o[r.key] }
         else if (r.kind === "segmented") {
             const opts = r.options
-            let i = opts.findIndex(o => o.value === (r.chat ? String(Chat[r.key]) : Settings[r.key]))
+            const now = r.value !== undefined ? r.value : r.chat ? String(Chat[r.key]) : Settings[r.key]
+            // A on Seasonal does what a click does: the next season.
+            if (dir === 0 && r.key === "theme" && now === "seasonal") { pickSegment(r, "seasonal"); return }
+            let i = opts.findIndex(o => o.value === now)
             i = dir === 0 ? (i + 1) % opts.length : Math.max(0, Math.min(opts.length - 1, i + dir))
-            if (r.chat) Chat[r.key] = Number(opts[i].value); else Settings[r.key] = opts[i].value
+            pickSegment(r, opts[i].value)
+        } else if (r.kind === "grounds") {
+            // Default, then each background.
+            const order = [""].concat(Theme.groundSwatches)
+            const at = Math.max(0, order.indexOf(Theme.groundPick))
+            const i = dir === 0 ? (at + 1) % order.length : Math.max(0, Math.min(order.length - 1, at + dir))
+            Settings.seasonGround = order[i]
         } else if (r.kind === "accent") {
             // The named colors, then Any color (A on it asks for a code).
             const order = Theme.accentNames.concat(["custom"])
@@ -653,7 +728,7 @@ Rectangle {
             return false
         }
         const r = rows[row]
-        const sideways = r && (r.kind === "segmented" || r.kind === "accent" || r.kind === "size" || r.kind === "slider" || r.kind === "swatches")
+        const sideways = r && (r.kind === "segmented" || r.kind === "accent" || r.kind === "size" || r.kind === "slider" || r.kind === "swatches" || r.kind === "grounds")
         switch (b) {
         case "up": row = Math.max(0, row - 1); return true
         case "down": row = Math.min(rows.length - 1, row + 1); return true
@@ -665,7 +740,7 @@ Rectangle {
         return false
     }
 
-    // Look › Autumn: a plain slider in house style. A line, a knob, Left and Right or a drag to move it.
+    // Look › Seasonal: a plain slider in house style. A line, a knob, Left and Right or a drag to move it.
     component LookSlider: Item {
         id: sl
         property real from: 0
@@ -693,7 +768,7 @@ Rectangle {
             id: knob
             anchors.verticalCenter: parent.verticalCenter
             x: (sl.width - width) * sl.frac
-            width: Theme.px(18); height: width; radius: Theme.autumn ? width / 2 : Theme.radiusSmall
+            width: Theme.px(18); height: width; radius: Theme.seasonal ? width / 2 : Theme.radiusSmall
             color: slHover.hovered || sl.focused ? Theme.accent : Theme.textSoft
             border.width: sl.focused ? Theme.focusWidth : 0
             border.color: Theme.text

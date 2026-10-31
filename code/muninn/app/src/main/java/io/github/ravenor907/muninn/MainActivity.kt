@@ -433,8 +433,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().background(Palette.ground)) {
-            // Autumn: leaves fall behind everything (nothing is drawn in the other looks).
-            io.github.ravenor907.muninn.ui.AutumnLeaves()
+            // Seasonal: leaves or snow fall behind everything (nothing is drawn in the other looks).
+            io.github.ravenor907.muninn.ui.SeasonFall()
             // A tablet (smallest screen width 600 dp or more, whichever way it's held) is Discord style: a rail, the
             // chat list and the open chat. A phone, upright or sideways, shows one thing at a time. A window too
             // narrow for the three (split screen) is one thing at a time too.

@@ -240,12 +240,20 @@ private fun LookPage(app: Muninn) {
     val id = app.identity
     Framed("Look") {
         val looks = io.github.ravenor907.muninn.ui.Looks.ALL
+        val seasons = io.github.ravenor907.muninn.ui.Seasons
+        fun saveSeason() { id.season = Access.season; id.seasonGround = Access.seasonGround; id.seasonAnim = Access.seasonAnim }
         // Two a line; one a line at a large text size, so no name breaks mid-word.
         ChoiceRow(looks.size, Modifier.padding(vertical = 8.dp), minWidth = 140.dp, max = 2) { i, m ->
             val (k, n) = looks[i]
-            MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
+            val seasonal = k == io.github.ravenor907.muninn.ui.Looks.SEASONAL
+            // Seasonal names its season ("Seasonal: Snow"); tapping it again steps to the next season.
+            val label = if (seasonal) "$n: ${seasons.name(seasons.choice(Access.season))}" else n
+            MButton(label, m, if (Access.look == k) Kind.Accent else Kind.Normal) {
+                if (seasonal && Access.look == k) { Access.season = seasons.next(seasons.choice(Access.season)); saveSeason() }
+                else { Access.look = k; id.look = k }
+            }
         }
-        if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL && io.github.ravenor907.muninn.ui.Palette.autumn) io.github.ravenor907.muninn.ui.AutumnControls()
+        if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL) io.github.ravenor907.muninn.ui.SeasonControls { saveSeason() }
     }
     Framed("Size of everything") {
         val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)

@@ -35,9 +35,15 @@ class Settings : public QObject
     // Settings › Privacy and lock: the pattern's line and lit dots show while it's drawn (off: only
     // a brief pulse on each dot, so someone looking over your shoulder can't read it).
     Q_PROPERTY(bool patternTrail READ patternTrail WRITE setPatternTrail NOTIFY changed)
-    // Autumn's falling leaves: how big and how many (percent of the usual).
+    // The Seasonal look's falling leaves or snowflakes: how big and how many (percent of the usual).
     Q_PROPERTY(int leafSize READ leafSize WRITE setLeafSize NOTIFY appearanceChanged)
     Q_PROPERTY(int leafCount READ leafCount WRITE setLeafCount NOTIFY appearanceChanged)
+    // Seasonal: the season ("auto" follows the date, or a season's own name like "snow"), the
+    // background ("" for the season's own, or one of the Look page's "#RRGGBB" swatches) and the
+    // animation ("off", "light" for about half as much falling, or "full"). Theme.qml checks them.
+    Q_PROPERTY(QString season READ season WRITE setSeason NOTIFY appearanceChanged)
+    Q_PROPERTY(QString seasonGround READ seasonGround WRITE setSeasonGround NOTIFY appearanceChanged)
+    Q_PROPERTY(QString seasonAnimation READ seasonAnimation WRITE setSeasonAnimation NOTIFY appearanceChanged)
     // Do not disturb: no message sound, no desktop notification and no ring while it's on. Set by
     // the status card for this run only; it isn't saved here (the status is).
     Q_PROPERTY(bool quiet READ quiet WRITE setQuiet NOTIFY changed)
@@ -87,6 +93,13 @@ public:
     bool patternTrail() const { return value("patternTrail", true).toBool(); }
     int leafSize() const { return qBound(50, value("leafSize", 100).toInt(), 200); }
     int leafCount() const { return qBound(25, value("leafCount", 100).toInt(), 200); }
+    QString season() const { return value("season", "auto").toString(); }
+    QString seasonGround() const { return value("seasonGround", "").toString(); }
+    QString seasonAnimation() const
+    {
+        const QString v = value("seasonAnimation", "full").toString();
+        return v == QLatin1String("off") || v == QLatin1String("light") ? v : QStringLiteral("full");
+    }
     bool quiet() const { return s_quiet; }
     bool labs() const { return value("labs/on", false).toBool(); }
     QString updateChannel() const { return value("labs/channel", "stable").toString() == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable"); }
@@ -121,6 +134,9 @@ public:
     void setPatternTrail(bool v) { set("patternTrail", v); }
     void setLeafSize(int v) { setLook("leafSize", qBound(50, v, 200)); }
     void setLeafCount(int v) { setLook("leafCount", qBound(25, v, 200)); }
+    void setSeason(const QString &v) { setLook("season", v); }
+    void setSeasonGround(const QString &v) { setLook("seasonGround", v); }
+    void setSeasonAnimation(const QString &v) { setLook("seasonAnimation", v); }
     void setQuiet(bool v);
     void setLabs(bool v) { set("labs/on", v); }
     void setUpdateChannel(const QString &v) { set("labs/channel", v == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable")); }

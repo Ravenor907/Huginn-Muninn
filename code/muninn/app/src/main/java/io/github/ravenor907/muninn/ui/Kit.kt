@@ -65,7 +65,7 @@ import io.github.ravenor907.muninn.R
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Panels, buttons and fields: sharp in most looks, rounded in Autumn (see LookShapes). */
+/** Panels, buttons and fields: sharp in most looks, rounded in Seasonal (see LookShapes). */
 val Corner: androidx.compose.ui.graphics.Shape get() = LookShapes.corner
 
 /**
