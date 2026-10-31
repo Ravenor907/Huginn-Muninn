@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -62,7 +63,7 @@ enum class Fall { LEAVES, SNOW }
  * What falls behind everything in the Seasonal look: leaves in Autumn, snowflakes in Snow. Nothing is drawn in the
  * other looks. One engine moves both, so snow falls exactly as the leaves do and only the shapes differ: maple, oak
  * and birch leaves tumble, sway and glide on a slow wind with the odd gust, and maple seeds (samaras) spin as they
- * drop; in Snow the same paths carry six-armed crystals and soft round flakes.
+ * drop; in Snow every flake is a six-armed crystal that rocks, tumbles and flips the way a leaf does.
  *
  * Settings › Look › Animation: Full, Light (about half as many) or Off (nothing falls).
  *
@@ -166,30 +167,34 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
             x += sin(tt / l.swayT * TAU) * l.sway * unit + sin(tt / (l.swayT * 2.7f) * TAU) * l.sway * 0.4f * unit
             val alpha = when (l.depth) { 0 -> 0.6f; 1 -> 0.85f; else -> 1f }
             val s = size / 48f
-            if (l.kind == 3) {
+            // In Snow every flake, seed slots included, rocks, tumbles and flips like a leaf (below).
+            if (l.kind == 3 && fall != Fall.SNOW) {
                 // A samara: spins steadily and swings round a small circle as it drops.
                 val ox = cos(tt / l.orbitT * TAU) * l.orbit * unit
                 val oy = sin(tt / l.orbitT * TAU) * l.orbit * 0.5f * unit
                 d.withTransform({ translate(x + ox, y + oy); rotate(l.rps * 360f * tt, Offset.Zero); scale(s, s, Offset.Zero) }) {
-                    if (fall == Fall.SNOW) drawCircle(SOFT_SMALL, 5f, Offset.Zero, alpha = alpha * FLAKE_ALPHA)
-                    else {
-                        drawPath(SAMARA, SEED_BRUSHES[l.tint], alpha = alpha * 0.95f)
-                        drawPath(SAMARA, SEED_EDGE, alpha = alpha * 0.6f, style = THIN)
-                        drawPath(SAMARA_VEINS, SEED_EDGE, alpha = alpha * 0.55f, style = HAIR)
-                        drawOval(SEED_EDGE, Offset(-3.2f, -3f), androidx.compose.ui.geometry.Size(8.4f, 6f), alpha = alpha)
-                    }
+                    drawPath(SAMARA, SEED_BRUSHES[l.tint], alpha = alpha * 0.95f)
+                    drawPath(SAMARA, SEED_EDGE, alpha = alpha * 0.6f, style = THIN)
+                    drawPath(SAMARA_VEINS, SEED_EDGE, alpha = alpha * 0.55f, style = HAIR)
+                    drawOval(SEED_EDGE, Offset(-3.2f, -3f), androidx.compose.ui.geometry.Size(8.4f, 6f), alpha = alpha)
                 }
                 continue
             }
             // A leaf: rocks on the sway, tumbles over now and then (zig), and turns edge-on and back (flip) as it falls.
-            val rot = l.spin * sin(tt / l.swayT * TAU) + sin(tt * 0.6f) * 10f + l.zig * 28f * sin(tt / l.tumbleT * TAU * 2f)
-            val flip = 0.55f + 0.45f * cos(tt / l.flipT * TAU)
+            // A seed slot carrying a snowflake has no leaf numbers of its own: steady ones in their place.
+            val seed = l.kind == 3
+            val spin = if (seed) 16f * l.dir else l.spin
+            val zig = if (seed) 0.8f else l.zig
+            val tumbleT = if (seed) l.orbitT + 0.6f else l.tumbleT
+            val flipT = if (seed) 2.2f + (l.phase % 1f) else l.flipT
+            val rot = spin * sin(tt / l.swayT * TAU) + sin(tt * 0.6f) * 10f + zig * 28f * sin(tt / tumbleT * TAU * 2f)
+            val flip = 0.55f + 0.45f * cos(tt / flipT * TAU)
             if (fall == Fall.SNOW) {
-                // A snowflake in the leaf's place: a big crystal, a soft round flake or a small crystal.
+                // A snowflake in the leaf's place: six-armed crystals in three sizes, so each one shows its turn and flip.
                 d.withTransform({ translate(x, y); rotate(rot, Offset.Zero); scale(s * flip, s, Offset.Zero) }) {
                     when (l.kind) {
                         0 -> drawPath(CRYSTAL, Color.White, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE)
-                        1 -> drawCircle(SOFT, 7f, Offset.Zero, alpha = alpha * FLAKE_ALPHA)
+                        1 -> scale(0.78f, 0.78f, Offset.Zero) { drawPath(CRYSTAL, Color.White, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE) }
                         else -> drawPath(SMALL_CRYSTAL, Color.White, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE)
                     }
                 }
@@ -217,8 +222,6 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
         private const val FLAKE_ALPHA = 0.85f
         private val FLAKE_STROKE = Stroke(1.8f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
         /** Soft round flakes: white in the middle, fading out at the edge. */
-        private val SOFT = Brush.radialGradient(0f to Color.White, 0.55f to Color.White.copy(alpha = 0.7f), 1f to Color.Transparent, center = Offset.Zero, radius = 7f)
-        private val SOFT_SMALL = Brush.radialGradient(0f to Color.White, 0.55f to Color.White.copy(alpha = 0.7f), 1f to Color.Transparent, center = Offset.Zero, radius = 5f)
         /** A six-armed crystal round the origin: [r] long arms with a pair of side branches on each (two pairs if [twigs]). */
         private fun crystal(r: Float, twigs: Boolean): Path = Path().apply {
             val third = (PI / 3).toFloat()

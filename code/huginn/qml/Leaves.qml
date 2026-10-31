@@ -125,7 +125,8 @@ Item {
                 let x = q.x0 * W + Math.sin(tt / q.swayT * tau) * q.sway * ss + Math.sin(tt / (q.swayT * 2.7) * tau) * q.sway * 0.4 * ss
                 let y = fall * H
                 let rot, flip
-                if (q.kind === "seed") {
+                // In Snow every flake, seed slots included, rocks, tumbles and flips like a leaf.
+                if (q.kind === "seed" && leaves.kind !== "snow") {
                     rot = (tt * q.rps * 360) % 360
                     flip = 1
                     x += Math.cos(tt / q.orbitT * tau) * q.orbit * ss
@@ -133,12 +134,17 @@ Item {
                     q.wx += gust * 70 * ss * dt
                 } else {
                     // Rock with the sway, a slow tumble each way, and a lean into the gust.
-                    rot = q.spin * Math.sin(tt / q.swayT * tau) + Math.sin(tt * 0.6) * 10
-                        + q.dir * 18 * Math.sin(tt / q.tumbleT * tau) + gust * 28 * q.dir
-                    flip = 0.55 + 0.45 * Math.cos(tt / q.flipT * tau)
+                    const spin = q.spin !== undefined ? q.spin : 16 * q.dir
+                    const tumbleT = q.tumbleT !== undefined ? q.tumbleT : q.orbitT + 0.6
+                    const flipT = q.flipT !== undefined ? q.flipT : 2.2 + (q.phase % 1)
+                    const glide = q.glide !== undefined ? q.glide : 0.6
+                    const zig = q.zig !== undefined ? q.zig : 0.8
+                    rot = spin * Math.sin(tt / q.swayT * tau) + Math.sin(tt * 0.6) * 10
+                        + q.dir * 18 * Math.sin(tt / tumbleT * tau) + gust * 28 * q.dir
+                    flip = 0.55 + 0.45 * Math.cos(tt / flipT * tau)
                     // Gliding sideways as it falls, and pushed along by the gust.
-                    x += q.dir * q.glide * q.zig * (fall + 0.12) * H * 0.16
-                    q.wx += gust * q.zig * 110 * ss * dt
+                    x += q.dir * glide * zig * (fall + 0.12) * H * 0.16
+                    q.wx += gust * zig * 110 * ss * dt
                 }
                 x += q.wx
                 // Off one side comes back in on the other.
@@ -247,24 +253,14 @@ Item {
         for (let i = 0; i < sp.length; ++i) { const c = sp[i]; ctx.beginPath(); ctx.arc(c[0], c[1], c[2], 0, tau); ctx.fill() }
         ctx.globalAlpha = 1
     }
-    // A snowflake in a leaf's or seed's place, centered in the box (12 right of the stem's base): a
-    // big six-armed crystal, a soft round flake or a small crystal for a leaf (by its shape), a small
-    // soft flake for a seed.
+    // A snowflake in a leaf's or seed's place, centered in the box (12 right of the stem's base): six-armed
+    // crystals in three sizes, so every flake shows its turn and flip: big for one leaf shape, medium for
+    // another, small for the third and for a seed.
     function drawFlake(ctx, sym) {
-        const type = sym >= 15 ? 1 : (leafShape[sym] || 0)
+        const type = sym >= 15 ? 2 : (leafShape[sym] || 0)
         ctx.translate(12, 0)
-        if (type === 1) {
-            const r = sym >= 15 ? 5 : 7
-            const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r)
-            g.addColorStop(0, "rgba(255, 255, 255, 0.85)")
-            g.addColorStop(0.55, "rgba(255, 255, 255, 0.6)")
-            g.addColorStop(1, "rgba(255, 255, 255, 0)")
-            ctx.fillStyle = g
-            ctx.beginPath(); ctx.arc(0, 0, r, 0, tau); ctx.fill()
-            return
-        }
-        const r = type === 0 ? 14 : 9
-        const twigs = type === 0 ? [0.5, 0.75] : [0.55]
+        const r = type === 0 ? 14 : type === 1 ? 11 : 8
+        const twigs = type === 0 ? [0.5, 0.75] : type === 1 ? [0.6] : [0.55]
         const third = Math.PI / 3
         ctx.globalAlpha = 0.85
         ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.8
