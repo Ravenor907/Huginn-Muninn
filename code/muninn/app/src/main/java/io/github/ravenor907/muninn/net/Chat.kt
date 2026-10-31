@@ -270,6 +270,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             override fun trusted(peer: String) = io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)
             override fun hasF1(peer: String) = this@Chat.hasF1(peer)
+            override fun waitsForAsk(peer: String) = contacts.get(peer)?.caps?.contains(FileLink.ASK_CAP) == true
             override fun save(name: String, file: File): String? = try {
                 val t = Received.create(context, name)
                 file.inputStream().use { it.copyTo(t.out) }
@@ -336,11 +337,23 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
         }
         nostr.onEnvelope = { content ->
-            try { unwrap(content)?.let { receive(it, "internet") }; true } catch (_: Exception) { true }
+            try {
+                val plain = unwrap(content)
+                if (plain != null) { receive(plain, "internet"); true }
+                // Cap e1 after a restore: for a day key not here yet, not taken (so not marked seen) for 7 days.
+                else !waitsForDayKey(content)
+            } catch (_: Exception) { true }
+        }
+        // A backup was restored: a new day key, announced to every e1 contact now.
+        if (prefs.getBoolean(Backup.RESTORE_ANNOUNCE, false)) {
+            prefs.edit().remove(Backup.RESTORE_ANNOUNCE).apply()
+            bg { try { wrapKeys.fresh(); announceKeys { RingWire.WRAP_CAP in it.caps } } catch (_: Exception) {} }
         }
         // Auto-delete: check every minute for messages past the chosen age, and for contacts 30 days in the trash.
         bg { emptyOldTrash() }
-        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune() } catch (_: Exception) {} } }
+        bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune()
+            // A ring mailbox replaced after a block: 2 days later it isn't asked for any more.
+            if (ringKey?.prune() == true) nostr.resubscribe() } catch (_: Exception) {} } }
     }
 
     /**
@@ -536,6 +549,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return ChatCrypto.openBytes(key, ChatCrypto.Sealed(o.getString("n"), o.getString("d")))?.let { String(it) }
     }
 
+    private val prefs get() = context.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
+
+    /** An e1 wrapping that didn't open names a day key not here, within 7 days of a restore ([RingWire.waitForDayKey]). */
+    private fun waitsForDayKey(content: String): Boolean = try {
+        val o = JSONObject(String(Base64.getDecoder().decode(content)))
+        o.has("w") && RingWire.waitForDayKey(wrapKeys.find(o.getString("w")) != null, prefs.getLong(Backup.RESTORED_AT, 0L), System.currentTimeMillis())
+    } catch (e: Exception) { false }
+
     fun codeWith(peerKey: String): String =
         ChatCrypto.pairingCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
 
@@ -669,10 +690,22 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Nothing from them arrives, here or in the Nearby room. Their chat is hidden until unblocked. */
     fun block(peerKey: String, on: Boolean = true) {
+        val was = peerKey in id.muted()
         _requests.update { l -> l.filterNot { it.peerKey == peerKey } }
         held.remove(peerKey)
         mute(peerKey, on)
         _blocked.value = id.muted()
+        // Cap b1: what they hold no longer rings this phone. A new ring key and ring mailbox go to the other b1
+        // contacts; the old mailbox is listened on 2 more days.
+        if (on && !was) ringKey?.let { r ->
+            bg {
+                try {
+                    r.renew()
+                    nostr.resubscribe()
+                    announceKeys { RingWire.RING_CAP in it.caps && it.chatKey != peerKey }
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     private val _blocked = MutableStateFlow(id.muted())
@@ -1513,10 +1546,27 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      */
     private fun withKeys(peerKey: String, o: JSONObject): JSONObject {
         val caps = capsOf(peerKey)
-        if (RingWire.RING_CAP in caps) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
+        // The ring key only to contacts (never a group peer or someone met close by).
+        if (RingWire.RING_CAP in caps && isContact(peerKey)) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
         if (RingWire.WRAP_CAP in caps) try { wrapKeys.current().let { d -> o.put("wk", d.pub).put("wt", d.t) } } catch (_: Exception) {}
         return o
     }
+
+    /**
+     * My keys, in an empty receipt, to every contact [which] picks (after a restore, or a new ring key after a block).
+     * Never to anyone blocked or in the trash.
+     */
+    private fun announceKeys(which: (Contact) -> Boolean) {
+        val muted = id.muted()
+        for (c in contacts.all.value) {
+            if (c.groupOnly || c.chatKey in muted || trash.has(c.chatKey) || !which(c)) continue
+            val body = withKeys(c.chatKey, JSONObject().put("ids", JSONArray()).put("s", "delivered")).toString()
+            try { deliver(c.chatKey, envelope("receipt", c.chatKey, body, UUID.randomUUID().toString()), c.mailbox) } catch (_: Exception) {}
+        }
+    }
+
+    /** Erase everything and Move: the day keys go (the ring key and the locked store are dropped by the app). */
+    fun forgetKeys() { wrapKeys.drop(); try { File(context.filesDir, "wrapkeys.json").delete() } catch (_: Exception) {} }
 
     /** Their app just said b1 or e1: my keys go to them at once, in an empty receipt (once each while Muninn runs). */
     private fun sendKeys(peerKey: String) {

@@ -290,6 +290,7 @@ FileLink::FileLink(Chat *chat, QObject *parent)
         return;
     signal = [chat](const QString &peer, const QJsonObject &msg) { chat->sendEverywhere(peer, QStringLiteral("file"), msg, QString()); };
     peerHasF1 = [chat](const QString &peer) { return chat->hasCap(peer, QString::fromLatin1(kCap)); };
+    waitsForAsk = [chat](const QString &peer) { return chat->hasCap(peer, QString::fromLatin1(RingWire::kWrapCap)); };
     relay = [chat](const QString &peer, const QByteArray &bytes, const QString &name) { return chat->sendFileBlob(peer, bytes, name); };
     nameOf = [chat](const QString &peer) { return chat->nameOf(peer); };
     connect(this, &FileLink::notice, chat, &Chat::notice);
@@ -490,7 +491,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         x->mine = false;
         x->dir = 1;
         m_x.insert(id, x);
-        if (x->size >= kAutoBytes) {
+        if (x->size >= kAutoBytes && (!waitsForAsk || waitsForAsk(from))) {
             // A big file asks first, as from anyone else. The sender gives up after kAskAnswerMs.
             x->state = QStringLiteral("asking");
             x->note = QStringLiteral("Wants to send you a big file. Accept or decline");

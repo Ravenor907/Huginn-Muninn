@@ -38,15 +38,17 @@ public:
 
     // Every envelope that arrives for this device (content of the event). Return false to see it again later.
     std::function<bool(const QString &content)> onEnvelope;
-    // Cap b1: the ring mailbox and its Nostr secret, from this device's ring key outside the vault (empty: none). Its
-    // mailbox is asked for on an inbox request of its own, locked or not, and relays that ask get a sign-in as it.
-    std::function<QString()> ringMailbox;
-    std::function<QByteArray()> ringSecret;
+    // Cap b1: the ring mailboxes and their Nostr secrets, from this device's ring key outside the vault (empty: none;
+    // two for a while after a block renewed it). They are asked for on an inbox request of their own, locked or not,
+    // and relays that ask get a sign-in as each.
+    std::function<QStringList()> ringMailboxes;
+    std::function<QList<QByteArray>()> ringSecrets;
     // Every event for the ring mailbox (its content): never kept, never handed to onEnvelope.
     std::function<void(const QString &content)> onRing;
     // The events already taken are kept in the vault (main.cpp): keepSeen saves the list, restoreSeen
-    // reads it back when the vault opens (and moves in a list found in plain settings, removing it there).
-    std::function<void(const QByteArray &stored)> keepSeen;
+    // reads it back when the vault opens (and moves in a list found in plain settings, removing it there only once the
+    // vault has it). keepSeen returns whether the list was written.
+    std::function<bool(const QByteArray &stored)> keepSeen;
     void restoreSeen(const QByteArray &stored);
 
     int connected() const { return int(m_live.size()); }

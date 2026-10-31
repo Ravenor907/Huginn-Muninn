@@ -195,7 +195,7 @@ QString LocalSend::expectedFor(const QUrl &url) const
     return best ? best->id : QString();
 }
 
-QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected) const
+QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected, bool anonymous) const
 {
     QNetworkRequest req(url);
     if (url.scheme() != QLatin1String("https"))
@@ -206,8 +206,9 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected)
     c.setPeerVerifyMode(QSslSocket::VerifyNone);
     // Peers are addressed by IP, and the name below is not a real host name: send none.
     c.setSslOption(QSsl::SslOptionDisableServerNameIndication, true);
-    if (m_secure) {
-        // Show our certificate: some LocalSend apps require one, and use it to prove our fingerprint.
+    // Show our certificate: some LocalSend apps require one, and use it to prove our fingerprint. Not on a register
+    // sent while hidden (anonymous): nothing that names this computer.
+    if (m_secure && !anonymous) {
         c.setLocalCertificate(m_tls.cert);
         c.setPrivateKey(m_tls.key);
     }
@@ -215,8 +216,9 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected)
     // Qt reuses open connections by host, port and this name. A name per expected fingerprint
     // means a connection checked for one device is never reused for a request meant for another,
     // or one opened unchecked during a scan.
+    // An anonymous one gets a name of its own, so a later request that shows the certificate never reuses it.
     if (!expected.isEmpty())
-        req.setPeerVerifyName(QStringLiteral("p") + expected.left(40).toLower());
+        req.setPeerVerifyName((anonymous ? QStringLiteral("a") : QStringLiteral("p")) + expected.left(40).toLower());
     return req;
 }
 
@@ -264,10 +266,38 @@ void LocalSend::start()
     Q_EMIT stateChanged();
 }
 
+QSslConfiguration LocalSend::serverTls()
+{
+    if (!(silent && silent())) {
+        m_hiddenTls = QSslConfiguration();   // visible again: the next time hidden gets a new one
+        return m_serverTls;
+    }
+    if (m_hiddenTls.localCertificate().isNull()) {
+        const Tls::Identity id = Tls::throwaway();
+        if (!id.isValid())
+            return m_serverTls;   // couldn't make one: /register and /info still answer nothing
+        m_hiddenTls = m_serverTls;
+        m_hiddenTls.setLocalCertificate(id.cert);
+        m_hiddenTls.setPrivateKey(id.key);
+    }
+    return m_hiddenTls;
+}
+
+void LocalSend::hiddenChanged()
+{
+    if (!m_secure)
+        return;
+    const QSslConfiguration cfg = serverTls();
+    for (const auto &s : m_servers)
+        if (auto *tls = qobject_cast<QSslServer *>(s.second))
+            tls->setSslConfiguration(cfg);
+}
+
 void LocalSend::bindLan()
 {
     if (!m_on)
         return;
+    hiddenChanged();
     const QList<QHostAddress> want = Lan::addresses();
     bool changed = false;
     // Addresses that went away (Wi-Fi off, another network): stop listening there.
@@ -291,7 +321,7 @@ void LocalSend::bindLan()
         QTcpServer *server = nullptr;
         if (m_secure) {
             auto *tls = new QSslServer(this);
-            tls->setSslConfiguration(m_serverTls);
+            tls->setSslConfiguration(serverTls());
             // QSslServer hands over a socket only once its handshake is done.
             connect(tls, &QTcpServer::pendingConnectionAvailable, this, [this, tls] { onConnection(tls); });
             server = tls;
@@ -387,7 +417,8 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
 {
     // expected: the fingerprint the device announced (empty for a scan, which can't know it yet).
     const QString pinTo = protocol == QLatin1String("https") ? expected : QString();
-    QNetworkRequest req = makeRequest(QUrl(QStringLiteral("%1://%2:%3%4/register").arg(protocol, Lan::urlHost(ip)).arg(port).arg(kApi)), pinTo);
+    QNetworkRequest req = makeRequest(QUrl(QStringLiteral("%1://%2:%3%4/register").arg(protocol, Lan::urlHost(ip)).arg(port).arg(kApi)), pinTo,
+                                      silent && silent());
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(scan ? 2500 : 5000);
     QNetworkReply *r = m_net.post(req, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
@@ -743,6 +774,13 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             remember(o, ip, QStringLiteral("https"), peerFp);
         }
     };
+    // Hidden from people nearby (21.3): no answer to a scan or an info request, as if nothing were here.
+    const bool hidden = silent && silent();
+    if (hidden && (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")
+                   || path == kApi + QStringLiteral("/info") || path == QStringLiteral("/api/localsend/v1/info"))) {
+        reply(s, 404);
+        return;
+    }
     if (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")) {
         learn(body);
         reply(s, 200, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));

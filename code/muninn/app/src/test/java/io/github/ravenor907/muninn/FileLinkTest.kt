@@ -85,4 +85,16 @@ class FileLinkTest {
         assertEquals(FileLink.ANSWER_MS, FileLink.answerMs(1 * mb))
         assertTrue(FileLink.answerMs(60 * mb) > FileLink.ANSWER_MS)
     }
+
+    /** An older sender (no [FileLink.ASK_CAP]) gives up after 2 minutes: its big files arrive as before, without asking. */
+    @Test
+    fun bigFilesFromOlderSendersArriveAsBefore() {
+        val mb = 1024L * 1024
+        assertTrue(FileLink.asksFirst(60 * mb, true))
+        assertFalse(FileLink.asksFirst(60 * mb, false))
+        assertFalse(FileLink.asksFirst(10 * mb, true))
+        assertTrue(FileLink.arrivesByItself(60 * mb, true, senderWaits = false))
+        assertFalse(FileLink.arrivesByItself(60 * mb, false, senderWaits = false))
+        assertFalse(FileLink.arrivesByItself(60 * mb, true, senderWaits = true))
+    }
 }

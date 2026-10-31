@@ -101,15 +101,16 @@ private const val UPDATE_FIRST = "Update the TV first"
 
 /**
  * "Kids' TV" on a parent's phone. [section]: null shows the menu; one of [ParentTvMenu.items]' ids opens that
- * screen. Back from a screen returns to the menu, and Back from the menu calls [onBack]. Every change goes to
- * the TV as a new signed config.
+ * screen. Back from a screen opened from the menu returns to the menu; Back from the menu, or from a [section]
+ * opened straight from elsewhere (the TV contact's menu), calls [onBack]. Every change goes to the TV as a new signed config.
  */
 @Composable
 fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: () -> Unit) {
     val tvs by TvParent.tvs.collectAsState()
     val t = tvs[tvKey]
     var open by remember(section) { mutableStateOf(section?.takeIf { ParentTvMenu.label(it) != null }) }
-    fun back() { if (open != null) open = null else onBack() }
+    // A section opened straight from elsewhere goes back there, not to this menu.
+    fun back() { if (open != null && section == null) open = null else onBack() }
     BackHandler { back() }
     if (t == null || t.disconnecting) { LaunchedEffect(Unit) { onBack() }; return }
     val contacts by app.contacts.all.collectAsState()
@@ -417,12 +418,14 @@ private fun Storage(app: Muninn, t: ManagedTv) {
 /** How long messages stay on the TV. */
 @Composable
 private fun Keep(app: Muninn, t: ManagedTv) {
-    if (!TvParent.k8(app, t.key)) Note(UPDATE_FIRST)
+    // A TV without k8 can't take it: the rows are off until it's updated.
+    val can = TvParent.k8(app, t.key)
+    if (!can) Note(UPDATE_FIRST)
     for (days in listOf(TvRules.MIN_KEEP, TvRules.MAX_KEEP)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.RadioButton) { TvParent.setKeep(t.key, days) },
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = can, role = Role.RadioButton) { TvParent.setKeep(t.key, days) },
             verticalAlignment = Alignment.CenterVertically) {
-            Text(keepName(days), style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-            if (t.keep == days) MIcon("check", Palette.goldBright, 22.dp)
+            Text(keepName(days), style = Type.normal.copy(color = if (can) Palette.text else Palette.textFaint), modifier = Modifier.weight(1f))
+            if (t.keep == days) MIcon("check", if (can) Palette.goldBright else Palette.textFaint, 22.dp)
         }
     }
 }

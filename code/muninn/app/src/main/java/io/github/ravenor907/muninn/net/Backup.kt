@@ -15,7 +15,12 @@ object Backup {
     const val PREFS_ENTRY = "@prefs.json"
     private const val PREFS = "muninn"
     /** Settings that belong to this phone, not to the person: never copied over. */
-    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone")
+    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
+        RESTORED_AT, RESTORE_ANNOUNCE)
+    /** When a backup was last restored here (ms): for 7 days a relay envelope for a day key not here yet waits (see Chat). */
+    const val RESTORED_AT = "restoredAt"
+    /** A backup was restored: a new day key goes to every e1 contact once the chats open (see Chat). */
+    const val RESTORE_ANNOUNCE = "restoreAnnounce"
 
     fun fileName(): String = "muninn-backup-${java.time.LocalDate.now()}.mbk"
 
@@ -51,6 +56,8 @@ object Backup {
     fun restore(context: Context, vault: Vault, opened: BackupFormat.Opened) {
         vault.stageRestore(opened.files.filter { it.first != PREFS_ENTRY })
         opened.files.firstOrNull { it.first == PREFS_ENTRY }?.let { applyPrefs(context, String(it.second)) }
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(RESTORED_AT, System.currentTimeMillis()).putBoolean(RESTORE_ANNOUNCE, true).commit()
     }
 
     /** Closes Muninn and opens it again, so everything starts from the restored data. */

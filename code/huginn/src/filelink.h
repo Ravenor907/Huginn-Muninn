@@ -117,6 +117,9 @@ public:
     std::function<void(const QString &peer, const QJsonObject &msg)> signal;
     std::function<bool(const QString &peer)> trusted;
     std::function<bool(const QString &peer)> peerHasF1;
+    // Their app waits kAskAnswerMs for a big file (its caps say e1): only then is a big file asked about first.
+    // An older sender gives up after kAnswerMs, so its big files are taken as before. Unset: it waits.
+    std::function<bool(const QString &peer)> waitsForAsk;
     std::function<QString(const QString &peer, const QByteArray &bytes, const QString &name)> relay;
     std::function<QString(const QString &peer)> nameOf;
     QString saveDir;

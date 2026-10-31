@@ -44,8 +44,17 @@ object FileLink {
     const val ANSWER_MS = 120_000L
     const val ASK_ANSWER_MS = 10 * 60_000L
 
-    /** An offered file of [size] downloads by itself (small enough, and Data saver doesn't say wait). */
-    fun arrivesByItself(size: Long, mayDownload: Boolean): Boolean = size < AUTO_BYTES && mayDownload
+    /**
+     * A sender whose app says this cap waits [ASK_ANSWER_MS] for a big file, so the receiver may ask first. An older
+     * sender gives up after [ANSWER_MS]: its big files are taken as before, without asking.
+     */
+    const val ASK_CAP = RingWire.WRAP_CAP
+
+    /** A file of [size] asks Accept or Decline first: big, and the sender waits for that ([senderWaits]). */
+    fun asksFirst(size: Long, senderWaits: Boolean): Boolean = size >= AUTO_BYTES && senderWaits
+
+    /** An offered file of [size] downloads by itself (small enough or from an older sender, and Data saver doesn't say wait). */
+    fun arrivesByItself(size: Long, mayDownload: Boolean, senderWaits: Boolean = true): Boolean = !asksFirst(size, senderWaits) && mayDownload
 
     /** How long the sender waits for an answer to a file of [size]. */
     fun answerMs(size: Long): Long = if (size < AUTO_BYTES) ANSWER_MS else ASK_ANSWER_MS
@@ -158,6 +167,8 @@ object FileLink {
         fun signal(peer: String, json: String)
         fun trusted(peer: String): Boolean
         fun hasF1(peer: String): Boolean
+        /** Their app waits for a big file to be accepted ([ASK_CAP]). */
+        fun waitsForAsk(peer: String): Boolean = true
         /** A whole file arrived and checked out: put it in Downloads. Returns the name it got. */
         fun save(name: String, file: File): String?
         fun cacheDir(): File
@@ -211,9 +222,10 @@ object FileLink {
                 if (!h.trusted(from)) { h.signal(from, JSONObject().put("t", "decline").put("id", id).toString()); return }
                 val inc = In(from, p.getString("name"), p.getLong("size"), p.getString("sha"), p.getString("e"), CallLogic.directOf(p.getJSONArray("c")))
                 ins[id] = inc
+                val waits = h.waitsForAsk(from)
                 when {
-                    arrivesByItself(inc.size, h.mayDownload()) -> accept(id)
-                    inc.size >= AUTO_BYTES -> {
+                    arrivesByItself(inc.size, h.mayDownload(), waits) -> accept(id)
+                    asksFirst(inc.size, waits) -> {
                         put(Progress(id, from, inc.name, inc.size, false, "asking", note = "Wants to send you a big file. Accept or decline"))
                         h.notice("A big file is waiting for you to accept: ${inc.name}")
                     }

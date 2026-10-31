@@ -580,7 +580,9 @@ end with `hangup` `why:"dropped"` and show "Call dropped".
 - Nostr relays see nothing new: signaling is sealed like any message.
 - Calls over Bluetooth or the same Wi-Fi use local addresses that Chat's discovery already shares there.
   A setting "Internet calls" (default on) can be turned off: then no relay login is fetched, no `relay`
-  candidate is sent, and calls work only over Wi-Fi and Bluetooth.
+  candidate is sent, and calls work only over Wi-Fi and Bluetooth. An offer from someone not reachable on the
+  same Wi-Fi or over Bluetooth is then answered with `decline` at once, never rung, and the chat gets a missed-call
+  line saying "Internet calls are off".
 
 ### 5.8 Call extras (cap `c2`)
 
@@ -1460,6 +1462,9 @@ is v1. Receivers take both (23.1).
   `type || UTF-8(id)`. `dir` is 0 from the sender, 1 from the receiver. Types: 1 probe, 2 data (`index (4 bytes) || piece`),
   3 ack (`below (4 bytes) || bits (8 bytes)`: every piece below `below` is in, and bit `b` says piece `below + b` is),
   4 done.
+- A file of 50 MB or more from someone whose caps include `e1` asks Accept or Decline first (Accept sends `accept`,
+  Decline sends `decline`); such a sender waits 10 minutes for the answer, other offers 120 s. From a sender without
+  `e1` (it gives up after 120 s) a big file is taken as before, without asking.
 - Pieces are 1100 bytes (the last one shorter). Both sides probe every candidate of the other until an authentic probe
   comes back (20 s at most); the address it came from is used. The sender keeps at most 96 pieces unconfirmed and sends a
   piece again 500 ms after it last went. The receiver acks at least every 40 ms or 16 new pieces, checks the SHA-256 at
@@ -1787,7 +1792,9 @@ A proof is a signed object (2.2) by the chat key, without the object itself on t
 ### 21.3 Hidden from people nearby
 
 Hidden, a device sends nothing about itself close by. On the Wi-Fi it makes no announcement and answers no scan or
-`info` request. On Bluetooth LE it is silent: Muninn doesn't advertise, serves nothing on HELLO and lets go of any
+`info` request: `register` and `info` get 404. A `register` it sends shows no client certificate. Huginn's HTTPS
+server shows a throwaway certificate made for that time while hidden, never its lasting one, which anyone close by
+could follow. On Bluetooth LE it is silent: Muninn doesn't advertise, serves nothing on HELLO and lets go of any
 connection; Huginn doesn't scan (an active scan names its adapter), doesn't connect and sends no hello. Anyone close
 by learns nothing they can follow from place to place; contacts still reach it over the internet.
 
@@ -1920,8 +1927,10 @@ Without `e1`, the relay wrapping (20.1) is sealed to the recipient's chat key al
 can open every saved relay event and read who sent it, their name and the room. With `e1` it is also sealed to a
 **day key** the recipient deletes after a while; once it is gone, the chat key alone opens nothing.
 
-- Each device makes a new P-256 day key when its newest is a day old (or more than a day ahead of its clock), keeps the
-  private halves in the vault, and deletes each 40 days after it was made (7 days of use, 31 on a relay, a margin).
+- Each device makes a new P-256 day key when its newest is a day old, keeps the private halves in the vault, and
+  deletes each 40 days after it was made (7 days of use, 31 on a relay, a margin). A day key stamped more than a day
+  ahead of the clock (made while the clock ran fast) is deleted too and never counts as the newest, so a clock put
+  back makes one new day key, not one on every receipt.
   Its id is the first 16 lowercase hex characters of SHA-256 of its SubjectPublicKeyInfo.
 - It announces the newest in every receipt (room `receipt`, also caps probes and their answers) to someone whose caps
   include `e1`: `"wk"` (the public key, base64 SPKI) and `"wt"` (when it was made, unix seconds, an integer). The
@@ -1946,6 +1955,13 @@ can open every saved relay event and read who sent it, their name and the room. 
   while it still has it; without `"w"` as in 20.1.
 - Room `file` (14.1) goes through the ratchet to someone whose caps include `e1`, so file offers and accepts (with
   their one-off keys and addresses) are forward secret like call signals.
+- **After restoring a backup** the backup's day keys may be older than the ones contacts hold. The device makes a new
+  day key (whatever the newest's age) and sends an empty receipt `{"ids":[],"s":"delivered"}` carrying `wk` and `wt`
+  to every contact whose caps include `e1`, at once when the restored app first opens (Huginn: at the first unlock
+  after the restore). For 7 days after the restore, a relay event whose wrapping names a day key this device doesn't
+  have is not marked seen (it is tried again when a relay sends it again); after that it is dropped like any event
+  that doesn't open. Either way it is never shown.
+- Erase everything and Move (on the device moved from) delete the day keys with the vault.
 
 ### 23.2 The ring key (`b1`)
 
@@ -1954,10 +1970,17 @@ can't ring. With `b1` it can:
 
 - Each device makes a **ring key**: a P-256 key pair and a Nostr secret for its **ring mailbox**, kept in the app's own
   private storage **outside the vault** (Muninn: `ring-key.json` in its files; Huginn: `ring-key.json` in its data
-  folder, beside the vault folder), never in an OS key store. It is not the chat key and is not in backups.
-- Its public half goes in every receipt to someone whose caps include `b1`: `"rk"` (base64 SPKI) and `"rp"` (the ring
-  mailbox, 64 lowercase hex). A receiver takes both from an authentic receipt of a contact or group peer when `rk` is a
-  P-256 SPKI as in 23.1 and `rp` is 64 lowercase hex, and keeps the latest.
+  folder, beside the vault folder), readable by this user only, never in an OS key store. It is not the chat key and
+  is not in backups. Erase everything and Move (on the device moved from) delete the file; a new ring key is made only
+  once there is a vault again.
+- Its public half goes in every receipt to a **contact** whose caps include `b1` (never to a group-only peer, never
+  to someone blocked): `"rk"` (base64 SPKI) and `"rp"` (the ring mailbox, 64 lowercase hex). A receiver takes both
+  from an authentic receipt of a contact or group peer when `rk` is a P-256 SPKI as in 23.1 and `rp` is 64 lowercase
+  hex, and keeps the latest.
+- **Blocking someone** makes a new ring key and ring mailbox, so whoever was blocked can't ring the device any more.
+  An empty receipt `{"ids":[],"s":"delivered"}` with the new `rk` and `rp` goes at once to every other contact whose
+  caps include `b1`. The old ring mailbox is still read (and signed in as) for 2 days, for rings from contacts who
+  haven't heard of the new one yet, then dropped.
 - A caller sending a 1:1 `offer` (5.2, not one inside a voice room) to someone whose caps include `b1` and whose ring
   key it holds also publishes, once per call, a **ring envelope** to their ring mailbox, padded and expiring like
   any other event (section 20):

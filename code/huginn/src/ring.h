@@ -8,6 +8,7 @@
 #include <QJsonValue>
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include "chatcrypto.h"
 
@@ -60,6 +61,7 @@ struct Announce {
 };
 Announce announceOf(const QJsonObject &r, qint64 nowS);
 bool mayUse(qint64 wt, qint64 nowS);
+// Kept: under 40 days old and no more than a day ahead (a key stamped further ahead is deleted).
 bool keep(qint64 t, qint64 nowS);
 bool rotateDue(qint64 newest, qint64 nowS);   // newest < 0: none yet
 
@@ -77,8 +79,12 @@ public:
         qint64 t = 0;
     };
     WrapKeys(std::function<QByteArray()> read, std::function<void(const QByteArray &)> write);
-    // The day key to announce now: a new one when the newest is a day old. Old ones past keeping go.
+    // The day key to announce now: a new one when the newest is a day old. Old ones past keeping go, and so do ones
+    // stamped more than a day ahead (a clock put back never makes a new key on every call).
     Day current(qint64 nowS);
+    // A new day key now, whatever the newest's age (after a restore: the backup's keys may be older than what
+    // contacts hold). It is the one current() gives from then on.
+    Day renew(qint64 nowS);
     // The key pair a wrapping's "w" names, while it's kept (empty when gone).
     ChatCrypto::KeyPair find(const QString &id, qint64 nowS);
     void prune(qint64 nowS);
@@ -114,23 +120,41 @@ private:
 };
 
 // This device's ring key (b1): a P-256 key pair and a Nostr secret for the ring mailbox, in a file of Huginn's own
-// outside the vault (never an OS key store). With it a locked Huginn can tell a call is coming, and nothing else:
-// someone holding the computer learns only that calls came and when.
+// outside the vault (never an OS key store), readable by this user only. With it a locked Huginn can tell a call is
+// coming, and nothing else: someone holding the computer learns only that calls came and when.
 class RingKey
 {
 public:
+    static constexpr qint64 kOldKeepMs = 2 * 86400000LL;   // after renew(), the old ring mailbox is still read this long
     explicit RingKey(const QString &path);
     QString publicKey();      // "rk"
     QString mailbox();        // "rp": where callers send ring envelopes
-    QByteArray nostrSecret(); // to sign in to relays that ask (NIP-42)
-    // A ring envelope's content opened: true with the call id and ts.
+    // The ring mailboxes to read and their Nostr secrets (to sign in to relays that ask, NIP-42): the current one,
+    // and the one before a renew() for kOldKeepMs.
+    QStringList mailboxes();
+    QList<QByteArray> nostrSecrets();
+    // A ring envelope's content opened (with the current key, or the old one while it's read): true with the call id and ts.
     bool open(const QString &content, QString *callId, qint64 *ts);
+    // Someone was blocked: a new key pair and ring mailbox, so they can't ring this device any more. The old one is read
+    // for kOldKeepMs (contacts who haven't heard of the new one yet).
+    void renew();
+    // True (once) when the old ring mailbox just stopped being read.
+    bool dropOld();
+    // Erase everything and Move: the file goes, and no ring mailbox is read. A new key is made only when publicKey() or
+    // mailbox() is asked for again (Chat, once there is a vault again).
+    void forget();
 
 private:
+    struct Pair {
+        ChatCrypto::KeyPair keys;
+        QByteArray secret;
+        QString mailbox;
+    };
     void load();
+    bool save() const;
     QString m_path;
-    ChatCrypto::KeyPair m_keys;
-    QByteArray m_secret;
-    QString m_mailbox;
+    Pair m_now, m_old;
+    qint64 m_oldUntil = 0;   // ms; 0: no old one
     bool m_loaded = false;
+    bool m_forgotten = false;
 };

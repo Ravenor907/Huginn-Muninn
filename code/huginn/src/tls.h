@@ -20,6 +20,10 @@ struct Identity {
 // Returns an invalid Identity if neither works.
 Identity load();
 
+// A new identity kept only in memory, never saved: what a hidden device shows to whoever connects, so nobody close by
+// can follow its lasting certificate from place to place. Invalid if it couldn't be made.
+Identity throwaway();
+
 // Uppercase hex SHA-256 of a certificate's DER bytes; empty for a null certificate.
 QString fingerprintOf(const QSslCertificate &cert);
 

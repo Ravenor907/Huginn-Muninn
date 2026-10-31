@@ -251,11 +251,26 @@ bool Vault::hasLock() const
     return QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("mode")).toString() != QLatin1String("open");
 }
 
-bool Vault::turnOffLock()
+bool Vault::turnOffLock(const QString &secret)
 {
-    // Only while open on screen too: not from behind the lock screen.
-    if (m_restarting || m_screenLocked || m_key.size() != 32 || !exists())
+    // Only while open on screen too: not from behind the lock screen, and only with the lock given again.
+    if (m_restarting || m_screenLocked || m_key.size() != 32 || !exists() || !hasLock() || waitSeconds() > 0)
         return false;
+    {
+        QFile lock(keyFile());
+        if (!lock.open(QIODevice::ReadOnly))
+            return false;
+        bool ok = false;
+        QByteArray given = openLock(QJsonDocument::fromJson(lock.readAll()).object(), secret, &ok);
+        const bool same = ok && given == m_key;
+        given.fill(0);
+        if (!same) {
+            wrongTry();
+            Q_EMIT changed();
+            return false;
+        }
+        settings().setValue(QStringLiteral("vault/fails"), 0);
+    }
     // No secret: the data key itself goes in vault.key. Nothing outside Huginn keeps it.
     const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(m_key.toBase64())}};
     QSaveFile f(keyFile());
@@ -330,15 +345,7 @@ bool Vault::unlock(const QString &secret)
     bool ok = false;
     const QByteArray key = openLock(o, secret, &ok);
     if (!ok || key.size() != 32) {
-        // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
-        const int fails = settings().value(QStringLiteral("vault/fails"), 0).toInt() + 1;
-        settings().setValue(QStringLiteral("vault/fails"), fails);
-        if (fails % 5 == 0) {
-            const qint64 wait = qMin<qint64>(3600000, qint64(30000) << qMin(fails / 5 - 1, 7)), mono = sinceStart();
-            settings().setValue(QStringLiteral("vault/wait"), wait);
-            settings().setValue(QStringLiteral("vault/at"), mono + wait);
-            settings().setValue(QStringLiteral("vault/started"), QDateTime::currentMSecsSinceEpoch() - mono);
-        }
+        wrongTry();
         Q_EMIT changed();
         return false;
     }
@@ -361,20 +368,66 @@ bool Vault::unlock(const QString &secret)
     return true;
 }
 
+void Vault::wrongTry()
+{
+    // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
+    const int fails = settings().value(QStringLiteral("vault/fails"), 0).toInt() + 1;
+    settings().setValue(QStringLiteral("vault/fails"), fails);
+    if (fails % 5 == 0) {
+        const qint64 wait = qMin<qint64>(3600000, qint64(30000) << qMin(fails / 5 - 1, 7)), mono = sinceStart();
+        settings().setValue(QStringLiteral("vault/wait"), wait);
+        settings().setValue(QStringLiteral("vault/at"), mono + wait);
+        settings().setValue(QStringLiteral("vault/started"), QDateTime::currentMSecsSinceEpoch() - mono);
+    }
+}
+
 bool Vault::setSecret(const QString &secret, bool pattern)
 {
     if (!strongSecret(secret))
         return false;
     if (exists() && m_key.isEmpty())
         return false;   // changing needs the old lock opened first
+    if (m_restarting)
+        return false;
     const bool first = m_key.isEmpty();
-    if (first)
+    // The lock was off: the data key sat unprotected in vault.key, so a copy of it may be out there. A new one, and
+    // every file sealed again with it, before the new lock guards it.
+    const bool wasOff = !first && exists() && !hasLock();
+    if (wasOff && m_busy)
+        return false;   // a backup is reading the files with the old key
+    QByteArray old;
+    Files files;
+    if (first) {
         m_key = random(32);
+    } else if (wasOff) {
+        old = m_key;
+        files = collect(old, dataDir());
+        const QByteArray fresh = random(32);
+        QString error;
+        if (!replaceAll(fresh, dataDir(), files, &error)) {
+            replaceAll(old, dataDir(), files, &error);   // a swap that stopped partway: put the old sealing back
+            for (auto &e : files)
+                e.second.fill(0);
+            return false;
+        }
+        m_key = fresh;
+    }
     if (!writeLock(secret, pattern)) {
         if (first)
             m_key.clear();
+        if (wasOff) {
+            // vault.key still holds the old key: the files go back to it.
+            QString error;
+            replaceAll(old, dataDir(), files, &error);
+            m_key = old;
+        }
+        for (auto &e : files)
+            e.second.fill(0);
         return false;
     }
+    for (auto &e : files)
+        e.second.fill(0);
+    old.fill(0);
     m_weak = false;
     m_screenLocked = false;
     Q_EMIT changed();
@@ -433,11 +486,15 @@ void Vault::eraseAll()
     m_key.fill(0);
     m_key.clear();
     settings().remove(QStringLiteral("vault"));
-    // The inbox address and chat identity go too, so an erased computer doesn't keep the old mailbox.
+    // The inbox address and chat identity go too. The day keys were vault files (gone above); the ring key and its
+    // ring mailbox live outside the vault and go on erased() (main.cpp, RingKey::forget), so an erased computer
+    // keeps none of its old mailboxes.
     settings().remove(QStringLiteral("nostr"));
     settings().remove(QStringLiteral("chat"));
+    settings().remove(QStringLiteral("restore"));
     // Written now, so what Move saves right after (its "Moved to" note, through its own QSettings) isn't removed later.
     settings().sync();
+    Q_EMIT erased();
     Q_EMIT changed();
 }
 
@@ -1045,6 +1102,11 @@ void Vault::restoreOpened()
         if (e.first == kSettingsEntry)
             applySettingsBlob(e.second);
     forgetOpened();
+    // The backup's day keys may be older than the ones contacts hold: Chat makes a new one and announces it at the
+    // next start (restore/announce), and wrappings for day keys it no longer has wait 7 days (restore/at).
+    settings().setValue(QStringLiteral("restore/at"), QDateTime::currentMSecsSinceEpoch());
+    settings().setValue(QStringLiteral("restore/announce"), true);
+    settings().sync();
     // Chat still holds the old conversations in memory: drop the key so nothing it saves in the
     // next moment can overwrite what was just restored, then start fresh on the restored files.
     m_key.fill(0);

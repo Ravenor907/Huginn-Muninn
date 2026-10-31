@@ -4,6 +4,7 @@
 #include "schnorr.h"
 
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -172,7 +173,9 @@ RingWire::Announce RingWire::announceOf(const QJsonObject &r, qint64 nowS)
 }
 
 bool RingWire::mayUse(qint64 wt, qint64 nowS) { return nowS - wt <= kWrapUseS && wt - nowS <= kWrapAheadS; }
-bool RingWire::keep(qint64 t, qint64 nowS) { return nowS - t < kWrapKeepS; }
+// A day key stamped more than a day ahead (made while the clock ran fast) is not kept: it would stay the newest and
+// make a new one on every call once the clock is put back.
+bool RingWire::keep(qint64 t, qint64 nowS) { return nowS - t < kWrapKeepS && t - nowS <= kWrapAheadS; }
 bool RingWire::rotateDue(qint64 newest, qint64 nowS) { return newest < 0 || nowS - newest >= kWrapNewS || newest - nowS > kWrapAheadS; }
 
 // ------------------------------------------------------------------ this device's day keys
@@ -212,7 +215,7 @@ WrapKeys::Day WrapKeys::current(qint64 nowS)
     m_days.removeIf([nowS](const Day &d) { return !RingWire::keep(d.t, nowS); });
     const Day *newest = nullptr;
     for (const Day &d : std::as_const(m_days))
-        if (!newest || d.t > newest->t)
+        if (!newest || d.t >= newest->t)
             newest = &d;
     if (newest && !RingWire::rotateDue(newest->t, nowS)) {
         const Day keepIt = *newest;
@@ -220,6 +223,18 @@ WrapKeys::Day WrapKeys::current(qint64 nowS)
             save();
         return keepIt;
     }
+    const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
+    const QString pub = b64(kp.publicDer);
+    const Day d{RingWire::wrapId(pub), pub, kp.privateDer, nowS};
+    m_days << d;
+    save();
+    return d;
+}
+
+WrapKeys::Day WrapKeys::renew(qint64 nowS)
+{
+    load();
+    m_days.removeIf([nowS](const Day &d) { return !RingWire::keep(d.t, nowS); });
     const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
     const QString pub = b64(kp.publicDer);
     const Day d{RingWire::wrapId(pub), pub, kp.privateDer, nowS};
@@ -322,53 +337,160 @@ void PeerKeys::forget(const QString &key)
 
 RingKey::RingKey(const QString &path) : m_path(path) {}
 
+namespace
+{
+QJsonObject pairJson(const ChatCrypto::KeyPair &k, const QByteArray &secret)
+{
+    return QJsonObject{{QStringLiteral("k"), b64(k.publicDer)}, {QStringLiteral("s"), b64(k.privateDer)}, {QStringLiteral("n"), QString::fromLatin1(secret.toHex())}};
+}
+
+qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
+}
+
 void RingKey::load()
 {
     if (m_loaded)
         return;
+    const auto pairOf = [](const QJsonObject &o) {
+        Pair p;
+        p.keys = ChatCrypto::KeyPair{unb64(o.value(QStringLiteral("s"))), unb64(o.value(QStringLiteral("k")))};
+        p.secret = QByteArray::fromHex(o.value(QStringLiteral("n")).toString().toLatin1());
+        if (p.keys.privateDer.isEmpty() || p.keys.publicDer.isEmpty() || p.secret.size() != 32)
+            return Pair();
+        p.mailbox = Schnorr::hex(Schnorr::publicKey(p.secret));
+        return p;
+    };
     QFile f(m_path);
     if (f.open(QIODevice::ReadOnly)) {
         const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-        m_keys = ChatCrypto::KeyPair{unb64(o.value(QStringLiteral("s"))), unb64(o.value(QStringLiteral("k")))};
-        m_secret = QByteArray::fromHex(o.value(QStringLiteral("n")).toString().toLatin1());
+        f.close();
+        m_now = pairOf(o);
+        const QJsonObject old = o.value(QStringLiteral("old")).toObject();
+        m_old = pairOf(old);
+        m_oldUntil = m_old.mailbox.isEmpty() ? 0 : old.value(QStringLiteral("until")).toInteger();
+        // Written by an older Huginn with the default permissions: this user only from now on.
+        QFile::setPermissions(m_path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
-    if (m_keys.privateDer.isEmpty() || m_keys.publicDer.isEmpty() || m_secret.size() != 32) {
-        m_keys = ChatCrypto::newKeyPair();
-        m_secret = Schnorr::newSecret();
-        QDir().mkpath(QFileInfo(m_path).absolutePath());
-        QSaveFile out(m_path);
-        if (out.open(QIODevice::WriteOnly)) {
-            out.write(compact(QJsonObject{{QStringLiteral("k"), b64(m_keys.publicDer)}, {QStringLiteral("s"), b64(m_keys.privateDer)},
-                                          {QStringLiteral("n"), QString::fromLatin1(m_secret.toHex())}}));
-            out.commit();
-        }
+    if (m_now.mailbox.isEmpty()) {
+        m_now.keys = ChatCrypto::newKeyPair();
+        m_now.secret = Schnorr::newSecret();
+        m_now.mailbox = Schnorr::hex(Schnorr::publicKey(m_now.secret));
+        save();
     }
-    m_mailbox = Schnorr::hex(Schnorr::publicKey(m_secret));
-    m_loaded = !m_keys.privateDer.isEmpty() && !m_mailbox.isEmpty();
+    m_loaded = !m_now.keys.privateDer.isEmpty() && !m_now.mailbox.isEmpty();
+}
+
+bool RingKey::save() const
+{
+    QJsonObject o = pairJson(m_now.keys, m_now.secret);
+    if (m_oldUntil > 0 && !m_old.mailbox.isEmpty()) {
+        QJsonObject old = pairJson(m_old.keys, m_old.secret);
+        old.insert(QStringLiteral("until"), m_oldUntil);
+        o.insert(QStringLiteral("old"), old);
+    }
+    const QByteArray data = compact(o);
+    // Readable by this user only (like the certificate's key, tls.cpp), written beside the file and then swapped in.
+    QDir().mkpath(QFileInfo(m_path).absolutePath());
+    const QString tmp = m_path + QStringLiteral(".new");
+    QFile::remove(tmp);
+    QFile f(tmp);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
+        return false;
+    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    const bool ok = f.write(data) == data.size();
+    f.close();
+    if (!ok || f.error() != QFileDevice::NoError) {
+        QFile::remove(tmp);
+        return false;
+    }
+    QFile::remove(m_path);
+    return QFile::rename(tmp, m_path);
 }
 
 QString RingKey::publicKey()
 {
+    m_forgotten = false;
     load();
-    return b64(m_keys.publicDer);
+    return b64(m_now.keys.publicDer);
 }
 
 QString RingKey::mailbox()
 {
+    m_forgotten = false;
     load();
-    return m_mailbox;
+    return m_now.mailbox;
 }
 
-QByteArray RingKey::nostrSecret()
+QStringList RingKey::mailboxes()
 {
+    if (m_forgotten)
+        return {};
     load();
-    return m_secret;
+    QStringList out;
+    if (!m_now.mailbox.isEmpty())
+        out << m_now.mailbox;
+    if (m_oldUntil > nowMs() && !m_old.mailbox.isEmpty())
+        out << m_old.mailbox;
+    return out;
+}
+
+QList<QByteArray> RingKey::nostrSecrets()
+{
+    if (m_forgotten)
+        return {};
+    load();
+    QList<QByteArray> out;
+    if (m_now.secret.size() == 32)
+        out << m_now.secret;
+    if (m_oldUntil > nowMs() && m_old.secret.size() == 32)
+        out << m_old.secret;
+    return out;
 }
 
 bool RingKey::open(const QString &content, QString *callId, qint64 *ts)
 {
+    if (m_forgotten)
+        return false;
     load();
-    return RingWire::openRingContent(content, m_keys, callId, ts);
+    if (RingWire::openRingContent(content, m_now.keys, callId, ts))
+        return true;
+    return m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_old.keys, callId, ts);
+}
+
+void RingKey::renew()
+{
+    m_forgotten = false;
+    load();
+    m_old = m_now;
+    m_oldUntil = nowMs() + kOldKeepMs;
+    m_now.keys = ChatCrypto::newKeyPair();
+    m_now.secret = Schnorr::newSecret();
+    m_now.mailbox = Schnorr::hex(Schnorr::publicKey(m_now.secret));
+    save();
+}
+
+bool RingKey::dropOld()
+{
+    if (m_forgotten)
+        return false;
+    load();
+    if (m_oldUntil == 0 || m_oldUntil > nowMs())
+        return false;
+    m_old = Pair();
+    m_oldUntil = 0;
+    save();
+    return true;
+}
+
+void RingKey::forget()
+{
+    QFile::remove(m_path);
+    QFile::remove(m_path + QStringLiteral(".new"));
+    m_now = Pair();
+    m_old = Pair();
+    m_oldUntil = 0;
+    m_loaded = false;
+    m_forgotten = true;
 }
 
 // ------------------------------------------------------------------ self-test
@@ -483,6 +605,14 @@ bool RingWire::selfTest(const QString &vectorsPath)
         const QByteArray got = openWrap(sealed, me, [&](const QString &id) { return again.find(id, t0 + 39 * kDayS); }, &o1);
         openWrap(sealed, me, [&](const QString &id) { return again.find(id, t0 + 40 * kDayS); }, &o2);
         check("own day keys", same && d1.id != d0.id && got == "hi" && o1 && !o2);
+        // A clock put back: the key stamped days ahead goes, and the one made then stays (no new key on every call).
+        QByteArray fastStored;
+        WrapKeys fast([&fastStored] { return fastStored; }, [&fastStored](const QByteArray &b) { fastStored = b; });
+        const WrapKeys::Day ahead = fast.current(t0 + 5 * kDayS);
+        const WrapKeys::Day back1 = fast.current(t0);
+        const WrapKeys::Day back2 = fast.current(t0 + 60);
+        check("clock put back", back1.id != ahead.id && back2.id == back1.id && fast.find(ahead.id, t0).privateDer.isEmpty()
+                                    && !keep(t0 + kDayS + 1, t0) && keep(t0 + kDayS, t0));
     }
     // What contacts announced: the ring key as said, a day key only when newer, used for a week.
     {
@@ -508,6 +638,25 @@ bool RingWire::selfTest(const QString &vectorsPath)
         qint64 t = 0;
         check("ring key file", tmp.isValid() && keyOk(pub) && b.publicKey() == pub && b.mailbox() == a.mailbox() && a.mailbox().size() == 64
                                    && b.open(ringContent(pub, QStringLiteral("AAECAwQFBgcICQoLDA0ODw"), 42), &cid, &t) && t == 42);
+#ifdef Q_OS_UNIX
+        check("ring key file is this user's only",
+              (QFileInfo(path).permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther | QFileDevice::WriteGroup | QFileDevice::WriteOther)) == 0);
+#endif
+        // Renewed (someone blocked): a new key and mailbox; the old one is still read for two days, then dropped.
+        const QString oldBox = b.mailbox();
+        b.renew();
+        RingKey c(path);
+        QString cid2;
+        qint64 t2 = 0;
+        check("ring key renewed", c.publicKey() != pub && c.mailbox() != oldBox && c.mailboxes() == QStringList({c.mailbox(), oldBox})
+                                      && c.nostrSecrets().size() == 2 && c.open(ringContent(pub, QStringLiteral("AAECAwQFBgcICQoLDA0ODw"), 7), &cid2, &t2)
+                                      && t2 == 7 && !c.dropOld());
+        // Erase everything: the file goes, and the next key is a new one.
+        const QString cpub = c.publicKey();
+        c.forget();
+        const bool gone = !QFile::exists(path) && c.mailboxes().isEmpty() && !QFile::exists(path);
+        RingKey d(path);
+        check("ring key forgotten", gone && d.publicKey() != cpub && d.mailboxes().size() == 1);
     }
     return all;
 }

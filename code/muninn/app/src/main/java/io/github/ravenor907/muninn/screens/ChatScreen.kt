@@ -164,6 +164,8 @@ object ChatNav {
     var back by mutableStateOf("")
     /** A group whose "Pick people" call list is open, "" for none. */
     var callSome by mutableStateOf("")
+    /** Who New group starts with picked (Start a group, from a person's menu). */
+    var groupWith by mutableStateOf(setOf<String>())
     /**
      * On a tablet ([TABLET_SW_DP]) and at least this wide, Muninn uses the tablet layout (rail, chat list,
      * conversation); on a phone, a conversation takes the whole screen.
@@ -1799,7 +1801,9 @@ private fun NoGroup() {
 private fun NewGroup(app: Muninn) {
     var name by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf("") }
-    var chosen by remember { mutableStateOf(setOf<String>()) }
+    // Start a group (a person's menu): them already picked.
+    var chosen by remember { mutableStateOf(ChatNav.groupWith) }
+    LaunchedEffect(Unit) { ChatNav.groupWith = emptySet() }
     val contacts by app.chat.contacts.all.collectAsState()
     val people = contacts.filter { !it.groupOnly && !app.chat.trash.has(it.chatKey) }.sortedBy { it.shown.lowercase() }
     Column(Modifier.fillMaxSize().imePadding()) {
@@ -1824,6 +1828,17 @@ private fun NewGroup(app: Muninn) {
                     ChatNav.open = Folders.groupKey(g)
                     Ui.say(failed.firstOrNull() ?: "${name.trim()} is ready.", failed.isNotEmpty())
                 }
+            }
+            // A group with the people picked, and a group call to them at once.
+            MButton("Call them", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Normal, enabled = chosen.isNotEmpty(), icon = "call") {
+                val picked = chosen.toList()
+                val (g, msg) = app.chat.startGroup(picked)
+                if (g == null) { Ui.say(msg, true); return@MButton }
+                if (name.isNotBlank()) app.chat.groups.rename(g, name)
+                ChatNav.openGroup(g)
+                Ui.say(msg)
+                // Rings once the group has reached them, and says who couldn't be rung.
+                io.github.ravenor907.muninn.net.call.GroupRing.start(app, g, picked)
             }
             Spacer(Modifier.height(24.dp))
         }

@@ -513,6 +513,14 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         addHistory(from, false, QStringLiteral("missed"), qint64(msg.value(QStringLiteral("ts")).toDouble()), 0);
         return;
     }
+    // Internet calls off and they aren't on this Wi-Fi or Bluetooth: declined at once, never rung, and a missed-call
+    // line says why.
+    if (!Settings::internetCallsOn() && m_signal->lanHost(from).isEmpty() && !m_signal->bleReady(from)) {
+        m_handled.insert(id);
+        m_signal->send(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), id}});
+        addHistory(from, false, QStringLiteral("internetOff"), nowMs(), 0);
+        return;
+    }
     if ((m_session && m_session->state() != CallSession::Ended) || (busyElsewhere && busyElsewhere())) {
         m_handled.insert(id);
         const QJsonObject busy{{QStringLiteral("t"), QStringLiteral("busy")}, {QStringLiteral("call"), id}};
@@ -735,7 +743,7 @@ void CallManager::addHistory(const QString &key, bool out, const QString &result
                   {QStringLiteral("result"), result},
                   {QStringLiteral("started"), started},
                   {QStringLiteral("seconds"), seconds},
-                  {QStringLiteral("missed"), result == QLatin1String("missed")}};
+                  {QStringLiteral("missed"), result == QLatin1String("missed") || result == QLatin1String("internetOff")}};
     m_history.prepend(e);
     while (m_history.size() > kMaxHistory)
         m_history.removeLast();

@@ -187,6 +187,12 @@ object CallLogic {
     /** 5.2: an offer is fresh if its ts is at most 60 s old and at most 120 s ahead. */
     fun fresh(tsMs: Long, nowMs: Long) = tsMs >= nowMs - 60_000 && tsMs <= nowMs + 120_000
 
+    /**
+     * Answered on the locked ringing screen: the offer, opened after unlocking, is answered only while the caller is
+     * still ringing ([RING_MS] from its time). Older, it's a missed call.
+     */
+    fun lockedAnswerOk(tsMs: Long, nowMs: Long) = nowMs - tsMs <= RING_MS && tsMs <= nowMs + 120_000
+
     // The jitter buffer (5.5) is Jitter.kt.
 
     // ------------------------------------------------------------------ speaking indicator (5.5)

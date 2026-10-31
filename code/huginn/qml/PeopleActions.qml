@@ -18,7 +18,8 @@ QtObject {
         const contact = !!c.tour || Chat.isContact(k)
         const blocked = !c.tour && Chat.isBlocked(k)
         const items = [{ name: "Message", icon: "thread", url: "message" }]
-        if (contact) items.push({ name: "Call", icon: "call", url: "call" }, { name: "Video", icon: "video", url: "video" })
+        if (contact) items.push({ name: "Call", icon: "call", url: "call" })
+        if (contact && (c.tour || Calls.canVideo(k))) items.push({ name: "Video", icon: "video", url: "video" })
         items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (contact) items.push({ name: "Folders and role", icon: "folder", url: "folders" }, { name: "What they can do", icon: "shield", url: "can" })
         items.push({ name: "Chat", icon: "pin", url: "chat" })

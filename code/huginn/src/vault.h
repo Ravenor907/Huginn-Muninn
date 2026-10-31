@@ -33,16 +33,18 @@ public:
     bool locked() const { return m_key.isEmpty(); }
     bool usesPattern() const;
     bool hasLock() const;
-    // Turns the lock off (must be unlocked): the data key is kept beside the chats, unprotected.
-    // Panic lock and locking when away stop working. setSecret() turns it on again.
-    Q_INVOKABLE bool turnOffLock();
+    // Turns the lock off (must be unlocked, and the current pattern or password given again; a wrong one counts as a
+    // wrong try): the data key is kept beside the chats, unprotected. Panic lock and locking when away stop working.
+    // setSecret() turns it on again, with a new data key (everything is sealed again with it).
+    Q_INVOKABLE bool turnOffLock(const QString &secret);
     // At start (main.cpp, once everything listens for opened()): a vault without a lock opens by itself.
     void openWithoutLock();
     int waitSeconds() const;      // after too many wrong tries, seconds until the next try
 
     // Opens with the pattern ("pattern:0,3,6,...") or password. False if wrong.
     Q_INVOKABLE bool unlock(const QString &secret);
-    // Sets the lock the first time (creating the data key), or changes it (must be unlocked).
+    // Sets the lock the first time (creating the data key), or changes it (must be unlocked). Set again after it was
+    // off: a new data key, and every file is sealed again with it (the old key sat unprotected on disk).
     // At least 6 pattern dots or 6 characters.
     Q_INVOKABLE bool setSecret(const QString &secret, bool pattern);
     // True once, after unlocking with a lock shorter than new ones may be: suggest a stronger one.
@@ -151,12 +153,14 @@ public:
 Q_SIGNALS:
     void changed();
     void opened();   // the data key is available (first unlock)
+    void erased();   // Erase everything (also Move, once done): what lives outside the vault goes too
     void done(const QString &what, bool ok, const QString &message);   // backup, open, restore
     void panicked(); // the panic combo just locked Chat: close anything that could show it
 
 private:
     QString keyFile() const;
     bool writeLock(const QString &secret, bool pattern) const;
+    void wrongTry();   // counts a wrong pattern or password (the wait doubles every 5)
     QByteArray m_key;
     bool m_weak = false;   // the lock just opened is shorter than new ones may be
     void leaving();   // Huginn went to the background: cover at once

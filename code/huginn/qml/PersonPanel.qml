@@ -73,7 +73,8 @@ Item {
         else if (id === "note")
             Ui.ask("Note about " + shownName, "Only you see it", Chat.noteOf(k), "Save", t => { Chat.setNote(k, t); panel.revision++ }, false, true)
         else if (id === "color") pickColor(1)
-        else if (id === "days") { visible = false; PeopleActions.daysMenu(k, () => panel.reopen()) }
+        // The list opens over this panel (it stays open on the same row); back here after a pick or B.
+        else if (id === "days") PeopleActions.daysMenu(k, () => { panel.revision++; if (Ui.main) Ui.main.restoreFocus() })
         else if (id === "direct") { Calls.setTrusted(k, !Calls.trusted(k)); revision++ }
         else if (setters[id] && has(setters[id])) { Chat[setters[id]](k, !isOn(id)); revision++ }
     }

@@ -183,4 +183,14 @@ class CallLogicTest {
         is Number -> v.toLong()
         else -> v
     }
+
+    /** Answered on the locked ringing screen: the offer is answered only within the caller's 45 s ring, else missed. */
+    @Test fun lockedAnswerOnlyWhileTheCallerRings() {
+        val now = 1_761_500_000_000L
+        assertTrue(CallLogic.lockedAnswerOk(now, now))
+        assertTrue(CallLogic.lockedAnswerOk(now - CallLogic.RING_MS, now))
+        assertFalse(CallLogic.lockedAnswerOk(now - CallLogic.RING_MS - 1, now))
+        assertFalse(CallLogic.lockedAnswerOk(now - 90_000, now))
+        assertFalse(CallLogic.lockedAnswerOk(now + 121_000, now))
+    }
 }

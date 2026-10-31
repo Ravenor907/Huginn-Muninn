@@ -49,6 +49,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QTimer>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
@@ -242,8 +243,7 @@ int main(int argc, char *argv[])
     }, &app);
     // The internet inbox's list of events already taken: in the vault too.
     nostr->keepSeen = [vault](const QByteArray &stored) {
-        if (!vault->locked())
-            vault->write(QStringLiteral("nostrseen.json"), stored);
+        return !vault->locked() && vault->write(QStringLiteral("nostrseen.json"), stored);
     };
     QObject::connect(vault, &Vault::opened, nostr, [vault, nostr] { nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json"))); });
     if (!vault->locked())
@@ -281,8 +281,18 @@ int main(int argc, char *argv[])
     // rings even while Huginn is locked: only "Incoming call", no name, until it's unlocked.
     auto *ringKey = new RingKey(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ring-key.json"));
     chat->setRingKey(ringKey);
-    nostr->ringMailbox = [ringKey] { return ringKey->mailbox(); };
-    nostr->ringSecret = [ringKey] { return ringKey->nostrSecret(); };
+    nostr->ringMailboxes = [ringKey] { return ringKey->mailboxes(); };
+    nostr->ringSecrets = [ringKey] { return ringKey->nostrSecrets(); };
+    // Erase everything (and Move, which erases this computer when it's done): the ring key file goes too.
+    QObject::connect(vault, &Vault::erased, vault, [ringKey] { ringKey->forget(); });
+    // Two days after a block renewed the ring key, the old ring mailbox is no longer read.
+    auto *ringOld = new QTimer(&app);
+    ringOld->setInterval(3600000);
+    QObject::connect(ringOld, &QTimer::timeout, nostr, [ringKey, nostr] {
+        if (ringKey->dropOld())
+            nostr->resubscribe();
+    });
+    ringOld->start();
     nostr->onRing = [ringKey, calls](const QString &content) {
         QString call;
         qint64 ts = 0;
@@ -367,9 +377,11 @@ int main(int argc, char *argv[])
                          [chat, where] { Q_EMIT chat->showChat(where); });
     };
     QObject::connect(calls, &CallManager::logged, chat, [chat, calls, missedNote](const QString &key, bool out, const QString &result, int seconds) {
-        const bool missed = result == QLatin1String("missed");
+        const bool missed = result == QLatin1String("missed") || result == QLatin1String("internetOff");
         QString text;
-        if (missed)
+        if (result == QLatin1String("internetOff"))
+            text = QStringLiteral("Missed call · Internet calls are off");
+        else if (missed)
             text = QStringLiteral("Missed call");
         else if (result == QLatin1String("answered"))
             text = (out ? QStringLiteral("Outgoing call") : QStringLiteral("Incoming call")) + (seconds > 0 ? QStringLiteral(" · ") + calls->duration(seconds) : QString());

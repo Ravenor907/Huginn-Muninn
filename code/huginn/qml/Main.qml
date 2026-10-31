@@ -108,9 +108,10 @@ Window {
     function restoreFocus() { keys.forceActiveFocus() }
     // The lock screen goes up (the power menu, or Lock in your card); messages still arrive behind it.
     function lockNow() {
-        if (!Vault.exists || Vault.screenLocked) return
+        if (!Vault.hasLock || Vault.screenLocked) return
         if (meCard.visible) meCard.close()
         Vault.lockScreen()
+        if (!Vault.screenLocked) return   // nothing locked: no toast
         openPage("dms", {})
         Ui.say("Huginn locked.")
     }

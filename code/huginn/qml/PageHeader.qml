@@ -11,6 +11,7 @@ Item {
     property string glyph: ""        // "#" for a channel
     property bool carved: true        // Cinzel for section names; conversations use the body font
     property bool backShown: false
+    property bool warn: false         // the subtitle is a warning (a changed security key)
     signal back()
     default property alias trailing: right.data
 
@@ -73,7 +74,7 @@ Item {
             elide: Text.ElideRight
             visible: header.subtitle.length > 0
             text: header.subtitle
-            color: Theme.textMuted
+            color: header.warn ? Theme.danger : Theme.textMuted
             font.family: Theme.body
             font.pixelSize: Theme.fs(13)
         }

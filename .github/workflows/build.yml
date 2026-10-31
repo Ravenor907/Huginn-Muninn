@@ -785,26 +785,6 @@ jobs:
             Huginn-Windows.zip
             Huginn.flatpak
             Muninn.apk
-      - name: Deploy the relay Worker (code/shared/relay-worker, releases only)
-        if: steps.v.outputs.new == '1'
-        # The apps work with the relay already running, so a failed deploy warns and doesn't hold back the release.
-        continue-on-error: true
-        working-directory: code/shared/relay-worker
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          WRANGLER_SEND_METRICS: "false"
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::warning title=Relay Worker not deployed::Add the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (Settings > Secrets and variables > Actions) to deploy it with each release. See code/shared/relay-worker/README.md."
-            exit 0
-          fi
-          # Wrangler needs Node 22 or newer; an older runner Node gets Node 22 from npm for this step only.
-          node22=""
-          [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ] || node22="-p node@22"
-          npx --yes $node22 -p wrangler@4.156.0 -- wrangler deploy
-          code=$(curl -s -o /dev/null -w '%{http_code}' https://huginn-relay.ravenor907.workers.dev/health || true)
-          echo "::notice title=Relay Worker::Deployed; /health answered $code"
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
         if: steps.v.outputs.new == '1'
         with:
@@ -831,6 +811,26 @@ jobs:
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
             Every file is signed with the project's release key (the .sig beside it, and the .vsig for its version) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md
             Privacy and security: https://github.com/Ravenor907/Huginn-Muninn#security
+      - name: Deploy the relay Worker (code/shared/relay-worker, releases only)
+        if: steps.v.outputs.new == '1'
+        # The apps work with the relay already running, so a failed deploy warns and doesn't hold back the release.
+        continue-on-error: true
+        working-directory: code/shared/relay-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::warning title=Relay Worker not deployed::Add the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (Settings > Secrets and variables > Actions) to deploy it with each release. See code/shared/relay-worker/README.md."
+            exit 0
+          fi
+          # Wrangler needs Node 22 or newer; an older runner Node gets Node 22 from npm for this step only.
+          node22=""
+          [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ] || node22="-p node@22"
+          npx --yes $node22 -p wrangler@4.156.0 -- wrangler deploy
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://huginn-relay.ravenor907.workers.dev/health || true)
+          echo "::notice title=Relay Worker::Deployed; /health answered $code"
 
   beta:
     # The beta branch's downloads as one pre-release named "beta", replaced on every push to beta, signed like a release

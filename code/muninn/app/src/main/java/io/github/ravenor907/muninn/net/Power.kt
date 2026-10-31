@@ -128,6 +128,10 @@ class Power(private val app: Muninn) {
             if (!v) main.post { caughtUpAt = 0L; catchUp(opened = true) }
         }
 
+    /** Extreme battery saver is in charge right now (a Kids' TV always listens and rings): [PowerLogic.manual]. */
+    fun manual(): Boolean = PowerLogic.manual(PowerLogic.Inputs(extreme = extreme,
+        kidsTv = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }))
+
     /** Something arrived or Muninn was opened: wide awake again (Check less when it's quiet starts over). */
     fun activity() {
         prefs.edit().putLong("lastActivity", System.currentTimeMillis()).apply()

@@ -98,6 +98,9 @@ public:
     // Hidden from people nearby (Chat's setting): no multicast announcement at all, no answer to anyone
     // else's, and no chat proof or hint in what is sent. Look again still finds devices and files still go out.
     std::function<bool()> silent;
+    // Hidden changed (Chat): from now on the server shows a throwaway certificate while hidden (never the lasting one,
+    // which anyone close by could follow), and the lasting one again once visible.
+    void hiddenChanged();
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
     // Moving to another device (cap x1): its own path on the same port, with an answer.
     std::function<QPair<int, QByteArray>(const QByteArray &body)> moveReceive;
@@ -166,7 +169,8 @@ private:
     void onDatagrams();
     void remember(const QJsonObject &o, const QString &ip, const QString &protocolFallback, const QString &provenFp = {});
     void registerWith(const QString &ip, int port, const QString &protocol, bool scan, const QString &expected = {});
-    QNetworkRequest makeRequest(const QUrl &url, const QString &expected) const;
+    // anonymous: no client certificate (a register sent while hidden).
+    QNetworkRequest makeRequest(const QUrl &url, const QString &expected, bool anonymous = false) const;
     void checkPeer(QNetworkReply *r, const QString &expected);
     QString expectedFor(const QUrl &url) const;
     void onConnection(QTcpServer *server);
@@ -184,6 +188,8 @@ private:
     Tls::Identity m_tls;
     bool m_secure = false;      // false only if no certificate could be made: then plain HTTP
     QSslConfiguration m_serverTls;
+    QSslConfiguration m_hiddenTls;   // while hidden: a certificate made for this time only, kept in memory
+    QSslConfiguration serverTls();
     bool m_on = false;
     std::vector<std::pair<QHostAddress, QTcpServer *>> m_servers;   // one per home-network address
     QStringList m_joined;                                           // interfaces in the multicast group

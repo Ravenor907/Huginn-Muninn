@@ -173,10 +173,10 @@ void Nostr::restoreSeen(const QByteArray &stored)
         have.remove(all.takeFirst());
     m_seen = all;
     m_seenSet = have;
+    // The plain list goes only once the vault really has it.
     if (!plain.isEmpty() || s.contains(QStringLiteral("nostr/seen"))) {
-        if (keepSeen)
-            keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact));
-        s.remove(QStringLiteral("nostr/seen"));
+        if (keepSeen && keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact)))
+            s.remove(QStringLiteral("nostr/seen"));
     }
 }
 
@@ -402,9 +402,9 @@ void Nostr::signIn(const QString &url, QWebSocket *ws, const QString &challenge)
     const QByteArray sk = secret();
     if (!sk.isEmpty())
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), sk)}));
-    const QByteArray rs = ringSecret ? ringSecret() : QByteArray();
-    if (rs.size() == 32)
-        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), rs)}));
+    for (const QByteArray &rs : ringSecrets ? ringSecrets() : QList<QByteArray>())
+        if (rs.size() == 32)
+            ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), rs)}));
 }
 
 void Nostr::subscribe(QWebSocket *ws)
@@ -420,10 +420,10 @@ void Nostr::subscribe(QWebSocket *ws)
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_subId, filter}));
     }
     // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
-    const QString ring = ringMailbox ? ringMailbox() : QString();
-    if (!ring.isEmpty()) {
+    const QStringList rings = ringMailboxes ? ringMailboxes() : QStringList();
+    if (!rings.isEmpty()) {
         const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
-                                 {QStringLiteral("#p"), QJsonArray{ring}},
+                                 {QStringLiteral("#p"), QJsonArray::fromStringList(rings)},
                                  {QStringLiteral("since"), qMax<qint64>(0, now() - 2 * 86400)}};
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_ringSubId, filter}));
     }
@@ -442,7 +442,7 @@ void Nostr::onMessage(const QString &url, QWebSocket *ws, const QString &text)
     } else if (type == QLatin1String("AUTH")) {
         // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
         m_challenges.insert(url, a.at(1).toString());
-        if (secret().isEmpty() && !(ringSecret && ringSecret().size() == 32))
+        if (secret().isEmpty() && !(ringSecrets && !ringSecrets().isEmpty()))
             return;
         signIn(url, ws, a.at(1).toString());
         subscribe(ws);
@@ -460,15 +460,15 @@ void Nostr::handle(const QJsonObject &ev)
     if (id.isEmpty() || m_seenSet.contains(id) || m_working.contains(id))
         return;
     // Cap b1: an event for the ring mailbox is only ever a ring envelope. Tried with the ring key, then dropped.
-    const QString ring = ringMailbox ? ringMailbox() : QString();
-    if (!ring.isEmpty()) {
+    const QStringList rings = ringMailboxes ? ringMailboxes() : QStringList();
+    if (!rings.isEmpty()) {
         QString p;
         for (const QJsonValue &t : ev.value(QStringLiteral("tags")).toArray())
             if (t.toArray().at(0).toString() == QLatin1String("p")) {
                 p = t.toArray().at(1).toString();
                 break;
             }
-        if (p == ring) {
+        if (!p.isEmpty() && rings.contains(p)) {
             const bool good = idOf(ev) == id
                 && Schnorr::verify(Schnorr::unhex(id), Schnorr::unhex(ev.value(QStringLiteral("pubkey")).toString()),
                                    Schnorr::unhex(ev.value(QStringLiteral("sig")).toString()));

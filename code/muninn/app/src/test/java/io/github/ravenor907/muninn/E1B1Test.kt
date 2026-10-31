@@ -183,4 +183,81 @@ class E1B1Test {
         assertFalse(RingWire.fileRatchet("private", c.copy(caps = c.caps + "e1")))
         assertFalse(ChatWire.useRatchet("file", c.copy(caps = c.caps + "e1")))
     }
+
+    /** A day key stamped more than a day ahead (the clock was set back) is dropped, and doesn't make a new key every call. */
+    @Test fun clockSetBackMakesOneNewDayKey() {
+        var stored: String? = null
+        var writes = 0
+        val keys = WrapKeys({ stored }, { stored = it; writes++ })
+        val t0 = 1_761_500_000L
+        val ahead = keys.current(t0 + 3 * RingWire.DAY_S)
+        val now = keys.current(t0)
+        assertTrue(now.id != ahead.id)
+        assertNull(keys.find(ahead.id, t0))
+        val w = writes
+        assertEquals(now.id, keys.current(t0 + 60).id)
+        assertEquals(now.id, keys.current(t0 + 3600).id)
+        assertEquals(w, writes)
+        assertFalse(RingWire.keep(t0 + RingWire.DAY_S + 1, t0))
+        assertTrue(RingWire.keep(t0 + RingWire.DAY_S, t0))
+        // Less than a day ahead: kept and used, still no new key every call.
+        val k2 = WrapKeys({ null }, { })
+        val soon = k2.current(t0 + 12 * 3600)
+        assertEquals(soon.id, k2.current(t0).id)
+        assertEquals(soon.id, k2.current(t0 + 1).id)
+    }
+
+    /** After a restore: a fresh day key whatever the newest's age, and the old ones still open. */
+    @Test fun freshDayKey() {
+        var stored: String? = null
+        val keys = WrapKeys({ stored }, { stored = it })
+        val t0 = 1_761_500_000L
+        val d0 = keys.current(t0)
+        val d1 = keys.fresh(t0 + 10)
+        assertTrue(d0.id != d1.id)
+        assertEquals(d1.id, keys.current(t0 + 20).id)
+        assertNotNull(keys.find(d0.id, t0 + 20))
+    }
+
+    /** A wrapping for a day key not here waits only within 7 days of a restore, and only for an unknown key. */
+    @Test fun waitForDayKeyAfterRestore() {
+        val r = 1_761_500_000_000L
+        assertTrue(RingWire.waitForDayKey(false, r, r + 1000))
+        assertTrue(RingWire.waitForDayKey(false, r, r + RingWire.RESTORE_WAIT_MS - 1))
+        assertFalse(RingWire.waitForDayKey(false, r, r + RingWire.RESTORE_WAIT_MS))
+        assertFalse(RingWire.waitForDayKey(true, r, r + 1000))
+        assertFalse(RingWire.waitForDayKey(false, 0L, r))
+    }
+
+    /** After a block: a new ring key and mailbox; the old one still opens and is listened on for 2 days, then goes. */
+    @Test fun ringKeyRenewAfterBlock() {
+        val f = java.io.File.createTempFile("ring", ".json").also { it.delete() }
+        try {
+            val a = RingKey(f)
+            val oldPub = a.publicKey
+            val oldBox = a.mailbox
+            val t = 1_761_500_000_000L
+            a.renew(t)
+            assertTrue(a.publicKey != oldPub)
+            assertTrue(a.mailbox != oldBox)
+            assertEquals(listOf(a.mailbox, oldBox), a.mailboxes(t + 1000))
+            val call = "AAECAwQFBgcICQoLDA0ODw"
+            assertEquals(call to 7L, a.open(RingWire.ringContent(oldPub, call, 7L), t + 1000))
+            assertEquals(call to 8L, a.open(RingWire.ringContent(a.publicKey, call, 8L), t + 1000))
+            // Read back from the file the same.
+            val b = RingKey(f)
+            assertEquals(a.publicKey, b.publicKey)
+            assertEquals(listOf(a.mailbox, oldBox), b.mailboxes(t + 1000))
+            assertEquals(2, b.nostrSecrets(t + 1000).size)
+            // 2 days on: only the new one.
+            assertEquals(listOf(a.mailbox), b.mailboxes(t + RingKey.OLD_MS))
+            assertNull(b.open(RingWire.ringContent(oldPub, call, 7L), t + RingKey.OLD_MS))
+            assertFalse(b.prune(t + 1000))
+            assertTrue(b.prune(t + RingKey.OLD_MS))
+            assertEquals(listOf(b.mailbox), RingKey(f).mailboxes(t))
+            // Erase everything: a new key next time.
+            b.forget()
+            assertFalse(f.exists())
+        } finally { f.delete() }
+    }
 }

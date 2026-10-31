@@ -208,9 +208,14 @@ void Chat::start()
     connect(m_ble, &Ble::changed, this, &Chat::changed);
     connect(m_nostr, &Nostr::connectedChanged, this, &Chat::changed);
     m_nostr->onEnvelope = [this](const QString &content) {
-        const QByteArray body = unwrap(content);
+        bool unknownDay = false;
+        const QByteArray body = unwrap(content, &unknownDay);
         if (!body.isEmpty())
             receive(body, QStringLiteral("internet"));
+        // Cap e1 after a restore: a wrapping for a day key the backup didn't have is never shown, and not marked
+        // seen for 7 days (it is tried again each time a relay sends it).
+        else if (unknownDay && justRestored())
+            return false;
         return true;
     };
     // Cap m1: what's on the way, pins, and saying "active" while Huginn is in front.
@@ -246,7 +251,22 @@ void Chat::start()
     m_prune.start();
     m_ready = true;
     m_net->announce();
+    // Restored from a backup: its day keys may be older than what contacts hold, so a new one goes at once to every
+    // contact whose app says e1 (an empty receipt with "wk" and "wt").
+    if (m_settings.value(QStringLiteral("restore/announce")).toBool()) {
+        m_settings.remove(QStringLiteral("restore/announce"));
+        m_wrapKeys->renew(now() / 1000);
+        for (const QString &k : m_contacts.keys())
+            if (hasCap(k, QLatin1String(RingWire::kWrapCap)) && !isBlocked(k))
+                sendKeys(k, true);
+    }
     Q_EMIT changed();
+}
+
+bool Chat::justRestored() const
+{
+    const qint64 at = m_settings.value(QStringLiteral("restore/at"), 0).toLongLong();
+    return at > 0 && now() - at < 7 * kDay;
 }
 
 // ------------------------------------------------------------------ identity
@@ -327,6 +347,7 @@ void Chat::setVisibleNearby(bool v)
     m_settings.setValue(QStringLiteral("chat/visibleNearby"), v);
     // Hidden, Bluetooth goes silent at once (links end, no scanning); visible again, it starts looking.
     m_ble->hiddenChanged();
+    m_net->hiddenChanged();
     m_net->announce();
     Q_EMIT changed();
 }
@@ -401,8 +422,10 @@ QString Chat::wrap(const QString &peerKey, const QByteArray &body) const
     return b64(Nostr::pad(QJsonDocument(o).toJson(QJsonDocument::Compact)));   // padded to a fixed size (section 20)
 }
 
-QByteArray Chat::unwrap(const QString &content) const
+QByteArray Chat::unwrap(const QString &content, bool *unknownDay) const
 {
+    if (unknownDay)
+        *unknownDay = false;
     const QByteArray raw = QByteArray::fromBase64(content.toLatin1());
     const QJsonObject o = QJsonDocument::fromJson(raw).object();
     if (!o.contains(QStringLiteral("e")))
@@ -413,6 +436,8 @@ QByteArray Chat::unwrap(const QString &content) const
         if (!m_wrapKeys)
             return QByteArray();
         WrapKeys *days = m_wrapKeys.get();
+        if (unknownDay && days->find(o.value(QStringLiteral("w")).toString(), now() / 1000).privateDer.isEmpty())
+            *unknownDay = true;
         const QByteArray plain = RingWire::openWrap(o, ChatCrypto::KeyPair{m_priv, m_pub},
                                                     [days](const QString &id) { return days->find(id, now() / 1000); }, &ok);
         return ok ? plain : QByteArray();
@@ -804,7 +829,8 @@ void Chat::ring(const QString &key, const QJsonObject &msg)
 
 QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
 {
-    if (m_ringKey && hasCap(key, QLatin1String(RingWire::kRingCap))) {
+    // Cap b1: the ring key only to contacts, so a group-only peer (or someone blocked) can't ring this device.
+    if (m_ringKey && isContact(key) && !isBlocked(key) && hasCap(key, QLatin1String(RingWire::kRingCap))) {
         o.insert(QStringLiteral("rk"), m_ringKey->publicKey());
         o.insert(QStringLiteral("rp"), m_ringKey->mailbox());
     }
@@ -816,9 +842,9 @@ QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
     return o;
 }
 
-void Chat::sendKeys(const QString &key)
+void Chat::sendKeys(const QString &key, bool again)
 {
-    if (m_keysSent.contains(key))
+    if (m_keysSent.contains(key) && !again)
         return;
     m_keysSent.insert(key);
     const QJsonObject r = withKeys(key, QJsonObject{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}});
@@ -1159,6 +1185,7 @@ bool Chat::isBlocked(const QString &key) const { return blockedKeys().contains(k
 
 void Chat::block(const QString &key, bool on)
 {
+    const bool was = isBlocked(key);
     QStringList m = blockedKeys();
     m.removeAll(key);
     if (on)
@@ -1173,6 +1200,15 @@ void Chat::block(const QString &key, bool on)
             if (str(v.toMap(), "peer") != key || v.toMap().value(QStringLiteral("mine")).toBool())
                 kept << v;
         m_nearby = kept;
+        // Cap b1: they may hold my ring key, so a new one (and a new ring mailbox) goes to everyone else who may ring
+        // this device. The old ring mailbox is still read for two days (main.cpp), then dropped.
+        if (!was && m_ringKey) {
+            m_ringKey->renew();
+            m_nostr->resubscribe();
+            for (const QString &k : m_contacts.keys())
+                if (k != key && !isBlocked(k) && hasCap(k, QLatin1String(RingWire::kRingCap)))
+                    sendKeys(k, true);
+        }
     }
     Q_EMIT changed();
 }

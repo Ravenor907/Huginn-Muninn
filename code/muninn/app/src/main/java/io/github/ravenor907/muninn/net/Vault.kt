@@ -225,7 +225,11 @@ class Vault(private val context: Context) {
      * Erases everything Muninn keeps: chats, contacts, keys, settings, files waiting in the cache (shared in,
      * camera shots, parts of a move), every settings file (moving ones too) and the background work list.
      */
+    /** Erase everything and Move: keys kept in memory outside the vault (ring key, day keys, the locked store) go first. */
+    @Volatile var onErase: (() -> Unit)? = null
+
     fun eraseAll() {
+        try { onErase?.invoke() } catch (_: Exception) {}
         context.filesDir.listFiles()?.forEach { it.deleteRecursively() }
         context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
         val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")

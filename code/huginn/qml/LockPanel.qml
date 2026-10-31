@@ -3,17 +3,20 @@ import Huginn
 
 // Huginn's lock, required like Muninn's. "setup": first time, pick a 9-dot pattern or a password.
 // "unlock": draw or type it. "change": Settings › Privacy and lock › Lock (already unlocked).
+// "off": Settings › Turn off the lock: the current one is drawn or typed again first.
 // Everything Huginn keeps is locked with it; there's no way to recover it. The pattern sits in the
 // lower half (Settings › Privacy and lock › Pattern position: Top, Middle or Lower).
 Item {
     id: panel
     property string mode: Vault.exists ? "unlock" : "setup"
-    property bool usePattern: mode === "unlock" ? Vault.usesPattern : true
+    // Unlocking, or turning the lock off: the current pattern or password is asked for.
+    readonly property bool asks: mode === "unlock" || mode === "off"
+    property bool usePattern: asks ? Vault.usesPattern : true
     property var first: null
     property string note: ""
     property bool bad: false
     property int wait: Vault.waitSeconds
-    signal finished(string how)   // "setup", "unlock" or "change": what just finished
+    signal finished(string how)   // "setup", "unlock", "change" or "off": what just finished
     signal cancelled()
 
     implicitWidth: Theme.px(520)
@@ -34,9 +37,15 @@ Item {
         if (Vault.unlock(secret)) { note = ""; bad = false; finished("unlock") }
         else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
     }
+    function tryOff(secret) {
+        if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
+        if (Vault.turnOffLock(secret)) { note = ""; bad = false; Ui.say("The lock is off."); finished("off") }
+        else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
+    }
     function onPattern(dots) {
         const secret = "pattern:" + dots.join(",")
         if (mode === "unlock") { tryUnlock(secret); return }
+        if (mode === "off") { tryOff(secret); return }
         if (dots.length < 6) { note = "Connect at least 6 dots."; bad = true; pad.shake(); return }
         if (first === null) { first = dots; note = "Draw it again to confirm."; bad = false; return }
         if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
@@ -46,6 +55,7 @@ Item {
     function submitPassword() {
         const t = pw.text
         if (mode === "unlock") { tryUnlock(t); pw.text = ""; return }
+        if (mode === "off") { tryOff(t); pw.text = ""; return }
         if (t.length < 6) { note = "At least 6 characters."; bad = true; return }
         if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
         pw.text = ""; pw2.text = ""
@@ -68,19 +78,20 @@ Item {
         }
         Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: panel.mode === "setup" ? "PROTECT YOUR MESSAGES" : panel.mode === "change" ? "CHANGE THE LOCK" : "HUGINN"
+            text: panel.mode === "setup" ? "PROTECT YOUR MESSAGES" : panel.mode === "change" ? "CHANGE THE LOCK"
+                : panel.mode === "off" ? "TURN OFF THE LOCK" : "HUGINN"
             color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
         }
         Text {
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
-            text: panel.mode === "unlock"
+            text: panel.asks
                   ? (panel.usePattern ? "Draw your pattern" : "Type your password")
                   : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
-            visible: panel.mode !== "unlock"
+            visible: !panel.asks
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: Theme.px(8)
             HButton { text: "Pattern"; kind: panel.usePattern ? "accent" : "normal"; onClicked: { panel.usePattern = true; panel.first = null; panel.note = "" } }
@@ -124,9 +135,9 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: Math.min(parent.width, Theme.px(320))
                 spacing: Theme.px(8)
-                PwField { id: pw; placeholder: panel.mode === "unlock" ? "Password" : "New password (6 or more)"; onEnter: panel.mode === "unlock" ? panel.submitPassword() : pw2.forceActiveFocus() }
-                PwField { id: pw2; visible: panel.mode !== "unlock"; placeholder: "Type it again"; onEnter: panel.submitPassword() }
-                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
+                PwField { id: pw; placeholder: panel.asks ? "Password" : "New password (6 or more)"; onEnter: panel.asks ? panel.submitPassword() : pw2.forceActiveFocus() }
+                PwField { id: pw2; visible: !panel.asks; placeholder: "Type it again"; onEnter: panel.submitPassword() }
+                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
             }
         }
     }
@@ -145,7 +156,7 @@ Item {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         HButton {
-            visible: panel.mode === "change"
+            visible: panel.mode === "change" || panel.mode === "off"
             anchors.horizontalCenter: parent.horizontalCenter
             kind: "plain"; text: "Cancel"
             onClicked: panel.cancelled()
@@ -189,7 +200,7 @@ Item {
     function handleButton(b) {
         if (usePattern && pad.handleButton(b)) return true
         if (b === "a" && !usePattern) { if (pw.text.length) submitPassword(); else { pw.forceActiveFocus(); System.showSteamKeyboard() } return true }
-        if ((b === "lb" || b === "next" || b === "prev") && mode !== "unlock") { usePattern = !usePattern; first = null; note = ""; return true }
+        if ((b === "lb" || b === "next" || b === "prev") && !asks) { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "b") { cancelled(); return true }
         return false
     }

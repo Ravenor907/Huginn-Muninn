@@ -25,7 +25,7 @@ Rectangle {
     // The power menu. Up and Down move along it, A chooses, B closes.
     property bool menuOpen: false
     property int menuIndex: 0
-    readonly property bool canLock: Vault.exists && !Vault.screenLocked
+    readonly property bool canLock: Vault.hasLock && !Vault.screenLocked   // with the lock off there's nothing to lock
     readonly property var menuItems: (canLock ? [{ id: "lock", label: "Lock Huginn", icon: "lock" }] : [])
                                      .concat([{ id: "exit", label: "Close Huginn", icon: "power", danger: true }])
     function openPowerMenu() { menuIndex = 0; menuOpen = true; tipText = "" }

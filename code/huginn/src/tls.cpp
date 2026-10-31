@@ -116,6 +116,14 @@ QString Tls::fingerprintOf(const QSslCertificate &cert)
     return QString::fromLatin1(cert.digest(QCryptographicHash::Sha256).toHex().toUpper());
 }
 
+Tls::Identity Tls::throwaway()
+{
+    QByteArray keyPem, certPem;
+    if (!make(keyPem, certPem))
+        return {};
+    return fromPem(keyPem, certPem);
+}
+
 Tls::Identity Tls::load()
 {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/tls");

@@ -95,6 +95,12 @@ class Muninn : Application() {
         nostr.onRing = { content ->
             ring.open(content)?.let { (call, ts) -> io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, call, ts) }
         }
+        // Erase everything and Move: the ring key, the day keys and what was kept while locked all go.
+        vault.onErase = {
+            ring.forget()
+            nostr.forgetHeld()
+            if (ready.value) try { chat.forgetKeys() } catch (_: Exception) {}
+        }
         // Screen, charging, Battery Saver, Doze, calls and the network decide how connected to stay.
         // (It also reconnects to the relays at once when the network comes back.)
         power = io.github.ravenor907.muninn.net.Power(this)
@@ -216,7 +222,7 @@ class Muninn : Application() {
     }
 
     /** Extreme battery saver with Muninn not on screen: no ringing and no notifications, only the call history. */
-    fun quietUntilOpen(): Boolean = !visible && try { power.extreme } catch (_: Exception) { false }
+    fun quietUntilOpen(): Boolean = !visible && try { power.manual() } catch (_: Exception) { false }
 
     /** Do not disturb is picked on Your profile: no message sound, and calls don't ring out loud. */
     fun doNotDisturb(): Boolean = ready.value && runCatching { profile.myStatus.value == "dnd" }.getOrDefault(false)

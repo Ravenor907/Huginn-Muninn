@@ -3,13 +3,46 @@ import Huginn
 
 // Files going straight to or from one person over the internet (cap f1): what each is doing, with Stop
 // while it runs and a close button once it's over. A big file from them (50 MB or more) waits with
-// Accept and Decline. Empty (and no height) when there are none.
+// Accept and Decline. Empty (and no height) when there are none. The D-pad reaches Accept and Decline:
+// Down past the last message (ChatPage), Left and Right between them, A to choose, Up or B to leave.
 Column {
     id: strip
     property string peer: ""
     readonly property var items: peer === "" ? [] : FileLink.transfers.filter(t => t.peer === peer)
+    property int focusIndex: -1       // the waiting file the controller is on (-1: none)
+    property int focusButton: 0       // 0 Accept, 1 Decline
     visible: items.length > 0
     spacing: Theme.px(6)
+    onPeerChanged: focusIndex = -1
+
+    function isAsking(t) { return !!t && t.state === "asking" && !t.mine }
+    // The first file waiting for Accept or Decline, or -1.
+    function firstAsking() { return items.findIndex(t => isAsking(t)) }
+    function enter() {
+        const i = firstAsking()
+        if (i < 0) return false
+        focusIndex = i; focusButton = 0
+        return true
+    }
+    // Up and B leave (false: the page takes Up to its messages).
+    function handleButton(b) {
+        if (!isAsking(items[focusIndex])) { focusIndex = -1; return false }
+        const t = items[focusIndex]
+        if (b === "left") { focusButton = 0; return true }
+        if (b === "right") { focusButton = 1; return true }
+        if (b === "down") {
+            for (let i = focusIndex + 1; i < items.length; i++) if (isAsking(items[i])) { focusIndex = i; return true }
+            return true
+        }
+        if (b === "a") { focusIndex = -1; if (focusButton === 0) FileLink.accept(t.id); else FileLink.decline(t.id); return true }
+        if (b === "b") { focusIndex = -1; return true }
+        if (b === "up") {
+            for (let i = focusIndex - 1; i >= 0; i--) if (isAsking(items[i])) { focusIndex = i; return true }
+            focusIndex = -1
+            return false
+        }
+        return true
+    }
 
     Repeater {
         model: strip.items
@@ -63,6 +96,7 @@ Column {
                 height: Theme.px(36); fontSize: 14
                 text: "Accept"
                 kind: "primary"
+                focused: strip.focusIndex === index && strip.focusButton === 0
                 onClicked: FileLink.accept(modelData.id)
             }
             HButton {
@@ -72,6 +106,7 @@ Column {
                 height: Theme.px(36); fontSize: 14
                 text: parent.asking ? "Decline" : parent.running ? "Stop" : "Close"
                 kind: parent.running ? "danger" : "normal"
+                focused: parent.asking && strip.focusIndex === index && strip.focusButton === 1
                 onClicked: parent.asking ? FileLink.decline(modelData.id) : parent.running ? FileLink.cancel(modelData.id) : FileLink.dismiss(modelData.id)
             }
         }

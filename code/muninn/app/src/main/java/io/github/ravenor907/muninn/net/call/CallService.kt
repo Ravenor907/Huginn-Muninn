@@ -196,7 +196,7 @@ object Ringer {
     /** [key]: the chat it opens (the caller, or "g:" and a group for a group call). */
     fun missed(c: Context, name: String, key: String) {
         // Extreme battery saver: no notifications; the chat still shows it.
-        if (try { (c.applicationContext as Muninn).power.extreme } catch (_: Exception) { false }) return
+        if (try { (c.applicationContext as Muninn).power.manual() } catch (_: Exception) { false }) return
         channels(c)
         val who = shown(c, name)
         val open = PendingIntent.getActivity(c, key.hashCode() + 1, Intent(c, io.github.ravenor907.muninn.MainActivity::class.java)

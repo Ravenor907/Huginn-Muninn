@@ -35,6 +35,7 @@ Rectangle {
     property string viewing: ""       // a photo open full size
     property bool tour: false
     property bool changeLock: false
+    property bool lockOff: false      // Settings › Turn off the lock: the current lock is asked for first
     // A direct message never shows the member column.
     readonly property bool isGroup: false
     // The controller or its pointer is in use: what opens takes the controller's focus, not a text cursor.
@@ -67,6 +68,7 @@ Rectangle {
         tour = !!a.tour
         if (tour) picked = true
         changeLock = !!a.changeLock
+        lockOff = !!a.lockOff
         if (a.zone) zone = a.zone
         if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
@@ -77,7 +79,7 @@ Rectangle {
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
     // The lock's own LB (pattern or password) wins over moving along the rail.
-    readonly property bool ownsShoulders: lock.visible && lock.mode !== "unlock"
+    readonly property bool ownsShoulders: lock.visible && !lock.asks
 
     // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
     // keep their own order; people in no folder go newest first until they're moved.
@@ -118,10 +120,13 @@ Rectangle {
     }
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
     readonly property string openRoute: openKey === "" ? "" : (Chat.chats, Chat.route(openKey))
+    readonly property bool keyWarning: openKey !== "" && !tour && (Chat.chats, Chat.keyChanged(openKey))
+    function routeWord(r) { return r === "bluetooth" ? "Bluetooth" : r === "wifi" ? "Wi-Fi" : r === "internet" ? "Internet" : "Not reachable" }
 
     // What the hint bar shows (Main.qml adds LB). LT opens the menu (the page gets it as X).
-    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(lock.mode !== "unlock" ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
+    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
+        : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusButton === 0 ? "Accept" : "Decline" }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
@@ -537,8 +542,11 @@ Rectangle {
             backShown: Theme.portrait && !page.locked
             onBack: { page.zone = "list"; page.sel = -1 }
             title: page.locked ? "Locked" : !page.picked ? "Chats" : page.openKey === "" ? "Nearby room" : page.openName
+            // How they're reached (never an address), Active, and Verified or a changed security key.
             subtitle: page.locked || !page.picked ? "" : page.openKey === "" ? "People close by"
-                    : (Chat.isVerified(page.openKey) && !Chat.keyChanged(page.openKey) ? "Verified" : "Not verified")
+                    : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active"] : [])
+                      .concat([page.keyWarning ? "Security key changed" : (Chat.chats, Chat.isVerified(page.openKey)) ? "Verified" : "Not verified"]).join(" · ")
+            warn: !page.locked && page.picked && page.keyWarning
             // Name, Call and the person's one menu.
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
@@ -558,20 +566,21 @@ Rectangle {
         // ------------------------------------------------------- locked
         LockPanel {
             id: lock
-            visible: page.locked || page.changeLock
-            mode: page.changeLock && !page.locked ? "change" : Vault.exists ? "unlock" : "setup"
+            visible: page.locked || page.changeLock || page.lockOff
+            mode: page.lockOff && !page.locked ? "off" : page.changeLock && !page.locked ? "change" : Vault.exists ? "unlock" : "setup"
             anchors.top: convHead.bottom
             anchors.bottom: parent.bottom
             anchors.horizontalCenter: parent.horizontalCenter
             width: Math.min(parent.width - Theme.px(32), Theme.px(520))
             onFinished: how => {
                 if (how === "change") page.changeLock = false   // after an unlock, the change step follows
+                if (how === "off") page.lockOff = false
                 // A lock shorter than new ones may be: suggest a stronger one, once.
                 if (how === "unlock" && Vault.askStronger())
                     Ui.sure("Make your lock stronger?", "Your " + (Vault.usesPattern ? "pattern" : "password") + " is shorter than new ones may be. One with at least 6 "
                             + (Vault.usesPattern ? "dots" : "characters") + " is much harder to guess.", "Change it", () => { page.changeLock = true })
             }
-            onCancelled: { if (page.changeLock) page.changeLock = false; else Ui.closePage() }
+            onCancelled: { if (page.lockOff) page.lockOff = false; else if (page.changeLock) page.changeLock = false; else Ui.closePage() }
         }
 
         Item {
@@ -1522,6 +1531,14 @@ Rectangle {
         if (threadBox.emojiShown) return threadBox.emojiButton(b)
         if (typingIn && boxButton(typingIn, b)) return true
         if (zone === "side") return sideButton(b)
+        // A big file waiting: the D-pad is on its Accept and Decline (Up past it goes back to the messages).
+        if (zone === "messages" && fileStrip.focusIndex >= 0) {
+            if (fileStrip.handleButton(b)) return true
+            if (b === "up") {
+                if (messages.length > 0) { sel = messages.length - 1; list.positionViewAtIndex(sel, ListView.Contain) }
+                return true
+            }
+        }
         // Keep in touch: A says yes (Menu always opens Settings).
         if (zone === "messages" && openKey !== "" && keep.visible && sel < 0 && b === "a") { Chat.keepInTouch(openKey); return true }
         switch (b) {
@@ -1531,6 +1548,7 @@ Rectangle {
             return true
         case "down":
             if (zone === "list") row = Math.min(entries.length - 1, row + 1)
+            else if ((sel < 0 || sel === messages.length - 1) && fileStrip.enter()) sel = -1   // on to a file's Accept and Decline
             else if (sel >= 0) { sel = Math.min(messages.length - 1, sel + 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "right":

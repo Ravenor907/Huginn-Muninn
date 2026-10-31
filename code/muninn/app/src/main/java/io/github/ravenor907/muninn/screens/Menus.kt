@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -241,7 +242,10 @@ private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -
     if (Labs.on(app)) MenuRow("info", "Report a bug") { done(); Labs.report(context) }
 }
 
-/** A person's menu: Search, Media, Mute, Notifications, Person details, then Block and Delete. A Kids' TV has its own. */
+/**
+ * A person's menu: Search, Media, Start a group, Mute, Notifications, Person details, then Block and Delete. A Kids' TV
+ * has its own sections, then Search, Media, Mute and Notifications too.
+ */
 @Composable
 private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit, go: (String) -> Unit, done: () -> Unit) {
     @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()
@@ -258,12 +262,22 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
             Ui.sure(Ask("Block $name?", "They aren't told.", "Block", danger = true, onConfirm = { app.chat.block(key); Ui.say("$name blocked.") }))
         }
     }
+    val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
+    val muteRow: @Composable () -> Unit = {
+        MenuRow("mute", if (muted) "Unmute" else "Mute") {
+            if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
+        }
+    }
     if (tvs[key]?.disconnecting == false) {
         // A Kids' TV this phone looks after.
         val rows = tvRows()
         rows.filter { it.first != "disconnect" }.forEach { (id, label) ->
             MenuRow(tvIcon(id), label) { done(); openTvSection(key, id); onChats() }
         }
+        MenuRow("search", "Search") { open("search") }
+        MenuRow("image", "Media") { open("media") }
+        muteRow()
+        MenuRow("clock", "Notifications") { go("notify") }
         MenuRow("user", "Person details") { done(); openDetails(key); onChats() }
         rows.firstOrNull { it.first == "disconnect" }?.let { (id, label) ->
             MenuRow(tvIcon(id), label, danger = true) { done(); openTvSection(key, id); onChats() }
@@ -271,14 +285,15 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         block()
         return
     }
-    val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
     if (contact != null || app.chat.conversations.value[key].orEmpty().isNotEmpty()) {
         MenuRow("search", "Search") { open("search") }
         MenuRow("image", "Media") { open("media") }
     }
-    MenuRow("mute", if (muted) "Unmute" else "Mute") {
-        if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
+    // The New group picker with them already picked; there, Call them rings everyone picked.
+    if (contact != null && !contact.groupOnly) MenuRow("people", "Start a group") {
+        done(); ChatNav.space = ""; ChatNav.groupWith = setOf(key); ChatNav.open = "newgroup"; onChats()
     }
+    muteRow()
     MenuRow("clock", "Notifications") { go("notify") }
     MenuRow("user", "Person details") { done(); ChatNav.space = ""; openDetails(key); onChats() }
     if (inGroup == null) MoveRows(app, key)
@@ -324,15 +339,19 @@ private fun MoveRows(app: Muninn, key: String) {
     MenuRow("download", "Move down", enabled = down != null) { down?.invoke() }
 }
 
-/** A person's notifications: whether they always come through, and marking the chat unread. */
+/** A person's notifications: whether they always come through, and marking the chat unread (or read again). */
 @Composable
 private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     MenuTitle("Notifications")
     var ra by remember(key) { mutableStateOf(app.power.isRightAway(key)) }
+    val fl by app.chat.flags.all.collectAsState()
+    val newOnes by app.chat.unread.collectAsState()
+    val unread = key in fl.unread || key in newOnes
     Column(Modifier.padding(horizontal = 20.dp)) {
         ToggleRow("Always right away", "Even when saving battery", ra) { app.power.setRightAway(key, it); ra = it }
     }
-    MenuRow("chat", "Mark unread") {
+    if (unread) MenuRow("chat", "Mark read") { app.chat.markRead(key); back(); Ui.say("Marked read.") }
+    else MenuRow("chat", "Mark unread") {
         app.chat.flags.markUnread(key, true); if (ChatNav.open == key) ChatNav.open = ""; back(); Ui.say("Marked unread.")
     }
     MenuRow("back", "Back") { back() }
@@ -344,7 +363,8 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, do
     val all by app.chat.groups.all.collectAsState()
     val flags by app.chat.flags.all.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
-    val grp = all[g] ?: run { done(); return }
+    // Gone meanwhile: the sheet closes, after this frame (never during composition).
+    val grp = all[g] ?: run { LaunchedEffect(g) { done() }; return }
     val s = grp.state
     val key = Folders.groupKey(g)
     val me = app.identity.publicKey

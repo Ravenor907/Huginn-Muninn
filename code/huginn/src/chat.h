@@ -460,7 +460,10 @@ private:
     QByteArray keyWith(const QString &theirKey) const;
     QString myKey() const { return QString::fromLatin1(m_pub.toBase64()); }
     QString wrap(const QString &peerKey, const QByteArray &body) const;
-    QByteArray unwrap(const QString &content) const;
+    // unknownDay: the wrapping names a day key this device doesn't have (or no longer has).
+    QByteArray unwrap(const QString &content, bool *unknownDay = nullptr) const;
+    // Within 7 days of restoring a backup (restore/at): a wrapping for an unknown day key is tried again later.
+    bool justRestored() const;
     // Caps b1 and e1 (shared/docs/protocol-0.6.md section 23, ring.*): my day keys for the relay wrapping and what each
     // contact announced (both in the vault, made when it opens), my ring key (outside it).
     std::unique_ptr<WrapKeys> m_wrapKeys;
@@ -468,9 +471,11 @@ private:
     RingKey *m_ringKey = nullptr;
     QSet<QString> m_rung;       // call ids a ring envelope already went out for
     QSet<QString> m_keysSent;   // contacts my keys went to when their app first said b1 or e1
-    // A receipt to an app that says b1 or e1 carries my ring key and mailbox ("rk", "rp") and my day key ("wk", "wt").
+    // A receipt to an app that says b1 or e1 carries my day key ("wk", "wt"), and to a contact (not a group-only peer,
+    // never someone blocked) my ring key and mailbox ("rk", "rp").
     QJsonObject withKeys(const QString &key, QJsonObject o) const;
-    void sendKeys(const QString &key);
+    // An empty receipt with my keys; once per person unless again (a block renewed the ring key, a restore the day key).
+    void sendKeys(const QString &key, bool again = false);
     // A 1:1 offer also goes as a ring envelope to their ring mailbox (b1).
     void ring(const QString &key, const QJsonObject &msg);
     // Room "file" goes through the ratchet for a contact whose app says e1.

@@ -591,7 +591,7 @@ Rectangle {
         else if (key === "restore") startRestore()
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
         else if (key === "lockOff") Ui.sure("Turn off the lock?", "Anyone here could read your chats.",
-                                            "Turn off", () => { if (Vault.turnOffLock()) Ui.say("The lock is off."); else Ui.say("Unlock Huginn first.", true) }, false, true)
+                                            "Turn off", () => Ui.openPage("chat", { lockOff: true }), false, true)
         else if (key === "deleteMessages" && !Chat.ready) Ui.say("Unlock Huginn first.", true)
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Can't be undone.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
         else if (key === "eraseChat") Ui.sure("Erase everything?", "Deletes everything on this PC. Can't be undone.",

@@ -104,7 +104,8 @@ def may_use(wt, now):
 
 
 def keep(t, now):
-    return now - t < WRAP_KEEP_S
+    # A key stamped more than a day ahead (made under a clock that was later set back) is dropped.
+    return now - t < WRAP_KEEP_S and t - now <= WRAP_AHEAD_S
 
 
 def rotate_due(newest, now):

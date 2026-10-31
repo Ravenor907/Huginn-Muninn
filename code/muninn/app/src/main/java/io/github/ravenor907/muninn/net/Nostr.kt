@@ -124,19 +124,23 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     } catch (_: Exception) { false }
 
     /**
-     * Unlocked: everything kept while locked goes to [onEnvelope] now, oldest first, and the store is deleted
-     * once it's all been handed over. Run off the main thread.
+     * Unlocked: everything kept while locked goes to [onEnvelope] now, oldest first. Only the ones it took (true)
+     * are deleted; one it wants to see again later stays for the next unlock. Run off the main thread.
      */
     fun openHeld() {
         val list = synchronized(heldLock) { readHeld() }
         if (list.isEmpty()) { heldFile.delete(); return }
-        for (content in list) try { onEnvelope?.invoke(content) } catch (_: Exception) {}
+        val handled = HashSet<String>()
+        for (content in list) try { if (onEnvelope?.invoke(content) == true) handled.add(content) } catch (_: Exception) {}
         synchronized(heldLock) {
-            // Anything kept meanwhile (locked again already) stays for the next unlock.
-            val rest = readHeld().filter { it !in list }
+            // Anything kept meanwhile (locked again already), or not taken yet, stays for the next unlock.
+            val rest = readHeld().filter { it !in handled }
             if (rest.isEmpty()) heldFile.delete() else writeHeld(rest)
         }
     }
+
+    /** Erase everything and Move: what was kept while locked goes, unopened. */
+    fun forgetHeld() = synchronized(heldLock) { heldFile.delete(); java.io.File(heldFile.path + ".tmp").delete() }
 
     private val _connected = MutableStateFlow(0)
     val connected: StateFlow<Int> = _connected.asStateFlow()
@@ -401,7 +405,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private fun signIn(url: String, ws: WebSocket, challenge: String) {
         val tags = JSONArray().put(JSONArray().put("relay").put(url)).put(JSONArray().put("challenge").put(challenge))
         secret?.let { ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", it)).toString()) }
-        try { ring?.let { r -> ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", r.nostrSecret)).toString()) } } catch (_: Exception) {}
+        try { ring?.let { r -> r.nostrSecrets().forEach { ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", it)).toString()) } } } catch (_: Exception) {}
     }
 
     fun disconnect() {
@@ -420,7 +424,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
         try {
             ring?.let { r ->
-                val rf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(r.mailbox)).put("since", since)
+                // A ring mailbox replaced after a block is still asked for, for 2 days.
+                val rf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray(r.mailboxes())).put("since", since)
                 ws.send(JSONArray().put("REQ").put(ringSubId).put(rf).toString())
             }
         } catch (_: Exception) {}
@@ -559,7 +564,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
         // Cap b1: an event for the ring mailbox is only ever a ring envelope. Tried with the ring key, then dropped.
         val r = ring
-        if (r != null && pTag(ev) == (try { r.mailbox } catch (e: Exception) { null })) {
+        if (r != null && pTag(ev).let { p -> p != null && (try { p in r.mailboxes() } catch (e: Exception) { false }) }) {
             try {
                 val own = try { idOf(ev) == id } catch (e: Exception) { false }
                 if (own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false })
