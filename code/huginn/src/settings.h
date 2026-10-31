@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QRect>
 #include <QSettings>
 
 // Everything the person can change, saved as they change it.
@@ -13,6 +14,10 @@ class Settings : public QObject
     Q_PROPERTY(bool highContrast READ highContrast WRITE setHighContrast NOTIFY changed)
     Q_PROPERTY(bool colorBlind READ colorBlind WRITE setColorBlind NOTIFY changed)
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY changed)
+    // Huginn opens in a window unless this is on; F11 switches too.
+    Q_PROPERTY(bool fullScreen READ fullScreen WRITE setFullScreen NOTIFY changed)
+    // The window's last place and size (empty: 80% of the screen, centered).
+    Q_PROPERTY(QRect windowRect READ windowRect WRITE setWindowRect NOTIFY changed)
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
     Q_PROPERTY(bool runInBackground READ runInBackground WRITE setRunInBackground NOTIFY changed)
     Q_PROPERTY(bool nearbySharing READ nearbySharing WRITE setNearbySharing NOTIFY changed)
@@ -66,6 +71,8 @@ public:
     bool highContrast() const { return value("highContrast", false).toBool(); }
     bool colorBlind() const { return value("colorBlind", false).toBool(); }
     bool reduceMotion() const { return value("reduceMotion", false).toBool(); }
+    bool fullScreen() const { return value("fullScreen", false).toBool(); }
+    QRect windowRect() const { return value("windowRect", QRect()).toRect(); }
     // Looks for a new release at start. Off: only Check now asks GitHub.
     bool autoUpdate() const { return value("autoUpdate", true).toBool(); }
     bool runInBackground() const { return value("runInBackground", true).toBool(); }
@@ -137,6 +144,8 @@ public:
     void setHighContrast(bool v) { set("highContrast", v); }
     void setColorBlind(bool v) { set("colorBlind", v); }
     void setReduceMotion(bool v) { set("reduceMotion", v); }
+    void setFullScreen(bool v) { set("fullScreen", v); }
+    void setWindowRect(const QRect &r) { if (r.width() >= 320 && r.height() >= 240) set("windowRect", r); }
     void setAutoUpdate(bool v) { set("autoUpdate", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }
     void setNearbySharing(bool v) { set("nearbySharing", v); }

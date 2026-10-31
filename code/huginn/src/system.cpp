@@ -38,15 +38,8 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
     : QObject(parent)
     , m_settings(settings)
     , m_tourDir(tourDir)
-#ifdef Q_OS_WIN
-    , m_windowed(true)   // a Windows PC: a normal window, not full screen
-#else
-    , m_windowed(windowed)
-#endif
+    , m_windowed(windowed)   // --windowed (and the tour): always a window, whatever Settings › Look says
 {
-#ifdef Q_OS_WIN
-    Q_UNUSED(windowed);
-#endif
     m_gameMode = qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QLatin1String("gamescope"), Qt::CaseInsensitive)
         || !qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY")
         || qEnvironmentVariable("SteamGamepadUI") == QLatin1String("1");

@@ -8,10 +8,19 @@ import Huginn
 // window shows one column at a time, like Muninn on a phone.
 Window {
     id: app
-    width: System.tourDir.length > 0 ? 1920 : 1280
-    height: System.tourDir.length > 0 ? 1080 : 800
+    // A normal window: where it was last time, else 80% of the screen and centered. Full screen only when
+    // Settings › Look › Open full screen is on (F11 switches), or in a handheld's game mode.
+    readonly property rect savedRect: Settings.windowRect
+    readonly property bool hasSaved: savedRect.width >= 320 && savedRect.height >= 240
+    width: System.tourDir.length > 0 ? 1920 : hasSaved ? savedRect.width : Math.round(Screen.desktopAvailableWidth * 0.8)
+    height: System.tourDir.length > 0 ? 1080 : hasSaved ? savedRect.height : Math.round(Screen.desktopAvailableHeight * 0.8)
+    x: hasSaved ? savedRect.x : Math.round((Screen.desktopAvailableWidth - width) / 2)
+    y: hasSaved ? savedRect.y : Math.round((Screen.desktopAvailableHeight - height) / 2)
+    minimumWidth: 480
+    minimumHeight: 360
     visible: true
-    visibility: System.windowed ? Window.Windowed : Window.FullScreen
+    visibility: System.windowed ? Window.Windowed
+              : (Settings.fullScreen || System.gameMode) ? Window.FullScreen : Window.Windowed
     title: "Huginn"
     color: Theme.ground
 
@@ -321,6 +330,13 @@ Window {
     }
     // The rest of the keyboard shortcuts (all listed in ShortcutsPanel.qml).
     readonly property bool keysOn: !app.touring && !updating.visible && !app.privacyCovered
+    Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode; onActivated: Settings.fullScreen = !Settings.fullScreen }
+    // The window's place and size, kept a moment after it stops moving (only while it's a normal window).
+    Timer { id: keepRect; interval: 800; onTriggered: if (app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
+    onXChanged: keepRect.restart()
+    onYChanged: keepRect.restart()
+    onWidthChanged: keepRect.restart()
+    onHeightChanged: keepRect.restart()
     Shortcut { sequence: "Ctrl+/"; context: Qt.ApplicationShortcut; enabled: app.keysOn
                onActivated: shortcutsPanel.visible ? shortcutsPanel.close() : shortcutsPanel.open() }
     Shortcut { sequence: "Ctrl+Shift+L"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("list") }

@@ -74,6 +74,8 @@ Everything there works with a controller too:
 - In a voice room, A on the room has Mute, Deafen and Leave. The voice panel at the foot of the list has them too
   (click it with the right stick's pointer).
 - Push to talk (Settings › Calls) is a keyboard key: it works while Huginn is in front.
+- Huginn opens in a normal window that keeps its size and place. F11, or Settings › Look › Open full screen,
+  switches to full screen. A handheld's game mode is always full screen.
 
 ## Calls and files
 

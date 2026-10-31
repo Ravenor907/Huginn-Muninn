@@ -108,6 +108,7 @@ Rectangle {
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
             { group: "Accessibility", kind: "toggle", key: "colorBlind", title: "Color-blind friendly" },
             { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Less motion" },
+            { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode },
             { group: "Panels", kind: "toggle", key: "showList", title: "Show the chat list", note: "Ctrl+Shift+L" },
             { group: "Panels", kind: "toggle", key: "showMembers", title: "Show group members", note: "Ctrl+Shift+U" },
             { group: "Panels", kind: "button", key: "resetPanels", title: "Panel sizes", label: "Reset" }
