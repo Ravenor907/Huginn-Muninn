@@ -120,7 +120,7 @@ Tls::Identity Tls::throwaway()
 {
     QByteArray keyPem, certPem;
     if (!make(keyPem, certPem))
-        return {};
+        return Identity();   // value-initialized: copy-list-init fails on MSVC (explicit QSslKey default constructor)
     return fromPem(keyPem, certPem);
 }
 
