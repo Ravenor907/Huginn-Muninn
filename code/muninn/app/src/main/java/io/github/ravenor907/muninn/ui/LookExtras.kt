@@ -21,18 +21,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 
 /**
  * Settings › Look, under the Seasonal look: the season (Auto follows the date), the background (the season's own or
- * one of a few dark grounds), the animation (Off, Light or Full), and how big the leaves or snowflakes are and how
- * many fall (both 25% to 200%; 100% is the usual). [onChange] runs after any of the first three changes, to save them.
+ * one of a few dark grounds), falling leaves or snow on or off, and how many fall (Amount, 1 to 400 on screen) and how
+ * big they are (Size, 15% to 600% of the usual). [onChange] runs after any of the first three changes, to save them.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -66,18 +66,23 @@ fun SeasonControls(onChange: () -> Unit) {
             Access.seasonGround = ""; onChange()
         }
 
-        Label("Animation")
-        val anims = Seasons.ANIMS
-        val anim = Seasons.anim(Access.seasonAnim)
-        ChoiceRow(anims.size, Modifier.padding(top = 6.dp)) { i, m ->
-            val (k, n) = anims[i]
-            MButton(n, m, if (anim == k) Kind.Accent else Kind.Normal) { Access.seasonAnim = k; onChange() }
+        val on = Seasons.falls(Access.seasonAnim)
+        val snow = Palette.snow
+        ToggleRow(if (snow) "Falling snow" else "Falling leaves", "Reduce motion holds it still.", on) {
+            Access.seasonAnim = if (it) Seasons.FULL else Seasons.OFF; onChange()
         }
-        Text("Reduce motion holds it still.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
 
-        if (anim != Seasons.OFF) {
-            LeafSlider(if (Palette.snow) "Flake size" else "Leaf size", LeafPrefs.size) { LeafPrefs.setSize(context, it) }
-            LeafSlider("How many", LeafPrefs.count) { LeafPrefs.setCount(context, it) }
+        if (on) {
+            val config = LocalConfiguration.current
+            val n = LeafPrefs.countFor(config.screenWidthDp, config.screenHeightDp)
+            val unit = if (snow) (if (n == 1) "flake" else "flakes") else (if (n == 1) "leaf" else "leaves")
+            FallSlider("Amount", "$n $unit", FallScale.countPos(n), "1", "${FallScale.MAX_COUNT}") {
+                LeafPrefs.setCount(context, FallScale.countAt(it))
+            }
+            val size = LeafPrefs.size
+            FallSlider("Size", "$size%", FallScale.sizePos(size), "Tiny", "Huge") {
+                LeafPrefs.setSize(context, FallScale.sizeAt(it))
+            }
             Text("Fewer, smaller ones save battery.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
         }
     }
@@ -87,18 +92,24 @@ fun SeasonControls(onChange: () -> Unit) {
 private fun Label(text: String) =
     Text(text, style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 12.dp))
 
+/**
+ * A slider from 0 to 100 (where [pos] sits; [onChange] gets the new position), with [label] and its [value] above
+ * and the two ends named below.
+ */
 @Composable
-private fun LeafSlider(label: String, value: Int, onChange: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun FallSlider(label: String, value: String, pos: Float, low: String, high: String, onChange: (Float) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-        Text("$value%", style = Type.small.copy(color = Palette.textSoft), maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+        Text(value, style = Type.small.copy(color = Palette.textSoft), maxLines = 1, modifier = Modifier.padding(start = 8.dp))
     }
     Slider(
-        value = value.toFloat(), onValueChange = { onChange((it / 5f).roundToInt() * 5) }, valueRange = 25f..200f, steps = 34,
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$label, $value percent" },
-        // The empty part of the track uses the track shade, which stands out from the ground in every look; the 5% tick
-        // marks take the track's own colours so the dots don't crowd it.
-        colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.track,
-            activeTickColor = Palette.accent, inactiveTickColor = Palette.track),
+        value = pos.coerceIn(0f, 100f), onValueChange = onChange, valueRange = 0f..100f,
+        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$label, $value" },
+        // The empty part of the track uses the track shade, which stands out from the ground in every look.
+        colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.track),
     )
+    Row(Modifier.fillMaxWidth()) {
+        Text(low, style = Type.small, modifier = Modifier.weight(1f))
+        Text(high, style = Type.small)
+    }
 }

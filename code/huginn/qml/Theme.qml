@@ -44,6 +44,21 @@ QtObject {
         return seasonChoices[(i + 1) % seasonChoices.length].value
     }
 
+    // Settings › Look › Amount and Size of what falls, worked out the same way in Muninn. Both sliders
+    // run 0 to 100 and are logarithmic, so the low end is fine-grained: Amount is round(400^(v/100)),
+    // 1 to 400 on screen; Size is round(15 * 40^(v/100)), 15% to 600% of the usual.
+    function fallCountAt(v) { return Math.max(1, Math.min(400, Math.round(Math.pow(400, Math.max(0, Math.min(100, v)) / 100)))) }
+    function fallCountPos(n) { return 100 * Math.log(Math.max(1, Math.min(400, n))) / Math.log(400) }
+    function fallSizeAt(v) { return Math.max(15, Math.min(600, Math.round(15 * Math.pow(40, Math.max(0, Math.min(100, v)) / 100)))) }
+    function fallSizePos(p) { return 100 * Math.log(Math.max(15, Math.min(600, p)) / 15) / Math.log(40) }
+    // How many fall in a w by h window: the Amount picked, or until it's moved, Settings.fallBase on
+    // a 1600x900 window scaled by the window's area.
+    function fallCount(w, h) {
+        if (Settings.fallCount > 0) return Settings.fallCount
+        const area = Math.max(0.2, (w * h) / (1600 * 900))
+        return Math.max(1, Math.min(400, Math.round(Settings.fallBase * area)))
+    }
+
     // Settings › Look: "dark" (stone, iron and aged gold), "black" (true black, for OLED screens),
     // "light" (parchment) or "seasonal" (a season's look, picked by the date or by hand, see seasons).
     // choice is what was picked; mode is the look on screen ("autumn" or "snow" while Seasonal shows

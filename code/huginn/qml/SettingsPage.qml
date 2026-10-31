@@ -43,6 +43,31 @@ Rectangle {
     readonly property var prompts: inSection ? [{ key: "a", label: "Change" }, { key: "b", label: "Back" }]
                                              : [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
     readonly property string status: ""
+    // Look › Amount: how many fall in this window now (the Amount picked, or the window's own).
+    readonly property int fallShown: Theme.fallCount(Ui.main ? Ui.main.width : 1600, Ui.main ? Ui.main.height : 900)
+    // Look › Amount and Size: where the slider sits (0 to 100) and what a position sets.
+    function fallPos(key) { return key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
+    function setFall(key, v) {
+        if (key === "fallCount") Settings.fallCount = Theme.fallCountAt(v)
+        else Settings.fallSize = Theme.fallSizeAt(v)
+    }
+    // One notch left or right: on to the next number the slider gives (near 1 several positions give
+    // the same one). A puts it back: Amount follows the window again, Size goes to 60%.
+    function stepFall(key, dir) {
+        if (dir === 0) {
+            if (key === "fallCount") Settings.fallCount = 0
+            else Settings.fallSize = 60
+            return
+        }
+        const now = key === "fallCount" ? fallShown : Settings.fallSize
+        let v = fallPos(key)
+        for (let i = 0; i < 100; ++i) {
+            v = Math.max(0, Math.min(100, v + dir))
+            const got = key === "fallCount" ? Theme.fallCountAt(v) : Theme.fallSizeAt(v)
+            if (got !== now || v <= 0 || v >= 100) break
+        }
+        setFall(key, v)
+    }
     readonly property var swatches: ["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"]
 
     // Each row: { kind: "segmented"|"toggle"|"accent"|"swatches"|"grounds"|"button"|"size"|"slider"|"info", group, title, note, ... }.
@@ -68,11 +93,12 @@ Rectangle {
               value: Theme.seasonPick, options: Theme.seasonChoices },
             { group: "Theme", kind: "grounds", key: "seasonGround", hide: Theme.choice !== "seasonal", title: "Background" },
             { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: Theme.choice !== "seasonal", title: "Animation", note: "Less motion holds it still",
-              options: [{ value: "off", label: "Off" }, { value: "light", label: "Light" }, { value: "full", label: "Full" }] },
-            { group: "Theme", kind: "slider", key: "leafSize", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
-              title: (Theme.snow ? "Flake size: " : "Leaf size: ") + Settings.leafSize + "%", from: 50, to: 200, step: 5 },
-            { group: "Theme", kind: "slider", key: "leafCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
-              title: (Theme.snow ? "How many flakes: " : "How many leaves: ") + Settings.leafCount + "%", from: 25, to: 200, step: 5 },
+              options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }] },
+            { group: "Theme", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
+              title: "Amount: " + page.fallShown + (Theme.snow ? (page.fallShown === 1 ? " flake" : " flakes") : (page.fallShown === 1 ? " leaf" : " leaves")),
+              low: "1", high: "400" },
+            { group: "Theme", kind: "slider", key: "fallSize", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
+              title: "Size: " + Settings.fallSize + "%", low: "Tiny", high: "Huge" },
             { group: "Theme", kind: "accent", key: "accent", title: "Accent color" },
             { group: "Theme", kind: "segmented", key: "density", title: "Messages",
               options: [{ value: "compact", label: "Compact" }, { value: "cozy", label: "Default" }, { value: "spacious", label: "Spacious" }] },
@@ -371,7 +397,7 @@ Rectangle {
                  : rowItem.r.kind === "raven" ? ravenCtl.width
                  : rowItem.r.kind === "button" ? buttonCtl.implicitWidth : 0)
             height: Math.max(Theme.px(36), segCtl.visible ? segCtl.implicitHeight : 0, buttonCtl.visible ? buttonCtl.implicitHeight : 0,
-                             ravenCtl.visible ? ravenCtl.height : 0)
+                             ravenCtl.visible ? ravenCtl.height : 0, sliderCtl.visible ? sliderCtl.implicitHeight : 0)
             // About: the raven. Ten presses turn Labs mode on or off.
             Image {
                 id: ravenCtl
@@ -387,17 +413,20 @@ Rectangle {
                 Accessible.onPressAction: page.tapRaven()
                 TapHandler { onTapped: page.tapRaven() }
             }
-            // Look › Seasonal: the size of what falls, and how many.
+            // Look › Seasonal: how many fall, and their size.
             LookSlider {
+                id: sliderCtl
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 visible: rowItem.r.kind === "slider"
                 width: parent.width
-                from: rowItem.r.from || 0; to: rowItem.r.to || 100; stepSize: rowItem.r.step || 1
-                value: rowItem.r.kind === "slider" ? Number(Settings[rowItem.r.key]) : 0
+                value: rowItem.r.kind === "slider" ? page.fallPos(rowItem.r.key) : 0
                 label: rowItem.r.title || ""
+                low: rowItem.r.low || ""
+                high: rowItem.r.high || ""
                 focused: rowItem.focused
-                onMoved: v => Settings[rowItem.r.key] = Math.round(v)
+                onMoved: v => page.setFall(rowItem.r.key, v)
+                onNudged: dir => page.stepFall(rowItem.r.key, dir)
             }
             Segmented {
                 id: segCtl
@@ -707,12 +736,7 @@ Rectangle {
             const i = dir === 0 ? (at + 1) % swatches.length : Math.max(0, Math.min(swatches.length - 1, at + dir))
             Profile.setMyColour(swatches[i])
         } else if (r.kind === "size") { if (dir === 0) press("sizeReset"); else Ui.main.stepSize(dir) }
-        else if (r.kind === "slider") {
-            // Left and Right step it; A puts it back to 100%.
-            const step = r.step || 1
-            const now = Number(Settings[r.key]) || 100
-            Settings[r.key] = dir === 0 ? 100 : Math.max(r.from, Math.min(r.to, now + dir * step))
-        }
+        else if (r.kind === "slider") stepFall(r.key, dir)
         else if (r.kind === "button" && dir === 0 && r.enabled !== false) press(r.key)
         else if (r.kind === "raven" && dir === 0) tapRaven()
     }
@@ -741,6 +765,8 @@ Rectangle {
     }
 
     // Look › Seasonal: a plain slider in house style. A line, a knob, Left and Right or a drag to move it.
+    // A slider from 0 to 100 (stepSize a notch), with the names of its two ends under the track.
+    // moved: a press or drag at a position; nudged: one notch left (-1) or right (1).
     component LookSlider: Item {
         id: sl
         property real from: 0
@@ -748,30 +774,48 @@ Rectangle {
         property real stepSize: 1
         property real value: 0
         property string label: ""
+        property string low: ""
+        property string high: ""
         property bool focused: false
         signal moved(real value)
-        implicitHeight: Theme.px(28)
+        signal nudged(int dir)
+        readonly property bool ends: low.length > 0 || high.length > 0
+        readonly property real trackY: Theme.px(14)
+        implicitHeight: Theme.px(28) + (ends ? lowText.implicitHeight : 0)
         readonly property real frac: to > from ? Math.max(0, Math.min(1, (value - from) / (to - from))) : 0
         Accessible.role: Accessible.Slider
         Accessible.name: label
-        Accessible.onIncreaseAction: sl.moved(Math.min(sl.to, sl.value + sl.stepSize))
-        Accessible.onDecreaseAction: sl.moved(Math.max(sl.from, sl.value - sl.stepSize))
+        Accessible.onIncreaseAction: sl.nudged(1)
+        Accessible.onDecreaseAction: sl.nudged(-1)
         function at(px) {
             const f = Math.max(0, Math.min(1, (px - knob.width / 2) / (width - knob.width)))
             let v = from + f * (to - from)
             v = Math.round(v / stepSize) * stepSize
             moved(Math.max(from, Math.min(to, v)))
         }
-        Rectangle { anchors.verticalCenter: parent.verticalCenter; x: knob.width / 2; width: parent.width - knob.width; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.lineMuted }
-        Rectangle { anchors.verticalCenter: parent.verticalCenter; x: knob.width / 2; width: (parent.width - knob.width) * sl.frac; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.accent }
+        Rectangle { y: sl.trackY - height / 2; x: knob.width / 2; width: parent.width - knob.width; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.lineMuted }
+        Rectangle { y: sl.trackY - height / 2; x: knob.width / 2; width: (parent.width - knob.width) * sl.frac; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.accent }
         Rectangle {
             id: knob
-            anchors.verticalCenter: parent.verticalCenter
+            y: sl.trackY - height / 2
             x: (sl.width - width) * sl.frac
             width: Theme.px(18); height: width; radius: Theme.seasonal ? width / 2 : Theme.radiusSmall
             color: slHover.hovered || sl.focused ? Theme.accent : Theme.textSoft
             border.width: sl.focused ? Theme.focusWidth : 0
             border.color: Theme.text
+        }
+        Text {
+            id: lowText
+            visible: sl.ends
+            x: 0; y: Theme.px(26)
+            text: sl.low
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
+        }
+        Text {
+            visible: sl.ends
+            x: sl.width - width; y: Theme.px(26)
+            text: sl.high
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         HoverHandler { id: slHover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: point => sl.at(point.position.x) }

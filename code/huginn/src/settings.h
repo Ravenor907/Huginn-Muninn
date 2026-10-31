@@ -35,12 +35,16 @@ class Settings : public QObject
     // Settings › Privacy and lock: the pattern's line and lit dots show while it's drawn (off: only
     // a brief pulse on each dot, so someone looking over your shoulder can't read it).
     Q_PROPERTY(bool patternTrail READ patternTrail WRITE setPatternTrail NOTIFY changed)
-    // The Seasonal look's falling leaves or snowflakes: how big and how many (percent of the usual).
-    Q_PROPERTY(int leafSize READ leafSize WRITE setLeafSize NOTIFY appearanceChanged)
-    Q_PROPERTY(int leafCount READ leafCount WRITE setLeafCount NOTIFY appearanceChanged)
+    // The Seasonal look's falling leaves or snowflakes. fallCount: how many on screen, 1 to 400, or
+    // 0 until the Amount slider is moved: then fallBase on a 1600x900 window, scaled by the window's
+    // area. fallSize: percent of the usual, 15 to 600. Older "leafCount" and "leafSize" percents and
+    // the Light animation carry over; their old defaults get today's (12 and 60%).
+    Q_PROPERTY(int fallCount READ fallCount WRITE setFallCount NOTIFY appearanceChanged)
+    Q_PROPERTY(double fallBase READ fallBase NOTIFY appearanceChanged)
+    Q_PROPERTY(int fallSize READ fallSize WRITE setFallSize NOTIFY appearanceChanged)
     // Seasonal: the season ("auto" follows the date, or a season's own name like "snow"), the
     // background ("" for the season's own, or one of the Look page's "#RRGGBB" swatches) and the
-    // animation ("off", "light" for about half as much falling, or "full"). Theme.qml checks them.
+    // animation ("off" or "full"; an older "light" reads as "full"). Theme.qml checks them.
     Q_PROPERTY(QString season READ season WRITE setSeason NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonGround READ seasonGround WRITE setSeasonGround NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonAnimation READ seasonAnimation WRITE setSeasonAnimation NOTIFY appearanceChanged)
@@ -91,14 +95,31 @@ public:
     bool showMembers() const { return value("showMembers", true).toBool(); }
     bool pushToTalk() const { return value("pushToTalk", false).toBool(); }
     bool patternTrail() const { return value("patternTrail", true).toBool(); }
-    int leafSize() const { return qBound(50, value("leafSize", 100).toInt(), 200); }
-    int leafCount() const { return qBound(25, value("leafCount", 100).toInt(), 200); }
+    int fallCount() const
+    {
+        const int v = value("fallCount", 0).toInt();
+        return v <= 0 ? 0 : qBound(1, v, 400);
+    }
+    double fallBase() const
+    {
+        if (m_settings.contains(QStringLiteral("fallBase"))) return qBound(0.1, value("fallBase", 12.0).toDouble(), 400.0);
+        const int old = qBound(25, value("leafCount", 100).toInt(), 200);
+        const bool light = value("seasonAnimation", "full").toString() == QLatin1String("light");
+        // About 23 fell on a 1600x900 window at the old 100%; Light was about half.
+        return old == 100 && !light ? 12.0 : 23.0 * old / 100.0 * (light ? 0.5 : 1.0);
+    }
+    int fallSize() const
+    {
+        if (m_settings.contains(QStringLiteral("fallSize"))) return qBound(15, value("fallSize", 60).toInt(), 600);
+        const int old = value("leafSize", 100).toInt();
+        return old == 100 ? 60 : qBound(15, old, 600);
+    }
     QString season() const { return value("season", "auto").toString(); }
     QString seasonGround() const { return value("seasonGround", "").toString(); }
     QString seasonAnimation() const
     {
         const QString v = value("seasonAnimation", "full").toString();
-        return v == QLatin1String("off") || v == QLatin1String("light") ? v : QStringLiteral("full");
+        return v == QLatin1String("off") ? v : QStringLiteral("full");
     }
     bool quiet() const { return s_quiet; }
     bool labs() const { return value("labs/on", false).toBool(); }
@@ -132,11 +153,18 @@ public:
     void setShowMembers(bool v) { setLook("showMembers", v); }
     void setPushToTalk(bool v) { set("pushToTalk", v); }
     void setPatternTrail(bool v) { set("patternTrail", v); }
-    void setLeafSize(int v) { setLook("leafSize", qBound(50, v, 200)); }
-    void setLeafCount(int v) { setLook("leafCount", qBound(25, v, 200)); }
+    // 0 goes back to following the window.
+    void setFallCount(int v) { setLook("fallCount", v <= 0 ? 0 : qBound(1, v, 400)); }
+    void setFallSize(int v) { setLook("fallSize", qBound(15, v, 600)); }
     void setSeason(const QString &v) { setLook("season", v); }
     void setSeasonGround(const QString &v) { setLook("seasonGround", v); }
-    void setSeasonAnimation(const QString &v) { setLook("seasonAnimation", v); }
+    void setSeasonAnimation(const QString &v)
+    {
+        // An older Light or "how many" percent lives on in fallBase once the choice is saved again.
+        const double base = fallBase();
+        if (!m_settings.contains(QStringLiteral("fallBase")) && base != 12.0) m_settings.setValue(QStringLiteral("fallBase"), base);
+        setLook("seasonAnimation", v);
+    }
     void setQuiet(bool v);
     void setLabs(bool v) { set("labs/on", v); }
     void setUpdateChannel(const QString &v) { set("labs/channel", v == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable")); }

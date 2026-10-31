@@ -5,30 +5,34 @@ import Huginn
 // The Seasonal look's ground (Autumn's warm bark, Snow's night blue, or the background picked on the
 // Look page) and what falls behind the frosted panes. One engine for both seasons; kind only picks
 // the shapes. Autumn: three leaf shapes (maple, oak and a serrated elm) in seven colors, and maple
-// seeds. Snow: six-armed crystals and soft round flakes, white and a little see-through, in the
-// leaves' and seeds' places. Each is drawn once on a small Canvas, then moved by a 30 fps timer: they
-// glide sideways as they fall, rock and tumble, flip edge-on and back, and lean into a gust now and
-// then; the seeds (and the flakes in their place) spin and orbit as they drop. Nothing is allocated
-// per frame. The timer stops while the window is hidden or minimized, and with Less motion on
-// everything lies still, scattered across the ground.
-// Settings › Look: Animation (Off draws nothing, Light about half as many), How many (25% to 200% of
-// about 18 leaves and 5 seeds on a 1600x900 window, scaled by the window's area) and size (50% to 200%).
+// seeds. Snow: six-armed crystals in the leaves' and seeds' places, white and a little see-through.
+// A 30 fps timer moves them: they glide sideways as they fall, rock and tumble, flip edge-on and
+// back, and lean into a gust now and then; the seeds spin and orbit as they drop. Up to 180 (and
+// while that many small canvases cost less than one the size of the window), each is drawn once on
+// its own small Canvas and only moved after that; more than that are all drawn on one Canvas each
+// frame, the same way and in the same places. The timer stops while the window is hidden or
+// minimized, and with Less motion on everything lies still, scattered across the ground.
+// Settings › Look: Animation (Off draws nothing and stops the timer), Amount (1 to 400 on screen;
+// until it's moved, Theme.fallCount scales it by the window's area) and Size (15% to 600%).
 Item {
     id: leaves
     visible: Theme.seasonal
     // What falls: "leaves" (Autumn) or "snow".
     readonly property string kind: Theme.snow ? "snow" : "leaves"
-    // Settings › Look › Animation: Off 0, Light about half, Full all.
-    readonly property real amount: Settings.seasonAnimation === "off" ? 0 : Settings.seasonAnimation === "light" ? 0.5 : 1
+    // Settings › Look › Animation: Off or On.
+    readonly property bool falling: Settings.seasonAnimation !== "off"
 
-    readonly property real sizeScale: (Number(Settings.leafSize) || 100) / 100 * Theme.s
-    readonly property real density: (Number(Settings.leafCount) || 100) / 100
-    readonly property real area: Math.max(0.2, (width * height) / (1600 * 900))
-    readonly property int nLeaves: amount > 0 ? Math.min(140, Math.max(4, Math.round(18 * area * density * amount))) : 0
-    readonly property int nSeeds: amount > 0 ? Math.min(40, Math.max(1, Math.round(5 * area * density * amount))) : 0
+    readonly property real sizeScale: (Number(Settings.fallSize) || 60) / 100 * Theme.s
+    readonly property int count: falling ? Theme.fallCount(width, height) : 0
+    // About 5 seeds in every 23; the rest are leaves (all flakes in Snow).
+    readonly property int nSeeds: Math.round(count * 5 / 23)
+    readonly property int nLeaves: count - nSeeds
+    // All on one Canvas: past 180, or when the small canvases together would hold more than twice
+    // the window's pixels (a few dozen huge ones).
+    readonly property bool one: count > 180 || count * Math.pow(30 * sizeScale, 2) > Math.max(width * height, 1440000) * 2
     readonly property bool winActive: Window.active
     readonly property bool onScreen: visible && Window.visibility !== Window.Hidden && Window.visibility !== Window.Minimized
-    readonly property bool moving: onScreen && Theme.motion && amount > 0
+    readonly property bool moving: onScreen && Theme.motion && falling
 
     // Where each leaf starts and how it moves. The same index always gets the same leaf, so the
     // sliders add or take away leaves without reshuffling the rest.
@@ -38,7 +42,7 @@ Item {
         for (let i = 0; i < nSeeds; ++i) out.push(make(1000 + i, "seed"))
         return out
     }
-    // A small, repeatable random source per leaf.
+    // A small, repeatable random source per leaf. px, py, rot and flip are where it is now (pose).
     function make(i, kind) {
         let s = (i * 2654435761 + 97) >>> 0
         const r = function() { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
@@ -46,14 +50,17 @@ Item {
         if (kind === "seed")
             return { kind: "seed", sym: 15 + Math.floor(r() * 6), x0: r(), speed: 0.062 + r() * 0.016, sway: 12, swayT: 4 + r(),
                      w: 20 + r() * 5, rps: (1.8 + r() * 0.7) * (r() < 0.5 ? -1 : 1), phase: r() * 100, dir: r() < 0.5 ? -1 : 1,
-                     orbit: 10 + r() * 7, orbitT: 3.2 + r() * 0.8, op: 0.9, wx: 0, lastFall: -1 }
+                     orbit: 10 + r() * 7, orbitT: 3.2 + r() * 0.8, op: 0.9, wx: 0, lastFall: -1, px: 0, py: 0, rot: 0, flip: 1, placed: false }
         const w = depth === 0 ? 17 + r() * 5 : depth === 1 ? 22 + r() * 8 : 30 + r() * 10
         return { kind: "leaf", sym: Math.floor(r() * 15), x0: r(), depth: depth,
                  speed: depth === 0 ? 0.03 + r() * 0.012 : depth === 1 ? 0.048 + r() * 0.016 : 0.068 + r() * 0.024,
                  sway: w * (0.6 + r() * 0.6), swayT: 2.6 + r() * 2.2, w: w, spin: (4 + r() * 26) * (r() < 0.5 ? -1 : 1),
                  flipT: 1.9 + r() * 1.3, phase: r() * 100, dir: r() < 0.5 ? -1 : 1, glide: 0.5 + r() * 0.75,
-                 tumbleT: 2.7 + r() * 2.8, zig: 0.65 + r() * 0.75, op: depth === 0 ? 0.6 : depth === 1 ? 0.85 : 1, wx: 0, lastFall: -1 }
+                 tumbleT: 2.7 + r() * 2.8, zig: 0.65 + r() * 0.75, op: depth === 0 ? 0.6 : depth === 1 ? 0.85 : 1, wx: 0, lastFall: -1,
+                 px: 0, py: 0, rot: 0, flip: 1, placed: false }
     }
+    // The drawn size of a leaf: its own width times the slider.
+    function sideOf(q) { return Math.max(3, Math.ceil((q.w || 24) * sizeScale)) }
 
     // The ground: the season's (or the picked background), a little lighter near the top.
     Rectangle {
@@ -81,6 +88,12 @@ Item {
     }
     function step(t, dt) {
         const g = gustAt(t)
+        if (one) {
+            const pl = plan
+            for (let i = 0; i < pl.length; ++i) { const q = pl[i]; pose(q, t, dt, g, sideOf(q)) }
+            sky.requestPaint()
+            return
+        }
         const n = rep.count
         for (let i = 0; i < n; ++i) { const it = rep.itemAt(i); if (it) it.place(t, dt, g) }
     }
@@ -89,19 +102,66 @@ Item {
     onMovingChanged: settle()
     onPlanChanged: Qt.callLater(settle)
     onKindChanged: Qt.callLater(settle)
+    onOneChanged: Qt.callLater(settle)
+    onSizeScaleChanged: Qt.callLater(settle)
     onWidthChanged: Qt.callLater(settle)
     onHeightChanged: Qt.callLater(settle)
 
+    // Where leaf q is at time t (seconds), side pixels across: its turning point (px, py; the stem's
+    // base, or a flake's middle), its turn in degrees (rot) and how far it faces you (flip, 1 flat
+    // on, near 0 edge-on). Kept on q, so nothing is allocated.
+    function pose(q, t, dt, gust, side) {
+        const W = width, H = height, ss = sizeScale
+        const tt = t + q.phase
+        // Top to bottom and round again: from 12% above the window to 13% below it, or by its own
+        // size for a big one, so it leaves whole before it starts again at the top.
+        const top = Math.min(-0.12 * H, -side)
+        const drop = Math.max(1.13 * H, H + side) - top
+        const fallen = (tt * q.speed * H) % drop
+        // Back at the top: the wind's push starts over.
+        if (fallen < q.lastFall) q.wx = 0
+        q.lastFall = fallen
+        let x = q.x0 * W + Math.sin(tt / q.swayT * tau) * q.sway * ss + Math.sin(tt / (q.swayT * 2.7) * tau) * q.sway * 0.4 * ss
+        let y = top + fallen
+        let rot, flip
+        // In Snow every flake, seed slots included, rocks, tumbles and flips like a leaf.
+        if (q.kind === "seed" && kind !== "snow") {
+            rot = (tt * q.rps * 360) % 360
+            flip = 1
+            x += Math.cos(tt / q.orbitT * tau) * q.orbit * ss
+            y += Math.sin(tt / q.orbitT * tau) * q.orbit * 0.5 * ss
+            q.wx += gust * 70 * ss * dt
+        } else {
+            // Rock with the sway, a slow tumble each way, and a lean into the gust.
+            const spin = q.spin !== undefined ? q.spin : 16 * q.dir
+            const tumbleT = q.tumbleT !== undefined ? q.tumbleT : q.orbitT + 0.6
+            const flipT = q.flipT !== undefined ? q.flipT : 2.2 + (q.phase % 1)
+            const glide = q.glide !== undefined ? q.glide : 0.6
+            const zig = q.zig !== undefined ? q.zig : 0.8
+            rot = spin * Math.sin(tt / q.swayT * tau) + Math.sin(tt * 0.6) * 10
+                + q.dir * 18 * Math.sin(tt / tumbleT * tau) + gust * 28 * q.dir
+            flip = 0.55 + 0.45 * Math.cos(tt / flipT * tau)
+            // Gliding sideways as it falls, and pushed along by the gust.
+            x += q.dir * glide * zig * fallen * 0.16
+            q.wx += gust * zig * 110 * ss * dt
+        }
+        x += q.wx
+        // Off one side by its own size comes back in on the other.
+        const span = W + side * 2
+        x = ((x + side) % span + span) % span - side
+        q.px = x; q.py = y; q.rot = rot; q.flip = flip; q.placed = true
+    }
+
     Repeater {
         id: rep
-        model: leaves.visible ? leaves.plan.length : 0
+        model: leaves.visible && !leaves.one ? leaves.plan.length : 0
         delegate: Item {
             id: leaf
             required property int index
             readonly property var p: leaves.plan[index] || ({})
             // The drawn size: the leaf's own width times the slider. The canvas is drawn at that size,
             // so it stays crisp; the slider repaints it once, not every frame.
-            readonly property int side: Math.max(8, Math.ceil((p.w || 24) * leaves.sizeScale))
+            readonly property int side: leaves.sideOf(p)
             width: side; height: side
             opacity: p.op || 1
             // The stem's base, where the leaf turns; a snowflake turns about its middle.
@@ -116,44 +176,11 @@ Item {
             function place(t, dt, gust) {
                 const q = p
                 if (!q.kind) return
-                const W = leaves.width, H = leaves.height, ss = leaves.sizeScale, tau = leaves.tau
-                const tt = t + q.phase
-                const fall = ((tt * q.speed) % 1.25) - 0.12
-                // Back at the top: the wind's push starts over.
-                if (fall < q.lastFall) q.wx = 0
-                q.lastFall = fall
-                let x = q.x0 * W + Math.sin(tt / q.swayT * tau) * q.sway * ss + Math.sin(tt / (q.swayT * 2.7) * tau) * q.sway * 0.4 * ss
-                let y = fall * H
-                let rot, flip
-                // In Snow every flake, seed slots included, rocks, tumbles and flips like a leaf.
-                if (q.kind === "seed" && leaves.kind !== "snow") {
-                    rot = (tt * q.rps * 360) % 360
-                    flip = 1
-                    x += Math.cos(tt / q.orbitT * tau) * q.orbit * ss
-                    y += Math.sin(tt / q.orbitT * tau) * q.orbit * 0.5 * ss
-                    q.wx += gust * 70 * ss * dt
-                } else {
-                    // Rock with the sway, a slow tumble each way, and a lean into the gust.
-                    const spin = q.spin !== undefined ? q.spin : 16 * q.dir
-                    const tumbleT = q.tumbleT !== undefined ? q.tumbleT : q.orbitT + 0.6
-                    const flipT = q.flipT !== undefined ? q.flipT : 2.2 + (q.phase % 1)
-                    const glide = q.glide !== undefined ? q.glide : 0.6
-                    const zig = q.zig !== undefined ? q.zig : 0.8
-                    rot = spin * Math.sin(tt / q.swayT * tau) + Math.sin(tt * 0.6) * 10
-                        + q.dir * 18 * Math.sin(tt / tumbleT * tau) + gust * 28 * q.dir
-                    flip = 0.55 + 0.45 * Math.cos(tt / flipT * tau)
-                    // Gliding sideways as it falls, and pushed along by the gust.
-                    x += q.dir * glide * zig * (fall + 0.12) * H * 0.16
-                    q.wx += gust * zig * 110 * ss * dt
-                }
-                x += q.wx
-                // Off one side comes back in on the other.
-                const span = W + side * 2
-                x = ((x + side) % span + span) % span - side
-                leaf.x = x - ox
-                leaf.y = y - oy
-                rotT.angle = rot
-                flipT.xScale = flip
+                leaves.pose(q, t, dt, gust, side)
+                leaf.x = q.px - ox
+                leaf.y = q.py - oy
+                rotT.angle = q.rot
+                flipT.xScale = q.flip
             }
 
             Canvas {
@@ -175,10 +202,43 @@ Item {
                     ctx.translate(12 * k, 24 * k)
                     ctx.scale(k, k)
                     ctx.lineJoin = "round"; ctx.lineCap = "round"
-                    if (kind === "snow") leaves.drawFlake(ctx, sym)
-                    else if (sym >= 15) leaves.drawSeed(ctx, sym - 15)
-                    else leaves.drawLeaf(ctx, sym)
+                    if (kind === "snow") leaves.drawFlake(ctx, sym, 12, 1)
+                    else if (sym >= 15) leaves.drawSeed(ctx, sym - 15, 1)
+                    else leaves.drawLeaf(ctx, sym, 1, null)
                 }
+            }
+        }
+    }
+
+    // Many at once: all of them on this one Canvas, redrawn each frame from where pose put them. Each
+    // is turned, flipped and sized exactly as its own small canvas would be, with the same opacity.
+    Canvas {
+        id: sky
+        anchors.fill: parent
+        visible: leaves.one
+        renderTarget: Canvas.Image
+        renderStrategy: Canvas.Immediate
+        onPaint: {
+            const ctx = getContext("2d")
+            ctx.reset()
+            ctx.clearRect(0, 0, width, height)
+            if (!leaves.one) return
+            const pl = leaves.plan
+            const snow = leaves.kind === "snow"
+            ctx.lineJoin = "round"; ctx.lineCap = "round"
+            // The leaves' gradients, made once a frame and shared by every leaf of a color.
+            const fills = snow ? null : leaves.leafFills(ctx)
+            for (let i = 0; i < pl.length; ++i) {
+                const q = pl[i]
+                if (!q.placed) continue
+                const k = leaves.sideOf(q) / 48
+                const a = q.rot * Math.PI / 180
+                const c = Math.cos(a) * k, s = Math.sin(a) * k
+                // Scale by k, flip across, turn, then move to the turning point.
+                ctx.setTransform(c * q.flip, s * q.flip, -s, c, q.px, q.py)
+                if (snow) leaves.drawFlake(ctx, q.sym, 0, q.op)
+                else if (q.sym >= 15) leaves.drawSeed(ctx, q.sym - 15, q.op)
+                else leaves.drawLeaf(ctx, q.sym, q.op, fills)
             }
         }
     }
@@ -229,67 +289,87 @@ Item {
         for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1])
         ctx.closePath()
     }
-    function drawLeaf(ctx, sym) {
+    // One radial gradient per color for drawLeaf, lit from near the stem.
+    function leafFills(ctx) {
+        const out = []
+        for (let i = 0; i < tones.length; ++i) {
+            const tone = tones[i]
+            const g = ctx.createRadialGradient(7.2, -2.4, 0, 7.2, -2.4, 31.2)
+            g.addColorStop(0, tone[0]); g.addColorStop(0.55, tone[1]); g.addColorStop(1, tone[2])
+            out.push(g)
+        }
+        return out
+    }
+    // A leaf at the origin, its stem's base; a is its opacity, fills the gradients from leafFills (or
+    // null to make its own).
+    function drawLeaf(ctx, sym, a, fills) {
         const shape = leafShape[sym] || 0
-        const tone = tones[leafTone[sym] || 0]
+        const t = leafTone[sym] || 0
+        const tone = tones[t]
         const dark = tone[2]
+        ctx.globalAlpha = a
         // The stem.
         ctx.strokeStyle = dark; ctx.lineWidth = 1.2
         ctx.beginPath(); ctx.moveTo(-7, 1.2); ctx.quadraticCurveTo(-3.5, 0.4, 0, 0); ctx.stroke()
         // The blade, lit from near the stem.
-        const g = ctx.createRadialGradient(7.2, -2.4, 0, 7.2, -2.4, 31.2)
-        g.addColorStop(0, tone[0]); g.addColorStop(0.55, tone[1]); g.addColorStop(1, tone[2])
-        ctx.fillStyle = g
+        ctx.fillStyle = fills ? fills[t] : leafFills(ctx)[t]
         ctx.lineWidth = 0.35
         ctx.beginPath(); outline(ctx, shape); ctx.fill(); ctx.stroke()
         // Veins and a few spots.
-        ctx.globalAlpha = 0.8; ctx.lineWidth = 0.7
+        ctx.globalAlpha = 0.8 * a; ctx.lineWidth = 0.7
         const vs = veins[shape]
         ctx.beginPath()
         for (let i = 0; i < vs.length; ++i) { const v = vs[i]; ctx.moveTo(0, 0); ctx.quadraticCurveTo(v[0], v[1], v[2], v[3]) }
         ctx.stroke()
-        ctx.globalAlpha = 0.35; ctx.fillStyle = dark
+        ctx.globalAlpha = 0.35 * a; ctx.fillStyle = dark
         const sp = spots[shape]
         for (let i = 0; i < sp.length; ++i) { const c = sp[i]; ctx.beginPath(); ctx.arc(c[0], c[1], c[2], 0, tau); ctx.fill() }
         ctx.globalAlpha = 1
     }
-    // A snowflake in a leaf's or seed's place, centered in the box (12 right of the stem's base): six-armed
-    // crystals in three sizes, so every flake shows its turn and flip: big for one leaf shape, medium for
-    // another, small for the third and for a seed.
-    function drawFlake(ctx, sym) {
+    // A snowflake in a leaf's or seed's place, its middle at (at, 0) (12 right of the stem's base in a
+    // leaf's box): six-armed crystals in three sizes, so every flake shows its turn and flip: big for
+    // one leaf shape, medium for another, small for the third and for a seed. a is its opacity.
+    function drawFlake(ctx, sym, at, a) {
         const type = sym >= 15 ? 2 : (leafShape[sym] || 0)
-        ctx.translate(12, 0)
-        const r = type === 0 ? 14 : type === 1 ? 11 : 8
-        const twigs = type === 0 ? [0.5, 0.75] : type === 1 ? [0.6] : [0.55]
-        const third = Math.PI / 3
-        ctx.globalAlpha = 0.85
+        const ln = flakeLines[type]
+        if (at !== 0) ctx.translate(at, 0)
+        ctx.globalAlpha = 0.85 * a
         ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.8
         ctx.beginPath()
+        for (let i = 0; i < ln.length; i += 4) { ctx.moveTo(ln[i], ln[i + 1]); ctx.lineTo(ln[i + 2], ln[i + 3]) }
+        ctx.stroke()
+        ctx.globalAlpha = 1
+    }
+    // Each crystal's strokes, worked out once: (x1, y1, x2, y2) for each arm and each side branch.
+    readonly property var flakeLines: [crystal(14, [0.5, 0.75]), crystal(11, [0.6]), crystal(8, [0.55])]
+    function crystal(r, twigs) {
+        const out = []
+        const third = Math.PI / 3
         for (let i = 0; i < 6; ++i) {
             const a = i * third, c = Math.cos(a), n = Math.sin(a)
-            ctx.moveTo(0, 0); ctx.lineTo(c * r, n * r)
+            out.push(0, 0, c * r, n * r)
             for (let j = 0; j < twigs.length; ++j) {
                 const at = twigs[j], len = r * (at > 0.6 ? 0.2 : 0.3)
                 for (let side = -1; side <= 1; side += 2) {
                     const b = a + side * third
-                    ctx.moveTo(c * r * at, n * r * at); ctx.lineTo(c * r * at + Math.cos(b) * len, n * r * at + Math.sin(b) * len)
+                    out.push(c * r * at, n * r * at, c * r * at + Math.cos(b) * len, n * r * at + Math.sin(b) * len)
                 }
             }
         }
-        ctx.stroke()
-        ctx.globalAlpha = 1
+        return out
     }
-    function drawSeed(ctx, n) {
+    // A maple seed, the seed itself at the origin; a is its opacity.
+    function drawSeed(ctx, n, a) {
         const tone = seedTones[n] || seedTones[0]
         const g = ctx.createLinearGradient(2, 0, 38, 0)
         g.addColorStop(0, tone[0]); g.addColorStop(0.25, tone[1]); g.addColorStop(1, tone[2])
         // The wing.
-        ctx.globalAlpha = 0.95
+        ctx.globalAlpha = 0.95 * a
         ctx.fillStyle = g; ctx.strokeStyle = tone[0]; ctx.lineWidth = 0.5
         ctx.beginPath(); ctx.moveTo(2, 0); ctx.bezierCurveTo(8, -9, 22, -11, 34, -7); ctx.bezierCurveTo(38, -5, 38, 1, 34, 3)
         ctx.bezierCurveTo(24, 7, 10, 7, 2, 2); ctx.closePath(); ctx.fill(); ctx.stroke()
         // Its ribs.
-        ctx.globalAlpha = 0.55; ctx.lineWidth = 0.35
+        ctx.globalAlpha = 0.55 * a; ctx.lineWidth = 0.35
         ctx.beginPath()
         ctx.moveTo(4, -1); ctx.quadraticCurveTo(18, -6, 33, -6)
         ctx.moveTo(4, 0); ctx.quadraticCurveTo(18, -3, 33, -3)
@@ -297,9 +377,9 @@ Item {
         ctx.moveTo(4, 1); ctx.quadraticCurveTo(18, 2, 33, 1)
         ctx.stroke()
         // The seed itself, with a glint.
-        ctx.globalAlpha = 1; ctx.fillStyle = tone[0]
+        ctx.globalAlpha = a; ctx.fillStyle = tone[0]
         ctx.beginPath(); ctx.ellipse(1 - 4.2, -3, 8.4, 6); ctx.fill()
-        ctx.globalAlpha = 0.7; ctx.fillStyle = "#9a7a44"
+        ctx.globalAlpha = 0.7 * a; ctx.fillStyle = "#9a7a44"
         ctx.beginPath(); ctx.ellipse(-2.2, -2, 4.4, 2.4); ctx.fill()
         ctx.globalAlpha = 1
     }

@@ -57,9 +57,12 @@ class SeasonsTest {
         assertEquals(Seasons.GROUNDS[0], Seasons.ground(Seasons.GROUNDS[0]))
         assertEquals(Seasons.GROUNDS.size, Seasons.GROUND_NAMES.size)
         assertEquals(Seasons.FULL, Seasons.anim("nonsense"))
-        assertEquals(0f, Seasons.animScale(Seasons.OFF), 0f)
-        assertEquals(0.5f, Seasons.animScale(Seasons.LIGHT), 0f)
-        assertEquals(1f, Seasons.animScale(Seasons.FULL), 0f)
+        // The older Light choice reads as on; only Off stops the fall.
+        assertEquals(Seasons.FULL, Seasons.anim(Seasons.LIGHT))
+        assertEquals(false, Seasons.falls(Seasons.OFF))
+        assertEquals(true, Seasons.falls(Seasons.LIGHT))
+        assertEquals(true, Seasons.falls(Seasons.FULL))
+        assertEquals(true, Seasons.falls(null))
     }
 
     @Test

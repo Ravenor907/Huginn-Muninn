@@ -40,7 +40,7 @@ object Access {
     var season by androidx.compose.runtime.mutableStateOf(Seasons.AUTO)
     /** Seasonal's background: "" (the season's own) or one of [Seasons.GROUNDS]. */
     var seasonGround by androidx.compose.runtime.mutableStateOf("")
-    /** Seasonal's falling leaves or snow: [Seasons.OFF], [Seasons.LIGHT] or [Seasons.FULL]. */
+    /** Seasonal's falling leaves or snow: [Seasons.OFF] or on ([Seasons.FULL]). */
     var seasonAnim by androidx.compose.runtime.mutableStateOf(Seasons.FULL)
 }
 
@@ -123,14 +123,16 @@ object Seasons {
     val GROUND_NAMES = listOf("Night", "Pine", "Teal", "Plum", "Bark", "Umber", "Slate", "Charcoal")
     fun ground(key: String?): String = if (key != null && key in GROUNDS) key else ""
 
-    /** Animation: what falls behind the Seasonal look. */
+    /** Animation: whether anything falls behind the Seasonal look. How much and how big is [LeafPrefs]. */
     const val OFF = "off"
+    /** An older saved choice for about half as many; it reads as on, and [LeafPrefs] keeps the half. */
     const val LIGHT = "light"
     const val FULL = "full"
-    val ANIMS = listOf(OFF to "Off", LIGHT to "Light", FULL to "Full")
-    fun anim(key: String?): String = ANIMS.firstOrNull { it.first == key }?.first ?: FULL
-    /** How much falls: none when Off, about half on Light. */
-    fun animScale(key: String): Float = when (anim(key)) { OFF -> 0f; LIGHT -> 0.5f; else -> 1f }
+    val ANIMS = listOf(OFF to "Off", FULL to "On")
+    /** A saved Animation choice: Off, or on ([FULL]) for anything else. */
+    fun anim(key: String?): String = if (key == OFF) OFF else FULL
+    /** Something falls: the animation isn't Off. */
+    fun falls(key: String?): Boolean = anim(key) != OFF
 }
 
 /**

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -27,32 +28,83 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Settings › Look › Seasonal: how big the leaves or snowflakes are and how many fall (both 25% to 200% of the
- * usual). Kept here so the sliders and what falls follow the same value at once; saved in the app's settings under "leafSize" and
- * "leafCount".
+ * The Amount and Size sliders under Settings › Look › Seasonal, worked out the same way in Huginn. Both are
+ * logarithmic, so the low end is fine-grained: a slider position from 0 to 100 gives 1 to 400 on screen
+ * (`round(400^(v/100))`) and 15% to 600% of the usual size (`round(15 * 40^(v/100))`). Until Amount is moved it
+ * follows the screen: [DEFAULT_BASE] on a phone-sized screen, more on a bigger one.
+ */
+object FallScale {
+    const val MIN_COUNT = 1
+    const val MAX_COUNT = 400
+    const val MIN_SIZE = 15
+    const val MAX_SIZE = 600
+    const val DEFAULT_SIZE = 60
+    /** How many fall on a phone-sized screen until Amount is moved. */
+    const val DEFAULT_BASE = 12f
+    /** How many fell on a phone-sized screen at 100% in older versions (11 leaves and 3 seeds). */
+    const val OLD_BASE = 14f
+
+    /** Amount at slider position [v] (0 to 100). */
+    fun countAt(v: Float): Int = 400.0.pow(v.coerceIn(0f, 100f) / 100.0).roundToInt().coerceIn(MIN_COUNT, MAX_COUNT)
+    /** Where [n] sits on the Amount slider. */
+    fun countPos(n: Int): Float = (100.0 * ln(n.coerceIn(MIN_COUNT, MAX_COUNT).toDouble()) / ln(400.0)).toFloat()
+    /** Size (percent of the usual) at slider position [v] (0 to 100). */
+    fun sizeAt(v: Float): Int = (15.0 * 40.0.pow(v.coerceIn(0f, 100f) / 100.0)).roundToInt().coerceIn(MIN_SIZE, MAX_SIZE)
+    /** Where [pct] sits on the Size slider. */
+    fun sizePos(pct: Int): Float = (100.0 * ln(pct.coerceIn(MIN_SIZE, MAX_SIZE) / 15.0) / ln(40.0)).toFloat()
+
+    /** Screen area against a phone's (412 by 915 dp), held between half and four times. */
+    fun area(widthDp: Int, heightDp: Int): Float = (widthDp * heightDp / (412f * 915f)).coerceIn(0.5f, 4f)
+    /** How many fall when Amount follows the screen: [base] on a phone, scaled by [area]. */
+    fun autoCount(base: Float, area: Float): Int = (base * area).roundToInt().coerceIn(MIN_COUNT, MAX_COUNT)
+    /** The phone-sized amount for an older saved "how many" percent and Light: 100% on Full gets today's default. */
+    fun legacyBase(oldPct: Int, light: Boolean): Float =
+        if (oldPct == 100 && !light) DEFAULT_BASE else OLD_BASE * oldPct.coerceIn(25, 200) / 100f * (if (light) 0.5f else 1f)
+    /** The size for an older saved percent: 100% (the old default) gets today's default, anything else stays. */
+    fun legacySize(oldPct: Int): Int = if (oldPct == 100) DEFAULT_SIZE else oldPct.coerceIn(MIN_SIZE, MAX_SIZE)
+    /** How many of [n] are maple seeds (about 3 in 14); the rest are leaves. In Snow all are flakes. */
+    fun seeds(n: Int): Int = (n * 3f / 14f).roundToInt().coerceIn(0, n)
+}
+
+/**
+ * Settings › Look › Seasonal: Amount (how many fall; 0 follows the screen) and Size (percent of the usual). Kept here
+ * so the sliders and what falls follow the same value at once; saved in the app's settings under "fallCount",
+ * "fallBase" and "fallSize". Older "leafCount" and "leafSize" percents and the Light animation carry over.
  */
 object LeafPrefs {
-    var size by mutableIntStateOf(100)
-    var count by mutableIntStateOf(100)
+    /** Amount picked on the slider, or 0: [FallScale.autoCount] of [base] for the screen. */
+    var count by mutableIntStateOf(0)
+    var base by mutableFloatStateOf(FallScale.DEFAULT_BASE)
+    var size by mutableIntStateOf(FallScale.DEFAULT_SIZE)
     private var loaded = false
     fun load(context: Context) {
         if (loaded) return
         loaded = true
         val p = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
-        size = p.getInt("leafSize", 100).coerceIn(25, 200)
-        count = p.getInt("leafCount", 100).coerceIn(25, 200)
+        count = p.getInt("fallCount", 0).let { if (it <= 0) 0 else it.coerceIn(FallScale.MIN_COUNT, FallScale.MAX_COUNT) }
+        base = if (p.contains("fallBase")) p.getFloat("fallBase", FallScale.DEFAULT_BASE)
+            else FallScale.legacyBase(p.getInt("leafCount", 100), p.getString("seasonAnim", null) == Seasons.LIGHT)
+        size = if (p.contains("fallSize")) p.getInt("fallSize", FallScale.DEFAULT_SIZE).coerceIn(FallScale.MIN_SIZE, FallScale.MAX_SIZE)
+            else FallScale.legacySize(p.getInt("leafSize", 100))
+        // Keep what came over from the older settings, so it stays once the Animation choice is saved as On.
+        if (!p.contains("fallBase") && base != FallScale.DEFAULT_BASE) p.edit().putFloat("fallBase", base).apply()
     }
+    /** How many fall on a screen [widthDp] by [heightDp]. */
+    fun countFor(widthDp: Int, heightDp: Int): Int =
+        if (count > 0) count else FallScale.autoCount(base, FallScale.area(widthDp, heightDp))
     fun setSize(context: Context, v: Int) {
-        size = v.coerceIn(25, 200)
-        context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putInt("leafSize", size).apply()
+        size = v.coerceIn(FallScale.MIN_SIZE, FallScale.MAX_SIZE)
+        context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putInt("fallSize", size).apply()
     }
     fun setCount(context: Context, v: Int) {
-        count = v.coerceIn(25, 200)
-        context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putInt("leafCount", count).apply()
+        count = v.coerceIn(FallScale.MIN_COUNT, FallScale.MAX_COUNT)
+        context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putInt("fallCount", count).apply()
     }
 }
 
@@ -65,30 +117,27 @@ enum class Fall { LEAVES, SNOW }
  * and birch leaves tumble, sway and glide on a slow wind with the odd gust, and maple seeds (samaras) spin as they
  * drop; in Snow every flake is a six-armed crystal that rocks, tumbles and flips the way a leaf does.
  *
- * Settings › Look › Animation: Full, Light (about half as many) or Off (nothing falls).
+ * Settings › Look › Animation: On or Off (nothing falls and the clock stops); Amount from 1 to 400 on screen and Size
+ * from 15% to 600% ([LeafPrefs]).
  *
- * Cheap on the battery: the shapes are built once and drawn from cached paths, the frame clock runs at about 30
- * frames a second and only while Muninn is on screen (it rests when the activity stops, so also when the screen
- * is off), nothing is allocated while drawing, and with Reduce motion (Muninn's or Android's "remove animations")
- * everything lies still in a scatter.
+ * Cheap on the battery: the shapes are built once and drawn from cached paths in one Canvas, the frame clock runs at
+ * about 30 frames a second and only while Muninn is on screen (it rests when the activity stops, so also when the
+ * screen is off), each frame is one pass over the particles with nothing allocated, and with Reduce motion (Muninn's
+ * or Android's "remove animations") everything lies still in a scatter.
  */
 @Composable
 fun SeasonFall() {
     if (!Palette.seasonal) return
     val kind = if (Palette.snow) Fall.SNOW else Fall.LEAVES
-    val amount = Seasons.animScale(Access.seasonAnim)
-    if (amount <= 0f) return
+    if (!Seasons.falls(Access.seasonAnim)) return
     val context = LocalContext.current
     LeafPrefs.load(context)
     val config = LocalConfiguration.current
     val sizePct = LeafPrefs.size
-    val countPct = LeafPrefs.count
-    // How many: about 11 leaves and 3 seeds on a phone screen, more on a bigger one, times the setting (and half
-    // as many on Light).
-    val scene = remember(config.screenWidthDp, config.screenHeightDp, countPct, amount, kind) {
-        val area = (config.screenWidthDp * config.screenHeightDp) / (412f * 915f)
-        val k = area.coerceIn(0.5f, 4f) * countPct / 100f * amount
-        Scene((11 * k).roundToInt().coerceIn(3, 48), (3 * k).roundToInt().coerceIn(1, 12), kind)
+    val n = LeafPrefs.countFor(config.screenWidthDp, config.screenHeightDp)
+    val scene = remember(n, kind) {
+        val seeds = FallScale.seeds(n)
+        Scene(n - seeds, seeds, kind)
     }
     val still = Access.reduceMotion || remember(context) { systemStill(context) }
     var now by remember { mutableLongStateOf(0L) }
@@ -158,21 +207,31 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
         val g = sin(t / 13f * TAU).coerceAtLeast(0f)
         val gust = g * g * g * 140f
         val wind = (breeze + gust) * unit
-        val span = w + 80f * unit
-        for (l in all) {
+        // One pass, nothing allocated: every number below is a plain float.
+        for (i in all.indices) {
+            val l = all[i]
             val tt = t + l.phase
             val size = l.w * unit
-            val y = ((tt * l.speed) % 1.25f - 0.12f) * h
-            var x = ((l.x * w + l.dir * l.glide * 22f * unit * tt + wind) % span + span) % span - 40f * unit
+            // Off screen by its own size at each edge (no shape reaches further from its turning point), so a big
+            // one leaves the screen whole before it comes back in on the other side.
+            val margin = size
+            // Top to bottom and round again: from 12% above the screen to 13% below it, or further for a big one.
+            val top = minOf(-0.12f * h, -margin)
+            val drop = maxOf(1.13f * h, h + margin) - top
+            val y = top + (tt * l.speed * h) % drop
+            var x = l.x * w + l.dir * l.glide * 22f * unit * tt + wind
             x += sin(tt / l.swayT * TAU) * l.sway * unit + sin(tt / (l.swayT * 2.7f) * TAU) * l.sway * 0.4f * unit
+            val samara = l.kind == 3 && fall != Fall.SNOW
+            if (samara) x += cos(tt / l.orbitT * TAU) * l.orbit * unit
+            val span = w + 2f * margin
+            x = ((x + margin) % span + span) % span - margin
             val alpha = when (l.depth) { 0 -> 0.6f; 1 -> 0.85f; else -> 1f }
             val s = size / 48f
             // In Snow every flake, seed slots included, rocks, tumbles and flips like a leaf (below).
-            if (l.kind == 3 && fall != Fall.SNOW) {
+            if (samara) {
                 // A samara: spins steadily and swings round a small circle as it drops.
-                val ox = cos(tt / l.orbitT * TAU) * l.orbit * unit
                 val oy = sin(tt / l.orbitT * TAU) * l.orbit * 0.5f * unit
-                d.withTransform({ translate(x + ox, y + oy); rotate(l.rps * 360f * tt, Offset.Zero); scale(s, s, Offset.Zero) }) {
+                d.withTransform({ translate(x, y + oy); rotate(l.rps * 360f * tt, Offset.Zero); scale(s, s, Offset.Zero) }) {
                     drawPath(SAMARA, SEED_BRUSHES[l.tint], alpha = alpha * 0.95f)
                     drawPath(SAMARA, SEED_EDGE, alpha = alpha * 0.6f, style = THIN)
                     drawPath(SAMARA_VEINS, SEED_EDGE, alpha = alpha * 0.55f, style = HAIR)
