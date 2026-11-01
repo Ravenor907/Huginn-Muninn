@@ -1,4 +1,5 @@
 #include "thumbs.h"
+#include "photos.h"
 
 #include <QMutexLocker>
 
@@ -29,7 +30,9 @@ QImage ThumbProvider::requestImage(const QString &id, QSize *size, const QSize &
     if (id.isEmpty() || id.contains(QLatin1Char('/')) || id.contains(QLatin1Char('\\')))
         return {};
     QByteArray bytes = m_read(QStringLiteral("photos/") + id);
-    QImage img = QImage::fromData(bytes, "JPEG");
+    // A GIF (cap a1) shows its first frame, and only once it passes the GIF limits again.
+    const bool gif = Photos::isGif(bytes);
+    QImage img = gif && Photos::cleanGif(bytes).isEmpty() ? QImage() : QImage::fromData(bytes, gif ? "GIF" : "JPEG");
     bytes.fill(0);
     if (img.isNull())
         return {};

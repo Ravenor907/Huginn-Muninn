@@ -49,6 +49,37 @@ class ReleaseSigTest {
         }
     }
 
+    /** The signatures block in release notes and pages: which texts give one, what it holds, and that its signatures check out. */
+    @Test
+    fun signaturesBlock() {
+        val v = JSONObject(javaClass.classLoader!!.getResource("release-sig-vectors.json")!!.readText())
+        assertEquals(Updater.SIGNATURES_FIRST, v.getString("notes_first"))
+        val cases = v.getJSONArray("notes")
+        assertTrue(cases.length() >= 20)
+        for (i in 0 until cases.length()) {
+            val c = cases.getJSONObject(i)
+            val name = c.getString("name")
+            val got = Updater.parseSignatures(c.getString("text") + " ".repeat(c.getInt("pad")), c.getBoolean("page"))
+            assertEquals(name, c.getBoolean("valid"), got != null)
+            if (got == null) continue
+            val label = c.getString("label")
+            val pub = hex(c.getString("public"))
+            val files = c.getJSONArray("files")
+            assertEquals(name, label, got.label)
+            assertEquals(name, (0 until files.length()).map { files.getJSONObject(it).getString("name") }, got.files.keys.toList())
+            for (j in 0 until files.length()) {
+                val f = files.getJSONObject(j)
+                val line = got.files.getValue(f.getString("name"))
+                val data = hex(f.getString("data"))
+                assertEquals(name, f.getString("sha256"), line.sha)
+                assertTrue(name, line.sig.contentEquals(hex(f.getString("sig"))) && line.vsig.contentEquals(hex(f.getString("vsig"))))
+                assertEquals(name, line.sha, java.security.MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) })
+                assertTrue(name, Ed25519.verify(pub, data, line.sig))
+                assertTrue(name, Updater.versionSigned(label, f.getString("name"), line.sha, line.vsig, pub))
+            }
+        }
+    }
+
     @Test
     fun streamsInPieces() {
         val c = JSONObject(javaClass.classLoader!!.getResource("release-sig-vectors.json")!!.readText()).getJSONArray("cases").getJSONObject(3)

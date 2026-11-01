@@ -36,6 +36,55 @@ object Photos {
         }
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
+    /**
+     * A GIF's first frame as an ordinary photo (640 px, at most 60 KB, no metadata): what someone whose app doesn't
+     * show GIFs gets, and what a GIF too big to go animated can go as. Null if it can't be read.
+     */
+    fun still(gif: ByteArray): ByteArray? = try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(gif, 0, gif.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) null else {
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= NORMAL_SIDE) sample *= 2
+            BitmapFactory.decodeByteArray(gif, 0, gif.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                ?.let { scrub(encode(opaque(scale(it, NORMAL_SIDE)), NORMAL_BYTES)) }
+        }
+    } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
+
+    /** Clear parts of a GIF frame on white, as a JPEG has no transparency. */
+    private fun opaque(b: Bitmap): Bitmap {
+        if (!b.hasAlpha()) return b
+        val out = Bitmap.createBitmap(b.width, b.height, Bitmap.Config.ARGB_8888)
+        android.graphics.Canvas(out).apply { drawColor(android.graphics.Color.WHITE); drawBitmap(b, 0f, 0f, null) }
+        return out
+    }
+
+    /** True if [uri] holds a GIF (by its first bytes, whatever its name or type says). */
+    fun isGif(context: Context, uri: Uri): Boolean = try {
+        context.contentResolver.openInputStream(uri)?.use { s -> val head = ByteArray(6); var n = 0
+            while (n < 6) { val r = s.read(head, n, 6 - n); if (r < 0) break; n += r }
+            n == 6 && Gifs.isGif(head) } ?: false
+    } catch (e: Exception) { false }
+
+    /**
+     * A GIF the person picked, read and cleaned (Gifs.clean). Reads at most 8 MB and a byte: anything longer is
+     * "big" without reading the rest. Null if it can't be read at all.
+     */
+    fun readGif(context: Context, uri: Uri): Gifs.Result? = try {
+        context.contentResolver.openInputStream(uri)?.use { s ->
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
+            var over = false
+            while (true) {
+                val r = s.read(buf)
+                if (r < 0) break
+                out.write(buf, 0, r)
+                if (out.size() > Gifs.MAX_BYTES) { over = true; break }
+            }
+            if (over) Gifs.Result(null, 0, "big") else Gifs.clean(out.toByteArray())
+        }
+    } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
+
     /** A Labs screenshot: 1280 px on the long side, at most 300 KB, a plain JPEG with no metadata. Null if it can't be made. */
     fun screenshot(b: Bitmap): ByteArray? = try { scrub(encode(scale(b, 1280), 300 * 1024)) } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 

@@ -230,6 +230,14 @@ private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -
     MenuTitle("Chats")
     MenuRow("refresh", "Refresh") { done(); app.refreshChats(); app.refreshNearby(); Ui.say("Checking for new messages…") }
     MenuRow("folder", "New folder") { onFolder() }
+    MenuRow("people", "Requests", value = if (ChatNav.asks > 0) "${ChatNav.asks}" else "") { done(); ChatNav.open = "requests" }
+    MenuRow("download", "Archived", value = if (ChatNav.archived > 0) "${ChatNav.archived}" else "") { done(); ChatNav.open = "archived" }
+    MenuRow("delete", "Trash", value = if (ChatNav.trashed > 0) "${ChatNav.trashed}" else "") { done(); ChatNav.open = "trash" }
+    // Bug reports that came in: only on the Labs contact's own phone, and only while Labs mode is on.
+    if (app.chat.isLabs() && Labs.on(app)) {
+        val reports by app.chat.labs.reports.collectAsState()
+        MenuRow("info", "Labs reports", value = if (reports.isNotEmpty()) "${reports.size}" else "") { done(); ChatNav.open = io.github.ravenor907.muninn.net.Chat.LABS_PAGE }
+    }
     // Said in words too, never by the dot's color alone.
     Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 20.dp).semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically) {

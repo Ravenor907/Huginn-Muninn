@@ -13,8 +13,15 @@ An app builds that text from the release tag it is installing (v0.97 -> "0.97"),
 what it downloaded, so an older signed file posted again under a newer tag doesn't check out. It installs only a
 version newer than its own, by order() below (a stable version is newer than its own betas). A pre-release's
 "version" is its label ("0.99 beta 12"). Vectors: "versioned" (signatures) and "newer" (which versions may be installed).
+
+The release notes carry the signatures as one block (parse_notes below), so a release lists only its three downloads:
+    huginn-muninn signatures v1
+    label <version, or the pre-release's label>
+    <file name> sha256 <lowercase hex> sig <base64 of .sig> vsig <base64 of .vsig>   (one line per download)
+Vectors: "notes" (which texts give a block, and what it holds). Run with --check-notes FILE LABEL release-key.pem in the
+folder holding the downloads to check that a release body's block parses and that every signature in it checks out.
 """
-import hashlib, json, os
+import base64, hashlib, json, os, re, sys
 
 P = 2 ** 255 - 19
 L = 2 ** 252 + 27742317777372353535851937790883648493
@@ -239,6 +246,195 @@ def newer_cases():
     return [{"tag": t, "current": c, "install": order(t) > order(c)} for t, c in pairs]
 
 
+NOTES_FIRST = "huginn-muninn signatures v1"
+NOTES_FILES = ("Huginn-Windows.zip", "Huginn.flatpak", "Muninn.apk")
+NOTES_MAX_TEXT = 4 * 1024 * 1024   # the most of a release body or release page an app reads
+NOTES_MAX_BLOCK = 2048             # the block itself, first line to its end
+LABEL_LINE = re.compile(r"label ([0-9]{1,6}\.[0-9]{1,6}(?: beta [1-9][0-9]{0,5})?)")
+FILE_LINE = re.compile(r"(Huginn-Windows\.zip|Huginn\.flatpak|Muninn\.apk) sha256 ([0-9a-f]{64})"
+                       r" sig ([A-Za-z0-9+/]{86}==) vsig ([A-Za-z0-9+/]{86}==)")
+
+
+def sig64(b64):
+    """The 64 bytes of a signature in the block; None unless the base64 is the one canonical spelling of them."""
+    raw = base64.b64decode(b64, validate=True)
+    return raw if len(raw) == 64 and base64.b64encode(raw).decode() == b64 else None
+
+
+def parse_notes(text, page):
+    """The signatures block in a release body (page False: the API's markdown) or its release page (page True: GitHub's
+    HTML), or None. The first line must start the text or a line (body) or follow a ">" (page: the start of the code
+    element; an attribute or a page description never qualifies), and exactly once. The block ends at the first "<"
+    or "```" after it, or at the end of the text. Every line must have one of the shapes above: the first line, then
+    the label, then one to three downloads, each named once; empty lines only at the end; a "\r" before a "\n" is
+    dropped. Returns {"label": label, "files": {name: (sha256 hex, sig bytes, vsig bytes)}}."""
+    if len(text) > NOTES_MAX_TEXT:
+        return None
+    starts, i = [], text.find(NOTES_FIRST)
+    while i >= 0:
+        before = text[i - 1] if i > 0 else None
+        if (before == ">") if page else (before is None or before == "\n"):
+            starts.append(i)
+        i = text.find(NOTES_FIRST, i + 1)
+    if len(starts) != 1:
+        return None
+    s, end = starts[0], len(text)
+    for t in ("<", "```"):
+        j = text.find(t, s)
+        if j >= 0:
+            end = min(end, j)
+    if end - s > NOTES_MAX_BLOCK:
+        return None
+    lines = [l[:-1] if l.endswith("\r") else l for l in text[s:end].split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    if not 3 <= len(lines) <= 2 + len(NOTES_FILES) or lines[0] != NOTES_FIRST:
+        return None
+    m = LABEL_LINE.fullmatch(lines[1])
+    if not m:
+        return None
+    out = {"label": m.group(1), "files": {}}
+    for line in lines[2:]:
+        m = FILE_LINE.fullmatch(line)
+        if not m or m.group(1) in out["files"]:
+            return None
+        sig, vsig = sig64(m.group(3)), sig64(m.group(4))
+        if sig is None or vsig is None:
+            return None
+        out["files"][m.group(1)] = (m.group(2), sig, vsig)
+    return out
+
+
+def notes_block(label, files):
+    """The block as the release job writes it: files is [(name, sha256 hex, sig bytes, vsig bytes)]."""
+    lines = [NOTES_FIRST, "label " + label]
+    for name, sha, sig, vsig in files:
+        lines.append("%s sha256 %s sig %s vsig %s" % (name, sha, base64.b64encode(sig).decode(), base64.b64encode(vsig).decode()))
+    return "\n".join(lines) + "\n"
+
+
+def notes_cases():
+    seed = hashlib.sha256(b"Huginn and Muninn throwaway release key").digest()
+    pub = public_key(seed).hex()
+
+    def signed(label, names):
+        out = []
+        for name in names:
+            data = hashlib.sha256(("%s %s" % (name, label)).encode()).digest() * 5
+            sha = hashlib.sha256(data).hexdigest()
+            out.append((name, data, sha, sign(seed, data), sign(seed, version_message(label, name, sha))))
+        return out
+
+    beta = signed("1.2 beta 310", NOTES_FILES)
+    stable = signed("1.3", NOTES_FILES)
+    block = notes_block("1.2 beta 310", [(n, h, s, v) for n, _, h, s, v in beta])
+    sblock = notes_block("1.3", [(n, h, s, v) for n, _, h, s, v in stable])
+    human = "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n"
+    body = human + "```\n" + block + "```\n"
+    lines = block.rstrip("\n").split("\n")
+
+    def page(b, before=""):
+        # The shape of GitHub's release page: page descriptions and the copy button hold the text too, never after a ">".
+        flat = b.replace("\n", "&#10;")
+        return ('<meta name="description" content="%s%s" />\n<div class="markdown-body"><p>%s</p>\n'
+                '<div class="snippet-clipboard-content" data-snippet-clipboard-copy-content="%s">'
+                '<pre class="notranslate"><code class="notranslate">%s</code></pre></div>\n</div>'
+                % (before, b, human.strip(), flat, b))
+
+    def with_line(i, new):
+        ls = list(lines)
+        if new is None:
+            del ls[i]
+        else:
+            ls[i] = new
+        return human + "```\n" + "\n".join(ls) + "\n```\n"
+
+    def case(name, text, is_page, valid, made=None, label=None, pad=0):
+        # pad: that many spaces go after text (kept out of the file to keep it small).
+        c = {"name": name, "page": is_page, "text": text, "pad": pad, "valid": valid}
+        if valid:
+            c["public"] = pub
+            c["label"] = label
+            c["files"] = [{"name": n, "data": d.hex(), "sha256": h, "sig": s.hex(), "vsig": v.hex()} for n, d, h, s, v in made]
+        return c
+
+    sig_b64 = base64.b64encode(beta[0][3]).decode()
+    noncanon = sig_b64[:85] + chr(ord(sig_b64[85]) + 1) + "=="   # the same 64 bytes, other padding bits
+    if base64.b64decode(noncanon) != beta[0][3] or noncanon == sig_b64:
+        raise SystemExit("non-canonical base64 case")
+    out = [
+        case("beta body", body, False, True, beta, "1.2 beta 310"),
+        case("beta body with CRLF", body.replace("\n", "\r\n"), False, True, beta, "1.2 beta 310"),
+        case("stable body, block at the very start, no fence", sblock, False, True, stable, "1.3"),
+        case("release page", page(block), True, True, beta, "1.2 beta 310"),
+        case("release page, page description holds the whole block", page(block, "x\n"), True, True, beta, "1.2 beta 310"),
+        case("one download", human + "```\n" + "\n".join(lines[:3]) + "\n```\n", False, True, beta[:1], "1.2 beta 310"),
+        case("release page read as a body", page(block), False, False),
+        case("body read as a release page", body, True, False),
+        case("two blocks", body + "\n```\n" + block + "```\n", False, False),
+        case("no block", human, False, False),
+        case("first line inside a line", human + "see huginn-muninn signatures v1\n" + "\n".join(lines[1:]), False, False),
+        case("first line changed", with_line(0, "huginn-muninn signatures v2"), False, False),
+        case("label missing", with_line(1, None), False, False),
+        case("label beta 0", with_line(1, "label 1.2 beta 0"), False, False),
+        case("label with a v", with_line(1, "label v1.2"), False, False),
+        case("label with a space at the end", with_line(1, "label 1.2 beta 310 "), False, False),
+        case("no downloads", human + "```\n" + "\n".join(lines[:2]) + "\n```\n", False, False),
+        case("unknown file", with_line(2, lines[2].replace("Huginn-Windows.zip", "Huginn-Linux.zip", 1)), False, False),
+        case("same file twice", with_line(3, lines[2]), False, False),
+        case("upper-case SHA-256", with_line(2, lines[2].replace(beta[0][2], beta[0][2].upper())), False, False),
+        case("short SHA-256", with_line(2, lines[2].replace(beta[0][2], beta[0][2][:63])), False, False),
+        case("non-canonical base64", with_line(2, lines[2].replace(sig_b64, noncanon)), False, False),
+        case("unpadded base64", with_line(2, lines[2].replace(sig_b64, sig_b64[:86])), False, False),
+        case("extra word", with_line(2, lines[2] + " extra"), False, False),
+        case("two spaces", with_line(2, lines[2].replace(" sha256 ", "  sha256 ")), False, False),
+        case("tab", with_line(2, lines[2].replace(" sig ", "\tsig ")), False, False),
+        case("unknown line", with_line(4, lines[4] + "\nnote hello"), False, False),
+        case("empty line inside", with_line(2, lines[2] + "\n"), False, False),
+        case("indented", human + "```\n" + block.replace("\nlabel", "\n label") + "```\n", False, False),
+        case("block too long", human + "```\n" + block + "\n" * 1500 + "```\n", False, False),
+        case("just short enough", body, False, True, beta, "1.2 beta 310", NOTES_MAX_TEXT - len(body)),
+        case("text too long", body, False, False, pad=NOTES_MAX_TEXT - len(body) + 1),
+    ]
+    return out
+
+
+def check_notes(cases):
+    for c in cases:
+        got = parse_notes(c["text"] + " " * c["pad"], c["page"])
+        if (got is not None) != c["valid"]:
+            raise SystemExit("notes %r: got %s" % (c["name"], got))
+        if got is None:
+            continue
+        if got["label"] != c["label"] or list(got["files"]) != [f["name"] for f in c["files"]]:
+            raise SystemExit("notes %r: label or files" % c["name"])
+        pub = bytes.fromhex(c["public"])
+        for f in c["files"]:
+            sha, sig, vsig = got["files"][f["name"]]
+            data = bytes.fromhex(f["data"])
+            if (sha, sig.hex(), vsig.hex()) != (f["sha256"], f["sig"], f["vsig"]) or hashlib.sha256(data).hexdigest() != sha \
+                    or not verify(pub, data, sig) or not verify(pub, version_message(c["label"], f["name"], sha), vsig):
+                raise SystemExit("notes %r: %s" % (c["name"], f["name"]))
+
+
+def check_release_notes(path, label, pem):
+    """CI: the body the release job is about to publish holds a block for all three downloads, under label, and
+    every SHA-256 and signature in it checks out against the files here and the project key (release-key.pem)."""
+    with open(path, encoding="utf-8") as f:
+        got = parse_notes(f.read(), False)
+    if got is None or got["label"] != label or sorted(got["files"]) != sorted(NOTES_FILES):
+        raise SystemExit("::error title=Signatures block::%s has no whole signatures block for %s." % (path, label))
+    with open(pem, encoding="utf-8") as f:
+        pub = base64.b64decode("".join(l.strip() for l in f.read().splitlines() if not l.startswith("-----")))[-32:]
+    for name, (sha, sig, vsig) in got["files"].items():
+        with open(name, "rb") as f:
+            data = f.read()
+        if hashlib.sha256(data).hexdigest() != sha or not verify(pub, data, sig) \
+                or not verify(pub, version_message(label, name, sha), vsig):
+            raise SystemExit("::error title=Signatures block::The block's line for %s doesn't check out." % name)
+    print("The signatures block for %s checks out." % label)
+
+
 def check(v):
     for c in v["cases"]:
         got = verify(bytes.fromhex(c["public"]), bytes.fromhex(c["message"]), bytes.fromhex(c["signature"]))
@@ -256,11 +452,13 @@ def check(v):
     for c in v["newer"]:
         if (order(c["tag"]) > order(c["current"])) != c["install"]:
             raise SystemExit("newer %r" % c)
+    check_notes(v["notes"])
 
 
 def main():
     v = {"note": "Ed25519 release signatures (RFC 8032), code/shared/docs/releases.md; written by code/shared/tools/release_sig_ref.py",
-         "cases": cases(), "domain": DOMAIN, "versioned": versioned(), "newer": newer_cases()}
+         "cases": cases(), "domain": DOMAIN, "versioned": versioned(), "newer": newer_cases(),
+         "notes_first": NOTES_FIRST, "notes": notes_cases()}
     check(v)
     here = os.path.dirname(os.path.abspath(__file__))
     for path in (os.path.join(here, "..", "vectors", "release-sig-vectors.json"),
@@ -274,4 +472,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 5 and sys.argv[1] == "--check-notes":
+        check_release_notes(sys.argv[2], sys.argv[3], sys.argv[4])
+    else:
+        main()

@@ -706,6 +706,14 @@ private fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> 
                     Text(Voice.length(m.voice), style = tvText(20.sp, Palette.textSoft))
                 }
             }
+            // Cap a1: a GIF moves right in the conversation (still with Less motion); OK shows it big.
+            m.photo.isNotEmpty() && m.gif -> {
+                var focused by remember { mutableStateOf(false) }
+                io.github.ravenor907.muninn.ui.GifImage(m.id, { app.chat.photo(m.photo) }, "GIF. Press OK to see it big.",
+                    Modifier.size(150.dp, 110.dp).onFocusChanged { focused = it.isFocused }.clip(shape).background(bg)
+                        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+                        .clickable(role = Role.Image, onClick = onPhoto), maxSide = 400)
+            }
             m.photo.isNotEmpty() -> {
                 val bmp = remember(m.photo) { try { app.chat.photo(m.photo)?.let { thumb(it) } } catch (e: Throwable) { null } }
                 var focused by remember { mutableStateOf(false) }
@@ -752,6 +760,7 @@ private fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (St
     val m = photos.getOrNull(i) ?: run { LaunchedEffect(Unit) { onClose() }; return }
     val context = LocalContext.current
     val bmp = remember(m.photo) {
+        if (m.gif) return@remember null
         try {
             app.chat.photo(m.photo)?.let { bytes ->
                 // No bigger than the screen.
@@ -776,7 +785,9 @@ private fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (St
                     else -> false
                 }
             }.focusable(), contentAlignment = Alignment.Center) {
-            if (bmp != null) Image(bmp, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            if (m.gif) io.github.ravenor907.muninn.ui.GifImage(m.id, { app.chat.photo(m.photo) }, "GIF", Modifier.fillMaxSize(), fit = true,
+                maxSide = maxOf(context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels).coerceIn(720, 1920))
+            else if (bmp != null) Image(bmp, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             else MIcon("image", Palette.textMuted, 96.dp)
             if (photos.size > 1) Text("${i + 1} of ${photos.size}", style = tvText(22.sp, Palette.textSoft),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(18.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xAA000000)).padding(horizontal = 16.dp, vertical = 8.dp))

@@ -63,6 +63,7 @@ qt_add_executable(huginn
     src/updater.cpp src/updater.h
     src/labs.cpp src/labs.h
     src/appstorage.cpp src/appstorage.h
+    src/perfcheck.cpp src/perfcheck.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
     src/direct.h
@@ -271,6 +272,7 @@ qt_add_qml_module(huginn
         qml/LabsReport.qml
         qml/LabsInbox.qml
         qml/AppStoragePanel.qml
+        qml/PerfPanel.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -309,6 +311,7 @@ if(WIN32)
         ${QRENCODE_LIBRARY}
         winmm      # PlaySound, for the raven call (src/platform/chime_windows.cpp)
         advapi32   # the Wi-Fi self-test's separate registry key
+        psapi      # Labs › Performance check's memory figure (src/perfcheck.cpp)
     )
 else()
     target_link_libraries(huginn PRIVATE Qt6::DBus KF6::Prison PkgConfig::SDL2)

@@ -8,7 +8,8 @@ QtObject {
     // Settings › Look › Accessibility.
     readonly property bool hc: Settings.highContrast
     readonly property real textScale: Number(Settings.textSize) / 100
-    readonly property bool motion: !Settings.reduceMotion
+    // Labs › Performance check › Animations: Off holds everything still too (from the start it was tried at).
+    readonly property bool motion: !Settings.reduceMotion && !Perf.animationsOff
 
     // Seasonal: each season's look and the days it runs, as month * 100 + day, both ends included (a
     // range that wraps past the new year, like 1201 to 229, works too). The first that holds the day
@@ -53,10 +54,11 @@ QtObject {
     function fallSizePos(p) { return 100 * Math.log(Math.max(15, Math.min(600, p)) / 15) / Math.log(40) }
     // How many fall in a w by h window: the Amount picked, or until it's moved, Settings.fallBase on
     // a 1600x900 window scaled by the window's area.
+    // Handheld mode: half as many until the Amount slider is moved.
     function fallCount(w, h) {
         if (Settings.fallCount > 0) return Settings.fallCount
         const area = Math.max(0.2, (w * h) / (1600 * 900))
-        return Math.max(1, Math.min(400, Math.round(Settings.fallBase * area)))
+        return Math.max(1, Math.min(400, Math.round(Settings.fallBase * area * (System.handheld ? 0.5 : 1))))
     }
 
     // Settings › Look: "dark" (stone, iron and aged gold), "black" (true black, for OLED screens),
@@ -204,7 +206,10 @@ QtObject {
     readonly property int radiusSmall: seasonal ? px(8) : 2
     // Controller focus: thick enough to spot from the couch.
     readonly property int focusWidth: Math.max(hc ? 3 : 2, px(hc ? 3 : 2))
-    readonly property int rowHeight: px(42)
+    readonly property int rowHeight: px(touch ? 48 : 42)
+    // Handheld mode: bigger touch targets (buttons, choices and switches at least 44 px at the design size).
+    readonly property bool touch: System.handheld
+    readonly property int tapMin: px(touch ? 44 : 36)
 
     // Avatars: a soft color per person, picked from their name so it never changes. Your own is gold.
     readonly property var avatarTones: hc ? [{ bg: "#1F1F1F", fg: "#FFFFFF" }]

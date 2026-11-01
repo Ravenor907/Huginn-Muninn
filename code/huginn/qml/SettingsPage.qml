@@ -4,7 +4,8 @@ import Huginn
 // Settings: one flat list on the left (You, Notifications, Look, Calls, Privacy and lock, Devices,
 // Controller, Backup, About, and Erase last in red). A choice opens its rows on the right, related
 // ones together in framed sections. Changes save as you go. About starts with the raven: ten presses
-// (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports, App storage).
+// (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports, App storage,
+// Performance check).
 Rectangle {
     id: page
     // Seasonal: a frosted pane, so what falls shows while Look's settings change.
@@ -121,7 +122,11 @@ Rectangle {
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
             { group: "Accessibility", kind: "toggle", key: "colorBlind", title: "Color-blind friendly" },
             { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Less motion" },
-            { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode },
+            { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode || System.handheld },
+            // Full screen, controller hints, the on-screen keyboard, bigger touch targets and lighter animation.
+            { group: "Window", kind: "segmented", key: "handheldMode", title: "Handheld mode",
+              note: "Detected: " + (System.handheldModel !== "" ? System.handheldModel : System.handheldDetected ? "a handheld" : "not a handheld"),
+              options: [{ value: "auto", label: "Automatic" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
             { group: "Panels", kind: "toggle", key: "showList", title: "Show the chat list", note: "Ctrl+Shift+L" },
             { group: "Panels", kind: "toggle", key: "showMembers", title: "Show group members", note: "Ctrl+Shift+U" },
             { group: "Panels", kind: "button", key: "resetPanels", title: "Panel sizes", label: "Reset" }
@@ -183,7 +188,8 @@ Rectangle {
             { group: "Labs", kind: "button", key: "goStable", hide: !Settings.labs, title: "Go back to stable", note: "Installs the latest stable",
               label: "Go back", enabled: !Updater.busy },
             { group: "Labs", kind: "button", key: "report", hide: !Settings.labs, title: "Report a bug", note: "Screenshot optional", label: "Report" },
-            { group: "Labs", kind: "button", key: "storage", hide: !Settings.labs, title: "App storage", note: "Files Huginn keeps", label: "Open" }
+            { group: "Labs", kind: "button", key: "storage", hide: !Settings.labs, title: "App storage", note: "Files Huginn keeps", label: "Open" },
+            { group: "Labs", kind: "button", key: "perf", hide: !Settings.labs, title: "Performance check", note: "Lag and size", label: "Open" }
         ].filter(r => !r.hide)
         case "erase": return [
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
@@ -743,6 +749,7 @@ Rectangle {
         else if (key === "raven") tapRaven()
         else if (key === "report") Ui.main.openReport()
         else if (key === "storage") Ui.main.openAppStorage()
+        else if (key === "perf") Ui.main.openPerf()
         else if (key === "goStable") {
             if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
             Ui.sure("Go back to stable?", "Installs the latest stable Huginn, then restarts. Labs mode turns off." + (job ? " " + job : ""),

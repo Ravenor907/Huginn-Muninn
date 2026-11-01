@@ -23,7 +23,16 @@ class System : public QObject
     Q_PROPERTY(QString graphics READ graphics NOTIFY graphicsChanged)
     // Drawn by the processor instead of a graphics card (slow).
     Q_PROPERTY(bool softwareGraphics READ softwareGraphics NOTIFY graphicsChanged)
+    // How frames are made: "threaded" (on their own thread) or "basic" (on the main thread).
+    Q_PROPERTY(QString renderLoop READ renderLoop NOTIFY graphicsChanged)
     Q_PROPERTY(bool windowed READ windowed CONSTANT)
+    // Handheld mode (Settings › Look): full screen, controller-first wording, the on-screen keyboard, the
+    // small-screen size, lighter Seasonal animation and bigger touch targets. Automatic follows the detection.
+    Q_PROPERTY(bool handheld READ handheld NOTIFY handheldChanged)
+    // What the detection found, for Settings' note: the model from the known list ("ROG Ally X"), or empty.
+    Q_PROPERTY(QString handheldModel READ handheldModel NOTIFY handheldChanged)
+    // Automatic's answer, whatever the setting says.
+    Q_PROPERTY(bool handheldDetected READ handheldDetected NOTIFY handheldChanged)
     Q_PROPERTY(QString version READ version CONSTANT)
     Q_PROPERTY(QString tourDir READ tourDir CONSTANT)
 
@@ -39,11 +48,30 @@ public:
     // How much bigger than its design size a w by h screen (device-independent pixels, after the system's own
     // scaling) of physical size mm must draw to be readable. 1.0 for monitors and TVs.
     static double fitFor(const QSize &px, const QSizeF &mm, bool gameMode);
+    // The screen's diagonal in inches when its reported physical size can be believed, else 0 (fitFor's rules).
+    static double trustedInches(const QSize &px, const QSizeF &mm, bool gameMode);
+
+    // Handheld detection, once at start. The known models are one table in system.cpp (kHandhelds): a
+    // case-insensitive piece of the product name, family or board, and where given, of the maker too.
+    // The model's name from that table for these firmware strings, or empty.
+    static QString handheldModelFor(const QString &product, const QString &family, const QString &board, const QString &vendor);
+    // Automatic: a known model, or at least two of a 6 to 9 inch built-in screen, a controller at start and game mode.
+    static bool handheldRule(bool knownModel, bool smallScreen, bool controller, bool gameMode);
+    // --privacy-selftest: the model table, the two-of-three rule and a laptop with a pad that must not count.
+    static bool handheldSelfTest();
+    // main(): whether a controller was there at start (the last fact Automatic needs).
+    void noteControllerAtStart(bool connected);
+    bool handheld() const { return m_handheld; }
+    QString handheldModel() const { return m_model; }
+    bool handheldDetected() const { return m_handheldAuto; }
+    // For the Performance check and crash.log: "on (Automatic, ROG Ally X)".
+    QString handheldSummary() const;
     bool gameMode() const { return m_gameMode; }
     double uiScale() const { return m_uiScale; }
     double screenScale() const { return m_fit; }
     QString graphics() const { return m_graphics; }
     bool softwareGraphics() const { return m_software; }
+    QString renderLoop() const { return m_renderLoop; }
     // Follows the main window's screen (its size and physical size) and notes what draws it.
     void watchWindow(QQuickWindow *window);
     bool windowed() const { return m_windowed; }
@@ -67,6 +95,7 @@ public:
 Q_SIGNALS:
     void layoutChanged();
     void graphicsChanged();
+    void handheldChanged();
 
 private:
     QString m_inhibitHandle;     // portal request path
@@ -82,7 +111,18 @@ private:
     double m_uiScale = 1.0;
     QString m_graphics;
     bool m_software = false;
+    QString m_renderLoop;
+    bool m_handheld = false;
+    bool m_handheldAuto = false;
+    bool m_controllerAtStart = false;
+    bool m_smallScreen = false;
+    QString m_model;
+    QString m_handheldWhy;   // what Automatic went by, for the reports
+    void detectHandheld();
+    void updateHandheld();
+    // Game mode's ways (the 7 inch guess, the on-screen keyboard) apply: handheld on, or game mode not forced Off.
+    bool gameLike() const;
     void watchScreen(QScreen *screen);
     void refit();
-    void noteGraphics(const QString &what, bool software);
+    void noteGraphics(const QString &what, bool software, const QString &loop);
 };

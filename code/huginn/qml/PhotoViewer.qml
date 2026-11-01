@@ -22,12 +22,36 @@ Rectangle {
         return true
     }
 
+    // Cap a1: a GIF moves here too (held still with Less motion until played); "" for a photo.
+    readonly property string gif: visible && !tour && photos[at] ? Chat.gifUrl(photos[at]) : ""
+    property bool asked: false
+    onAtChanged: asked = false
     Image {
         anchors.fill: parent; anchors.margins: Theme.px(10)
         fillMode: Image.PreserveAspectFit
         asynchronous: true
-        source: viewer.visible && !viewer.tour && viewer.photos[viewer.at] ? Chat.photoUrl(viewer.photos[viewer.at]) : ""
+        visible: viewer.gif === ""
+        source: viewer.visible && !viewer.tour && viewer.gif === "" && viewer.photos[viewer.at] ? Chat.photoUrl(viewer.photos[viewer.at]) : ""
         TapHandler { onTapped: viewer.closed() }
+    }
+    AnimatedImage {
+        anchors.fill: parent; anchors.margins: Theme.px(10)
+        fillMode: Image.PreserveAspectFit
+        cache: false
+        visible: viewer.gif !== ""
+        source: viewer.gif
+        playing: visible && (!Settings.reduceMotion || viewer.asked) && Qt.application.state === Qt.ApplicationActive
+        TapHandler { onTapped: viewer.closed() }
+    }
+    Rectangle {
+        visible: viewer.gif !== "" && Settings.reduceMotion
+        anchors.centerIn: parent
+        width: Theme.px(64); height: width; radius: width / 2
+        color: Qt.rgba(0, 0, 0, 0.55)
+        Icon { anchors.centerIn: parent; name: viewer.asked ? "stop" : "play"; color: "white"; size: Theme.px(30) }
+        Accessible.role: Accessible.Button
+        Accessible.name: viewer.asked ? "Stop the GIF" : "Play the GIF"
+        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: viewer.asked = !viewer.asked }
     }
     Text {
         textFormat: Text.PlainText

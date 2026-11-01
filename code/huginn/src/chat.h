@@ -134,6 +134,8 @@ public:
     Q_INVOKABLE void sendVoice(const QString &key, const QByteArray &aac, int ms);
     Q_INVOKABLE QByteArray blob(const QString &id) const;
     Q_INVOKABLE QString photoUrl(const QString &id);
+    // Cap a1: a stored GIF as a data URL for AnimatedImage, only when it passes the GIF limits again; "" otherwise.
+    Q_INVOKABLE QString gifUrl(const QString &id);
     Q_INVOKABLE bool savePhoto(const QString &id);
     // The newest pictures in Pictures, found on a worker thread; recentPicturesReady brings them back.
     Q_INVOKABLE void loadRecentPictures();
@@ -450,6 +452,9 @@ private:
     void putMet(const QString &key, const QVariantMap &m);
     // extra: cap m2 fields kept with the message and sent with its pieces ("video", "al", "ai", "an").
     QString sendBlob(const QString &key, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());
+    bool sendGifTo(const QString &key, const QByteArray &gif);   // cap a1: a cleaned GIF to a contact or "g:<group>:<channel>"
+    bool bigIncoming() const;                                      // three GIFs over 3.2 MB already coming in
+    bool groupGif(const QString &g, const QString &id) const;      // a group message of mine that is a GIF
     QList<QJsonObject> pieces(const QVariantMap &m);
     QList<QByteArray> sealedFor(const QString &key, const QString &id, const QVariantMap &m);
     void keepSealed(const QString &id, const QString &key, const QList<QByteArray> &bodies);

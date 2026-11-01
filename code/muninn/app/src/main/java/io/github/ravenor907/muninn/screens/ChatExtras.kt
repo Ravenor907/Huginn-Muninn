@@ -102,50 +102,150 @@ internal fun EmojiPicker(title: String, onPick: (String) -> Unit, onDismiss: () 
     )
 }
 
-/** One thing the message sheet can do. */
-internal data class SheetAction(val label: String, val icon: String, val danger: Boolean = false, val run: () -> Unit)
+/**
+ * One thing the message sheet can do. [folder] "" puts it in the main list, a name puts it in that sub-sheet
+ * ("Message"); [info] is a line of facts, not a button; [danger] ones go at the bottom in red.
+ */
+internal data class SheetAction(val label: String, val icon: String, val danger: Boolean = false, val folder: String = "",
+                                val info: Boolean = false, val run: () -> Unit = {})
+
+/** Where each action goes in the message sheet: the main rows, the folders (by name), and the red ones at the bottom. */
+internal object SheetLayout {
+    data class Plan(val primary: List<SheetAction>, val folders: List<Pair<String, List<SheetAction>>>, val danger: List<SheetAction>)
+
+    /** A folder with one plain action shows it as a main row instead; a folder with facts in it stays a folder. */
+    fun plan(actions: List<SheetAction>): Plan {
+        val danger = actions.filter { it.danger }
+        val rest = actions.filter { !it.danger }
+        val primary = ArrayList(rest.filter { it.folder.isEmpty() })
+        val folders = ArrayList<Pair<String, List<SheetAction>>>()
+        rest.filter { it.folder.isNotEmpty() }.groupBy { it.folder }.forEach { (name, list) ->
+            if (list.size == 1 && !list[0].info) primary.add(list[0]) else folders.add(name to list)
+        }
+        return Plan(primary, folders, danger)
+    }
+}
+
+@Composable
+private fun SheetRow(label: String, icon: String, danger: Boolean = false, more: Boolean = false, onClick: (() -> Unit)?) {
+    val shape = io.github.ravenor907.muninn.ui.Corner
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(shape)
+        .then(if (onClick != null) Modifier.clickable(role = Role.Button) { onClick() } else Modifier)
+        .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        MIcon(icon, if (danger) Palette.danger else Palette.accent, 22.dp)
+        Spacer(Modifier.width(14.dp))
+        Text(label, style = body.copy(fontSize = 17.sp, color = if (danger) Palette.danger else Palette.text), modifier = Modifier.weight(1f))
+        if (more) Text("›", style = body.copy(fontSize = 20.sp, color = Palette.textMuted))
+    }
+}
+
+@Composable
+private fun SheetHeader(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconAction("back", "Back", Palette.accent, size = 20.dp) { onBack() }
+        Spacer(Modifier.width(6.dp))
+        Text(title, style = Type.big)
+    }
+}
 
 /**
- * Hold a message: the five quick reactions and + for any emoji (tap the one you gave to take it back),
- * then what can be done with it.
+ * Hold a message: the quick reactions and + for any emoji (tap the one you gave to take it back), the main
+ * actions as large rows, then folders ("Message ›", "Read by ›") that open their own page, and the red ones last.
+ * [readBy] draws the "Read by" page (groups, my messages only).
  */
 @Composable
-internal fun MessageSheet(mineReaction: String?, canReact: Boolean, actions: List<SheetAction>, onReact: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun MessageSheet(mineReaction: String?, canReact: Boolean, actions: List<SheetAction>, onReact: (String) -> Unit,
+                          readBy: (@Composable () -> Unit)? = null, onDismiss: () -> Unit) {
     var picking by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf("") }
     if (picking) {
         EmojiPicker("React with", { e -> picking = false; onDismiss(); onReact(if (e == mineReaction) "" else e) }) { picking = false }
         return
     }
+    val plan = remember(actions) { SheetLayout.plan(actions) }
+    val shape = io.github.ravenor907.muninn.ui.Corner
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Palette.panel,
+        shape = shape,
         text = {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                if (canReact) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    (Rich.QUICK + listOfNotNull(mineReaction?.takeIf { it !in Rich.QUICK })).forEach { e ->
-                        val on = e == mineReaction
-                        Box(Modifier.size(48.dp).clip(CircleShape).background(if (on) Palette.goldTint else Palette.raised)
-                            .then(if (on) Modifier.border(2.dp, Palette.gold, CircleShape) else Modifier)
-                            .clickable(role = Role.Button) { onDismiss(); onReact(if (on) "" else e) }
-                            .semantics { contentDescription = if (on) "Take back $e" else "React $e" },
-                            contentAlignment = Alignment.Center) { Text(e, style = TextStyle(fontSize = 24.sp)) }
+                val folder = plan.folders.firstOrNull { it.first == page }?.second
+                when {
+                    page == READ_BY && readBy != null -> { SheetHeader("Read by") { page = "" }; readBy() }
+                    folder != null -> {
+                        SheetHeader(page) { page = "" }
+                        folder.filter { !it.info }.forEach { a -> SheetRow(a.label, a.icon) { onDismiss(); a.run() } }
+                        val facts = folder.filter { it.info }
+                        if (facts.isNotEmpty()) {
+                            Text("INFO", style = Type.section, modifier = Modifier.padding(start = 8.dp, top = 10.dp, bottom = 2.dp))
+                            facts.forEach { a ->
+                                Row(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(horizontal = 8.dp).semantics(mergeDescendants = true) {},
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    MIcon(a.icon, Palette.textMuted, 18.dp)
+                                    Spacer(Modifier.width(14.dp))
+                                    Text(a.label, style = body.copy(color = Palette.textSoft))
+                                }
+                            }
+                        }
                     }
-                    Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.raised).clickable(role = Role.Button) { picking = true }
-                        .semantics { contentDescription = "More reactions" }, contentAlignment = Alignment.Center) { MIcon("plus", Palette.accent, 20.dp, weight = 2f) }
-                }
-                actions.forEach { a ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = Role.Button) { onDismiss(); a.run() }
-                        .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        MIcon(a.icon, if (a.danger) Palette.danger else Palette.accent, 20.dp)
-                        Spacer(Modifier.width(14.dp))
-                        Text(a.label, style = body.copy(color = if (a.danger) Palette.danger else Palette.text))
+                    else -> {
+                        if (canReact) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            (Rich.QUICK + listOfNotNull(mineReaction?.takeIf { it !in Rich.QUICK })).forEach { e ->
+                                val on = e == mineReaction
+                                Box(Modifier.size(48.dp).clip(shape).background(if (on) Palette.goldTint else Palette.raised)
+                                    .then(if (on) Modifier.border(2.dp, Palette.gold, shape) else Modifier)
+                                    .clickable(role = Role.Button) { onDismiss(); onReact(if (on) "" else e) }
+                                    .semantics { contentDescription = if (on) "Take back $e" else "React $e" },
+                                    contentAlignment = Alignment.Center) { Text(e, style = TextStyle(fontSize = 24.sp)) }
+                            }
+                            Box(Modifier.size(48.dp).clip(shape).background(Palette.raised).clickable(role = Role.Button) { picking = true }
+                                .semantics { contentDescription = "More reactions" }, contentAlignment = Alignment.Center) { MIcon("plus", Palette.accent, 20.dp, weight = 2f) }
+                        }
+                        plan.primary.forEach { a -> SheetRow(a.label, a.icon) { onDismiss(); a.run() } }
+                        plan.folders.forEach { (name, list) -> SheetRow(name, if (list.all { it.info }) "info" else "more", more = true) { page = name } }
+                        if (readBy != null) SheetRow(READ_BY, "check", more = true) { page = READ_BY }
+                        if (plan.danger.isNotEmpty()) {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(Palette.raised))
+                            plan.danger.forEach { a -> SheetRow(a.label, a.icon, danger = true) { onDismiss(); a.run() } }
+                        }
                     }
                 }
             }
         },
-        confirmButton = { MButton("Cancel") { onDismiss() } },
+        confirmButton = { MButton(if (page.isEmpty()) "Cancel" else "Close") { onDismiss() } },
     )
+}
+
+private const val READ_BY = "Read by"
+
+/**
+ * The "Read by" page of a group message of mine: who read it (picture, name, when), whose phone has it, whose
+ * app doesn't send read receipts ("Not shown"), and who doesn't have it yet.
+ */
+@Composable
+internal fun ReadByList(r: io.github.ravenor907.muninn.net.Groups.ReadBy, nameOf: (String) -> String, timeOf: (Long) -> String) {
+    @Composable fun part(title: String, keys: List<Pair<String, Long>>) {
+        if (keys.isEmpty()) return
+        Text(title.uppercase(), style = Type.section, modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 4.dp))
+        keys.forEach { (k, t) ->
+            val n = nameOf(k)
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 4.dp).semantics(mergeDescendants = true) {},
+                verticalAlignment = Alignment.CenterVertically) {
+                io.github.ravenor907.muninn.ui.Avatar(k, n, 34.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(n, style = body, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (t > 0) Text(timeOf(t), style = small)
+            }
+        }
+    }
+    part("Read", r.read)
+    part("Delivered to", r.delivered.map { it to 0L })
+    part("Not yet", r.notYet.map { it to 0L })
+    part("Not shown", r.notShown.map { it to 0L })
+    if (r.read.isEmpty() && r.delivered.isEmpty() && r.notYet.isEmpty() && r.notShown.isEmpty())
+        Text("Nobody else is in this group.", style = small, modifier = Modifier.padding(4.dp))
 }
 
 /** The reactions under a bubble: each emoji once with how many chose it; mine is outlined. Tap to see or change. */

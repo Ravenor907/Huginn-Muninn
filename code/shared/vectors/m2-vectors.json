@@ -157,6 +157,9 @@
    {
     "kind": "file",
     "fn": "Tax return 2025.pdf"
+   },
+   {
+    "kind": "gif"
    }
   ]
  },
@@ -468,7 +471,13 @@
     "an": 2
    },
    {
-    "kind": "gif"
+    "kind": "webp"
+   },
+   {
+    "kind": "gif",
+    "al": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "ai": 0,
+    "an": 2
    },
    {
     "kind": "file"

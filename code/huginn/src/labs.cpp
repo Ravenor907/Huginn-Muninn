@@ -136,13 +136,23 @@ void Labs::clearShot()
 
 bool Labs::hasCrashLog() const { return CrashLog::hasLines(); }
 
-QString Labs::send(const QString &text, bool withShot, bool withLog)
+QString Labs::send(const QString &text, bool withShot, bool withLog, const QString &perf)
 {
     QString t = text.trimmed();
     if (t.isEmpty())
         return QStringLiteral("Say what went wrong first.");
     if (GroupWire::length(t) > kMaxText)
         return QStringLiteral("That's too long. 2000 characters at most.");
+    // The performance check's report (already scrubbed), cut to the room the 2000 characters leave.
+    if (!perf.trimmed().isEmpty()) {
+        const QString head = QStringLiteral("\n\nPerformance check:\n");
+        const int room = kMaxText - int(GroupWire::length(t)) - int(head.size());
+        QString add = room > 80 ? perf.trimmed().left(room) : QString();
+        while (!add.isEmpty() && GroupWire::length(t + head + add) > kMaxText)
+            add.chop(qMin<qsizetype>(add.size(), 40));
+        if (add.size() > 80)
+            t += head + add;
+    }
     // The crash log's last lines, in whatever room the 2000 characters leave.
     if (withLog) {
         const QString head = QStringLiteral("\n\nCrash log, last lines:\n");

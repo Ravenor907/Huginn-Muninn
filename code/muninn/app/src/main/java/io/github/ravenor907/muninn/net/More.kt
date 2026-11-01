@@ -120,6 +120,8 @@ object More {
                         if (p.has("al")) throw Refused("video in an album")
                     }
                     "photo", "voice" -> {}
+                    // Cap a1 (section 25): an animated GIF, never in an album.
+                    "gif" -> if (p.has("al")) throw Refused("GIF in an album")
                     // Cap f1 (section 14): a small file over the relays, with its name.
                     "file" -> {
                         val fn = p.opt("fn")

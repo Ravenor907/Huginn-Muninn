@@ -88,6 +88,13 @@ Everything there works with a controller too:
 - Push to talk (Settings › Calls) is a keyboard key: it works while Huginn is in front.
 - Huginn opens in a normal window that keeps its size and place. F11, or Settings › Look › Open full screen,
   switches to full screen. A handheld's game mode is always full screen.
+- Settings › Look › Handheld mode (Automatic, On or Off). On: full screen, the controller's wording and button
+  legend from the start, the on-screen keyboard for text fields, the small-screen size (7 inches when the screen
+  doesn't say), half as many falling leaves or flakes, and bigger touch targets. Off keeps the desktop layout,
+  though game mode stays full screen. Automatic turns it on for a known handheld (Steam Deck, ROG Ally, Ally X,
+  Xbox Ally and Xbox Ally X, Legion Go and Go S, MSI Claw, AYANEO, GPD, OneXPlayer, Zotac Zone; the list is
+  kHandhelds in code/huginn/src/system.cpp), or when at least two of these hold at start: a 6 to 9 inch built-in
+  screen, a controller, game mode. Settings shows what it detected; the Performance check and crash.log say too.
 
 ## Calls and files
 

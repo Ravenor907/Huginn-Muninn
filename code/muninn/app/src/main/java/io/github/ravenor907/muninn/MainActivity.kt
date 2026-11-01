@@ -71,6 +71,7 @@ import io.github.ravenor907.muninn.screens.ContactsScreen
 import io.github.ravenor907.muninn.screens.LockScreen
 import io.github.ravenor907.muninn.screens.FirstLock
 import io.github.ravenor907.muninn.screens.lockChosen
+import io.github.ravenor907.muninn.screens.tourSpot
 import androidx.compose.runtime.remember
 import io.github.ravenor907.muninn.screens.SettingsScreen
 import io.github.ravenor907.muninn.screens.SettingsNav
@@ -176,7 +177,9 @@ class MainActivity : ComponentActivity() {
         lockIfDue()
         recents()
         if (app.ready.value) startNet()
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+        // A fresh install asks on first setup's Allow page instead.
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            && !io.github.ravenor907.muninn.screens.Setup.freshByPrefs(app, ciSkip))
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         // ChatNav lives as long as the process, and the message service keeps the process alive after
         // Muninn's window is closed. So a fresh open would land back in whatever chat was last on screen:
@@ -355,8 +358,17 @@ class MainActivity : ComponentActivity() {
         if (uris.isEmpty()) return
         val busy = app.ready.value && app.net.transfer.value.active
         Thread {
-            val files = Share.copyIn(this, uris, busy)
-            runOnUiThread { Share.pending.addAll(files); show("files") }
+            // One GIF: it goes into a chat, animated (cap a1). Anything else waits in Files.
+            val gif = uris.singleOrNull()?.takeIf { Share.handedOver(this, it) && io.github.ravenor907.muninn.net.Photos.isGif(this, it) }
+                ?.let { io.github.ravenor907.muninn.screens.GifShare.copyIn(this, it) }
+            if (gif != null) runOnUiThread {
+                io.github.ravenor907.muninn.screens.GifShare.pending = gif
+                show("chat")
+                Ui.say("Open a chat to send the GIF.")
+            } else {
+                val files = Share.copyIn(this, uris, busy)
+                runOnUiThread { Share.pending.addAll(files); show("files") }
+            }
         }.start()
     }
 
@@ -393,6 +405,23 @@ class MainActivity : ComponentActivity() {
             LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }
             return
         }
+        // A fresh phone or tablet: first setup (welcome, lock, name, permissions, people, a tour). It picks up again
+        // after a restart; Labs › Replay first setup runs it as practice. Its pages cover everything; the tour sits over the main screen.
+        remember { io.github.ravenor907.muninn.screens.Setup.maybeBegin(app, ciSkip) }
+        io.github.ravenor907.muninn.screens.Setup.tick
+        val setupRun = io.github.ravenor907.muninn.screens.Setup.run
+        val setupEnded = io.github.ravenor907.muninn.screens.Setup.ended
+        LaunchedEffect(setupEnded) {
+            val e = setupEnded ?: return@LaunchedEffect
+            io.github.ravenor907.muninn.screens.Setup.ended = null
+            // Practice goes back to Labs (in Settings); Start a chat opens Add someone.
+            if (e.practice) show("settings") else { show("chat"); if (e.startChat) ChatNav.open = "add" }
+        }
+        if (setupRun != null && setupRun.step != io.github.ravenor907.muninn.screens.SetupFlow.Step.TOUR) {
+            io.github.ravenor907.muninn.screens.FirstSetup(app); return
+        }
+        val touring = setupRun != null
+        LaunchedEffect(touring) { if (touring) { show("chat"); ChatNav.open = ""; ChatNav.hold = "" } }
         // A lock is suggested on first open, before anything else (Skip goes without one).
         var locked by remember { mutableStateOf(lockChosen(app) || ciSkip) }
         // Then the name others see, until it's been asked (a restart in between still asks).
@@ -444,6 +473,7 @@ class MainActivity : ComponentActivity() {
             val wide = tablet && maxWidth >= ChatNav.WIDE_MIN
             SideEffect { ChatNav.wide = wide }
             if (wide) TabletLayout(toast, maxWidth) else PhoneLayout(toast)
+            io.github.ravenor907.muninn.screens.TourOverlay()
         }
 
         request?.let { r ->
@@ -540,7 +570,7 @@ class MainActivity : ComponentActivity() {
             state = androidx.compose.material3.rememberTooltipState(),
         ) {
             // No circle behind the knot: while Settings is open, a very faint glow comes from its centre instead.
-            Box(Modifier.size(48.dp)
+            Box(Modifier.size(48.dp).tourSpot("settings")
                 .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
                 .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
                 // Centred on the knot's weight, a touch below the middle of the button.
@@ -565,7 +595,7 @@ class MainActivity : ComponentActivity() {
                 listOf("chat" to ("chat" to "Chats"), "files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
                     val tint = if (on) Palette.goldBright else Palette.textMuted
-                    Column(Modifier.weight(1f).heightIn(min = 48.dp).clickable(role = Role.Tab) { if (id == "chat" && tab == "chat") toList() else show(id) }
+                    Column(Modifier.weight(1f).then(if (id == "files") Modifier.tourSpot("files") else Modifier).heightIn(min = 48.dp).clickable(role = Role.Tab) { if (id == "chat" && tab == "chat") toList() else show(id) }
                         .semantics { selected = on }.padding(vertical = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         MIcon(v.first, tint, 22.dp)
                         // One line under the icon: "Contacts" shortens rather than wrapping at a large text size.
@@ -634,9 +664,11 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.spacedBy(12.dp)) { RailSpaces() }
                 listOf("files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
-                    RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
-                        onClick = { show(id) }) {
-                        MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
+                    Box(if (id == "files") Modifier.tourSpot("files") else Modifier) {
+                        RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,
+                            onClick = { show(id) }) {
+                            MIcon(v.first, if (on) Palette.goldBright else Palette.textMuted, 22.dp)
+                        }
                     }
                 }
                 Box(Modifier.width(80.dp), contentAlignment = Alignment.Center) {

@@ -66,6 +66,8 @@ class Groups(
         val video: Int = 0, val album: String = "", val albumAt: Int = 0, val albumOf: Int = 0,
         /** This try also goes to the relays (false while they hold it and it isn't time yet, see NetLogic). */
         val net: Boolean = true,
+        /** Cap a1: an animated GIF (a member without a1 gets its first frame as a photo). */
+        val gif: Boolean = false,
     )
 
     /** [gone]: "" while I'm in it, "left" or "removed" after (then it's read-only). */
@@ -74,7 +76,10 @@ class Groups(
         val g get() = state.g
     }
 
-    /** A group message. Mine: [to] is who it went to, [delivered] and [read] who confirmed. */
+    /**
+     * A group message. Mine: [to] is who it went to, [delivered] and [read] who confirmed, [readAt] when each
+     * reader read it (0: not known), [noRead] members whose app said it doesn't send read receipts (3.10).
+     */
     data class GMsg(
         val id: String, val g: String, val ch: String, val from: String, val name: String, val text: String, val mine: Boolean,
         val time: Long, val photo: String = "", val voice: Int = 0, val unsent: String = "", val state: String = "",
@@ -85,7 +90,13 @@ class Groups(
         /** Cap m2: a video message's length, an album (id, place, how many), a poll and its votes, a link preview. */
         val video: Int = 0, val album: String = "", val albumAt: Int = 0, val albumOf: Int = 0,
         val poll: More.Poll? = null, val votes: Map<String, More.Vote> = emptyMap(), val preview: More.Preview? = null,
+        val readAt: Map<String, Long> = emptyMap(), val noRead: Set<String> = emptySet(),
+        /** Cap a1: an animated GIF, stored like a photo under [photo]. */
+        val gif: Boolean = false,
     )
+
+    /** [Companion.readBy]: readers with when they read it (0: not known), then the rest by where the message stands with them. */
+    data class ReadBy(val read: List<Pair<String, Long>>, val delivered: List<String>, val notShown: List<String>, val notYet: List<String>)
 
     /** "Raven invited you to Family": nothing changes until it's accepted. */
     data class Invite(val g: String, val name: String, val from: String, val fromName: String, val inv: String, val x: Long, val state: State)
@@ -377,14 +388,14 @@ class Groups(
     }
 
     /** A photo or voice message already stored as [blob] (Chat seals the pieces per member). */
-    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean = act {
+    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false): Boolean = act {
         val (s, chId) = target(g, ch) ?: return@act false
         val id = Proto06.newLogicalId()
         // A video message goes only to members whose app plays it (m2); an album's fields are ignored by apps without m2.
         val to = s.members.map { it.k }.filter { it != me && (videoMs == 0 || host.hasM2(it)) }.toSet()
         addMsg(GMsg(id, g, chId, me, host.myName, "", true, now(), photo = blob, voice = voiceMs, state = if (to.isEmpty()) "sent" else "sending", to = to,
-            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0))
-        to.forEach { out(it, "gphoto", "", id, g, photo = blob, voice = voiceMs, ch = chId, video = videoMs, album = album) }
+            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, gif = gif))
+        to.forEach { out(it, "gphoto", "", id, g, photo = blob, voice = voiceMs, ch = chId, video = videoMs, album = album, gif = gif) }
         true
     }
 
@@ -798,16 +809,16 @@ class Groups(
 
     /** A photo or voice message whose pieces all came in (Chat put it back together and stored it as [blob]). */
     fun receivedBlob(from: String, fromName: String, g: String, ch: String, gid: String, blob: String, voiceMs: Int,
-                     videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean = act {
+                     videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false): Boolean = act {
         val grp = groups[g]
         if (grp == null || grp.readOnly || !grp.state.has(from) || !Proto06.isLogicalId(gid)) return@act false
         if (deleted.containsKey(gid) || unsentBy[gid]?.first == from || chats[g]?.any { it.id == gid } == true) { receipt(from, g, listOf(gid), "delivered"); return@act false }
         val s = grp.state
         val name = nameIn(s, from, fromName)
         addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs,
-            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0))
+            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, gif = gif))
         unread.add(g)
-        host.arrived(g, "$name in ${s.name}", when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; album != null -> "Photos"; else -> "Photo" })
+        host.arrived(g, "$name in ${s.name}", when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; gif -> "GIF"; album != null -> "Photos"; else -> "Photo" })
         receipt(from, g, listOf(gid), "delivered")
         true
     }
@@ -843,11 +854,14 @@ class Groups(
             tries.remove(env); heldAt.remove(env); publishedAt.remove(env)
         }
         val list = chats[g] ?: return 200
+        val t = now()
         chats[g] = list.map { m ->
             if (!m.mine || m.id !in ids || from !in m.to) m
             else when (st) {
-                "delivered" -> m.copy(delivered = m.delivered + from, state = "sent")
-                "read" -> m.copy(delivered = m.delivered + from, read = m.read + from, state = "sent")
+                "delivered" -> m.copy(delivered = m.delivered + from, state = "sent",
+                    noRead = if (p.optInt("nr") == 1 && from !in m.read) m.noRead + from else m.noRead - from)
+                "read" -> m.copy(delivered = m.delivered + from, read = m.read + from, state = "sent", noRead = m.noRead - from,
+                    readAt = m.readAt + (from to (m.readAt[from] ?: readTime(p.optLong("at"), m.time, t))))
                 else -> m
             }
         }
@@ -869,13 +883,17 @@ class Groups(
         }
         if (receipted.size > 2000) receipted.entries.removeIf { t - it.value > NetLogic.RECEIPT_GAP_MS }
         if (ids.isEmpty()) return
-        queue.add(Out(Proto06.newLogicalId(), to, "greceipt", JSONObject().put("g", g).put("ids", JSONArray(ids)).put("s", s).toString(), "", g, now(), retry = false))
+        // 3.10: "read" says when; "delivered" says if this app won't send read receipts, so the author shows "Not shown".
+        val r = JSONObject().put("g", g).put("ids", JSONArray(ids)).put("s", s)
+        if (s == "read") r.put("at", t)
+        if (s == "delivered" && !host.readReceipts) r.put("nr", 1)
+        queue.add(Out(Proto06.newLogicalId(), to, "greceipt", r.toString(), "", g, now(), retry = false))
     }
 
     private fun out(to: String, room: String, plain: String, id: String, g: String, photo: String = "", voice: Int = 0, ch: String = "",
-                    video: Int = 0, album: Triple<String, Int, Int>? = null) {
+                    video: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false) {
         val o = Out(Proto06.envelopeId(id, to), to, room, plain, id, g, now(), photo = photo, voice = voice, ch = ch, tries = 1,
-            video = video, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0)
+            video = video, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, gif = gif)
         outs.removeAll { it.env == o.env }
         outs.add(o)
         tries[o.env] = 1 to now() + RETRY[0]
@@ -1024,7 +1042,8 @@ class Groups(
             write(CHATS, c.toString())
             write(OUTS, JSONArray().apply { outs.forEach { put(JSONObject().put("e", it.env).put("to", it.to).put("r", it.room).put("p", it.plain).put("id", it.id)
                 .put("g", it.g).put("t", it.t).put("ph", it.photo).put("vo", it.voice).put("ch", it.ch)
-                .apply { if (it.video > 0) put("vd", it.video); if (it.album.isNotEmpty()) put("al", it.album).put("ai", it.albumAt).put("an", it.albumOf) }) } }.toString())
+                .apply { if (it.video > 0) put("vd", it.video); if (it.album.isNotEmpty()) put("al", it.album).put("ai", it.albumAt).put("an", it.albumOf)
+                    if (it.gif) put("gif", true) }) } }.toString())
         } catch (_: Exception) {}
     }
 
@@ -1038,6 +1057,9 @@ class Groups(
             m.poll?.let { put("poll", More.pollJson(it)) }
             if (m.votes.isNotEmpty()) put("vt", More.votesToJson(m.votes))
             m.preview?.let { put("lp", More.previewJson(it)) }
+            if (m.readAt.isNotEmpty()) put("ra", JSONObject().apply { m.readAt.forEach { (k, v) -> put(k, v) } })
+            if (m.noRead.isNotEmpty()) put("nrd", JSONArray(m.noRead.toList()))
+            if (m.gif) put("gif", true)
         }
 
     private fun strings(a: JSONArray?): Set<String> = if (a == null) emptySet() else (0 until a.length()).map { a.getString(it) }.toSet()
@@ -1077,7 +1099,9 @@ class Groups(
                         strings(it.optJSONArray("to")), strings(it.optJSONArray("dl")), strings(it.optJSONArray("rd")), it.optBoolean("sn"),
                         it.optString("re"), Rich.reactionsFromJson(it.optJSONObject("rx")), it.optLong("ed"),
                         it.optInt("vd"), it.optString("al"), it.optInt("ai"), it.optInt("an"),
-                        More.pollOf(it), More.votesFromJson(it.optJSONObject("vt")), More.previewOf(it))
+                        More.pollOf(it), More.votesFromJson(it.optJSONObject("vt")), More.previewOf(it),
+                        it.optJSONObject("ra")?.let { ra -> ra.keys().asSequence().associateWith { k -> ra.optLong(k) } }.orEmpty(),
+                        strings(it.optJSONArray("nrd")), gif = it.optBoolean("gif"))
                 } }
             }
             read(OUTS)?.let { text ->
@@ -1085,7 +1109,7 @@ class Groups(
                 for (i in 0 until a.length()) a.getJSONObject(i).let {
                     outs.add(Out(it.getString("e"), it.getString("to"), it.getString("r"), it.optString("p"), it.optString("id"), it.getString("g"), it.optLong("t"),
                         photo = it.optString("ph"), voice = it.optInt("vo"), ch = it.optString("ch"),
-                        video = it.optInt("vd"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an")))
+                        video = it.optInt("vd"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"), gif = it.optBoolean("gif")))
                 }
             }
         } catch (_: Exception) {}
@@ -1104,6 +1128,17 @@ class Groups(
             return if (Proto06.chars(t) <= limit) t else t.substring(0, t.offsetByCodePoints(0, limit))
         }
         private fun mailbox(p: String) = if (Proto06.isMailbox(p)) p else ""
+        /** When a "read" receipt says it was read: [at] from the reader (0 when not sent), kept between the message's time and [now]. */
+        fun readTime(at: Long, sent: Long, now: Long): Long = if (at <= 0) now else at.coerceIn(minOf(sent, now), now)
+
+        /** "Read by" for a message of mine: who read it (earliest first) and when, who has it, whose app doesn't show reads, who doesn't have it yet. */
+        fun readBy(m: GMsg): ReadBy {
+            val read = m.to.filter { it in m.read }.map { it to (m.readAt[it] ?: 0L) }.sortedWith(compareBy({ it.second }, { it.first }))
+            val rest = m.to.filter { it !in m.read }
+            val hidden = rest.filter { it in m.noRead }
+            return ReadBy(read, rest.filter { it in m.delivered && it !in m.noRead }.sorted(), hidden.sorted(), rest.filter { it !in m.delivered && it !in m.noRead }.sorted())
+        }
+
         /** Mine: "Sending", "Delivered to 4 of 6", "Read by 2". */
         fun status(m: GMsg): String = when {
             !m.mine || m.unsent.isNotEmpty() -> ""

@@ -28,7 +28,14 @@ namespace
 const char *kReleases = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100";
 const char *kLatestPage = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest";
 const char *kDownload = "https://github.com/Ravenor907/Huginn-Muninn/releases/download/";
-// The one pre-release (Labs' Pre-release channel), always under this tag; its version.txt holds the label.
+// A release's web page, read for its signatures block when the API said no.
+const char *kTagPage = "https://github.com/Ravenor907/Huginn-Muninn/releases/tag/";
+// The signatures block at the end of the release notes (shared/docs/releases.md): its first line, and the most of a
+// body or page and of the block itself that Huginn reads.
+const char *kSignaturesFirst = "huginn-muninn signatures v1";
+constexpr qsizetype kMaxNotes = 4 * 1024 * 1024;
+constexpr qsizetype kMaxBlock = 2048;
+// The one pre-release (Labs' Pre-release channel), always under this tag; its signatures block (or version.txt) holds the label.
 const char *kBetaTag = "beta";
 // The project's release key (Ed25519, shared/docs/release-key.pem). CI signs every release file with its private half.
 const char *kReleaseKey = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06";
@@ -150,6 +157,10 @@ void Updater::fetch(bool installAfter, bool autoMode)
     m_busy = true;
     m_status = QStringLiteral("Checking for updates…");
     Q_EMIT changed();
+    m_signed = {};
+    m_signedTag.clear();
+    m_betaBlock = {};
+    m_viaPage = false;
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kReleases)));
     req.setRawHeader("Accept", "application/vnd.github+json");
     QNetworkReply *r = m_net.get(req);
@@ -157,11 +168,13 @@ void Updater::fetch(bool installAfter, bool autoMode)
         r->deleteLater();
         m_busy = false;
         if (r->error() != QNetworkReply::NoError) {
+            m_viaPage = true;
             fetchLatestPage(installAfter, autoMode);
             return;
         }
         QString bestVer, bestTag, bestAsset;
         QByteArray bestDigest;
+        SignedFile bestSigned;
         const bool pre = !m_goingBack && m_settings && m_settings->preRelease();
         m_betaDigest.clear();
         for (const QJsonValue &v : QJsonDocument::fromJson(r->readAll()).array()) {
@@ -170,10 +183,13 @@ void Updater::fetch(bool installAfter, bool autoMode)
                 continue;
             if (rel.value(QStringLiteral("prerelease")).toBool()) {
                 // The Pre-release channel only: GitHub's SHA-256 of the beta release's file, when it lists one.
-                if (pre && rel.value(QStringLiteral("tag_name")).toString() == QLatin1String(kBetaTag))
+                if (pre && rel.value(QStringLiteral("tag_name")).toString() == QLatin1String(kBetaTag)) {
                     for (const QJsonValue &a : rel.value(QStringLiteral("assets")).toArray())
                         if (a.toObject().value(QStringLiteral("name")).toString() == assetName())
                             m_betaDigest = WinUpdate::parseDigest(a.toObject().value(QStringLiteral("digest")).toString().toLatin1());
+                    // Its signatures block (label and signatures), when its notes carry one.
+                    m_betaBlock = parseSignatures(rel.value(QStringLiteral("body")).toString().toUtf8(), false);
+                }
                 continue;
             }
             const QString tag = rel.value(QStringLiteral("tag_name")).toString();
@@ -197,9 +213,14 @@ void Updater::fetch(bool installAfter, bool autoMode)
                 bestTag = tag;
                 bestAsset = asset;
                 bestDigest = digest;
+                // This download's line in the release notes' signatures block; none means the separate files.
+                const Signatures block = parseSignatures(rel.value(QStringLiteral("body")).toString().toUtf8(), false);
+                bestSigned = block.ok ? block.files.value(assetName()) : SignedFile();
             }
         }
         m_assetDigest = bestDigest;
+        m_signed = bestSigned;
+        m_signedTag = bestTag;
         if (pre) {
             fetchBeta(bestVer, bestTag, bestAsset, installAfter, autoMode);
             return;
@@ -210,6 +231,27 @@ void Updater::fetch(bool installAfter, bool autoMode)
 
 void Updater::fetchBeta(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode)
 {
+    // The label line of the beta release's signatures block, from the API.
+    if (m_betaBlock.ok) {
+        betaOrStable(m_betaBlock.label, m_betaBlock.files.value(assetName()), ver, tag, asset, installAfter, autoMode);
+        return;
+    }
+    // The API said no: the beta release's page.
+    if (m_viaPage) {
+        fetchPage(QString::fromLatin1(kBetaTag), [this, ver, tag, asset, installAfter, autoMode](const Signatures &block) {
+            if (block.ok)
+                betaOrStable(block.label, block.files.value(assetName()), ver, tag, asset, installAfter, autoMode);
+            else
+                fetchBetaLabel(ver, tag, asset, installAfter, autoMode);
+        });
+        return;
+    }
+    fetchBetaLabel(ver, tag, asset, installAfter, autoMode);
+}
+
+void Updater::fetchBetaLabel(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode)
+{
+    // A beta release without a signatures block: its version.txt, and the separate .sig and .vsig files.
     m_busy = true;
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + QLatin1String(kBetaTag) + QStringLiteral("/version.txt")));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -218,15 +260,41 @@ void Updater::fetchBeta(const QString &ver, const QString &tag, const QString &a
         r->deleteLater();
         m_busy = false;
         const QString label = r->error() == QNetworkReply::NoError ? QString::fromUtf8(r->read(64)).trimmed() : QString();
-        // A beta newer than the newest stable release (or no stable one found): that one.
-        if (isLabel(label) && (tag.isEmpty() || newer(label, ver))) {
-            m_betaLabel = label;
-            m_assetDigest = m_betaDigest;   // may be empty: then the file's own SHA-256, bound by .sig and .vsig
-            chosen(label, QString::fromLatin1(kBetaTag), QString::fromLatin1(kDownload) + QLatin1String(kBetaTag) + QLatin1Char('/') + assetName(),
-                   installAfter, autoMode);
-            return;
-        }
-        chosen(ver, tag, asset, installAfter, autoMode);
+        betaOrStable(label, SignedFile(), ver, tag, asset, installAfter, autoMode);
+    });
+}
+
+void Updater::betaOrStable(const QString &label, const SignedFile &signedFile, const QString &ver, const QString &tag, const QString &asset,
+                           bool installAfter, bool autoMode)
+{
+    // A beta newer than the newest stable release (or no stable one found): that one.
+    if (isLabel(label) && (tag.isEmpty() || newer(label, ver))) {
+        m_betaLabel = label;
+        m_assetDigest = m_betaDigest;   // may be empty: then the block's SHA-256 or the file's own, bound by .sig and .vsig
+        m_signed = signedFile;
+        m_signedTag = QString::fromLatin1(kBetaTag);
+        chosen(label, QString::fromLatin1(kBetaTag), QString::fromLatin1(kDownload) + QLatin1String(kBetaTag) + QLatin1Char('/') + assetName(),
+               installAfter, autoMode);
+        return;
+    }
+    chosen(ver, tag, asset, installAfter, autoMode);
+}
+
+void Updater::fetchPage(const QString &tag, const std::function<void(const Signatures &)> &done)
+{
+    m_busy = true;
+    QNetworkRequest req = request(QUrl(QString::fromLatin1(kTagPage) + tag));
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkReply *r = m_net.get(req);
+    // A page over the cap is never read whole.
+    connect(r, &QNetworkReply::downloadProgress, r, [r](qint64 got, qint64) {
+        if (got > kMaxNotes)
+            r->abort();
+    });
+    connect(r, &QNetworkReply::finished, this, [this, r, done] {
+        r->deleteLater();
+        m_busy = false;
+        done(r->error() == QNetworkReply::NoError ? parseSignatures(r->read(kMaxNotes + 1), true) : Signatures());
     });
 }
 
@@ -251,14 +319,19 @@ void Updater::fetchLatestPage(bool installAfter, bool autoMode)
             return;
         }
         // Every release carries Huginn.flatpak (see .github/workflows/build.yml).
-        m_assetDigest.clear();   // the page doesn't say; the .sha256 file beside the zip does
+        m_assetDigest.clear();   // the page doesn't list digests; the signatures block (or the .sha256 file) does
         const QString asset = QString::fromLatin1(kDownload) + tag + (WinUpdate::supported() ? QStringLiteral("/") + WinUpdate::assetName() : QStringLiteral("/Huginn.flatpak"));
-        if (!m_goingBack && m_settings && m_settings->preRelease()) {
-            m_betaDigest.clear();
-            fetchBeta(ver, tag, asset, installAfter, autoMode);
-            return;
-        }
-        chosen(ver, tag, asset, installAfter, autoMode);
+        // The release's page, for its signatures block; without one, the separate files.
+        fetchPage(tag, [this, ver, tag, asset, installAfter, autoMode](const Signatures &block) {
+            m_signed = block.ok ? block.files.value(assetName()) : SignedFile();
+            m_signedTag = tag;
+            if (!m_goingBack && m_settings && m_settings->preRelease()) {
+                m_betaDigest.clear();
+                fetchBeta(ver, tag, asset, installAfter, autoMode);
+                return;
+            }
+            chosen(ver, tag, asset, installAfter, autoMode);
+        });
     });
 }
 
@@ -391,6 +464,19 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
     m_status = QStringLiteral("Checking the download…");
     Q_EMIT changed();
     const QString name = assetName();
+    // The release notes' signatures block: the SHA-256, .sig and .vsig in one place. GitHub's digest, when the API
+    // gave one, must say the same.
+    if (m_signedTag == tag && m_signed.sha.size() == 64) {
+        if (!m_assetDigest.isEmpty() && m_assetDigest != m_signed.sha) {
+            qWarning("update: GitHub says SHA-256 %s, the signatures block %s", m_assetDigest.constData(), m_signed.sha.constData());
+            QFile::remove(path);
+            failed(QStringLiteral("The download didn't match the release, so it wasn't installed. Try again."));
+            return;
+        }
+        checkThenInstall(path, tag, name, m_signed.sha, m_signed.sig, m_signed.vsig);
+        return;
+    }
+    // A release without a block: the separate files beside the download.
     auto get = [this, tag](const QString &file) {
         QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + file));
         req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -452,7 +538,7 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
         failed(QStringLiteral("This update isn't signed with the project's key, so it wasn't installed."));
         return;
     }
-    // The version signed in .vsig must be the one this release's tag names (the beta release: its version.txt label),
+    // The version signed in .vsig must be the one this release's tag names (the beta release: its label),
     // and newer than this copy: an older signed file posted again under a newer tag is never installed.
     const QString version = labelFor(tag);
     if (version.isEmpty() || !versionSignedBy(version, name, got, vsig, QByteArray::fromHex(kReleaseKey))) {
@@ -553,6 +639,75 @@ bool Updater::versionSignedBy(const QString &version, const QString &file, const
     return signedBy(versionMessage(version, file, shaHex), vsig, publicKey);
 }
 
+Updater::Signatures Updater::parseSignatures(const QByteArray &text, bool page)
+{
+    Signatures out;
+    const QByteArray first(kSignaturesFirst);
+    if (text.size() > kMaxNotes)
+        return out;
+    // The first line, exactly once where it may start: a line of the body, or right after a ">" in the page (the start
+    // of its code element; the page's descriptions and copy button hold the text too, never right after a ">").
+    qsizetype start = -1;
+    int found = 0;
+    for (qsizetype i = text.indexOf(first); i >= 0; i = text.indexOf(first, i + 1)) {
+        const char before = i > 0 ? text.at(i - 1) : '\0';
+        if (page ? before == '>' : (i == 0 || before == '\n')) {
+            start = i;
+            ++found;
+        }
+    }
+    if (found != 1)
+        return out;
+    // It ends at the first "<" or "```" after it, or at the end.
+    qsizetype end = text.size();
+    for (const char *t : {"<", "```"}) {
+        const qsizetype j = text.indexOf(t, start);
+        if (j >= 0 && j < end)
+            end = j;
+    }
+    if (end - start > kMaxBlock)
+        return out;
+    QList<QByteArray> lines = text.mid(start, end - start).split('\n');
+    for (QByteArray &l : lines)
+        if (l.endsWith('\r'))
+            l.chop(1);
+    while (!lines.isEmpty() && lines.last().isEmpty())
+        lines.removeLast();
+    if (lines.size() < 3 || lines.size() > 5 || lines.first() != first)
+        return out;
+    static const QRegularExpression labelLine(QRegularExpression::anchoredPattern(
+        QStringLiteral("label ([0-9]{1,6}\\.[0-9]{1,6}(?: beta [1-9][0-9]{0,5})?)")));
+    static const QRegularExpression fileLine(QRegularExpression::anchoredPattern(
+        QStringLiteral("(Huginn-Windows\\.zip|Huginn\\.flatpak|Muninn\\.apk) sha256 ([0-9a-f]{64}) sig ([A-Za-z0-9+/]{86}==) vsig ([A-Za-z0-9+/]{86}==)")));
+    const QRegularExpressionMatch lm = labelLine.match(QString::fromLatin1(lines.at(1)));
+    if (!lm.hasMatch())
+        return out;
+    // A signature: the one canonical base64 spelling of 64 bytes.
+    auto sig64 = [](const QString &b64, QByteArray *raw) {
+        const QByteArray in = b64.toLatin1();
+        const auto r = QByteArray::fromBase64Encoding(in, QByteArray::AbortOnBase64DecodingErrors);
+        if (!r || r->size() != 64 || r->toBase64() != in)
+            return false;
+        *raw = *r;
+        return true;
+    };
+    QHash<QString, SignedFile> files;
+    for (qsizetype i = 2; i < lines.size(); ++i) {
+        const QRegularExpressionMatch m = fileLine.match(QString::fromLatin1(lines.at(i)));
+        if (!m.hasMatch() || files.contains(m.captured(1)))
+            return out;
+        SignedFile f;
+        f.sha = m.captured(2).toLatin1();
+        if (!sig64(m.captured(3), &f.sig) || !sig64(m.captured(4), &f.vsig))
+            return out;
+        files.insert(m.captured(1), f);
+    }
+    out.ok = true;
+    out.label = lm.captured(1);
+    out.files = files;
+    return out;
+}
+
 bool Updater::selfTest(const QString &vectorsPath)
 {
     QFile f(vectorsPath);
@@ -597,6 +752,40 @@ bool Updater::selfTest(const QString &vectorsPath)
             }
         }
         ok = ok && vok;
+    }
+    // The signatures block in release notes and pages: which texts give one, what it holds, and that its signatures check
+    // out. (A file without "notes", like CI's freshly signed one, skips this.)
+    if (all.contains(QStringLiteral("notes"))) {
+        const QJsonArray nc = all.value(QStringLiteral("notes")).toArray();
+        bool nok = !nc.isEmpty() && all.value(QStringLiteral("notes_first")).toString() == QLatin1String(kSignaturesFirst);
+        for (const QJsonValue &v : nc) {
+            const QJsonObject c = v.toObject();
+            const QString name = c.value(QStringLiteral("name")).toString();
+            const QByteArray text = c.value(QStringLiteral("text")).toString().toUtf8() + QByteArray(c.value(QStringLiteral("pad")).toInt(), ' ');
+            const Signatures got = parseSignatures(text, c.value(QStringLiteral("page")).toBool());
+            bool good = got.ok == c.value(QStringLiteral("valid")).toBool();
+            if (good && got.ok) {
+                const QJsonArray want = c.value(QStringLiteral("files")).toArray();
+                const QByteArray pub = b(c, "public");
+                const QString label = c.value(QStringLiteral("label")).toString();
+                good = got.label == label && got.files.size() == want.size();
+                for (const QJsonValue &w : want) {
+                    const QJsonObject e = w.toObject();
+                    const QString file = e.value(QStringLiteral("name")).toString();
+                    const SignedFile f = got.files.value(file);
+                    const QByteArray data = b(e, "data");
+                    good = good && got.files.contains(file) && f.sha == e.value(QStringLiteral("sha256")).toString().toLatin1()
+                        && f.sig == b(e, "sig") && f.vsig == b(e, "vsig")
+                        && QCryptographicHash::hash(data, QCryptographicHash::Sha256).toHex() == f.sha && signedBy(data, f.sig, pub)
+                        && versionSignedBy(label, file, f.sha, f.vsig, pub);
+                }
+            }
+            if (!good) {
+                fprintf(stderr, "release-sig self-test: notes case \"%s\" gave the wrong answer\n", qPrintable(name));
+                nok = false;
+            }
+        }
+        ok = ok && nok;
     }
     // Pre-release labels (Labs): numeric version first, a stable release above its betas, betas by number.
     {

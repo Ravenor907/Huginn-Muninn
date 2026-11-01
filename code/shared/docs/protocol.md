@@ -73,6 +73,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `p1` | profile pictures and status (section 22): room `profile`, and `st` and `cs` on `active`. Muninn and Huginn. |
 | `b1` | the ring key (section 23.2): `rk` and `rp` in receipts, ring envelopes for 1:1 offers. Muninn and Huginn. |
 | `e1` | the relay wrapping sealed to a day key too, and room `file` through the ratchet (section 23.1): `wk` and `wt` in receipts. Muninn and Huginn. |
+| `a1` | animated GIFs: photo pieces with `kind:"gif"` (section 25). Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -110,6 +111,8 @@ Caps are also learned these ways:
 - UI: the call button on a contact without `c1` says "Needs an update"; inviting a contact without
   `g1` to a group says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work with everyone, whatever their caps.
+- A GIF goes animated (`kind:"gif"`, section 25) only to someone whose caps are known to include `a1`; anyone else,
+  and anyone whose caps aren't known yet, gets its first frame as an ordinary photo.
 
 ## 2. Shared rules
 
@@ -339,9 +342,15 @@ The envelope `id` follows 2.3 from `gid`. "Delivered" once all pieces are in, as
 ```
 
 - Sent only to the author of those messages, never to the whole group. At most 40 ids per receipt.
-- `read` only if the reader has read receipts on (the app's setting).
-- The author keeps per message a set of member keys that delivered and a set that read, and shows
-  "Delivered to 4 of 6", "Read by 2". Nobody else learns who read what.
+- `read` only if the reader has read receipts on (the app's setting). Huginn never sends group `read`.
+- Optional fields, both ignored by apps that don't know them:
+  - `at` (integer, ms) on `read`: when the reader read them. The author keeps it between the message's own
+    time and the moment the receipt came in; without `at`, the moment it came in.
+  - `nr` (integer 1) on `delivered`: this app doesn't send `read` (read receipts off, or Huginn). A `delivered`
+    without it clears that for the message; a later `read` clears it too.
+- The author keeps per message a set of member keys that delivered, a set that read with when, and a set
+  that sent `nr`. Muninn shows "Delivered to 4 of 6", "Read by 2", and in the message's "Read by" page each
+  member under Read (with the time), Delivered to, Not yet or Not shown (`nr`). Nobody else learns who read what.
 
 ## 4. Contact folders
 
@@ -1240,6 +1249,7 @@ pairwise like the rest of section 7.
 | `mx` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
 | `group` | `vote` | 12.3 | yes | as `react` | Seen | m2 |
 | `photo`, `gphoto` | | pieces with `kind:"video"` (12.2) | yes | as photo | as photo | m2 |
+| `photo`, `gphoto` | | pieces with `kind:"gif"` (25) | yes | as photo | as photo | a1 |
 | `intro` | `intro` `yes` `add` | 13 | v1 (it may go to a non-contact) | no (the relays keep it) | Seen | i1 |
 | `file` | `offer` `accept` `decline` | 14.1 | to `e1`; v1 otherwise | no | Seen | f1 |
 | `receipt` | | `rk` `rp` `wk` `wt` (23) | yes | no | Seen | b1, e1 |
@@ -1251,6 +1261,7 @@ pairwise like the rest of section 7.
 | envelope on any route | 64 KB (the Bluetooth limit; stays under Nostr relays' usual 64 to 128 KB after wrapping) |
 | text in `private` / `gmsg` | 2000 characters |
 | photo piece | 16 KB |
+| animated GIF (25) | 8 MB (512 pieces, on every route), 400 frames, 2048 px a side, 160 M pixels of frames in all |
 | group members | 50 |
 | channels per group | 20 (including `main`) |
 | people per voice room or group call | 8 |
@@ -1398,8 +1409,8 @@ shows as "Not here any more". A reply to a contact without `m1` goes as `private
   | `edit` | `msg` (the sender's gmsg), `text`, `ts` | as 11.3, only from the message's author |
 
   Taken only from a member of the receiver's current state.
-- Read receipts are the 3.10 ones: the author's app shows a check mark and, in a circle, how many members have
-  read the message. Nobody else learns who read what.
+- Read receipts are the 3.10 ones: Muninn shows the author a check mark and, in a circle, how many members have
+  read the message, and who in its "Read by" page. Huginn shows no read marks on group messages. Nobody else learns who read what.
 - `@name` in a message's text (any case, not inside a longer word) mentions that member: the app lights the
   message up and says "Raven mentioned you in Family". Nothing extra goes on the wire.
 
@@ -2193,3 +2204,61 @@ quietly (answers 200 and keeps nothing). The Labs contact's app:
 **Replying.** Reply in the Labs reports list makes the sender a contact on the Labs contact's app and opens their
 chat. Its messages go as to any new contact (no invite). The tester's app, once it has sent a report, takes a
 private message from the Labs key with no invite as a chat request (Requests), like a code shared some other way.
+
+## 25. Animated GIFs (cap `a1`)
+
+A GIF goes as `photo` (or `gphoto`, 3.9) pieces exactly like a photo (16 KB, `i`, `n`, sealed one by one, padded like
+any relay envelope, 20.1), with one more clear field in every piece:
+
+```json
+{"room": "photo", "id": "..", "i": 0, "n": 37, "kind": "gif"}
+```
+
+`code/shared/tools/gif_ref.py` is the reference and writes `code/shared/vectors/gif-vectors.json` (every `good` input
+cleans to exactly its `out` with its `frames`; every `refuse` input is refused for its `why`). Muninn checks it in
+`GifsTest`, Huginn in its chat self-test (next to `m2-vectors.json`).
+
+### 25.1 Who gets it
+
+- Only to someone whose caps include `a1` (1.3). An app without `a1` refuses an unknown `kind` (400), so everyone else,
+  and anyone whose caps aren't known yet, gets the GIF's first frame as an ordinary JPEG photo (no `kind`), made the
+  way any photo is. In a group the pieces are sealed per member (3.9), so each member gets what their app shows.
+- A linked device (section 15) gets the first frame as a photo (`"k": "photo"`).
+- Never in an album: a piece with `kind:"gif"` and `al` is malformed.
+
+### 25.2 Cleaning
+
+The sender cleans the GIF before it goes, and the receiver cleans the joined bytes again before keeping them, so only
+the picture survives whatever the other side did. Cleaning keeps:
+
+- the header, always written `GIF89a`;
+- the logical screen descriptor and its global color table, as they came;
+- every image: descriptor, local color table and image data, with the graphic control extension just before it (the
+  last well-formed one, exactly 4 bytes in one sub-block; a broken one is dropped);
+- the loop count, from the first `NETSCAPE2.0` or `ANIMEXTS1.0` block whose second sub-block is `01 lo hi`, written
+  once, as `21 FF 0B "NETSCAPE2.0" 03 01 lo hi 00`, right after the global color table;
+- the trailer `3B` (added when the GIF ends between blocks without one).
+
+Everything else goes: comments, plain text blocks (with the control block before them), every other application
+block (XMP, ICC profiles, maker data) and anything after the trailer.
+
+### 25.3 Limits
+
+A GIF is refused (`why` in the vectors) when:
+
+- `gif`: it doesn't start `GIF87a` or `GIF89a`, a block is cut off or unknown, the screen is 0 wide or high, a frame
+  is 0 wide or high or reaches past the screen, an LZW code size isn't 2 to 8, or it has no frames;
+- `big`: it is over 8 MB, the screen is over 2048 px a side, or its frames add up to more than 160 M pixels;
+- `frames`: it has more than 400 frames.
+
+A receiver answers 400 to a GIF that doesn't clean. A piece with `kind:"gif"` may have `n` up to 512 (8 MB); a
+receiver keeps at most 3 such GIFs coming in at once (429 to a fourth). Over the internet a GIF may use all 512
+pieces. A sender whose GIF is over the limits offers to send it as a still (its first frame, a photo) or as a file
+(section 14).
+
+### 25.4 Showing it
+
+A received GIF is decoded only after it cleaned, off the main thread, at no more than the size it's shown at, and a
+decoder failure leaves the first frame or the word "GIF". It moves in the chat, in the viewer and on the Kids' TV.
+With Less motion (or the system's animations off) it holds its first frame with a play button. It stops when it's
+off screen or the app is in the background. The chat list and notifications say "GIF".

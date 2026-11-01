@@ -17,6 +17,8 @@ class Settings : public QObject
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY changed)
     // Huginn opens in a window unless this is on; F11 switches too.
     Q_PROPERTY(bool fullScreen READ fullScreen WRITE setFullScreen NOTIFY changed)
+    // Settings › Look › Handheld mode: "auto" (System decides at start), "on" or "off".
+    Q_PROPERTY(QString handheldMode READ handheldMode WRITE setHandheldMode NOTIFY changed)
     // The window's last place and size (empty: 80% of the screen, centered).
     Q_PROPERTY(QRect windowRect READ windowRect WRITE setWindowRect NOTIFY changed)
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
@@ -96,6 +98,11 @@ public:
     bool colorBlind() const { return value("colorBlind", false).toBool(); }
     bool reduceMotion() const { return value("reduceMotion", false).toBool(); }
     bool fullScreen() const { return value("fullScreen", false).toBool(); }
+    QString handheldMode() const
+    {
+        const QString v = value("handheldMode", "auto").toString();
+        return v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto");
+    }
     QRect windowRect() const { return value("windowRect", QRect()).toRect(); }
     // Looks for a new release at start. Off: only Check now asks GitHub.
     bool autoUpdate() const { return value("autoUpdate", true).toBool(); }
@@ -197,6 +204,7 @@ public:
     void setColorBlind(bool v) { set("colorBlind", v); }
     void setReduceMotion(bool v) { set("reduceMotion", v); }
     void setFullScreen(bool v) { set("fullScreen", v); }
+    void setHandheldMode(const QString &v) { set("handheldMode", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
     void setWindowRect(const QRect &r) { if (r.width() >= 320 && r.height() >= 240) set("windowRect", r); }
     void setAutoUpdate(bool v) { set("autoUpdate", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }

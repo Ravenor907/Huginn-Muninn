@@ -23,7 +23,15 @@ Rectangle {
         Behavior on x { NumberAnimation { duration: Theme.motion ? 120 : 0 } }
     }
     HoverHandler { cursorShape: Qt.PointingHandCursor }
-    TapHandler { onTapped: sw.toggled() }
+    TapHandler { enabled: !Theme.touch; onTapped: sw.toggled() }
+    // Handheld mode: a finger-sized area around the switch takes the tap too.
+    Item {
+        anchors.centerIn: parent
+        width: Math.max(parent.width, Theme.tapMin)
+        height: Math.max(parent.height, Theme.tapMin)
+        enabled: Theme.touch
+        TapHandler { onTapped: sw.toggled() }
+    }
     Accessible.role: Accessible.CheckBox
     Accessible.checked: checked
     Accessible.onToggleAction: toggled()

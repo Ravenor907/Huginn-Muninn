@@ -59,15 +59,23 @@ QStringList Chat::pickPictures() const
 QString Chat::sendPhotos(const QString &where, const QStringList &paths, bool hd)
 {
     QList<QByteArray> jpegs;
-    int bad = 0;
+    int bad = 0, gifs = 0;
     for (const QString &p : paths) {
+        // Cap a1: a GIF goes on its own, animated (never in an album).
+        if (Photos::isGifFile(p)) {
+            if (sendPhoto(where, p, hd))
+                ++gifs;
+            else
+                ++bad;
+            continue;
+        }
         const QByteArray j = Photos::prepare(p, hd);
         if (j.isEmpty())
             ++bad;
         else
             jpegs << j;
     }
-    if (jpegs.isEmpty())
+    if (jpegs.isEmpty() && gifs == 0)
         return paths.size() == 1 ? QStringLiteral("That picture couldn't be opened.") : QStringLiteral("Those pictures couldn't be opened.");
     QString g, ch;
     const bool group = inGroup(where, &g, &ch);
@@ -383,7 +391,8 @@ QVariantMap Chat::shared(const QString &where) const
         }
         if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() == 0) {
             media << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("video"), m.value(QStringLiteral("video")).toInt()},
-                                 {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))}};
+                                 {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))},
+                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}};
             continue;
         }
         const QVariantMap lp = m.value(QStringLiteral("lp")).toMap();

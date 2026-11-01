@@ -355,8 +355,11 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
                     }
                     Box(Modifier.aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
                         .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
-                        bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                        bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else if (m.gif) "GIF" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
                         if (m.video > 0) MIcon("play", Color.White, 22.dp, filled = true)
+                        // A GIF holds still here (its first frame); it moves once opened.
+                        if (m.gif) Text("GIF", style = Type.small.copy(color = Color.White), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
+                            .clip(RoundedCornerShape(4.dp)).background(Color(0x99000000)).padding(horizontal = 4.dp))
                     }
                 }
             }

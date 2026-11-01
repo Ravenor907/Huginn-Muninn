@@ -152,11 +152,43 @@ Rectangle {
             onJump: host.jumpTo(msg.m.re)
         }
         Image {
-            visible: !!msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album
+            visible: !!msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album && !msg.m.gif
             width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
             source: visible && !host.isTour ? Chat.photoUrl(msg.m.photo) : ""
+        }
+        // A GIF (cap a1): it moves while Huginn is in front; with Less motion it holds its first frame until played.
+        Item {
+            id: gifBox
+            property bool asked: false
+            visible: !!msg.m.photo && !!msg.m.gif && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album
+            width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
+            clip: true
+            AnimatedImage {
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                cache: false
+                // Chat.gifUrl checks the GIF limits again before anything decodes it.
+                source: gifBox.visible && !msg.host.isTour ? Chat.gifUrl(msg.m.photo) : ""
+                playing: gifBox.visible && (!Settings.reduceMotion || gifBox.asked) && Qt.application.state === Qt.ApplicationActive
+            }
+            Rectangle {
+                visible: Settings.reduceMotion
+                anchors.centerIn: parent
+                width: Theme.px(48); height: width; radius: width / 2
+                color: Qt.rgba(0, 0, 0, 0.55)
+                Icon { anchors.centerIn: parent; name: gifBox.asked ? "stop" : "play"; color: "white"; size: Theme.px(24) }
+                Accessible.role: Accessible.Button
+                Accessible.name: gifBox.asked ? "Stop the GIF" : "Play the GIF"
+                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: gifBox.asked = !gifBox.asked }
+            }
+            Rectangle {
+                anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Theme.px(6)
+                width: gifTag.implicitWidth + Theme.px(8); height: gifTag.implicitHeight + Theme.px(2); radius: Theme.px(4)
+                color: Qt.rgba(0, 0, 0, 0.6)
+                Text { id: gifTag; textFormat: Text.PlainText; anchors.centerIn: parent; text: "GIF"; color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(11) }
+            }
         }
         Row {
             visible: !!msg.m.voice && !msg.m.unsent

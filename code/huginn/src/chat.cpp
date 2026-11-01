@@ -2008,6 +2008,14 @@ QString Chat::sendBlob(const QString &key, const QByteArray &bytes, int voiceMs,
 
 bool Chat::sendPhoto(const QString &key, const QString &path, bool hd)
 {
+    // Cap a1 (section 25): a GIF goes animated when it's within the limits; over them, as a still picture.
+    if (Photos::isGifFile(path)) {
+        QString why;
+        const QByteArray gif = Photos::readGif(path, &why);
+        if (!gif.isEmpty())
+            return sendGifTo(key, gif);
+        Q_EMIT notice(Photos::gifWhy(why) + QStringLiteral(", so it goes as a still picture. To keep it moving, send it as a file."));
+    }
     if (key.startsWith(QLatin1String("g:"))) {
         const QStringList parts = key.split(QLatin1Char(':'));
         return parts.size() == 3 && sendGroupPhoto(parts.at(1), parts.at(2), path, hd);
@@ -2037,11 +2045,42 @@ void Chat::sendVoice(const QString &key, const QByteArray &aac, int ms)
 
 QByteArray Chat::blob(const QString &id) const { return id.isEmpty() ? QByteArray() : m_vault->read(QStringLiteral("photos/") + id); }
 
+// A cleaned GIF (cap a1) to a contact or a group channel ("g:<group>:<channel>"). Someone whose app doesn't show
+// GIFs gets its first frame as a photo, made when the pieces are.
+bool Chat::sendGifTo(const QString &key, const QByteArray &gif)
+{
+    const QVariantMap extra{{QStringLiteral("gif"), true}};
+    if (key.startsWith(QLatin1String("g:"))) {
+        const QStringList parts = key.split(QLatin1Char(':'));
+        return parts.size() == 3 && !sendGroupBlob(parts.at(1), parts.at(2), gif, 0, extra).isEmpty();
+    }
+    sendBlob(key, gif, 0, extra);
+    return true;
+}
+
+bool Chat::bigIncoming() const
+{
+    int big = 0;
+    for (const Incoming &inc : m_incoming)
+        if (inc.parts.size() > Photos::kMaxPieces)
+            ++big;
+    return big >= 3;
+}
+
 QString Chat::photoUrl(const QString &id)
 {
     // QML shows pictures from a URL: a data URL keeps it in memory, never on disk unencrypted.
     const QByteArray b = blob(id);
-    return b.isEmpty() ? QString() : QStringLiteral("data:image/jpeg;base64,") + b64(b);
+    if (b.isEmpty())
+        return QString();
+    return (Photos::isGif(b) ? QStringLiteral("data:image/gif;base64,") : QStringLiteral("data:image/jpeg;base64,")) + b64(b);
+}
+
+QString Chat::gifUrl(const QString &id)
+{
+    // Only a GIF that passes the limits again reaches the decoder (section 25.4): a stored one can't freeze the app.
+    const QByteArray b = blob(id);
+    return Photos::isGif(b) && !Photos::cleanGif(b).isEmpty() ? QStringLiteral("data:image/gif;base64,") + b64(b) : QString();
 }
 
 bool Chat::savePhoto(const QString &id)
@@ -2051,7 +2090,7 @@ bool Chat::savePhoto(const QString &id)
         return false;
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation) + QStringLiteral("/Huginn");
     QDir().mkpath(dir);
-    QFile f(dir + QStringLiteral("/Huginn-%1.jpg").arg(now()));
+    QFile f(dir + QStringLiteral("/Huginn-%1.%2").arg(now()).arg(Photos::isGif(b) ? QStringLiteral("gif") : QStringLiteral("jpg")));
     return f.open(QIODevice::WriteOnly) && f.write(b) == b.size();
 }
 
@@ -2122,10 +2161,16 @@ void Chat::copyText(const QString &text) const
 
 QList<QJsonObject> Chat::pieces(const QVariantMap &m)
 {
-    const QByteArray bytes = blob(str(m, "photo"));
-    if (bytes.isEmpty())
+    const QByteArray stored = blob(str(m, "photo"));
+    if (stored.isEmpty())
         return {};
     const QString peer = str(m, "peer");
+    // Cap a1: a GIF only to an app that shows it; anyone else (or caps not known yet) gets its first frame as a photo.
+    const bool gifMsg = m.value(QStringLiteral("gif")).toBool();
+    const bool gif = gifMsg && hasCap(peer, QLatin1String(Photos::kGifCap));
+    const QByteArray bytes = gifMsg && !gif ? Photos::stillOfGif(stored) : stored;
+    if (bytes.isEmpty())
+        return {};
     const QList<QByteArray> parts = Photos::split(bytes);
     QList<QJsonObject> out;
     const int voice = m.value(QStringLiteral("voice")).toInt();
@@ -2142,6 +2187,8 @@ QList<QJsonObject> Chat::pieces(const QVariantMap &m)
             o.insert(QStringLiteral("fn"), str(m, "file"));
         }
         MoreWire::addPieceFields(o, m);   // cap m2: a video message, or a photo in an album
+        if (gif)
+            o.insert(QStringLiteral("kind"), QStringLiteral("gif"));
         out << seal(o, peer, parts.at(i));   // each piece is its own message (r1: its own ratchet step)
     }
     return out;
@@ -2154,7 +2201,8 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
         return 403;
     const QString id = o.value(QStringLiteral("id")).toString();
     const int n = o.value(QStringLiteral("n")).toInt(), i = o.value(QStringLiteral("i")).toInt(-1);
-    if (id.isEmpty() || n < 1 || n > Photos::kMaxPieces || i < 0 || i >= n || !MoreWire::ok(QStringLiteral("piece"), o))
+    const bool gif = o.value(QStringLiteral("kind")).toString() == QLatin1String("gif");   // cap a1: up to 8 MB
+    if (id.isEmpty() || n < 1 || n > (gif ? Photos::kGifPieces : Photos::kMaxPieces) || i < 0 || i >= n || !MoreWire::ok(QStringLiteral("piece"), o))
         return 400;
     // Files turned off for them: a file's pieces are dropped quietly.
     if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && !filesAllowed(fromKey))
@@ -2184,6 +2232,8 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     q << now();
     if (m_incoming.size() > 20 && !m_incoming.contains(id))
         return 429;
+    if (n > Photos::kMaxPieces && !m_incoming.contains(id) && bigIncoming())
+        return 429;   // three GIFs over 3.2 MB already coming in: memory stays bounded
     bool ok = false;
     const QByteArray part = open(o, fromKey, &ok);
     if (!ok)
@@ -2217,7 +2267,8 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
         return 400;
     const QVariantMap more = MoreWire::pieceFields(o);   // cap m2: a video message, or a photo in an album
     const QByteArray joined = !fileName.isEmpty() ? parts.join() : voiceMs > 0 ? Photos::joinVoice(parts)
-                            : more.contains(QStringLiteral("video")) ? MoreWire::joinVideo(parts) : Photos::join(parts);   // join() also strips any metadata
+                            : more.contains(QStringLiteral("video")) ? MoreWire::joinVideo(parts)
+                            : gif ? Photos::joinGif(parts) : Photos::join(parts);   // the joins also strip any metadata
     if (joined.isEmpty())
         return 400;
     m_vault->write(QStringLiteral("photos/") + id, joined);
@@ -2238,6 +2289,8 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     msg.insert(QStringLiteral("photo"), id);
     msg.insert(QStringLiteral("voice"), voiceMs);
     msg.insert(more);
+    if (gif)
+        msg.insert(QStringLiteral("gif"), true);
     if (!fileName.isEmpty()) {
         msg.insert(QStringLiteral("file"), fileName);
         msg.insert(QStringLiteral("size"), double(joined.size()));
@@ -2250,7 +2303,7 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
             Q_EMIT notice(!savedAs.isEmpty() ? QStringLiteral("File from %1: %2 · Saved to Downloads").arg(nameOf(fromKey), QFileInfo(savedAs).fileName())
                                              : QStringLiteral("File from %1: %2. It couldn't be saved to Downloads: right-click it to save.").arg(nameOf(fromKey), fileName));
         Q_EMIT arrived(nameOf(fromKey), !fileName.isEmpty() ? QStringLiteral("File: ") + fileName : voiceMs > 0 ? QStringLiteral("Voice message")
-                                        : more.contains(QStringLiteral("video")) ? QStringLiteral("Video message")
+                                        : more.contains(QStringLiteral("video")) ? QStringLiteral("Video message") : gif ? QStringLiteral("GIF")
                                         : more.contains(QStringLiteral("al")) ? QStringLiteral("Photos") : QStringLiteral("Photo"), fromKey);
     }
     receipt(fromKey, {id}, QStringLiteral("delivered"), mailbox);
@@ -2479,7 +2532,8 @@ void Chat::attempt(const QString &key, const QString &id)
     }
     const QString mailbox = backupMailbox(m);
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
-    if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
+    const int relayPieces = m.value(QStringLiteral("gif")).toBool() ? Photos::kGifPieces : Photos::kInternetPieces;   // cap a1: a GIF up to 8 MB
+    if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= relayPieces) {
         if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step))
             any = true;
     }
@@ -3054,6 +3108,8 @@ QVariantList Chat::chats() const
                 preview = mine ? QStringLiteral("You sent a video message") : QStringLiteral("Video message");
             else if (last.contains(QStringLiteral("poll")))
                 preview = QStringLiteral("Poll: ") + last.value(QStringLiteral("poll")).toMap().value(QStringLiteral("q")).toString();
+            else if (last.value(QStringLiteral("gif")).toBool())
+                preview = mine ? QStringLiteral("You sent a GIF") : QStringLiteral("GIF");
             else if (!str(last, "photo").isEmpty())
                 preview = mine ? QStringLiteral("You sent a photo") : QStringLiteral("Photo");
             else
@@ -3503,15 +3559,49 @@ void Chat::savePins()
     m_vault->write(QStringLiteral("pins.json"), compact(o));
 }
 
+namespace
+{
+// A GIF on the clipboard (cap a1): its bytes ("image/gif"), or one GIF file copied in a file manager. Empty otherwise.
+QByteArray clipboardGif()
+{
+    const QClipboard *c = QGuiApplication::clipboard();
+    const QMimeData *d = c ? c->mimeData() : nullptr;
+    if (!d)
+        return {};
+    if (d->hasFormat(QStringLiteral("image/gif"))) {
+        const QByteArray b = d->data(QStringLiteral("image/gif"));
+        if (Photos::isGif(b))
+            return b;
+    }
+    if (d->hasUrls() && d->urls().size() == 1 && d->urls().constFirst().isLocalFile()) {
+        QFile f(d->urls().constFirst().toLocalFile());
+        if (f.open(QIODevice::ReadOnly) && Photos::isGif(f.peek(6)))
+            return f.read(qint64(Photos::kGifMaxBytes) + 1);
+    }
+    return {};
+}
+}
+
 bool Chat::clipboardHasImage() const
 {
     const QClipboard *c = QGuiApplication::clipboard();
-    return c && !c->image().isNull();
+    return c && (!c->image().isNull() || !clipboardGif().isEmpty());
 }
 
 // A pasted picture goes through the same shrinking and scrubbing as a picked one.
 bool Chat::pasteImage(const QString &where)
 {
+    // A GIF keeps moving: through a scratch file, like a picked one (cleaned there, or a still when over the limits).
+    const QByteArray gif = clipboardGif();
+    if (!gif.isEmpty()) {
+        const QString path = Scratch::path(QStringLiteral("huginn-paste-%1.gif").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        QFile f(path);
+        const bool written = f.open(QIODevice::WriteOnly) && f.write(gif) == gif.size();
+        f.close();
+        const bool ok = written && sendPhoto(where, path, false);
+        Scratch::shred(path);
+        return ok;
+    }
     const QClipboard *c = QGuiApplication::clipboard();
     const QImage img = c ? c->image() : QImage();
     if (img.isNull())
@@ -3565,6 +3655,7 @@ QVariantMap Chat::withM1(const QVariantMap &in, const QVariantList &all, const M
             what = !str(q, "unsent").isEmpty() ? QStringLiteral("Message deleted")
                  : q.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral("Voice message")
                  : q.value(QStringLiteral("video")).toInt() > 0 ? QStringLiteral("Video message")
+                 : q.value(QStringLiteral("gif")).toBool() ? QStringLiteral("GIF")
                  : !str(q, "photo").isEmpty() ? QStringLiteral("Photo")
                  : q.contains(QStringLiteral("poll")) ? QStringLiteral("Poll: ") + q.value(QStringLiteral("poll")).toMap().value(QStringLiteral("q")).toString()
                  : str(q, "text").left(120);

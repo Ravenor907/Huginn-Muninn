@@ -486,8 +486,29 @@ Rectangle {
                 anchors.fill: parent
                 visible: page.viewing !== ""
                 color: "black"
-                Image { anchors.fill: parent; anchors.margins: Theme.px(10); fillMode: Image.PreserveAspectFit; source: page.viewing !== "" ? Chat.photoUrl(page.viewing) : "" }
+                id: fullPhoto
+                property bool asked: false
+                // Cap a1: a GIF moves full size too (held still with Less motion until played); "" for a photo.
+                readonly property string gif: page.viewing !== "" && !page.isTour ? Chat.gifUrl(page.viewing) : ""
+                onVisibleChanged: asked = false
+                Image { anchors.fill: parent; anchors.margins: Theme.px(10); fillMode: Image.PreserveAspectFit; visible: fullPhoto.gif === ""; source: page.viewing !== "" && fullPhoto.gif === "" ? Chat.photoUrl(page.viewing) : "" }
+                AnimatedImage {
+                    anchors.fill: parent; anchors.margins: Theme.px(10); fillMode: Image.PreserveAspectFit; cache: false
+                    visible: fullPhoto.gif !== ""
+                    source: fullPhoto.gif
+                    playing: visible && (!Settings.reduceMotion || fullPhoto.asked) && Qt.application.state === Qt.ApplicationActive
+                }
                 TapHandler { onTapped: page.viewing = "" }
+                Rectangle {
+                    visible: fullPhoto.gif !== "" && Settings.reduceMotion
+                    anchors.centerIn: parent
+                    width: Theme.px(64); height: width; radius: width / 2
+                    color: Qt.rgba(0, 0, 0, 0.55)
+                    Icon { anchors.centerIn: parent; name: fullPhoto.asked ? "stop" : "play"; color: "white"; size: Theme.px(30) }
+                    Accessible.role: Accessible.Button
+                    Accessible.name: fullPhoto.asked ? "Stop the GIF" : "Play the GIF"
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: fullPhoto.asked = !fullPhoto.asked }
+                }
             }
             Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom

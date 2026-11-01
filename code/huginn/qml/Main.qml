@@ -9,14 +9,14 @@ import Huginn
 Window {
     id: app
     // A normal window: where it was last time, else 80% of the screen and centered. Full screen only when
-    // Settings › Look › Open full screen is on (F11 switches), or in a handheld's game mode.
+    // Settings › Look › Open full screen is on (F11 switches), in game mode, or in Handheld mode.
     // Set once at start (never bound to the saved value, so the window manager stays in charge of where it is).
     width: 1280
     height: 800
     function placeWindow() {
         if (touring) { width = 1920; height = 1080; return }
-        // Game Mode: the whole screen from the first frame (gamescope shows one window at a time).
-        if (System.gameMode && !System.windowed) { x = 0; y = 0; width = Screen.width; height = Screen.height; return }
+        // Game mode and Handheld mode: the whole screen from the first frame (game mode shows one window at a time).
+        if ((System.gameMode || System.handheld) && !System.windowed) { x = 0; y = 0; width = Screen.width; height = Screen.height; return }
         const r = Settings.windowRect
         const sw = Screen.desktopAvailableWidth, sh = Screen.desktopAvailableHeight
         if (r.width >= 320 && r.height >= 240 && r.width <= sw && r.height <= sh) {
@@ -31,15 +31,23 @@ Window {
     minimumHeight: 360
     visible: true
     visibility: System.windowed ? Window.Windowed
-              : (Settings.fullScreen || System.gameMode) ? Window.FullScreen : Window.Windowed
+              : (Settings.fullScreen || System.gameMode || System.handheld) ? Window.FullScreen : Window.Windowed
     title: "Huginn"
     color: Theme.ground
 
     readonly property bool touring: System.tourDir.length > 0
-    // A controller is being used (its wording and focus rings); a mouse or keyboard turns it off.
+    // A controller is being used (its wording and focus rings); a mouse or keyboard turns it off. Handheld mode
+    // starts with it on, before the first button.
     property bool padInUse: false
-    // The controller's button legend: Select (View) shows it, Select again or any other button hides it.
+    // The controller's button legend: Select (View) shows it, Select again or any other button hides it. Handheld
+    // mode shows it at start.
     property bool legend: false
+    function controllerFirst() {
+        if (touring) return
+        padInUse = System.handheld
+        legend = System.handheld && Gamepad.connected
+    }
+    Connections { target: System; function onHandheldChanged() { app.controllerFirst() } }
     // Taller than wide: one column at a time.
     readonly property bool portrait: height > width
     Binding { target: Ui; property: "portrait"; value: app.portrait }
@@ -357,7 +365,7 @@ Window {
     }
     // The rest of the keyboard shortcuts (all listed in ShortcutsPanel.qml).
     readonly property bool keysOn: !app.touring && !updating.visible && !app.privacyCovered
-    Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode; onActivated: Settings.fullScreen = !Settings.fullScreen }
+    Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode && !System.handheld; onActivated: Settings.fullScreen = !Settings.fullScreen }
     // The window's place and size, kept a moment after it stops moving (only while it's a normal window).
     Timer { id: keepRect; interval: 800; onTriggered: if (app.placed && app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
     property bool placed: false
@@ -401,11 +409,20 @@ Window {
     LabsInbox { id: labsInbox; z: 28 }
     // Labs › App storage: files Huginn keeps that can go.
     AppStoragePanel { id: appStorage; z: 28 }
+    // Labs › Performance check (under Report a bug, which it can open with its report).
+    PerfPanel { id: perfPanel; z: 27.5 }
     function openReport() {
         if (app.privacyCovered) return
         Labs.capture(app)
         labsReport.open(app.touring)
     }
+    // Report a bug with a performance report going along (the person can switch it off there).
+    function openReportWith(perfText) {
+        if (app.privacyCovered) return
+        Labs.capture(app)
+        labsReport.openWith(perfText)
+    }
+    function openPerf() { perfPanel.open(app.touring) }
     function openLabsReports() { labsInbox.open(app.touring) }
     function openAppStorage() { appStorage.open(app.touring) }
     TextPrompt { id: prompt; z: 30 }
@@ -436,6 +453,7 @@ Window {
         if (labsReport.visible) labsReport.close()
         if (labsInbox.visible) labsInbox.close()
         if (appStorage.visible) appStorage.close()
+        if (perfPanel.visible) perfPanel.close()
         if (meCard.visible) meCard.close()
         if (rail.menuOpen) rail.closeMenu()
         if (linkPhone.visible) linkPhone.close()
@@ -594,6 +612,7 @@ Window {
 
     Component.onCompleted: {
         placeWindow(); placed = true
+        controllerFirst()
         Ui.main = app
         Ui.prompt = prompt
         Ui.confirm = confirm
@@ -602,6 +621,8 @@ Window {
         Ui.profile = profileCard
         Ui.person = personPanel
         if (touring) tour.start()
+        // Labs › Performance check: settings being tried kept Huginn from starting last time.
+        else if (Perf.droppedNow) Qt.callLater(() => Ui.say("Tried settings didn't start. Back to Automatic.", true))
     }
 
     // ------------------------------------------------------------- nearby sharing (LocalSend)
@@ -699,6 +720,7 @@ Window {
         if (labsReport.visible) return labsReport
         if (labsInbox.visible) return labsInbox
         if (appStorage.visible) return appStorage
+        if (perfPanel.visible) return perfPanel
         if (personPanel.visible) return personPanel
         if (profileCard.visible) return profileCard
         if (meCard.visible) return meCard
@@ -926,7 +948,9 @@ Window {
             { page: "settings", section: "notify", file: "42-notifications" },
             { page: "g:tour-crew", zone: "messages", find: "in", file: "43-find" },
             // Labs › App storage (sample files: nothing on this computer is touched).
-            { page: "settings", section: "about", labs: true, appStorage: true, file: "44-app-storage" }
+            { page: "settings", section: "about", labs: true, appStorage: true, file: "44-app-storage" },
+            // Labs › Performance check with sample results (nothing is measured).
+            { page: "settings", section: "about", labs: true, perf: true, file: "45-performance-check" }
         ]
         interval: 1500
         repeat: true
@@ -934,7 +958,7 @@ Window {
             if (step > 0) System.grab(app, steps[step - 1].file)
             prompt.visible = false; confirm.visible = false; picker.visible = false
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
-            labsReport.visible = false; labsInbox.visible = false; appStorage.visible = false; linkPhone.visible = false
+            labsReport.visible = false; labsInbox.visible = false; appStorage.visible = false; perfPanel.visible = false; linkPhone.visible = false
             if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
             if (step >= steps.length) {
                 Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
@@ -969,6 +993,7 @@ Window {
             if (s.report) Qt.callLater(app.openReport)
             if (s.labsInbox) app.openLabsReports()
             if (s.appStorage) app.openAppStorage()
+            if (s.perf) app.openPerf()
             if (s.linkPhone) linkPhone.open(true, s.linkPhone)
             if (s.find) Qt.callLater(() => { const p = app.page(); if (p && p.openFind) p.openFind(s.find) })
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)

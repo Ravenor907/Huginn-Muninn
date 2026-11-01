@@ -56,8 +56,9 @@ public:
     Q_INVOKABLE void capture(QQuickWindow *window);
     Q_INVOKABLE void clearShot();
     // Sends the report; "" when it went, otherwise what to tell the person. withLog: the last lines of crash.log go
-    // after the text (only when the person ticked it; it holds no message text, names or addresses).
-    Q_INVOKABLE QString send(const QString &text, bool withShot, bool withLog = false);
+    // after the text (only when the person ticked it; it holds no message text, names or addresses). perf: Labs ›
+    // Performance check's short report, after the text and before the crash log, in whatever room is left.
+    Q_INVOKABLE QString send(const QString &text, bool withShot, bool withLog = false, const QString &perf = QString());
     // crash.log has something in it (Report a bug then offers to attach its last lines).
     Q_INVOKABLE bool hasCrashLog() const;
     Q_INVOKABLE QString shotOf(const QString &id) const;   // a report's screenshot as a data URL, or ""

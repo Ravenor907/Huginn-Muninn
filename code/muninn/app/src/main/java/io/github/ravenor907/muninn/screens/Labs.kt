@@ -130,7 +130,7 @@ object Labs {
         listOf(Build.MANUFACTURER, Build.MODEL).filter { !it.isNullOrBlank() }.joinToString(" "))
 }
 
-/** Settings' Labs section: update channel, going back to stable, reporting a bug, App storage. */
+/** Settings' Labs section: update channel, going back to stable, reporting a bug, App storage, replaying first setup. */
 @Composable
 internal fun LabsSection(app: Muninn) {
     val context = LocalContext.current
@@ -147,6 +147,8 @@ internal fun LabsSection(app: Muninn) {
         MenuRow("undo", "Go back to stable") { Labs.goBack(app) }
         MenuRow("info", "Report a bug") { Labs.report(context) }
         MenuRow("folder", "App storage") { SettingsNav.goChat = "appstorage" }
+        // First setup again, as practice: nothing it does is saved.
+        MenuRow("refresh", "Replay first setup (practice)") { Setup.practice(app) }
     }
 }
 

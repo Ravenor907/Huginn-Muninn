@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QObject>
@@ -11,9 +12,10 @@ class Settings;
 // Updates from GitHub releases (tagged v0.3, v0.31...). Updates install the
 // release's Flatpak bundle for this user, then Huginn restarts. Only a file that matches the release's
 // SHA-256, carries the project's signature (.sig) and the project's signature of its version (.vsig, for the
-// release tag being installed) and is newer than this copy is installed.
-// The Pre-release channel (Labs) also reads the "beta" pre-release (its version.txt holds a label like
-// "0.99 beta 12") and installs whichever of the two is newest. Go back to stable installs the latest
+// release tag being installed) and is newer than this copy is installed. All three come from the signatures block at
+// the end of the release notes (shared/docs/releases.md), or from the separate files of a release without one.
+// The Pre-release channel (Labs) also reads the "beta" pre-release (its block's label line, or its version.txt, holds
+// a label like "0.99 beta 12") and installs whichever of the two is newest. Go back to stable installs the latest
 // stable even though it's older, the only time the newer check is skipped; every check of the file stays.
 class Updater : public QObject
 {
@@ -70,6 +72,21 @@ public:
     static QByteArray versionMessage(const QString &version, const QString &file, const QByteArray &shaHex);
     static bool versionSignedBy(const QString &version, const QString &file, const QByteArray &shaHex, const QByteArray &vsig,
                                 const QByteArray &publicKey);
+    // One download's line in a release's signatures block: SHA-256 (lowercase hex), .sig and .vsig (64 bytes each).
+    struct SignedFile {
+        QByteArray sha;
+        QByteArray sig;
+        QByteArray vsig;
+    };
+    struct Signatures {
+        bool ok = false;
+        QString label;
+        QHash<QString, SignedFile> files;
+    };
+    // The signatures block (shared/docs/releases.md) in a release body from the API (page false: markdown) or in the
+    // release's web page (page true: HTML). Strict: the first line exactly once (starting a line in a body, right
+    // after a ">" in a page), only the expected line shapes, size caps. Anything else gives ok == false.
+    static Signatures parseSignatures(const QByteArray &text, bool page);
     // Checks signedBy() against shared/vectors/release-sig-vectors.json (for CI).
     static bool selfTest(const QString &vectorsPath);
 
@@ -84,15 +101,22 @@ private:
     void fetch(bool installAfter, bool autoMode = false);
     // GitHub's API limits each address to 60 questions an hour: when it refuses, the "latest release" page (a redirect to the tag) says the same thing.
     void fetchLatestPage(bool installAfter, bool autoMode);
-    // The Pre-release channel: after the best stable one is known, version.txt of the "beta" release.
+    // The Pre-release channel: after the best stable one is known, the "beta" release's label (its signatures block,
+    // else its version.txt).
     void fetchBeta(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
+    void fetchBetaLabel(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
+    void betaOrStable(const QString &label, const SignedFile &signedFile, const QString &ver, const QString &tag, const QString &asset,
+                      bool installAfter, bool autoMode);
+    // When the API said no: the release's web page (github.com/.../releases/tag/<tag>), for its signatures block.
+    void fetchPage(const QString &tag, const std::function<void(const Signatures &)> &done);
     QString labelFor(const QString &tag) const;
     QString assetName() const;
     void chosen(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
     QNetworkRequest request(const QUrl &url) const;
     void download(const QString &url, const QString &tag);
-    // Checks the download against the release's SHA-256 (GitHub's digest or the .sha256 file), the project's
-    // signature (the .sig file beside it) and its signature of the version (the .vsig file), then installs it.
+    // Checks the download against the release's SHA-256 (its signatures block, and GitHub's digest when there is one),
+    // the project's signature (.sig) and its signature of the version (.vsig), from the block or else the separate
+    // files beside the download, then installs it.
     void verifyThenInstall(const QString &path, const QString &tag);
     void checkThenInstall(const QString &path, const QString &tag, const QString &name, const QByteArray &expected, const QByteArray &sig,
                           const QByteArray &vsig);
@@ -106,7 +130,11 @@ private:
     QString m_assetUrl;
     QByteArray m_assetDigest;   // SHA-256 (hex) of m_assetUrl's file, when GitHub said it
     QByteArray m_betaDigest;    // the same for the beta release's file, when the API listed it
-    QString m_betaLabel;        // the label in the beta release's version.txt
+    QString m_betaLabel;        // the beta release's label (its signatures block, or version.txt)
+    SignedFile m_signed;        // this download's line in the chosen release's signatures block (empty: none)
+    QString m_signedTag;        // the tag m_signed belongs to
+    Signatures m_betaBlock;     // the beta release's signatures block, from the API
+    bool m_viaPage = false;     // the API said no: read the release pages instead
     bool m_goingBack = false;   // Go back to stable is under way
     QString m_status;
     bool m_busy = false;

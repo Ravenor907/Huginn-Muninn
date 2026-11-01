@@ -15,7 +15,7 @@ Rectangle {
     readonly property bool squeezed: width < naturalWidth - 0.5
     FontMetrics { id: metrics; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold }
     implicitWidth: naturalWidth
-    implicitHeight: Math.max(Theme.px(36), Math.ceil(metrics.height) + Theme.px(12))
+    implicitHeight: Math.max(Theme.tapMin, Math.ceil(metrics.height) + Theme.px(12))
     radius: Theme.radius
     color: "transparent"
     border.color: Theme.lineStrong

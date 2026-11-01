@@ -61,10 +61,11 @@ class GroupsTest {
     }
 
     /** Delivers everything on the wire (and what that causes) to phones that are online. Offline ones lose it, like a dropped route. */
-    private fun pump(rounds: Int = 50) {
+    private fun pump(rounds: Int = 50, log: MutableList<Pair<Phone, Groups.Out>>? = null) {
         repeat(rounds) {
             if (wire.isEmpty()) return
             val now = wire.toList(); wire.clear()
+            log?.addAll(now)
             for ((from, o) in now) {
                 val to = phones.first { it.key == o.to }
                 if (!to.online) continue
@@ -121,6 +122,64 @@ class GroupsTest {
         pump()
         assertEquals("On my way", a.groups.messages.value[g]!!.last().text)
         assertEquals("Delivered", Groups.status(c.groups.messages.value[g]!!.last()))
+    }
+
+    @Test
+    fun readByListsEachMemberWithTimesAndPrivacy() {
+        val g = family()
+        c.readOn = false                       // C's delivered receipt says it won't send reads
+        assertTrue(a.groups.sendText(g, Proto06.MAIN, "Dinner at six")); pump()
+        var mine = a.groups.messages.value[g]!!.single()
+        assertEquals(setOf(c.key), mine.noRead)
+        var r = Groups.readBy(mine)
+        assertEquals(listOf(b.key), r.delivered)
+        assertEquals(listOf(c.key), r.notShown)
+        assertTrue(r.read.isEmpty() && r.notYet.isEmpty())
+        clock += 60_000
+        val readAt = clock
+        b.groups.markRead(g); c.groups.markRead(g); pump()
+        mine = a.groups.messages.value[g]!!.single()
+        r = Groups.readBy(mine)
+        assertEquals(listOf(b.key to readAt), r.read)
+        assertEquals(listOf(c.key), r.notShown)
+        assertEquals("Read by 1", Groups.status(mine))
+        // Kept across a restart.
+        a.start()
+        assertEquals(r, Groups.readBy(a.groups.messages.value[g]!!.single()))
+    }
+
+    @Test
+    fun readByWithoutNewFields() {
+        // An older app's receipts: no "at", no "nr". Read time is when the receipt came in; others are Not yet.
+        val m = Groups.GMsg("id", "g", Proto06.MAIN, "me", "Me", "hi", true, 1000, to = setOf("x", "y", "z"),
+            delivered = setOf("x", "y"), read = setOf("x"))
+        val r = Groups.readBy(m)
+        assertEquals(listOf("x" to 0L), r.read)
+        assertEquals(listOf("y"), r.delivered)
+        assertEquals(listOf("z"), r.notYet)
+        assertTrue(r.notShown.isEmpty())
+        assertEquals(5000L, Groups.readTime(0, 1000, 5000))
+        assertEquals(3000L, Groups.readTime(3000, 1000, 5000))
+        assertEquals(5000L, Groups.readTime(9000, 1000, 5000))   // the reader's clock ahead: not after it came in
+        assertEquals(1000L, Groups.readTime(10, 1000, 5000))     // nor before the message was sent
+    }
+
+    @Test
+    fun readReceiptCarriesWhenAndDeliveredCarriesNr() {
+        val g = family()
+        c.readOn = false
+        assertTrue(a.groups.sendText(g, Proto06.MAIN, "Hi"))
+        val sent = ArrayList<Pair<Phone, Groups.Out>>()
+        pump(log = sent)
+        val fromC = sent.filter { it.first === c && it.second.room == "greceipt" }.map { JSONObject(it.second.plain) }
+        assertTrue(fromC.isNotEmpty() && fromC.all { it.optInt("nr") == 1 })
+        val fromB = sent.filter { it.first === b && it.second.room == "greceipt" }.map { JSONObject(it.second.plain) }
+        assertTrue(fromB.isNotEmpty() && fromB.none { it.has("nr") })
+        sent.clear()
+        b.groups.markRead(g)
+        pump(log = sent)
+        val read = sent.map { JSONObject(it.second.plain) }.single { it.optString("s") == "read" }
+        assertEquals(clock, read.getLong("at"))
     }
 
     @Test

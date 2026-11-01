@@ -3,7 +3,9 @@
 #include "photos.h"
 #include "richwire.h"
 
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -198,6 +200,8 @@ bool MoreWire::ok(const QString &room, const QJsonObject &p)
                     return false;
             return !p.contains(QStringLiteral("al"));
         }
+        if (kind == QLatin1String("gif"))   // cap a1 (section 25): an animated GIF, never in an album
+            return !p.contains(QStringLiteral("al"));
         return kind == QLatin1String("photo") || kind == QLatin1String("voice");
     }
     return false;
@@ -427,5 +431,7 @@ bool MoreWire::selfTest(const QString &vectorsPath)
     check(mp4Ms(mp4 + moov) == 10000 && mp4Ms(mp4) == 0, "mp4 length");
     check(pass > 60, "the vectors have cases");
     std::printf("m2 self-test: %d passed, %d failed\n", pass, fail);
-    return fail == 0;
+    // Cap a1: animated GIFs, from the vectors next to these.
+    const bool gifs = Photos::gifSelfTest(QFileInfo(vectorsPath).absoluteDir().filePath(QStringLiteral("gif-vectors.json")));
+    return fail == 0 && gifs;
 }

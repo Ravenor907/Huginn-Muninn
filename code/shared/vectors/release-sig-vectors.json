@@ -270,5 +270,393 @@
    "current": "0.99",
    "install": true
   }
+ ],
+ "notes_first": "huginn-muninn signatures v1",
+ "notes": [
+  {
+   "name": "beta body",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.2 beta 310",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95",
+     "sha256": "da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306",
+     "sig": "38f6080dceaaeb59fb24d5af6f520f2192d9d3c36e9ed1991d613bd7d2b1f2e782bf1b53ae4441b2c31763fabb0e5be64a426cf66fac69956fa05b4d2d73ea04",
+     "vsig": "f5f8019e46b6f9827c632ad809845f8cdf5a68bbbb4e518f149d5123cd721e6e32c2ef127247ccc55ad85f9b211e7cc01313e79727bcf71716d50c24cce7ff05"
+    },
+    {
+     "name": "Huginn.flatpak",
+     "data": "0fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b31",
+     "sha256": "db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3",
+     "sig": "843064fdf85fd0879ee74f93f86231ccf91b5bbdca0915134f8cc73325fd0ca5fdffde88252dbaf1452747b9e1710d9404166cc1b39cef3f0e9c7a862a4b090c",
+     "vsig": "90aafb31cba08832298c17a6a3c733032c17dd7f569a5998505a5a6011f0e0534f561d4434bb50cd2c92614ba527fc9d336799f5520e946c94668c2c218de406"
+    },
+    {
+     "name": "Muninn.apk",
+     "data": "1de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df894",
+     "sha256": "2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b",
+     "sig": "1c0cf156eb6f5d12adde5d492e04191f5577a3892132bc84bc57112de54c3ffc37e6911cb2126d733a028250be11a1010f8b46bb9e9e95a3704d06e2030ee004",
+     "vsig": "17b67aec1aef31f7ea1fc0062f0b66c33705bd021a8726cd1101db59394db9a77f42551deaf5909c5214cc74ef401936e14f0d41abe2500753efaac4fd6b1a06"
+    }
+   ]
+  },
+  {
+   "name": "beta body with CRLF",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\r\n\r\n```\r\nhuginn-muninn signatures v1\r\nlabel 1.2 beta 310\r\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\r\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\r\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\r\n```\r\n",
+   "pad": 0,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.2 beta 310",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95",
+     "sha256": "da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306",
+     "sig": "38f6080dceaaeb59fb24d5af6f520f2192d9d3c36e9ed1991d613bd7d2b1f2e782bf1b53ae4441b2c31763fabb0e5be64a426cf66fac69956fa05b4d2d73ea04",
+     "vsig": "f5f8019e46b6f9827c632ad809845f8cdf5a68bbbb4e518f149d5123cd721e6e32c2ef127247ccc55ad85f9b211e7cc01313e79727bcf71716d50c24cce7ff05"
+    },
+    {
+     "name": "Huginn.flatpak",
+     "data": "0fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b31",
+     "sha256": "db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3",
+     "sig": "843064fdf85fd0879ee74f93f86231ccf91b5bbdca0915134f8cc73325fd0ca5fdffde88252dbaf1452747b9e1710d9404166cc1b39cef3f0e9c7a862a4b090c",
+     "vsig": "90aafb31cba08832298c17a6a3c733032c17dd7f569a5998505a5a6011f0e0534f561d4434bb50cd2c92614ba527fc9d336799f5520e946c94668c2c218de406"
+    },
+    {
+     "name": "Muninn.apk",
+     "data": "1de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df894",
+     "sha256": "2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b",
+     "sig": "1c0cf156eb6f5d12adde5d492e04191f5577a3892132bc84bc57112de54c3ffc37e6911cb2126d733a028250be11a1010f8b46bb9e9e95a3704d06e2030ee004",
+     "vsig": "17b67aec1aef31f7ea1fc0062f0b66c33705bd021a8726cd1101db59394db9a77f42551deaf5909c5214cc74ef401936e14f0d41abe2500753efaac4fd6b1a06"
+    }
+   ]
+  },
+  {
+   "name": "stable body, block at the very start, no fence",
+   "page": false,
+   "text": "huginn-muninn signatures v1\nlabel 1.3\nHuginn-Windows.zip sha256 c6319279e8be3f029799eef3df83d9d71326fd174e608fef20f2155c9c61e837 sig MuTcIMhfDVvcBTLjChq6qlMG0QZ7BfX+gQkSTph2jyXB9d4wHPHQSsJKvDxpoP5D+TWFFAVCDmm/O3TDLx0uBw== vsig j+LqqlodO5rFe00F6YWtbe7pqU6qbooJcJOtdPXHodZxUs6SnuFUyhO/MoZcKYdWMIuziANrtJQFEPhG0h7xDw==\nHuginn.flatpak sha256 bac888dcfab7d04fe51d5cf27662dacd8c97bc6fee778d5c18ab550ed08e7f0a sig Ri50ZIHPrIyvRueyUpjFTsT506jjA+Ts0Kui8JIb/fvQaojR8DFX/wXn5h10LBWTu/f6aX7RInZls9ZSrt1TDw== vsig ecDV+NLgQ+hE9sRHF4b//nNlDFgBulsvAfvsmRCt3IoYKhyMGTbp9r+U7Fi6l2C12SuljmPRWD+9PKNsBvtvCg==\nMuninn.apk sha256 b05f6158ecc725b306fdcdc2f1aacc761ad526f75eddd6e34fd26a61a90a0e90 sig FPDXpZuWe4Z8aOMjWgzVYI+GNqDc9j8jUjPOCERLo2AeFKCXSUeA7Kjw/Y4+HjI4SXgeD2yCnAgmU3hhgJXPAw== vsig NvnFF43dsX8kEtKrqRYRFF52EOpfC8UqlQn9LwG2Lh5Vr4HSRE9IxadUfazXHCGLKzyp0+gmCKtdfa9ADhFiBA==\n",
+   "pad": 0,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.3",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "8fce20b23c3fec47ea4d6667a4e559fe66560f67010a9e1e79cef6b2b3d029b78fce20b23c3fec47ea4d6667a4e559fe66560f67010a9e1e79cef6b2b3d029b78fce20b23c3fec47ea4d6667a4e559fe66560f67010a9e1e79cef6b2b3d029b78fce20b23c3fec47ea4d6667a4e559fe66560f67010a9e1e79cef6b2b3d029b78fce20b23c3fec47ea4d6667a4e559fe66560f67010a9e1e79cef6b2b3d029b7",
+     "sha256": "c6319279e8be3f029799eef3df83d9d71326fd174e608fef20f2155c9c61e837",
+     "sig": "32e4dc20c85f0d5bdc0532e30a1abaaa5306d1067b05f5fe8109124e98768f25c1f5de301cf1d04ac24abc3c69a0fe43f935851405420e69bf3b74c32f1d2e07",
+     "vsig": "8fe2eaaa5a1d3b9ac57b4d05e985ad6deee9a94eaa6e8a097093ad74f5c7a1d67152ce929ee154ca13bf32865c298756308bb388036bb4940510f846d21ef10f"
+    },
+    {
+     "name": "Huginn.flatpak",
+     "data": "7d9d71f05035abd6dd0cb21701a298514fc686f8c093e1da8fd48d2b0802e2437d9d71f05035abd6dd0cb21701a298514fc686f8c093e1da8fd48d2b0802e2437d9d71f05035abd6dd0cb21701a298514fc686f8c093e1da8fd48d2b0802e2437d9d71f05035abd6dd0cb21701a298514fc686f8c093e1da8fd48d2b0802e2437d9d71f05035abd6dd0cb21701a298514fc686f8c093e1da8fd48d2b0802e243",
+     "sha256": "bac888dcfab7d04fe51d5cf27662dacd8c97bc6fee778d5c18ab550ed08e7f0a",
+     "sig": "462e746481cfac8caf46e7b25298c54ec4f9d3a8e303e4ecd0aba2f0921bfdfbd06a88d1f03157ff05e7e61d742c1593bbf7fa697ed1227665b3d652aedd530f",
+     "vsig": "79c0d5f8d2e043e844f6c4471786fffe73650c5801ba5b2f01fbec9910addc8a182a1c8c1936e9f6bf94ec58ba9760b5d92ba58e63d1583fbd3ca36c06fb6f0a"
+    },
+    {
+     "name": "Muninn.apk",
+     "data": "3764ff756257ef2839fad62b25b6c467e118de47edabfc13f019cac228992d743764ff756257ef2839fad62b25b6c467e118de47edabfc13f019cac228992d743764ff756257ef2839fad62b25b6c467e118de47edabfc13f019cac228992d743764ff756257ef2839fad62b25b6c467e118de47edabfc13f019cac228992d743764ff756257ef2839fad62b25b6c467e118de47edabfc13f019cac228992d74",
+     "sha256": "b05f6158ecc725b306fdcdc2f1aacc761ad526f75eddd6e34fd26a61a90a0e90",
+     "sig": "14f0d7a59b967b867c68e3235a0cd5608f8636a0dcf63f235233ce08444ba3601e14a097494780eca8f0fd8e3e1e323849781e0f6c829c08265378618095cf03",
+     "vsig": "36f9c5178dddb17f2412d2aba91611145e7610ea5f0bc52a9509fd2f01b62e1e55af81d2444f48c5a7547dacd71c218b2b3ca9d3e82608ab5d7daf400e116204"
+    }
+   ]
+  },
+  {
+   "name": "release page",
+   "page": true,
+   "text": "<meta name=\"description\" content=\"huginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n\" />\n<div class=\"markdown-body\"><p>Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.</p>\n<div class=\"snippet-clipboard-content\" data-snippet-clipboard-copy-content=\"huginn-muninn signatures v1&#10;label 1.2 beta 310&#10;Huginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==&#10;Huginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==&#10;Muninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==&#10;\"><pre class=\"notranslate\"><code class=\"notranslate\">huginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n</code></pre></div>\n</div>",
+   "pad": 0,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.2 beta 310",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95",
+     "sha256": "da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306",
+     "sig": "38f6080dceaaeb59fb24d5af6f520f2192d9d3c36e9ed1991d613bd7d2b1f2e782bf1b53ae4441b2c31763fabb0e5be64a426cf66fac69956fa05b4d2d73ea04",
+     "vsig": "f5f8019e46b6f9827c632ad809845f8cdf5a68bbbb4e518f149d5123cd721e6e32c2ef127247ccc55ad85f9b211e7cc01313e79727bcf71716d50c24cce7ff05"
+    },
+    {
+     "name": "Huginn.flatpak",
+     "data": "0fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b31",
+     "sha256": "db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3",
+     "sig": "843064fdf85fd0879ee74f93f86231ccf91b5bbdca0915134f8cc73325fd0ca5fdffde88252dbaf1452747b9e1710d9404166cc1b39cef3f0e9c7a862a4b090c",
+     "vsig": "90aafb31cba08832298c17a6a3c733032c17dd7f569a5998505a5a6011f0e0534f561d4434bb50cd2c92614ba527fc9d336799f5520e946c94668c2c218de406"
+    },
+    {
+     "name": "Muninn.apk",
+     "data": "1de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df894",
+     "sha256": "2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b",
+     "sig": "1c0cf156eb6f5d12adde5d492e04191f5577a3892132bc84bc57112de54c3ffc37e6911cb2126d733a028250be11a1010f8b46bb9e9e95a3704d06e2030ee004",
+     "vsig": "17b67aec1aef31f7ea1fc0062f0b66c33705bd021a8726cd1101db59394db9a77f42551deaf5909c5214cc74ef401936e14f0d41abe2500753efaac4fd6b1a06"
+    }
+   ]
+  },
+  {
+   "name": "release page, page description holds the whole block",
+   "page": true,
+   "text": "<meta name=\"description\" content=\"x\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n\" />\n<div class=\"markdown-body\"><p>Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.</p>\n<div class=\"snippet-clipboard-content\" data-snippet-clipboard-copy-content=\"huginn-muninn signatures v1&#10;label 1.2 beta 310&#10;Huginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==&#10;Huginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==&#10;Muninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==&#10;\"><pre class=\"notranslate\"><code class=\"notranslate\">huginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n</code></pre></div>\n</div>",
+   "pad": 0,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.2 beta 310",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95",
+     "sha256": "da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306",
+     "sig": "38f6080dceaaeb59fb24d5af6f520f2192d9d3c36e9ed1991d613bd7d2b1f2e782bf1b53ae4441b2c31763fabb0e5be64a426cf66fac69956fa05b4d2d73ea04",
+     "vsig": "f5f8019e46b6f9827c632ad809845f8cdf5a68bbbb4e518f149d5123cd721e6e32c2ef127247ccc55ad85f9b211e7cc01313e79727bcf71716d50c24cce7ff05"
+    },
+    {
+     "name": "Huginn.flatpak",
+     "data": "0fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b31",
+     "sha256": "db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3",
+     "sig": "843064fdf85fd0879ee74f93f86231ccf91b5bbdca0915134f8cc73325fd0ca5fdffde88252dbaf1452747b9e1710d9404166cc1b39cef3f0e9c7a862a4b090c",
+     "vsig": "90aafb31cba08832298c17a6a3c733032c17dd7f569a5998505a5a6011f0e0534f561d4434bb50cd2c92614ba527fc9d336799f5520e946c94668c2c218de406"
+    },
+    {
+     "name": "Muninn.apk",
+     "data": "1de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df894",
+     "sha256": "2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b",
+     "sig": "1c0cf156eb6f5d12adde5d492e04191f5577a3892132bc84bc57112de54c3ffc37e6911cb2126d733a028250be11a1010f8b46bb9e9e95a3704d06e2030ee004",
+     "vsig": "17b67aec1aef31f7ea1fc0062f0b66c33705bd021a8726cd1101db59394db9a77f42551deaf5909c5214cc74ef401936e14f0d41abe2500753efaac4fd6b1a06"
+    }
+   ]
+  },
+  {
+   "name": "one download",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\n```\n",
+   "pad": 0,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.2 beta 310",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95",
+     "sha256": "da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306",
+     "sig": "38f6080dceaaeb59fb24d5af6f520f2192d9d3c36e9ed1991d613bd7d2b1f2e782bf1b53ae4441b2c31763fabb0e5be64a426cf66fac69956fa05b4d2d73ea04",
+     "vsig": "f5f8019e46b6f9827c632ad809845f8cdf5a68bbbb4e518f149d5123cd721e6e32c2ef127247ccc55ad85f9b211e7cc01313e79727bcf71716d50c24cce7ff05"
+    }
+   ]
+  },
+  {
+   "name": "release page read as a body",
+   "page": false,
+   "text": "<meta name=\"description\" content=\"huginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n\" />\n<div class=\"markdown-body\"><p>Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.</p>\n<div class=\"snippet-clipboard-content\" data-snippet-clipboard-copy-content=\"huginn-muninn signatures v1&#10;label 1.2 beta 310&#10;Huginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==&#10;Huginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==&#10;Muninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==&#10;\"><pre class=\"notranslate\"><code class=\"notranslate\">huginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n</code></pre></div>\n</div>",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "body read as a release page",
+   "page": true,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "two blocks",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "no block",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "first line inside a line",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\nsee huginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "first line changed",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v2\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "label missing",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "label beta 0",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 0\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "label with a v",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel v1.2\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "label with a space at the end",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310 \nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "no downloads",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "unknown file",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Linux.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "same file twice",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "upper-case SHA-256",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 DA9B31117397D94BEFFE0C7968EC8DB65653E0EB04F3567CB4AD5351B6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "short SHA-256",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b678430 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "non-canonical base64",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBB== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "unpadded base64",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "extra word",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ== extra\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "two spaces",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip  sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "tab",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306\tsig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "unknown line",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\nnote hello\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "empty line inside",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\n\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "indented",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\n label 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "block too long",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n```\n",
+   "pad": 0,
+   "valid": false
+  },
+  {
+   "name": "just short enough",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 4193342,
+   "valid": true,
+   "public": "4c2652f01776591bab07c8480f1702df6be2454d14a018007acfd8cf7d2032f9",
+   "label": "1.2 beta 310",
+   "files": [
+    {
+     "name": "Huginn-Windows.zip",
+     "data": "b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95b151f94f282ff3bcfec8053827906a1754e66029c424db1138eec855afcddc95",
+     "sha256": "da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306",
+     "sig": "38f6080dceaaeb59fb24d5af6f520f2192d9d3c36e9ed1991d613bd7d2b1f2e782bf1b53ae4441b2c31763fabb0e5be64a426cf66fac69956fa05b4d2d73ea04",
+     "vsig": "f5f8019e46b6f9827c632ad809845f8cdf5a68bbbb4e518f149d5123cd721e6e32c2ef127247ccc55ad85f9b211e7cc01313e79727bcf71716d50c24cce7ff05"
+    },
+    {
+     "name": "Huginn.flatpak",
+     "data": "0fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b310fc28dbaf160faff29bc29b3559c6f0f2a45e69e0f621c2af1c840606d830b31",
+     "sha256": "db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3",
+     "sig": "843064fdf85fd0879ee74f93f86231ccf91b5bbdca0915134f8cc73325fd0ca5fdffde88252dbaf1452747b9e1710d9404166cc1b39cef3f0e9c7a862a4b090c",
+     "vsig": "90aafb31cba08832298c17a6a3c733032c17dd7f569a5998505a5a6011f0e0534f561d4434bb50cd2c92614ba527fc9d336799f5520e946c94668c2c218de406"
+    },
+    {
+     "name": "Muninn.apk",
+     "data": "1de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df8941de9b2b9949be963b282ad9d9c8f5ccbf57d676aa6ef381224f45e41174df894",
+     "sha256": "2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b",
+     "sig": "1c0cf156eb6f5d12adde5d492e04191f5577a3892132bc84bc57112de54c3ffc37e6911cb2126d733a028250be11a1010f8b46bb9e9e95a3704d06e2030ee004",
+     "vsig": "17b67aec1aef31f7ea1fc0062f0b66c33705bd021a8726cd1101db59394db9a77f42551deaf5909c5214cc74ef401936e14f0d41abe2500753efaac4fd6b1a06"
+    }
+   ]
+  },
+  {
+   "name": "text too long",
+   "page": false,
+   "text": "Pre-release 1.2 beta 310. Apps on the Pre-release channel install it by themselves.\n\n```\nhuginn-muninn signatures v1\nlabel 1.2 beta 310\nHuginn-Windows.zip sha256 da9b31117397d94beffe0c7968ec8db65653e0eb04f3567cb4ad5351b6784306 sig OPYIDc6q61n7JNWvb1IPIZLZ08NuntGZHWE719Kx8ueCvxtTrkRBssMXY/q7DlvmSkJs9m+saZVvoFtNLXPqBA== vsig 9fgBnka2+YJ8YyrYCYRfjN9aaLu7TlGPFJ1RI81yHm4ywu8SckfMxVrYX5shHnzAExPnlye89xcW1QwkzOf/BQ==\nHuginn.flatpak sha256 db8d69504b1ef1a55f61dd19ad2f2d8f544615fc7ef780e98a4e8b7f18967ff3 sig hDBk/fhf0Iee50+T+GIxzPkbW73KCRUTT4zHMyX9DKX9/96IJS268UUnR7nhcQ2UBBZswbOc7z8OnHqGKksJDA== vsig kKr7McugiDIpjBemo8czAywX3X9WmlmYUFpaYBHw4FNPVh1ENLtQzSySYUulJ/ydM2eZ9VIOlGyUZowsIY3kBg==\nMuninn.apk sha256 2165d4595c11d689286cbe2094b370b9b281f29d3a23b49e6a1b975c7c0a571b sig HAzxVutvXRKt3l1JLgQZH1V3o4khMryEvFcRLeVMP/w35pEcshJtczoCglC+EaEBD4tGu56elaNwTQbiAw7gBA== vsig F7Z67BrvMffqH8AGLwtmwzcFvQIahybNEQHbWTlNuad/QlUd6vWQnFIUzHTvQBk24U8NQaviUAdT76rE/WsaBg==\n```\n",
+   "pad": 4193343,
+   "valid": false
+  }
  ]
 }

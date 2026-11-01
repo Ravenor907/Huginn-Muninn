@@ -112,7 +112,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** A small file that came over the relays (cap f1): its name (the bytes are stored like a photo). */
                    val file: String = "",
                    /** Theirs: where that file was saved in Downloads (a content URI, for Open), or "" if it wasn't. */
-                   val saved: String = "")
+                   val saved: String = "",
+                   /** An animated GIF (cap a1), stored like a photo under [photo]. */
+                   val gif: Boolean = false)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false,
@@ -322,7 +324,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun days(peer: String) = chatDays(peer)
             override fun emoji(key: String) = try { emojiWith(key) } catch (e: Exception) { "" }
-            override fun media(m: Msg): ByteArray? = if (m.photo.isEmpty()) null else photo(m.photo)
+            // A GIF goes to a linked computer as its first frame: a photo, the kinds 15 knows.
+            override fun media(m: Msg): ByteArray? = if (m.photo.isEmpty()) null else photo(m.photo)?.let { if (m.gif) Photos.still(it) else it }
             override fun onLan(key: String) = lanTo(key) != null
             override fun sendLan(d: Link.Device, json: String): Boolean {
                 val dev = lanTo(d.key) ?: return false
@@ -1314,6 +1317,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
+    /**
+     * An animated GIF (cap a1), already cleaned (Gifs.clean). Someone whose app doesn't show GIFs gets its first
+     * frame as a photo instead (made when the pieces are). Null when sent, else what to say.
+     */
+    fun sendGif(peerKey: String, gif: ByteArray): String? {
+        if (!Gifs.isGif(gif) || gif.size > Gifs.MAX_BYTES) return "That GIF can't be sent."
+        if (capsOf(peerKey).isEmpty()) probeCaps(peerKey)
+        sendBlob(peerKey, gif, 0, gif = true)
+        return null
+    }
+
+    /** Their app shows animated GIFs (cap a1). Unknown caps: not yet, so they get a still they can surely open. */
+    fun hasA1(peerKey: String) = Permissions.has(capsOf(peerKey), Gifs.CAP)
+
     /** A recorded voice message (AAC, no container, so nothing but sound). */
     fun sendVoice(peerKey: String, aac: ByteArray, ms: Int) = sendBlob(peerKey, aac, ms.coerceAtLeast(1))
 
@@ -1363,14 +1380,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return null
     }
 
-    private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, fileName: String = "") {
+    private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, fileName: String = "",
+                         gif: Boolean = false) {
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
         val msgId = UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, msgId), jpeg)
         val mine = Msg(msgId, peerKey, id.username, "", true, System.currentTimeMillis(), via = r, state = "sending", photo = msgId, voice = voiceMs,
-            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, file = fileName)
+            video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, file = fileName, gif = gif)
         tries[mine.id] = Tries(0, System.currentTimeMillis() + RETRY[0])
         addPrivate(peerKey, mine)
         sends.tryEmit(peerKey)
@@ -1384,7 +1402,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** The photo's sealed pieces: made (and encrypted) once, then the same bytes on every try and route. */
     private fun pieces(m: Msg): List<String>? = outbox.fresh(m.id, stale(m.peerKey)) {
-        val bytes = photo(m.photo) ?: return@fresh null
+        val stored = photo(m.photo) ?: return@fresh null
+        // Cap a1: a GIF only to an app that shows it; anyone else gets its first frame as a photo.
+        val gif = m.gif && hasA1(m.peerKey)
+        val bytes = if (m.gif && !gif) (Photos.still(stored) ?: return@fresh null) else stored
         val parts = Photos.split(bytes)
         seal("photo", m.peerKey, parts.mapIndexed { i, part ->
             ChatWire.base("photo", id.publicKey, id.username, id.fingerprint, nostr.publicKey, m.id).put("i", i).put("n", parts.size)
@@ -1392,17 +1413,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     if (m.voice > 0) put("kind", "voice").put("ms", m.voice)
                     if (m.video > 0) put("kind", "video").put("ms", m.video)
                     if (m.file.isNotEmpty()) put("kind", "file").put("fn", m.file)
+                    if (gif) put("kind", "gif")
                     if (m.album.isNotEmpty()) put("al", m.album).put("ai", m.albumAt).put("an", m.albumOf)
                 } to part
         }).map { it.toString() }
     }
+
+    /** Pieces one photo may have: a GIF (cap a1) up to 8 MB, anything else 3.2 MB. */
+    private fun maxPieces(o: JSONObject) = if (o.optString("kind") == "gif") Gifs.PIECES else Photos.MAX_PIECES
+
+    /** Three GIFs over 3.2 MB already coming in: a fourth waits, so memory stays bounded. */
+    private fun bigIncoming() = incoming.values.count { it.parts.size > Photos.MAX_PIECES } >= 3
 
     private fun receivePiece(o: JSONObject, fromKey: String, name: String, via: String): Pair<Int, String> {
         val contact = contacts.contact(fromKey)
         if (contact == null && via == "internet" && !_met.value.containsKey(fromKey)) return 403 to "{}"
         val msgId = o.optString("id")
         val n = o.optInt("n"); val i = o.optInt("i", -1)
-        if (msgId.isEmpty() || n < 1 || n > Photos.MAX_PIECES || i !in 0 until n) return 400 to "{}"
+        if (msgId.isEmpty() || n < 1 || n > maxPieces(o) || i !in 0 until n) return 400 to "{}"
         // Cap m2: album fields and video messages must be well-formed.
         if (!More.ok("piece", o)) return 400 to "{}"
         // Files turned off for them: a file's pieces are dropped quietly.
@@ -1423,6 +1451,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             q.addLast(now)
         }
         if (incoming.size > 20 && !incoming.containsKey(msgId)) return 429 to "{}"
+        if (n > Photos.MAX_PIECES && !incoming.containsKey(msgId) && bigIncoming()) return 429 to "{}"
         return opened(o, fromKey, dup) { part -> takePiece(o, fromKey, name, via, msgId, n, i, mailbox, part) }
     }
 
@@ -1444,11 +1473,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
         val videoMs = if (o.optString("kind") == "video") o.optInt("ms").coerceIn(1, More.VIDEO_MAX_MS) else 0
         val fileName = if (o.optString("kind") == "file") o.optString("fn") else ""
+        val gif = o.optString("kind") == "gif"
         val joined = inc.parts.map { it!! }
         val jpeg = (when {
             voiceMs > 0 -> Voice.check(joined)
             videoMs > 0 -> Videos.join(joined)
             fileName.isNotEmpty() -> java.io.ByteArrayOutputStream().also { b -> joined.forEach { b.write(it) } }.toByteArray()
+            gif -> Gifs.join(joined)   // cleaned again: only the picture is kept
             else -> Photos.join(joined)
         }) ?: return 400 to "{}"
         vault.writeBytes(File(photosDir, msgId), jpeg)
@@ -1465,10 +1496,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val album = o.optString("al")
         if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId, voice = voiceMs,
                 video = videoMs, album = album, albumAt = if (album.isEmpty()) 0 else o.optInt("ai"), albumOf = if (album.isEmpty()) 0 else o.optInt("an"),
-                file = fileName, saved = savedAs?.second ?: ""))) {
+                file = fileName, saved = savedAs?.second ?: "", gif = gif))) {
             _unread.update { it + fromKey }
             arrivals.tryEmit(Triple(contact?.shown ?: name, when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; fileName.isNotEmpty() -> "File: $fileName"
-                album.isNotEmpty() -> "Photos"; else -> "Photo" }, fromKey))
+                gif -> "GIF"; album.isNotEmpty() -> "Photos"; else -> "Photo" }, fromKey))
             if (fileName.isNotEmpty()) notices.tryEmit(savedAs?.let { "File from ${contact?.shown ?: name}: ${it.first} · Saved to Downloads" }
                 ?: "File from ${contact?.shown ?: name}: $fileName. It couldn't be saved to Downloads: tap Save in the chat.")
         }
@@ -1815,7 +1846,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
-    private fun preview(m: Msg) = when { m.voice > 0 -> "Voice message"; m.video > 0 -> "Video message"; m.file.isNotEmpty() -> "File: ${m.file}"; m.photo.isNotEmpty() -> "Photo"
+    private fun preview(m: Msg) = when { m.voice > 0 -> "Voice message"; m.video > 0 -> "Video message"; m.file.isNotEmpty() -> "File: ${m.file}"; m.gif -> "GIF"; m.photo.isNotEmpty() -> "Photo"
         m.poll != null -> "Poll: ${m.poll.q}"; else -> m.text.take(60) }
 
     /** Seals one reaction or edit once and keeps it until their receipt names its envelope id (a day at most). */
@@ -2013,7 +2044,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
         }
         val mailbox = backupMailbox(m)
-        if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && mailbox != null) {
+        if ((!any || t.count >= 2) && parts.size <= (if (m.gif) Gifs.PIECES else Photos.INTERNET_PIECES) && mailbox != null) {
             if (!publishNow(t)) any = true
             else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) any = true
         }
@@ -2322,10 +2353,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return if (older.isEmpty()) null else "${older.size} ${if (older.size == 1) "person needs" else "people need"} a newer Muninn to see video messages."
     }
 
-    private fun sendGroupBlob(g: String, ch: String, bytes: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null): Boolean {
+    /** An animated GIF (cap a1, already cleaned) to group [g]: members whose app doesn't show GIFs get its first frame. */
+    fun sendGroupGif(g: String, ch: String, gif: ByteArray): String? {
+        if (!Gifs.isGif(gif) || gif.size > Gifs.MAX_BYTES) return "That GIF can't be sent."
+        return if (sendGroupBlob(g, ch, gif, 0, gif = true)) null else "That GIF didn't send."
+    }
+
+    private fun sendGroupBlob(g: String, ch: String, bytes: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null,
+                              gif: Boolean = false): Boolean {
         val blob = "g-" + UUID.randomUUID().toString()
         vault.writeBytes(File(photosDir, blob), bytes)
-        val ok = groups.sendBlob(g, ch, blob, voiceMs, videoMs, album)
+        val ok = groups.sendBlob(g, ch, blob, voiceMs, videoMs, album, gif)
         if (!ok) File(photosDir, blob).delete() else sends.tryEmit(Folders.groupKey(g))
         return ok
     }
@@ -2341,12 +2379,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!c.groupOnly && "g1" !in c.caps) { probeCaps(o.to); return }
         val bodies = (if (!o.retry) listOf(envelope(o.room, o.to, o.plain, o.env).toString())
             else outbox.fresh(o.env, stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
-        spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null, groupDays(o.g))
+        spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null, groupDays(o.g),
+            if (o.gif) Gifs.PIECES else Photos.INTERNET_PIECES)
     }
 
     /** A group photo or voice message: the usual photo pieces plus g, ch and gid in the clear (3.9). */
     private fun groupPieces(o: Groups.Out): List<String>? {
-        val bytes = photo(o.photo) ?: return null
+        val stored = photo(o.photo) ?: return null
+        // Cap a1: the GIF to a member whose app shows it, its first frame as a photo to anyone else.
+        val gif = o.gif && hasA1(o.to)
+        val bytes = if (o.gif && !gif) (Photos.still(stored) ?: return null) else stored
         val parts = Photos.split(bytes)
         return seal("gphoto", o.to, parts.mapIndexed { i, part ->
             ChatWire.base("gphoto", id.publicKey, id.username, id.fingerprint, nostr.publicKey, o.env).put("i", i).put("n", parts.size)
@@ -2354,6 +2396,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 .apply {
                     if (o.voice > 0) put("kind", "voice").put("ms", o.voice)
                     if (o.video > 0) put("kind", "video").put("ms", o.video)
+                    if (gif) put("kind", "gif")
                     if (o.album.isNotEmpty()) put("al", o.album).put("ai", o.albumAt).put("an", o.albumOf)
                 } to part
         }).map { it.toString() }
@@ -2363,13 +2406,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * Every route at once. A photo goes over the internet only when nothing close by took it (or on a later try).
      * [publish]: false while relays already hold it (it isn't sent to them again yet); [held] runs once they do.
      */
-    private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?, publish: Boolean = true, held: (() -> Unit)? = null, days: Int = 0) {
+    private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?, publish: Boolean = true, held: (() -> Unit)? = null, days: Int = 0,
+                       relayPieces: Int = Photos.INTERNET_PIECES) {
         if (Move.locked) return
         var local = false
         // Cap s1: only a route that proved it's them keeps a big photo off the internet.
         if (ble.has(k, strict(k)) && bodies.all { ble.send(k, it, strict(k)) } && ble.proven(k)) local = true
         wifiTo(k)?.let { d -> if (d.proven) local = true; bg { bodies.forEach { net.post(d, PATH, it) } } }
-        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= Photos.INTERNET_PIECES))) internet(k, bodies, mailbox, held = held, days = days)
+        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= relayPieces))) internet(k, bodies, mailbox, held = held, days = days)
     }
 
     private fun receiveGroup(o: JSONObject, room: String, fromKey: String, name: String, mailbox: String?): Pair<Int, String> {
@@ -2406,7 +2450,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun receiveGroupPiece(o: JSONObject, fromKey: String, name: String): Pair<Int, String> {
         val g = o.optString("g"); val ch = o.optString("ch"); val gid = o.optString("gid"); val env = o.optString("id")
         val n = o.optInt("n"); val i = o.optInt("i", -1)
-        if (!Proto06.isLogicalId(gid) || env != Proto06.envelopeId(gid, id.publicKey) || n < 1 || n > Photos.MAX_PIECES || i !in 0 until n) return 400 to "{}"
+        if (!Proto06.isLogicalId(gid) || env != Proto06.envelopeId(gid, id.publicKey) || n < 1 || n > maxPieces(o) || i !in 0 until n) return 400 to "{}"
         if (!More.ok("piece", o)) return 400 to "{}"
         if (!groups.isMember(g, fromKey)) return 403 to "{}"
         val key = "g|$fromKey|$gid"
@@ -2424,6 +2468,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             q.addLast(now)
         }
         if (incoming.size > 20 && !incoming.containsKey(key)) return 429 to "{}"
+        if (n > Photos.MAX_PIECES && !incoming.containsKey(key) && bigIncoming()) return 429 to "{}"
         return opened(o, fromKey, dup) { part ->
             val inc = incoming.getOrPut(key) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis()) }
             wakeRetry()
@@ -2435,14 +2480,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
             val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
             val videoMs = if (o.optString("kind") == "video") o.optInt("ms").coerceIn(1, More.VIDEO_MAX_MS) else 0
+            val gif = o.optString("kind") == "gif"
             val joined = inc.parts.map { it!! }
-            val bytes = (when { voiceMs > 0 -> Voice.check(joined); videoMs > 0 -> Videos.join(joined); else -> Photos.join(joined) }) ?: return@opened 400 to "{}"
+            val bytes = (when { voiceMs > 0 -> Voice.check(joined); videoMs > 0 -> Videos.join(joined); gif -> Gifs.join(joined); else -> Photos.join(joined) })
+                ?: return@opened 400 to "{}"
             val blob = "g-$gid"
             val al = o.optString("al")
             val album = if (al.isEmpty()) null else Triple(al, o.optInt("ai"), o.optInt("an"))
             if (groups.knownEnvelope(env) == null) {
                 vault.writeBytes(File(photosDir, blob), bytes)
-                if (!groups.receivedBlob(fromKey, name, g, ch, gid, blob, voiceMs, videoMs, album) && groups.knownEnvelope(env) == null) File(photosDir, blob).delete()
+                if (!groups.receivedBlob(fromKey, name, g, ch, gid, blob, voiceMs, videoMs, album, gif) && groups.knownEnvelope(env) == null) File(photosDir, blob).delete()
             }
             200 to "{}"
         }
@@ -2635,7 +2682,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"), it.optInt("voice"),
             re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"),
             video = it.optInt("vid"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"),
-            poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it), file = it.optString("fn"), saved = it.optString("sv"))
+            poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it), file = it.optString("fn"), saved = it.optString("sv"),
+            gif = it.optBoolean("gif"))
     }
 
     /** Cap m2 parts of a stored message (only the ones it has). */
@@ -2647,6 +2695,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         m.preview?.let { o.put("lp", More.previewJson(it)) }
         if (m.file.isNotEmpty()) o.put("fn", m.file)
         if (m.saved.isNotEmpty()) o.put("sv", m.saved)
+        if (m.gif) o.put("gif", true)
     }
 
     private fun save() {

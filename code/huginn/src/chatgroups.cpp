@@ -200,19 +200,18 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
     for (const QVariant &v : it->messages) {
         if (str(v.toMap(), "ch") != ch)
             continue;
-        // Cap m1: the quoted message, reactions, edits, how many read it, and @mentions of me.
+        // Cap m1: the quoted message, reactions, edits and @mentions of me. No read marks in groups on Huginn.
         QVariantMap m = withM1(v.toMap(), it->messages, idx, QString());
-        m.insert(QStringLiteral("readCount"), int(m.value(QStringLiteral("rd")).toStringList().size()));
+        m.insert(QStringLiteral("readCount"), 0);
+        if (str(m, "state") == QLatin1String("read"))
+            m.insert(QStringLiteral("state"), QStringLiteral("delivered"));
         m.insert(QStringLiteral("mention"), !m.value(QStringLiteral("mine")).toBool() && RichWire::mentions(str(m, "text"), username()));
         if (m.value(QStringLiteral("mine")).toBool()) {
             const int to = int(m.value(QStringLiteral("to")).toStringList().size());
             const int dlv = int(m.value(QStringLiteral("dlv")).toStringList().size());
-            const int rd = int(m.value(QStringLiteral("rd")).toStringList().size());
             QString receipt;
             if (to > 0 && str(m, "unsent").isEmpty()) {
-                if (rd > 0)
-                    receipt = rd == to ? QStringLiteral("Read by everyone") : QStringLiteral("Read by %1").arg(rd);
-                else if (dlv > 0)
+                if (dlv > 0)
                     receipt = dlv == to ? QStringLiteral("Delivered to everyone") : QStringLiteral("Delivered to %1 of %2").arg(dlv).arg(to);
             }
             m.insert(QStringLiteral("receipt"), receipt);
@@ -742,7 +741,8 @@ void Chat::groupAttempt(const QString &envId)
                     sent();
             });
     }
-    if ((!media || !any || o.count >= 2) && bodies.size() <= Photos::kInternetPieces)
+    // Cap a1: a GIF may use all its pieces over the internet (8 MB); other media 2 MB.
+    if ((!media || !any || o.count >= 2) && (bodies.size() <= Photos::kInternetPieces || (media && groupGif(o.g, o.logical) && bodies.size() <= Photos::kGifPieces)))
         sendInternet(o.to, bodies, mailboxOf(o.to), sent, groupDays(o.g));
 }
 
@@ -774,8 +774,10 @@ void Chat::groupReceipt(const QString &g, const QString &to, const QStringList &
     if (ids.isEmpty() || to.isEmpty())
         return;
     for (int i = 0; i < ids.size(); i += GroupWire::kMaxReceiptIds) {
-        const QJsonObject r{{QStringLiteral("g"), g}, {QStringLiteral("ids"), QJsonArray::fromStringList(ids.mid(i, GroupWire::kMaxReceiptIds))},
-                            {QStringLiteral("s"), state}};
+        QJsonObject r{{QStringLiteral("g"), g}, {QStringLiteral("ids"), QJsonArray::fromStringList(ids.mid(i, GroupWire::kMaxReceiptIds))},
+                      {QStringLiteral("s"), state}};
+        if (state == QLatin1String("delivered"))
+            r.insert(QStringLiteral("nr"), 1);   // 3.10: Huginn never sends group "read"
         deliver(to, envelope(QStringLiteral("greceipt"), to, compact(r), uuid()), mailboxOf(to));
     }
 }
@@ -928,6 +930,14 @@ void Chat::takeGroupChange(const QString &g, const QString &from, const QJsonObj
 
 bool Chat::sendGroupPhoto(const QString &g, const QString &ch, const QString &path, bool hd)
 {
+    // Cap a1 (section 25): a GIF goes animated when it's within the limits; over them, as a still picture.
+    if (Photos::isGifFile(path)) {
+        QString why;
+        const QByteArray gif = Photos::readGif(path, &why);
+        if (!gif.isEmpty())
+            return !sendGroupBlob(g, ch, gif, 0, QVariantMap{{QStringLiteral("gif"), true}}).isEmpty();
+        Q_EMIT notice(Photos::gifWhy(why) + QStringLiteral(", so it goes as a still picture."));
+    }
     const QByteArray jpeg = Photos::prepare(path, hd);
     if (jpeg.isEmpty()) {
         Q_EMIT notice(QStringLiteral("That picture couldn't be opened."));
@@ -969,7 +979,9 @@ QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArra
 QList<QByteArray> Chat::groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs,
                                     const QVariantMap &extra)
 {
-    const QList<QByteArray> parts = Photos::split(bytes);
+    // Cap a1: the GIF to a member whose app shows it, its first frame as a photo to anyone else.
+    const bool gif = extra.value(QStringLiteral("gif")).toBool() && hasCap(to, QLatin1String(Photos::kGifCap));
+    const QList<QByteArray> parts = Photos::split(extra.value(QStringLiteral("gif")).toBool() && !gif ? Photos::stillOfGif(bytes) : bytes);
     const QString envId = GroupWire::envelopeId(gid, to);
     QList<QByteArray> out;
     for (int i = 0; i < parts.size(); ++i) {
@@ -981,6 +993,8 @@ QList<QByteArray> Chat::groupPieces(const QString &g, const QString &ch, const Q
             o.insert(QStringLiteral("ms"), voiceMs);
         }
         MoreWire::addPieceFields(o, extra);   // cap m2: a video message, or a photo in an album
+        if (gif)
+            o.insert(QStringLiteral("kind"), QStringLiteral("gif"));
         out << compact(seal(o, to, parts.at(i)));
     }
     return out;
@@ -995,22 +1009,7 @@ void Chat::markGroupRead(const QString &g, const QString &ch)
         saveGroupsSoon();
         Q_EMIT changed();
     }
-    if (!readReceipts())
-        return;
-    QHash<QString, QStringList> byAuthor;
-    for (QVariant &v : gr.messages) {
-        QVariantMap m = v.toMap();
-        if (str(m, "ch") != ch || m.value(QStringLiteral("mine")).toBool() || m.value(QStringLiteral("system")).toBool() || str(m, "state") == QLatin1String("read"))
-            continue;
-        m.insert(QStringLiteral("state"), QStringLiteral("read"));
-        byAuthor[str(m, "from")] << str(m, "id");
-        v = m;
-    }
-    if (byAuthor.isEmpty())
-        return;
-    saveGroupChats();
-    for (auto it = byAuthor.cbegin(); it != byAuthor.cend(); ++it)
-        groupReceipt(g, it.key(), it.value().mid(qMax(0, int(it.value().size()) - 200)), QStringLiteral("read"));
+    // No group read receipts from Huginn: its "delivered" receipts carry nr (protocol 3.10), so Muninn shows "Not shown".
 }
 
 void Chat::unsendGroup(const QString &g, const QString &id)
@@ -1067,6 +1066,19 @@ void Chat::retryGroup(const QString &g, const QString &id)
     groupRetry();
 }
 
+bool Chat::groupGif(const QString &g, const QString &id) const
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend())
+        return false;
+    for (int i = int(it->messages.size()) - 1; i >= 0; --i) {
+        const QVariantMap m = it->messages.at(i).toMap();
+        if (str(m, "id") == id)
+            return m.value(QStringLiteral("gif")).toBool();
+    }
+    return false;
+}
+
 void Chat::updateGroupMessage(const QString &g, const QString &id, const std::function<void(QVariantMap &)> &f)
 {
     if (!m_groups.contains(g))
@@ -1115,6 +1127,7 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
         }
         const QString what = m.value(QStringLiteral("voice")).toInt() > 0 ? QStringLiteral("Voice message")
                            : m.value(QStringLiteral("video")).toInt() > 0  ? QStringLiteral("Video message")
+                           : m.value(QStringLiteral("gif")).toBool()       ? QStringLiteral("GIF")
                            : !str(m, "photo").isEmpty()                    ? QStringLiteral("Photo")
                                                                            : str(m, "text");
         // An @mention of me says so (and Main.qml makes it stand out).
@@ -1460,7 +1473,9 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     Q_UNUSED(mailbox)
     const QString g = o.value(QStringLiteral("g")).toString(), gid = o.value(QStringLiteral("gid")).toString();
     const int n = o.value(QStringLiteral("n")).toInt(), i = o.value(QStringLiteral("i")).toInt(-1);
-    if (!GroupWire::isGroupId(g) || !GroupWire::isLogicalId(gid) || n < 1 || n > Photos::kMaxPieces || i < 0 || i >= n || !MoreWire::ok(QStringLiteral("piece"), o))
+    const bool gif = o.value(QStringLiteral("kind")).toString() == QLatin1String("gif");   // cap a1: up to 8 MB
+    if (!GroupWire::isGroupId(g) || !GroupWire::isLogicalId(gid) || n < 1 || n > (gif ? Photos::kGifPieces : Photos::kMaxPieces) || i < 0 || i >= n
+        || !MoreWire::ok(QStringLiteral("piece"), o))
         return 400;
     if (o.value(QStringLiteral("id")).toString() != GroupWire::envelopeId(gid, myKey()))
         return 400;   // someone else's copy
@@ -1485,6 +1500,8 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     q << now();
     if (m_incoming.size() > 20 && !m_incoming.contains(key))
         return 429;
+    if (n > Photos::kMaxPieces && !m_incoming.contains(key) && bigIncoming())
+        return 429;
     bool ok = false;
     const QByteArray part = open(o, fromKey, &ok);
     if (!ok)
@@ -1508,7 +1525,8 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     const QList<QByteArray> parts = m_incoming.take(key).parts;
     const int voiceMs = o.value(QStringLiteral("kind")).toString() == QLatin1String("voice") ? qBound(1, o.value(QStringLiteral("ms")).toInt(), Photos::kMaxVoiceMs) : 0;
     const QVariantMap more = MoreWire::pieceFields(o);   // cap m2: a video message, or a photo in an album
-    const QByteArray joined = voiceMs > 0 ? Photos::joinVoice(parts) : more.contains(QStringLiteral("video")) ? MoreWire::joinVideo(parts) : Photos::join(parts);
+    const QByteArray joined = voiceMs > 0 ? Photos::joinVoice(parts) : more.contains(QStringLiteral("video")) ? MoreWire::joinVideo(parts)
+                            : gif ? Photos::joinGif(parts) : Photos::join(parts);
     if (joined.isEmpty())
         return 400;
     m_vault->write(QStringLiteral("photos/") + gid, joined);
@@ -1519,6 +1537,8 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
                   {QStringLiteral("text"), QString()}, {QStringLiteral("mine"), false}, {QStringLiteral("time"), now()}, {QStringLiteral("via"), via},
                   {QStringLiteral("state"), QString()}, {QStringLiteral("photo"), gid}, {QStringLiteral("voice"), voiceMs}, {QStringLiteral("unsent"), QString()}};
     m.insert(more);
+    if (gif)
+        m.insert(QStringLiteral("gif"), true);
     storeGroupMessage(g, m, true);
     groupReceipt(g, fromKey, {gid}, QStringLiteral("delivered"));
     return 200;

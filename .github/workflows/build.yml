@@ -27,6 +27,7 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
       label: ${{ steps.plan.outputs.label }}
+      separate_sigs: ${{ steps.plan.outputs.separate_sigs }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
       - name: No outside services, no pairing, no em dashes
@@ -63,6 +64,12 @@ jobs:
           echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 1.0, not \"$v\""; exit 1; }
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "tag=v$v" >> "$GITHUB_OUTPUT"
+          # TRANSITION. The signatures live in the release notes (code/shared/docs/releases.md), but installed 1.1 apps
+          # only read the separate <file>.sig, <file>.vsig and (beta) version.txt. While code/VERSION is 1.2 or lower,
+          # the release and beta jobs upload those files too; from VERSION 1.3 on they don't. (One dot, read as a
+          # decimal: 1.2 -> 1200000, 1.3 -> 1300000, 1.10 -> 1100000.)
+          num=$(( ${v%%.*} * 1000000 + 10#$(printf '%-6s' "${v#*.}" | tr ' ' 0) ))
+          if [ "$num" -le 1200000 ]; then echo "separate_sigs=1" >> "$GITHUB_OUTPUT"; else echo "separate_sigs=0" >> "$GITHUB_OUTPUT"; fi
           if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
             echo "release=1" >> "$GITHUB_OUTPUT"; echo "::notice title=Release::This push releases $v"
           else
@@ -774,6 +781,33 @@ jobs:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
         # Fails, and nothing is released, if any of the three downloads is missing or the key is missing or wrong.
         run: bash code/shared/tools/sign-release.sh "${{ needs.rules.outputs.version }}" code/shared/docs/release-key.pem
+      - name: Release notes with the signatures block, and the files to upload
+        id: notes
+        env:
+          VERSION: ${{ needs.rules.outputs.version }}
+          SEPARATE_SIGS: ${{ needs.rules.outputs.separate_sigs }}
+        run: |
+          # The notes for people first, then the signatures block both apps read (code/shared/docs/releases.md).
+          cat > notes.md <<'EOF'
+          **Huginn** (Linux): Huginn.flatpak. Installed copies update themselves at launch.
+          **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
+          **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
+          Every file is signed with the project's release key (the signatures block below) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md
+          Privacy and security: https://github.com/Ravenor907/Huginn-Muninn#security
+
+          EOF
+          { echo '```'; cat signatures.txt; echo '```'; } >> notes.md
+          # Fails, and nothing is released, unless the block names all three downloads and every signature in it checks out.
+          python3 code/shared/tools/release_sig_ref.py --check-notes notes.md "$VERSION" code/shared/docs/release-key.pem
+          {
+            echo 'files<<FILES_END'
+            printf '%s\n' Huginn.flatpak Huginn-Windows.zip Muninn.apk
+            # TRANSITION (rules job, separate_sigs): up to VERSION 1.2 the .sig and .vsig files go up too, for 1.1 apps.
+            if [ "$SEPARATE_SIGS" = 1 ]; then
+              printf '%s\n' Huginn.flatpak.sig Huginn.flatpak.vsig Huginn-Windows.zip.sig Huginn-Windows.zip.vsig Muninn.apk.sig Muninn.apk.vsig
+            fi
+            echo 'FILES_END'
+          } >> "$GITHUB_OUTPUT"
       - name: Build attestations (gh attestation verify, see code/shared/docs/releases.md)
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
@@ -786,26 +820,12 @@ jobs:
           tag_name: ${{ needs.rules.outputs.tag }}
           target_commitish: ${{ github.sha }}
           name: Huginn and Muninn ${{ needs.rules.outputs.version }}
-          files: |
-            Huginn.flatpak
-            Huginn.flatpak.sig
-            Huginn.flatpak.vsig
-            Huginn-Windows.zip
-            Huginn-Windows.zip.sig
-            Huginn-Windows.zip.vsig
-            Muninn.apk
-            Muninn.apk.sig
-            Muninn.apk.vsig
+          files: ${{ steps.notes.outputs.files }}
           fail_on_unmatched_files: true
           prerelease: false
           make_latest: true
           generate_release_notes: false
-          body: |
-            **Huginn** (Linux): Huginn.flatpak. Installed copies update themselves at launch.
-            **Huginn** (Windows PC): Huginn-Windows.zip. Unzip it anywhere you can write to (Documents is fine) and run Huginn.exe; nothing to install. It updates itself at launch too.
-            **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
-            Every file is signed with the project's release key (the .sig beside it, and the .vsig for its version) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md
-            Privacy and security: https://github.com/Ravenor907/Huginn-Muninn#security
+          body_path: notes.md
 
   relay-deploy:
     # Deploys code/shared/relay-worker to the Worker huginn-relay after a release went out. The apps work with the
@@ -876,18 +896,30 @@ jobs:
         run: |
           # Fails, and nothing is published, if any of the three downloads is missing or the key is missing or wrong.
           bash code/shared/tools/sign-release.sh "$LABEL" code/shared/docs/release-key.pem
-          # The label, with no newline at the end: what apps on the Pre-release channel read first.
+          # The notes, then the signatures block: its label line is what apps on the Pre-release channel read first.
+          {
+            echo "Pre-release $LABEL. Apps on the Pre-release channel (Settings, Labs) install it by themselves. Every file is signed with the project's release key (the signatures block below), like a release."
+            echo
+            echo '```'; cat signatures.txt; echo '```'
+          } > notes.md
+          # Fails, and nothing is published, unless the block names all three downloads and every signature in it checks out.
+          python3 code/shared/tools/release_sig_ref.py --check-notes notes.md "$LABEL" code/shared/docs/release-key.pem
+          # The label, with no newline at the end, for 1.1 apps (uploaded only while separate_sigs is 1, see below).
           printf '%s' "$LABEL" > version.txt
       - name: Replace the beta pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           LABEL: ${{ needs.rules.outputs.label }}
+          SEPARATE_SIGS: ${{ needs.rules.outputs.separate_sigs }}
         run: |
+          files=(Huginn.flatpak Huginn-Windows.zip Muninn.apk)
+          # TRANSITION (rules job, separate_sigs): up to VERSION 1.2 the .sig, .vsig and version.txt files go up too, for 1.1 apps.
+          if [ "$SEPARATE_SIGS" = 1 ]; then
+            files+=(Huginn.flatpak.sig Huginn.flatpak.vsig Huginn-Windows.zip.sig Huginn-Windows.zip.vsig Muninn.apk.sig Muninn.apk.vsig version.txt)
+          fi
+          for f in "${files[@]}"; do [ -f "$f" ] || { echo "::error title=Download missing::$f isn't there. Nothing was published."; exit 1; }; done
           gh release delete beta --cleanup-tag --yes || true
-          gh release create beta \
-            Huginn.flatpak Huginn.flatpak.sig Huginn.flatpak.vsig \
-            Huginn-Windows.zip Huginn-Windows.zip.sig Huginn-Windows.zip.vsig \
-            Muninn.apk Muninn.apk.sig Muninn.apk.vsig version.txt \
+          gh release create beta "${files[@]}" \
             --prerelease --latest=false --target "${{ github.sha }}" --title "Beta: $LABEL" \
-            --notes "Pre-release $LABEL. Apps on the Pre-release channel (Settings, Labs) install it by themselves. Every file is signed with the project's release key, like a release."
+            --notes-file notes.md

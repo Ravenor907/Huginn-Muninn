@@ -112,7 +112,8 @@ Item {
         return g > 0 ? g * g : 0
     }
     Timer {
-        // 30 frames a second; all on one Canvas (redrawn whole each frame), or in the background, 15.
+        // 30 frames a second at most (Handheld mode too, with half as many falling, Theme.fallCount); all on one
+        // Canvas (redrawn whole each frame), or in the background, 15.
         interval: leaves.winActive && !leaves.one ? 33 : 66
         repeat: true
         running: leaves.moving

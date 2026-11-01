@@ -248,8 +248,16 @@ Item {
                     Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "play"; color: "white"; size: Theme.px(30) }
                     Text { textFormat: Text.PlainText; text: Voice.length(modelData.video || 0); color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 }
+                // Cap a1: a GIF holds its first frame here; it moves once opened.
+                Rectangle {
+                    visible: !!modelData.gif
+                    anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Theme.px(6)
+                    width: mediaGifTag.implicitWidth + Theme.px(8); height: mediaGifTag.implicitHeight + Theme.px(2); radius: Theme.px(4)
+                    color: Qt.rgba(0, 0, 0, 0.6)
+                    Text { id: mediaGifTag; textFormat: Text.PlainText; anchors.centerIn: parent; text: "GIF"; color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(11) }
+                }
                 Accessible.role: Accessible.Button
-                Accessible.name: (modelData.video > 0 ? "Video from " : "Photo from ") + modelData.name
+                Accessible.name: (modelData.video > 0 ? "Video from " : modelData.gif ? "GIF from " : "Photo from ") + modelData.name
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { layer.sharedSel = index; layer.openSharedItem(index) } }
             }
         }

@@ -4,6 +4,8 @@
 #   RELEASE_SIGNING_KEY=<PEM> sign-release.sh <version or label> <path to release-key.pem>
 # <file>.sig is the Ed25519 signature of the file's raw bytes, and <file>.vsig the signature of its version (or label),
 # name and SHA-256. Both apps refuse an update without them, so this stops on anything missing or wrong.
+# It also writes signatures.txt: the signatures block that goes at the end of the release notes (releases.md),
+# one line per download with its SHA-256, .sig and .vsig (base64).
 set -euo pipefail
 VERSION=${1:-}
 PUB=${2:-}
@@ -47,5 +49,12 @@ for f in $FILES; do
   [ "$(stat -c %s "$f.vsig")" = 64 ] || fail "Signing failed" "$f.vsig isn't 64 bytes."
 done
 rm -f "$k"
+{
+  printf 'huginn-muninn signatures v1\nlabel %s\n' "$VERSION"
+  for f in $FILES; do
+    printf '%s sha256 %s sig %s vsig %s\n' "$f" "$(sha256sum < "$f" | cut -d' ' -f1)" "$(base64 -w0 < "$f.sig")" "$(base64 -w0 < "$f.vsig")"
+  done
+} > signatures.txt
+[ "$(wc -l < signatures.txt)" = 5 ] || fail "Signing failed" "signatures.txt isn't five lines."
 sha256sum $FILES
 echo "Signed $FILES for $VERSION."

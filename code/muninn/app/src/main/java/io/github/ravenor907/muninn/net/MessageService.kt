@@ -36,7 +36,10 @@ class MessageService : Service() {
         val n = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle("Muninn")
             .setContentText("Listening for messages").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET).setShowWhen(false).setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setContentIntent(open).build()
+            .setContentIntent(open)
+            // "Hide": Android's page for this one channel, where it's turned off (as Settings › Battery › Hide the Listening notification).
+            .apply { hideIntent(this@MessageService)?.let { addAction(0, "Hide", it) } }
+            .build()
         try {
             if (Build.VERSION.SDK_INT >= 34) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING)
             else if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -81,6 +84,14 @@ class MessageService : Service() {
                 setSound(null, null)
                 enableVibration(false)
             })
+        }
+
+        /** Android 8 and newer: opens this channel's own settings page. Null before (no channels). */
+        private fun hideIntent(context: Context): PendingIntent? {
+            if (Build.VERSION.SDK_INT < 26) return null
+            val i = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, CHANNEL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            return PendingIntent.getActivity(context, 3, i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
 
         fun stop(context: Context) { context.stopService(Intent(context, MessageService::class.java)) }

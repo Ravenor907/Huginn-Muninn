@@ -34,6 +34,7 @@
 #include "updater.h"
 #include "labs.h"
 #include "appstorage.h"
+#include "perfcheck.h"
 #include "wifiselftest.h"
 #include "proof.h"
 #include "move.h"
@@ -158,6 +159,8 @@ int main(int argc, char *argv[])
     // Windows: a start log next to Huginn.exe and cleanup after an update.
     Platform::beginStart();
     s_previous = qInstallMessageHandler(messages);
+    // Labs › Performance check: settings being tried (display mode, drawing, render loop) go in before Qt starts.
+    PerfCheck::applyAtStart(argc, argv);
 #ifndef Q_OS_WIN
     // SteamOS Game Mode: gamescope shows games through Xwayland, and Huginn takes the same path as every game
     // there (gamescope's frame pacing is built around it), unless a platform was set by hand.
@@ -191,7 +194,7 @@ int main(int argc, char *argv[])
     args.addOption(ratchetTest);
     QCommandLineOption nostrTest(QStringLiteral("nostr-selftest"), QStringLiteral("Check the Nostr signatures against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(nostrTest);
-    QCommandLineOption privacyTest(QStringLiteral("privacy-selftest"), QStringLiteral("Check the vault, photo scrubbing, Bluetooth framing and the App storage allowlist (for CI), then quit."));
+    QCommandLineOption privacyTest(QStringLiteral("privacy-selftest"), QStringLiteral("Check the vault, photo scrubbing, Bluetooth framing, the App storage allowlist and the handheld detection (for CI), then quit."));
     args.addOption(privacyTest);
     QCommandLineOption backupTest(QStringLiteral("backup-selftest"), QStringLiteral("Back up and restore a temporary chat folder (for CI), then quit."));
     args.addOption(backupTest);
@@ -268,7 +271,11 @@ int main(int argc, char *argv[])
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();
         // Labs › App storage never reaches the vault, keys or chats.
         const bool d = AppStorage::selfTest();
-        return selfTested(a && b && c && d);
+        // Labs › Performance check's report never carries names, addresses, ids or file names.
+        const bool e = PerfCheck::selfTest();
+        // Handheld mode's detection: the known models, the two-of-three rule, a laptop with a pad.
+        const bool f = System::handheldSelfTest();
+        return selfTested(a && b && c && d && e && f);
     }
 
     // crash.log (Windows and Linux): crashes, fatal errors, graphics failures and runs that never closed.
@@ -279,10 +286,13 @@ int main(int argc, char *argv[])
     auto *one = new SingleInstance(&app);
     if (!quiet && !one->claim(args.isSet(restarted))) {
         Platform::noStartLog();
+        PerfCheck::notStarting();   // this copy draws nothing: no failed start to count
         return 0;
     }
-    if (!quiet)
+    if (!quiet) {
         CrashLog::claimed();
+        PerfCheck::noteStart();
+    }
     // Only now the start log is written fresh and an update's leftovers are cleaned up (not by a
     // second copy that is about to quit).
     Platform::startClaimed(!quiet);
@@ -308,6 +318,8 @@ int main(int argc, char *argv[])
     }
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
+    // Handheld mode's last fact: a controller there from the start (a handheld's own).
+    system->noteControllerAtStart(gamepad->connected());
     auto *transfer = new Transfer(settings, &app);
     auto *localSend = new LocalSend(settings, &app);
     // Bluetooth first: Qt decides how to reach BlueZ the first time anything asks (see Ble).
@@ -449,6 +461,12 @@ int main(int argc, char *argv[])
     // Labs mode: bug reports, and the channel back to Stable before the stable release is installed.
     auto *labs = new Labs(chat, vault, settings, &app);
     auto *appStorage = new AppStorage(updater, &app);
+    auto *perf = new PerfCheck(settings, system, &app);
+    // Never in a performance report: the names this computer and its person go by.
+    perf->privateWords = [chat, settings, linked] {
+        return QStringList{chat->username(), settings->deviceName(), Settings::defaultDeviceName(),
+                           linked->me().value(QStringLiteral("name")).toString()};
+    };
     chat->setLabs(labs);
     updater->beforeGoingBack = [labs] { return labs->beforeGoingBack(); };
     // Moving to another device (cap x1): on the Wi-Fi port, and locked while it moves.
@@ -581,6 +599,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Profile", profile);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Labs", labs);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "AppStorage", appStorage);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Perf", perf);
 
     // Closed cleanly once everything below (the window, the engine) has gone; a run that never gets here shows in crash.log.
     struct CleanExit {
@@ -607,6 +626,8 @@ int main(int argc, char *argv[])
         Platform::watchMainWindow(window);
         // The size that fits this screen, and what draws it (crash.log and Settings › About).
         system->watchWindow(window);
+        // Labs › Performance check: its frames, and the first one shows tried settings started.
+        perf->watch(window);
 #ifndef Q_OS_WIN
         // Windows notes these itself (and starts again, winstart.cpp).
         if (window)

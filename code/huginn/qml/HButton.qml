@@ -14,7 +14,7 @@ Rectangle {
     signal clicked()
 
     implicitWidth: label.implicitWidth + Theme.px(32)
-    implicitHeight: Math.max(Theme.px(36), label.implicitHeight + Theme.px(12))
+    implicitHeight: Math.max(Theme.tapMin, label.implicitHeight + Theme.px(12))
     radius: Theme.radius
     opacity: enabled ? 1 : 0.45
     color: kind === "primary" ? (hover.hovered ? Qt.lighter(btn.accent, 1.12) : btn.accent)

@@ -120,6 +120,15 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.content.ReceiveContentListener
+import androidx.compose.foundation.content.TransferableContent
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.runtime.snapshotFlow
+import io.github.ravenor907.muninn.net.Gifs
+import io.github.ravenor907.muninn.ui.GifImage
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.graphics.SolidColor
@@ -156,6 +165,10 @@ object ChatNav {
     var incoming by mutableStateOf("")
     /** Whose three-dot menu is open: a person's key, "g:" and a group, "list" for the chat list, "" for none. */
     var hold by mutableStateOf("")
+    /** For the chat list's menu: waiting requests, archived chats and chats in the trash. */
+    var asks by mutableStateOf(0)
+    var archived by mutableStateOf(0)
+    var trashed by mutableStateOf(0)
     /** Set when [hold] was opened from a group's People page: that group's id, for its admin actions. */
     var menuGroup by mutableStateOf("")
     /** What an opened conversation does first: "search" or "media" (from its menu), "" nothing. */
@@ -229,6 +242,7 @@ private fun initial(name: String) = name.trim().firstOrNull { it.isLetterOrDigit
 private fun preview(m: Chat.Msg) = when {
     m.unsent.isNotEmpty() -> "Message deleted"
     m.voice > 0 -> "Voice message · ${Voice.length(m.voice)}"
+    m.gif -> "GIF"
     m.photo.isNotEmpty() -> "Photo"
     else -> m.text.replace('\n', ' ')
 }
@@ -489,7 +503,6 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val flagState by app.chat.flags.all.collectAsState()
     // A TV used normally has a remote, not a touchscreen: no dragging hint.
     val onTv = io.github.ravenor907.muninn.tv.KidMode.isTv(LocalContext.current)
-    var showMore by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var editingFolder by remember { mutableStateOf<Folders.Folder?>(null) }
     val activeMap by app.chat.active.collectAsState()
@@ -581,7 +594,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     // One chat on the list. [sec]: the section it's under ("" no folder), null in search results (nothing to move there).
     val chatRow: @Composable (ChatRow, String?, String) -> Unit = { c, sec, item ->
         val lifted = dragged?.item == item
-        val rowMod = Modifier.then(if (lifted) Modifier.zIndex(1f).graphicsLayer { translationY = dragBy }.background(Palette.panel) else Modifier)
+        // First setup's tour points at the first chat.
+        val rowMod = Modifier.then(if (c.key == shownRows.firstOrNull()?.key) Modifier.tourSpot("row") else Modifier).then(if (lifted) Modifier.zIndex(1f).graphicsLayer { translationY = dragBy }.background(Palette.panel) else Modifier)
             .then(if (hover == item) Modifier.background(Palette.focusFill) else Modifier)
         val onDrag: ((Float) -> Unit)? = if (sec == null) null else ({ dy ->
             if (dragged?.item != item) { dragged = Dragged(item, sec, c.key); dragBy = 0f }
@@ -621,7 +635,10 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 2.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     SearchBox(query, Modifier.weight(1f)) { query = it }
                     Spacer(Modifier.width(4.dp))
-                    io.github.ravenor907.muninn.ui.DotsButton("Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
+                    Box(Modifier.tourSpot("menu")) {
+                        io.github.ravenor907.muninn.ui.DotsButton(if (ChatNav.asks > 0) "Chat list menu, ${ChatNav.asks} requests" else "Chat list menu") { ChatNav.menuGroup = ""; ChatNav.hold = "list" }
+                        if (ChatNav.asks > 0) Box(Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(10.dp).clip(CircleShape).background(Palette.accent))
+                    }
                 }
                 // Permissions still missing, the message limits note and mirrored chats: one row, one sheet.
                 FinishRow(app, onAllowNearby, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
@@ -691,27 +708,19 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     }
                 }
             }
-            // Requests, archived chats and the trash: one row at the bottom.
+            // Requests, archived chats and the trash live in the chat list's menu (the dots beside Search).
             val pendingIntros = intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
-            val asks = requests.size + ginvites.size + pendingIntros
-            val labsHere = app.chat.isLabs()
-            if (q.isEmpty() && (asks > 0 || archivedRows.isNotEmpty() || trashed.isNotEmpty() || labsHere)) item(key = "more") {
-                Box(Modifier.fillMaxWidth().padding(top = 12.dp).height(1.dp).background(Palette.hairline))
-                PersonRow("More", if (labsHere) "Requests, archived, trash, Labs" else "Requests, archived, trash", "", asks, false,
-                    { Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.coolTint), contentAlignment = Alignment.Center) { MIcon("download", Palette.accent, 22.dp) } }) {
-                    showMore = true
-                }
-            }
+            ChatNav.asks = requests.size + ginvites.size + pendingIntros
+            ChatNav.archived = archivedRows.size
+            ChatNav.trashed = trashed.size
             // Room under the last row for the + button.
             item { Spacer(Modifier.height(96.dp)) }
         }
         // Add someone: a round gold button at the bottom left, above the tabs.
-        Box(Modifier.align(Alignment.BottomStart).padding(16.dp).size(56.dp).clip(CircleShape).background(Palette.gold)
+        Box(Modifier.align(Alignment.BottomStart).padding(16.dp).size(56.dp).tourSpot("plus").clip(CircleShape).background(Palette.gold)
             .clickable(role = Role.Button) { ChatNav.open = "add" }.semantics { contentDescription = "Add someone" },
             contentAlignment = Alignment.Center) { MIcon("plus", Palette.onGold, 26.dp) }
     }
-    if (showMore) MoreSheet(asks = requests.size + ginvites.size + intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size,
-        archived = archivedRows.size, trash = trashed.size, labs = if (app.chat.isLabs()) app.chat.labs.reports.value.size else -1) { showMore = false }
     FolderDialogs(app, editingFolder) { editingFolder = null }
 }
 
@@ -742,24 +751,6 @@ internal fun listMoves(app: Muninn, key: String): Pair<(() -> Unit)?, (() -> Uni
     val up: (() -> Unit)? = if (i > 0) ({ ch.folders.order(sec, Folders.shift(l, key, -1)) }) else null
     val down: (() -> Unit)? = if (i < l.size - 1) ({ ch.folders.order(sec, Folders.shift(l, key, 1)) }) else null
     return Pair(up, down)
-}
-
-/** The chat list's More row: Requests, Archived and Trash, each its own page. */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun MoreSheet(asks: Int, archived: Int, trash: Int, labs: Int = -1, done: () -> Unit) {
-    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = done, sheetState = sheet, containerColor = Palette.panel, shape = Corner, dragHandle = null) {
-        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).navigationBarsPadding()) {
-            Text("More", style = Type.big, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
-            Box(Modifier.fillMaxWidth().padding(bottom = 4.dp).height(1.dp).background(Palette.hairline))
-            io.github.ravenor907.muninn.ui.MenuRow("people", "Requests", value = if (asks > 0) "$asks" else "") { done(); ChatNav.open = "requests" }
-            io.github.ravenor907.muninn.ui.MenuRow("download", "Archived", value = if (archived > 0) "$archived" else "") { done(); ChatNav.open = "archived" }
-            io.github.ravenor907.muninn.ui.MenuRow("delete", "Trash", value = if (trash > 0) "$trash" else "") { done(); ChatNav.open = "trash" }
-            // The Labs contact's own phone: the bug reports that came in.
-            if (labs >= 0) io.github.ravenor907.muninn.ui.MenuRow("info", "Labs reports", value = if (labs > 0) "$labs" else "") { done(); ChatNav.open = Chat.LABS_PAGE }
-        }
-    }
 }
 
 /** Archived chats: they come back to the list when a message arrives. Hold one for its menu. */
@@ -909,6 +900,8 @@ private fun Conversation(app: Muninn, key: String) {
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
     // Cap m2: several photos picked at once, the "+" menu, the camera ("photo" or "video"), a new poll, the Shared page.
     var pickedMany by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    // Cap a1: GIFs waiting to be sent, one panel at a time (picked, shared in or over the limits).
+    var gifs by remember { mutableStateOf<List<PendingGif>>(emptyList()) }
     var attaching by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf("") }
     var polling by remember { mutableStateOf(false) }
@@ -926,7 +919,13 @@ private fun Conversation(app: Muninn, key: String) {
     val activeNow = key in activeMap
     val me = app.identity.publicKey
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
-        if (uris.size == 1) picked = uris[0] else if (uris.size > 1) pickedMany = uris
+        // GIFs go on their own, animated; the rest as a photo or an album.
+        if (uris.isNotEmpty()) scope.launch {
+            val anim = withContext(Dispatchers.IO) { uris.filter { Photos.isGif(context, it) } }
+            val rest = uris.filterNot { it in anim }
+            gifs = gifs + anim.map { PendingGif(it) }
+            if (rest.size == 1) picked = rest[0] else if (rest.size > 1) pickedMany = rest
+        }
     }
     val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         Ui.say(if (ok) "Ready. Hold the mic to record." else "Needs the microphone.", !ok)
@@ -951,13 +950,26 @@ private fun Conversation(app: Muninn, key: String) {
             preparing = false; pickedMany = emptyList()
         }
     }
+    /** Cap a1: a GIF, animated. Over the limits, its panel offers a still or a file instead. */
+    fun sendGif(p: PendingGif) {
+        preparing = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { Photos.readGif(context, p.uri) }
+            when {
+                r == null -> { Ui.say("That GIF couldn't be opened.", true); gifs = gifs - p; p.done() }
+                r.bytes != null -> { withContext(Dispatchers.IO) { app.chat.sendGif(key, r.bytes) }?.let { Ui.say(it, true) }; gifs = gifs - p; p.done() }
+                else -> gifs = gifs.map { if (it === p) PendingGif(p.uri, Gifs.why(r), p.shared) else it }
+            }
+            preparing = false
+        }
+    }
     fun sendPollHere(poll: io.github.ravenor907.muninn.net.More.Poll) {
         app.chat.sendPoll(key, poll.q, poll.options, poll.multi)?.let { Ui.say(it, true) }
     }
     // A file over the internet: straight to their phone (or over the internet route when small). Its card shows in
     // the chat at once, while the file is still being copied in, and says how it goes from there.
-    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch(Dispatchers.IO) {
+    fun sendAsFile(uri: Uri, fallbackName: String = "file", then: () -> Unit = {}) {
+        scope.launch(Dispatchers.IO) {
             var chosenName: String? = null
             var size = 0L
             try {
@@ -965,14 +977,16 @@ private fun Conversation(app: Muninn, key: String) {
                     if (c.moveToFirst()) { chosenName = c.getString(0); if (!c.isNull(1)) size = c.getLong(1) }
                 }
             } catch (_: Exception) {}
-            val clean = app.chat.cleanFileName(chosenName ?: "file")
+            val clean = app.chat.cleanFileName(chosenName ?: fallbackName)
             val card = io.github.ravenor907.muninn.net.FileLink.preparing(key, clean, size)
             val tmp = java.io.File(java.io.File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
             val ok = try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
             if (!ok) { tmp.delete(); io.github.ravenor907.muninn.net.FileLink.failed(key, clean, size, "That file couldn't be opened.", card) }
             else app.chat.sendFile(key, tmp, clean, card)?.let { Ui.say(it, true) }
+            withContext(Dispatchers.Main) { then() }
         }
     }
+    val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendAsFile(uri) }
     fun jumpTo(id: String) {
         val i = msgs.indexOfFirst { it.id == id }
         if (i < 0) Ui.say("That message isn't here any more.") else scope.launch { list.animateScrollToItem(i) }
@@ -1111,6 +1125,13 @@ private fun Conversation(app: Muninn, key: String) {
                 }
             }
         }
+        GifShare.pending?.let { u -> LaunchedEffect(u) { GifShare.pending = null; gifs = gifs + PendingGif(u, shared = true) } }
+        gifs.firstOrNull()?.let { p ->
+            GifPanel(p, name, preparing, onSend = { sendGif(p) }, onStill = {
+                gifs = gifs - p
+                sendPhoto(p.uri, false)   // a shared copy stays until the next share clears it
+            }, onFile = { gifs = gifs - p; sendAsFile(p.uri, "animation.gif") { p.done() } }) { gifs = gifs - p; p.done() }
+        }
         if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }, onFile = { pickFile.launch(arrayOf("*/*")) }) { attaching = false }
         DirectFiles(key, name) { p, file, n -> scope.launch(Dispatchers.IO) { app.chat.sendFile(p, file, n)?.let { Ui.say(it, true) } } }
@@ -1128,7 +1149,10 @@ private fun Conversation(app: Muninn, key: String) {
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${if (r.mine) "yourself" else name}", preview(r), "reply") { replyTo = null } } }
         Composer(text, { text = it; app.chat.typingTo(key, it.isNotBlank()) }, if (editing != null) "Edit your message" else "Message $name", onPhoto = {
             attaching = true
-        }, voice = VoiceHooks(
+        }, onImage = { uri -> scope.launch {
+            // From the keyboard (a GIF or sticker picked in Gboard): a GIF goes at once, a picture asks like a picked photo.
+            if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
+        } }, voice = VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
             ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
             send = { aac, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVoice(key, aac, ms) } },
@@ -1143,15 +1167,18 @@ private fun Conversation(app: Muninn, key: String) {
     sheetFor?.let { s ->
         val actions = buildList {
             if (s.unsent.isEmpty() && !s.failed) add(SheetAction("Reply", "reply") { editing = null; replyTo = s })
-            if (s.mine && s.unsent.isEmpty() && !s.failed && s.photo.isEmpty() && s.text.isNotEmpty())
-                add(SheetAction("Edit", "edit") {
-                    if (!app.chat.hasM1(key)) Ui.say("$name needs an update for edits.", true)
-                    else { replyTo = null; editing = s; text = s.text }
-                })
-            if (s.unsent.isEmpty() && s.text.isNotEmpty()) add(SheetAction("Copy text", "copy") {
+            if (s.unsent.isEmpty() && s.text.isNotEmpty()) add(SheetAction("Copy", "copy") {
                 io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", s.text)
                 Ui.say("Copied.")
             })
+            if (s.mine && s.unsent.isEmpty() && !s.failed && s.photo.isEmpty() && s.text.isNotEmpty())
+                add(SheetAction("Edit", "edit", folder = "Message") {
+                    if (!app.chat.hasM1(key)) Ui.say("$name needs an update for edits.", true)
+                    else { replyTo = null; editing = s; text = s.text }
+                })
+            add(SheetAction((if (s.mine) "Sent " else "Received ") + clock(s.time), "clock", folder = "Message", info = true))
+            if (s.mine && s.unsent.isEmpty() && !s.failed) io.github.ravenor907.muninn.net.Ticks.private(s.state, name).takeIf { it.isNotEmpty() }
+                ?.let { add(SheetAction(it, "check", folder = "Message", info = true)) }
             when {
                 // Mine, and it got out: take it back from both phones, or just remove it here.
                 s.mine && s.unsent.isEmpty() && !s.failed -> add(SheetAction("Unsend", "undo", danger = true) {
@@ -1172,10 +1199,38 @@ private fun Conversation(app: Muninn, key: String) {
 
 private class VoiceHooks(val allowed: () -> Boolean, val ask: () -> Unit, val send: (ByteArray, Int) -> Unit)
 
+/**
+ * The message box. [onImage]: a picture or GIF the keyboard put in (Gboard's GIFs and stickers, a pasted picture),
+ * handed over as its content link; without it the keyboard is told no pictures are taken here.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, voice: VoiceHooks? = null,
-                     banner: (@Composable () -> Unit)? = null, onSend: () -> Unit) {
+                     banner: (@Composable () -> Unit)? = null, onImage: ((Uri) -> Unit)? = null, onSend: () -> Unit) {
     val context = LocalContext.current
+    // The box keeps its own text (so the keyboard can put pictures in); [text] stays the one that counts. A change
+    // from outside (sent and cleared, an emoji, a message to edit) is put in the box; typing goes back out.
+    val field = rememberTextFieldState(text)
+    val textNow by rememberUpdatedState(text)
+    val onTextNow by rememberUpdatedState(onText)
+    val onImageNow by rememberUpdatedState(onImage)
+    LaunchedEffect(text) {
+        val want = text
+        if (field.text.toString() != want) field.edit { replace(0, length, want) }
+    }
+    LaunchedEffect(field) { snapshotFlow { field.text.toString() }.collect { if (it != textNow) onTextNow(it.take(Chat.MAX)) } }
+    val receiver = remember {
+        object : ReceiveContentListener {
+            override fun onReceive(transferableContent: TransferableContent): TransferableContent? {
+                val take = onImageNow ?: return transferableContent
+                return transferableContent.consume { item ->
+                    val uri = item.uri
+                    val type = uri?.let { u -> try { context.contentResolver.getType(u) } catch (_: Exception) { null } }.orEmpty()
+                    if (uri != null && type.startsWith("image/")) { take(uri); true } else false
+                }
+            }
+        }
+    }
     var emoji by remember { mutableStateOf(false) }
     if (emoji) EmojiPicker("Emoji", { e -> onText((text + e).take(Chat.MAX)) }) { emoji = false }
     banner?.invoke()
@@ -1201,8 +1256,10 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
             verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f).padding(vertical = 11.dp), contentAlignment = Alignment.CenterStart) {
                 if (text.isEmpty()) Text(hint, style = bodyStyle.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                BasicTextField(text, { onText(it.take(Chat.MAX)) }, textStyle = bodyStyle, cursorBrush = SolidColor(Palette.accent), maxLines = 6,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = hint })
+                BasicTextField(state = field, textStyle = bodyStyle, cursorBrush = SolidColor(Palette.accent),
+                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                    modifier = Modifier.fillMaxWidth().then(if (onImage != null) Modifier.contentReceiver(receiver) else Modifier)
+                        .semantics { contentDescription = hint })
             }
             IconAction("smile", "Emoji", Palette.textMuted, size = 20.dp) { emoji = true }
         }
@@ -1461,6 +1518,12 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                             AlbumGrid(album, albumBytes, onAlbumTap)
                             Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) { metaLine() }
                         }
+                        isPhoto && m.gif -> Column(Modifier.padding(4.dp)) {
+                            Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
+                            GifImage(m.id, photo!!, "GIF", Modifier.widthIn(max = 260.dp).fillMaxWidth().aspectRatio(260f / 170f)
+                                .clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep))
+                            Box(Modifier.align(Alignment.End).padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 2.dp)) { metaLine() }
+                        }
                         isPhoto -> Column(Modifier.padding(4.dp)) {
                             Box(Modifier.padding(horizontal = 8.dp)) { Column { name(); quoted() } }
                             val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(photo!!(), 720) } }
@@ -1527,26 +1590,27 @@ private fun UriThumb(uri: Uri, modifier: Modifier) {
 private fun PhotoViewer(app: Muninn, m: Chat.Msg, close: () -> Unit) {
     val context = LocalContext.current
     val bytes = remember(m.id) { app.chat.photo(m.photo) }
-    val bmp = remember(m.id) { decode(bytes, 2048) }
+    val bmp = remember(m.id) { if (m.gif) null else decode(bytes, 2048) }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Back", icon = "back") { close() }
             Spacer(Modifier.weight(1f))
             MButton("Save to phone", kind = Kind.Accent, icon = "download", enabled = bytes != null) {
-                Ui.say(if (bytes != null && savePhoto(context, bytes)) "Saved in Pictures › Muninn." else "Couldn't save it.", bytes == null)
+                Ui.say(if (bytes != null && savePhoto(context, bytes, m.gif)) "Saved in Pictures › Muninn." else "Couldn't save it.", bytes == null)
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
+            if (m.gif) GifImage(m.id, { bytes }, "GIF", Modifier.fillMaxSize(), fit = true, maxSide = 2048)
+            else bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize()) }
                 ?: Text("This photo can't be shown.", style = Type.normal)
         }
     }
 }
 
-private fun savePhoto(context: Context, bytes: ByteArray): Boolean = try {
+private fun savePhoto(context: Context, bytes: ByteArray, gif: Boolean = false): Boolean = try {
     val values = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, "Muninn-${System.currentTimeMillis()}.jpg")
-        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+        put(MediaStore.Images.Media.DISPLAY_NAME, "Muninn-${System.currentTimeMillis()}" + if (gif) ".gif" else ".jpg")
+        put(MediaStore.Images.Media.MIME_TYPE, if (gif) "image/gif" else "image/jpeg")
         if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Muninn")
     }
     val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
@@ -1713,6 +1777,7 @@ private fun groupPreview(app: Muninn, m: Groups.GMsg): String {
     val what = when {
         m.unsent.isNotEmpty() -> "Message deleted"
         m.voice > 0 -> "Voice message · ${Voice.length(m.voice)}"
+        m.gif -> "GIF"
         m.photo.isNotEmpty() -> "Photo"
         else -> m.text.replace('\n', ' ')
     }
@@ -1730,7 +1795,7 @@ private fun groupUnread(msgs: List<Groups.GMsg>): Int {
 private fun asMsg(app: Muninn, m: Groups.GMsg) = Chat.Msg(m.id, m.from,
     if (m.mine) app.identity.username else app.chat.contacts.contact(m.from)?.shown ?: m.name, m.text, m.mine, m.time,
     state = m.state, photo = m.photo, unsent = m.unsent, voice = m.voice, re = m.re, reactions = m.reactions, edited = m.edited,
-    video = m.video, album = m.album, albumAt = m.albumAt, albumOf = m.albumOf, poll = m.poll, votes = m.votes, preview = m.preview)
+    video = m.video, album = m.album, albumAt = m.albumAt, albumOf = m.albumOf, poll = m.poll, votes = m.votes, preview = m.preview, gif = m.gif)
 
 /** Two members' faces, one over the other; a group of one or two shows a single circle. */
 @Composable
@@ -1988,6 +2053,8 @@ private fun GroupConversation(app: Muninn, g: String) {
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
     // Cap m2: several photos picked at once, the "+" menu, the camera ("photo" or "video"), a new poll, the Shared page.
     var pickedMany by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    // Cap a1: GIFs waiting to be sent, one panel at a time (picked, shared in or over the limits).
+    var gifs by remember { mutableStateOf<List<PendingGif>>(emptyList()) }
     var attaching by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf("") }
     var polling by remember { mutableStateOf(false) }
@@ -2025,7 +2092,13 @@ private fun GroupConversation(app: Muninn, g: String) {
         if (action.isNotEmpty()) ChatNav.action = ""
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
-        if (uris.size == 1) picked = uris[0] else if (uris.size > 1) pickedMany = uris
+        // GIFs go on their own, animated; the rest as a photo or an album.
+        if (uris.isNotEmpty()) scope.launch {
+            val anim = withContext(Dispatchers.IO) { uris.filter { Photos.isGif(context, it) } }
+            val rest = uris.filterNot { it in anim }
+            gifs = gifs + anim.map { PendingGif(it) }
+            if (rest.size == 1) picked = rest[0] else if (rest.size > 1) pickedMany = rest
+        }
     }
     val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         Ui.say(if (ok) "Ready. Hold the mic to record." else "Needs the microphone.", !ok)
@@ -2047,6 +2120,19 @@ private fun GroupConversation(app: Muninn, g: String) {
             if (jpegs.isEmpty()) Ui.say("Those photos couldn't be opened.", true)
             else withContext(Dispatchers.IO) { app.chat.sendGroupPhotos(g, ch, jpegs) }
             preparing = false; pickedMany = emptyList()
+        }
+    }
+    /** Cap a1: a GIF, animated, to the group. Over the limits, its panel offers a still instead. */
+    fun sendGif(p: PendingGif) {
+        preparing = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { Photos.readGif(context, p.uri) }
+            when {
+                r == null -> { Ui.say("That GIF couldn't be opened.", true); gifs = gifs - p; p.done() }
+                r.bytes != null -> { withContext(Dispatchers.IO) { app.chat.sendGroupGif(g, ch, r.bytes) }?.let { Ui.say(it, true) }; gifs = gifs - p; p.done() }
+                else -> gifs = gifs.map { if (it === p) PendingGif(p.uri, Gifs.why(r), p.shared) else it }
+            }
+            preparing = false
         }
     }
     fun sendPollHere(poll: io.github.ravenor907.muninn.net.More.Poll) {
@@ -2134,6 +2220,13 @@ private fun GroupConversation(app: Muninn, g: String) {
                 }
             }
         }
+        if (!grp.readOnly) GifShare.pending?.let { u -> LaunchedEffect(u) { GifShare.pending = null; gifs = gifs + PendingGif(u, shared = true) } }
+        gifs.firstOrNull()?.let { p ->
+            GifPanel(p, s.name, preparing, onSend = { sendGif(p) }, onStill = {
+                gifs = gifs - p
+                sendPhoto(p.uri, false)   // a shared copy stays until the next share clears it
+            }, onFile = null) { gifs = gifs - p; p.done() }
+        }
         if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }) { attaching = false }
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
@@ -2150,7 +2243,9 @@ private fun GroupConversation(app: Muninn, g: String) {
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${whoOf(r)}", groupPreview(app, r).substringAfter(": "), "reply") { replyTo = null } } }
         if (!grp.readOnly) Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
             attaching = true
-        }, voice = VoiceHooks(
+        }, onImage = { uri -> scope.launch {
+            if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
+        } }, voice = VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
             ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
             send = { aac, ms -> scope.launch(Dispatchers.IO) { app.chat.sendGroupVoice(g, ch, aac, ms) } },
@@ -2166,20 +2261,21 @@ private fun GroupConversation(app: Muninn, g: String) {
     sheetFor?.let { gm ->
         val actions = buildList {
             if (!grp.readOnly && gm.unsent.isEmpty()) add(SheetAction("Reply", "reply") { editing = null; replyTo = gm })
-            if (!grp.readOnly && gm.mine && gm.unsent.isEmpty() && gm.photo.isEmpty() && gm.text.isNotEmpty())
-                add(SheetAction("Edit", "edit") { replyTo = null; editing = gm; text = gm.text })
-            if (gm.unsent.isEmpty() && gm.text.isNotEmpty()) add(SheetAction("Copy text", "copy") {
+            if (gm.unsent.isEmpty() && gm.text.isNotEmpty()) add(SheetAction("Copy", "copy") {
                 io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", gm.text)
                 Ui.say("Copied.")
             })
+            if (!grp.readOnly && gm.mine && gm.unsent.isEmpty() && gm.photo.isEmpty() && gm.text.isNotEmpty())
+                add(SheetAction("Edit", "edit", folder = "Message") { replyTo = null; editing = gm; text = gm.text })
+            add(SheetAction((if (gm.mine) "Sent " else "Received ") + clock(gm.time), "clock", folder = "Message", info = true))
             // Who reacted with what: everyone in the group sees reactions.
             val shown = io.github.ravenor907.muninn.net.Rich.shown(gm.reactions)
             if (shown.isNotEmpty()) add(SheetAction(shown.entries.joinToString(", ") { (k, e) ->
-                "$e " + (if (k == me) "You" else s.member(k)?.let { memberName(app, it) } ?: "Someone") }, "smile") {})
-            if (gm.mine) add(SheetAction(Groups.status(gm).ifEmpty { "Sent" }, "check") {})
+                "$e " + (if (k == me) "You" else s.member(k)?.let { memberName(app, it) } ?: "Someone") }, "smile", folder = "Message", info = true))
+            if (gm.mine) add(SheetAction(Groups.status(gm).ifEmpty { "Sent" }, "check", folder = "Message", info = true))
             // Per member: whose phones have it and whose it's still waiting for.
             if (gm.mine && gm.unsent.isEmpty()) io.github.ravenor907.muninn.net.Ticks.groupLines(gm.to, gm.delivered) { k ->
-                s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check") {}) }
+                s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check", folder = "Message", info = true)) }
             if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly) add(SheetAction("Unsend", "undo", danger = true) {
                 Ui.sure(Ask("Unsend this message?",
                     "Removes it from everyone's phone.",
@@ -2192,7 +2288,10 @@ private fun GroupConversation(app: Muninn, g: String) {
             })
         }
         MessageSheet(gm.reactions[me]?.e?.takeIf { it.isNotEmpty() }, !grp.readOnly && gm.unsent.isEmpty(), actions,
-            onReact = { e -> if (!app.chat.groups.react(g, gm.id, e)) Ui.say("That reaction couldn't be added.", true) }) { sheetFor = null }
+            onReact = { e -> if (!app.chat.groups.react(g, gm.id, e)) Ui.say("That reaction couldn't be added.", true) },
+            readBy = if (gm.mine && gm.unsent.isEmpty()) ({
+                ReadByList(Groups.readBy(gm), { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }, ::clock)
+            }) else null) { sheetFor = null }
     }
 }
 
@@ -2527,6 +2626,65 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
             if (t.isNotEmpty()) {
                 val r = io.github.ravenor907.muninn.net.Link.sendFromCompanion(peer, t)
                 if (r == null) text = "" else Ui.say(r, true)
+            }
+        }
+    }
+}
+
+/** Cap a1: a GIF waiting in a chat. [why]: set once it turned out to be over the limits. [shared]: our own copy of one shared in. */
+internal class PendingGif(val uri: Uri, val why: String = "", val shared: Boolean = false) {
+    /** A shared-in copy goes once it's sent or put aside. */
+    fun done() { if (shared) uri.path?.let { java.io.File(it).delete() } }
+}
+
+/** A GIF shared into Muninn from another app ("Share" › Muninn), waiting for a chat to be opened. */
+object GifShare {
+    var pending by mutableStateOf<Uri?>(null)
+
+    /** Copies the shared GIF in (the last one shared replaces any before it); null if it couldn't be read. */
+    fun copyIn(context: Context, uri: Uri): Uri? = try {
+        val dir = java.io.File(context.cacheDir, "gifshare")
+        dir.deleteRecursively(); dir.mkdirs()
+        val f = java.io.File(dir, "shared.gif")
+        var n = 0L
+        context.contentResolver.openInputStream(uri)?.use { ins ->
+            f.outputStream().use { out ->
+                val buf = ByteArray(64 * 1024)
+                while (true) { val r = ins.read(buf); if (r < 0) break; n += r; if (n > Gifs.MAX_BYTES + 1L) break; out.write(buf, 0, r) }
+            }
+        } ?: throw java.io.IOException()
+        Uri.fromFile(f)
+    } catch (e: Exception) { null }
+}
+
+/** "Send this GIF?", or, when it's over the limits, the way it can still go: as a still picture or as a file. */
+@Composable
+private fun GifPanel(p: PendingGif, to: String, busy: Boolean, onSend: () -> Unit, onStill: () -> Unit, onFile: (() -> Unit)?, onCancel: () -> Unit) {
+    Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            UriThumb(p.uri, Modifier.size(72.dp))
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                when {
+                    busy -> Text("Getting it ready…", style = Type.big)
+                    p.why.isEmpty() -> {
+                        Text(if (p.shared) "Send the GIF you shared to $to?" else "Send this GIF to $to?", style = Type.big)
+                        Text("It moves. Comments and other details in it are removed.", style = Type.small)
+                    }
+                    else -> {
+                        Text(p.why, style = Type.big)
+                        Text("GIFs move up to 8 MB and ${Gifs.MAX_FRAMES} frames. " + (if (onFile != null) "Send it as a still picture, or as a file that keeps moving." else "Send it as a still picture?"),
+                            style = Type.small)
+                    }
+                }
+            }
+        }
+        val buttons = if (p.why.isEmpty()) 2 else if (onFile != null) 3 else 2
+        io.github.ravenor907.muninn.ui.ChoiceRow(buttons, Modifier.padding(top = 8.dp), minWidth = 88.dp, gap = 8.dp) { n, m ->
+            when {
+                n == 0 -> MButton("Cancel", m, enabled = !busy) { onCancel() }
+                p.why.isEmpty() -> MButton("Send", m, Kind.Accent, enabled = !busy) { onSend() }
+                n == 1 -> MButton("As a still", m, if (onFile == null) Kind.Accent else Kind.Normal, enabled = !busy) { onStill() }
+                else -> MButton("As a file", m, Kind.Accent, enabled = !busy) { onFile?.invoke() }
             }
         }
     }

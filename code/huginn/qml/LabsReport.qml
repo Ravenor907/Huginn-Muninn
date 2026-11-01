@@ -2,8 +2,8 @@ import QtQuick
 import Huginn
 
 // Labs › Report a bug: the screenshot of Huginn taken just before this opened, Include screenshot (on unless
-// switched off), what went wrong (up to 2000 characters), Include crash log (off unless ticked; only when there is
-// one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
+// switched off), what went wrong (up to 2000 characters), Include performance check (when Labs › Performance
+// check opened it; on unless switched off), Include crash log (off unless ticked; only when there is one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
 // opens it (openReport).
 Item {
     id: report
@@ -14,10 +14,15 @@ Item {
     property bool includeLog: false
     property bool hasLog: false
     property bool tour: false
-    // The focus with a controller: 0 Include screenshot, 1 the text, 4 Include crash log, 2 Send, 3 Cancel.
+    // Labs › Performance check's short report, sent after what was written.
+    property string perf: ""
+    property bool includePerf: true
+    // The focus with a controller: 0 Include screenshot, 1 the text, 5 Include performance check, 4 Include crash
+    // log, 2 Send, 3 Cancel.
     property int focusAt: 1
     readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
-    readonly property int firstFocus: Labs.hasShot ? 0 : 1
+    // Top to bottom (Cancel sits beside Send).
+    readonly property var order: (Labs.hasShot ? [0] : []).concat([1]).concat(perf !== "" ? [5] : []).concat(hasLog ? [4] : []).concat([2])
 
     function open(asTour) {
         tour = !!asTour
@@ -25,8 +30,16 @@ Item {
         include = true
         includeLog = false
         hasLog = !tour && Labs.hasCrashLog()
+        perf = ""
+        includePerf = true
         focusAt = 1
         visible = true
+    }
+    // From Labs › Performance check: its report goes along.
+    function openWith(perfText) {
+        open(false)
+        perf = perfText
+        text = "Performance check"
     }
     function close() {
         visible = false
@@ -40,7 +53,7 @@ Item {
     // The controller's focus stays in view.
     onFocusAtChanged: Qt.callLater(reveal)
     function reveal() {
-        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : focusAt === 4 ? logRow : buttons
+        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : focusAt === 4 ? logRow : focusAt === 5 ? perfRow : buttons
         if (!it || !it.visible) return
         const y = it.mapToItem(col, 0, 0).y
         if (y < view.contentY) view.contentY = Math.max(0, y)
@@ -51,7 +64,7 @@ Item {
     }
     function send() {
         if (tour) return
-        const err = Labs.send(report.text, report.include && Labs.hasShot, report.includeLog && report.hasLog)
+        const err = Labs.send(report.text, report.include && Labs.hasShot, report.includeLog && report.hasLog, report.includePerf ? report.perf : "")
         if (err !== "") { Ui.say(err, true); return }
         Ui.say("Report sent. Thank you.")
         close()
@@ -60,22 +73,24 @@ Item {
         if (focusAt === 0) include = !include
         else if (focusAt === 1) edit()
         else if (focusAt === 4) includeLog = !includeLog
+        else if (focusAt === 5) includePerf = !includePerf
         else if (focusAt === 2) send()
         else close()
     }
     function handleButton(b) {
         switch (b) {
-        // Top to bottom: 0, 1, 4 (when there is a crash log), then 2 and 3 side by side.
-        case "up":
-            if (focusAt === 4) focusAt = 1
-            else if (focusAt >= 2) focusAt = hasLog ? 4 : 1
-            else focusAt = Math.max(firstFocus, focusAt - 1)
+        // Top to bottom as in order, with 2 and 3 side by side at the end.
+        case "up": {
+            const i = order.indexOf(focusAt === 3 ? 2 : focusAt)
+            focusAt = order[Math.max(0, i - 1)]
             break
-        case "down":
-            if (focusAt === 0) focusAt = 1
-            else if (focusAt === 1) focusAt = hasLog ? 4 : 2
-            else if (focusAt === 4) focusAt = 2
+        }
+        case "down": {
+            if (focusAt === 2 || focusAt === 3) break
+            const i = order.indexOf(focusAt)
+            focusAt = order[Math.min(order.length - 1, i + 1)]
             break
+        }
         case "left": if (focusAt === 2) focusAt = 3; else if (focusAt === 3) focusAt = 2; break
         case "right": if (focusAt === 3) focusAt = 2; else if (focusAt === 2) focusAt = 3; break
         case "a": activate(); break
@@ -179,6 +194,34 @@ Item {
                     }
                     HoverHandler { cursorShape: Qt.IBeamCursor }
                     TapHandler { onTapped: { report.focusAt = 1; report.edit() } }
+                }
+                // Labs › Performance check's report (no names, messages, files or addresses). On unless switched off.
+                Rectangle {
+                    id: perfRow
+                    visible: report.perf !== ""
+                    width: parent.width
+                    height: Theme.px(48)
+                    radius: Theme.radius
+                    color: report.focusAt === 5 && report.padFocus ? Theme.focusFill : "transparent"
+                    border.width: report.focusAt === 5 && report.padFocus ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Text {
+                        textFormat: Text.PlainText
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.right: perfSwitch.left; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        text: "Include performance check"
+                        color: Theme.text
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium
+                    }
+                    ToggleSwitch {
+                        id: perfSwitch
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: report.includePerf
+                        onToggled: report.includePerf = !report.includePerf
+                    }
                 }
                 // The crash log's last lines (crashes and errors only; no messages, names or addresses). Off unless ticked.
                 Rectangle {
