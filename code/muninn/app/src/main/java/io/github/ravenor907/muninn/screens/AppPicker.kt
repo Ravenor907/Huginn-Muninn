@@ -44,7 +44,7 @@ fun AppPicker(onCancel: () -> Unit, onFile: (() -> Unit)? = null, onPick: (AppFi
         title = { Text("Send an app", style = Type.big) },
         text = {
             Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState())) {
-                Text("Android asks on the TV before it installs. Apps made for phones don't always work on a TV.",
+                Text("A Kids' TV installs it only after you press Install on your phone. Apps made for phones don't always work on a TV.",
                     style = Type.small, modifier = Modifier.padding(bottom = 8.dp))
                 if (onFile != null) MButton("Pick an .apk file", Modifier.fillMaxWidth().padding(bottom = 8.dp)) { onFile() }
                 val list = apps

@@ -28,11 +28,10 @@ class NearbyService : Service() {
         }
         val nm = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.channel_transfer), NotificationManager.IMPORTANCE_LOW))
-        val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
-        val n = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle(getString(R.string.app_name))
-            .setContentText("Transferring files").setOngoing(true).setContentIntent(open).build()
-        if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, 7, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        else startForeground(7, n)
+        val n = build(this, "Transferring files", -1)
+        running = true
+        if (Build.VERSION.SDK_INT >= 29) ServiceCompat.startForeground(this, ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        else startForeground(ID, n)
         // Awake for about 10 minutes at a time, renewed while the transfer moves: a stalled one lets the phone sleep.
         if (wake == null) wake = (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Muninn:transfer")
             .apply { setReferenceCounted(false) }
@@ -42,6 +41,8 @@ class NearbyService : Service() {
     }
 
     override fun onDestroy() {
+        running = false
+        try { getSystemService(NotificationManager::class.java)?.cancel(ID) } catch (_: Exception) {}
         wake?.let { if (it.isHeld) it.release() }
         wake = null
         super.onDestroy()
@@ -53,6 +54,26 @@ class NearbyService : Service() {
         private const val AWAKE_MS = 10 * 60_000L
         @Volatile private var wake: PowerManager.WakeLock? = null
         @Volatile private var renewed = 0L
+        private const val ID = 7
+        @Volatile private var running = false
+        @Volatile private var notedAt = 0L
+
+        /** The ongoing notification: [text] ("Sending game.apk") and a bar at [percent] (below 0: none). */
+        private fun build(c: Context, text: String, percent: Int) = NotificationCompat.Builder(c, CHANNEL).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(if (percent >= 0) "$text · $percent%" else c.getString(R.string.app_name)).setContentText(if (percent >= 0) c.getString(R.string.app_name) else text)
+            .setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
+            .apply { if (percent >= 0) setProgress(100, percent.coerceIn(0, 100), false) }
+            .setContentIntent(PendingIntent.getActivity(c, 1, Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE))
+            .build()
+
+        /** How far the transfer is, on its notification too (at most once a second), while the service runs. */
+        fun note(context: Context, text: String, percent: Int) {
+            if (!running) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (now - notedAt < 1000L) return
+            notedAt = now
+            try { context.getSystemService(NotificationManager::class.java)?.notify(ID, build(context.applicationContext, text, percent)) } catch (_: Exception) {}
+        }
 
         /** The transfer moved: keep the phone awake another 10 minutes (renewed at most once a minute). */
         fun progress() {

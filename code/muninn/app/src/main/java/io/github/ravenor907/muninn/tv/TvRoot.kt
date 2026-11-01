@@ -135,15 +135,23 @@ object TvNav {
 @Composable
 fun TvRoot(app: Muninn) {
     val ready by app.ready.collectAsState()
-    Box(Modifier.fillMaxSize().background(Palette.ground)) {
+    // A file on its way (an app a parent sends, or a file from someone): a banner in the corner that never takes the
+    // focus. Back hides it (that Back does nothing else); it goes by itself a few seconds after the file arrived.
+    val file = if (ready) io.github.ravenor907.muninn.screens.transferBanner(app) else null
+    Box(Modifier.fillMaxSize().background(Palette.ground).onPreviewKeyEvent { e ->
+        val b = file
+        if (b == null || e.key != Key.Back) return@onPreviewKeyEvent false
+        if (e.type == KeyEventType.KeyUp) io.github.ravenor907.muninn.screens.TransferSeen.hide(b.key)
+        true
+    }) {
         // The Seasonal look's leaves or snow fall behind everything (nothing is drawn in the other looks).
         io.github.ravenor907.muninn.ui.SeasonFall()
         if (!ready) TvStarting(app)
         else {
             val st by KidTv.state.collectAsState()
             val wiping by KidTv.wiping.collectAsState()
-            // A plain notice when something came (an app a parent sent: "File from Dad: game.apk · Saved to Downloads").
-            LaunchedEffect(Unit) { app.net.messages.collect { (ok, msg) -> Ui.say(msg, !ok) } }
+            // A plain notice for anything else nearby sharing says; how a transfer ended shows in the file banner.
+            LaunchedEffect(Unit) { app.net.messages.collect { (ok, msg) -> if (msg != app.net.finished.value?.second) Ui.say(msg, !ok) } }
             val cfg = st.cfg
             when {
                 wiping -> TvNote("Starting over…")
@@ -154,6 +162,7 @@ fun TvRoot(app: Muninn) {
             }
         }
         TvToast(Modifier.align(Alignment.BottomCenter))
+        file?.let { TvFileBanner(it, Modifier.align(Alignment.TopEnd)) }
         val ask by Ui.ask.collectAsState()
         ask?.let { AskDialog(it) }
     }
@@ -175,6 +184,24 @@ private fun TvNote(title: String, detail: String = "") {
     Column(Modifier.fillMaxSize().padding(48.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(title, style = tvTitle(34.sp), textAlign = TextAlign.Center)
         if (detail.isNotEmpty()) Text(detail, style = tvText(24.sp, Palette.textMuted), modifier = Modifier.padding(top = 14.dp))
+    }
+}
+
+/** "game.apk", "Receiving 42%" and a bar; then "File from Dad: game.apk · Saved to Downloads". Never focusable. */
+@Composable
+private fun TvFileBanner(b: io.github.ravenor907.muninn.net.TransferView.Banner, modifier: Modifier) {
+    val shape = RoundedCornerShape(14.dp)
+    Column(modifier.padding(24.dp).widthIn(max = 460.dp).clip(shape).background(if (b.ok) Palette.raised else Palette.dangerFill)
+        .border(2.dp, if (b.ok) Palette.goldBright else Palette.danger, shape).padding(horizontal = 22.dp, vertical = 16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            MIcon(when { !b.ok -> "info"; !b.running -> "check"; b.line.startsWith("Sending") -> "upload"; else -> "download" },
+                if (b.ok) Palette.goldBright else Palette.danger, 30.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(b.title, style = tvText(24.sp, if (b.ok) Palette.text else Palette.danger, FontWeight.SemiBold), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (b.line.isNotEmpty()) Text(b.line, style = tvText(22.sp, Palette.textSoft), modifier = Modifier.padding(top = 6.dp))
+        b.fraction?.let { io.github.ravenor907.muninn.ui.Bar(it, Modifier.padding(top = 10.dp), Palette.gold) }
+        Text("Back to hide", style = tvText(20.sp, Palette.textMuted), modifier = Modifier.padding(top = 8.dp))
     }
 }
 

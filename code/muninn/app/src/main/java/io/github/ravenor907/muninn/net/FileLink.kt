@@ -236,6 +236,12 @@ object FileLink {
         _all.value = _all.value - id
     }
 
+    /** A card of mine whose file went over the internet route instead: the chat's own message takes over from here. */
+    fun handedOff(id: String) {
+        again.remove(id)
+        _all.value = _all.value - id
+    }
+
     /** Cancel shows: mine while it runs, theirs while it comes straight (one over the internet route just arrives). */
     fun canCancel(id: String) = _all.value[id]?.let { FileText.running(it.state) && (it.mine || ins.containsKey(id)) } == true
 

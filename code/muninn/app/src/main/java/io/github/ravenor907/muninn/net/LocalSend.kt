@@ -72,10 +72,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
     /** A transfer in the Files tab's Recent list. [sent]: going out (else coming in). [uri]: a received file's place in Downloads, for Open. */
     data class Item(val name: String, val status: String, val fraction: Float, val failed: Boolean, val sent: Boolean = false, val uri: String = "")
 
-    /** The transfer under way: overall, and each file ([files]). [started]: when bytes began to move, for speed and time left. */
+    /**
+     * The transfer under way: overall, and each file ([files]). [started]: when bytes began to move, for speed and time
+     * left. [id]: this transfer's own. [preparing]: still being copied and checked before it goes. [peer]: the other side.
+     */
     data class Transfer(
         val active: Boolean = false, val sending: Boolean = false, val status: String = "",
         val done: Long = 0, val total: Long = 0, val started: Long = 0, val files: List<Item> = emptyList(),
+        val id: String = "", val preparing: Boolean = false, val peer: String = "",
     ) {
         val fraction get() = if (total > 0) done.toFloat() / total else 0f
         /** "2.1 MB/s · 12 s left", or "" before there's enough to tell. */
@@ -85,6 +89,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private val _finished = MutableStateFlow<Pair<Boolean, String>?>(null)
     /** How the last transfer ended (shown in Files until the next one starts). */
     val finished: StateFlow<Pair<Boolean, String>?> = _finished.asStateFlow()
+    /** The [Transfer.id] that [finished] is about. */
+    @Volatile var finishedId = ""
+        private set
 
     /** This phone's Nostr mailbox, so Wi-Fi contacts can keep chatting from anywhere. */
     var mailbox: String? = null
@@ -144,6 +151,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
     // Sending.
     private val stopSend = AtomicBoolean(false)
     @Volatile private var sendConn: HttpURLConnection? = null
+    /** [send] took it over (from [preparing]): its own thread ends it. */
+    @Volatile private var sendBusy = false
 
     /**
      * Hidden from people nearby: no name, chat key or mailbox goes out, only a hint that changes every day, which only
@@ -595,7 +604,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val sess = Session(UUID.randomUUID().toString(), alias, ip, map, kids)
         session = sess
         _finished.value = null
-        _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total, System.currentTimeMillis())
+        _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total, System.currentTimeMillis(),
+            files = map.values.map { it.toItem() }, id = UUID.randomUUID().toString(), peer = alias)
         NearbyService.hold(context, true)
         val tokens = JSONObject().apply { map.forEach { (k, f) -> put(k, f.token) } }
         reply(out, 200, JSONObject().put("sessionId", sess.id).put("files", tokens).toString())
@@ -666,6 +676,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val now = s.files.values.map { it.toItem() }
         _transfer.update { it.copy(done = got, total = total, files = now) }
         NearbyService.progress()
+        NearbyService.note(context, "Receiving ${TransferView.what(now.map { it.name })}", FileText.percent(got, total))
         _items.value = now + history
     }
 
@@ -698,6 +709,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
         while (history.size > 30) history.removeAt(history.size - 1)
         _items.value = history.toList()
+        finishedId = _transfer.value.id
         _transfer.value = Transfer()
         _finished.value = ok to message
         NearbyService.hold(context, false)
@@ -706,16 +718,51 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     // ------------------------------------------------------------------ sending
 
-    fun send(deviceId: String, files: List<File>, pin: String? = null) {
-        val dev = found[deviceId] ?: run { messages.tryEmit(false to "That device isn't nearby anymore. Look again and pick it."); return }
+    /**
+     * Files about to go to [peer] that are still being copied in and checked (an app sent to a TV): the strip and the
+     * Kids' TV screen say "Getting ready" at once. Returns its id for [send], or null when another transfer runs.
+     */
+    fun preparing(peer: String, names: List<String>): String? {
+        synchronized(this) {
+            if (_transfer.value.active) return null
+            val id = UUID.randomUUID().toString()
+            _finished.value = null
+            _transfer.value = Transfer(true, true, "Getting ready…", id = id, preparing = true, peer = peer,
+                files = names.map { Item(it, "Getting ready", 0f, false, sent = true) })
+            return id
+        }
+    }
+
+    /** What [preparing] showed couldn't go after all (or was cancelled): [why] shows as how it ended. */
+    fun notSent(id: String, why: String) {
+        synchronized(this) {
+            if (_transfer.value.id != id || !_transfer.value.preparing) return
+            finishedId = id
+            _transfer.value = Transfer()
+        }
+        if (why.isNotEmpty()) { _finished.value = false to why; messages.tryEmit(false to why) }
+    }
+
+    /** [prepared]: the id [preparing] gave; when that was cancelled meanwhile, nothing goes. */
+    fun send(deviceId: String, files: List<File>, pin: String? = null, prepared: String? = null) {
+        if (prepared != null && _transfer.value.id != prepared) return   // cancelled while it was made ready
+        fun no(why: String) { if (prepared != null) notSent(prepared, why) else messages.tryEmit(false to why) }
+        val dev = found[deviceId] ?: run { no("That device isn't nearby anymore. Look again and pick it."); return }
         val list = files.filter { it.isFile }
-        if (list.isEmpty()) { messages.tryEmit(false to "Pick some files to send first."); return }
-        if (_transfer.value.active) return
-        stopSend.set(false)
-        val total = list.sumOf { it.length() }
-        _finished.value = null
-        _transfer.value = Transfer(true, true, "Waiting for ${dev.alias} to accept…", 0, total,
-            files = list.map { Item(it.name, "Waiting", 0f, false, sent = true) })
+        if (list.isEmpty()) { no("Pick some files to send first."); return }
+        val id = synchronized(this) {
+            val now = _transfer.value
+            if (now.active && !(now.preparing && now.id == prepared)) return
+            stopSend.set(false)
+            sendBusy = true
+            val total = list.sumOf { it.length() }
+            _finished.value = null
+            // Apps are checked (SHA-256) before anything goes: "Getting ready" until then.
+            (prepared ?: UUID.randomUUID().toString()).also { newId ->
+                _transfer.value = Transfer(true, true, "Getting ready…", 0, total,
+                    files = list.map { Item(it.name, "Waiting", 0f, false, sent = true) }, id = newId, preparing = true, peer = dev.alias)
+            }
+        }
         NearbyService.hold(context, true)
         // Over HTTPS, every request checks the device's certificate against the fingerprint it announced.
         val expected = if (dev.protocol == "https") dev.id else null
@@ -724,6 +771,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
             try {
                 // Apps go with their SHA-256: a Kids' TV takes only the exact files a parent named (TvApps).
                 val shas = list.map { f -> if (AppFiles.isApk(f.name)) try { AppFiles.sha256(f) } catch (e: Exception) { null } else null }
+                if (stopSend.get()) throw InterruptedException()
+                _transfer.update { if (it.id == id) it.copy(preparing = false, status = "Waiting for ${dev.alias} to accept…") else it }
                 val meta = JSONObject()
                 list.forEachIndexed { i, f ->
                     val ext = f.extension.lowercase()
@@ -766,6 +815,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                                             fraction = if (f.length() > 0) mineSent.toFloat() / f.length() else 1f)
                                         _transfer.update { it.copy(done = sent, files = rows.toList()) }
                                         NearbyService.progress()
+                                        NearbyService.note(context, "Sending ${TransferView.what(rows.map { it.name })}", FileText.percent(sent, _transfer.value.total))
                                     }
                                 }
                             }
@@ -817,11 +867,15 @@ class LocalSend(private val context: Context, val identity: Identity) {
     fun cancelReceive() { if (session != null) endSession(false, "Receiving stopped.") }
 
     fun cancelSend() {
+        // Still being made ready (not yet handed to send): it just stops here.
+        _transfer.value.takeIf { it.preparing && !sendBusy }?.let { notSent(it.id, "Sending stopped.") }
         stopSend.set(true)
         try { sendConn?.disconnect() } catch (_: Exception) {}
     }
 
     private fun done(ok: Boolean?, msg: String) {
+        sendBusy = false
+        finishedId = _transfer.value.id
         _transfer.value = Transfer()
         if (ok != null) _finished.value = ok to msg
         sendConn = null

@@ -438,7 +438,8 @@ class MainActivity : ComponentActivity() {
         val ask by Ui.ask.collectAsState()
         val toast by Ui.toast.collectAsState()
         LaunchedEffect(Unit) {
-            launch { app.net.messages.collect { (ok, msg) -> Ui.say(msg, !ok) } }
+            // How a transfer ended shows in the transfer strip (and in Files): no second notice for it.
+            launch { app.net.messages.collect { (ok, msg) -> if (msg != app.net.finished.value?.second) Ui.say(msg, !ok) } }
             launch { app.chat.notices.collect { Ui.say(it) } }
             launch { app.net.pinNeeded.collect { Ui.say("That device asks for a PIN. Turn off its PIN setting in LocalSend to send from Muninn.", true) } }
         }
@@ -549,6 +550,8 @@ class MainActivity : ComponentActivity() {
             } }
             if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
             if (!full) UpdateBanner()
+            // A file on its way shows over every screen (Files has its own panel; an open chat shows its own cards).
+            if (tab != "files") io.github.ravenor907.muninn.screens.TransferStrip(app, skipPeer = if (full) ChatNav.open else "") { show("files") }
             Box(Modifier.weight(1f)) {
                 TabContent(tab)
                 Toast(toast, Modifier.align(Alignment.BottomCenter))
@@ -677,6 +680,7 @@ class MainActivity : ComponentActivity() {
             }
             Column(Modifier.weight(1f).fillMaxHeight()) {
                 UpdateBanner()
+                if (tab != "files") io.github.ravenor907.muninn.screens.TransferStrip(app, skipPeer = if (tab == "chat") ChatNav.open else "") { show("files") }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (tab == "chat") Row(Modifier.fillMaxSize()) {
                         // A group opened from anywhere (a notification, the list) picks it on the rail too.

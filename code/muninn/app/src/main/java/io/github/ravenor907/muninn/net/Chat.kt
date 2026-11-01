@@ -1363,7 +1363,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             file.delete(); return null
         }
         if (FileLink.send(peerKey, file, clean, cardId) == null) return null
-        relayFile(peerKey, file, clean)?.let { FileLink.failed(peerKey, clean, file.length(), it, cardId) } ?: FileLink.dismiss(cardId)
+        // No straight path (not trusted, say): the card made while it was copied in goes, and the message's own card
+        // ("Sending 42%") takes over. It was still "Getting ready", which dismiss() leaves alone, so it stayed there.
+        val size = file.length()
+        relayFile(peerKey, file, clean)?.let { FileLink.failed(peerKey, clean, size, it, cardId) } ?: FileLink.handedOff(cardId)
         return null
     }
 

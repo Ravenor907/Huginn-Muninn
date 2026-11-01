@@ -396,11 +396,16 @@ private fun Apps(app: Muninn, t: ManagedTv) {
     val tvKey = t.key
     val context = LocalContext.current
     var sendingApp by remember { mutableStateOf(false) }
+    // "Getting ready" shows at once (below, in the strip and on the notification) while the app is copied and checked.
     val apkPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) Thread {
-            val files = io.github.ravenor907.muninn.screens.Share.copyIn(context, uris, app.net.transfer.value.active)
-            sendAppToTv(app, tvKey, files.filter { AppFiles.isApk(it.name) })
-        }.start()
+        if (uris.isNotEmpty()) {
+            val prep = app.net.preparing("", listOf(if (uris.size == 1) "App" else "${uris.size} files"))
+            if (prep == null) Ui.say("Wait for the transfer to finish.", true)
+            else Thread {
+                val files = io.github.ravenor907.muninn.screens.Share.copyIn(context, uris, true)
+                sendAppToTv(app, tvKey, files.filter { AppFiles.isApk(it.name) }, prep)
+            }.start()
+        }
     }
     // Each part is off while the TV's app can't take it: apps (k4), Update now (k2), Auto-update (k7).
     val k2 = TvParent.k2(app, tvKey)
@@ -428,8 +433,9 @@ private fun Apps(app: Muninn, t: ManagedTv) {
             }
         }
     }
-    // An app on its way to the TV: how far, how fast, and Cancel. It lands in the TV's Downloads.
+    // An app on its way to the TV: how far, how fast, and Cancel; then how it ended. It lands in the TV's Downloads.
     val moving by app.net.transfer.collectAsState()
+    val finished by app.net.finished.collectAsState()
     if (moving.active && moving.sending) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(moving.status, style = Type.normal)
         io.github.ravenor907.muninn.ui.Bar(moving.fraction, Modifier.padding(top = 6.dp), Palette.gold)
@@ -437,6 +443,11 @@ private fun Apps(app: Muninn, t: ManagedTv) {
         Text("${io.github.ravenor907.muninn.net.FileText.percent(moving.done, moving.total)}%" + (if (pace.isNotEmpty()) " · $pace" else ""),
             style = Type.small, modifier = Modifier.padding(top = 4.dp))
         MButton("Cancel", Modifier.padding(top = 6.dp), kind = io.github.ravenor907.muninn.ui.Kind.Danger) { app.net.cancelSend() }
+    } else finished?.let { (ok, text) ->
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text(text, style = Type.normal.copy(color = if (ok) Palette.text else Palette.danger))
+            MButton("Done", Modifier.padding(top = 6.dp)) { app.net.clearFinished() }
+        }
     }
     MenuRow("Update now", t.app, enabled = k2) {
         when {
@@ -453,7 +464,9 @@ private fun Apps(app: Muninn, t: ManagedTv) {
         onFile = { sendingApp = false; try { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } },
     ) { a ->
         sendingApp = false
-        Thread { sendAppToTv(app, tvKey, AppFiles.copyOut(context, a.pkg)) }.start()
+        val prep = app.net.preparing("", listOf(a.label))
+        if (prep == null) Ui.say("Wait for the transfer to finish.", true)
+        else Thread { sendAppToTv(app, tvKey, AppFiles.copyOut(context, a.pkg), prep) }.start()
     }
 }
 
@@ -556,18 +569,19 @@ private fun keepName(days: Int) = if (days <= TvRules.MIN_KEEP) "1 day" else "$d
 /**
  * A parent sends an app ([files]: one app's APK and its parts, or .apk files picked by hand) to the TV: first
  * their SHA-256s in room tvconfig (7.9), then the files themselves over the Wi-Fi. Runs off the main thread.
+ * [prep]: the "Getting ready" transfer that showed the moment it was picked; it becomes the send, or says why not.
  */
-private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>) {
-    if (files.isEmpty()) { Ui.say("Pick an app or an .apk file.", true); return }
+private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>, prep: String) {
+    if (files.isEmpty()) { app.net.notSent(prep, "Pick an app or an .apk file."); return }
     val dev = app.net.deviceFor(tvKey)
-    if (dev == null) { Ui.say("The TV isn't on this Wi-Fi.", true); return }
-    if (app.net.transfer.value.active) { Ui.say("Wait for the transfer to finish.", true); return }
+    if (dev == null) { app.net.notSent(prep, "The TV isn't on this Wi-Fi."); return }
+    if (app.net.transfer.value.id != prep) return   // cancelled while it was copied in
     val name = AppFiles.group(files) { it.name }.joinToString(", ") { it.first }
-    val parts = try { files.map { TvApps.Part(AppFiles.sha256(it), it.length()) } } catch (e: Exception) { Ui.say("$name couldn't be read.", true); return }
-    if (TvParent.tvs.value[tvKey]?.off?.contains("install") == true) { Ui.say(INSTALLS_OFF, true); return }
-    if (!TvParent.announceApp(app, tvKey, name, parts)) { Ui.say(UPDATE_FIRST, true); return }
-    app.net.send(dev.id, files)
-    Ui.say("Sending $name to the TV's Downloads. You'll be asked here before it installs.")
+    val parts = try { files.map { TvApps.Part(AppFiles.sha256(it), it.length()) } } catch (e: Exception) { app.net.notSent(prep, "$name couldn't be read."); return }
+    if (TvParent.tvs.value[tvKey]?.off?.contains("install") == true) { app.net.notSent(prep, INSTALLS_OFF); return }
+    if (app.net.transfer.value.id != prep) return
+    if (!TvParent.announceApp(app, tvKey, name, parts)) { app.net.notSent(prep, UPDATE_FIRST); return }
+    app.net.send(dev.id, files, prepared = prep)
 }
 
 /** Pick one contact; [waiting]: people who haven't accepted this phone yet. */

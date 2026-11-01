@@ -151,6 +151,8 @@ class Muninn : Application() {
         // Unsent: take its notification down too, so the text doesn't linger there.
         scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
+        // Kids' TV: a file on its way shows over other apps too (TvRoot shows it in Muninn).
+        if (io.github.ravenor907.muninn.tv.KidMode.isTv(this)) scope.launch { io.github.ravenor907.muninn.tv.TvBanner.watch(this@Muninn) }
         io.github.ravenor907.muninn.net.Move.ready(this)
         // A window already on screen (onStart ran before the vault opened): say so now, with Active status on.
         chat.foreground(visible)
