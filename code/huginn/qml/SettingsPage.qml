@@ -4,7 +4,7 @@ import Huginn
 // Settings: one flat list on the left (You, Notifications, Look, Calls, Privacy and lock, Devices,
 // Controller, Backup, About, and Erase last in red). A choice opens its rows on the right, related
 // ones together in framed sections. Changes save as you go. About starts with the raven: ten presses
-// (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports).
+// (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports, App storage).
 Rectangle {
     id: page
     // Seasonal: a frosted pane, so what falls shows while Look's settings change.
@@ -178,7 +178,8 @@ Rectangle {
               options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
             { group: "Labs", kind: "button", key: "goStable", hide: !Settings.labs, title: "Go back to stable", note: "Installs the latest stable",
               label: "Go back", enabled: !Updater.busy },
-            { group: "Labs", kind: "button", key: "report", hide: !Settings.labs, title: "Report a bug", note: "Screenshot optional", label: "Report" }
+            { group: "Labs", kind: "button", key: "report", hide: !Settings.labs, title: "Report a bug", note: "Screenshot optional", label: "Report" },
+            { group: "Labs", kind: "button", key: "storage", hide: !Settings.labs, title: "App storage", note: "Files Huginn keeps", label: "Open" }
         ].filter(r => !r.hide)
         case "erase": return [
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
@@ -737,6 +738,7 @@ Rectangle {
                                               "Hold to erase", () => { Vault.eraseAll(); Ui.main.quitNow() }, true, true)
         else if (key === "raven") tapRaven()
         else if (key === "report") Ui.main.openReport()
+        else if (key === "storage") Ui.main.openAppStorage()
         else if (key === "goStable") {
             if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
             Ui.sure("Go back to stable?", "Installs the latest stable Huginn, then restarts. Labs mode turns off." + (job ? " " + job : ""),

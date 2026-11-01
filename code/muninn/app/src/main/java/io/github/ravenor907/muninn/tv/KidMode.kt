@@ -276,6 +276,16 @@ object KidTv {
                 TvStorage.later { TvStorage.clear(app); sendStatus(app, null) }
                 true
             }
+            "files", "filedel", "filemove" -> {
+                // k10 (7.16): a parent's App storage (Labs): the TV's list, or deleting or moving files on its allowlist.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                TvStorage.later {
+                    val list = TvFiles.serve(app, o) ?: return@later
+                    send(app, fromKey, list)
+                    if (o.optString("t") != "files") sendStatus(app, null)
+                }
+                true
+            }
             "allow" -> {
                 // k8 (7.13): a parent asks the TV to turn on a permission; the kids' screen brings up Android's prompt.
                 if (s.cfg == null || fromKey !in s.parents) return false

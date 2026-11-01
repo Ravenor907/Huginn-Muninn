@@ -306,6 +306,7 @@ fun ChatMain(app: Muninn) {
             "tap" -> TapScreen(app) { ChatNav.open = "" }
             "mirror" -> MirrorList()
             "labsreport" -> LabsReportScreen(app)
+            "appstorage" -> AppStorageScreen()
             Chat.LABS_PAGE -> LabsReportsScreen(app)
             else -> if (open.startsWith("mirror/")) androidx.compose.runtime.key(open) { MirrorChatScreen(open.removePrefix("mirror/")) { ChatNav.open = "" } }
                 else androidx.compose.runtime.key(open) { Conversation(app, open) }

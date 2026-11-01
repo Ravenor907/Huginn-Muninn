@@ -37,6 +37,8 @@ public:
     QString status() const { return m_status; }
     bool autoUpdating() const { return m_auto; }
     bool ready() const { return !m_readyPath.isEmpty(); }
+    // The checked update waiting for Restart now ("" when none): App storage leaves it alone.
+    QString readyPath() const { return m_readyPath; }
     bool installing() const { return m_installing; }
 
     // At launch: if a newer release is out, download and check it; it installs only on Restart now.

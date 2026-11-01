@@ -245,6 +245,8 @@ object TvParent {
         if (o.optString("t") == "removed") return takeRemoved(app, fromKey, o)
         // k9 (7.15): an app waiting on a TV this phone looks after, or how its install went.
         if (o.optString("t") == "appask" || o.optString("t") == "appres") return _tvs.value.containsKey(fromKey) && TvAppAsks.handle(app, fromKey, o)
+        // k10 (7.16): the TV's App storage list, for a parent in Labs mode.
+        if (o.optString("t") == "filelist") return _tvs.value.containsKey(fromKey) && TvFiles.take(fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false
@@ -427,6 +429,30 @@ object TvParent {
         return true
     }
 
+    /** The TV's app said "k10": App storage from this phone (7.16). */
+    fun k10(app: Muninn, key: String): Boolean = TvFiles.CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** Asks the TV for its App storage list. False if its app lacks k10. */
+    fun askFiles(app: Muninn, key: String): Boolean {
+        if (!k10(app, key)) { app.chat.probeCaps(key); return false }
+        send(app, key, listOf(TvFiles.askMessage()))
+        return true
+    }
+
+    /** Asks the TV to delete files on its App storage list ([all]: every received file, or the caches). */
+    fun deleteTvFiles(app: Muninn, key: String, ids: List<String>, all: io.github.ravenor907.muninn.net.AppStorage.Kind? = null): Boolean {
+        if (!k10(app, key)) return false
+        send(app, key, listOf(if (all != null) TvFiles.deleteAllMessage(all) else TvFiles.deleteMessage(ids)))
+        return true
+    }
+
+    /** Asks the TV to move received files to its Downloads. */
+    fun moveTvFiles(app: Muninn, key: String, ids: List<String>): Boolean {
+        if (!k10(app, key)) return false
+        send(app, key, listOf(TvFiles.moveMessage(ids)))
+        return true
+    }
+
     /**
      * Someone the parent picked who hasn't accepted this phone yet (Keep in touch, waiting for them): kept
      * on the TV's list of [ManagedTv.waiting] and invited by [tick] the moment they're a contact.
@@ -564,6 +590,7 @@ object TvParent {
             save(app)
         }
         tries.remove(key)
+        TvFiles.forget(key)
         try { app.chat.deleteConversation(key); app.chat.removeContact(key) } catch (_: Exception) {}
     }
 

@@ -494,6 +494,29 @@ private fun Storage(app: Muninn, t: ManagedTv) {
             else Ui.say(UPDATE_FIRST, true)
         })
     }
+    // Labs: App storage on the TV (a Kids' TV has no Settings of its own), cap k10.
+    if (io.github.ravenor907.muninn.screens.Labs.on(app)) TvAppStorage(app, t)
+}
+
+/** Labs › App storage for the TV: its list (newest 40), with Delete, Move to Downloads, Delete all received files and Clear caches. */
+@Composable
+private fun TvAppStorage(app: Muninn, t: ManagedTv) {
+    val lists by TvFiles.lists.collectAsState()
+    val k10 = TvParent.k10(app, t.key)
+    // Asked when this opens; the TV answers with its list (and again after each change).
+    LaunchedEffect(t.key, k10) { TvParent.askFiles(app, t.key) }
+    var waiting by remember { mutableStateOf(false) }
+    val l = lists[t.key]
+    LaunchedEffect(l) { waiting = false }
+    // No answer (the TV is off, or nothing changed): the buttons come back after a while.
+    LaunchedEffect(waiting) { if (waiting) { kotlinx.coroutines.delay(15_000); waiting = false } }
+    Text("APP STORAGE", style = Type.section.copy(color = Palette.accent), modifier = Modifier.padding(top = 18.dp, bottom = 8.dp))
+    if (!k10) { Note(UPDATE_FIRST); return }
+    fun ask(sent: Boolean) { if (sent) waiting = true else Ui.say(UPDATE_FIRST, true) }
+    io.github.ravenor907.muninn.screens.StorageList(l?.items, waiting, l?.move == true, count = l?.count ?: 0, total = l?.total ?: 0L,
+        onDelete = { i -> ask(TvParent.deleteTvFiles(app, t.key, listOf(i.id))) },
+        onMove = { i -> ask(TvParent.moveTvFiles(app, t.key, listOf(i.id))) },
+        onDeleteAll = { k -> ask(TvParent.deleteTvFiles(app, t.key, emptyList(), all = k)) })
 }
 
 /** How long messages stay on the TV. */

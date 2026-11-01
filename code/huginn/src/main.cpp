@@ -33,6 +33,7 @@
 #include "livelist.h"
 #include "updater.h"
 #include "labs.h"
+#include "appstorage.h"
 #include "wifiselftest.h"
 #include "proof.h"
 #include "move.h"
@@ -170,7 +171,7 @@ int main(int argc, char *argv[])
     args.addOption(ratchetTest);
     QCommandLineOption nostrTest(QStringLiteral("nostr-selftest"), QStringLiteral("Check the Nostr signatures against Muninn's test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(nostrTest);
-    QCommandLineOption privacyTest(QStringLiteral("privacy-selftest"), QStringLiteral("Check the vault, photo scrubbing and Bluetooth framing (for CI), then quit."));
+    QCommandLineOption privacyTest(QStringLiteral("privacy-selftest"), QStringLiteral("Check the vault, photo scrubbing, Bluetooth framing and the App storage allowlist (for CI), then quit."));
     args.addOption(privacyTest);
     QCommandLineOption backupTest(QStringLiteral("backup-selftest"), QStringLiteral("Back up and restore a temporary chat folder (for CI), then quit."));
     args.addOption(backupTest);
@@ -245,7 +246,9 @@ int main(int argc, char *argv[])
     }
     if (args.isSet(privacyTest)) {
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();
-        return selfTested(a && b && c);
+        // Labs › App storage never reaches the vault, keys or chats.
+        const bool d = AppStorage::selfTest();
+        return selfTested(a && b && c && d);
     }
 
     // crash.log (Windows and Linux): crashes, fatal errors, graphics failures and runs that never closed.
@@ -418,6 +421,7 @@ int main(int argc, char *argv[])
     QObject::connect(profile, &Profile::changed, linked, [linked] { linked->sendMe(false); });
     // Labs mode: bug reports, and the channel back to Stable before the stable release is installed.
     auto *labs = new Labs(chat, vault, settings, &app);
+    auto *appStorage = new AppStorage(updater, &app);
     chat->setLabs(labs);
     updater->beforeGoingBack = [labs] { return labs->beforeGoingBack(); };
     // Moving to another device (cap x1): on the Wi-Fi port, and locked while it moves.
@@ -549,6 +553,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Profile", profile);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Labs", labs);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "AppStorage", appStorage);
 
     // Closed cleanly once everything below (the window, the engine) has gone; a run that never gets here shows in crash.log.
     struct CleanExit {

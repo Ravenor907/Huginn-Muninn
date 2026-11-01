@@ -62,6 +62,7 @@ qt_add_executable(huginn
     src/livelist.cpp src/livelist.h
     src/updater.cpp src/updater.h
     src/labs.cpp src/labs.h
+    src/appstorage.cpp src/appstorage.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
     src/direct.h
@@ -269,6 +270,7 @@ qt_add_qml_module(huginn
         qml/MoreButton.qml
         qml/LabsReport.qml
         qml/LabsInbox.qml
+        qml/AppStoragePanel.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -281,7 +283,7 @@ foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton Tog
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer FindBar EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel
-                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox LinkPhone)
+                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox AppStoragePanel LinkPhone)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels.

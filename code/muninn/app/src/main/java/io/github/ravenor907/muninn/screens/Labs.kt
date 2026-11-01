@@ -59,8 +59,8 @@ import java.util.Date
 
 /**
  * Labs mode: tap the raven in Settings 10 times (within 5 seconds) to turn it on, 10 more to turn it off. It shows
- * the Labs section in Settings (update channel, going back to stable, reporting a bug) and Report a bug in the chat
- * list's menu.
+ * the Labs section in Settings (update channel, going back to stable, reporting a bug, App storage) and Report a bug
+ * in the chat list's menu.
  */
 object Labs {
     private val taps = ArrayDeque<Long>()
@@ -130,7 +130,7 @@ object Labs {
         listOf(Build.MANUFACTURER, Build.MODEL).filter { !it.isNullOrBlank() }.joinToString(" "))
 }
 
-/** Settings' Labs section: update channel, going back to stable, reporting a bug. */
+/** Settings' Labs section: update channel, going back to stable, reporting a bug, App storage. */
 @Composable
 internal fun LabsSection(app: Muninn) {
     val context = LocalContext.current
@@ -146,6 +146,7 @@ internal fun LabsSection(app: Muninn) {
         Spacer(Modifier.height(6.dp))
         MenuRow("undo", "Go back to stable") { Labs.goBack(app) }
         MenuRow("info", "Report a bug") { Labs.report(context) }
+        MenuRow("folder", "App storage") { SettingsNav.goChat = "appstorage" }
     }
 }
 

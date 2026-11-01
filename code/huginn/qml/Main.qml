@@ -397,12 +397,15 @@ Window {
     // with the Labs key, Labs reports.
     LabsReport { id: labsReport; z: 28 }
     LabsInbox { id: labsInbox; z: 28 }
+    // Labs › App storage: files Huginn keeps that can go.
+    AppStoragePanel { id: appStorage; z: 28 }
     function openReport() {
         if (app.privacyCovered) return
         Labs.capture(app)
         labsReport.open(app.touring)
     }
     function openLabsReports() { labsInbox.open(app.touring) }
+    function openAppStorage() { appStorage.open(app.touring) }
     TextPrompt { id: prompt; z: 30 }
     CallPage { id: callPage; z: 36; opacity: app.privacyCovered ? 0 : 1 }
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
@@ -430,6 +433,7 @@ Window {
         if (shortcutsPanel.visible) shortcutsPanel.close()
         if (labsReport.visible) labsReport.close()
         if (labsInbox.visible) labsInbox.close()
+        if (appStorage.visible) appStorage.close()
         if (meCard.visible) meCard.close()
         if (rail.menuOpen) rail.closeMenu()
         if (linkPhone.visible) linkPhone.close()
@@ -692,6 +696,7 @@ Window {
         if (shortcutsPanel.visible) return shortcutsPanel
         if (labsReport.visible) return labsReport
         if (labsInbox.visible) return labsInbox
+        if (appStorage.visible) return appStorage
         if (personPanel.visible) return personPanel
         if (profileCard.visible) return profileCard
         if (meCard.visible) return meCard
@@ -917,7 +922,9 @@ Window {
             { page: "dms", linkPhone: "code", theme: "seasonal", season: "snow", file: "41-link-phone-snow" },
             // Settings › Notifications, and Find in a channel with its matches lit.
             { page: "settings", section: "notify", file: "42-notifications" },
-            { page: "g:tour-crew", zone: "messages", find: "in", file: "43-find" }
+            { page: "g:tour-crew", zone: "messages", find: "in", file: "43-find" },
+            // Labs › App storage (sample files: nothing on this computer is touched).
+            { page: "settings", section: "about", labs: true, appStorage: true, file: "44-app-storage" }
         ]
         interval: 1500
         repeat: true
@@ -925,7 +932,7 @@ Window {
             if (step > 0) System.grab(app, steps[step - 1].file)
             prompt.visible = false; confirm.visible = false; picker.visible = false
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
-            labsReport.visible = false; labsInbox.visible = false; linkPhone.visible = false
+            labsReport.visible = false; labsInbox.visible = false; appStorage.visible = false; linkPhone.visible = false
             if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
             if (step >= steps.length) {
                 Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
@@ -959,6 +966,7 @@ Window {
             if (s.newGroup) app.newGroup()
             if (s.report) Qt.callLater(app.openReport)
             if (s.labsInbox) app.openLabsReports()
+            if (s.appStorage) app.openAppStorage()
             if (s.linkPhone) linkPhone.open(true, s.linkPhone)
             if (s.find) Qt.callLater(() => { const p = app.page(); if (p && p.openFind) p.openFind(s.find) })
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)

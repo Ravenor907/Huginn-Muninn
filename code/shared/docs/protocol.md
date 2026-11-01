@@ -66,6 +66,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `k7` | kids' TV config field `upd`, automatic update checks (7.12). Muninn only. |
 | `k8` | kids' TV config field `keep`, the `allow` message and `off` in `status` (7.13). Muninn only. |
 | `k9` | parent-approved installs on a kids' TV (7.15): `appask`, `appok`, `appno`, `appres`. Muninn only. |
+| `k10` | App storage on a kids' TV from a parent's phone (7.16): `files`, `filelist`, `filedel`, `filemove`. Muninn only. |
 | `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn. |
 | `x1` | moving to another device (section 18). Muninn and Huginn. |
 | `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn. |
@@ -1189,6 +1190,29 @@ messages are in room `tvconfig`, sealed pairwise like the rest of section 7, so 
   with Install and Not now, and then the TV's result: "Installed", "Needs Install updates permission", "Failed: …".
 - Malformed messages are ignored; `pkg` or `ver` that don't fit are dropped, not the message.
 
+### 7.16 App storage on the TV (`k10`)
+
+Labs mode's App storage lists files an app keeps in its own private folders that can go: received files left there
+from before they went to Downloads, copies made for sending, update downloads and caches. A kids' TV has no Settings,
+so a parent in Labs mode sees the TV's list under Kids' TV, Storage. All messages are in room `tvconfig`, sealed
+pairwise like the rest of section 7.
+
+| t | from | fields |
+|---|---|---|
+| `files` | a parent | none: send your list |
+| `filelist` | the TV, to that parent | `files`: at most 40, newest first, each `id`, `n` (name, 1 to 80 characters), `s` (bytes), `at` (ms), `k` (`received`, `sent`, `update`, `cache`), `w` (a plain folder name, 1 to 40 characters); `count` (all of them), `total` (their bytes), `mv` (true: the TV can move received files to its Downloads) |
+| `filedel` | a parent | `ids` (1 to 40) or `all`: `received` or `cache` |
+| `filemove` | a parent | `ids` (1 to 40), received files to the TV's Downloads |
+
+- An `id` is a root letter (`c` the app's cache folder, `f` its files folder, `e` its folder on shared storage), `/`, and
+  the file's path there. Only a fixed allowlist is ever listed or touched: `c/apps/...`, `e/Download/...`,
+  `f/Download/...` (received), `c/outgoing/...`, `c/app/...` (sent copies), `c/updates/...` (updates), `c/files/...`,
+  `c/camera/...` and `c/app-info-*` (caches). `.`, `..`, empty parts, `\`, `:` and control characters are refused, and
+  so is a file reached through a link. The vault, keys, chats, settings and everything else are never named.
+- `k` must be the allowlist's kind for the `id`. Files changed in the last minute are still being written and are left out.
+- The TV takes `files`, `filedel` and `filemove` only from a current parent and answers with a fresh `filelist`; after
+  `filedel` or `filemove` its `status` (7.7) follows. Malformed messages are ignored.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -1208,6 +1232,7 @@ messages are in room `tvconfig`, sealed pairwise like the rest of section 7, so 
 | `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
 | `tvconfig` | `status` `usage` `clear` | 7.7 | yes | no | Seen | k3 |
 | `tvconfig` | `appask` `appok` `appno` `appres` | 7.15 | yes | no | Seen | k9 |
+| `tvconfig` | `files` `filelist` `filedel` `filemove` | 7.16 | yes | no | Seen | k10 |
 | `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |
