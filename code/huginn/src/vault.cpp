@@ -1,5 +1,6 @@
 #include "vault.h"
 #include "platform/powerwatch.h"
+#include "platform/crashlog.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
 
@@ -23,6 +24,8 @@
 #include <QThread>
 #include <QVariant>
 #include <QLocale>
+#include <QMutex>
+#include <QMutexLocker>
 #include <algorithm>
 #include <cstdio>
 #include <memory>
@@ -149,12 +152,28 @@ QSettings &settings()
     return s;
 }
 
-void restartHuginn();
+// A sealed file's contents with key; ok false when it isn't sealed with it (or isn't sealed at all: another program
+// could have put it there).
+QByteArray openSealed(const QByteArray &key, const QByteArray &b, bool *ok)
+{
+    *ok = false;
+    if (!b.startsWith(kMagic))
+        return {};
+    return Vault::open(key, b.mid(kMagic.size()), ok);
+}
 }
 
-Vault::Vault(QObject *parent)
-    : QObject(parent)
+struct Vault::Shared
 {
+    QMutex lock;
+    QByteArray key;
+};
+
+Vault::Vault(QObject *parent)
+    : QObject(parent), m_shared(std::make_shared<Shared>())
+{
+    // Every change of the key (unlock, panic, erase, restore) is followed by changed(): the copy for other threads follows.
+    connect(this, &Vault::changed, this, &Vault::shareKey);
     // Away from Chat: look every few seconds, so the lock is up before anyone comes back.
     m_awayTimer.setInterval(5000);
     connect(&m_awayTimer, &QTimer::timeout, this, [this] { if (!m_awaySince || checkAway()) m_awayTimer.stop(); });
@@ -176,6 +195,9 @@ Vault::Vault(QObject *parent)
                 returning();
                 return;
             }
+            // Sticks held while switching to a game don't count there.
+            m_l3 = m_r3 = false;
+            m_combo.stop();
             if (lockOnLeave() && hasLock() && !locked() && !m_screenLocked) {
                 lockScreen();
                 Q_EMIT panicked();
@@ -488,6 +510,7 @@ void Vault::eraseAll()
     settings().remove(QStringLiteral("chatlock/strongerAsked"));
     m_key.fill(0);
     m_key.clear();
+    m_unreadable.clear();
     settings().remove(QStringLiteral("vault"));
     // The inbox address and chat identity go too. The day keys were vault files (gone above); the ring key and its
     // ring mailbox live outside the vault and go on erased() (main.cpp, RingKey::forget), so an erased computer
@@ -505,28 +528,123 @@ bool Vault::write(const QString &name, const QByteArray &data) const
 {
     if (m_key.isEmpty() || m_restarting)
         return false;
+    // Loaded as empty because it couldn't be read: saving now would replace what is really there.
+    if (m_unreadable.contains(name)) {
+        qWarning("vault: not saving over a file that couldn't be read");
+        return false;
+    }
     QDir().mkpath(QFileInfo(path(name)).absolutePath());
     QSaveFile f(path(name));
     if (!f.open(QIODevice::WriteOnly))
         return false;
-    f.write(kMagic + seal(m_key, data));
+    if (f.write(kMagic + seal(m_key, data)) < 0)
+        return false;
     return f.commit();
 }
 
-QByteArray Vault::read(const QString &name) const
+Vault::ReadStatus Vault::readOnly(const QString &name) const
 {
     if (m_key.isEmpty())
-        return {};
+        return ReadFailed;
     QFile f(path(name));
+    if (!f.exists())
+        return ReadMissing;
     if (!f.open(QIODevice::ReadOnly))
-        return {};
-    const QByteArray b = f.readAll();
-    f.close();
-    if (!b.startsWith(kMagic))
-        return {};   // never take a file that isn't sealed: another program could have put it there
+        return ReadFailed;
     bool ok = false;
-    const QByteArray plain = open(m_key, b.mid(kMagic.size()), &ok);
-    return ok ? plain : QByteArray();
+    QByteArray plain = openSealed(m_key, f.readAll(), &ok);
+    plain.fill(0);
+    return ok ? ReadOk : ReadFailed;
+}
+
+QByteArray Vault::read(const QString &name, ReadStatus *status) const
+{
+    if (status)
+        *status = ReadFailed;
+    if (m_key.isEmpty())
+        return {};   // locked: nothing is noted (the files are fine)
+    const QString file = path(name);
+    // A few short tries: another program (a virus scanner, a copy of Huginn closing) may hold it for a moment.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        if (!QFileInfo::exists(file)) {
+            if (status)
+                *status = ReadMissing;
+            return {};
+        }
+        QFile f(file);
+        if (f.open(QIODevice::ReadOnly)) {
+            const QByteArray b = f.readAll();
+            f.close();
+            bool ok = false;
+            const QByteArray plain = openSealed(m_key, b, &ok);
+            if (ok) {
+                if (status)
+                    *status = ReadOk;
+                if (m_unreadable.remove(name) && m_unreadable.isEmpty())
+                    QMetaObject::invokeMethod(const_cast<Vault *>(this), [v = const_cast<Vault *>(this)] { Q_EMIT v->changed(); }, Qt::QueuedConnection);
+                return plain;
+            }
+        }
+        if (attempt < 2)
+            QThread::msleep(80 * (attempt + 1));
+    }
+    // There, but not readable: noted, so nothing is saved over it, and said on screen. Pictures stand alone (each
+    // is written once under its own name), so only the chat files count.
+    if (!name.startsWith(QLatin1String("photos/")) && !m_unreadable.contains(name)) {
+        m_unreadable.insert(name);
+        qWarning("vault: a saved file couldn't be read: %s", qPrintable(name));
+        CrashLog::note(QStringLiteral("a saved file couldn't be read: ") + name.section(QLatin1Char('/'), 0, 0));
+        QMetaObject::invokeMethod(const_cast<Vault *>(this), [v = const_cast<Vault *>(this)] { Q_EMIT v->changed(); }, Qt::QueuedConnection);
+    }
+    return {};
+}
+
+bool Vault::unreadable() const { return !m_unreadable.isEmpty() && !locked(); }
+
+bool Vault::tryReadAgain()
+{
+    if (m_unreadable.isEmpty())
+        return true;
+    for (const QString &name : std::as_const(m_unreadable))
+        if (readOnly(name) == ReadFailed)
+            return false;
+    // Everything reads now. What this run holds in memory was loaded without them, so it is never saved over them:
+    // Huginn starts again and loads it all (the files stay blocked until this copy has closed).
+    restartHuginn(QStringLiteral("Close Huginn and open it again to load your chats."));
+    return true;
+}
+
+void Vault::shareKey()
+{
+    QMutexLocker l(&m_shared->lock);
+    if (m_shared->key == m_key)
+        return;
+    m_shared->key.fill(0);
+    m_shared->key = m_key;
+    m_shared->key.detach();   // its own copy: wiping one never touches the other
+}
+
+std::function<QByteArray(const QString &)> Vault::anyThreadReader() const
+{
+    const std::shared_ptr<Shared> shared = m_shared;
+    const QString dir = dataDir();
+    return [shared, dir](const QString &name) -> QByteArray {
+        QByteArray key;
+        {
+            QMutexLocker l(&shared->lock);
+            key = shared->key;
+            key.detach();
+        }
+        if (key.isEmpty() || !Vault::safeName(name))
+            return {};
+        QFile f(dir + QLatin1Char('/') + name);
+        if (!f.open(QIODevice::ReadOnly))
+            return {};
+        bool ok = false;
+        const QByteArray plain = openSealed(key, f.readAll(), &ok);
+        key.fill(0);
+        return ok ? plain : QByteArray();
+    };
 }
 
 void Vault::remove(const QString &name) const { QFile::remove(path(name)); }
@@ -541,12 +659,8 @@ std::function<QByteArray()> Vault::reader(const QString &name) const
         QFile f(file);
         if (!f.open(QIODevice::ReadOnly))
             return {};
-        const QByteArray b = f.readAll();
-        f.close();
-        if (!b.startsWith(kMagic))
-            return {};
         bool ok = false;
-        const QByteArray plain = Vault::open(key, b.mid(kMagic.size()), &ok);
+        const QByteArray plain = openSealed(key, f.readAll(), &ok);
         return ok ? plain : QByteArray();
     };
 }
@@ -568,22 +682,21 @@ void Vault::setLockOnLeave(bool on)
 
 void Vault::panic()
 {
-    // Without a lock Huginn would only open again by itself: panic lock does nothing then.
+    // Without a lock there is nothing to lock with: panic lock does nothing then.
     if (!panicLock() || !exists() || locked() || !hasLock())
         return;
     lockScreen();
     Q_EMIT panicked();
-    // Like Muninn: the key is wiped from memory and Huginn starts again, so nothing readable is left behind.
-    // Nothing may be saved meanwhile (it would need the key).
-    m_key.fill(0);
-    m_key.clear();
-    m_restarting = true;
-    Q_EMIT changed();
-    QTimer::singleShot(300, this, [] { restartHuginn(); });
 }
 
 void Vault::button(const QString &name, bool down)
 {
+    // The controller reaches Huginn even while a game is in front: only presses made in Huginn count.
+    if (qGuiApp && QGuiApplication::applicationState() != Qt::ApplicationActive) {
+        m_l3 = m_r3 = false;
+        m_combo.stop();
+        return;
+    }
     if (name == QLatin1String("ls"))
         m_l3 = down;
     else if (name == QLatin1String("rs"))
@@ -703,16 +816,18 @@ void applySettingsBlob(const QByteArray &blob)
     s.sync();
 }
 
-// Starts Huginn again (to load restored chats) and closes this one.
-void restartHuginn()
-{
-    SingleInstance::releaseForRestart();   // the new copy must not find this one still holding the lock
-    if (QFile::exists(QStringLiteral("/.flatpak-info")))
-        QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QStringLiteral("io.github.ravenor907.Huginn")});
-    else
-        QProcess::startDetached(QCoreApplication::applicationFilePath(), QStringList());
-    QTimer::singleShot(300, qApp, &QCoreApplication::quit);
 }
+
+void Vault::restartHuginn(const QString &ifNot)
+{
+    // The new copy waits until this one has saved and closed: the two never use the files at the same time.
+    if (SingleInstance::startAgain()) {
+        QTimer::singleShot(300, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question
+        return;
+    }
+    m_busy = false;
+    Q_EMIT changed();
+    Q_EMIT notice(ifNot);
 }
 
 Vault::Files Vault::everything() const
@@ -742,7 +857,7 @@ bool Vault::takeEverything(const Files &files, QString *error)
     m_restarting = true;
     m_busy = true;
     Q_EMIT changed();
-    QTimer::singleShot(3000, this, [] { restartHuginn(); });
+    QTimer::singleShot(3000, this, [this] { restartHuginn(QStringLiteral("Moved here. Close Huginn and open it again to load your chats.")); });
     return true;
 }
 
@@ -1138,7 +1253,7 @@ void Vault::restoreOpened()
     m_busy = true;
     Q_EMIT changed();
     Q_EMIT done(QStringLiteral("restore"), true, QStringLiteral("Restored. Huginn restarts to load your chats."));
-    QTimer::singleShot(1500, this, [] { restartHuginn(); });
+    QTimer::singleShot(1500, this, [this] { restartHuginn(QStringLiteral("Restored. Close Huginn and open it again to load your chats.")); });
 }
 
 bool Vault::backupSelfTest()
@@ -1342,5 +1457,73 @@ bool Vault::selfTest()
         std::printf("vault lock opens with its secret only: %s\n", lk ? "ok" : "FAILED");
         all &= lk;
     }
+    return all;
+}
+
+bool Vault::stabilitySelfTest()
+{
+    bool all = true;
+    const auto check = [&all](const char *what, bool ok) {
+        std::printf("vault %s: %s\n", what, ok ? "ok" : "FAILED");
+        all &= ok;
+    };
+    Vault v;
+    if (!v.exists())
+        v.setSecret(QStringLiteral("stability self-test only"), false);
+    check("opens on the throwaway profile", !v.locked());
+    if (v.locked())
+        return false;
+    const QString name = QStringLiteral("selftest-groups.json");
+    check("writes a file", v.write(name, QByteArrayLiteral("{\"groups\":1}")));
+    ReadStatus st = ReadMissing;
+    check("reads it back", v.read(name, &st) == QByteArrayLiteral("{\"groups\":1}") && st == ReadOk);
+
+    // Damaged on disk (or another program's file): read fails, and nothing is saved over it.
+    const QByteArray damaged = kMagic + QByteArrayLiteral("not sealed with this key");
+    {
+        QFile f(v.path(name));
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            f.write(damaged);
+    }
+    const QByteArray got = v.read(name, &st);
+    check("a damaged file reads as failed, not missing", got.isEmpty() && st == ReadFailed);
+    check("a damaged file is held back", v.blocked(name) && v.unreadable());
+    check("an empty load is never saved over it", !v.write(name, QByteArrayLiteral("{}")));
+    {
+        QFile f(v.path(name));
+        const bool same = f.open(QIODevice::ReadOnly) && f.readAll() == damaged;
+        check("the file on disk is untouched", same);
+    }
+    check("Try again doesn't pass while it still can't be read", !v.tryReadAgain());
+
+    // Missing is not failed: the first save of a new file goes through.
+    const QString fresh = QStringLiteral("selftest-new.json");
+    v.remove(fresh);
+    v.read(fresh, &st);
+    check("a missing file reads as missing", st == ReadMissing && !v.blocked(fresh));
+    check("a missing file can be saved", v.write(fresh, QByteArrayLiteral("[]")));
+
+    // Readable again (the other program let go): read works and it can be saved again.
+    {
+        QSaveFile f(v.path(name));
+        if (f.open(QIODevice::WriteOnly)) {
+            f.write(kMagic + seal(v.m_key, QByteArrayLiteral("{\"groups\":2}")));
+            f.commit();
+        }
+    }
+    check("reads again once readable", v.read(name, &st) == QByteArrayLiteral("{\"groups\":2}") && st == ReadOk);
+    check("saves again once read", !v.blocked(name) && v.write(name, QByteArrayLiteral("{\"groups\":3}")));
+
+    // The image providers' reader: the same files from another thread, with the key copied for it.
+    QByteArray fromThread;
+    const auto readAny = v.anyThreadReader();
+    QThread *t = QThread::create([&] { fromThread = readAny(name); });
+    t->start();
+    t->wait(5000);
+    delete t;
+    check("reads from another thread without the main thread", fromThread == QByteArrayLiteral("{\"groups\":3}"));
+
+    v.remove(name);
+    v.remove(fresh);
     return all;
 }

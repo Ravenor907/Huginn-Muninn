@@ -291,6 +291,12 @@ public:
     Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
     // Writes everything still waiting to be saved (before Huginn closes or restarts for an update).
     void flushSaves();
+    // True when the last save of the groups or folders didn't go through (createGroup and addFolder then return "").
+    Q_INVOKABLE bool saveFailed() const { return m_saveFailed; }
+    // The identity keys: made only when there are none yet. secrets.json there but unreadable (or not a JSON object)
+    // never gets new ones written over it. --stability-selftest checks this.
+    static bool mayMakeKeys(int readStatus, bool parsed, bool hasKey);
+    static bool keySelfTest();
     Q_INVOKABLE QVariantMap groupInfo(const QString &g) const;
     Q_INVOKABLE QVariantList groupMessages(const QString &g, const QString &ch) const;
     Q_INVOKABLE void sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re = QString());
@@ -366,7 +372,9 @@ public:
     void setLabs(Labs *labs) { m_labs = labs; }
 
     static const int kMax = 2000;
-    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0);
+    // once: "1": true (13.6), the way Muninn's codes carry it.
+    static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0,
+                        bool once = false);
 
 Q_SIGNALS:
     void recentPicturesReady(const QVariantList &pictures);
@@ -399,6 +407,9 @@ private:
     Link *m_linked = nullptr;
     int receiveExtra(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p, const QString &via);
     void sendEverywhere(const QString &key, const QString &room, const QJsonObject &msg, const QString &mailbox);
+    // Room "link", a small live frame (section 15): Bluetooth, the Wi-Fi and at most 2 relays, never every relay, and in the
+    // relays' outbox apart from real messages. History, media and a "me" with its picture never go this way (Link::sendLan).
+    void sendLink(const QString &key, const QJsonObject &msg, const QString &mailbox);
     QString sendFileBlob(const QString &key, const QByteArray &bytes, const QString &name);
 
     void start();
@@ -497,7 +508,10 @@ private:
     void saveFlags();
     void forgetFlags(const QString &key);
     void loadFolders();
-    void saveFolders();
+    bool saveFolders();
+    // A save didn't go through: said on screen (at most once a minute) and tried again in a few seconds, unless the
+    // vault holds that file back (it couldn't be read this run).
+    void saveDidntGo(const QString &file, const std::function<void()> &again);
     // cap m1
     int receiveM1(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QString &sentId, const QJsonObject &p);
     void queueMx(const QString &key, const QByteArray &plain);
@@ -569,7 +583,7 @@ private:
     bool tokenOk(const QString &token, const QString &g) const;
     int gmsgIn(const QString &g, const QString &from, const QString &name, const QString &via, const QJsonObject &p);
     void loadGroups();
-    void saveGroups();
+    bool saveGroups();
     void saveGroupsSoon();
     void saveGroupChats();
     // Messages past each group's limit go; their ids are added to gone. cutoff: the oldest time kept for a limit in days.
@@ -657,6 +671,9 @@ private:
     QHash<QString, GroupOut> m_gout;                    // envelope id -> waiting for that member's receipt
     QHash<QString, qint64> m_syncAsked;                 // group|key -> when
     bool m_groupsDirty = false;
+    bool m_saveFailed = false;
+    qint64 m_saveSaid = 0;   // when "Couldn't save" was last said
+    int m_startTries = 0;    // secrets.json couldn't be read: Chat starts again a few times
     QHash<QString, QList<qint64>> m_recent, m_pieceTimes, m_recentGroup, m_recentCall, m_recentM1;
     QHash<QString, QVariantMap> m_mxOut;                // reactions and edits on their way: envelope id -> {key, time}
     QHash<QString, qint64> m_typing, m_active, m_typingSent;

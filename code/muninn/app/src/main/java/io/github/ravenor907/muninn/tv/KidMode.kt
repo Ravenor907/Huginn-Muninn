@@ -177,7 +177,7 @@ object KidTv {
     fun pairingCode(app: Muninn): String {
         // A fresh TV is named for what it is, not a random Nearby name.
         if (Regex("""Raven \d{4}""").matches(app.identity.username)) app.identity.username = "Kids' TV"
-        val code = app.chat.myCode()
+        val code = app.chat.myCode(once = false)
         val body = code.removePrefix(Contacts.PREFIX)
         val o = JSONObject(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("tv", 1)
         return Contacts.PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(o.toString().toByteArray(Charsets.UTF_8))

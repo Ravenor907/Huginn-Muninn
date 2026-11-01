@@ -18,7 +18,10 @@ class Chat;
 
 // Linked devices, companion style (shared/docs/protocol.md section 15), the same as Muninn's Link.kt.
 // A companion shows a phone's 1:1 chats and sends through it while the phone is online; contacts see
-// nothing new. Huginn can be either end:
+// nothing new. Routes (section 15): history ("chat" pages), media ("get", "part") and a "me" with its picture go only over
+// the home Wi-Fi (sendLan) and wait until both are on it; only small live frames use the internet, to at most 2 relays
+// (Chat::sendLink). History goes on "They match", on linking again, and on Refresh (at most once in 10 minutes), never
+// when a chat is opened. Huginn can be either end:
 //  - a companion: it shows a link code (MUNINNL1:, its chat key, mailbox and a token good for 10
 //    minutes and once) as a QR code; the phone takes it and answers t "hello". After the 4 emoji are
 //    checked, "chat" pages and "msg" mirror every message the phone keeps, and "send" asks the phone to
@@ -55,6 +58,8 @@ public:
     static constexpr int kText = 2000;                 // characters of "x"
     static constexpr int kPart = 192 * 1024;           // bytes of a file in one "part"
     static constexpr qint64 kMediaMax = 100LL * 1024 * 1024;
+    static constexpr qint64 kRefreshEveryMs = 10 * 60000;   // Refresh (a "sync" without "f") at most this often per companion
+    static constexpr qint64 kEchoMs = 60000;                // a "send" with no answer from the phone this long: "Didn't send"
 
     explicit Link(Chat *chat, QObject *parent = nullptr);
 
@@ -81,14 +86,19 @@ public:
     Q_INVOKABLE void confirm(const QString &key);
     Q_INVOKABLE void unlink(const QString &key);
     // On a companion: one mirrored chat's messages, oldest first:
-    // [{id, text, mine, time, kind ("" or photo, voice, video, file), media (an id for Chat.blob, "" until it's here), name, size}].
+    // [{id, text, mine, time, kind ("" or photo, voice, video, file), media (an id for Chat.blob, "" until it's here), name, size}],
+    // then what was sent from here and not answered yet: {id, text, mine, time, pending: true, failed, err}.
     Q_INVOKABLE QVariantList messages(const QString &peer) const;
     // On a companion: a photo, voice, video or file that came from the phone, saved in Downloads. "" when done,
     // else what to tell the person.
     Q_INVOKABLE QString saveMedia(const QString &peer, const QString &id) const;
-    // On a companion: send through the phone. False when no phone is linked.
-    Q_INVOKABLE bool send(const QString &peer, const QString &text);
-    Q_INVOKABLE void sync();
+    // On a companion: send through the phone. It shows at once as pending until the phone answers ("result") or its copy
+    // comes back; no answer in a minute: "Didn't send". "" when it went, else what to tell the person.
+    Q_INVOKABLE QString send(const QString &peer, const QString &text);
+    // On a companion: one that didn't send, again (the same id, so the phone never sends it twice).
+    Q_INVOKABLE void retrySend(const QString &id);
+    // On a companion: ask the phone for every chat again (Refresh), at most once in 10 minutes. What to tell the person.
+    Q_INVOKABLE QString refresh();
     // On a companion: this device's own chats while a phone is linked. openOwn checks the app lock (pattern or
     // password; anything when there's no lock) and shows them until the screen locks or closeOwn().
     Q_INVOKABLE bool ownChats() const;
@@ -136,6 +146,13 @@ public:
     static bool mediaOk(const QByteArray &bytes, const QString &hash, qint64 size);
     // "get" and "part" only on the home Wi-Fi: never over the internet, Bluetooth or Direct connect.
     static bool lanOnly(const QString &via, bool homeNet);
+    // A frame that may go over the internet (a small live one): msg, send, hello, unlink, result, sync, setme, and me
+    // without its picture. Everything else ("chat", "get", "part", a "me" with "pic") only on the home Wi-Fi.
+    static bool internetOk(const QJsonObject &msg);
+    // A Refresh from a companion last taken at last (ms, 0: never) may be taken at t.
+    static bool refreshDue(qint64 last, qint64 t) { return last <= 0 || t - last >= kRefreshEveryMs; }
+    // What a companion shows for a phone's {"t": "result", "ok": false, "err"}.
+    static QString errText(const QString &err);
     // How many parts a file of size bytes takes (0 when it's empty or too big).
     static int partsFor(qint64 size);
     // A file name from the phone made safe to save here: no folder, no character Windows or Linux refuses,
@@ -160,9 +177,24 @@ private:
     void ensureLoaded() const;
     void save();
     void saveMirror();
+    // A small live frame (internetOk): every route, at most 2 relays. Anything else only over sendLan.
     void sendTo(const Device &d, const QJsonObject &msg);
     bool sendLan(const QString &key, const QJsonObject &msg, std::function<void(int)> done = {});
     bool home() const { return !homeWifi || homeWifi(); }
+    bool lanHere(const QString &key) const;     // the device is on the home Wi-Fi with this one now
+    void sendMeTo(const Device &d, const QJsonObject &me);
+    void lanTick();                             // the phone's side: history and pictures that waited for the home Wi-Fi
+    QSet<QString> m_owed, m_meOwed;             // companions whose history, or "me" picture, waits for the home Wi-Fi
+    QHash<QString, qint64> m_synced;            // per companion: when its history was last asked for or sent
+    qint64 m_askedAt = 0;                       // the companion's side: when Refresh last asked
+    // The companion's side: sent through the phone, not answered yet (err: why it didn't send; "" while waiting).
+    struct Pending {
+        QString id, peer, text, err;
+        qint64 time = 0;
+    };
+    QList<Pending> m_pending;
+    void sendPending(const Pending &p);
+    void answerSend(const Device &d, const QString &id, bool ok, const QString &err, const QString &mid = QString());
     void syncAll(const Device *only);
     QJsonObject mJson(const QVariantMap &m, int max);
     static M mOf(const QJsonObject &o);

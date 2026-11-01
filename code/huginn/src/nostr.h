@@ -70,6 +70,14 @@ public:
     // Sends sealed content to someone's mailbox through every relay, on sending sockets of their own.
     // days > 0: the event carries a NIP-40 expiration tag (expiration(), the same for every chat). Returns how many relays are connected now.
     Q_INVOKABLE int publish(const QString &mailboxHex, const QString &content, int days = 0);
+    // The same, with more say: onStored runs once the first relay answers OK to it (NIP-20 ["OK", id, true, ...]), never
+    // before; maxRelays > 0 sends it to at most that many relays (open ones first); low marks a linked device's frame
+    // (section 15), which waits in an outbox of its own (kMaxLowOutbox) and never pushes a real message out of the main one.
+    int publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays = 0, bool low = false);
+    static constexpr int kMaxOutbox = 200;
+    static constexpr int kMaxLowOutbox = 40;
+    // The relays an event limited to n goes to: the open ones first (in list order), then the rest.
+    static QStringList pickRelays(const QStringList &all, const QSet<QString> &live, int n);
     // An event's created_at is up to this many seconds before the real time (section 20.3).
     static constexpr qint64 kBlurS = 600;
     // The longest message limit in days (section 16).
@@ -138,7 +146,15 @@ private:
     QHash<QString, Link> m_links;     // exactly one socket per relay
     QSet<QString> m_live;             // relays whose socket is open
     QHash<QString, int> m_retries;
-    QStringList m_outbox;             // events waiting for a relay
+    // Events waiting for a relay: real messages first; a linked device's frames (low) apart, with their own cap.
+    struct Out {
+        QString msg, id;
+        QStringList relays;           // empty: every relay
+        bool low = false;
+    };
+    QList<Out> m_outbox;
+    void takeOk(const QString &id);   // a relay said OK to it
+    QHash<QString, std::function<void()>> m_okWait;   // event id: what runs on its first OK
     QStringList m_seen;               // oldest first, at most 2000
     QSet<QString> m_seenSet;
     QSet<QString> m_working;

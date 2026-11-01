@@ -104,7 +104,7 @@ Window {
                    [{ value: "standard", label: "Standard" }, { value: "family", label: "Family" }, { value: "work", label: "Work" }], "standard",
                    "Type", (t, kind) => {
             const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
-            if (g === "") { Ui.say(Chat.ready ? "Give the group a name." : "Unlock Huginn first.", true); return }
+            if (g === "") { Ui.say(Chat.saveFailed() ? "Couldn't save. Try again." : Chat.ready ? "Give the group a name." : "Unlock Huginn first.", true); return }
             Ui.say("Made " + t + ".")
             openPage("g:" + g, {})
         })
@@ -138,12 +138,21 @@ Window {
         openPage("dms", {})
         Ui.say("Huginn locked.")
     }
-    // Every Exit goes through here, so a transfer is never cut off by surprise.
+    // Every Exit goes through here (the window's X too), so a transfer is never cut off by surprise.
     function requestExit() {
         if (LocalSend.busy)
-            Ui.sure("Exit while this runs?", LocalSend.status + " Closing now stops it partway.", "Exit anyway", () => Qt.quit(), true, true)
+            Ui.sure("Exit while this runs?", LocalSend.status + " Closing now stops it partway.", "Exit anyway", () => app.quitNow(), true, true)
         else
-            Ui.sure("Exit Huginn?", "Messages wait for you until you open Huginn again.", "Exit", () => Qt.quit(), false, false)
+            Ui.sure("Exit Huginn?", "Messages wait for you until you open Huginn again.", "Exit", () => app.quitNow(), false, false)
+    }
+    // Answered: Huginn closes (the window's close question isn't asked again).
+    property bool quitting: false
+    function quitNow() { quitting = true; Qt.quit() }
+    // The window's X (or Alt+F4) asks first, like Exit. Not while an update restarts Huginn, or in the screenshot tour.
+    onClosing: close => {
+        if (app.quitting || app.touring || Updater.installing) return
+        close.accepted = false
+        app.requestExit()
     }
 
     // The slim bar along the top: the raven, search (Ctrl+K) and the shortcuts (Ctrl+/).
@@ -501,6 +510,38 @@ Window {
         }
     }
 
+    // Some saved chat files couldn't be read this run: nothing is saved over them, and the screen says so (an empty
+    // list here is not a loss). Try again starts Huginn again once they read.
+    Rectangle {
+        id: unreadableBar
+        anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: Theme.px(updateBar.visible ? 8 + 12 : 8) + (updateBar.visible ? updateBar.height : 0)
+        z: 55
+        visible: Vault.unreadable && !app.touring
+        width: Math.min(app.width - Theme.px(24), unreadableRow.implicitWidth + Theme.px(24))
+        height: unreadableRow.implicitHeight + Theme.px(12)
+        color: Theme.panel
+        border.color: Theme.danger; border.width: Math.max(1, Theme.px(1))
+        Row {
+            id: unreadableRow
+            anchors.centerIn: parent
+            spacing: Theme.px(12)
+            Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(implicitWidth, app.width - Theme.px(200))
+                wrapMode: Text.Wrap
+                text: "Some saved chats couldn't be read. Nothing was changed or erased."
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(15)
+            }
+            HButton {
+                text: "Try again"; kind: "primary"
+                onClicked: if (!Vault.tryReadAgain()) Ui.say("Still can't read them. Close other programs using Huginn's folder, then try again.", true)
+            }
+        }
+    }
+
     // Shown while an update installs; Huginn restarts on the new version after.
     Rectangle {
         id: updating
@@ -616,6 +657,12 @@ Window {
             app.closePanels()
             Ui.say("Huginn locked.")
         }
+        function onNotice(text) { Ui.say(text, true) }
+    }
+    // An update that went in but couldn't start Huginn again, or didn't go in.
+    Connections {
+        target: Updater
+        function onNotice(text) { Ui.say(text, true) }
     }
     Connections {
         target: LocalSend

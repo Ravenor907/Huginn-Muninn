@@ -3,10 +3,12 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QTimer>
 #include <QVariant>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -72,10 +74,23 @@ public:
     // Erases every message, photo, voice message, contact and key, the cache and a move's state. Huginn's other settings stay.
     Q_INVOKABLE void eraseAll();
 
-    // Encrypted files in Huginn's data folder. read() returns empty when missing, locked or damaged;
-    // plain files are read once and saved encrypted.
+    // Encrypted files in Huginn's data folder. read() returns empty when missing, locked or damaged.
+    // A file that is there but couldn't be read (damaged, or held by another program for longer than a few short
+    // tries) is never written over: write() refuses it until a read of it works again, so what was loaded as empty
+    // can't replace what is on disk. False from write() means nothing was saved.
+    enum ReadStatus { ReadOk, ReadMissing, ReadFailed };
     bool write(const QString &name, const QByteArray &data) const;
-    QByteArray read(const QString &name) const;
+    QByteArray read(const QString &name) const { return read(name, nullptr); }
+    QByteArray read(const QString &name, ReadStatus *status) const;
+    bool blocked(const QString &name) const { return m_unreadable.contains(name); }
+    // Some saved chat files couldn't be read this run (the screen says so; nothing was changed or erased).
+    Q_PROPERTY(bool unreadable READ unreadable NOTIFY changed)
+    bool unreadable() const;
+    // Reads those files again: once they all read, Huginn starts again to load them. False when some still don't.
+    Q_INVOKABLE bool tryReadAgain();
+    // read() from any thread (the image providers): never waits on the main thread. The key it reads with is a copy
+    // the main thread keeps current.
+    std::function<QByteArray(const QString &)> anyThreadReader() const;
     void remove(const QString &name) const;
     QString path(const QString &name) const;
     // read() for another thread: the key and the file are taken now, the file is read and opened when it's called.
@@ -86,6 +101,9 @@ public:
     static QByteArray open(const QByteArray &key, const QByteArray &data, bool *ok);
     static QByteArray derive(const QString &secret, const QByteArray &salt, int rounds);
     static bool selfTest();
+    // --stability-selftest (on a throwaway profile): a file that is there but can't be read is never written over,
+    // a missing one is, and a file that reads again can be saved again.
+    static bool stabilitySelfTest();
 
     // ---------------------------------------------------------------- encrypted backup
     // The same file Muninn makes: "MUNB1", a 4-byte big-endian header length, the header JSON, then
@@ -138,8 +156,8 @@ public:
     static QString settingsEntry();
 
     // ---------------------------------------------------------------- panic lock
-    // Hold L3 and R3 for a second anywhere in Huginn: Chat locks at once. Main.qml passes every
-    // controller press and release here.
+    // Hold L3 and R3 for a second anywhere in Huginn (while it's the app in front): Chat locks at once.
+    // Main.qml passes every controller press and release here.
     Q_PROPERTY(bool panicLock READ panicLock WRITE setPanicLock NOTIFY changed)
     // Lock the moment Huginn stops being the app in front.
     Q_PROPERTY(bool lockOnLeave READ lockOnLeave WRITE setLockOnLeave NOTIFY changed)
@@ -148,8 +166,9 @@ public:
     bool lockOnLeave() const;
     void setLockOnLeave(bool on);
     Q_INVOKABLE void button(const QString &name, bool down);
-    // Lock at once (the keyboard's Ctrl+Shift+Q, or L3 and R3 held for a second). The key is wiped from
-    // memory and Huginn starts again, like Muninn.
+    // Lock at once (the keyboard's Ctrl+Shift+Q, or L3 and R3 held for a second): the lock screen goes up and
+    // anything that could show Chat closes. Huginn keeps running (messages are still saved behind the lock).
+    // The controller counts only while Huginn is the app in front, so a game played beside it never sets it off.
     Q_INVOKABLE void panic();
 
 Q_SIGNALS:
@@ -158,8 +177,17 @@ Q_SIGNALS:
     void erased();   // Erase everything (also Move, once done): what lives outside the vault goes too
     void done(const QString &what, bool ok, const QString &message);   // backup, open, restore
     void panicked(); // the panic combo just locked Chat: close anything that could show it
+    void notice(const QString &text);   // something to say on screen at once (Huginn couldn't start again)
 
 private:
+    // Starts Huginn again (it waits for this copy to close) and closes this one. When it can't start, this copy
+    // stays open and says ifNot.
+    void restartHuginn(const QString &ifNot);
+    ReadStatus readOnly(const QString &name) const;   // read() without noting anything (tryReadAgain)
+    struct Shared;
+    std::shared_ptr<Shared> m_shared;   // the key for anyThreadReader(), copied on every change
+    void shareKey();
+    mutable QSet<QString> m_unreadable;
     QString keyFile() const;
     bool writeLock(const QString &secret, bool pattern) const;
     bool writeKeyFile(const QByteArray &bytes) const;

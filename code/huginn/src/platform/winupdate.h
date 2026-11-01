@@ -10,7 +10,8 @@ class QObject;
 // Updater downloads the zip, checks its SHA-256 against the one published with the release, then
 // calls install(), which does everything inside Huginn itself: it unpacks the zip into a staging
 // folder beside Huginn.exe, moves each file in use aside (Windows lets a running program's files be
-// renamed), puts the new files in their place and starts the new Huginn.exe as a normal window.
+// renamed), puts the new files in their place and starts the new Huginn.exe as a normal window (it waits for this
+// one to close).
 // The moved-aside files are deleted the next time Huginn starts (cleanUp()).
 // On other platforms (and in a Windows development build) supported() is false.
 namespace WinUpdate
@@ -26,5 +27,6 @@ QString folderProblem();
 // folder layouts (everything at the top, or a launcher at the top with the app in lib\).
 void cleanUp();
 void tidyOldLayout();   // the folder-layout part of cleanUp(), kept for callers that run it later
-void install(const QString &zipPath, QObject *context, std::function<void(bool ok, const QString &message)> done);
+// done: ok (the files were replaced), restarting (the new copy was started; this one must close now) and what to say.
+void install(const QString &zipPath, QObject *context, std::function<void(bool ok, bool restarting, const QString &message)> done);
 }

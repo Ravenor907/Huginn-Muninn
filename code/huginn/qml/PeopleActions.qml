@@ -57,7 +57,12 @@ QtObject {
         const again = () => folderMenu(k, back)
         Ui.pickFrom("Folders and role", [{ header: "", items: items }], a => {
             if (a === "+") {
-                Ui.ask("New folder", "Only you see it", "", "Make it", t => { const f = Chat.addFolder(t); if (f !== "") Chat.setInFolder(f, k, true); Qt.callLater(again) }, false, true)
+                Ui.ask("New folder", "Only you see it", "", "Make it", t => {
+                    const f = Chat.addFolder(t)
+                    if (f !== "") Chat.setInFolder(f, k, true)
+                    else if (Chat.saveFailed()) Ui.say("Couldn't save. Try again.", true)
+                    Qt.callLater(again)
+                }, false, true)
                 return
             }
             if (a.indexOf("role:") === 0) {
@@ -155,9 +160,10 @@ QtObject {
         Chat.copyText(link)
         Ui.say("One-time link copied. Works for a day.")
     }
-    // After adding a code: a one-time invite says hi at once, so they know it worked.
+    // After adding a code: a code with "1" (every code Huginn and Muninn show, and one-time links) says hi at once, which
+    // makes this device a contact on theirs too, with no request to accept (13.6).
     function added(code, key) {
-        if (Trust.isOnceCode(code)) Chat.sendPrivate(key, "Hi, it's " + Chat.username + ". I added you with your invite link.")
+        if (Trust.isOnceCode(code)) Chat.sendPrivate(key, "Hi, it's " + Chat.username + ". I added you.")
     }
 
     // ------------------------------------------------------------- f1: files over the internet

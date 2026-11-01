@@ -185,6 +185,7 @@ jobs:
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --privacy-selftest
           run timeout 150 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --wifi-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --backup-selftest
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --stability-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/code/shared/vectors:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/code/shared/vectors/proto06-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/code/shared/vectors:ro" io.github.ravenor907.Huginn --release-sig-selftest "$PWD/code/shared/vectors/release-sig-vectors.json"
           exit $bad
@@ -633,6 +634,7 @@ jobs:
           # A message from a pretend Muninn over the local HTTPS endpoint, with the raven call and a notification.
           run timeout 150 "$h" --wifi-selftest
           run "$h" --backup-selftest
+          run "$h" --stability-selftest
           run "$h" --call-selftest code/shared/vectors/proto06-vectors.json
           run "$h" --release-sig-selftest code/shared/vectors/release-sig-vectors.json
           # A file signed the way the release job signs (openssl, Ed25519 over the raw bytes) with a throwaway key.

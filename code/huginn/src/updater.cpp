@@ -30,7 +30,6 @@ const char *kLatestPage = "https://github.com/Ravenor907/Huginn-Muninn/releases/
 const char *kDownload = "https://github.com/Ravenor907/Huginn-Muninn/releases/download/";
 // The one pre-release (Labs' Pre-release channel), always under this tag; its version.txt holds the label.
 const char *kBetaTag = "beta";
-const char *kAppId = "io.github.ravenor907.Huginn";
 // The project's release key (Ed25519, shared/docs/release-key.pem). CI signs every release file with its private half.
 const char *kReleaseKey = "705d7c9eb0626439b6ab749bbeefc9271876249c701914d60902a6b2b7341d06";
 
@@ -357,13 +356,22 @@ void Updater::installFlatpak(const QString &path)
             m_goingBack = false;
             m_status = QStringLiteral("Installing the update failed.");
             Q_EMIT changed();
+            Q_EMIT notice(m_status);
+            return;
+        }
+        // The new copy waits until this one has saved and closed. Closed only once it really started.
+        if (!SingleInstance::startAgain()) {
+            m_installing = false;
+            m_auto = false;
+            m_goingBack = false;
+            m_status = QStringLiteral("Updated. Open Huginn again.");
+            Q_EMIT changed();
+            Q_EMIT notice(m_status);
             return;
         }
         m_status = QStringLiteral("Updated. Restarting…");
         Q_EMIT changed();
-        SingleInstance::releaseForRestart();   // the new copy must not find this one still holding the lock
-        QProcess::startDetached(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("flatpak"), QStringLiteral("run"), QString::fromLatin1(kAppId)});
-        QTimer::singleShot(300, qApp, &QCoreApplication::quit);
+        QTimer::singleShot(300, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question
     });
     p->start(program, args);
 }
@@ -497,17 +505,20 @@ void Updater::installNow(const QString &path)
     }
     m_status = QStringLiteral("Installing…");
     Q_EMIT changed();
-    WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
+    WinUpdate::install(path, this, [this](bool ok, bool restarting, const QString &msg) {
         m_busy = false;
-        if (!ok) {
+        // Closed only when the new copy really started; otherwise Huginn stays open and says so.
+        if (!ok || !restarting) {
             m_installing = false;
             m_auto = false;
             m_goingBack = false;
         }
         m_status = msg;
         Q_EMIT changed();
-        if (ok)
-            QTimer::singleShot(300, qApp, &QCoreApplication::quit);
+        if (ok && restarting)
+            QTimer::singleShot(300, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question
+        else
+            Q_EMIT notice(msg);
     });
 }
 

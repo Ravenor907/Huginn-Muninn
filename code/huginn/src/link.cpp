@@ -82,12 +82,14 @@ Link::Link(Chat *chat, QObject *parent)
         if (m_loaded && !m_companions.isEmpty())
             m_meSoon.start();
     });
-    // A companion asks for what's missing every half minute while it's on the home Wi-Fi (one file at a time).
+    // A companion asks for what's missing every half minute while it's on the home Wi-Fi (one file at a time); the
+    // phone sends history and pictures that waited for the home Wi-Fi.
     m_fetchTimer.setInterval(30000);
     connect(&m_fetchTimer, &QTimer::timeout, this, [this] {
         if (!m_chat->ready())
             return;
         ensureLoaded();
+        lanTick();
         if (m_phone.key.isEmpty() || !m_phone.ok)
             return;
         if (m_want.isEmpty()) {
@@ -211,8 +213,37 @@ void Link::saveMirror()
 
 void Link::sendTo(const Device &d, const QJsonObject &msg)
 {
-    // Sealed like a private message, on every route at once.
-    m_chat->sendEverywhere(d.key, QStringLiteral("link"), msg, d.mailbox.size() == 64 ? d.mailbox : QString());
+    // Never history or a picture over the internet: those only on the home Wi-Fi (dropped when it isn't there now;
+    // the callers keep what they owe).
+    if (!internetOk(msg)) {
+        sendLan(d.key, msg);
+        return;
+    }
+    // Sealed like a private message: Bluetooth, the Wi-Fi and at most 2 relays.
+    m_chat->sendLink(d.key, msg, d.mailbox.size() == 64 ? d.mailbox : QString());
+}
+
+bool Link::internetOk(const QJsonObject &msg)
+{
+    const QString t = jstr(msg, "t");
+    if (t == QLatin1String("me"))
+        return !msg.contains(QStringLiteral("pic"));
+    return t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("hello") || t == QLatin1String("unlink")
+        || t == QLatin1String("result") || t == QLatin1String("sync") || t == QLatin1String("setme");
+}
+
+QString Link::errText(const QString &err)
+{
+    if (err == QLatin1String("confirm"))
+        return QStringLiteral("Confirm the emoji on your phone");
+    if (err == QLatin1String("not a contact"))
+        return QStringLiteral("Not a contact on your phone");
+    return QStringLiteral("Didn't send");
+}
+
+bool Link::lanHere(const QString &key) const
+{
+    return m_chat->ready() && home() && !key.isEmpty() && !m_chat->baseTo(key).isEmpty();
 }
 
 // Only to the device's address on the home Wi-Fi (the LAN route), never anywhere else. False when there is none.
@@ -326,7 +357,46 @@ void Link::sendMe(bool force)
         return;
     m_meSent = bytes;
     for (const Device &d : std::as_const(to))
+        sendMeTo(d, me);
+}
+
+// "me" with its picture only on the home Wi-Fi; away from it the rest goes now ("pk": keep the picture you have) and the
+// picture follows once both are on it again (lanTick).
+void Link::sendMeTo(const Device &d, const QJsonObject &me)
+{
+    if (!me.contains(QStringLiteral("pic"))) {
+        m_meOwed.remove(d.key);
         sendTo(d, me);
+        return;
+    }
+    if (lanHere(d.key) && sendLan(d.key, me)) {
+        m_meOwed.remove(d.key);
+        return;
+    }
+    QJsonObject small = me;
+    small.remove(QStringLiteral("pic"));
+    small.insert(QStringLiteral("pk"), true);
+    sendTo(d, small);
+    m_meOwed.insert(d.key);
+}
+
+void Link::lanTick()
+{
+    // Not while file sums are still being worked out: the history waiting on them goes by itself once they are.
+    if (m_companions.isEmpty() || !m_hashing.isEmpty())
+        return;
+    const QList<Device> all = m_companions;
+    for (const Device &d : all) {
+        if (!d.ok || !lanHere(d.key))
+            continue;
+        if (m_owed.contains(d.key))
+            syncAll(&d);
+        if (m_meOwed.contains(d.key) && myProfile) {
+            QJsonObject me = myProfile();
+            me.insert(QStringLiteral("t"), QStringLiteral("me"));
+            sendMeTo(d, me);
+        }
+    }
 }
 
 void Link::forgetPhone()
@@ -338,6 +408,8 @@ void Link::forgetPhone()
     m_meStatus.clear();
     m_meCustom.clear();
     m_mePic.clear();
+    m_pending.clear();
+    m_askedAt = 0;
     saveMirror();
     dropMedia();
 }
@@ -399,7 +471,8 @@ void Link::confirm(const QString &key)
     if (m_phone.key == key && !m_phone.ok) {
         m_phone.ok = true;
         save();
-        sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("sync")}});
+        // "f": the first one after the emoji, which the phone takes even inside the 10 minutes.
+        sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("f"), true}});
     }
 }
 
@@ -432,6 +505,12 @@ QVariantList Link::messages(const QString &peer) const
         out << QVariantMap{{QStringLiteral("id"), x.id}, {QStringLiteral("text"), x.text}, {QStringLiteral("mine"), x.mine}, {QStringLiteral("time"), double(x.time)},
                            {QStringLiteral("kind"), x.kind}, {QStringLiteral("media"), haveMedia(x.hash) ? mediaId(x.hash) : QString()},
                            {QStringLiteral("name"), x.name}, {QStringLiteral("size"), double(x.size)}};
+    for (const Pending &p : m_pending)
+        if (p.peer == peer)
+            out << QVariantMap{{QStringLiteral("id"), p.id}, {QStringLiteral("text"), p.text}, {QStringLiteral("mine"), true}, {QStringLiteral("time"), double(p.time)},
+                               {QStringLiteral("kind"), QString()}, {QStringLiteral("media"), QString()}, {QStringLiteral("name"), QString()},
+                               {QStringLiteral("size"), 0.0}, {QStringLiteral("pending"), true}, {QStringLiteral("failed"), !p.err.isEmpty()},
+                               {QStringLiteral("err"), p.err}};
     return out;
 }
 
@@ -584,6 +663,8 @@ void Link::unlink(const QString &key)
         if (d.key == key)
             sendTo(d, bye);
     m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == key; }), m_companions.end());
+    m_owed.remove(key);
+    m_meOwed.remove(key);
     // Files waiting for it are dropped (one already going stops at its next part, which isn't taken any more).
     for (qsizetype i = m_serve.size() - 1; i >= (m_serveAt >= 0 ? 1 : 0); --i)
         if (m_serve.at(i).to == key)
@@ -818,6 +899,18 @@ void Link::syncAll(const Device *only)
                 }
         }))
         return;
+    // History only over the home Wi-Fi: a companion that isn't on it now gets it once it is (lanTick).
+    QList<Device> lan;
+    for (const Device &d : std::as_const(to)) {
+        if (lanHere(d.key)) {
+            lan << d;
+            m_owed.remove(d.key);
+        } else {
+            m_owed.insert(d.key);
+        }
+    }
+    if (lan.isEmpty())
+        return;
     for (auto it = m_chat->m_private.cbegin(); it != m_chat->m_private.cend(); ++it) {
         const QString peer = it.key();
         if (it.value().isEmpty() || !m_chat->isContact(peer) || m_chat->isTrashed(peer))
@@ -833,8 +926,9 @@ void Link::syncAll(const Device *only)
             const QJsonObject json{{QStringLiteral("t"), QStringLiteral("chat")}, {QStringLiteral("peer"), peer}, {QStringLiteral("n"), m_chat->nameOf(peer)},
                                    {QStringLiteral("msgs"), all.at(i)}, {QStringLiteral("d"), m_chat->chatDays(peer)},
                                    {QStringLiteral("pg"), int(i)}, {QStringLiteral("pgs"), int(all.size())}};
-            for (const Device &d : to)
-                sendTo(d, json);
+            for (const Device &d : std::as_const(lan))
+                if (!sendLan(d.key, json))
+                    m_owed.insert(d.key);   // off the home Wi-Fi meanwhile: all of it again later
         }
     }
 }
@@ -1086,6 +1180,13 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     }
     // Nothing goes either way until this screen's emoji were checked.
     const bool okHere = ph ? m_phone.ok : std::any_of(m_companions.cbegin(), m_companions.cend(), [&](const Device &d) { return d.key == from && d.ok; });
+    if (!okHere && comp && t == QLatin1String("send")) {
+        // Not checked here yet: say so, so the companion doesn't wait for nothing.
+        for (const Device &d : std::as_const(m_companions))
+            if (d.key == from)
+                answerSend(d, jstr(p, "id"), false, QStringLiteral("confirm"));
+        return true;
+    }
     if (!okHere && (comp || ph))
         return t == QLatin1String("chat") || t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("sync")
             || t == QLatin1String("me") || t == QLatin1String("setme");
@@ -1097,8 +1198,40 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         m_meName = vstr(me, "name");
         m_meStatus = vstr(me, "status");
         m_meCustom = vstr(me, "custom");
-        m_mePic = me.value(QStringLiteral("pic")).toByteArray();
+        // "pk": sent away from the home Wi-Fi without the picture: the one here stays until it comes.
+        if (!p.value(QStringLiteral("pk")).toBool())
+            m_mePic = me.value(QStringLiteral("pic")).toByteArray();
         save();
+        return true;
+    }
+    if (ph && t == QLatin1String("result")) {
+        // The phone's answer to a "send" from here: gone (it shows as the phone's own message), or why it didn't send.
+        const QString id = jstr(p, "id");
+        for (qsizetype i = 0; i < m_pending.size(); ++i) {
+            if (m_pending.at(i).id != id)
+                continue;
+            const Pending done = m_pending.at(i);
+            if (p.value(QStringLiteral("ok")).toBool()) {
+                m_pending.removeAt(i);
+                // Its copy may not be here yet: shown under the phone's own id, which the copy then merges into.
+                const QString mid = jstr(p, "mid");
+                if (!mid.isEmpty()) {
+                    Mirror &c = m_mirror[done.peer];
+                    if (c.peer.isEmpty()) {
+                        c.peer = done.peer;
+                        c.name = QStringLiteral("Someone");
+                    }
+                    if (std::none_of(c.msgs.cbegin(), c.msgs.cend(), [&](const M &x) { return x.id == mid; })) {
+                        merge(c.msgs, {M{mid, done.text, true, now(), {}, {}, {}, 0}});
+                        saveMirror();
+                    }
+                }
+            } else {
+                m_pending[i].err = errText(jstr(p, "err"));
+            }
+            Q_EMIT changed();
+            break;
+        }
         return true;
     }
     if (comp && t == QLatin1String("setme")) {
@@ -1155,6 +1288,13 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         if (c.name.isEmpty())
             c.name = QStringLiteral("Someone");
         merge(c.msgs, {x});
+        // My own message from here came back: it isn't pending any more.
+        if (x.mine)
+            for (qsizetype i = 0; i < m_pending.size(); ++i)
+                if (m_pending.at(i).peer == peer && m_pending.at(i).text.left(kText) == x.text) {
+                    m_pending.removeAt(i);
+                    break;
+                }
         saveMirror();
         want(x);
         fetchNext();
@@ -1218,12 +1358,29 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     if (comp && t == QLatin1String("send")) {
         // The phone sends it as its own message, only to one of its contacts.
         // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
-        const QString peer = jstr(p, "peer"), text = jstr(p, "text").trimmed();
-        if (!text.isEmpty() && m_chat->isContact(peer) && firstSend(jstr(p, "id")))
-            m_chat->sendPrivate(peer, text.left(Chat::kMax));
+        // Answered either way ("result"), so the companion never waits for nothing.
+        const QString peer = jstr(p, "peer"), text = jstr(p, "text").trimmed(), id = jstr(p, "id");
+        Device dev;
+        for (const Device &d : std::as_const(m_companions))
+            if (d.key == from)
+                dev = d;
+        if (text.isEmpty()) {
+            answerSend(dev, id, false, QStringLiteral("empty"));
+        } else if (!m_chat->isContact(peer)) {
+            answerSend(dev, id, false, QStringLiteral("not a contact"));
+        } else if (!firstSend(id)) {
+            answerSend(dev, id, true, QString());   // sent already: its copy went then
+        } else {
+            const QString mid = m_chat->sendPrivateWith(peer, text.left(Chat::kMax), QString(), QJsonObject());
+            answerSend(dev, id, !mid.isEmpty(), mid.isEmpty() ? QStringLiteral("not sent") : QString(), mid);
+        }
         return true;
     }
     if (comp && t == QLatin1String("sync")) {
+        // Refresh at most once in 10 minutes per companion; the first one after the emoji ("f") always.
+        if (!p.value(QStringLiteral("f")).toBool() && !refreshDue(m_synced.value(from, 0), now()))
+            return true;
+        m_synced.insert(from, now());
         for (const Device &d : std::as_const(m_companions))
             if (d.key == from) {
                 const Device copy = d;
@@ -1237,22 +1394,86 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
 
 // ------------------------------------------------------------------ the companion's side
 
-bool Link::send(const QString &peer, const QString &text)
+QString Link::send(const QString &peer, const QString &text)
 {
     ensureLoaded();
     const QString t = text.trimmed();
-    if (m_phone.key.isEmpty() || t.isEmpty())
-        return false;
-    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("send")}, {QStringLiteral("peer"), peer}, {QStringLiteral("text"), t.left(Chat::kMax)},
-                                {QStringLiteral("id"), QUuid::createUuid().toString(QUuid::WithoutBraces)}});
-    return true;
+    if (m_phone.key.isEmpty())
+        return QStringLiteral("No phone is linked any more.");
+    if (!m_phone.ok)
+        return QStringLiteral("Check the emoji on both screens first.");
+    if (t.isEmpty())
+        return QStringLiteral("Write something first.");
+    // Shown at once as pending, until the phone answers or its copy comes back.
+    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, t.left(Chat::kMax), QString(), now()};
+    m_pending << p;
+    while (m_pending.size() > 50)
+        m_pending.removeFirst();
+    sendPending(p);
+    Q_EMIT changed();
+    return QString();
 }
 
-void Link::sync()
+void Link::sendPending(const Pending &p)
+{
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("send")}, {QStringLiteral("peer"), p.peer}, {QStringLiteral("text"), p.text},
+                                {QStringLiteral("id"), p.id}});
+    // No answer in a minute: "Didn't send", with Retry.
+    const QString id = p.id;
+    QTimer::singleShot(int(kEchoMs + 500), this, [this, id] {
+        for (Pending &x : m_pending)
+            if (x.id == id && x.err.isEmpty() && now() - x.time >= kEchoMs) {
+                x.err = QStringLiteral("Didn't send");
+                Q_EMIT changed();
+            }
+    });
+}
+
+void Link::retrySend(const QString &id)
 {
     ensureLoaded();
-    if (!m_phone.key.isEmpty())
-        sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("sync")}});
+    if (m_phone.key.isEmpty() || !m_phone.ok)
+        return;
+    for (Pending &x : m_pending)
+        if (x.id == id) {
+            x.err.clear();
+            x.time = now();
+            sendPending(x);   // the same id: the phone sends it at most once
+            Q_EMIT changed();
+            return;
+        }
+}
+
+void Link::answerSend(const Device &d, const QString &id, bool ok, const QString &err, const QString &mid)
+{
+    if (d.key.isEmpty() || id.isEmpty())
+        return;
+    QJsonObject r{{QStringLiteral("t"), QStringLiteral("result")}, {QStringLiteral("id"), id}, {QStringLiteral("ok"), ok}};
+    if (!err.isEmpty())
+        r.insert(QStringLiteral("err"), err);
+    if (!mid.isEmpty())
+        r.insert(QStringLiteral("mid"), mid);
+    sendTo(d, r);
+}
+
+QString Link::refresh()
+{
+    ensureLoaded();
+    if (m_phone.key.isEmpty())
+        return QStringLiteral("No phone is linked.");
+    if (!m_phone.ok)
+        return QStringLiteral("Check the emoji on both screens first.");
+    const qint64 t = now();
+    if (!refreshDue(m_askedAt, t)) {
+        const qint64 mins = qMax<qint64>(1, (kRefreshEveryMs - (t - m_askedAt) + 59999) / 60000);
+        return QStringLiteral("Asked already. You can ask again in %1 min.").arg(mins);
+    }
+    m_askedAt = t;
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("sync")}});
+    fetchNext();
+    const QString name = m_phone.name.isEmpty() ? QStringLiteral("your phone") : m_phone.name;
+    return lanHere(m_phone.key) ? QStringLiteral("Asked %1 for its chats.").arg(name)
+                                : QStringLiteral("Asked %1. History comes over on home Wi-Fi.").arg(name);
 }
 
 // ------------------------------------------------------------------ self-test (shared/vectors/i1f1-vectors.json "link")
@@ -1368,6 +1589,20 @@ bool Link::selfTest(const QJsonObject &v)
         check(readMe(QJsonObject{{QStringLiteral("n"), QString(60, QLatin1Char('x'))}}).value(QStringLiteral("name")).toString().size() == 40, "me: a name is cut at 40");
         check(readMe(QJsonObject{{QStringLiteral("n"), QStringLiteral("A")}, {QStringLiteral("pic"), QStringLiteral("bm90IGEganBlZw==")}})
                   .value(QStringLiteral("pic")).toByteArray().isEmpty(), "me: a picture that isn't a 256x256 JPEG is dropped");
+    }
+    // Routes: history, media and a picture only on the home Wi-Fi; small live frames may use the internet.
+    {
+        auto f = [](const char *t) { return QJsonObject{{QStringLiteral("t"), QString::fromLatin1(t)}}; };
+        check(internetOk(f("msg")) && internetOk(f("send")) && internetOk(f("hello")) && internetOk(f("unlink")) && internetOk(f("result"))
+                  && internetOk(f("me")), "small live frames may use the internet");
+        check(!internetOk(f("chat")) && !internetOk(f("get")) && !internetOk(f("part")), "history and media never use the internet");
+        QJsonObject me = f("me");
+        me.insert(QStringLiteral("pic"), QStringLiteral("AAAA"));
+        check(!internetOk(me), "a me with its picture never uses the internet");
+        check(refreshDue(0, 1) && !refreshDue(1000, 1000 + kRefreshEveryMs - 1) && refreshDue(1000, 1000 + kRefreshEveryMs),
+              "Refresh at most once in 10 minutes");
+        check(errText(QStringLiteral("confirm")) == QLatin1String("Confirm the emoji on your phone")
+                  && errText(QStringLiteral("not a contact")) == QLatin1String("Not a contact on your phone"), "a phone's result shows why");
     }
     return bad == 0;
 }

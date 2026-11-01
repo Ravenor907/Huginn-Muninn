@@ -215,4 +215,19 @@ class LinkTest {
         // Not a 256x256 JPEG: no picture.
         assertEquals(0, LinkWire.readMe(JSONObject().put("n", "A").put("pic", "bm90IGEganBlZw=="))!!.pic.size)
     }
+
+    /** Only small live frames use the internet; history, media and a picture wait for the home Wi-Fi (section 15). */
+    @Test
+    fun historyAndPicturesOnlyOnTheHomeWifi() {
+        fun f(t: String) = JSONObject().put("t", t)
+        listOf("msg", "send", "hello", "unlink", "result", "sync", "setme", "me").forEach { assertTrue(it, LinkWire.internetOk(f(it))) }
+        listOf("chat", "get", "part").forEach { assertFalse(it, LinkWire.internetOk(f(it))) }
+        assertFalse(LinkWire.internetOk(f("me").put("pic", "AAAA")))
+        // Refresh at most once in 10 minutes.
+        assertTrue(LinkWire.syncDue(0L, 1L))
+        assertFalse(LinkWire.syncDue(1000L, 1000L + LinkWire.REFRESH_EVERY_MS - 1))
+        assertTrue(LinkWire.syncDue(1000L, 1000L + LinkWire.REFRESH_EVERY_MS))
+        assertEquals("Confirm the emoji on your phone", LinkWire.errText("confirm"))
+        assertEquals("Not a contact on your phone", LinkWire.errText("not a contact"))
+    }
 }

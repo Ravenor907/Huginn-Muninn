@@ -734,7 +734,7 @@ Rectangle {
         else if (key === "deleteMessages" && !Chat.ready) Ui.say("Unlock Huginn first.", true)
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Can't be undone.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
         else if (key === "eraseChat") Ui.sure("Erase everything?", "Deletes everything on this device. Can't be undone." + (job ? " " + job : ""),
-                                              "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
+                                              "Hold to erase", () => { Vault.eraseAll(); Ui.main.quitNow() }, true, true)
         else if (key === "raven") tapRaven()
         else if (key === "report") Ui.main.openReport()
         else if (key === "goStable") {

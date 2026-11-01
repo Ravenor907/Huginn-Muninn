@@ -232,6 +232,7 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
 
 QString Chat::createGroup(const QString &name, const QString &kind)
 {
+    m_saveFailed = false;
     if (!m_ready)
         return QString();
     const QString n = GroupWire::cleanName(name, GroupWire::kMaxName);
@@ -254,8 +255,14 @@ QString Chat::createGroup(const QString &name, const QString &kind)
     gr.history << s;
     gr.since = now();
     m_groups.insert(g, gr);
+    if (!saveGroups()) {
+        // Not kept: not shown either ("Couldn't save. Try again." on screen).
+        m_groups.remove(g);
+        m_groupsDirty = false;
+        m_saveFailed = true;
+        return QString();
+    }
     groupNote(g, QStringLiteral("You made %1. Add people from the group's menu (its three dots): Add people.").arg(n));
-    saveGroups();
     Q_EMIT changed();
     return g;
 }
@@ -1692,11 +1699,11 @@ void Chat::saveGroupsSoon()
     });
 }
 
-void Chat::saveGroups()
+bool Chat::saveGroups()
 {
     m_groupsDirty = false;
     if (!m_ready)
-        return;
+        return false;
     QJsonObject gs;
     for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it) {
         QJsonArray history, held;
@@ -1727,7 +1734,14 @@ void Chat::saveGroups()
                                          {QStringLiteral("room"), it->room}, {QStringLiteral("time"), it->time}, {QStringLiteral("count"), it->count}});
     const QJsonObject root{{QStringLiteral("groups"), gs},         {QStringLiteral("peers"), maps(m_gpeers)}, {QStringLiteral("invites"), maps(m_ginvites)},
                            {QStringLiteral("joining"), maps(m_joining)}, {QStringLiteral("tokens"), maps(m_gtokens)}, {QStringLiteral("out"), out}};
-    m_vault->write(QStringLiteral("groups.json"), compact(root));
+    const bool ok = m_vault->write(QStringLiteral("groups.json"), compact(root));
+    m_saveFailed = !ok;
+    if (!ok) {
+        // Still waiting to be saved: tried again shortly (and before Huginn closes).
+        m_groupsDirty = true;
+        saveDidntGo(QStringLiteral("groups.json"), [this] { if (m_groupsDirty) saveGroups(); });
+    }
+    return ok;
 }
 
 void Chat::saveGroupChats()

@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QImage>
 #include <QJsonObject>
+#include <QMutex>
 #include <QObject>
 #include <QQuickImageProvider>
 #include <QSet>
@@ -62,8 +63,11 @@ public:
     Q_INVOKABLE int pictureVersion(const QString &key) const;
     // The picture itself (decoded once and kept), null when there is none.
     QImage picture(const QString &key);
-    // The same by the id in a picture URL ("me", or the hash of a key), for the image provider.
+    // The same by the id in a picture URL ("me", "phone", or the hash of a key).
     QImage pictureById(const QString &id);
+    // For the image provider, from any thread: the JPEG behind an id in a picture URL, from a copy made on the main
+    // thread whenever a picture changes. Never waits on the main thread.
+    QByteArray sharedPicture(const QString &id) const;
 
     // Chat's side: a fresh "active" from key (room "live"), a room "profile" message from a contact or group peer
     // (false when malformed; an older version is taken and changes nothing), someone removed for good, and the
@@ -110,6 +114,7 @@ private:
     void reconcileSoon();
     void reconcile();
     void liveChanged();
+    void share();   // copies every picture into m_shared (main thread)
     static QString file(const QString &key);
     static QJsonObject toJson(const QString &key, const Entry &e);
     static Entry fromJson(const QJsonObject &o);
@@ -130,9 +135,12 @@ private:
     QByteArray m_phonePic;
     QString m_phoneStatus;
     qint64 m_phoneV = 0;
+    mutable QMutex m_sharedLock;
+    QHash<QString, QByteArray> m_shared;   // id in a picture URL -> JPEG, read by the image provider's thread
 };
 
-// "image://profile/<key>?v=<n>": the picture of key ("me" for mine). The vault is only read on the main thread.
+// "image://profile/<key>?v=<n>": the picture of key ("me" for mine). Reads Profile::sharedPicture only, so a
+// loading thread never waits on the main thread (which could hang Huginn while it closes).
 class ProfileImageProvider : public QQuickImageProvider
 {
 public:

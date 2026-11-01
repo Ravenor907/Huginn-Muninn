@@ -20,7 +20,6 @@
 namespace
 {
 constexpr int kMaxSeen = 2000;
-constexpr int kMaxOutbox = 200;
 constexpr int kAuthKind = 22242;
 // A sending socket closes this long after the last thing given to it.
 constexpr int kSendMs = 20000;
@@ -290,9 +289,15 @@ void Nostr::opened(const QString &url, QWebSocket *ws)
     ping->start();
     setLive(url, true);
     subscribe(ws);
-    // This relay is reachable again: what still waits goes to it on a sending socket, never on this one.
-    if (!m_outbox.isEmpty())
-        send(url, m_outbox);
+    // This relay is reachable again: what still waits for it goes on a sending socket, never on this one. Real messages
+    // first, a linked device's frames after them (only those meant for this relay).
+    QStringList again;
+    for (int pass = 0; pass < 2; ++pass)
+        for (const Out &o : std::as_const(m_outbox))
+            if (o.low == (pass == 1) && (o.relays.isEmpty() || o.relays.contains(url)))
+                again << o.msg;
+    if (!again.isEmpty())
+        send(url, again);
 }
 
 // Only the current socket for this relay counts; an old one closing changes nothing.
@@ -432,9 +437,8 @@ void Nostr::onMessage(const QString &url, QWebSocket *ws, const QString &text)
         signIn(url, ws, a.at(1).toString());
         subscribe(ws);
     } else if (type == QLatin1String("OK")) {
-        const QString id = a.at(1).toString();
-        if (a.at(2).toBool() && !id.isEmpty())
-            m_outbox.removeIf([&id](const QString &msg) { return msg.contains(id); });
+        if (a.at(2).toBool())
+            takeOk(a.at(1).toString());
     }
 }
 
@@ -518,9 +522,8 @@ void Nostr::send(const QString &url, const QStringList &msgs)
         // Only "OK" matters here. "AUTH" is never answered: signing in would name this computer's mailbox.
         connect(ws, &QWebSocket::textMessageReceived, this, [this](const QString &text) {
             const QJsonArray a = QJsonDocument::fromJson(text.toUtf8()).array();
-            const QString id = a.at(1).toString();
-            if (a.at(0).toString() == QLatin1String("OK") && a.at(2).toBool() && !id.isEmpty())
-                m_outbox.removeIf([&id](const QString &msg) { return msg.contains(id); });
+            if (a.at(0).toString() == QLatin1String("OK") && a.at(2).toBool())
+                takeOk(a.at(1).toString());
         });
         it = m_senders.insert(url, Sender{ws, {}, false, closer});
         ws->open(QUrl(url));
@@ -553,7 +556,41 @@ void Nostr::dropSender(const QString &url, QWebSocket *ws)
     ws->deleteLater();
 }
 
+void Nostr::takeOk(const QString &id)
+{
+    if (id.isEmpty())
+        return;
+    m_outbox.removeIf([&id](const Out &o) { return o.id == id; });
+    // NIP-20: the first relay that stored it. Only now is it "sent".
+    const auto it = m_okWait.find(id);
+    if (it == m_okWait.end())
+        return;
+    const std::function<void()> f = it.value();
+    m_okWait.erase(it);
+    if (f)
+        f();
+}
+
+QStringList Nostr::pickRelays(const QStringList &all, const QSet<QString> &live, int n)
+{
+    if (n <= 0 || n >= all.size())
+        return all;
+    QStringList out;
+    for (const QString &u : all)
+        if (live.contains(u) && out.size() < n)
+            out << u;
+    for (const QString &u : all)
+        if (!out.contains(u) && out.size() < n)
+            out << u;
+    return out;
+}
+
 int Nostr::publish(const QString &mailboxHex, const QString &content, int days)
+{
+    return publishTo(mailboxHex, content, days, {});
+}
+
+int Nostr::publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays, bool low)
 {
     // QJsonValue(...) keeps the inner array nested: MSVC treats QJsonArray{QJsonArray{...}} as a copy.
     QJsonArray tags{QJsonValue(QJsonArray{QStringLiteral("p"), mailboxHex})};
@@ -565,11 +602,28 @@ int Nostr::publish(const QString &mailboxHex, const QString &content, int days)
         tags.append(QJsonValue(QJsonArray{QStringLiteral("expiration"), QString::number(expiration(createdAt))}));
     const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), createdAt);
     const QString msg = compact(QJsonArray{QStringLiteral("EVENT"), ev});
-    m_outbox << msg;
-    while (m_outbox.size() > kMaxOutbox)
-        m_outbox.removeFirst();
-    // Every relay gets it, each on a sending socket of its own that never asks for the inbox or signs in.
-    for (const QString &url : relays())
+    const QString id = ev.value(QStringLiteral("id")).toString();
+    const QStringList to = maxRelays > 0 ? pickRelays(relays(), m_live, maxRelays) : QStringList();
+    m_outbox << Out{msg, id, to, low};
+    // Each kind has its own cap: a linked device's frames only ever push out older ones of their own.
+    int count = 0;
+    for (const Out &o : std::as_const(m_outbox))
+        count += o.low == low ? 1 : 0;
+    for (qsizetype i = 0; i < m_outbox.size() && count > (low ? kMaxLowOutbox : kMaxOutbox);) {
+        if (m_outbox.at(i).low == low) {
+            m_outbox.removeAt(i);   // its OK, if one still comes, still counts
+            count--;
+        } else {
+            ++i;
+        }
+    }
+    if (onStored) {
+        if (m_okWait.size() > 500)
+            m_okWait.clear();
+        m_okWait.insert(id, std::move(onStored));
+    }
+    // Every relay (or the few chosen) gets it, each on a sending socket of its own that never asks for the inbox or signs in.
+    for (const QString &url : to.isEmpty() ? relays() : to)
         send(url, {msg});
     if (m_links.isEmpty())
         connectRelays();

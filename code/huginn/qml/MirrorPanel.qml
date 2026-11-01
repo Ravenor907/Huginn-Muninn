@@ -3,8 +3,10 @@ import Huginn
 
 // On a companion (linked devices, section 15): the phone's 1:1 chats, over the conversation. Up and Down pick a
 // chat, Right goes into its messages (Up and Down pick one, A plays or saves its photo, voice, video or file),
-// A answers through the phone, X asks it for everything again, B goes back. Photos, voice, video and files come
-// over the home Wi-Fi; until then they show as words with "On home Wi-Fi".
+// A answers through the phone, X asks it for everything again (Refresh, at most once in 10 minutes), B goes back.
+// Opening never asks the phone for anything. History, photos, voice, video and files come over the home Wi-Fi; until then
+// media shows as words with "On home Wi-Fi". A message sent from here shows at once as Sending, and as "Didn't send ·
+// Retry" (or why) when the phone doesn't take it.
 Rectangle {
     id: panel
     visible: false
@@ -18,13 +20,12 @@ Rectangle {
     readonly property var msgs: current ? (Linked.mirror, Linked.messages(current.peer)) : []
     readonly property var picked: zone === "talk" ? msgs[msgSel] || null : null
     readonly property var prompts: zone === "talk"
-        ? [{ key: "a", label: picked && picked.media ? actionWord(picked) : "Write" }, { key: "x", label: "Get chats again" }, { key: "b", label: "Back" }]
-        : [{ key: "a", label: "Write" }, { key: "x", label: "Get chats again" }, { key: "b", label: "Close" }]
+        ? [{ key: "a", label: picked && picked.failed ? "Retry" : picked && picked.media ? actionWord(picked) : "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Back" }]
+        : [{ key: "a", label: "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Close" }]
 
     function open(peer) {
         row = 0; zone = "chats"; msgSel = -1
         visible = true
-        Linked.sync()
         if (peer) { const i = Linked.mirror.findIndex(c => c.peer === peer); if (i >= 0) row = i }
     }
     function close() { visible = false; zone = "chats"; msgSel = -1; if (Ui.main) Ui.main.restoreFocus() }
@@ -32,9 +33,12 @@ Rectangle {
         if (!current) return
         const c = current
         Ui.ask("Message " + c.name, "Sent by " + (Linked.phone.name || "your phone") + " as its own message, while it's online", "", "Send", t => {
-            if (!Linked.send(c.peer, t)) Ui.say("No phone is linked any more.", true)
+            const r = Linked.send(c.peer, t)
+            if (r !== "") Ui.say(r, true)
         }, false, true)
     }
+    function refresh() { Ui.say(Linked.refresh()) }
+    function stateWord(m) { return m.failed ? (m.err || "Didn't send") + " · Retry" : "Sending" }
     function actionWord(m) { return m.kind === "voice" ? (Voice.playing === m.media ? "Stop" : "Play") : "Save" }
     // A photo, voice, video or file that's here: voice plays, the rest is saved in Downloads.
     function act(m) {
@@ -48,8 +52,8 @@ Rectangle {
             switch (b) {
             case "up": msgSel = Math.max(0, msgSel - 1); talk.positionViewAtIndex(msgSel, ListView.Contain); return true
             case "down": msgSel = Math.min(msgs.length - 1, msgSel + 1); talk.positionViewAtIndex(msgSel, ListView.Contain); return true
-            case "a": if (picked && picked.media) act(picked); else reply(); return true
-            case "x": Linked.sync(); Ui.say("Asked " + (Linked.phone.name || "your phone") + " for its chats."); return true
+            case "a": if (picked && picked.failed) Linked.retrySend(picked.id); else if (picked && picked.media) act(picked); else reply(); return true
+            case "x": refresh(); return true
             case "left": case "b": zone = "chats"; msgSel = -1; return true
             }
             return true
@@ -59,7 +63,7 @@ Rectangle {
         case "down": row = Math.min(chats.length - 1, row + 1); return true
         case "right": if (msgs.length) { zone = "talk"; msgSel = msgs.length - 1; talk.positionViewAtEnd() } return true
         case "a": reply(); return true
-        case "x": Linked.sync(); Ui.say("Asked " + (Linked.phone.name || "your phone") + " for its chats."); return true
+        case "x": refresh(); return true
         case "b": close(); return true
         }
         return true
@@ -70,6 +74,7 @@ Rectangle {
         id: head
         width: parent.width
         title: (Linked.phone.name || "Your phone") + "'s chats"
+        HButton { anchors.verticalCenter: parent.verticalCenter; height: Theme.px(34); fontSize: 14; text: "Refresh"; onClicked: panel.refresh() }
         HButton { anchors.verticalCenter: parent.verticalCenter; height: Theme.px(34); fontSize: 14; text: "Close"; onClicked: panel.close() }
     }
     ListView {
@@ -94,7 +99,7 @@ Rectangle {
             textFormat: Text.PlainText
             visible: panel.chats.length === 0
             anchors.centerIn: parent; width: parent.width - Theme.px(20); wrapMode: Text.WordWrap
-            text: "Nothing yet. The phone's chats show here while it's on and online."
+            text: "Nothing yet. History comes over on home Wi-Fi, while the phone is on."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
     }
@@ -124,7 +129,10 @@ Rectangle {
                     width: parent.width
                     elide: Text.ElideRight
                     text: (modelData.mine ? "You" : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
-                    color: modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
+                          + (modelData.pending ? " · " + panel.stateWord(modelData) : "")
+                    color: modelData.failed ? Theme.danger : modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
+                    // Didn't send: a click sends it again (the phone never sends one twice).
+                    TapHandler { enabled: !!modelData.failed; onTapped: Linked.retrySend(modelData.id) }
                 }
                 // A photo that's here.
                 Image {

@@ -858,13 +858,17 @@ Rectangle {
         if (!readOnly && info.amAdmin && invitePanel.has("groupLinks")) items.push({ name: "Active links", icon: "attach", url: "links" })
         Ui.pickFrom("Add people", [{ header: "", items: items }], a => {
             if (a === "contacts") invite()
-            else if (a === "link") { if (invitePanel.ready && canInvite) invitePanel.openCreate(); else showCode() }
+            else if (a === "link") linkOrCode()
             else if (a === "links") invitePanel.openList()
         }, () => page.groupMenu())
     }
+    function linkOrCode() { if (invitePanel.ready && canInvite) invitePanel.openCreate(); else showCode() }
     function invite() {
         const inGroup = members.map(m => m.key)
-        const people = Chat.people.filter(p => p.contact && !p.blocked && inGroup.indexOf(p.key) < 0)
+        const contacts = Chat.people.filter(p => p.contact && !p.blocked)
+        // No contacts here (a linked computer's contacts stay on the phone): the link or code instead.
+        if (!contacts.length) { Ui.say("No contacts on this computer yet. Share the group's link or code instead."); linkOrCode(); return }
+        const people = contacts.filter(p => inGroup.indexOf(p.key) < 0)
         if (!people.length) { Ui.say("Every contact is already here.", true); return }
         const g = gid
         Ui.pickFrom("From contacts", [{ header: "", items: people.map(p => ({ name: p.name, url: p.key,

@@ -74,6 +74,8 @@ public:
 Q_SIGNALS:
     void changed();
     void aboutToRestart();
+    // Something to say on screen at once (the update went in but Huginn couldn't start again, or it failed).
+    void notice(const QString &text);
 
 private:
     void installNow(const QString &path);

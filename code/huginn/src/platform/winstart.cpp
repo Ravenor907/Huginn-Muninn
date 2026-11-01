@@ -12,10 +12,12 @@ void watchMainWindow(QQuickWindow *) {}
 void blockCapture(QQuickWindow *, bool) {}
 void startFailed(const QString &) {}
 void noStartLog() {}
+QProcessEnvironment childEnvironment() { return QProcessEnvironment::systemEnvironment(); }
 }
 
 #else
 
+#include "crashlog.h"
 #include "singleinstance.h"
 #include "winupdate.h"
 
@@ -57,6 +59,11 @@ QList<QByteArray> s_waiting;
 QtMessageHandler s_next = nullptr;
 bool s_keep = false;
 bool s_shown = false;
+// This copy was started again after a graphics failure: with the software renderer (before the first frame), or
+// after the graphics reset once already. Read at start and taken out of the environment, so later copies (an
+// update, a restore) start normally.
+bool s_softwareRetry = false;
+bool s_resetRestarted = false;
 
 QString exeDir()
 {
@@ -145,6 +152,7 @@ LONG WINAPI crashed(EXCEPTION_POINTERS *e)
                   e && e->ExceptionRecord ? e->ExceptionRecord->ExceptionCode : 0ul, name,
                   static_cast<unsigned long long>(reinterpret_cast<quintptr>(at) - reinterpret_cast<quintptr>(mod)));
     writeLine(line);
+    CrashLog::line(line);
     // The calls that led there (module+offset each), unwound from the crash's own registers.
     if (e && e->ContextRecord) {
         CONTEXT c = *e->ContextRecord;
@@ -157,6 +165,7 @@ LONG WINAPI crashed(EXCEPTION_POINTERS *e)
             std::snprintf(line, sizeof line, "  at %s+0x%llx", base ? base + 1 : mname,
                           static_cast<unsigned long long>(c.Rip - reinterpret_cast<quintptr>(m)));
             writeLine(line);
+            CrashLog::line(line);
             DWORD64 imageBase = 0;
             PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &imageBase, nullptr);
             if (!fn) {
@@ -215,6 +224,10 @@ namespace Platform
 void beginStart()
 {
     s_keep = envSet("HUGINN_KEEP_START_LOG");
+    s_softwareRetry = envSet("HUGINN_GRAPHICS_RETRY");
+    s_resetRestarted = envSet("HUGINN_GRAPHICS_RESET");
+    qunsetenv("HUGINN_GRAPHICS_RETRY");
+    qunsetenv("HUGINN_GRAPHICS_RESET");
     const QString dir = exeDir();
     s_next = qInstallMessageHandler(messages);
     SetUnhandledExceptionFilter(crashed);
@@ -328,23 +341,38 @@ void watchMainWindow(QQuickWindow *window)
             closeLog(!s_keep);
         });
     }, Qt::QueuedConnection);
-    // The graphics backend failed after all: start again once with the software renderer.
+    // The graphics failed. Never drawn: start again once with the software renderer. Drawn before (the graphics
+    // card reset, a driver update): start again once, the same way; a second time in one run it stops and says so.
     QObject::connect(window, &QQuickWindow::sceneGraphError, qApp, [](QQuickWindow::SceneGraphError, const QString &msg) {
-        logLine(QStringLiteral("graphics failed: ") + msg);
-        if (envSet("HUGINN_GRAPHICS_RETRY")) {
-            startFailed(QStringLiteral("graphics failed with the software renderer too"));
-            QCoreApplication::exit(4);
+        static bool handled = false;
+        if (handled)
             return;
+        handled = true;
+        logLine(QStringLiteral("graphics failed: ") + msg);
+        CrashLog::note(QStringLiteral("graphics failed") + (s_shown ? QStringLiteral(" after the window was shown: ") : QStringLiteral(" at start: ")) + msg);
+        QStringList env;
+        if (!s_shown) {
+            if (s_softwareRetry) {
+                startFailed(QStringLiteral("graphics failed with the software renderer too"));
+                QCoreApplication::exit(4);
+                return;
+            }
+            env << QStringLiteral("QT_QUICK_BACKEND=software") << QStringLiteral("HUGINN_GRAPHICS_RETRY=1");
+        } else {
+            if (s_resetRestarted) {
+                startFailed(QStringLiteral("graphics failed again after starting again"));
+                QCoreApplication::exit(4);
+                return;
+            }
+            env << QStringLiteral("HUGINN_GRAPHICS_RESET=1");
+            if (s_softwareRetry)
+                env << QStringLiteral("QT_QUICK_BACKEND=software") << QStringLiteral("HUGINN_GRAPHICS_RETRY=1");
         }
-        SingleInstance::releaseForRestart();
-        QProcess p;
-        p.setProgram(QCoreApplication::applicationFilePath());
-        p.setArguments(QCoreApplication::arguments().mid(1));
-        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        env.insert(QStringLiteral("QT_QUICK_BACKEND"), QStringLiteral("software"));
-        env.insert(QStringLiteral("HUGINN_GRAPHICS_RETRY"), QStringLiteral("1"));
-        p.setProcessEnvironment(env);
-        logLine(p.startDetached() ? QStringLiteral("restarting with the software renderer") : QStringLiteral("couldn't restart"));
+        // The new copy waits until this one has saved and closed.
+        const bool started = SingleInstance::startAgain(QString(), QString(), env, QCoreApplication::arguments().mid(1));
+        logLine(started ? (s_shown ? QStringLiteral("starting again") : QStringLiteral("starting again with the software renderer")) : QStringLiteral("couldn't start again"));
+        if (!started)
+            CrashLog::note(QStringLiteral("couldn't start again after the graphics failed"));
         QCoreApplication::exit(4);
     });
 }
@@ -358,6 +386,17 @@ void startFailed(const QString &why)
 void noStartLog()
 {
     closeLog(true);
+}
+
+QProcessEnvironment childEnvironment()
+{
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.remove(QStringLiteral("HUGINN_GRAPHICS_RETRY"));
+    env.remove(QStringLiteral("HUGINN_GRAPHICS_RESET"));
+    // The software renderer was only for this copy (a graphics retry), not every copy after it.
+    if (s_softwareRetry)
+        env.remove(QStringLiteral("QT_QUICK_BACKEND"));
+    return env;
 }
 }
 

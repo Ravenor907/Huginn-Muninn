@@ -293,13 +293,22 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun myName() = id.deviceName.ifBlank { id.username }
             override fun send(d: Link.Device, json: String) {
                 bg {
+                    if (Move.locked) return@bg
+                    // A small live frame (section 15): close by, the Wi-Fi, and at most 2 relays, in their own outbox.
                     val body = envelope("link", d.key, json, UUID.randomUUID().toString()).toString()
-                    spread(d.key, listOf(body), false, 1, d.mailbox.takeIf { it.length == 64 })
+                    val k = d.key
+                    ble.send(k, body, strict(k))
+                    wifiTo(k)?.let { dev -> net.post(dev, PATH, body) }
+                    (d.mailbox.takeIf { it.length == 64 } ?: contacts.get(k)?.mailbox)?.let { mb ->
+                        nostr.publish(mb, wrap(k, body), days = Limits.LONGEST, maxRelays = 2, low = true)
+                    }
                 }
             }
             override fun chats(): Map<String, Pair<String, List<Msg>>> =
                 _private.value.filter { (k, v) -> v.isNotEmpty() && isContact(k) && !trash.has(k) }.mapValues { (k, v) -> nameOf(k) to v }
             override fun sendAsMe(peer: String, text: String): Boolean { if (!isContact(peer)) return false; sendPrivate(peer, text); return true }
+            override fun sendAsMeId(peer: String, text: String): String? = if (!isContact(peer)) null else sendPrivate(peer, text)
+            override fun isContactHere(peer: String) = isContact(peer)
             override fun read(name: String) = vault.read(File(context.filesDir, name))
             override fun write(name: String, text: String) { try { vault.write(File(context.filesDir, name), text) } catch (_: Exception) {} }
             override fun notice(text: String) { notices.tryEmit(text) }
@@ -383,16 +392,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         .apply { if (id.visibleNearby) put("chatKey", id.publicKey).put("mailbox", nostr.publicKey) else put("hint", Proof.hintNow(id.publicKey)) }
         .put("device", if (id.visibleNearby) id.deviceName else Identity.HIDDEN_NAME)
 
-    /** A new code each time it's shown, with an invite good for an hour. */
-    fun myCode(): String {
+    /**
+     * A new code each time it's shown, with an invite good for an hour. It carries "1" (13.6), as Huginn's does: whoever
+     * adds it says hi, and that makes them a contact here at once, no request. [once] false: a Kids' TV's pairing code (7.1).
+     */
+    fun myCode(once: Boolean = true): String {
         val token = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
         val until = System.currentTimeMillis() + INVITE_MS
         synchronized(invites) {
             invites[token] = until
+            if (once) this.once.add(token)
             invites.entries.removeIf { it.value < System.currentTimeMillis() }
+            this.once.retainAll(invites.keys)
             saveInvites()
         }
-        return Contacts.code(id.username, id.publicKey, nostr.publicKey, token, until)
+        return ChatWire.code(id.username, id.publicKey, nostr.publicKey, token, until, once = once)
     }
 
     /**
@@ -530,10 +544,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Not now to a family offer: kept as declined, so it isn't offered again. */
     fun dismissOffer(o: Trust.Intro) = putIntro(o.copy(declined = true, at = System.currentTimeMillis()))
 
-    /** A one-time invite still good: used up now. */
+    /**
+     * A one-time invite still good: used up now. The token stays a valid invite until it runs out, so someone else with
+     * the same code gets an ordinary request instead of being dropped.
+     */
     private fun useOnce(token: String): Boolean = token.isNotEmpty() && synchronized(invites) {
         if (token !in once || (invites[token] ?: 0L) <= System.currentTimeMillis()) return@synchronized false
-        invites.remove(token); once.remove(token); saveInvites(); true
+        once.remove(token); saveInvites(); true
     }
 
     private fun saveInvites() {
@@ -1054,6 +1071,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     // taken on quietly (not even close by): held until the person accepts, and warned (as Huginn does).
                     held.getOrPut(fromKey) { java.util.Collections.synchronizedMap(LinkedHashMap()) }.putIfAbsent(msgId, msg)
                     askReplace(Contact(fromKey, name, mailbox, false), via == "internet")
+                } else if (useOnce(o.optString("invite"))) {
+                    // My code or one-time invite link ("1", 13.6): whoever used it first is a contact now, no asking (also
+                    // close by or on the same Wi-Fi, so it never lands as "met").
+                    putContact(Contact(fromKey, name, mailbox, verified = false))
+                    if (addPrivate(fromKey, msg)) {
+                        _unread.update { it + fromKey }
+                        arrivals.tryEmit(Triple(name, text, fromKey))
+                    }
+                    notices.tryEmit("$name added you with your code.")
+                    receipt(fromKey, listOf(msgId), "delivered", mailbox)
                 } else if (via != "internet" && !id.visibleNearby) {
                     // Hidden from people nearby: only contacts get through close by or on the Wi-Fi.
                     return 403 to "{}"
@@ -1066,15 +1093,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                         // Not a contact: the name they chose never shows as if it were one.
                         arrivals.tryEmit(Triple(stranger(name), text, fromKey))
                     }
-                    receipt(fromKey, listOf(msgId), "delivered", mailbox)
-                } else if (useOnce(o.optString("invite"))) {
-                    // My one-time invite link: whoever used it first is a contact now, no asking. The link is used up.
-                    putContact(Contact(fromKey, name, mailbox, verified = false))
-                    if (addPrivate(fromKey, msg)) {
-                        _unread.update { it + fromKey }
-                        arrivals.tryEmit(Triple(name, text, fromKey))
-                    }
-                    notices.tryEmit("$name added you with your invite link.")
                     receipt(fromKey, listOf(msgId), "delivered", mailbox)
                 } else if (!inviteOk(o.optString("invite")) && !(fromKey == LabsWire.KEY && LabsWire.replyOpen(id.labsReportedAt, System.currentTimeMillis()))) {
                     // (A reply from the Labs contact within 30 days of a report sent from here goes on to be a request.)
@@ -1606,9 +1624,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** [re]: the id of the message this answers (a reply, cap m1; to an app without m1 it goes as plain text). */
-    fun sendPrivate(peerKey: String, text: String, re: String = "") {
+    /** The new message's id ("" when there was nothing to send). */
+    fun sendPrivate(peerKey: String, text: String, re: String = ""): String {
         val t = ChatWire.clip(text.trim(), MAX)
-        if (t.isEmpty()) return
+        if (t.isEmpty()) return ""
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
@@ -1616,6 +1635,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r, state = "sending",
             re = re.takeIf { Rich.isMsgId(it) } ?: "")
         send(peerKey, name, r, mine)
+        return mine.id
     }
 
     /** Adds [mine] to the chat and sends it; a link in a message to an m1 app gets its preview first (cap m2). */
@@ -2006,6 +2026,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 pending.remove(m.id)
                 continue
             }
+            // Still "sending" after a minute (no relay said OK, no proven route took it): "Not sent, tap to retry". It keeps
+            // being tried; the first route that takes it clears that.
+            if (m.state == "sending" && !m.failed && now - m.time > NOT_SENT_MS) update(m.peerKey, m.id) { if (it.state == "sending") it.copy(failed = true) else it }
             val t = tries[m.id]
             if (t == null) { tries[m.id] = Tries(1, now + RETRY[0]); continue }   // after a restart: wait one round
             if (now >= t.next) { t.next = NetLogic.NEVER; bg { attempt(m) } }
@@ -2029,6 +2052,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         came.forEach { groups.nudge(it) }
         // A linked phone or companion on the home Wi-Fi again: photos and files still missing come over now.
         if (Link.phone.value?.key in came) Link.fetchMissing()
+        Link.lanCame(came)
     }
 
     /** An envelope in room "link" (read from its clear fields only). */
@@ -2639,6 +2663,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val MAX = 2000
         const val KEEP_AFTER = 10
         const val INVITE_MS = 60 * 60_000L
+        /** A message of mine still "sending" this long (no relay said OK, no proven route took it) shows "Not sent, tap to retry". */
+        const val NOT_SENT_MS = 60_000L
         const val DAY = ChatWire.DAY
         /** Outbox key for a message's unsend envelope. */
         private const val UNSEND = "unsend:"

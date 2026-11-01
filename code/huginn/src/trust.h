@@ -44,8 +44,11 @@ public:
     Q_INVOKABLE QString emojiWith(const QString &key) const;
     QVariantList pending() const;
 
-    // My one-time invite, still good: used up now (Chat calls this for a stranger's first message).
+    // My one-time invite, still good: used up now (Chat calls this for a stranger's first message). The token stays a
+    // valid invite until it runs out: someone else with the same code gets an ordinary request, never dropped.
     bool useOnce(const QString &token);
+    // A token of a code shown here (Chat::newLink) counts as one-time too (13.6), so whoever adds it is a contact at once.
+    void markOnce(const QString &token);
     // Room "intro", opened: 200, 400 (malformed), 403 (not from someone allowed to send it) or 429.
     int receive(const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p);
 

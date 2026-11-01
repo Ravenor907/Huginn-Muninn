@@ -116,6 +116,32 @@ Rectangle {
             id: groupCol
             width: groupView.width
             spacing: Theme.px(8)
+            // Locked: the groups are behind the lock, not gone. Says so where they show.
+            Item {
+                id: lockedHint
+                visible: Vault.exists && Vault.screenLocked && System.tourDir.length === 0
+                width: groupCol.width
+                height: visible ? hintCol.implicitHeight + Theme.px(8) : 0
+                Accessible.role: Accessible.StaticText
+                Accessible.name: "Unlock to see your groups"
+                Column {
+                    id: hintCol
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: parent.width - Theme.px(8)
+                    spacing: Theme.px(4)
+                    Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "lock"; size: Theme.px(18); color: Theme.textMuted }
+                    Text {
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        text: "Unlock to see your groups"
+                        color: Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(11)
+                    }
+                }
+                TapHandler { onTapped: rail.activated(0) }   // Chats, where the lock screen is
+            }
             Repeater {
                 id: groupRep
                 model: rail.groupItems

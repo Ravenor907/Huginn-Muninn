@@ -230,6 +230,7 @@ Rectangle {
             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
             msg.chosen()
             if (button === Qt.RightButton) msg.options()
+            else if (msg.m.mine && msg.m.failed && msg.host && msg.host.openKey) Chat.retry(msg.host.openKey, msg.m.id)
             else if (msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album) host.viewing = msg.m.photo
         }
     }

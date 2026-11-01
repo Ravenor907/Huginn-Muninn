@@ -50,10 +50,10 @@ bool supported() { return false; }
 void cleanUp() {}
 void tidyOldLayout() {}
 QString folderProblem() { return {}; }
-void install(const QString &, QObject *, std::function<void(bool, const QString &)> done)
+void install(const QString &, QObject *, std::function<void(bool, bool, const QString &)> done)
 {
     if (done)
-        done(false, QStringLiteral("Updates from a zip are only for the Windows build."));
+        done(false, false, QStringLiteral("Updates from a zip are only for the Windows build."));
 }
 
 #else
@@ -239,19 +239,19 @@ void tidyOldLayout()
 #endif
 }
 
-void install(const QString &zipPath, QObject *context, std::function<void(bool, const QString &)> done)
+void install(const QString &zipPath, QObject *context, std::function<void(bool, bool, const QString &)> done)
 {
     // On the next turn of the event loop, so "Installing…" is on screen while the zip unpacks.
     QTimer::singleShot(0, context, [zipPath, done] {
         const QString problem = folderProblem();
         if (!problem.isEmpty()) {
-            done(false, problem);
+            done(false, false, problem);
             return;
         }
         const QString root = appDir(), staging = stagingDir();
         QDir(staging).removeRecursively();
         if (!QDir().mkpath(staging)) {
-            done(false, QStringLiteral("Couldn't make a folder for the update."));
+            done(false, false, QStringLiteral("Couldn't make a folder for the update."));
             return;
         }
         QString why;
@@ -259,7 +259,7 @@ void install(const QString &zipPath, QObject *context, std::function<void(bool, 
         if (files.isEmpty()) {
             qWarning("update: %s", qPrintable(why));
             QDir(staging).removeRecursively();
-            done(false, why);
+            done(false, false, why);
             return;
         }
 
@@ -277,7 +277,7 @@ void install(const QString &zipPath, QObject *context, std::function<void(bool, 
                 rollBack(moved);
                 QDir(staging).removeRecursively();
                 qWarning("update: couldn't replace %s", qPrintable(rel));
-                done(false, QStringLiteral("Couldn't replace %1. Close anything using the Huginn folder and try again.").arg(QDir::toNativeSeparators(rel)));
+                done(false, false, QStringLiteral("Couldn't replace %1. Close anything using the Huginn folder and try again.").arg(QDir::toNativeSeparators(rel)));
                 return;
             }
             moved << m;
@@ -294,13 +294,12 @@ void install(const QString &zipPath, QObject *context, std::function<void(bool, 
         QDir(staging).removeRecursively();
         QFile::remove(zipPath);
 
-        // The new Huginn.exe, started the ordinary way in its own folder.
-        SingleInstance::releaseForRestart();
-        if (!QProcess::startDetached(root + QStringLiteral("/Huginn.exe"), {}, root)) {
-            done(true, QStringLiteral("Updated. Open Huginn again to use the new version."));
+        // The new Huginn.exe in its own folder. It waits until this one has saved and closed.
+        if (!SingleInstance::startAgain(root + QStringLiteral("/Huginn.exe"), root)) {
+            done(true, false, QStringLiteral("Updated. Open Huginn again."));
             return;
         }
-        done(true, QStringLiteral("Updated. Restarting…"));
+        done(true, true, QStringLiteral("Updated. Restarting…"));
     });
 }
 

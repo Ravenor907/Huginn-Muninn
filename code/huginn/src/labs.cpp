@@ -4,6 +4,7 @@
 #include "chatwire.h"
 #include "groupwire.h"
 #include "photos.h"
+#include "platform/crashlog.h"
 #include "settings.h"
 #include "vault.h"
 
@@ -133,13 +134,23 @@ void Labs::clearShot()
     Q_EMIT shotChanged();
 }
 
-QString Labs::send(const QString &text, bool withShot)
+bool Labs::hasCrashLog() const { return CrashLog::hasLines(); }
+
+QString Labs::send(const QString &text, bool withShot, bool withLog)
 {
-    const QString t = text.trimmed();
+    QString t = text.trimmed();
     if (t.isEmpty())
         return QStringLiteral("Say what went wrong first.");
     if (GroupWire::length(t) > kMaxText)
         return QStringLiteral("That's too long. 2000 characters at most.");
+    // The crash log's last lines, in whatever room the 2000 characters leave.
+    if (withLog) {
+        const QString head = QStringLiteral("\n\nCrash log, last lines:\n");
+        const int room = kMaxText - int(GroupWire::length(t)) - int(head.size());
+        const QString tail = room > 80 ? CrashLog::tail(room) : QString();
+        if (!tail.isEmpty() && GroupWire::length(t + head + tail) <= kMaxText)
+            t += head + tail;
+    }
     if (!m_chat->ready() || m_vault->screenLocked())
         return QStringLiteral("Unlock Huginn first.");
     if (m_chat->moving())

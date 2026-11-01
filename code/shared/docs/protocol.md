@@ -1453,7 +1453,11 @@ fixed). The same on both phones means nobody is in between. Nothing goes on the 
 ### 13.6 One-time invite links (local)
 
 A contact code may carry `"1": true`: its invite token works once. The first stranger whose message carries it is added
-as a contact at once (no request to accept), and the token is used up; the app that adds such a code says hi straight away.
+as a contact at once (no request to accept), on any route (checked before "met close by"), and the token stops adding
+anyone at once; it stays a valid invite until `x`, so someone else with the same code gets an ordinary request instead of
+being dropped. The app that adds such a code says hi straight away, which is what makes it a contact on the other side.
+Every code Huginn and Muninn show (My code, the add-me QR) carries `"1"`, as do one-time links, so adding someone's code
+makes both sides contacts with no request in between.
 
 ## 14. Files over the internet (cap `f1`)
 
@@ -1496,9 +1500,26 @@ photo and saves it to Downloads when the person taps Save.
 A tablet or computer (the companion) shows a phone's 1:1 chats and sends through it, while the phone is on and
 online. Contacts see nothing new: every message still comes from and goes to the phone. Muninn and Huginn, each as a
 companion or as the phone (a Muninn phone usually; Huginn on Windows and Linux and Muninn on a tablet are usually the
-companion). Envelopes in room `link` are sealed like private messages (v1) and, except `get` and `part`, go on every
-route (LAN, Direct, Nostr); they are exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only
-a paired device gets past the check below.
+companion). Envelopes in room `link` are sealed like private messages (v1) and go by the routing rules below; they are
+exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only a paired device gets past the check
+below.
+
+**Routes.** A linked pair is usually in one household, behind one internet address that relays rate-limit, so link
+traffic MUST stay off the relays except for small live frames:
+- History (`chat` pages), media (`get`, `part`) and a `me` that carries `pic` go **only** over the LAN route (the HTTPS
+  message endpoint of a device on the same home Wi-Fi, never Direct). When the other device isn't on it, they wait: the
+  phone remembers which companions it owes history or its picture and sends them when the companion is on the home Wi-Fi
+  again (at least every 30 s it looks, or when the device shows up there). The companion says "History comes over on
+  home Wi-Fi".
+- Only small live frames may use the internet: `msg`, `send`, `hello`, `unlink`, `result`, `sync`, `setme`, and `me`
+  without `pic`. They also go on Bluetooth and the LAN, but to **at most 2 relays** (open ones first), never all of them,
+  and they wait for a relay in an outbox of their own (at most 40) that never pushes out a real message (real messages
+  are sent first when a relay comes back, and keep their own cap of 200). A `me` sent away from the home Wi-Fi drops
+  `pic` and says `"pk": true`: the companion keeps the picture it has until the full `me` comes over the LAN.
+- History goes only on "They match" (both sides), on linking again, and on Refresh. Opening a chat or the mirrored list
+  never asks for it. Refresh is a `sync` without `f`, which the phone takes at most once in 10 minutes per companion
+  (the companion doesn't send more often either); the companion's `sync` right after "They match" carries `"f": true`
+  and is always taken.
 
 **Pairing.** The companion shows a link code as a QR code: `MUNINNL1:` then base64url (no padding) of
 `{"k": chat key, "p": Nostr mailbox, "n": device name, "i": token}`. The token is 128 random bits, good for 10 minutes and
@@ -1514,21 +1535,26 @@ back to unchecked: the chats stay, and nothing shows until the emoji are checked
 **Checking the pair.** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
 the person confirms "They match" on each ("No" unlinks). Until then the phone sends nothing (`chat`, `msg`, `part`) and
 takes nothing (`send`, `sync`, `get`) from that companion, and the companion shows nothing from the phone; on "They
-match" the companion sends `sync`. A pair linked without this check stays linked. While a phone's chats are mirrored
+match" the companion sends `{"t": "sync", "f": true}`. A pair linked without this check stays linked. While a phone's chats are mirrored
 anywhere, it says "Mirrored to [name]".
 
 **From the phone:**
-- `{"t": "chat", "peer", "n", "msgs": [item, ...], "d", "pg": i, "pgs": n}`: one page of a chat's history. On "They
-  match" and on every `sync` the phone sends every message it still keeps for each 1:1 chat with a contact (within the
+- `{"t": "chat", "peer", "n", "msgs": [item, ...], "d", "pg": i, "pgs": n}`: one page of a chat's history, over the LAN
+  route only. On "They match" and on every `sync` it takes, the phone sends every message it still keeps for each 1:1 chat with a contact (within the
   chat's limit, section 16), oldest first, in pages `pg` 0 to `pgs` - 1, each at most 100 items and at most 20 KB (20480 bytes) of UTF-8
   JSON in `msgs`, so a page fits an envelope on every route. The companion **merges** each page into the chat by message `id` (a
   later copy of an id replaces the earlier one): no page ever wipes what an earlier page or `msg` brought.
 - `{"t": "msg", "peer", "n", "m": item, "d"}`: one message in or out, merged the same way.
+- `{"t": "result", "id", "ok", "err", "mid"}`: the answer to every `send` (`id` is the `send`'s). `ok` true: sent (or sent
+  already, for an `id` seen before), `mid` the new message's id on the phone when there is one. `ok` false with `err`:
+  `"confirm"` (the phone hasn't checked the emoji for this companion yet; the companion shows "Confirm the emoji on your
+  phone"), `"not a contact"` (shown as "Not a contact on your phone"), or anything else ("Didn't send").
 - `{"t": "me", "n": name, "st": status, "cs": custom status (omitted when none), "pic": base64 JPEG (omitted when none)}`:
   the phone's own profile. The phone sends it on "They match", on every `sync`, and whenever its name, status, custom
   status or picture changes. `st` is `online`, `away`, `dnd` or `invisible` (anything else reads as `online`), `n` at most
   40 characters (a blank one is ignored), `cs` cleaned as in section 22, `pic` the phone's profile picture as sent in room
-  `profile` (a 256x256 JPEG of at most 24 KB; any other is dropped). The companion keeps the last one and, while the
+  `profile` (a 256x256 JPEG of at most 24 KB; any other is dropped). `"pk": true` (sent without `pic`, away from the
+  home Wi-Fi): keep the picture already here. The companion keeps the last one and, while the
   phone is linked and checked, shows it everywhere as "you": its name, picture and status, never the companion's own.
   The companion's own name and picture stay with its own chats (put away below) and are shown again only when they're
   opened or the phone is unlinked.
@@ -1542,10 +1568,15 @@ well-formed (or `s` over 100 MB) is ignored and the item shows as words. `d` is 
 (section 16): the companion deletes older messages, and their files, too.
 
 **From the companion:** `{"t": "send", "peer", "text", "id"}` (the phone sends `text` to its contact `peer` as its own
-message, each `id` once; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "get", "h"}`
+message, each `id` once, and always answers with `result`), `{"t": "sync", "f"}` (all chats again, see Routes),
+`{"t": "get", "h"}`
 (below), `{"t": "setme", "n", "st", "cs"}` (the person changed their name, status or custom status on the companion: the
 phone is the account, so it takes them as its own, read as in `me`, and sends `me` to every checked companion; a blank
 `n` or `st` leaves that one as it is; a picture is changed only on the phone), `{"t": "unlink"}`.
+
+**Sending through the phone.** The companion shows a `send` at once in the chat as "Sending". The phone's `result` (or
+its `msg` copy of the message) ends that; `ok` false shows why. With no answer within 60 s it shows "Didn't send · Retry",
+and Retry sends the same `id` again (so the phone never sends it twice).
 
 **Media, on the home Wi-Fi only.** The companion asks for a file it doesn't have with `{"t": "get", "h"}`, one file at a
 time, and the phone answers with `{"t": "part", "h", "i", "n", "b": base64}`: the file in parts of 192 KB (196608 bytes,
@@ -1794,8 +1825,8 @@ means nothing; receivers ignore `z` (as they ignore any unknown field).
 
 Events are published on short-lived sockets that only send: they never send `REQ` and never answer `AUTH`, so a relay
 can't tie a published event to the mailbox the same app subscribes to (and may sign in as, NIP-42) on its listening
-socket. Every relay gets every event, each on a sending socket of its own, which closes about 20 s after the last event
-given to it. Events still waiting when a relay's listening socket comes back are sent on a new sending socket. Retries
+socket. Every relay gets every event (except a linked device's small frames, which go to at most 2, section 15), each on
+a sending socket of its own, which closes about 20 s after the last event given to it. Events still waiting when a relay's listening socket comes back are sent on a new sending socket. Retries
 go to every relay, again at 1 h and 6 h while not delivered. The relay still sees the internet
 address on both kinds of socket; only a VPN or Tor hides that.
 

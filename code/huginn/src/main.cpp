@@ -18,6 +18,7 @@
 #include "vault.h"
 #include "voice.h"
 #include "platform/chime.h"
+#include "platform/crashlog.h"
 #include "platform/notify.h"
 #include "platform/scratch.h"
 #include "platform/singleinstance.h"
@@ -65,6 +66,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
+#include <cstdio>
 #include <memory>
 
 #ifndef HUGINN_VERSION
@@ -114,6 +116,9 @@ QString s_warningFile;
 // Counts QML warnings so the CI screenshot tour can fail the build on any of them.
 void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
 {
+    // A fatal error ends Huginn right after this: kept in crash.log (scrubbed of the home folder and addresses).
+    if (type == QtFatalMsg)
+        CrashLog::note(QStringLiteral("fatal: ") + msg);
     if (type >= QtWarningMsg) {
         const QString file = QString::fromUtf8(ctx.file ? ctx.file : "");
         // A screen smaller than the size asked for (a CI machine's small display) is not a QML problem.
@@ -144,6 +149,12 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QStringLiteral(HUGINN_VERSION_LABEL));
     QApplication::setDesktopFileName(QStringLiteral("io.github.ravenor907.Huginn"));
     QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
+    // The single-instance self-test's helper copy: holds a lock in a temporary folder, nothing else.
+    {
+        const QStringList a = QCoreApplication::arguments();
+        if (a.size() >= 5 && a.at(1) == QLatin1String("--instance-selftest-holder"))
+            return SingleInstance::selfTestHolder(a.at(2), a.at(3).toInt(), a.at(4) == QLatin1String("hang"));
+    }
     Platform::chooseGraphics();
 
     QCommandLineParser args;
@@ -167,6 +178,12 @@ int main(int argc, char *argv[])
     args.addOption(callTest);
     QCommandLineOption wifiTest(QStringLiteral("wifi-selftest"), QStringLiteral("Run on a throwaway profile, receive an encrypted message from a pretend Muninn over the local HTTPS endpoint, raise the call and a notification (for CI), then quit."));
     args.addOption(wifiTest);
+    QCommandLineOption stabilityTest(QStringLiteral("stability-selftest"), QStringLiteral("On a throwaway profile: a saved file that can't be read is never written over, a restarted copy waits for the closing one, a stuck one is taken over (for CI), then quit."));
+    args.addOption(stabilityTest);
+    // Started by a copy that is closing (an update, a restore): wait for it to end before starting.
+    QCommandLineOption restarted(QStringLiteral("restarted"), QStringLiteral("Wait for the copy that started this one to close."));
+    restarted.setFlags(QCommandLineOption::HiddenFromHelp);
+    args.addOption(restarted);
     QCommandLineOption releaseSigTest(QStringLiteral("release-sig-selftest"), QStringLiteral("Check the update signature check against the shared test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(releaseSigTest);
     args.process(app);
@@ -215,17 +232,34 @@ int main(int argc, char *argv[])
         return selfTested(Ratchet::selfTest(args.value(ratchetTest)));
     if (args.isSet(nostrTest))
         return selfTested(Nostr::selfTest(args.value(nostrTest)));
+    if (args.isSet(stabilityTest)) {
+        WifiSelfTest::isolate();
+        const bool a = Vault::stabilitySelfTest(), b = SingleInstance::selfTest(), c = Chat::keySelfTest();
+        // crash.log lines never carry the home folder (the account name) or a network address.
+        const QString home = QDir::homePath();
+        const QString scrubbed = CrashLog::scrub(QStringLiteral("at 192.168.1.20 and fe80::1 in ") + home + QStringLiteral("/x QQuickWindow::sceneGraphError"));
+        const bool d = !scrubbed.contains(QLatin1String("192.168")) && !scrubbed.contains(QLatin1String("fe80"))
+            && (home.size() <= 1 || !scrubbed.contains(home)) && scrubbed.contains(QLatin1String("QQuickWindow::sceneGraphError"));
+        std::printf("crash log keeps out addresses and the home folder: %s\n", d ? "ok" : "FAILED");
+        return selfTested(a && b && c && d);
+    }
     if (args.isSet(privacyTest)) {
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();
         return selfTested(a && b && c);
     }
 
-    // One copy at a time: two would share the same chat folder and vault files.
+    // crash.log (Windows and Linux): crashes, fatal errors, graphics failures and runs that never closed.
+    if (!quiet)
+        CrashLog::start();
+    // One copy at a time: two would share the same chat folder and vault files. A restarted copy waits here
+    // until the copy that started it has saved and closed.
     auto *one = new SingleInstance(&app);
-    if (!quiet && !one->claim()) {
+    if (!quiet && !one->claim(args.isSet(restarted))) {
         Platform::noStartLog();
         return 0;
     }
+    if (!quiet)
+        CrashLog::claimed();
     // Only now the start log is written fresh and an update's leftovers are cleaned up (not by a
     // second copy that is about to quit).
     Platform::startClaimed(!quiet);
@@ -266,12 +300,20 @@ int main(int argc, char *argv[])
     auto *nostr = new Nostr([vault] {
         if (vault->locked())
             return QByteArray();
-        QJsonObject s = QJsonDocument::fromJson(vault->read(QStringLiteral("secrets.json"))).object();
+        // There but not readable: no inbox key this time, and never a new one over the one in that file.
+        Vault::ReadStatus st = Vault::ReadFailed;
+        const QByteArray raw = vault->read(QStringLiteral("secrets.json"), &st);
+        QJsonParseError pe;
+        const QJsonDocument doc = QJsonDocument::fromJson(raw, &pe);
+        if (st == Vault::ReadFailed || (st == Vault::ReadOk && !doc.isObject()))
+            return QByteArray();
+        QJsonObject s = doc.object();
         QByteArray secret = QByteArray::fromHex(s.value(QStringLiteral("nostrSecret")).toString().toLatin1());
         if (secret.size() != 32) {
             secret = Schnorr::newSecret();
             s.insert(QStringLiteral("nostrSecret"), QString::fromLatin1(secret.toHex()));
-            vault->write(QStringLiteral("secrets.json"), QJsonDocument(s).toJson(QJsonDocument::Compact));
+            if (!vault->write(QStringLiteral("secrets.json"), QJsonDocument(s).toJson(QJsonDocument::Compact)))
+                return QByteArray();   // not kept: not used either (the next start would make another)
         }
         return secret;
     }, &app);
@@ -508,9 +550,16 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Profile", profile);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Labs", labs);
 
+    // Closed cleanly once everything below (the window, the engine) has gone; a run that never gets here shows in crash.log.
+    struct CleanExit {
+        bool on;
+        ~CleanExit() { if (on) CrashLog::cleanExit(); }
+    } cleanExit{!quiet};
     QQmlApplicationEngine engine;
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
-    engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(chat));
+    // The image providers run on Qt's loading threads: they read copies kept for them, never waiting on the main
+    // thread (which could hang Huginn while it closes).
+    engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(vault->anyThreadReader()));
     engine.addImageProvider(QStringLiteral("profile"), new ProfileImageProvider(profile));
     engine.addImageProvider(QStringLiteral("noise"), new NoiseProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
@@ -524,6 +573,13 @@ int main(int argc, char *argv[])
     if (!engine.rootObjects().isEmpty()) {
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
         Platform::watchMainWindow(window);
+#ifndef Q_OS_WIN
+        // Windows notes these itself (and starts again, winstart.cpp).
+        if (window)
+            QObject::connect(window, &QQuickWindow::sceneGraphError, window, [](QQuickWindow::SceneGraphError, const QString &msg) {
+                CrashLog::note(QStringLiteral("graphics failed: ") + msg);
+            });
+#endif
         // Settings › Privacy › Block screenshots (Windows), set again whenever it's switched.
         if (window) {
             auto shield = std::make_shared<int>(-1);
@@ -542,6 +598,9 @@ int main(int argc, char *argv[])
         WifiSelfTest::start(chat, localSend, sound);
     QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::flushSaves);
+    // Saved: from here on, a copy that finds this one stuck while closing may end it (SingleInstance::takeOverStaleLock).
+    if (!quiet)
+        QObject::connect(&app, &QCoreApplication::aboutToQuit, one, &SingleInstance::markClosing);
     if (!quiet)
         updater->startAutoUpdate();
     return app.exec();

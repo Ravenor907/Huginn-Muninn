@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QProcessEnvironment>
 #include <QString>
 
 class QQuickWindow;
@@ -30,4 +31,7 @@ void blockCapture(QQuickWindow *window, bool on);
 void startFailed(const QString &why);
 // A command-line run (self-tests): no start log is left behind.
 void noStartLog();
+// The environment for a copy of Huginn this one starts: without what only this copy was started with
+// (the software renderer after a graphics failure, and the marker that it was a retry).
+QProcessEnvironment childEnvironment();
 }

@@ -1064,7 +1064,7 @@ private fun Conversation(app: Muninn, key: String) {
                     if (m.id !in albums.first) Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null,
                         quote = quoteOf(m.re), onQuote = { jumpTo(m.re) }, me = me, highlight = current == i,
                         onReply = if (m.failed) null else ({ editing = null; replyTo = m }), onReactions = { sheetFor = m },
-                        onTap = { viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
+                        onTap = { if (m.mine && m.failed && m.unsent.isEmpty()) app.chat.retry(key, m.id) else viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
                         onVote = { v -> app.chat.vote(key, m.id, v)?.let { Ui.say(it, true) } }, voterName = { if (it == key) name else app.chat.nameOf(it) }) { sheetFor = m }
                 }
             }
@@ -1325,7 +1325,8 @@ private fun AddSomeone(app: Muninn) {
                         MButton("Add ${found.name}", Modifier.weight(1f), Kind.Accent) {
                             app.chat.addContact(found)
                             // A one-time invite link: say hi at once, which adds me on their phone too (the link is used up then).
-                            if (Contacts.once(text)) app.chat.sendPrivate(found.chatKey, "Hi, it's ${app.identity.username}. I added you with your invite link.")
+                            // So is every code Muninn and Huginn show now ("1", 13.6): no request to accept on their side.
+                            if (Contacts.once(text)) app.chat.sendPrivate(found.chatKey, "Hi, it's ${app.identity.username}. I added you.")
                             // A Kids' TV's code: offer to set it up (no lock on the TV, so ask first).
                             io.github.ravenor907.muninn.tv.TvParent.adoptIfTv(app, text)
                             // A key change has its own warning (from Chat): don't cover it.
@@ -1389,7 +1390,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
         !m.mine -> ""
         m.state == "unsending" -> "Removing from their phone"
         m.unsent.isNotEmpty() -> ""
-        m.failed -> "Didn't send"
+        m.failed -> "Not sent, tap to retry"
         // Honest ticks: "Delivered" only once their phone has it, else whose phone it's waiting for.
         else -> io.github.ravenor907.muninn.net.Ticks.private(m.state, theirName)
     }
@@ -2456,15 +2457,16 @@ private fun MirrorList(inline: Boolean = false) {
             MIcon("phone", Palette.accent, 20.dp)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(phone?.name ?: "Your phone", style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("While your phone is online", style = Type.small)
+                Text("History comes over on home Wi-Fi", style = Type.small)
             }
-            IconAction("refresh", "Ask the phone again", Palette.textMuted, size = 20.dp) {
-                io.github.ravenor907.muninn.net.Link.askSync(); Ui.say("Asking your phone…")
+            // Never on opening: only this, at most once in 10 minutes.
+            IconAction("refresh", "Refresh", Palette.textMuted, size = 20.dp) {
+                Ui.say(io.github.ravenor907.muninn.net.Link.askSync())
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
         LazyColumn(Modifier.weight(1f)) {
-            if (list.isEmpty()) item { Text("Your chats are coming over.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            if (list.isEmpty()) item { Text("Your chats come over on home Wi-Fi.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
             items(list, key = { it.peer }) { c ->
                 val last = c.msgs.lastOrNull()
                 PersonRow(c.name, last?.let { (if (it.mine) "You: " else "") + it.text.replace('\n', ' ') } ?: "", last?.let { when_(it.time) } ?: "", 0, false, {
@@ -2480,10 +2482,12 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
     BackHandler { back() }
     val chats by io.github.ravenor907.muninn.net.Link.mirror.collectAsState()
     val c = chats[peer]
+    val pendingAll by io.github.ravenor907.muninn.net.Link.pending.collectAsState()
+    val waiting = pendingAll.filter { it.peer == peer }
     var text by remember { mutableStateOf("") }
     val state = rememberLazyListState()
     val msgs = c?.msgs.orEmpty()
-    LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) state.scrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.size + waiting.size) { if (msgs.isNotEmpty() || waiting.isNotEmpty()) state.scrollToItem(msgs.size + waiting.size - 1) }
     LaunchedEffect(peer) { io.github.ravenor907.muninn.net.Link.fetchMissing() }
     Column(Modifier.fillMaxSize()) {
         PageBar(c?.name ?: "Chat", "Back to your phone's chats") { back() }
@@ -2497,11 +2501,23 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
                     }
                 }
             }
+            // Sent from here, not answered by the phone yet: Sending, or why it didn't send (tap to try again).
+            items(waiting, key = { "p:" + it.id }) { w ->
+                Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = Alignment.CenterEnd) {
+                    Column(Modifier.widthIn(max = 520.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.goldTint)
+                        .clickable(enabled = w.err.isNotEmpty()) { io.github.ravenor907.muninn.net.Link.retrySend(w.id) }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Text(w.text, style = Type.normal.copy(color = Palette.text))
+                        Text(if (w.err.isEmpty()) "Sending" else "${w.err} · Retry", style = Type.small.copy(color = if (w.err.isEmpty()) Palette.textMuted else Palette.danger))
+                    }
+                }
+            }
         }
         Composer(text, { text = it.take(Chat.MAX) }, "Message through your phone") {
             val t = text.trim()
             if (t.isNotEmpty()) {
-                if (io.github.ravenor907.muninn.net.Link.sendFromCompanion(peer, t)) text = "" else Ui.say("No phone is linked.", true)
+                val r = io.github.ravenor907.muninn.net.Link.sendFromCompanion(peer, t)
+                if (r == null) text = "" else Ui.say(r, true)
             }
         }
     }

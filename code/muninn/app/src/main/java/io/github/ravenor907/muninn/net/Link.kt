@@ -85,6 +85,31 @@ object LinkWire {
     /** Media may go between the two devices: it came on the LAN route (same home Wi-Fi) and Direct isn't what carries it. */
     fun lanOk(via: String, directOn: Boolean): Boolean = via == "wifi" && !directOn
 
+    /** Refresh (a "sync" without "f") at most this often per companion. */
+    const val REFRESH_EVERY_MS = 10 * 60_000L
+    /** A "send" from a companion with no answer from the phone this long: "Didn't send". */
+    const val ECHO_MS = 60_000L
+
+    /**
+     * A frame that may go over the internet (a small live one, to at most 2 relays): msg, send, hello, unlink, result,
+     * sync, setme, and me without its picture. History ("chat"), "get", "part" and a "me" with "pic" only on the home Wi-Fi.
+     */
+    fun internetOk(o: JSONObject): Boolean = when (o.optString("t")) {
+        "me" -> !o.has("pic")
+        "msg", "send", "hello", "unlink", "result", "sync", "setme" -> true
+        else -> false
+    }
+
+    /** A Refresh last taken at [last] (ms, 0: never) may be taken at [now]. */
+    fun syncDue(last: Long, now: Long): Boolean = last <= 0L || now - last >= REFRESH_EVERY_MS
+
+    /** What a companion shows for a phone's {"t": "result", "ok": false, "err"}. */
+    fun errText(err: String): String = when (err) {
+        "confirm" -> "Confirm the emoji on your phone"
+        "not a contact" -> "Not a contact on your phone"
+        else -> "Didn't send"
+    }
+
     /** The link code on screen made at [madeAt] should be swapped for a new one now. */
     fun refreshDue(madeAt: Long, now: Long): Boolean = now - madeAt >= Link.TOKEN_MS - REFRESH_EARLY_MS
 
@@ -134,10 +159,11 @@ object LinkWire {
  *  - The companion shows a link code as a QR (its own chat key, mailbox and a token good for 10 minutes, made anew
  *    before it runs out); the phone scans it, then both screens show the same 4 emoji.
  *  - Room "link" from the phone: t "hello" {i} (pairing), "chat" {peer, n, msgs, d, pg, pgs} (every message still kept,
- *    in pages, oldest first), "msg" {peer, n, m} (one message, in or out), "part" {h, i, n, b} (a piece of a photo or
- *    file, home Wi-Fi only), "unlink".
- *  - Room "link" from the companion: t "send" {peer, text, id} (the phone sends it as its own), "sync" (all chats again),
- *    "get" {h} (a photo or file, home Wi-Fi only), "unlink".
+ *    in pages, oldest first, home Wi-Fi only), "msg" {peer, n, m} (one message, in or out), "result" {id, ok, err, mid}
+ *    (the answer to a "send"), "part" {h, i, n, b} (a piece of a photo or file, home Wi-Fi only), "unlink".
+ *  - Room "link" from the companion: t "send" {peer, text, id} (the phone sends it as its own), "sync" (all chats again,
+ *    at most once in 10 minutes), "get" {h} (a photo or file, home Wi-Fi only), "unlink".
+ *  - Only small live frames ([LinkWire.internetOk]) use the internet, to at most 2 relays; history waits for the home Wi-Fi.
  *  - A companion that had chats of its own keeps them, sealed away while it's linked: they show again on unlinking,
  *    or from Settings › Linked devices (after the lock).
  */
@@ -163,12 +189,16 @@ object Link {
         fun myKey(): String
         fun myMailbox(): String
         fun myName(): String
-        /** Seal [json] (room "link") for [d] and send it on every route. */
+        /** Seal [json] (room "link") for [d] and send it as a small live frame: close by, the Wi-Fi and at most 2 relays. */
         fun send(d: Device, json: String)
         /** The phone's chats: peer to (name, messages), newest last. */
         fun chats(): Map<String, Pair<String, List<Chat.Msg>>>
         /** The phone sends [text] to its contact [peer] as its own message. False when [peer] isn't a contact. */
         fun sendAsMe(peer: String, text: String): Boolean
+        /** The same, with the new message's id (null when [peer] isn't a contact). */
+        fun sendAsMeId(peer: String, text: String): String? = if (sendAsMe(peer, text)) "" else null
+        /** [peer] is one of my contacts (only they get a companion's "send"). */
+        fun isContactHere(peer: String): Boolean = true
         fun read(name: String): String?
         fun write(name: String, text: String)
         fun notice(text: String)
@@ -211,6 +241,18 @@ object Link {
     private val _ownShown = MutableStateFlow(false)
     /** On a linked companion: this device's own chats are open (after the lock) instead of the phone's. */
     val ownShown: StateFlow<Boolean> = _ownShown.asStateFlow()
+
+    /** On a companion: sent through the phone, not answered yet. [err]: why it didn't send ("" while waiting). */
+    data class Pending(val id: String, val peer: String, val text: String, val time: Long, val err: String = "")
+    private val _pending = MutableStateFlow<List<Pending>>(emptyList())
+    val pending: StateFlow<List<Pending>> = _pending.asStateFlow()
+    /** The phone's side: companions whose history, or "me" picture, waits for the home Wi-Fi; when each last asked. */
+    private val owed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val meOwed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val synced = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** The companion's side: when Refresh last asked. */
+    @Volatile private var askedAt = 0L
+    private val clock = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "muninn-link-clock").apply { isDaemon = true } }
 
     /** Link codes still good: token to until (the newest two, so one scanned just before a refresh still works). */
     private val tokens = ArrayList<Pair<String, Long>>()
@@ -318,7 +360,8 @@ object Link {
         }
         _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
             _phone.value = p.copy(ok = true); _ownShown.value = false; save()
-            h.send(p, JSONObject().put("t", "sync").toString())
+            // "f": the first one after the emoji, which the phone takes even inside the 10 minutes.
+            h.send(p, JSONObject().put("t", "sync").put("f", true).toString())
         }
     }
 
@@ -327,6 +370,7 @@ object Link {
         _companions.value.firstOrNull { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()) }
         _phone.value?.takeIf { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()); dropPhone() }
         _companions.value = _companions.value.filterNot { it.key == key }
+        owed.remove(key); meOwed.remove(key)
         save()
     }
 
@@ -336,10 +380,37 @@ object Link {
         val h = host ?: return
         val to = _companions.value.filter { it.ok }
         if (to.isEmpty()) return
-        val json = h.myProfile().put("t", "me").toString()
-        if (!force && json == meSent) return
-        meSent = json
-        to.forEach { h.send(it, json) }
+        later {
+            val me = h.myProfile().put("t", "me")
+            val json = me.toString()
+            if (!force && json == meSent) return@later
+            meSent = json
+            to.forEach { sendMeTo(h, it, me) }
+        }
+    }
+
+    /**
+     * "me" with its picture only on the home Wi-Fi. Away from it the rest goes now ("pk": keep the picture you have) and
+     * the picture follows once both are on it again ([lanCame]).
+     */
+    private fun sendMeTo(h: Host, d: Device, me: JSONObject) {
+        if (!me.has("pic")) { meOwed.remove(d.key); h.send(d, me.toString()); return }
+        if (h.onLan(d.key) && h.sendLan(d, me.toString())) { meOwed.remove(d.key); return }
+        h.send(d, JSONObject(me.toString()).apply { remove("pic"); put("pk", true) }.toString())
+        meOwed.add(d.key)
+    }
+
+    /** Devices that just came onto the home Wi-Fi: history and pictures that waited for it go now. */
+    fun lanCame(keys: Set<String>) {
+        val h = host ?: return
+        val back = _companions.value.filter { it.ok && it.key in keys && (it.key in owed || it.key in meOwed) }
+        if (back.isEmpty()) return
+        later {
+            for (d in back) {
+                if (d.key in owed) syncAll(d)
+                if (d.key in meOwed) sendMeTo(h, d, h.myProfile().put("t", "me"))
+            }
+        }
     }
 
     /** On a companion: a new name, status or custom status for the phone (the account), shown here at once. Null when sent. */
@@ -363,6 +434,7 @@ object Link {
         _stored.value.forEach { h?.delete(MEDIA_DIR + it) }
         _stored.value = emptySet(); saveStored()
         assemblies.clear(); asked.clear()
+        _pending.value = emptyList(); askedAt = 0L
         _ownShown.value = false
     }
 
@@ -377,14 +449,19 @@ object Link {
         val to = (if (d != null) listOf(d) else _companions.value).filter { it.ok }
         if (to.isEmpty()) return
         later {
+            // History only over the home Wi-Fi: a companion that isn't on it now gets it once it is ([lanCame]).
+            val lan = to.filter { d -> h.onLan(d.key).also { on -> if (on) owed.remove(d.key) else owed.add(d.key) } }.toMutableList()
+            if (lan.isEmpty()) return@later
             for ((peer, chat) in h.chats()) {
                 val pages = LinkWire.pages(chat.second.sortedBy { it.time }.map { mJson(it) })
                 val days = h.days(peer)
                 pages.forEachIndexed { i, pg ->
                     val json = JSONObject().put("t", "chat").put("peer", peer).put("n", chat.first).put("msgs", JSONArray(pg))
                         .put("d", days).put("pg", i).put("pgs", pages.size).toString()
-                    to.forEach { h.send(it, json) }
+                    // Off the home Wi-Fi meanwhile: all of it again later.
+                    lan.removeAll { d -> !h.sendLan(d, json).also { ok -> if (!ok) owed.add(d.key) } }
                 }
+                if (lan.isEmpty()) break
             }
             saveHashes()
         }
@@ -510,7 +587,31 @@ object Link {
             // Nothing from the phone shows until this screen's emoji were checked.
             ph != null && !ph.ok && (t == "chat" || t == "msg" || t == "part" || t == "me") -> {}
             // The phone's own profile: "you" here while it's linked.
-            ph != null && t == "me" -> LinkWire.readMe(p)?.let { _me.value = it; save() }
+            // "pk": sent away from the home Wi-Fi without the picture: the one here stays until it comes.
+            ph != null && t == "me" -> LinkWire.readMe(p)?.let { m ->
+                _me.value = if (p.optBoolean("pk")) LinkWire.Me(m.name, m.status, m.custom, _me.value?.pic ?: ByteArray(0)) else m
+                save()
+            }
+            // The phone's answer to a "send" from here: gone (it shows as the phone's own message), or why it didn't send.
+            ph != null && t == "result" -> {
+                val id = p.optString("id")
+                val pend = _pending.value.firstOrNull { it.id == id } ?: return true
+                if (p.optBoolean("ok")) {
+                    _pending.value = _pending.value.filterNot { it.id == id }
+                    // Its copy may not be here yet: shown under the phone's own id, which the copy then merges into.
+                    val mid = p.optString("mid")
+                    if (mid.isNotEmpty()) synchronized(mirrorLock) {
+                        val old = _mirror.value[pend.peer]
+                        if (old?.msgs?.any { it.id == mid } != true) {
+                            _mirror.value = _mirror.value + (pend.peer to MirrorChat(pend.peer, old?.name ?: "Someone",
+                                LinkWire.merge(old?.msgs.orEmpty(), listOf(M(mid, pend.text, true, System.currentTimeMillis()))), old?.days ?: Limits.DEFAULT))
+                            saveMirror()
+                        }
+                    }
+                } else {
+                    _pending.value = _pending.value.map { if (it.id == id) it.copy(err = LinkWire.errText(p.optString("err"))) else it }
+                }
+            }
             ph != null && t == "chat" -> {
                 val peer = p.optString("peer")
                 if (peer.isEmpty()) return true
@@ -533,11 +634,17 @@ object Link {
                         LinkWire.merge(old?.msgs.orEmpty(), listOf(m)), if (p.has("d")) daysOf(p) else old?.days ?: Limits.DEFAULT))
                     saveMirror()
                 }
+                // My own message from here came back: it isn't pending any more.
+                if (m.mine) _pending.value.firstOrNull { it.peer == peer && it.text.take(LinkWire.TEXT_MAX) == m.text }?.let { x ->
+                    _pending.value = _pending.value.filterNot { it.id == x.id }
+                }
                 if (!m.mine) h.notice("${p.optString("n")}: ${m.text.take(60)}")
                 fetchMissing()
             }
             ph != null && t == "part" -> if (lan) takePart(p)
-            comp != null && !comp.ok && (t == "send" || t == "sync" || t == "get" || t == "setme") -> {}
+            // Not checked here yet: a "send" is answered, so the companion doesn't wait for nothing.
+            comp != null && !comp.ok && t == "send" -> answerSend(h, comp, p.optString("id"), false, "confirm")
+            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme") -> {}
             // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
             comp != null && t == "setme" -> {
                 val q = JSONObject(p.toString()).apply { if (p.optString("n").isBlank()) put("n", h.myProfile().optString("n")) }
@@ -546,10 +653,26 @@ object Link {
             }
             comp != null && t == "send" -> {
                 val text = p.optString("text").trim()
-                // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
-                if (text.isNotEmpty() && firstSend(p.optString("id"))) h.sendAsMe(p.optString("peer"), text.take(LinkWire.TEXT_MAX))
+                val id = p.optString("id")
+                // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice. Always
+                // answered ("result"), so the companion shows what happened.
+                later {
+                    when {
+                        text.isEmpty() -> answerSend(h, comp, id, false, "empty")
+                        !h.isContactHere(p.optString("peer")) -> answerSend(h, comp, id, false, "not a contact")
+                        !firstSend(id) -> answerSend(h, comp, id, true, "")
+                        else -> {
+                            val mid = h.sendAsMeId(p.optString("peer"), text.take(LinkWire.TEXT_MAX))
+                            if (mid == null) answerSend(h, comp, id, false, "not a contact") else answerSend(h, comp, id, true, "", mid)
+                        }
+                    }
+                }
             }
-            comp != null && t == "sync" -> { syncAll(comp); sendMe(true) }
+            // Refresh at most once in 10 minutes per companion; the first one after the emoji ("f") always.
+            comp != null && t == "sync" -> {
+                val now = System.currentTimeMillis()
+                if (p.optBoolean("f") || LinkWire.syncDue(synced[comp.key] ?: 0L, now)) { synced[comp.key] = now; syncAll(comp); sendMe(true) }
+            }
             // Photos and files only on the home Wi-Fi: asked any other way, nothing is sent.
             comp != null && t == "get" -> if (lan) p.optString("h").takeIf { it.length == 64 }?.let { serve(comp, it) }
             else -> return comp != null || ph != null
@@ -581,15 +704,58 @@ object Link {
 
     // ------------------------------------------------------------------ the companion's side
 
-    /** Send [text] to [peer] through the phone. False when no phone is linked. */
-    fun sendFromCompanion(peer: String, text: String): Boolean {
-        val h = host ?: return false
-        val ph = _phone.value?.takeIf { it.ok } ?: return false
-        h.send(ph, JSONObject().put("t", "send").put("peer", peer).put("text", text).put("id", java.util.UUID.randomUUID().toString()).toString())
-        return true
+    /**
+     * Send [text] to [peer] through the phone. It shows at once in [pending] until the phone answers or its copy comes
+     * back; no answer in a minute: "Didn't send". Null when it went, else what to say.
+     */
+    fun sendFromCompanion(peer: String, text: String): String? {
+        if (host == null) return "Not ready."
+        val ph = _phone.value ?: return "No phone is linked."
+        if (!ph.ok) return "Check the emoji on both screens first."
+        val t = text.trim().take(LinkWire.TEXT_MAX)
+        if (t.isEmpty()) return "Write something first."
+        val p = Pending(java.util.UUID.randomUUID().toString(), peer, t, System.currentTimeMillis())
+        _pending.value = (_pending.value + p).takeLast(50)
+        sendPending(p)
+        return null
     }
 
-    fun askSync() { val h = host ?: return; _phone.value?.takeIf { it.ok }?.let { h.send(it, JSONObject().put("t", "sync").toString()) }; fetchMissing() }
+    private fun sendPending(p: Pending) {
+        val h = host ?: return
+        val ph = _phone.value?.takeIf { it.ok } ?: return
+        h.send(ph, JSONObject().put("t", "send").put("peer", p.peer).put("text", p.text).put("id", p.id).toString())
+        clock.schedule({
+            val now = System.currentTimeMillis()
+            _pending.value = _pending.value.map { if (it.id == p.id && it.err.isEmpty() && now - it.time >= LinkWire.ECHO_MS) it.copy(err = "Didn't send") else it }
+        }, LinkWire.ECHO_MS + 500, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    /** One that didn't send, again: the same id, so the phone never sends it twice. */
+    fun retrySend(id: String) {
+        val p = _pending.value.firstOrNull { it.id == id }?.copy(err = "", time = System.currentTimeMillis()) ?: return
+        _pending.value = _pending.value.map { if (it.id == id) p else it }
+        sendPending(p)
+    }
+
+    private fun answerSend(h: Host, d: Device, id: String, ok: Boolean, err: String, mid: String = "") {
+        if (id.isEmpty()) return
+        h.send(d, JSONObject().put("t", "result").put("id", id).put("ok", ok).apply {
+            if (err.isNotEmpty()) put("err", err)
+            if (mid.isNotEmpty()) put("mid", mid)
+        }.toString())
+    }
+
+    /** Refresh: every chat again, at most once in 10 minutes. What to say. */
+    fun askSync(): String {
+        val h = host ?: return "Not ready."
+        val ph = _phone.value?.takeIf { it.ok } ?: return "No phone is linked."
+        val now = System.currentTimeMillis()
+        if (!LinkWire.syncDue(askedAt, now)) return "Asked already. You can ask again in ${maxOf(1L, (LinkWire.REFRESH_EVERY_MS - (now - askedAt) + 59_999L) / 60_000L)} min."
+        askedAt = now
+        h.send(ph, JSONObject().put("t", "sync").toString())
+        fetchMissing()
+        return if (h.onLan(ph.key)) "Asked ${ph.name} for its chats." else "Asked ${ph.name}. History comes over on home Wi-Fi."
+    }
 
     /** Files being put back together, by hash; and when each missing one was last asked for. */
     private val assemblies = java.util.concurrent.ConcurrentHashMap<String, LinkWire.Assembly>()

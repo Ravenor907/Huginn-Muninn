@@ -2,16 +2,19 @@ import QtQuick
 import Huginn
 
 // Labs › Report a bug: the screenshot of Huginn taken just before this opened, Include screenshot (on unless
-// switched off), what went wrong (up to 2000 characters), then Send. The D-pad moves between them, A uses
-// one, B or Esc closes. Main.qml takes the screenshot and opens it (openReport).
+// switched off), what went wrong (up to 2000 characters), Include crash log (off unless ticked; only when there is
+// one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
+// opens it (openReport).
 Item {
     id: report
     visible: false
     anchors.fill: parent
     property string text: ""
     property bool include: true
+    property bool includeLog: false
+    property bool hasLog: false
     property bool tour: false
-    // The focus with a controller: 0 Include screenshot, 1 the text, 2 Send, 3 Cancel.
+    // The focus with a controller: 0 Include screenshot, 1 the text, 4 Include crash log, 2 Send, 3 Cancel.
     property int focusAt: 1
     readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
     readonly property int firstFocus: Labs.hasShot ? 0 : 1
@@ -20,6 +23,8 @@ Item {
         tour = !!asTour
         text = tour ? "The chat list jumps to the top when a photo arrives." : ""
         include = true
+        includeLog = false
+        hasLog = !tour && Labs.hasCrashLog()
         focusAt = 1
         visible = true
     }
@@ -35,7 +40,7 @@ Item {
     // The controller's focus stays in view.
     onFocusAtChanged: Qt.callLater(reveal)
     function reveal() {
-        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : buttons
+        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : focusAt === 4 ? logRow : buttons
         if (!it || !it.visible) return
         const y = it.mapToItem(col, 0, 0).y
         if (y < view.contentY) view.contentY = Math.max(0, y)
@@ -46,7 +51,7 @@ Item {
     }
     function send() {
         if (tour) return
-        const err = Labs.send(report.text, report.include && Labs.hasShot)
+        const err = Labs.send(report.text, report.include && Labs.hasShot, report.includeLog && report.hasLog)
         if (err !== "") { Ui.say(err, true); return }
         Ui.say("Report sent. Thank you.")
         close()
@@ -54,13 +59,23 @@ Item {
     function activate() {
         if (focusAt === 0) include = !include
         else if (focusAt === 1) edit()
+        else if (focusAt === 4) includeLog = !includeLog
         else if (focusAt === 2) send()
         else close()
     }
     function handleButton(b) {
         switch (b) {
-        case "up": focusAt = focusAt >= 2 ? 1 : Math.max(firstFocus, focusAt - 1); break
-        case "down": focusAt = Math.min(2, focusAt + 1); break
+        // Top to bottom: 0, 1, 4 (when there is a crash log), then 2 and 3 side by side.
+        case "up":
+            if (focusAt === 4) focusAt = 1
+            else if (focusAt >= 2) focusAt = hasLog ? 4 : 1
+            else focusAt = Math.max(firstFocus, focusAt - 1)
+            break
+        case "down":
+            if (focusAt === 0) focusAt = 1
+            else if (focusAt === 1) focusAt = hasLog ? 4 : 2
+            else if (focusAt === 4) focusAt = 2
+            break
         case "left": if (focusAt === 2) focusAt = 3; else if (focusAt === 3) focusAt = 2; break
         case "right": if (focusAt === 3) focusAt = 2; else if (focusAt === 2) focusAt = 3; break
         case "a": activate(); break
@@ -164,6 +179,34 @@ Item {
                     }
                     HoverHandler { cursorShape: Qt.IBeamCursor }
                     TapHandler { onTapped: { report.focusAt = 1; report.edit() } }
+                }
+                // The crash log's last lines (crashes and errors only; no messages, names or addresses). Off unless ticked.
+                Rectangle {
+                    id: logRow
+                    visible: report.hasLog
+                    width: parent.width
+                    height: Theme.px(48)
+                    radius: Theme.radius
+                    color: report.focusAt === 4 && report.padFocus ? Theme.focusFill : "transparent"
+                    border.width: report.focusAt === 4 && report.padFocus ? Theme.focusWidth : 0
+                    border.color: Theme.accent
+                    Text {
+                        textFormat: Text.PlainText
+                        anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                        anchors.right: logSwitch.left; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        elide: Text.ElideRight
+                        text: "Include crash log"
+                        color: Theme.text
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium
+                    }
+                    ToggleSwitch {
+                        id: logSwitch
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: report.includeLog
+                        onToggled: report.includeLog = !report.includeLog
+                    }
                 }
                 Text {
                     textFormat: Text.PlainText

@@ -132,6 +132,7 @@ target_sources(huginn PRIVATE
     src/platform/keepawake.h
     src/platform/powerwatch.h
     src/platform/singleinstance.cpp src/platform/singleinstance.h
+    src/platform/crashlog.cpp src/platform/crashlog.h
     src/platform/scratch.cpp src/platform/scratch.h
     src/platform/winupdate.cpp src/platform/winupdate.h
     src/platform/winstart.cpp src/platform/winstart.h

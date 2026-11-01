@@ -18,6 +18,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMetaObject>
+#include <QMutexLocker>
 #include <QThread>
 #include <QUrl>
 #include <QUuid>
@@ -189,6 +190,9 @@ Profile::Profile(Chat *chat, Vault *vault, QObject *parent)
         reconcileSoon();
     });
     connect(m_chat, &Chat::liveChanged, this, &Profile::liveChanged);
+    // Connected first, so the copy the image provider reads is current before anything shows a new picture URL.
+    connect(this, &Profile::pictureChanged, this, &Profile::share);
+    connect(this, &Profile::changed, this, &Profile::share);
     m_soon.setSingleShot(true);
     m_soon.setInterval(1500);
     connect(&m_soon, &QTimer::timeout, this, &Profile::reconcile);
@@ -346,6 +350,29 @@ QImage Profile::pictureById(const QString &id)
         if (hashOf(it.key()) == id)
             return picture(it.key());
     return {};
+}
+
+void Profile::share()
+{
+    QHash<QString, QByteArray> all;
+    if (!m_me.pic.isEmpty())
+        all.insert(kMe, m_me.pic);
+    if (m_phoneOn)
+        all.insert(QStringLiteral("phone"), m_phonePic);   // may be empty: then no picture stands for mine
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
+        if (!it->pic.isEmpty())
+            all.insert(hashOf(it.key()), it->pic);
+    QMutexLocker l(&m_sharedLock);
+    m_shared.swap(all);
+}
+
+QByteArray Profile::sharedPicture(const QString &id) const
+{
+    QMutexLocker l(&m_sharedLock);
+    // Mine shows only while no linked phone stands in for it (pictureById does the same).
+    if (id == kMe && m_shared.contains(QStringLiteral("phone")))
+        return {};
+    return m_shared.value(id);
 }
 
 void Profile::tookLive(const QString &key, bool on, const QJsonObject &p)
@@ -538,12 +565,8 @@ QImage ProfileImageProvider::requestImage(const QString &id, QSize *size, const 
     Q_UNUSED(requestedSize)
     // "<hash>?v=<n>" or "me?v=<n>": the version only makes QML ask again after a change.
     const QString who = id.section(QLatin1Char('?'), 0, 0);
-    QImage img;
-    auto fetch = [this, who, &img] { img = m_profile->pictureById(who); };
-    if (QThread::currentThread() == QCoreApplication::instance()->thread())
-        fetch();
-    else
-        QMetaObject::invokeMethod(m_profile, fetch, Qt::BlockingQueuedConnection);
+    const QByteArray bytes = m_profile->sharedPicture(who);
+    QImage img = bytes.isEmpty() ? QImage() : QImage::fromData(bytes, "JPEG");
     // Round here, so QML needs no shader effect: everything outside the circle is clear.
     if (!img.isNull()) {
         const int side = qMin(img.width(), img.height());

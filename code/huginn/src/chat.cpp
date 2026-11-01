@@ -41,6 +41,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
+#include <cstdio>
 #include <algorithm>
 #include <memory>
 
@@ -132,14 +133,37 @@ void Chat::start()
 {
     if (m_ready)
         return;
-    // The chat key's private half lives in the vault (made the first time).
-    QJsonObject secrets = QJsonDocument::fromJson(m_vault->read(QStringLiteral("secrets.json"))).object();
-    if (secrets.value(QStringLiteral("chatPriv")).toString().isEmpty()) {
+    // The chat key's private half lives in the vault (made the first time, and only then).
+    Vault::ReadStatus st = Vault::ReadFailed;
+    const QByteArray raw = m_vault->read(QStringLiteral("secrets.json"), &st);
+    const QJsonDocument doc = QJsonDocument::fromJson(raw);
+    QJsonObject secrets = doc.object();
+    const bool hasKey = !secrets.value(QStringLiteral("chatPriv")).toString().isEmpty();
+    if (!hasKey && !mayMakeKeys(st, doc.isObject(), hasKey)) {
+        // There but not readable (another program holding it, or damaged): never new keys over the old ones. Chat
+        // waits and tries again; meanwhile the screen says the saved chats couldn't be read.
+        qWarning("chat: the keys couldn't be read; not starting yet");
+        if (m_startTries++ < 5)
+            QTimer::singleShot(3000, this, [this] { if (!m_vault->locked()) start(); });
+        else
+            Q_EMIT notice(QStringLiteral("Huginn couldn't read your saved chats. Nothing was changed. Close Huginn and open it again."));
+        return;
+    }
+    if (!hasKey) {
         const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
         secrets.insert(QStringLiteral("chatPriv"), b64(kp.privateDer));
+        // Kept first: a key that couldn't be saved is never used (the public half would no longer match).
+        if (!m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(secrets).toJson(QJsonDocument::Compact))) {
+            qWarning("chat: new keys couldn't be saved; not starting yet");
+            if (m_startTries++ < 5)
+                QTimer::singleShot(3000, this, [this] { if (!m_vault->locked()) start(); });
+            else
+                Q_EMIT notice(QStringLiteral("Couldn't save. Try again."));
+            return;
+        }
         m_settings.setValue(QStringLiteral("chat/pub"), kp.publicDer.toBase64());
-        m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(secrets).toJson(QJsonDocument::Compact));
     }
+    m_startTries = 0;
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
     m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
     // Caps b1 and e1: my day keys and what contacts announced, read from the vault now it's open.
@@ -333,12 +357,14 @@ void Chat::setKeepNearby(bool v)
 
 int Chat::internet() const { return m_nostr->connected(); }
 
-QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires)
+QString Chat::code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite, qint64 expires, bool once)
 {
     QJsonObject o{{QStringLiteral("n"), name}, {QStringLiteral("k"), chatKey}, {QStringLiteral("p"), mailbox}};
     if (!invite.isEmpty()) {
         o.insert(QStringLiteral("i"), invite);
         o.insert(QStringLiteral("x"), double(expires / 1000));
+        if (once)
+            o.insert(QStringLiteral("1"), true);
     }
     return kPrefix + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
 }
@@ -355,7 +381,10 @@ QString Chat::newLink()
     for (auto it = m_invites.begin(); it != m_invites.end();)
         it = it.value() < now() ? m_invites.erase(it) : std::next(it);
     saveInvites();
-    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires);
+    // "1" (13.6): whoever adds this code says hi, and that makes them a contact here at once, no request; the same in Muninn.
+    if (m_trust)
+        m_trust->markOnce(token);
+    m_link = kPage + code(username(), myKey(), m_nostr->publicKey(), token, m_linkExpires, m_trust != nullptr);
     Q_EMIT changed();
     return m_link;
 }
@@ -713,10 +742,18 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
         return false;
     // Relays may drop it after the longest message limit (Nostr::expiration): it's gone from both sides by then.
     const int keep = days > 0 ? days : chatDays(key);
+    // sent: only once a relay answered OK to every piece (NIP-20), never just for handing it over.
+    std::function<void()> ok;
+    if (sent) {
+        QPointer<Chat> self(this);
+        auto left = std::make_shared<int>(int(bodies.size()));
+        ok = [self, left, sent] {
+            if (self && --*left == 0)
+                sent();
+        };
+    }
     for (const QByteArray &b : bodies)
-        m_nostr->publish(mailbox, wrap(key, b), keep);
-    if (sent)
-        sent();
+        m_nostr->publishTo(mailbox, wrap(key, b), keep, ok);
     return true;
 }
 
@@ -854,7 +891,11 @@ QString Chat::lanHost(const QString &key) const
 void Chat::loadFolders()
 {
     m_folders.clear();
-    const QByteArray raw = m_vault->read(QStringLiteral("folders.json"));
+    Vault::ReadStatus st = Vault::ReadFailed;
+    const QByteArray raw = m_vault->read(QStringLiteral("folders.json"), &st);
+    // There but not readable: no starting folders over the real ones (the vault holds the file back, too).
+    if (st == Vault::ReadFailed)
+        return;
     if (raw.isEmpty()) {
         // First time: three to start with. Rename, delete or add your own.
         for (const char *n : {"Family", "Work", "Folk"})
@@ -884,12 +925,47 @@ QByteArray Chat::savedFile(const QString &name) const
     return m_ready ? m_vault->read(name) : QByteArray();
 }
 
-void Chat::saveFolders()
+bool Chat::saveFolders()
 {
     QJsonArray a;
     for (const QVariantMap &f : std::as_const(m_folders))
         a << QJsonObject::fromVariantMap(f);
-    m_vault->write(QStringLiteral("folders.json"), compact(QJsonObject{{QStringLiteral("folders"), a}, {QStringLiteral("top"), QJsonArray::fromStringList(m_topOrder)}}));
+    const bool ok = m_vault->write(QStringLiteral("folders.json"),
+                                   compact(QJsonObject{{QStringLiteral("folders"), a}, {QStringLiteral("top"), QJsonArray::fromStringList(m_topOrder)}}));
+    if (!ok && m_ready)
+        saveDidntGo(QStringLiteral("folders.json"), [this] { saveFolders(); });
+    m_saveFailed = !ok;
+    return ok;
+}
+
+void Chat::saveDidntGo(const QString &file, const std::function<void()> &again)
+{
+    if (now() - m_saveSaid > 60000) {
+        m_saveSaid = now();
+        Q_EMIT notice(QStringLiteral("Couldn't save. Try again."));
+    }
+    // Held back (it couldn't be read this run): trying again would only fail again.
+    if (!m_vault->blocked(file) && !m_vault->locked())
+        QTimer::singleShot(5000, this, [this, again] { if (m_ready) again(); });
+}
+
+bool Chat::mayMakeKeys(int readStatus, bool parsed, bool hasKey)
+{
+    if (hasKey)
+        return false;   // there already
+    if (readStatus == Vault::ReadMissing)
+        return true;    // the first time
+    // Read, but without a key in it (another key was kept there first): fine. Read as something that isn't a JSON
+    // object, or not read at all: no.
+    return readStatus == Vault::ReadOk && parsed;
+}
+
+bool Chat::keySelfTest()
+{
+    const bool ok = mayMakeKeys(Vault::ReadMissing, false, false) && mayMakeKeys(Vault::ReadOk, true, false) && !mayMakeKeys(Vault::ReadFailed, false, false)
+        && !mayMakeKeys(Vault::ReadOk, false, false) && !mayMakeKeys(Vault::ReadOk, true, true) && !mayMakeKeys(Vault::ReadFailed, true, false);
+    std::printf("chat keys are never made over unreadable ones: %s\n", ok ? "ok" : "FAILED");
+    return ok;
 }
 
 QVariantList Chat::folders() const
@@ -905,12 +981,17 @@ QVariantList Chat::folders() const
 
 QString Chat::addFolder(const QString &name)
 {
+    m_saveFailed = false;
     const QString n = name.simplified().left(24);
     if (n.isEmpty() || !m_ready || m_folders.size() >= 30)
         return QString();
     const QString id = QUuid::createUuid().toString(QUuid::Id128).left(12);
     m_folders << QVariantMap{{QStringLiteral("id"), id}, {QStringLiteral("name"), n}, {QStringLiteral("keys"), QStringList()}};
-    saveFolders();
+    if (!saveFolders()) {
+        m_folders.removeLast();   // not kept: not shown either
+        m_saveFailed = true;
+        return QString();
+    }
     Q_EMIT changed();
     return id;
 }
@@ -1698,6 +1779,22 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 Q_EMIT notice(QStringLiteral("Someone says they're %1 with a new security key. Check Chat before accepting.").arg(nameOf(claims)));
                 Q_EMIT arrived(nameOf(claims), QStringLiteral("Says their security key changed"), fromKey);
             }
+        } else if (m_trust && m_trust->useOnce(o.value(QStringLiteral("invite")).toString())) {
+            // My code or one-time invite link ("1", 13.6): whoever used it first is a contact now, no asking. Checked before
+            // "met", so adding my code on the same Wi-Fi makes a contact too.
+            commitPeer();
+            m_contacts.insert(fromKey, {{QStringLiteral("key"), fromKey}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mailbox},
+                                        {QStringLiteral("verified"), false}});
+            m_met.remove(fromKey);
+            saveContacts();
+            saveMet();
+            sayHello(fromKey);
+            if (addPrivate(fromKey, incoming)) {
+                m_unread.insert(fromKey);
+                Q_EMIT arrived(nameOf(fromKey), text, fromKey);
+            }
+            Q_EMIT notice(QStringLiteral("%1 added you with your code.").arg(name));
+            receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
         } else if ((via != QLatin1String("internet") && visibleNearby()) || m_met.contains(fromKey)) {
             // Close by or on the same Wi-Fi (or someone met that way): no asking first. Hidden from
             // people nearby, only those already met get through this way.
@@ -1712,21 +1809,6 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 // Not a contact: the name they chose never shows as if it were one.
                 Q_EMIT arrived(stranger(nameOf(fromKey)), text, fromKey);
             }
-            receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
-        } else if (m_trust && m_trust->useOnce(o.value(QStringLiteral("invite")).toString())) {
-            // My one-time invite link (i1, 13.6): whoever used it first is a contact now, no asking.
-            commitPeer();
-            m_contacts.insert(fromKey, {{QStringLiteral("key"), fromKey}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mailbox},
-                                        {QStringLiteral("verified"), false}});
-            m_met.remove(fromKey);
-            saveContacts();
-            saveMet();
-            sayHello(fromKey);
-            if (addPrivate(fromKey, incoming)) {
-                m_unread.insert(fromKey);
-                Q_EMIT arrived(nameOf(fromKey), text, fromKey);
-            }
-            Q_EMIT notice(QStringLiteral("%1 added you with your invite link.").arg(name));
             receipt(fromKey, {msgId}, QStringLiteral("delivered"), mailbox);
         } else if (m_labs && m_labs->replyAllowed(fromKey)) {
             // The Labs contact answering a bug report sent from here: an ordinary request, under its own name.
@@ -2380,7 +2462,7 @@ void Chat::retryLoop()
     for (const QString &k : m_unsentKeeps.keys())
         if (!route(k).isEmpty() && !deliver(k, m_unsentKeeps.value(k), mailboxOf(k)).isEmpty())
             m_unsentKeeps.remove(k);
-    QList<QPair<QString, QString>> due, unsends;
+    QList<QPair<QString, QString>> due, unsends, late;
     for (auto it = m_private.begin(); it != m_private.end(); ++it)
         for (const QVariant &v : it.value()) {
             const QVariantMap m = v.toMap();
@@ -2405,6 +2487,11 @@ void Chat::retryLoop()
                 dropSealed(id);
                 continue;
             }
+            // Still "sending" after a minute (no relay said OK, no proven route took it): "Not sent, tap to retry". It
+            // keeps being tried; the first route that takes it clears that.
+            if (str(m, "state") == QLatin1String("sending") && !m.value(QStringLiteral("failed")).toBool()
+                && t0 - m.value(QStringLiteral("time")).toLongLong() > 60000)
+                late << qMakePair(it.key(), id);
             if (!m_tries.contains(id)) {
                 m_tries.insert(id, Tries{1, t0 + kRetry[0]});   // after a restart: wait one round
                 continue;
@@ -2412,6 +2499,8 @@ void Chat::retryLoop()
             if (t0 >= m_tries.value(id).next)
                 due << qMakePair(it.key(), id);
         }
+    for (const auto &l : late)
+        update(l.first, l.second, [](QVariantMap &x) { x.insert(QStringLiteral("failed"), true); });
     for (const auto &d : due)
         attempt(d.first, d.second);
     groupRetry();

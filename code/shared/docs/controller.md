@@ -59,8 +59,8 @@ of Y sends it, B throws it away. Up from the first message in a chat reaches its
 Video (when they can take video) or the menu, A presses it, Down or B goes back to the messages.
 
 A phone's chats on this device (Settings › Linked devices): Up and Down pick a chat, A writes through the phone, Right
-goes into its messages (Up and Down pick one, A plays a voice message or saves a photo, video or file), X asks the phone
-for its chats again, B goes back.
+goes into its messages (Up and Down pick one, A plays a voice message or saves a photo, video or file, or retries one
+that didn't send), X refreshes (asks the phone for its chats again, at most once in 10 minutes), B goes back.
 
 In Settings › About, A on the raven ten times turns Labs mode on or off. Labs adds Report a bug (also in the Chats
 list's menu): the D-pad moves between Include screenshot, the text and Send, A uses the highlighted one, B closes.

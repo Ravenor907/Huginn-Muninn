@@ -442,10 +442,19 @@ bool Trust::useOnce(const QString &token)
     if (token.isEmpty() || !m_once.contains(token) || m_chat->m_invites.value(token, 0) <= now())
         return false;
     m_once.remove(token);
-    m_chat->m_invites.remove(token);
-    m_chat->saveInvites();
     save();
     return true;
+}
+
+void Trust::markOnce(const QString &token)
+{
+    ensureLoaded();
+    if (token.isEmpty() || !m_chat->ready())
+        return;
+    m_once.insert(token);
+    for (auto it = m_once.begin(); it != m_once.end();)
+        it = m_chat->m_invites.contains(*it) ? std::next(it) : m_once.erase(it);
+    save();
 }
 
 QString Trust::emojiWith(const QString &key) const
@@ -532,6 +541,20 @@ void Chat::sendEverywhere(const QString &key, const QString &room, const QJsonOb
     if (!base.isEmpty())
         post(base, json);
     sendInternet(key, {json}, mailbox.isEmpty() ? mailboxOf(key) : mailbox);
+}
+
+void Chat::sendLink(const QString &key, const QJsonObject &msg, const QString &mailbox)
+{
+    if (!m_ready || key.isEmpty() || m_moving)
+        return;
+    const QByteArray json = compact(envelope(QStringLiteral("link"), key, compact(msg), QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    sendBle(key, json);
+    const QString base = baseTo(key);
+    if (!base.isEmpty())
+        post(base, json);
+    const QString to = mailbox.isEmpty() ? mailboxOf(key) : mailbox;
+    if (!to.isEmpty())
+        m_nostr->publishTo(to, wrap(key, json), chatDays(key), {}, 2, true);
 }
 
 // ------------------------------------------------------------------ self-test (shared/vectors/i1f1-vectors.json)

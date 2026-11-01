@@ -43,4 +43,14 @@ class NostrTest {
         sig[5] = (sig[5].toInt() xor 1).toByte()
         assertFalse(Schnorr.verify(msg, Schnorr.publicKey(sk), sig))
     }
+
+    /** A linked device's frames go to at most 2 relays, the open ones first (protocol.md section 15). */
+    @Test
+    fun linkFramesGoToTwoRelaysOpenOnesFirst() {
+        val all = Nostr.DEFAULT_RELAYS
+        assertEquals(all, Nostr.pickRelays(all, emptySet(), 0))
+        assertEquals(all.take(2), Nostr.pickRelays(all, emptySet(), 2))
+        assertEquals(listOf(all[3], all[0]), Nostr.pickRelays(all, setOf(all[3]), 2))
+        assertEquals(listOf(all[2], all[4]), Nostr.pickRelays(all, setOf(all[4], all[2]), 2))
+    }
 }

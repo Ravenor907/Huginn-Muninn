@@ -166,7 +166,7 @@ Rectangle {
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
     function stateLabel(m) {
         if (!m.mine) return ""
-        if (m.failed) return " · Didn't send"
+        if (m.failed) return " · Not sent, tap to retry"
         if (m.state === "unsending") return " · Removing from their phone"
         if (m.unsent) return ""
         return m.state === "read" ? " · Read" : m.state === "delivered" ? " · Delivered" : m.state === "sent" ? " · Sent" : m.state === "sending" ? " · Sending" : ""
@@ -924,6 +924,7 @@ Rectangle {
                             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
                             page.zone = "messages"; page.sel = index
                             if (button === Qt.RightButton) page.options()
+                            else if (modelData.mine && modelData.failed && page.openKey !== "") Chat.retry(page.openKey, modelData.id)
                             else if (modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album) page.viewing = modelData.photo
                         }
                     }
@@ -1270,7 +1271,7 @@ Rectangle {
                 { name: "Same person, new key", url: "same" }] }],
                 a => {
                     if (a === "same") { Chat.addContact(t, r.key); openKey = c.key; picked = true; zone = "messages" }
-                    else { Chat.addContact(t); added() }
+                    else { Chat.addContact(t); PeopleActions.added(t, c.key); added() }
                 })
         })
     }
@@ -1330,7 +1331,7 @@ Rectangle {
     function newFolder(key, from) {
         Ui.ask("New folder", "Only you see it", "", "Make it", t => {
             const f = Chat.addFolder(t)
-            if (f === "") { Ui.say(Chat.folders.length >= 30 ? "30 folders at most." : "Give the folder a name.", true); return }
+            if (f === "") { Ui.say(Chat.saveFailed() ? "Couldn't save. Try again." : Chat.folders.length >= 30 ? "30 folders at most." : "Give the folder a name.", true); return }
             if (key) Chat.placeIn(key, from || "", f, [key])
             Ui.say("Made " + t + ".")
         }, false, true)

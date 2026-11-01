@@ -1,19 +1,15 @@
 #include "thumbs.h"
-#include "chat.h"
 
-#include <QCoreApplication>
-#include <QMetaObject>
 #include <QMutexLocker>
-#include <QThread>
 
 namespace
 {
 const int kSide = 320;
 }
 
-ThumbProvider::ThumbProvider(Chat *chat)
+ThumbProvider::ThumbProvider(std::function<QByteArray(const QString &)> read)
     : QQuickImageProvider(QQuickImageProvider::Image)
-    , m_chat(chat)
+    , m_read(std::move(read))
 {
     m_cache.setMaxCost(48 * 1024 * 1024);   // bytes of pictures kept, about 120 thumbnails
 }
@@ -29,11 +25,10 @@ QImage ThumbProvider::requestImage(const QString &id, QSize *size, const QSize &
             return *hit;
         }
     }
-    QByteArray bytes;
-    if (QThread::currentThread() == QCoreApplication::instance()->thread())
-        bytes = m_chat->blob(id);
-    else
-        QMetaObject::invokeMethod(m_chat, [this, id, &bytes] { bytes = m_chat->blob(id); }, Qt::BlockingQueuedConnection);
+    // Chat::blob: "photos/<id>" (an id never has a slash, so it can't reach outside the photos folder).
+    if (id.isEmpty() || id.contains(QLatin1Char('/')) || id.contains(QLatin1Char('\\')))
+        return {};
+    QByteArray bytes = m_read(QStringLiteral("photos/") + id);
     QImage img = QImage::fromData(bytes, "JPEG");
     bytes.fill(0);
     if (img.isNull())

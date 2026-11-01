@@ -34,6 +34,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val seen = LinkedHashSet<String>()
     private val working = HashSet<String>()
     private val outbox = mutableListOf<String>()        // events waiting for a relay
+    /** A linked device's frames (section 15) waiting for a relay, with the relays each may go to: apart from [outbox], so they never push a real message out. */
+    private val lowOutbox = mutableListOf<Pair<List<String>, String>>()
     private val subId = "muninn-" + UUID.randomUUID().toString().take(8)
     /** Reconnect by itself when a relay drops (set while Muninn is listening for messages). */
     @Volatile var keepAlive = false
@@ -452,6 +454,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> if (m !in again) again.add(m) }
             }
             burst[url]?.let { m -> synchronized(m) { m.forEach { if (it !in again) again.add(it) }; m.clear() } }
+            // Real messages first; a linked device's frames after them, only those meant for this relay.
+            synchronized(lowOutbox) { lowOutbox.forEach { (to, m) -> if (url in to && m !in again) again.add(m) } }
             if (again.isNotEmpty()) send(url, again)
         }
 
@@ -612,6 +616,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private fun storedAt(url: String, id: String) {
         if (id.isEmpty()) return
         synchronized(outbox) { outbox.removeAll { it.contains(id) } }
+        synchronized(lowOutbox) { lowOutbox.removeAll { it.second.contains(id) } }
         stored[id]?.let { w ->
             // The first relay to store it: "sent". The second: it waits there safely (see NetLogic).
             val n = synchronized(w) { if (w.relays.add(url)) w.relays.size else 0 }
@@ -674,8 +679,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
      * Every relay gets it through a short-lived sending socket (never the one listening for my inbox), so it
      * reaches whichever relay the other phone listens on. A relay that connects again within [RECENT_MS] gets
      * it too ([recent]). [days] > 0: the event carries a NIP-40 expiration tag ([expiration], the same for every chat).
+     *
+     * [maxRelays] > 0: only that many relays (open ones first). [low]: a linked device's frame (section 15): it waits in an
+     * outbox of its own ([LOW_OUTBOX] at most) and isn't in [recent], so it never pushes a real message out.
      */
-    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Int {
+    fun publish(mailbox: String, content: String, ok: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0,
+                maxRelays: Int = 0, low: Boolean = false): Int {
         val tags = JSONArray().put(JSONArray().put("p").put(mailbox))
         // A new throwaway key for every message, and a slightly blurred time, so relays can't link messages to a sender.
         val createdAt = System.currentTimeMillis() / 1000 - Random.nextLong(0, BLUR_S)
@@ -685,6 +694,14 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val ev = event(KIND, tags, content, Schnorr.newSecret(), createdAt)
         val msg = JSONArray().put("EVENT").put(ev).toString()
         if (ok != null || held != null) { if (stored.size > 500) stored.clear(); stored[ev.getString("id")] = Waiting(ok, held) }
+        if (low || maxRelays > 0) {
+            val to = pickRelays(relays, live.keys, maxRelays)
+            if (low) synchronized(lowOutbox) { lowOutbox.add(to to msg); while (lowOutbox.size > LOW_OUTBOX) lowOutbox.removeAt(0) }
+            else synchronized(outbox) { outbox.add(msg); while (outbox.size > 200) outbox.removeAt(0) }
+            for (url in to) send(url, listOf(msg))
+            if (sockets.isEmpty()) connect()
+            return live.size
+        }
         synchronized(outbox) { outbox.add(msg); while (outbox.size > 200) outbox.removeAt(0) }
         synchronized(recent) {
             val now = android.os.SystemClock.elapsedRealtime()
@@ -724,6 +741,14 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val DEFAULT_RELAYS = listOf("wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net", "wss://nostr.mom", "wss://relay.nostr.band")
         /** An event's created_at is up to this many seconds before the real time (section 20.3). */
         const val BLUR_S = 600L
+        /** A linked device's frames waiting for a relay, at most (apart from real messages). */
+        const val LOW_OUTBOX = 40
+
+        /** The relays an event limited to [n] goes to: the open ones first (in list order), then the rest. [n] <= 0: all. */
+        fun pickRelays(all: List<String>, live: Set<String>, n: Int): List<String> {
+            if (n <= 0 || n >= all.size) return all
+            return (all.filter { it in live } + all.filter { it !in live }).take(n)
+        }
 
         /**
          * NIP-40 expiration for an event made at [createdAt] (already blurred): that time plus [BLUR_S] plus the longest
