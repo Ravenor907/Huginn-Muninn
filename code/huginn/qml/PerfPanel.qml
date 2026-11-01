@@ -48,6 +48,7 @@ Item {
     // What the controller can stop on, top to bottom.
     readonly property var items: {
         const out = []
+        out.push("copyTop", "sendTop")
         if (fellBack !== "") out.push("fellBack")
         if (overOn) out.push("undo")
         if (restartNeeded) out.push("restart")
@@ -112,13 +113,13 @@ Item {
         case "run": run(); break
         case "display": case "drawing": case "loop": case "animations": cycle(cur, 0); break
         case "size": stepSize(0); break
-        case "copy": copy(); break
-        case "send": send(); break
+        case "copy": case "copyTop": copy(); break
+        case "send": case "sendTop": send(); break
         }
     }
     function itemFor(k) {
         return ({ fellBack: fellRow, undo: triedRow, restart: triedRow, run: runRow, display: rowDisplay, drawing: rowDrawing,
-                  loop: rowLoop, animations: rowAnimations, size: rowSize, report: reportBox, copy: reportButtons, send: reportButtons })[k]
+                  loop: rowLoop, animations: rowAnimations, size: rowSize, report: reportBox, copy: reportButtons, send: reportButtons, copyTop: topButtons, sendTop: topButtons })[k]
     }
     function reveal() {
         const it = itemFor(cur)
@@ -480,6 +481,14 @@ Item {
                         HButton { visible: panel.overOn; text: "Undo all"; focused: panel.lit("undo"); onClicked: panel.undoAll() }
                         HButton { visible: panel.restartNeeded; text: "Restart"; kind: "primary"; focused: panel.lit("restart"); onClicked: panel.restart() }
                     }
+                }
+
+                // The report, first thing: copy it to paste anywhere, or send it as a bug report.
+                Row {
+                    id: topButtons
+                    spacing: Theme.px(8)
+                    HButton { text: "Copy report"; focused: panel.lit("copyTop"); onClicked: { panel.at = panel.items.indexOf("copyTop"); panel.copy() } }
+                    HButton { text: "Send report"; kind: "primary"; focused: panel.lit("sendTop"); onClicked: { panel.at = panel.items.indexOf("sendTop"); panel.send() } }
                 }
 
                 Heading { text: "CHECK" }
