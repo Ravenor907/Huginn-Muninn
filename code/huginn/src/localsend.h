@@ -50,6 +50,12 @@ class LocalSend : public QObject
     Q_PROPERTY(bool sending READ sending NOTIFY progressChanged)
     Q_PROPERTY(QVariantMap request READ request NOTIFY requestChanged)
     Q_PROPERTY(QVariantList items READ items NOTIFY progressChanged)
+    // While files go: "2.1 MB/s · 12 s left" (empty until there's enough to tell), and each file going out.
+    Q_PROPERTY(QString pace READ pace NOTIFY progressChanged)
+    Q_PROPERTY(QVariantList outgoing READ outgoing NOTIFY progressChanged)
+    // How the last transfer ended, until the next one starts or it's put away.
+    Q_PROPERTY(QString lastResult READ lastResult NOTIFY progressChanged)
+    Q_PROPERTY(bool lastOk READ lastOk NOTIFY progressChanged)
 
 public:
     explicit LocalSend(Settings *settings, QObject *parent = nullptr);
@@ -68,6 +74,10 @@ public:
     double progress() const;
     QVariantMap request() const;
     QVariantList items() const;
+    QString pace() const;
+    QVariantList outgoing() const;
+    QString lastResult() const { return m_last; }
+    bool lastOk() const { return m_lastOk; }
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void stop();
@@ -76,6 +86,9 @@ public:
     Q_INVOKABLE void decline();
     Q_INVOKABLE void send(const QString &deviceId, const QStringList &paths, const QString &pin = QString());
     Q_INVOKABLE void cancelSend();
+    // Cancel on the receiving side: what came so far is thrown away.
+    Q_INVOKABLE void cancelReceive();
+    Q_INVOKABLE void clearResult();
 
 Q_SIGNALS:
     void stateChanged();
@@ -216,4 +229,7 @@ private:
     bool asking(const QString &ip);
     void turnedDown(const QString &ip);
     QList<QVariantMap> m_history;   // finished incoming files, newest last
+    qint64 m_started = 0;           // when bytes began to move (speed and time left)
+    QString m_last;
+    bool m_lastOk = false;
 };

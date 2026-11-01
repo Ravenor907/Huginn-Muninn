@@ -953,15 +953,23 @@ private fun Conversation(app: Muninn, key: String) {
     fun sendPollHere(poll: io.github.ravenor907.muninn.net.More.Poll) {
         app.chat.sendPoll(key, poll.q, poll.options, poll.multi)?.let { Ui.say(it, true) }
     }
-    // A file over the internet: straight to their phone (or over the relays when small).
+    // A file over the internet: straight to their phone (or over the internet route when small). Its card shows in
+    // the chat at once, while the file is still being copied in, and says how it goes from there.
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch(Dispatchers.IO) {
-            val name = try { context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                if (c.moveToFirst()) c.getString(0) else null } } catch (e: Exception) { null } ?: "file"
+            var chosenName: String? = null
+            var size = 0L
+            try {
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) { chosenName = c.getString(0); if (!c.isNull(1)) size = c.getLong(1) }
+                }
+            } catch (_: Exception) {}
+            val clean = app.chat.cleanFileName(chosenName ?: "file")
+            val card = io.github.ravenor907.muninn.net.FileLink.preparing(key, clean, size)
             val tmp = java.io.File(java.io.File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
             val ok = try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
-            if (!ok) Ui.say("That file couldn't be opened.", true)
-            else app.chat.sendFile(key, tmp, name)?.let { Ui.say(it, true) }
+            if (!ok) { tmp.delete(); io.github.ravenor907.muninn.net.FileLink.failed(key, clean, size, "That file couldn't be opened.", card) }
+            else app.chat.sendFile(key, tmp, clean, card)?.let { Ui.say(it, true) }
         }
     }
     fun jumpTo(id: String) {
@@ -1064,7 +1072,7 @@ private fun Conversation(app: Muninn, key: String) {
                     if (m.id !in albums.first) Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null,
                         quote = quoteOf(m.re), onQuote = { jumpTo(m.re) }, me = me, highlight = current == i,
                         onReply = if (m.failed) null else ({ editing = null; replyTo = m }), onReactions = { sheetFor = m },
-                        onTap = { if (m.mine && m.failed && m.unsent.isEmpty()) app.chat.retry(key, m.id) else viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
+                        onTap = { if (m.mine && m.failed && m.unsent.isEmpty()) app.chat.retry(key, m.id) else if (m.file.isEmpty()) viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
                         onVote = { v -> app.chat.vote(key, m.id, v)?.let { Ui.say(it, true) } }, voterName = { if (it == key) name else app.chat.nameOf(it) }) { sheetFor = m }
                 }
             }
@@ -1104,7 +1112,7 @@ private fun Conversation(app: Muninn, key: String) {
         }
         if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }, onFile = { pickFile.launch(arrayOf("*/*")) }) { attaching = false }
-        DirectFiles(key)
+        DirectFiles(key, name) { p, file, n -> scope.launch(Dispatchers.IO) { app.chat.sendFile(p, file, n)?.let { Ui.say(it, true) } } }
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { pickedMany.take(5).forEach { UriThumb(it, Modifier.size(52.dp)) } }

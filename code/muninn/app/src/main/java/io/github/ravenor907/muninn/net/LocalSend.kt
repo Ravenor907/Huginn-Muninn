@@ -69,15 +69,22 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     data class Request(val from: String, val count: Int, val size: Long, val names: String)
 
-    /** A transfer in the Files tab's Recent list. [sent]: going out (else coming in). */
-    data class Item(val name: String, val status: String, val fraction: Float, val failed: Boolean, val sent: Boolean = false)
+    /** A transfer in the Files tab's Recent list. [sent]: going out (else coming in). [uri]: a received file's place in Downloads, for Open. */
+    data class Item(val name: String, val status: String, val fraction: Float, val failed: Boolean, val sent: Boolean = false, val uri: String = "")
 
+    /** The transfer under way: overall, and each file ([files]). [started]: when bytes began to move, for speed and time left. */
     data class Transfer(
         val active: Boolean = false, val sending: Boolean = false, val status: String = "",
-        val done: Long = 0, val total: Long = 0,
+        val done: Long = 0, val total: Long = 0, val started: Long = 0, val files: List<Item> = emptyList(),
     ) {
         val fraction get() = if (total > 0) done.toFloat() / total else 0f
+        /** "2.1 MB/s · 12 s left", or "" before there's enough to tell. */
+        fun pace(now: Long = System.currentTimeMillis()) = if (started == 0L) "" else FileText.pace(done, total, now - started)
     }
+
+    private val _finished = MutableStateFlow<Pair<Boolean, String>?>(null)
+    /** How the last transfer ended (shown in Files until the next one starts). */
+    val finished: StateFlow<Pair<Boolean, String>?> = _finished.asStateFlow()
 
     /** This phone's Nostr mailbox, so Wi-Fi contacts can keep chatting from anywhere. */
     var mailbox: String? = null
@@ -122,8 +129,6 @@ class LocalSend(private val context: Context, val identity: Identity) {
         @Volatile var done = false
         @Volatile var failed = false
         @Volatile var savedAs: Received.Target? = null
-        /** An app kept in Muninn's own files to be installed (on a TV), not saved to Downloads. */
-        @Volatile var kept = false
     }
     /** [kids]: an app a parent sent to this Kids' TV (TvApps). */
     private class Session(val id: String, val from: String, val ip: String, val files: Map<String, InFile>, val kids: Boolean = false) {
@@ -589,7 +594,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private fun open(map: Map<String, InFile>, alias: String, ip: String, total: Long, out: OutputStream, kids: Boolean) {
         val sess = Session(UUID.randomUUID().toString(), alias, ip, map, kids)
         session = sess
-        _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total)
+        _finished.value = null
+        _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total, System.currentTimeMillis())
         NearbyService.hold(context, true)
         val tokens = JSONObject().apply { map.forEach { (k, f) -> put(k, f.token) } }
         reply(out, 200, JSONObject().put("sessionId", sess.id).put("files", tokens).toString())
@@ -605,14 +611,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (f == null || f.token != r.query["token"] || ip != sess.ip) { reply(out, 403); return }
         // Never more than the size it was accepted at: a sender can't fill the storage past what the person agreed to.
         if (length > f.size) { reply(out, 413); return }
-        // Saved into Downloads (MediaStore), keeping folders the sender included ("Photos/a.jpg"). On a TV an
-        // app waits in Muninn's own files instead, to be installed (ApkInstall) and then deleted.
-        val keep = AppFiles.isApk(f.name) && (sess.kids || io.github.ravenor907.muninn.tv.KidMode.isTv(context))
-        val target = try {
-            if (keep) Received.inside(context, File(context.cacheDir, "apps/${sess.id}"), f.name) else Received.create(context, f.name)
-        } catch (e: Exception) { null }
+        // Saved into Downloads (MediaStore, where any Files app sees it), keeping folders the sender included
+        // ("Photos/a.jpg"). Every file, an app too, on a phone or a TV: nothing received is opened or installed by itself.
+        val target = try { Received.create(context, f.name) } catch (e: Exception) { null }
         f.savedAs = target
-        f.kept = keep
         f.received = 0
         f.failed = false
         val md = if (f.sha != null) MessageDigest.getInstance("SHA-256") else null
@@ -649,11 +651,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (sess.files.values.all { it.done || it.failed }) {
             val done = sess.files.values.count { it.done }
             val failed = sess.files.values.any { it.failed }
-            val apps = AppFiles.group(sess.files.values.toList()) { it.name }.map { it.first }
+            val first = sess.files.values.firstOrNull { it.done }?.let { it.savedAs?.name ?: it.name.substringAfterLast('/') } ?: ""
             endSession(!failed, when {
                 failed -> "$done of ${sess.files.size} files from ${sess.from} arrived. Send the rest again."
-                sess.files.values.all { it.kept } -> "${sess.from} sent ${apps.joinToString(", ")}."
-                else -> "Received ${if (done == 1) "1 file" else "$done files"} from ${sess.from}. They're in ${Received.place(context)}."
+                done == 1 -> "File from ${sess.from}: $first · Saved to ${Received.place(context)}"
+                else -> "$done files from ${sess.from} · Saved to ${Received.place(context)}"
             })
         }
     }
@@ -661,15 +663,18 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private fun progressIn(s: Session) {
         val total = s.files.values.sumOf { it.size }
         val got = s.files.values.sumOf { if (it.done) it.size else it.received }
-        _transfer.update { it.copy(done = got, total = total) }
+        val now = s.files.values.map { it.toItem() }
+        _transfer.update { it.copy(done = got, total = total, files = now) }
         NearbyService.progress()
-        _items.value = s.files.values.map { it.toItem() } + history
+        _items.value = now + history
     }
 
     private fun InFile.toItem() = Item(
         savedAs?.name ?: name.substringAfterLast('/'),
-        when { done && kept -> "Ready to install"; done -> "Saved to ${Received.place(context)}"; failed -> "Didn't arrive"; received == 0L -> "Waiting"; else -> "${size(received)} of ${size(size)}" },
+        when { done -> "Saved to ${Received.place(context)}"; failed -> "Didn't arrive"; received == 0L -> "Waiting"
+            else -> "Receiving ${FileText.percent(received, size)}% · ${size(received)} of ${size(size)}" },
         if (size > 0) received.toFloat() / size else if (done) 1f else 0f, failed,
+        uri = if (done) savedAs?.let { Received.shareUri(context, it) } ?: "" else "",
     )
 
     private val history = mutableListOf<Item>()
@@ -678,17 +683,15 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val s = session ?: return
         session = null
         s.files.values.forEach { f ->
+            val item = f.toItem()   // before a discard, while it still knows where it was saved
             if (!f.done) f.savedAs?.discard()
-            val where = if (f.kept) "ready to install" else "saved to ${Received.place(context)}"
-            history.add(0, f.toItem().copy(fraction = if (f.done) 1f else 0f, status = if (f.done) "From ${s.from} · $where" else "From ${s.from} · didn't arrive", failed = !f.done))
+            history.add(0, item.copy(fraction = if (f.done) 1f else 0f, failed = !f.done,
+                status = if (f.done) "From ${s.from} · Saved to ${Received.place(context)}" else "From ${s.from} · Didn't arrive"))
         }
-        // Apps for this TV: installed once every part is here (an app missing a part won't install), else deleted.
-        val apps = s.files.values.filter { it.kept && it.done }.mapNotNull { it.savedAs?.file }
-        if (ok && apps.isNotEmpty()) io.github.ravenor907.muninn.update.ApkInstall.arrived(context, s.from, apps, s.kids)
-        else apps.forEach { it.delete() }
         while (history.size > 30) history.removeAt(history.size - 1)
         _items.value = history.toList()
         _transfer.value = Transfer()
+        _finished.value = ok to message
         NearbyService.hold(context, false)
         messages.tryEmit(ok to message)
     }
@@ -702,7 +705,9 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (_transfer.value.active) return
         stopSend.set(false)
         val total = list.sumOf { it.length() }
-        _transfer.value = Transfer(true, true, "Waiting for ${dev.alias} to accept…", 0, total)
+        _finished.value = null
+        _transfer.value = Transfer(true, true, "Waiting for ${dev.alias} to accept…", 0, total,
+            files = list.map { Item(it.name, "Waiting", 0f, false, sent = true) })
         NearbyService.hold(context, true)
         // Over HTTPS, every request checks the device's certificate against the fingerprint it announced.
         val expected = if (dev.protocol == "https") dev.id else null
@@ -730,10 +735,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
                         val tokens = o.getJSONObject("files")
                         val accepted = list.indices.filter { tokens.has("f$it") }
                         var sent = 0L
+                        val rows = accepted.map { Item(list[it].name, "Waiting", 0f, false, sent = true) }.toMutableList()
+                        _transfer.update { it.copy(started = System.currentTimeMillis(), files = rows.toList()) }
                         for ((n, i) in accepted.withIndex()) {
                             if (stopSend.get()) throw InterruptedException()
                             val f = list[i]
                             _transfer.update { it.copy(status = "Sending ${f.name} to ${dev.alias}…", total = accepted.sumOf { j -> list[j].length() }) }
+                            var mineSent = 0L
                             val u = open("$base/upload?sessionId=${enc(sid)}&fileId=f$i&token=${enc(tokens.getString("f$i"))}", 60_000, expected)
                             sendConn = u
                             u.requestMethod = "POST"; u.doOutput = true
@@ -745,8 +753,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
                                     while (true) {
                                         if (stopSend.get()) throw InterruptedException()
                                         val r = ins.read(buf); if (r < 0) break
-                                        os.write(buf, 0, r); sent += r
-                                        _transfer.update { it.copy(done = sent) }
+                                        os.write(buf, 0, r); sent += r; mineSent += r
+                                        rows[n] = rows[n].copy(status = "Sending ${FileText.percent(mineSent, f.length())}%",
+                                            fraction = if (f.length() > 0) mineSent.toFloat() / f.length() else 1f)
+                                        _transfer.update { it.copy(done = sent, files = rows.toList()) }
                                         NearbyService.progress()
                                     }
                                 }
@@ -756,9 +766,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
                                 throw java.io.IOException("${dev.alias} didn't take ${f.name}. Sent $n of ${accepted.size}. Not sent: ${left.take(4).joinToString(", ")}.")
                             }
                             u.disconnect()
+                            rows[n] = rows[n].copy(status = "Sent", fraction = 1f)
+                            _transfer.update { it.copy(files = rows.toList()) }
                         }
                         logSent(accepted.map { list[it].name }, dev.alias)
-                        done(true, "Sent ${if (accepted.size == 1) "1 file" else "${accepted.size} files"} to ${dev.alias}.")
+                        // Muninn and Huginn answer only once the file is saved in Downloads.
+                        done(true, "Sent ${if (accepted.size == 1) "1 file" else "${accepted.size} files"} to ${dev.alias}" +
+                            if (dev.app == "muninn" || dev.app == "huginn") " · Saved in their Downloads" else ".")
                     }
                     204 -> done(true, "${dev.alias} already has these files.")
                     401 -> { done(null, ""); pinNeeded.tryEmit(deviceId to (pin != null)) }
@@ -789,6 +803,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
         _items.value = history.toList()
     }
 
+    fun clearFinished() { _finished.value = null }
+
+    /** Cancel on the receiving side: what came so far is thrown away, and the sender is told no more. */
+    fun cancelReceive() { if (session != null) endSession(false, "Receiving stopped.") }
+
     fun cancelSend() {
         stopSend.set(true)
         try { sendConn?.disconnect() } catch (_: Exception) {}
@@ -796,6 +815,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     private fun done(ok: Boolean?, msg: String) {
         _transfer.value = Transfer()
+        if (ok != null) _finished.value = ok to msg
         sendConn = null
         NearbyService.hold(context, false)
         if (ok != null) messages.tryEmit(ok to msg)

@@ -94,7 +94,10 @@ Everything there works with a controller too:
 - In a call, A mutes, Y changes the output and B ends the call. B asks first: the first press shows "Press B again
   to hang up" for 3 seconds, and a second press in that time hangs up. On a voice call X does the same as B; on a
   video call X turns the camera on or off. On a keyboard, Esc or Backspace is B and Space mutes.
-- In Files, Direct connect and Clear are in the menu (X or LT, or the three dots). While files are being sent, B asks
-  first too ("Press B again to cancel").
+- In Files, Direct connect and Clear are in the menu (X or LT, or the three dots). While files are being sent or
+  received, B asks first too ("Press B again to cancel").
+- A file on its way in a chat shows as a card at the bottom of the chat. Down past the last message goes onto its
+  buttons (Accept, Decline, Cancel, Open, Folder, Retry, Close): Left and Right between them, Up and Down between
+  cards, A to choose, B to leave.
 
 Ctrl+/ lists every keyboard shortcut.

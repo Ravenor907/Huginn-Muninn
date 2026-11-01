@@ -171,8 +171,91 @@ Rectangle {
                 Text { textFormat: Text.PlainText; text: "Voice message · " + Voice.length(msg.m.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
             }
         }
+        // A file that went as a message (the internet route): type icon, name, size and how it's going ("Sending 42%"
+        // with a bar, "Sent", "Sent · Saved in their Downloads"). Theirs was saved to Downloads when it came: Open and
+        // Folder (Save if it couldn't be then). Nothing received opens by itself.
+        Rectangle {
+            id: fileCard
+            visible: !!msg.m.file && !msg.m.unsent
+            readonly property real up: visible && msg.m.mine && Chat.uploads[msg.m.id] !== undefined ? Chat.uploads[msg.m.id] : -1
+            readonly property bool sending: visible && !!msg.m.mine && !msg.m.failed && msg.m.state === "sending"
+            readonly property string savedPath: msg.m.saved || ""
+            width: Math.min(Theme.px(380), col.width)
+            height: fileHead.height + Theme.px(20) + (fileButtons.visible ? fileButtons.height + Theme.px(8) : 0) + (fileBar.visible ? Theme.px(10) : 0)
+            radius: Theme.radius
+            color: Theme.panel
+            border.width: 1
+            border.color: msg.m.failed ? Theme.dangerLine : Theme.line
+            Accessible.role: Accessible.StaticText
+            Accessible.name: (msg.m.file || "") + ", " + fileLine.text
+            Item {
+                id: fileHead
+                x: Theme.px(10); y: Theme.px(10)
+                width: parent.width - Theme.px(20)
+                height: Math.max(fileBadge.height, fileWords.implicitHeight)
+                Rectangle {
+                    id: fileBadge
+                    width: Theme.px(38); height: width; radius: Theme.radius
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: Theme.raised
+                    Icon { anchors.centerIn: parent; name: FileLink.icon(msg.m.file || ""); size: Theme.px(20); color: msg.m.failed ? Theme.danger : msg.accent }
+                }
+                Column {
+                    id: fileWords
+                    anchors.left: fileBadge.right; anchors.leftMargin: Theme.px(10)
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.px(2)
+                    Text {
+                        textFormat: Text.PlainText
+                        width: parent.width; elide: Text.ElideMiddle
+                        text: msg.m.file || ""
+                        color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.ms(15); font.weight: Font.DemiBold
+                    }
+                    Text {
+                        id: fileLine
+                        textFormat: Text.PlainText
+                        width: parent.width; wrapMode: Text.Wrap
+                        text: (msg.m.size ? FileLink.size(msg.m.size) + " · " : "")
+                              + (msg.m.mine ? FileLink.relayLine(msg.m.state || "", !!msg.m.failed, fileCard.up)
+                                            : fileCard.savedPath !== "" ? "Saved to Downloads" : "Not saved yet")
+                        color: msg.m.failed ? Theme.danger : Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    }
+                }
+            }
+            Rectangle {
+                id: fileBar
+                visible: fileCard.sending
+                x: Theme.px(10); y: fileHead.y + fileHead.height + Theme.px(6)
+                width: parent.width - Theme.px(20); height: Theme.px(4)
+                color: Theme.line
+                Rectangle { width: parent.width * Math.max(0, fileCard.up); height: parent.height; color: msg.accent }
+            }
+            Row {
+                id: fileButtons
+                visible: !msg.m.mine && !(msg.host && msg.host.isTour)
+                x: Theme.px(10); y: fileHead.y + fileHead.height + Theme.px(8)
+                spacing: Theme.px(6)
+                HButton {
+                    visible: fileCard.savedPath === ""
+                    text: "Save"; kind: "accent"; height: Theme.px(32); fontSize: 13
+                    onClicked: if (msg.host && msg.host.openKey) PeopleActions.saveFile(msg.host.openKey, msg.m)
+                }
+                HButton {
+                    visible: fileCard.savedPath !== ""
+                    text: "Open"; kind: "accent"; height: Theme.px(32); fontSize: 13
+                    onClicked: if (!FileLink.openFile(fileCard.savedPath)) Ui.say("Nothing on this computer opens this kind of file, or it was moved.", true)
+                }
+                HButton {
+                    visible: fileCard.savedPath !== ""
+                    text: "Folder"; height: Theme.px(32); fontSize: 13
+                    onClicked: if (!FileLink.showInFolder(fileCard.savedPath)) Ui.say("It's not in Downloads any more.", true)
+                }
+            }
+        }
         Text {
-            visible: (!msg.m.photo || !!msg.m.file || !!msg.m.unsent) && !(msg.m.pollView && !msg.m.unsent)
+            visible: (!msg.m.photo || !!msg.m.unsent) && !(msg.m.pollView && !msg.m.unsent)
             width: parent.width; wrapMode: Text.Wrap
             textFormat: Text.PlainText
             text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")

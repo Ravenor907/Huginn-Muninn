@@ -56,8 +56,15 @@ object FileLink {
     /** An offered file of [size] downloads by itself (small enough or from an older sender, and Data saver doesn't say wait). */
     fun arrivesByItself(size: Long, mayDownload: Boolean, senderWaits: Boolean = true): Boolean = !asksFirst(size, senderWaits) && mayDownload
 
-    /** How long the sender waits for an answer to a file of [size]. */
-    fun answerMs(size: Long): Long = if (size < AUTO_BYTES) ANSWER_MS else ASK_ANSWER_MS
+    /** A file small enough for the internet route goes that way when no answer comes this soon (the other phone may be off). */
+    const val RELAY_AFTER_MS = 30_000L
+
+    /**
+     * How long the sender waits for an answer to a file of [size]. One small enough for the internet route then goes
+     * that way (it arrives when they're back); a bigger one waits as long as the other side may ask first (Data
+     * saver, or a big file).
+     */
+    fun answerMs(size: Long): Long = if (size <= FileText.RELAY_MAX) RELAY_AFTER_MS else ASK_ANSWER_MS
 
     const val PROBE: Byte = 1
     const val DATA: Byte = 2
@@ -156,7 +163,12 @@ object FileLink {
      * saver), "connecting", "sending", "done", "failed".
      */
     data class Progress(val id: String, val peer: String, val name: String, val size: Long, val mine: Boolean, val state: String,
-                        val done: Long = 0, val note: String = "")
+                        val done: Long = 0, val note: String = "",
+                        /** Theirs, once saved: where it is in Downloads (a content URI), for Open. */
+                        val uri: String = "")
+
+    /** A file saved in Downloads: the name it got and its content URI. */
+    data class Saved(val name: String, val uri: String)
 
     private val _all = MutableStateFlow<Map<String, Progress>>(emptyMap())
     val all: StateFlow<Map<String, Progress>> = _all.asStateFlow()
@@ -169,10 +181,14 @@ object FileLink {
         fun hasF1(peer: String): Boolean
         /** Their app waits for a big file to be accepted ([ASK_CAP]). */
         fun waitsForAsk(peer: String): Boolean = true
-        /** A whole file arrived and checked out: put it in Downloads. Returns the name it got. */
-        fun save(name: String, file: File): String?
+        /** A whole file arrived and checked out: put it in Downloads. */
+        fun save(name: String, file: File): Saved?
+        /** No straight path: send a small [file] over the internet route instead (it then shows as a message). Null when on its way. */
+        fun relay(peer: String, file: File, name: String): String? = "Not ready."
         fun cacheDir(): File
         fun notice(text: String)
+        /** Their name as this phone shows it. */
+        fun nameOf(peer: String): String = "Someone"
         /** May it download now (Data saver on mobile data says wait)? */
         fun mayDownload(): Boolean
     }
@@ -184,31 +200,111 @@ object FileLink {
     private class In(val peer: String, val name: String, val size: Long, val sha: String, val theirKey: String, val theirCands: List<InetSocketAddress>)
     private val outs = ConcurrentHashMap<String, Out>()
     private val ins = ConcurrentHashMap<String, In>()
+    /** Stopped with Cancel: its threads end quietly. */
+    private val stopped: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Mine, while it can be sent again (Retry): who to, the file and its name. */
+    private val again = ConcurrentHashMap<String, Triple<String, File, String>>()
+
+    /** A file of mine being made ready (copied in): its card shows at once. Returns its id for [send]. */
+    fun preparing(peer: String, name: String, size: Long): String {
+        val id = Proto06.newLogicalId()
+        put(Progress(id, peer, name, size, true, "connecting"))
+        return id
+    }
+
+    /** A file of mine that can't go at all: its card says why. */
+    fun failed(peer: String, name: String, size: Long, why: String, id: String = Proto06.newLogicalId()) {
+        put(Progress(id, peer, name, size, true, "failed", note = why))
+    }
+
+    fun isStopped(id: String) = id in stopped
+
+    /** Cancel: a file still on its way stops (the other side stops after 30 s of silence). */
+    fun cancel(id: String) {
+        val p = _all.value[id] ?: return
+        if (!FileText.running(p.state) && p.state != "asking" && p.state != "waiting") return
+        stopped.add(id)
+        if (!p.mine) ins.remove(id)?.let { host?.signal(it.peer, JSONObject().put("t", "decline").put("id", id).toString()) }
+        put(p.copy(state = "failed", note = "Stopped"))
+    }
+
+    /** Close: a finished or failed card goes. */
+    fun dismiss(id: String) {
+        val p = _all.value[id] ?: return
+        if (FileText.running(p.state)) return
+        again.remove(id)?.second?.delete()
+        _all.value = _all.value - id
+    }
+
+    /** Cancel shows: mine while it runs, theirs while it comes straight (one over the internet route just arrives). */
+    fun canCancel(id: String) = _all.value[id]?.let { FileText.running(it.state) && (it.mine || ins.containsKey(id)) } == true
+
+    fun canRetry(id: String) = again.containsKey(id) && _all.value[id]?.state == "failed"
+
+    /** Retry: the card goes and its file comes back to be sent again (Chat.sendFile). */
+    fun takeRetry(id: String): Triple<String, File, String>? {
+        if (!canRetry(id)) return null
+        val t = again.remove(id) ?: return null
+        _all.value = _all.value - id
+        return t.takeIf { it.second.isFile }
+    }
+
+    /** A file of theirs coming over the internet route ([have] of [n] pieces): its card shows how far. */
+    fun relayIn(msgId: String, peer: String, name: String, have: Int, n: Int) {
+        put(Progress(msgId, peer, name, n.toLong() * Photos.PIECE, false, "sending", have.toLong() * Photos.PIECE))
+    }
+
+    /** It arrived (the chat's message takes over), or half of it was let go. A copy offered straight goes too. */
+    fun relayInDone(msgId: String, peer: String = "", name: String = "") {
+        _all.value = _all.value.filterValues { p ->
+            p.id != msgId && !(name.isNotEmpty() && !p.mine && p.peer == peer && p.name == name && p.state in setOf("asking", "waiting", "failed"))
+        }
+        if (name.isNotEmpty()) ins.entries.removeIf { it.value.peer == peer && it.value.name == name && _all.value[it.key] == null }
+    }
+
+    /** No straight path for a file of mine: a small one goes over the internet route instead, else its card says [why]. */
+    private fun fallBack(id: String, peer: String, file: File, name: String, why: String) {
+        val h = host
+        if (h != null && file.isFile && file.length() <= FileText.RELAY_MAX) {
+            again.remove(id)
+            _all.value = _all.value - id   // the chat's own message takes over from here
+            h.relay(peer, file, name)?.let { failed(peer, name, file.length(), it, id) }
+            return
+        }
+        fail(id, why)
+    }
 
     /** Sends [file] to [peer] directly. Null when it started, else why not (then Chat may use the relays for a small one). */
-    fun send(peer: String, file: File, name: String): String? {
+    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId()): String? {
         val h = host ?: return "Not ready."
         if (!h.hasF1(peer)) return "needs a newer Muninn"
         if (!h.trusted(peer)) return "not trusted"
-        val id = Proto06.newLogicalId()
+        if (id in stopped) { file.delete(); return null }   // Cancel while it was being made ready
         val size = file.length()
+        again[id] = Triple(peer, file, name)
         put(Progress(id, peer, name, size, true, "connecting"))
         work.execute {
             try {
                 val sha = sha256(file)
+                if (id in stopped) return@execute
                 val sock = DatagramSocket()
                 val cands = candidates(sock)
-                if (cands.isEmpty()) { sock.close(); fail(id, "No internet connection that can go direct.") ; return@execute }
+                if (cands.isEmpty()) { sock.close(); fallBack(id, peer, file, name, "No internet connection that can go direct. Try on the same Wi-Fi."); return@execute }
                 val keys = ChatCrypto.newKeyPair()
                 outs[id] = Out(peer, file, name, size, sha, keys, sock, cands)
                 h.signal(peer, JSONObject().put("t", "offer").put("id", id).put("name", name).put("size", size).put("sha", sha)
                     .put("e", ChatCrypto.b64(keys.public.encoded)).put("c", candsJson(cands)).toString())
-                put(Progress(id, peer, name, size, true, "offered", note = "Waiting for them to accept"))
-                // Nothing back in time: give up (the other phone may be off; they can ask again). A big file waits
-                // longer, since the other phone asks before taking it.
-                Thread.sleep(answerMs(size))
-                if (_all.value[id]?.state == "offered") { outs.remove(id)?.sock?.close(); fail(id, "They didn't answer. Try again when they're online.") }
-            } catch (e: Exception) { fail(id, "That file couldn't be sent.") }
+                put(Progress(id, peer, name, size, true, "offered"))
+                // Nothing back in time: a small file goes over the internet route (it arrives when they're back); a
+                // bigger one waits as long as the other phone may ask first.
+                val until = System.currentTimeMillis() + answerMs(size)
+                while (System.currentTimeMillis() < until && _all.value[id]?.state == "offered" && id !in stopped) Thread.sleep(250)
+                if (id in stopped) { outs.remove(id)?.sock?.close(); return@execute }
+                if (_all.value[id]?.state == "offered") {
+                    outs.remove(id)?.sock?.close()
+                    fallBack(id, peer, file, name, "They're offline. Try again when they're back.")
+                }
+            } catch (e: Exception) { if (id !in stopped) fail(id, "That file couldn't be sent.") }
         }
         return null
     }
@@ -239,7 +335,18 @@ object FileLink {
                 val key = key(ChatCrypto.sharedKey(o.keys.private, o.keys.public, theirs), id)
                 work.execute { runSender(id, o, key, CallLogic.directOf(p.getJSONArray("c"))) }
             }
-            "decline" -> { outs.remove(id)?.let { it.sock.close(); fail(id, "They didn't take the file. They declined it, or they can't take files directly from you (both of you need Direct calls on for each other).") } }
+            "decline" -> outs[id]?.takeIf { it.peer == from }?.let {
+                outs.remove(id)
+                if (_all.value[id]?.state == "offered") {
+                    it.sock.close()
+                    fallBack(id, it.peer, it.file, it.name, "They declined, or Direct calls is off on their side.")
+                } else {
+                    // Stopped on their side while it was on its way.
+                    _all.value[id]?.let { p -> put(p.copy(state = "failed", note = "They stopped it")) }
+                    stopped.add(id)
+                    it.sock.close()
+                }
+            }
         }
     }
 
@@ -268,6 +375,7 @@ object FileLink {
     }
 
     private fun fail(id: String, why: String) {
+        if (id in stopped) return
         _all.value[id]?.let { put(it.copy(state = "failed", note = why)) }
         host?.notice(why)
     }
@@ -278,7 +386,10 @@ object FileLink {
         val sock = o.sock
         try {
             put(Progress(id, o.peer, o.name, o.size, true, "connecting"))
-            val peer = punch(sock, key, id, 0, theirs) ?: run { fail(id, "Couldn't connect directly. Try on the same Wi-Fi, or close by."); return }
+            val peer = punch(sock, key, id, 0, theirs) ?: run {
+                if (id !in stopped) fallBack(id, o.peer, o.file, o.name, "Couldn't connect straight to them. Try on the same Wi-Fi.")
+                return
+            }
             val n = pieces(o.size)
             val s = Sender(n)
             var seq = 1000L
@@ -290,6 +401,7 @@ object FileLink {
                 val chunk = ByteArray(CHUNK)
                 put(Progress(id, o.peer, o.name, o.size, true, "sending"))
                 while (!s.done) {
+                    if (id in stopped) return
                     val now = System.currentTimeMillis()
                     if (now - lastHeard > IDLE_MS) { fail(id, "The connection dropped. Try again."); return }
                     for (i in s.due(now)) {
@@ -319,6 +431,7 @@ object FileLink {
                 }
             }
             put(Progress(id, o.peer, o.name, o.size, true, "done", o.size))
+            again.remove(id)?.second?.delete()
         } catch (e: Exception) { fail(id, "That file couldn't be sent.") } finally { outs.remove(id); sock.close() }
     }
 
@@ -326,7 +439,7 @@ object FileLink {
         val h = host ?: return
         val tmp = File(h.cacheDir(), "incoming-$id")
         try {
-            val peer = punch(sock, key, id, 1, inc.theirCands) ?: run { fail(id, "Couldn't connect directly. Ask them to send it on the same Wi-Fi, or close by."); return }
+            val peer = punch(sock, key, id, 1, inc.theirCands) ?: run { fail(id, "Couldn't connect straight to them. It may come another way."); return }
             val n = pieces(inc.size)
             val r = Receiver(n)
             var seq = 1000L
@@ -339,6 +452,7 @@ object FileLink {
             RandomAccessFile(tmp, "rw").use { raf ->
                 raf.setLength(inc.size)
                 while (!r.done) {
+                    if (id in stopped) return
                     val now = System.currentTimeMillis()
                     if (now - lastHeard > IDLE_MS) { fail(id, "The connection dropped. Ask them to send it again."); return }
                     try {
@@ -364,9 +478,11 @@ object FileLink {
                 }
             }
             repeat(3) { val pk = seal(key, id, DONE, 1, seq++, ByteArray(0)); sock.send(DatagramPacket(pk, pk.size, peer)) }
+            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", inc.size, note = "Checking it"))
             if (sha256(tmp) != inc.sha) { fail(id, "${inc.name} arrived damaged, so it was thrown away."); return }
-            val saved = h.save(inc.name, tmp) ?: run { fail(id, "${inc.name} couldn't be saved."); return }
-            put(Progress(id, inc.peer, saved, inc.size, false, "done", inc.size, note = "Saved in Downloads"))
+            val saved = h.save(inc.name, tmp) ?: run { fail(id, "${inc.name} couldn't be saved. Is the storage full?"); return }
+            put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri))
+            h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved to Downloads")
         } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally { ins.remove(id); sock.close(); tmp.delete() }
     }
 
@@ -382,7 +498,7 @@ object FileLink {
         var seq = 1L
         var found: InetSocketAddress? = null
         var heardBack = 0
-        while (System.currentTimeMillis() < until) {
+        while (System.currentTimeMillis() < until && id !in stopped) {
             val targets = found?.let { listOf(it) } ?: theirs
             for (a in targets) { val pk = seal(key, id, PROBE, dir, seq++, byteArrayOf(1)); try { sock.send(DatagramPacket(pk, pk.size, a)) } catch (_: Exception) {} }
             try {

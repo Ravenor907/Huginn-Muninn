@@ -172,27 +172,22 @@ QtObject {
         if (Ui.main && Ui.main.touring) return
         System.pickFiles().forEach(p => sendUrl(k, p))
     }
+    // Its card shows at the bottom of the chat at once and says how it goes (FileStrip, or the message's own card).
     function sendUrl(k, url) {
         const path = Chat.localPath(url)
         const r = FileLink.send(k, path === "" ? String(url) : path)
         if (r !== "") Ui.say(r, true)
     }
-    // A dropped file that isn't a picture: straight to them when possible, otherwise on the same Wi-Fi.
+    // A dropped file that isn't a picture: to them like A file (straight, or over the internet route when it's
+    // small). Their app can't take files: false, and it goes to Files for the same Wi-Fi.
     function dropFiles(k, urls) {
-        if (Chat.route(k) !== "wifi" && FileLink.hasF1(k)) { urls.forEach(u => sendUrl(k, u)); return true }
+        if (FileLink.hasF1(k)) { urls.forEach(u => sendUrl(k, u)); return true }
         return false
     }
-    // A file that came through the relays.
+    // A file that came through the relays and couldn't be saved then.
     function saveFile(k, m) {
         const r = FileLink.saveReceived(k, m.id)
         Ui.say(r === "" ? m.file + " is in Downloads." : r, r !== "")
-    }
-    function fileText(t) {
-        const pct = t.size > 0 ? Math.floor(100 * t.done / t.size) : 0
-        return t.state === "done" ? (t.mine ? "Sent" : t.note || "Saved")
-             : t.state === "failed" ? t.note
-             : t.state === "sending" ? (t.note !== "" ? t.note : (t.mine ? "Sending " : "Getting ") + pct + "% of " + System.sizeText(t.size))
-             : t.note
     }
 
     // ------------------------------------------------------------- linked devices (section 15)

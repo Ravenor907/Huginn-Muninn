@@ -736,7 +736,8 @@ QString Chat::netStatus() const
     return internet() > 0 ? QStringLiteral("Internet: connected") : QStringLiteral("Internet: offline");
 }
 
-bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent, int days)
+bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent, int days,
+                        std::function<void(int)> step)
 {
     if (bodies.isEmpty() || mailbox.isEmpty() || m_moving)
         return false;
@@ -744,11 +745,17 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
     const int keep = days > 0 ? days : chatDays(key);
     // sent: only once a relay answered OK to every piece (NIP-20), never just for handing it over.
     std::function<void()> ok;
-    if (sent) {
+    if (sent || step) {
         QPointer<Chat> self(this);
-        auto left = std::make_shared<int>(int(bodies.size()));
-        ok = [self, left, sent] {
-            if (self && --*left == 0)
+        const int n = int(bodies.size());
+        auto left = std::make_shared<int>(n);
+        ok = [self, left, sent, step, n] {
+            if (!self)
+                return;
+            const int l = --*left;
+            if (step)
+                step(n - l);
+            if (l == 0 && sent)
                 sent();
         };
     }
@@ -2185,6 +2192,8 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     if (inc.parts.isEmpty()) {
         inc.from = fromKey;
         inc.started = now();
+        if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && FileLink::nameOk(o.value(QStringLiteral("fn"))))
+            inc.file = o.value(QStringLiteral("fn")).toString();
         for (int k = 0; k < n; ++k)
             inc.parts << QByteArray();
     }
@@ -2195,6 +2204,9 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
         inc.parts[i] = part;
         inc.have++;
     }
+    // A file shows "Receiving 42%" in the chat while its pieces come in.
+    if (inc.have < n && !inc.file.isEmpty() && m_files)
+        m_files->relayIn(id, fromKey, inc.file, inc.have, n);
     if (inc.have < n)
         return 200;
     const QList<QByteArray> parts = m_incoming.take(id).parts;
@@ -2209,6 +2221,12 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     if (joined.isEmpty())
         return 400;
     m_vault->write(QStringLiteral("photos/") + id, joined);
+    // A file goes into Downloads right away; it's never opened by itself.
+    QString savedAs;
+    if (!fileName.isEmpty() && m_files) {
+        m_files->relayInDone(id, fromKey, fileName);
+        savedAs = m_files->saveBytes(joined, fileName);
+    }
     if (!contact) {
         QVariantMap m = m_met.value(fromKey);
         m.insert(QStringLiteral("name"), name);
@@ -2220,10 +2238,17 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     msg.insert(QStringLiteral("photo"), id);
     msg.insert(QStringLiteral("voice"), voiceMs);
     msg.insert(more);
-    if (!fileName.isEmpty())
+    if (!fileName.isEmpty()) {
         msg.insert(QStringLiteral("file"), fileName);
+        msg.insert(QStringLiteral("size"), double(joined.size()));
+        if (!savedAs.isEmpty())
+            msg.insert(QStringLiteral("saved"), savedAs);
+    }
     if (addPrivate(fromKey, msg)) {
         m_unread.insert(fromKey);
+        if (!fileName.isEmpty())
+            Q_EMIT notice(!savedAs.isEmpty() ? QStringLiteral("File from %1: %2 · Saved to Downloads").arg(nameOf(fromKey), QFileInfo(savedAs).fileName())
+                                             : QStringLiteral("File from %1: %2. It couldn't be saved to Downloads: right-click it to save.").arg(nameOf(fromKey), fileName));
         Q_EMIT arrived(nameOf(fromKey), !fileName.isEmpty() ? QStringLiteral("File: ") + fileName : voiceMs > 0 ? QStringLiteral("Voice message")
                                         : more.contains(QStringLiteral("video")) ? QStringLiteral("Video message")
                                         : more.contains(QStringLiteral("al")) ? QStringLiteral("Photos") : QStringLiteral("Photo"), fromKey);
@@ -2421,14 +2446,23 @@ void Chat::attempt(const QString &key, const QString &id)
         if (photo)
             t.next = qMax(t.next, now() + bodies.size() * 3000);   // about 3 s a piece over Bluetooth: don't pile up resends
     }
+    // A file shows how far it got ("Sending 42%"): pieces a route took.
+    std::function<void(int)> step;
+    if (!str(m, "file").isEmpty()) {
+        const int n = int(bodies.size());
+        step = [this, id, n](int took) { uploaded(id, double(took) / n); };
+    }
     const QString base = baseTo(key);
     if (!base.isEmpty()) {
         const bool proven = m_net->provenFor(key);
         any = any || proven;
         auto left = std::make_shared<int>(int(bodies.size()));
         auto good = std::make_shared<bool>(proven);
+        auto took = std::make_shared<int>(0);
         for (const QByteArray &b : bodies)
-            post(base, b, [this, key, id, left, good](int code) {
+            post(base, b, [this, key, id, left, good, took, step](int code) {
+                if (code == 200 && step)
+                    step(++*took);
                 *good = *good && code == 200;
                 if (--*left > 0 || !*good)
                     return;
@@ -2446,18 +2480,34 @@ void Chat::attempt(const QString &key, const QString &id)
     const QString mailbox = backupMailbox(m);
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
     if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= Photos::kInternetPieces) {
-        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }))
+        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step))
             any = true;
     }
     if (!any && t.count == 1)
         update(key, id, [](QVariantMap &x) { x.insert(QStringLiteral("failed"), true); });
 }
 
+void Chat::uploaded(const QString &id, double fraction)
+{
+    if (m_uploads.value(id, -1.0).toDouble() >= fraction)
+        return;
+    m_uploads.insert(id, fraction);
+    Q_EMIT uploadsChanged();
+}
+
 void Chat::retryLoop()
 {
     const qint64 t0 = now();
-    for (auto it = m_incoming.begin(); it != m_incoming.end();)
-        it = t0 - it.value().started > 15 * 60000 ? m_incoming.erase(it) : std::next(it);   // half a photo that never finished
+    // Half a photo or file that never finished.
+    for (auto it = m_incoming.begin(); it != m_incoming.end();) {
+        if (t0 - it.value().started > 15 * 60000) {
+            if (!it.value().file.isEmpty() && m_files)
+                m_files->relayInDone(it.key());
+            it = m_incoming.erase(it);
+        } else {
+            it = std::next(it);
+        }
+    }
     // Someone said yes while out of range: say it again when they're back.
     for (const QString &k : m_unsentKeeps.keys())
         if (!route(k).isEmpty() && !deliver(k, m_unsentKeeps.value(k), mailboxOf(k)).isEmpty())

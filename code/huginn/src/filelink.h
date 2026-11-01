@@ -11,6 +11,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 #include <functional>
 
 class Chat;
@@ -30,8 +31,10 @@ class StunProbe;
 class FileLink : public QObject
 {
     Q_OBJECT
-    // Every transfer this run: [{id, peer, name, size, mine, state, done, note}]. state: "connecting",
-    // "offered", "asking" (a big file waiting for Accept or Decline), "sending", "done", "failed".
+    // Every transfer this run: [{id, peer, name, size, mine, state, done, note, path, wifi}]. state: "connecting",
+    // "offered", "asking" (a big file waiting for Accept or Decline), "sending", "done", "failed". path: mine, the
+    // file sent; theirs, where it was saved once done. wifi: too big for the internet route (Send on Wi-Fi).
+    // A file of theirs coming over the internet route shows too (id: its message id), until its message is in.
     Q_PROPERTY(QVariantList transfers READ transfers NOTIFY changed)
 
 public:
@@ -48,6 +51,23 @@ public:
     static constexpr int kAnswerMs = 120000;
     static constexpr int kAskAnswerMs = 10 * 60000;
     static const qint64 kRelayMax;              // the largest file the relays take (Photos' 130 pieces)
+    // A file small enough for the relays goes that way when no answer comes this soon (their device may be off).
+    static constexpr int kRelayAfterMs = 30000;
+    // How long an offer of a file of this size waits: a bigger one as long as the other side may ask first.
+    static int answerMs(qint64 size) { return size <= kRelayMax ? kRelayAfterMs : kAskAnswerMs; }
+
+    // What a file on its way says, the same words as Muninn's FileText (checked in selfTest).
+    static int percent(qint64 done, qint64 size);
+    static QString statusText(const QVariantMap &t, const QString &who);
+    // A file of mine sent as a message over the internet route: state "sending", "sent", "delivered", "read";
+    // fraction: how much a route took so far, below 0 before anything did.
+    static QString relayText(const QString &state, bool failed, double fraction);
+    static QString tooBig();
+    // "2.1 MB/s · 12 s left"; empty until a second has passed and something moved.
+    static QString paceText(qint64 done, qint64 total, qint64 ms);
+    static QString leftText(qint64 seconds);
+    static QString sizeText(qint64 bytes);
+    static QString iconFor(const QString &name);
     enum Type : quint8 { Probe = 1, Data = 2, Ack = 3, Done = 4 };
 
     // What the sender keeps: which pieces went when, which are confirmed.
@@ -110,6 +130,31 @@ public:
     Q_INVOKABLE QString saveReceived(const QString &peer, const QString &msgId);
     QVariantList transfers() const;
 
+    // For the chat's file cards.
+    Q_INVOKABLE QString text(const QVariantMap &t) const { return statusText(t, who(t.value(QStringLiteral("peer")).toString())); }
+    Q_INVOKABLE QString relayLine(const QString &state, bool failed, double fraction) const { return relayText(state, failed, fraction); }
+    Q_INVOKABLE QString icon(const QString &name) const { return iconFor(name); }
+    Q_INVOKABLE QString pace(double done, double total, double ms) const { return paceText(qint64(done), qint64(total), qint64(ms)); }
+    Q_INVOKABLE QString size(double bytes) const { return sizeText(qint64(bytes)); }
+    // Cancel shows: mine while it runs, theirs while it comes straight (one over the internet route just arrives).
+    Q_INVOKABLE bool canCancel(const QString &id) const;
+    Q_INVOKABLE bool canRetry(const QString &id) const;
+    // Retry: the card goes and its file is sent again.
+    Q_INVOKABLE void retry(const QString &id);
+    // Open: the app this computer uses for that kind of file (only when the person asks). Show in folder: its folder.
+    Q_INVOKABLE bool openFile(const QString &path) const;
+    Q_INVOKABLE bool showInFolder(const QString &path) const;
+
+    // A file of mine that can't go at all: its card says why (wifi: Send on Wi-Fi helps).
+    void addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path = {}, bool wifi = false,
+                   const QString &id = {});
+    // A file of theirs coming over the internet route: have of n pieces. Done: its message is in (or half of it was
+    // let go); a card for the same file that couldn't come straight goes too.
+    void relayIn(const QString &msgId, const QString &peer, const QString &name, int have, int n);
+    void relayInDone(const QString &msgId, const QString &peer = {}, const QString &name = {});
+    // A file that came as a message: saved in Downloads at once. Its full path, or empty when it couldn't be.
+    QString saveBytes(const QByteArray &bytes, const QString &name);
+
     // An opened, checked (ok()) room "file" message from a contact.
     void onSignal(const QString &from, const QJsonObject &p);
 
@@ -143,6 +188,9 @@ private:
     void sendAck(Xfer *x);
     void receivedAll(Xfer *x);
     void fail(Xfer *x, const QString &why, bool tell = true);
+    // No straight path for a file of mine: a small one goes over the internet route instead, else it fails with why.
+    void fallBack(Xfer *x, const QString &why);
+    void drop(const QString &id);
     void finish(Xfer *x);
     void end(Xfer *x);
     void put(Xfer *x, bool now = false);

@@ -76,6 +76,8 @@ class Chat : public QObject
     Q_PROPERTY(bool activeStatus READ activeStatus WRITE setActiveStatus NOTIFY changed)
     // Cap m2: make link previews on this computer when sending (Settings › Privacy). Received ones always show.
     Q_PROPERTY(bool linkPreviews READ linkPreviews WRITE setLinkPreviews NOTIFY changed)
+    // A file of mine going as a message: message id -> how much a route took so far (0 to 1), until it's sent.
+    Q_PROPERTY(QVariantMap uploads READ uploads NOTIFY uploadsChanged)
 
 public:
     Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
@@ -387,6 +389,7 @@ Q_SIGNALS:
     void callMessage(const QString &fromKey, const QJsonObject &msg);
     void pruned();   // messages past their chats' limits went (every minute, and when a limit changes)
     void liveChanged();
+    void uploadsChanged();
     // Open this chat on screen (a missed call's notification was clicked): a contact's key or "g:<group>".
     void showChat(const QString &where);
 
@@ -498,8 +501,10 @@ private:
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
     // Sends over the internet: to their mailbox on the relays. False when they have none.
     // days: how long relays may keep it (0: this chat's message limit).
+    // step: after each piece a relay took, how many have been so far.
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
-                      std::function<void()> sent = nullptr, int days = 0);
+                      std::function<void()> sent = nullptr, int days = 0, std::function<void(int)> step = nullptr);
+    QVariantMap uploads() const { return m_uploads; }
     void noteCaps(const QString &key, bool present, const QStringList &caps);
     // chatpeople.cpp
     void sayHello(const QString &key);
@@ -689,6 +694,8 @@ private:
     qint64 m_activeSent = 0;
     struct Tries { int count = 0; qint64 next = 0; };
     QHash<QString, Tries> m_tries;
-    struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; };
+    struct Incoming { QString from; QList<QByteArray> parts; int have = 0; qint64 started = 0; QString file; };
+    QVariantMap m_uploads;
+    void uploaded(const QString &id, double fraction);
     QHash<QString, Incoming> m_incoming;
 };

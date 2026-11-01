@@ -142,6 +142,8 @@ fun TvRoot(app: Muninn) {
         else {
             val st by KidTv.state.collectAsState()
             val wiping by KidTv.wiping.collectAsState()
+            // A plain notice when something came (an app a parent sent: "File from Dad: game.apk · Saved to Downloads").
+            LaunchedEffect(Unit) { app.net.messages.collect { (ok, msg) -> Ui.say(msg, !ok) } }
             val cfg = st.cfg
             when {
                 wiping -> TvNote("Starting over…")

@@ -150,7 +150,7 @@ Rectangle {
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
         : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
-        : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusButton === 0 ? "Accept" : "Decline" }, { key: "b", label: "Back" }]
+        : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu" : "Call" }, { key: "b", label: "Back" }]
@@ -697,7 +697,7 @@ Rectangle {
                 }
             }
 
-            // Files going straight to or from them (cap f1).
+            // Files on their way to or from them (cap f1).
             FileStrip {
                 id: fileStrip
                 peer: page.tour ? "" : page.openKey
@@ -1706,7 +1706,7 @@ Rectangle {
         if (typingIn && boxButton(typingIn, b)) return true
         if (zone === "side") return sideButton(b)
         if (zone === "head") return headButton(b)
-        // A big file waiting: the D-pad is on its Accept and Decline (Up past it goes back to the messages).
+        // A file card: the D-pad is on its buttons (Up past it goes back to the messages).
         if (zone === "messages" && fileStrip.focusIndex >= 0) {
             if (fileStrip.handleButton(b)) return true
             if (b === "up") {
@@ -1724,7 +1724,7 @@ Rectangle {
             return true
         case "down":
             if (zone === "list") row = Math.min(entries.length - 1, row + 1)
-            else if ((sel < 0 || sel === messages.length - 1) && fileStrip.enter()) sel = -1   // on to a file's Accept and Decline
+            else if ((sel < 0 || sel === messages.length - 1) && fileStrip.enter()) sel = -1   // on to a file card's buttons
             else if (sel >= 0) { sel = Math.min(messages.length - 1, sel + 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "right":

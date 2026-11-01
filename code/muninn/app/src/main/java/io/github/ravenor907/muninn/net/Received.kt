@@ -28,7 +28,8 @@ object Received {
         val name: String,
         val out: OutputStream,
         private val context: Context,
-        private val uri: Uri?,
+        /** Its MediaStore entry (Android 10 and newer). */
+        val uri: Uri?,
         /** Where it's written, when that's a plain file (not MediaStore). */
         val file: File?,
     ) {
@@ -46,6 +47,35 @@ object Received {
             file?.delete()
         }
     }
+
+    /** A URI other apps can open it by (Open): its MediaStore entry, or the file through Muninn's file provider. */
+    fun shareUri(context: Context, t: Target): String = t.uri?.toString() ?: t.file?.let { f ->
+        try { androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", f).toString() } catch (_: Exception) { "" }
+    } ?: ""
+
+    /** Open: the app the person picked for this kind of file. Never called by itself for something received. */
+    fun open(context: Context, uri: String, name: String): Boolean {
+        if (uri.isEmpty()) return false
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        return try {
+            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), type)
+                .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: Exception) { false }
+    }
+
+    /** Show in folder: the system's Downloads list. False when this device has none (some TVs). */
+    fun showFolder(context: Context): Boolean = try {
+        context.startActivity(android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        true
+    } catch (_: Exception) { false }
+
+    /** Saves [bytes] in Downloads as [name]: the name it got and its URI, or null. */
+    fun save(context: Context, name: String, bytes: ByteArray): Pair<String, String>? = try {
+        val t = create(context, name)
+        try { t.out.write(bytes); t.finish(); t.name to shareUri(context, t) } catch (e: Exception) { t.discard(); null }
+    } catch (_: Exception) { null }
 
     private fun oldPhoneAllowed(context: Context) =
         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
@@ -70,14 +100,6 @@ object Received {
         val ext = if (name.contains('.') && !name.startsWith(".")) "." + name.substringAfterLast('.') else ""
         while (t.exists()) { t = File(dir, "$base ($n)$ext"); n++ }
         return t
-    }
-
-    /** Starts saving a file in Muninn's own [dir] (an app waiting to be installed on a TV), under the last part of [path]. */
-    fun inside(context: Context, dir: File, path: String): Target {
-        val name = path.split('/', '\\').lastOrNull { it.isNotBlank() && it != "." && it != ".." }?.trim() ?: "app.apk"
-        dir.mkdirs()
-        val f = free(dir, name)
-        return Target(f.name, f.outputStream(), context, null, f)
     }
 
     /**

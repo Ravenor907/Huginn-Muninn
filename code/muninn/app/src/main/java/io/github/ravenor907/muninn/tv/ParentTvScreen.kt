@@ -410,6 +410,16 @@ private fun Apps(app: Muninn, t: ManagedTv) {
     if (!k2 || !k4 || !k7) Note(UPDATE_FIRST)
     if (installsOff) Note(INSTALLS_OFF)
     MenuRow("Send an app", "", enabled = k4) { sendingApp = true }
+    // An app on its way to the TV: how far, how fast, and Cancel. It lands in the TV's Downloads.
+    val moving by app.net.transfer.collectAsState()
+    if (moving.active && moving.sending) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(moving.status, style = Type.normal)
+        io.github.ravenor907.muninn.ui.Bar(moving.fraction, Modifier.padding(top = 6.dp), Palette.gold)
+        val pace = moving.pace()
+        Text("${io.github.ravenor907.muninn.net.FileText.percent(moving.done, moving.total)}%" + (if (pace.isNotEmpty()) " · $pace" else ""),
+            style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        MButton("Cancel", Modifier.padding(top = 6.dp), kind = io.github.ravenor907.muninn.ui.Kind.Danger) { app.net.cancelSend() }
+    }
     MenuRow("Update now", t.app, enabled = k2) {
         when {
             !TvParent.updateTv(app, tvKey) -> Ui.say(UPDATE_FIRST, true)
@@ -516,7 +526,7 @@ private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>) {
     if (TvParent.tvs.value[tvKey]?.off?.contains("install") == true) { Ui.say(INSTALLS_OFF, true); return }
     if (!TvParent.announceApp(app, tvKey, name, parts)) { Ui.say(UPDATE_FIRST, true); return }
     app.net.send(dev.id, files)
-    Ui.say("Sending $name. Press Install on the TV.")
+    Ui.say("Sending $name. It's saved in the TV's Downloads; nothing installs by itself.")
 }
 
 /** Pick one contact; [waiting]: people who haven't accepted this phone yet. */

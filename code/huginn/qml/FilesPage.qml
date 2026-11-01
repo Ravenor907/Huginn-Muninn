@@ -29,15 +29,15 @@ Rectangle {
     function setArgs(a) { tour = !!a.tour }
     Component.onCompleted: LocalSend.refresh()
 
-    readonly property var prompts: LocalSend.sending ? [{ key: "b", label: cancelArmed ? "Stop now" : "Stop sending" }]
+    readonly property var prompts: LocalSend.busy ? [{ key: "b", label: cancelArmed ? "Cancel now" : "Cancel" }]
         : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send" : "Pick files" },
            { key: "y", label: "Look again" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
-    // B while a send is going: the first press says to press again, a second one within 3 s cancels.
+    // B while files go: the first press says to press again, a second one within 3 s cancels.
     property bool cancelArmed: false
     Timer { id: cancelTimer; interval: 3000; onTriggered: page.cancelArmed = false }
     Connections {
         target: LocalSend
-        function onProgressChanged() { if (!LocalSend.sending && page.cancelArmed) { page.cancelArmed = false; cancelTimer.stop() } }
+        function onProgressChanged() { if (!LocalSend.busy && page.cancelArmed) { page.cancelArmed = false; cancelTimer.stop() } }
     }
     readonly property string status: ""
 
@@ -192,6 +192,67 @@ Rectangle {
                 id: lists
                 width: listsView.width
                 spacing: Theme.px(8)
+
+                // The transfer under way: overall (percent, speed, time left), each file going out, and Cancel.
+                SectionLabel { visible: LocalSend.busy; text: LocalSend.sending ? "SENDING" : "RECEIVING"; detail: LocalSend.pace }
+                Rectangle {
+                    visible: LocalSend.busy
+                    width: lists.width
+                    height: visible ? busyCol.implicitHeight + Theme.px(24) : 0
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.color: Theme.accent
+                    Column {
+                        id: busyCol
+                        x: Theme.px(12); y: Theme.px(12)
+                        width: parent.width - Theme.px(24)
+                        spacing: Theme.px(8)
+                        Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: LocalSend.status; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                        Rectangle {
+                            width: parent.width; height: Theme.px(6); color: Theme.line
+                            Rectangle { width: parent.width * Math.max(0, Math.min(1, LocalSend.progress)); height: parent.height; color: Theme.accent }
+                        }
+                        Text {
+                            textFormat: Text.PlainText
+                            text: Math.round(LocalSend.progress * 100) + "%" + (LocalSend.pace !== "" ? " · " + LocalSend.pace : "")
+                            color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                        }
+                        Repeater {
+                            model: LocalSend.sending ? LocalSend.outgoing.slice(0, 8) : []
+                            Item {
+                                width: busyCol.width; height: Theme.px(20)
+                                Text { textFormat: Text.PlainText; width: parent.width - outSt.width - Theme.px(12); elide: Text.ElideMiddle; text: modelData.name; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+                                Text { textFormat: Text.PlainText; id: outSt; anchors.right: parent.right; text: modelData.status; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                            }
+                        }
+                        HButton {
+                            text: "Cancel"
+                            kind: "danger"; height: Theme.px(34); fontSize: 13
+                            onClicked: LocalSend.sending ? LocalSend.cancelSend() : LocalSend.cancelReceive()
+                        }
+                    }
+                }
+                // How the last one ended, until the next starts.
+                Rectangle {
+                    visible: !LocalSend.busy && LocalSend.lastResult !== ""
+                    width: lists.width
+                    height: visible ? Math.max(Theme.px(52), lastText.implicitHeight + Theme.px(24)) : 0
+                    radius: Theme.radius
+                    color: Theme.panel
+                    border.color: LocalSend.lastOk ? Theme.line : Theme.dangerLine
+                    Icon { id: lastIcon; x: Theme.px(12); anchors.verticalCenter: parent.verticalCenter; name: LocalSend.lastOk ? "check" : "info"; size: Theme.px(20); color: LocalSend.lastOk ? Theme.accent : Theme.danger }
+                    Text {
+                        id: lastText
+                        textFormat: Text.PlainText
+                        anchors.left: lastIcon.right; anchors.leftMargin: Theme.px(10)
+                        anchors.right: lastDone.left; anchors.rightMargin: Theme.px(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        wrapMode: Text.Wrap
+                        text: LocalSend.lastResult
+                        color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                    }
+                    HButton { id: lastDone; anchors.right: parent.right; anchors.rightMargin: Theme.px(8); anchors.verticalCenter: parent.verticalCenter; text: "Done"; height: Theme.px(34); fontSize: 13; onClicked: LocalSend.clearResult() }
+                }
 
                 SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? "Pick a device" : "" }
                 Text {
@@ -352,9 +413,9 @@ Rectangle {
         Ui.sure("Start Direct connect?", "Leaves your Wi-Fi until stopped.", "Start", () => Direct.start(), false, false)
     }
     function handleButton(b) {
-        if (LocalSend.sending) {
+        if (LocalSend.busy) {
             if (b === "b") {
-                if (cancelArmed) { cancelArmed = false; cancelTimer.stop(); LocalSend.cancelSend() }
+                if (cancelArmed) { cancelArmed = false; cancelTimer.stop(); if (LocalSend.sending) LocalSend.cancelSend(); else LocalSend.cancelReceive() }
                 else { cancelArmed = true; cancelTimer.restart(); Ui.say((Ui.main && Ui.main.padInUse ? "Press B" : "Press Esc") + " again to cancel") }
                 return true
             }

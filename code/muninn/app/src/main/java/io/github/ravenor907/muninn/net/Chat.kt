@@ -110,7 +110,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** A link preview the sender's phone made (cap m2). */
                    val preview: More.Preview? = null,
                    /** A small file that came over the relays (cap f1): its name (the bytes are stored like a photo). */
-                   val file: String = "")
+                   val file: String = "",
+                   /** Theirs: where that file was saved in Downloads (a content URI, for Open), or "" if it wasn't. */
+                   val saved: String = "")
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false,
@@ -263,6 +265,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val trash = Trash({ vault.read(File(context.filesDir, "trash.json")) }, { vault.write(File(context.filesDir, "trash.json"), it) })
     private val groupTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val callTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    private val _uploads = MutableStateFlow<Map<String, Float>>(emptyMap())
+    /** A file of mine going as a message: how much a route took so far (0 to 1). Gone once it's sent. */
+    val uploads: StateFlow<Map<String, Float>> = _uploads.asStateFlow()
+    private fun uploaded(id: String, f: Float) = _uploads.update { m -> if ((m[id] ?: 0f) >= f) m else m + (id to f) }
 
     init {
         load()
@@ -278,11 +284,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun trusted(peer: String) = io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)
             override fun hasF1(peer: String) = this@Chat.hasF1(peer)
             override fun waitsForAsk(peer: String) = contacts.get(peer)?.caps?.contains(FileLink.ASK_CAP) == true
-            override fun save(name: String, file: File): String? = try {
+            override fun save(name: String, file: File): FileLink.Saved? = try {
                 val t = Received.create(context, name)
-                file.inputStream().use { it.copyTo(t.out) }
-                t.finish(); t.name
+                try { file.inputStream().use { it.copyTo(t.out) }; t.finish(); FileLink.Saved(t.name, Received.shareUri(context, t)) }
+                catch (e: Exception) { t.discard(); null }
             } catch (e: Exception) { null }
+            override fun relay(peer: String, file: File, name: String): String? = relayFile(peer, file, name)
+            override fun nameOf(peer: String) = this@Chat.nameOf(peer)
             override fun cacheDir(): File = File(context.cacheDir, "files").also { it.mkdirs() }
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
@@ -1289,7 +1297,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     // sealed and sent like a message (room "photo"). The other phone puts them back together and
     // answers "delivered" once it has them all. Pieces fit every route: Nearby's 32 KB limit and relays'.
 
-    private class Incoming(val from: String, val parts: Array<ByteArray?>, val started: Long)
+    private class Incoming(val from: String, val parts: Array<ByteArray?>, val started: Long, val file: String = "")
     private val incoming = ConcurrentHashMap<String, Incoming>()
     private val pieceTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
 
@@ -1324,22 +1332,35 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun hasF1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(FileLink.CAP) == true
 
     /**
-     * A file to [peerKey] over the internet: straight to their phone when both trust each other (never through
-     * Cloudflare), or through the relays when it's small. Null when it's on its way, else what to say.
+     * Sends a file the person picked: straight to their phone when both trust each other, else (or when that can't
+     * connect) over the internet route when it's small enough. Its card or message shows in the chat at once and says
+     * how it goes; nothing fails out of sight. [id]: the card FileLink.preparing made while the file was copied in.
      */
-    fun sendFile(peerKey: String, file: File, name: String): String? {
-        val who = nameOf(peerKey)
-        if (!hasF1(peerKey)) { probeCaps(peerKey); file.delete(); return "$who needs a newer Muninn to get files over the internet." }
-        val clean = name.replace('/', '_').replace('\\', '_').filter { it.code >= 0x20 }.take(200).ifBlank { "file" }
-        val direct = FileLink.send(peerKey, file, clean)
-        if (direct == null) return null
-        if (file.length() <= Photos.INTERNET_PIECES.toLong() * Photos.PIECE) {
-            val bytes = file.readBytes(); file.delete()
-            sendBlob(peerKey, bytes, 0, fileName = clean)
-            return null
+    fun sendFile(peerKey: String, file: File, name: String, id: String? = null): String? {
+        val clean = cleanFileName(name)
+        val cardId = id ?: Proto06.newLogicalId()
+        if (id != null && FileLink.isStopped(id)) { file.delete(); return null }
+        if (!hasF1(peerKey)) {
+            probeCaps(peerKey)
+            FileLink.failed(peerKey, clean, file.length(), "${nameOf(peerKey)} needs the latest Muninn or Huginn for files.", cardId)
+            file.delete(); return null
         }
+        if (FileLink.send(peerKey, file, clean, cardId) == null) return null
+        relayFile(peerKey, file, clean)?.let { FileLink.failed(peerKey, clean, file.length(), it, cardId) } ?: FileLink.dismiss(cardId)
+        return null
+    }
+
+    /** A file as it may be named on the wire (14.1): no folders or control characters, 1 to 200 characters. */
+    fun cleanFileName(name: String) = name.replace('/', '_').replace('\\', '_').filter { it.code >= 0x20 }.take(200).trim().ifBlank { "file" }
+
+    /** A small file over the internet route, as a message with its own card. Null when on its way, else why not. */
+    private fun relayFile(peerKey: String, file: File, name: String): String? {
+        if (!file.isFile) return "That file can't be read any more."
+        if (file.length() > FileText.RELAY_MAX) return FileText.tooBig()
+        val bytes = try { file.readBytes() } catch (e: Exception) { return "That file can't be read any more." }
         file.delete()
-        return "Big files go straight between phones, which needs Direct calls on for each other (in the chat's menu). Or send it on the same Wi-Fi from Files."
+        sendBlob(peerKey, bytes, 0, fileName = name)
+        return null
     }
 
     private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, fileName: String = "") {
@@ -1408,12 +1429,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun takePiece(o: JSONObject, fromKey: String, name: String, via: String, msgId: String, n: Int, i: Int, mailbox: String?,
                           part: ByteArray): Pair<Int, String> {
         val contact = contacts.contact(fromKey)
-        val inc = incoming.getOrPut(msgId) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis()) }
+        val kindFile = if (o.optString("kind") == "file") o.optString("fn") else ""
+        val inc = incoming.getOrPut(msgId) { Incoming(fromKey, arrayOfNulls(n), System.currentTimeMillis(), kindFile) }
         wakeRetry()   // the loop clears half a photo that never finishes
         if (inc.from != fromKey || inc.parts.size != n) return 400 to "{}"
         synchronized(inc) {
             inc.parts[i] = part
-            if (inc.parts.any { it == null }) return 200 to "{}"
+            val have = inc.parts.count { it != null }
+            // A file shows "Receiving 42%" in the chat while its pieces come in.
+            if (inc.file.isNotEmpty() && have < n) FileLink.relayIn(msgId, fromKey, inc.file, have, n)
+            if (have < n) return 200 to "{}"
             incoming.remove(msgId)
         }
         val voiceMs = if (o.optString("kind") == "voice") o.optInt("ms").coerceIn(1, Voice.MAX_MS) else 0
@@ -1427,6 +1452,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             else -> Photos.join(joined)
         }) ?: return 400 to "{}"
         vault.writeBytes(File(photosDir, msgId), jpeg)
+        // A file goes into Downloads right away, where any Files app sees it; it's never opened by itself.
+        var savedAs: Pair<String, String>? = null
+        if (fileName.isNotEmpty() && !known(fromKey, msgId)) {
+            FileLink.relayInDone(msgId, fromKey, fileName)
+            savedAs = Received.save(context, fileName, jpeg)
+        }
         if (contact == null) {
             val m = _met.value[fromKey]
             putMet(fromKey, (m ?: Met(name, mailbox)).copy(name = name, mailbox = mailbox ?: m?.mailbox))
@@ -1434,10 +1465,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val album = o.optString("al")
         if (addPrivate(fromKey, Msg(msgId, fromKey, name, "", false, System.currentTimeMillis(), via = via, photo = msgId, voice = voiceMs,
                 video = videoMs, album = album, albumAt = if (album.isEmpty()) 0 else o.optInt("ai"), albumOf = if (album.isEmpty()) 0 else o.optInt("an"),
-                file = fileName))) {
+                file = fileName, saved = savedAs?.second ?: ""))) {
             _unread.update { it + fromKey }
             arrivals.tryEmit(Triple(contact?.shown ?: name, when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; fileName.isNotEmpty() -> "File: $fileName"
                 album.isNotEmpty() -> "Photos"; else -> "Photo" }, fromKey))
+            if (fileName.isNotEmpty()) notices.tryEmit(savedAs?.let { "File from ${contact?.shown ?: name}: ${it.first} · Saved to Downloads" }
+                ?: "File from ${contact?.shown ?: name}: $fileName. It couldn't be saved to Downloads: tap Save in the chat.")
         }
         receipt(fromKey, listOf(msgId), "delivered", mailbox)
         return 200 to "{}"
@@ -1969,14 +2002,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (ble.has(k, strict(k)) && parts.all { ble.send(k, it.toString(), strict(k)) } && ble.proven(k)) {
             any = true; markSent(m, "close"); t.next = maxOf(t.next, System.currentTimeMillis() + parts.size * 3000L)
         }
+        // A file shows how far it got ("Sending 42%"): pieces a route took.
+        val step: ((Int) -> Unit)? = if (m.file.isEmpty()) null else ({ done: Int -> uploaded(m.id, done.toFloat() / parts.size) })
         wifiTo(k)?.let { d ->
             if (d.proven) any = true
-            bg { if (parts.all { net.post(d, PATH, it.toString()) == 200 } && d.proven) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it } }
+            bg {
+                var took = 0
+                for (piece in parts) { if (net.post(d, PATH, piece.toString()) != 200) break; took++; step?.invoke(took) }
+                if (took == parts.size && d.proven) update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = "wifi", failed = false) else it }
+            }
         }
         val mailbox = backupMailbox(m)
         if ((!any || t.count >= 2) && parts.size <= Photos.INTERNET_PIECES && mailbox != null) {
             if (!publishNow(t)) any = true
-            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t))) any = true
+            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) any = true
         }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
@@ -1996,7 +2035,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val now = System.currentTimeMillis()
         nearbyNow()
         groups.due().forEach { o -> bg { sendGroupOut(o) } }
-        incoming.entries.removeIf { now - it.value.started > 15 * 60_000 }   // half a photo that never finished
+        // Half a photo or file that never finished.
+        incoming.entries.removeIf { e -> (now - e.value.started > 15 * 60_000).also { gone -> if (gone && e.value.file.isNotEmpty()) FileLink.relayInDone(e.key) } }
         // Cap m1: reactions and edits still on their way, typing and active status that ran out.
         for ((env, v) in mxOut) {
             if (now - v.second > DAY) { mxOut.remove(env); outbox.drop(env); tries.remove(env); saveMx(); continue }
@@ -2113,13 +2153,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun wifiTo(k: String) = net.deviceFor(k, strict(k))
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
-    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0): Boolean {
+    private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0,
+                         step: ((Int) -> Unit)? = null): Boolean {
         if (mailbox == null || Move.locked) return false
         // Relays may drop it after the longest message limit (Nostr.expiration): it's gone from the phones by then.
         val keep = if (days > 0) days else try { chatDays(peerKey) } catch (_: Exception) { Limits.LONGEST }
         // [stored]: once a relay has said OK to every one of them. [held]: once enough relays have (NetLogic.HELD_RELAYS).
         val left = java.util.concurrent.atomic.AtomicInteger(bodies.size)
-        val ok: (() -> Unit)? = stored?.let { done -> { if (left.decrementAndGet() == 0) done() } }
+        val ok: (() -> Unit)? = if (stored == null && step == null) null else {
+            { val l = left.decrementAndGet(); step?.invoke(bodies.size - l); if (l == 0) stored?.invoke() }
+        }
         val heldLeft = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val all: (() -> Unit)? = held?.let { done -> { if (heldLeft.decrementAndGet() == 0) done() } }
         bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all, keep) }
@@ -2592,7 +2635,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             it.optBoolean("failed"), it.optString("via"), it.optString("state"), it.optString("photo"), it.optString("unsent"), it.optInt("voice"),
             re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"),
             video = it.optInt("vid"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"),
-            poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it), file = it.optString("fn"))
+            poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it), file = it.optString("fn"), saved = it.optString("sv"))
     }
 
     /** Cap m2 parts of a stored message (only the ones it has). */
@@ -2603,6 +2646,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (m.votes.isNotEmpty()) o.put("vt", More.votesToJson(m.votes))
         m.preview?.let { o.put("lp", More.previewJson(it)) }
         if (m.file.isNotEmpty()) o.put("fn", m.file)
+        if (m.saved.isNotEmpty()) o.put("sv", m.saved)
     }
 
     private fun save() {

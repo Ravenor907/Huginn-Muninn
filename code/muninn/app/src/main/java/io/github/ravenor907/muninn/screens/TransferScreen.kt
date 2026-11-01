@@ -52,6 +52,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.AppFiles
+import io.github.ravenor907.muninn.net.FileText
 import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Received
 import io.github.ravenor907.muninn.ui.Bar
@@ -123,6 +124,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
     val devices by app.net.devices.collectAsState()
     val transfer by app.net.transfer.collectAsState()
     val items by app.net.items.collectAsState()
+    val finished by app.net.finished.collectAsState()
     val scanning by app.net.scanning.collectAsState()
     val error by app.net.error.collectAsState()
     val direct by app.direct.state.collectAsState()
@@ -188,12 +190,35 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                     style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
                 MButton("Clear") { Share.pending.clear() }
             }
+            // The transfer under way: overall (percent, speed, time left), then each file, and Cancel.
             if (transfer.active) Panel(Modifier.padding(top = 12.dp)) {
                 Text(transfer.status, style = Type.big)
                 Spacer(Modifier.height(8.dp))
                 Bar(transfer.fraction, color = Palette.gold)
-                Text("${LocalSend.size(transfer.done)} of ${LocalSend.size(transfer.total)}", style = Type.small, modifier = Modifier.padding(top = 6.dp))
-                if (transfer.sending) MButton("Stop sending", Modifier.padding(top = 8.dp)) { app.net.cancelSend() }
+                val pace = transfer.pace()
+                Text("${FileText.percent(transfer.done, transfer.total)}% · ${LocalSend.size(transfer.done)} of ${LocalSend.size(transfer.total)}" +
+                    (if (pace.isNotEmpty()) " · $pace" else ""), style = Type.small, modifier = Modifier.padding(top = 6.dp))
+                if (transfer.files.size > 1 || transfer.files.any { it.fraction > 0f }) transfer.files.take(20).forEach { f ->
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        MIcon(FileText.icon(f.name), if (f.failed) Palette.danger else Palette.accent, 18.dp)
+                        Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                            Text(f.name, style = Type.small.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (f.fraction > 0f && f.fraction < 1f) Bar(f.fraction, Modifier.padding(top = 4.dp), Palette.gold)
+                        }
+                        Text(f.status, style = Type.small.copy(color = if (f.failed) Palette.danger else Palette.textMuted), modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+                if (transfer.sending) MButton("Cancel", Modifier.padding(top = 10.dp), kind = io.github.ravenor907.muninn.ui.Kind.Danger) { app.net.cancelSend() }
+                else MButton("Cancel", Modifier.padding(top = 10.dp), kind = io.github.ravenor907.muninn.ui.Kind.Danger) { app.net.cancelReceive() }
+            } else finished?.let { (ok, text) ->
+                // How the last one ended, until the next starts.
+                Panel(Modifier.padding(top = 12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MIcon(if (ok) "check" else "info", if (ok) Palette.accent else Palette.danger, 22.dp)
+                        Text(text, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f).padding(start = 10.dp))
+                    }
+                    MButton("Done", Modifier.padding(top = 8.dp)) { app.net.clearFinished() }
+                }
             }
             Label("Nearby") {
                 Text(if (scanning) "Looking…" else "Look again", style = noteStyle.copy(color = if (scanning) Palette.textFaint else Palette.gold),
@@ -258,6 +283,12 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                     if (moving) Bar(it.fraction, Modifier.padding(top = 8.dp), Palette.gold)
                     Text(it.status, style = noteStyle.copy(color = if (it.failed) Palette.danger else Palette.textMuted),
                         maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = if (moving) 4.dp else 2.dp))
+                }
+                // Received and saved: opened only when asked (never an app installer by itself).
+                if (!it.sent && it.uri.isNotEmpty()) {
+                    MButton("Open", Modifier.padding(start = 8.dp)) {
+                        if (!Received.open(context, it.uri, it.name)) Ui.say("Nothing on this device opens this kind of file.", true)
+                    }
                 }
             }
         }

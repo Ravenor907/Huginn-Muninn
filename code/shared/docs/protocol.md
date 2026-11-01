@@ -1068,10 +1068,9 @@ set of (`sha256`, size) pairs is exactly the set one `apps` named. That `apps` i
 answering 403. The upload itself still checks each file's SHA-256 (as any LocalSend transfer that gives one).
 
 An app on the phone goes out as `<name>.apk`, plus `<name>.split.<part>.apk` for each part Android keeps it
-in. The TV installs all the files of one name in one PackageInstaller session, and deletes them afterwards.
-Android still asks on the TV before it installs. A TV used normally (not in kids' mode) also keeps `.apk`
-files it receives out of Downloads and asks "Install …?" first; anyone the person accepts files from can
-send one there, with no `apps` needed.
+in. The TV saves them in its Downloads, like any received file, and shows a notice; nothing it receives is
+installed or opened by itself. A TV used normally (not in kids' mode) does the same with any file the person
+accepts. Muninn's own updates are separate (7.5).
 
 ### 7.10 Noise removal on the TV (`k5`)
 
@@ -1473,7 +1472,7 @@ is v1. Receivers take both (23.1).
 |---|---|---|
 | `offer` | `id` (logical id), `name` (1 to 200 characters, no `/`, `\` or control characters), `size` (1 byte to 4 GB), `sha` (SHA-256, lowercase hex), `e` (a one-off P-256 public key, base64 SPKI), `c` (candidates, 5.8.2) | the sender's phone, after asking a STUN server from a new UDP socket |
 | `accept` | `id`, `e`, `c` | the receiver's phone, from its own new socket; with Data saver on mobile data only once the person taps Download |
-| `decline` | `id` | the receiver doesn't trust the sender (addresses aren't swapped) |
+| `decline` | `id` | the receiver doesn't trust the sender (addresses aren't swapped), said no, or stopped it while it came |
 
 - Key: `SHA-256(UTF-8("muninn file v1") || ECDH-derived key of the two one-off keys (as ChatCrypto.sharedKey) || UTF-8(id))`.
 - UDP packets: `type (1 byte) || seq (8 bytes, big endian) || AES-256-GCM(payload)`, nonce `dir (4 bytes) || seq`, AAD
@@ -1481,8 +1480,11 @@ is v1. Receivers take both (23.1).
   3 ack (`below (4 bytes) || bits (8 bytes)`: every piece below `below` is in, and bit `b` says piece `below + b` is),
   4 done.
 - A file of 50 MB or more from someone whose caps include `e1` asks Accept or Decline first (Accept sends `accept`,
-  Decline sends `decline`); such a sender waits 10 minutes for the answer, other offers 120 s. From a sender without
-  `e1` (it gives up after 120 s) a big file is taken as before, without asking.
+  Decline sends `decline`); so does any file while the receiver's Data saver says wait. From a sender without `e1` (it
+  gives up after 120 s) a big file is taken as before, without asking.
+- The sender waits 30 s for an answer to a file of 2 MB or less, then sends it as in 14.2 (it arrives when they're
+  back); a bigger file waits 10 minutes. A `decline` to an offer, no candidates, or no path after probing does the same
+  for a small file. A `decline` while the file is on its way means the receiver stopped it.
 - Pieces are 1100 bytes (the last one shorter). Both sides probe every candidate of the other until an authentic probe
   comes back (20 s at most); the address it came from is used. The sender keeps at most 96 pieces unconfirmed and sends a
   piece again 500 ms after it last went. The receiver acks at least every 40 ms or 16 new pieces, checks the SHA-256 at
@@ -1491,8 +1493,9 @@ is v1. Receivers take both (23.1).
 ### 14.2 Small files over the relays
 
 A file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
-`"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`; the receiver keeps it encrypted like a
-photo and saves it to Downloads when the person taps Save.
+`"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`. The receiver keeps it encrypted like
+a photo and also saves it to Downloads as soon as it is whole (Save when that couldn't be done). A received file is
+never opened or installed by itself.
 
 
 ## 15. Linked devices, companion style (room `link`)

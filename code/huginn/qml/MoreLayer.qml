@@ -41,7 +41,7 @@ Item {
             { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },
             { name: "Video file", detail: "MP4, up to a minute", url: "videofile", icon: "play" },
             { name: "Poll", url: "poll", icon: "check" }]
-            .concat(where.indexOf("g:") === 0 || !Chat.isContact(where) ? [] : [{ name: "A file", detail: "Up to 4 GB", url: "file", icon: "file" }]) }], a => {
+            .concat(where.indexOf("g:") === 0 || !Chat.isContact(where) ? [] : [{ name: "A file", detail: "Any file", url: "file", icon: "file" }]) }], a => {
                 if (a === "files") pickPictures()
                 else if (a === "recent") recentPicture()
                 else if (a === "record") recordVideo()

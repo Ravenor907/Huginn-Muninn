@@ -2,6 +2,7 @@
 #include "proof.h"
 #include "lan.h"
 #include "settings.h"
+#include "filelink.h"
 #include "system.h"
 
 #include <QDir>
@@ -748,11 +749,15 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             int done = 0;
             for (const InFile &x : std::as_const(m_session.files))
                 done += x.done ? 1 : 0;
+            QString first;
+            for (const InFile &x : std::as_const(m_session.files))
+                if (x.done && first.isEmpty())
+                    first = QFileInfo(x.savedAs).fileName();
+            const QString where = System::displayPath(QUrl::fromLocalFile(m_settings->transferFolder()));
             endSession(!anyFailed, anyFailed ? QStringLiteral("%1 of %2 files from %3 arrived. The rest didn't make it; send them again.")
                                                    .arg(done).arg(m_session.files.size()).arg(m_session.from)
-                                             : QStringLiteral("Received %1 from %2. They're in %3.")
-                                                   .arg(done == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(done), m_session.from,
-                                                        System::displayPath(QUrl::fromLocalFile(m_settings->transferFolder()))));
+                                 : done == 1 ? QStringLiteral("File from %1: %2 · Saved to %3").arg(m_session.from, first, where)
+                                             : QStringLiteral("%1 files from %2 · Saved to %3").arg(done).arg(m_session.from, where));
         }
         return;
     }
@@ -882,6 +887,8 @@ void LocalSend::accept()
     m_requestTimer.stop();
     m_session = {};
     m_session.active = true;
+    m_started = QDateTime::currentMSecsSinceEpoch();
+    m_last.clear();
     m_session.id = randomToken();
     m_session.from = m_pending.from;
     m_session.ip = m_pending.ip;
@@ -938,6 +945,9 @@ void LocalSend::endSession(bool ok, const QString &message)
         m_history.removeFirst();
     m_session = {};
     m_status.clear();
+    m_started = 0;
+    m_last = message;
+    m_lastOk = ok;
     for (QTcpSocket *s : std::as_const(drop))
         s->abort();
     Q_EMIT progressChanged();
@@ -1030,6 +1040,52 @@ QVariantList LocalSend::items() const
     return out;
 }
 
+QString LocalSend::pace() const
+{
+    if (m_started == 0)
+        return {};
+    qint64 done = 0, total = 0;
+    if (m_send.active) {
+        done = m_send.sent + m_send.current;
+        total = m_send.total;
+    } else if (m_session.active) {
+        for (const InFile &f : m_session.files) {
+            total += f.size;
+            done += f.done ? f.size : f.received;
+        }
+    }
+    return FileLink::paceText(done, total, QDateTime::currentMSecsSinceEpoch() - m_started);
+}
+
+QVariantList LocalSend::outgoing() const
+{
+    QVariantList out;
+    if (!m_send.active)
+        return out;
+    for (int i = 0; i < m_send.files.size(); ++i) {
+        const OutFile &f = m_send.files.at(i);
+        const bool done = !m_send.sessionId.isEmpty() && i < m_send.next;
+        const bool now = !m_send.sessionId.isEmpty() && i == m_send.next;
+        const double frac = done ? 1.0 : now && f.size > 0 ? double(m_send.current) / f.size : 0.0;
+        out << QVariantMap{{QStringLiteral("name"), QFileInfo(f.path).fileName()},
+                           {QStringLiteral("status"), done ? QStringLiteral("Sent") : now ? QStringLiteral("Sending %1%").arg(int(frac * 100)) : QStringLiteral("Waiting")},
+                           {QStringLiteral("fraction"), frac}};
+    }
+    return out;
+}
+
+void LocalSend::cancelReceive()
+{
+    if (m_session.active)
+        endSession(false, QStringLiteral("Receiving stopped."));
+}
+
+void LocalSend::clearResult()
+{
+    m_last.clear();
+    Q_EMIT progressChanged();
+}
+
 double LocalSend::progress() const
 {
     if (m_send.active)
@@ -1085,6 +1141,7 @@ void LocalSend::send(const QString &deviceId, const QStringList &paths, const QS
         return;
     }
     m_send.active = true;
+    m_last.clear();
     m_status = QStringLiteral("Waiting for %1 to accept…").arg(m_send.alias);
     Q_EMIT progressChanged();
 
@@ -1128,6 +1185,7 @@ void LocalSend::send(const QString &deviceId, const QStringList &paths, const QS
             m_send.files = accepted;
             m_send.total = total;
             m_send.next = 0;
+            m_started = QDateTime::currentMSecsSinceEpoch();
             uploadNext();
             return;
         }
@@ -1153,7 +1211,11 @@ void LocalSend::uploadNext()
 {
     if (m_send.next >= m_send.files.size()) {
         const int n = int(m_send.files.size());
-        endSend(true, QStringLiteral("Sent %1 to %2.").arg(n == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(n), m_send.alias));
+        // Muninn and Huginn answer only once the file is saved in Downloads.
+        const auto dev = m_devices.constFind(m_send.deviceId);
+        const bool ours = dev != m_devices.constEnd() && (dev->app == QLatin1String("muninn") || dev->app == QLatin1String("huginn"));
+        endSend(true, QStringLiteral("Sent %1 to %2").arg(n == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(n), m_send.alias)
+                          + (ours ? QStringLiteral(" · Saved in their Downloads") : QStringLiteral(".")));
         return;
     }
     const OutFile f = m_send.files.at(m_send.next);
@@ -1233,6 +1295,9 @@ void LocalSend::endSend(bool ok, const QString &message)
 {
     m_send = {};
     m_status.clear();
+    m_started = 0;
+    m_last = message;
+    m_lastOk = ok;
     Q_EMIT progressChanged();
     Q_EMIT finished(ok, message);
 }

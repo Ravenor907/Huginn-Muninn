@@ -230,10 +230,6 @@
         <receiver
             android:name=".net.call.RoomActions"
             android:exported="false" />
-        <!-- A TV: the answer from Android's installer for an app someone sent. -->
-        <receiver
-            android:name=".update.ApkInstallResult"
-            android:exported="false" />
         <!-- Kids' TV: the answer from Android's installer when Muninn updates itself. -->
         <receiver
             android:name=".tv.TvInstallResult"

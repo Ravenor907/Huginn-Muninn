@@ -81,9 +81,12 @@ class FileLinkTest {
         assertFalse(FileLink.arrivesByItself(50 * mb, true))
         assertFalse(FileLink.arrivesByItself(2_000 * mb, true))
         assertFalse(FileLink.arrivesByItself(1 * mb, false))
-        // The sender waits longer for an answer to a file the other phone asks about.
-        assertEquals(FileLink.ANSWER_MS, FileLink.answerMs(1 * mb))
-        assertTrue(FileLink.answerMs(60 * mb) > FileLink.ANSWER_MS)
+        // A file small enough for the internet route goes that way when no answer comes soon; a bigger one waits as
+        // long as the other side may ask first (Data saver, or 50 MB and more).
+        assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(1 * mb))
+        assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(io.github.ravenor907.muninn.net.FileText.RELAY_MAX))
+        assertEquals(FileLink.ASK_ANSWER_MS, FileLink.answerMs(io.github.ravenor907.muninn.net.FileText.RELAY_MAX + 1))
+        assertEquals(FileLink.ASK_ANSWER_MS, FileLink.answerMs(60 * mb))
     }
 
     /** An older sender (no [FileLink.ASK_CAP]) gives up after 2 minutes: its big files arrive as before, without asking. */
