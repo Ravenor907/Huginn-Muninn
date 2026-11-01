@@ -1763,7 +1763,7 @@ Rectangle {
     }
     // Ctrl+F: find in this chat.
     Shortcut {
-        sequence: StandardKey.Find
+        sequences: [StandardKey.Find]
         enabled: page.picked && !page.locked && !page.tour && !mirror.visible && !!Ui.main && Ui.main.keysOn
         onActivated: page.openFind()
     }

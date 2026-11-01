@@ -1225,7 +1225,7 @@ Rectangle {
     }
     // Ctrl+F: find in this channel.
     Shortcut {
-        sequence: StandardKey.Find
+        sequences: [StandardKey.Find]
         enabled: !page.locked && page.exists && !page.isTour && !!Ui.main && Ui.main.keysOn
         onActivated: page.openFind()
     }
