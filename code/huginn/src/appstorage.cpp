@@ -271,6 +271,7 @@ bool AppStorage::selfTest()
         QFile f(path);
         if (f.open(QIODevice::WriteOnly)) {
             f.write("x");
+            f.flush();   // written first, so closing doesn't stamp it with the time now
             f.setFileTime(old, QFileDevice::FileModificationTime);
             f.close();
         }
