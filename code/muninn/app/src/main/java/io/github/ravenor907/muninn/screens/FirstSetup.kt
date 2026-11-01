@@ -504,7 +504,8 @@ fun TourOverlay() {
                 drawRect(accent, tl, sz, style = androidx.compose.ui.graphics.drawscope.Stroke(with(density) { 2.dp.toPx() }))
             }
         }) {
-        val below = spot != null && with(density) { spot.center.y.toDp() } < maxHeight / 2
+        val fullHeight = maxHeight
+        val below = spot != null && with(density) { spot.center.y.toDp() } < fullHeight / 2
         Column(Modifier.fillMaxSize()) {
             if (below) Spacer(Modifier.height(with(density) { (spot!!.bottom + pad).toDp() } + 12.dp)) else Spacer(Modifier.weight(1f))
             Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
@@ -518,7 +519,7 @@ fun TourOverlay() {
                 }
             }
             if (below) Spacer(Modifier.weight(1f))
-            else Spacer(Modifier.height(if (spot == null) 0.dp else (maxHeight - with(density) { (spot.top - pad).toDp() } + 12.dp).coerceAtLeast(0.dp)))
+            else Spacer(Modifier.height(if (spot == null) 0.dp else (fullHeight - with(density) { (spot.top - pad).toDp() } + 12.dp).coerceAtLeast(0.dp)))
         }
         // The ribbon goes on the side away from the spot, so it never covers it.
         if (run.practice) Box(Modifier.align(if (below) Alignment.BottomCenter else Alignment.TopCenter)

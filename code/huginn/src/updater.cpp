@@ -686,9 +686,9 @@ Updater::Signatures Updater::parseSignatures(const QByteArray &text, bool page)
     auto sig64 = [](const QString &b64, QByteArray *raw) {
         const QByteArray in = b64.toLatin1();
         const auto r = QByteArray::fromBase64Encoding(in, QByteArray::AbortOnBase64DecodingErrors);
-        if (!r || r->size() != 64 || r->toBase64() != in)
+        if (r.decodingStatus != QByteArray::Base64DecodingStatus::Ok || r.decoded.size() != 64 || r.decoded.toBase64() != in)
             return false;
-        *raw = *r;
+        *raw = r.decoded;
         return true;
     };
     QHash<QString, SignedFile> files;
