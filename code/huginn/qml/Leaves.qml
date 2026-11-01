@@ -10,8 +10,9 @@ import Huginn
 // back, and lean into a gust now and then; the seeds spin and orbit as they drop. Up to 180 (and
 // while that many small canvases cost less than one the size of the window), each is drawn once on
 // its own small Canvas and only moved after that; more than that are all drawn on one Canvas each
-// frame, the same way and in the same places. The timer stops while the window is hidden or
-// minimized, and with Less motion on everything lies still, scattered across the ground.
+// frame (at 15 frames a second), the same way and in the same places. The timer stops while the window is
+// hidden or minimized, or after a minute in the background, and with Less motion on everything lies still,
+// scattered across the ground.
 // Settings › Look: Animation (Off draws nothing and stops the timer), Amount (1 to 400 on screen;
 // until it's moved, Theme.fallCount scales it by the window's area) and Size (15% to 600%).
 Item {
@@ -32,7 +33,11 @@ Item {
     readonly property bool one: count > 180 || count * Math.pow(30 * sizeScale, 2) > Math.max(width * height, 1440000) * 2
     readonly property bool winActive: Window.active
     readonly property bool onScreen: visible && Window.visibility !== Window.Hidden && Window.visibility !== Window.Minimized
-    readonly property bool moving: onScreen && Theme.motion && falling
+    // In the background for a minute: everything holds still until Huginn is in front again.
+    property bool resting: false
+    Timer { interval: 60000; running: !leaves.winActive && leaves.onScreen; onTriggered: leaves.resting = true }
+    onWinActiveChanged: if (winActive) resting = false
+    readonly property bool moving: onScreen && Theme.motion && falling && !resting
 
     // Where each leaf starts and how it moves. The same index always gets the same leaf, so the
     // sliders add or take away leaves without reshuffling the rest.
@@ -69,8 +74,17 @@ Item {
         const c = v => Math.max(0, Math.min(1, v))
         return Qt.rgba(c(from.r + (to.r - from.r) * k), c(from.g + (to.g - from.g) * k), c(from.b + (to.b - from.b) * k), 1)
     }
+    // Drawn once per size and color as one still picture (main.cpp, GroundProvider), with the speckle in it; the
+    // plain gradient shows only until it's ready. A resize waits a moment, so dragging the window makes one, not many.
+    function hex(c) { return String(c).substring(1, 7) }
+    readonly property string groundId: hex(towards(Theme.groundMid, Theme.groundTop, gradientK)) + "-" + hex(Theme.groundMid) + "-"
+                                       + hex(towards(Theme.groundMid, Theme.groundDeep, gradientK))
+    property size groundSize: Qt.size(0, 0)
+    Component.onCompleted: sizeSoon.restart()
+    Timer { id: sizeSoon; interval: 250; onTriggered: leaves.groundSize = Qt.size(Math.round(leaves.width), Math.round(leaves.height)) }
     Rectangle {
         anchors.fill: parent
+        visible: !ground.shown
         gradient: Gradient {
             GradientStop { position: 0.0; color: leaves.towards(Theme.groundMid, Theme.groundTop, leaves.gradientK) }
             GradientStop { position: 0.45; color: Theme.groundMid }
@@ -78,12 +92,15 @@ Item {
         }
     }
     Image {
+        id: ground
+        readonly property bool shown: status === Image.Ready && leaves.gradientK > 0
         anchors.fill: parent
-        visible: leaves.gradientK > 0
-        source: "image://noise/tile"
-        fillMode: Image.Tile
-        smooth: false
-        cache: true
+        visible: shown
+        source: leaves.visible && leaves.gradientK > 0 && leaves.groundSize.width > 0 ? "image://ground/" + leaves.groundId : ""
+        sourceSize: leaves.groundSize
+        asynchronous: true
+        cache: false
+        smooth: true
     }
 
     // The clock. Date.now() costs nothing to read and never allocates.
@@ -95,7 +112,8 @@ Item {
         return g > 0 ? g * g : 0
     }
     Timer {
-        interval: leaves.winActive ? 33 : 66
+        // 30 frames a second; all on one Canvas (redrawn whole each frame), or in the background, 15.
+        interval: leaves.winActive && !leaves.one ? 33 : 66
         repeat: true
         running: leaves.moving
         onTriggered: leaves.step((Date.now() - leaves.t0) / 1000, interval / 1000)
@@ -118,8 +136,8 @@ Item {
     onKindChanged: Qt.callLater(settle)
     onOneChanged: Qt.callLater(settle)
     onSizeScaleChanged: Qt.callLater(settle)
-    onWidthChanged: Qt.callLater(settle)
-    onHeightChanged: Qt.callLater(settle)
+    onWidthChanged: { Qt.callLater(settle); sizeSoon.restart() }
+    onHeightChanged: { Qt.callLater(settle); sizeSoon.restart() }
 
     // Where leaf q is at time t (seconds), side pixels across: its turning point (px, py; the stem's
     // base, or a flake's middle), its turn in degrees (rot) and how far it faces you (flip, 1 flat

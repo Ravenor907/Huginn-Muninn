@@ -114,7 +114,8 @@ Rectangle {
             { group: "Theme", kind: "accent", key: "accent", title: "Accent color" },
             { group: "Theme", kind: "segmented", key: "density", title: "Messages",
               options: [{ value: "compact", label: "Compact" }, { value: "cozy", label: "Default" }, { value: "spacious", label: "Spacious" }] },
-            { group: "Size", kind: "size", key: "uiSize", title: "Size: " + Settings.uiSize + "%", note: "Ctrl+= and Ctrl+- too" },
+            { group: "Size", kind: "size", key: "uiSize", title: "Size: " + Settings.uiSize + "%",
+              note: System.screenScale > 1.001 ? "Already made bigger for this small screen. Ctrl+= and Ctrl+- too" : "Ctrl+= and Ctrl+- too" },
             { group: "Size", kind: "segmented", key: "textSize", title: "Text size",
               options: [{ value: "100", label: "Normal" }, { value: "115", label: "Large" }, { value: "130", label: "Larger" }, { value: "150", label: "Largest" }] },
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
@@ -170,6 +171,9 @@ Rectangle {
         ]
         case "about": return [
             { kind: "raven", key: "raven", title: "Huginn " + System.version, note: Settings.labs ? "Labs mode on" : "" },
+            // What draws the window. Drawn by the processor (no working graphics driver), everything is slow.
+            { kind: "info", hide: System.graphics === "", title: System.softwareGraphics ? "Graphics: slow" : "Graphics",
+              note: System.softwareGraphics ? "No graphics card in use, so Huginn is slow. " + System.graphics : System.graphics },
             { kind: "button", key: "check", title: Updater.status,
               label: Updater.ready ? "Restart now" : Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
             { kind: "toggle", key: "autoUpdate", title: "Update automatically" },

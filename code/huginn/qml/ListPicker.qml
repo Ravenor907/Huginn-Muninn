@@ -115,7 +115,7 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             model: picker.entries
             currentIndex: picker.current
-            highlightMoveDuration: 80
+            highlightMoveDuration: Theme.motion ? 80 : 0
             preferredHighlightBegin: height / 3
             preferredHighlightEnd: height * 2 / 3
             highlightRangeMode: ListView.ApplyRange

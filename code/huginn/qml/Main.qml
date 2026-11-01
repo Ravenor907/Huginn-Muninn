@@ -15,6 +15,8 @@ Window {
     height: 800
     function placeWindow() {
         if (touring) { width = 1920; height = 1080; return }
+        // Game Mode: the whole screen from the first frame (gamescope shows one window at a time).
+        if (System.gameMode && !System.windowed) { x = 0; y = 0; width = Screen.width; height = Screen.height; return }
         const r = Settings.windowRect
         const sw = Screen.desktopAvailableWidth, sh = Screen.desktopAvailableHeight
         if (r.width >= 320 && r.height >= 240 && r.width <= sw && r.height <= sh) {

@@ -165,8 +165,9 @@ QtObject {
     readonly property color focusFill: light ? Qt.rgba(accent.r * 0.1 + 0.86, accent.g * 0.1 + 0.84, accent.b * 0.1 + 0.79, 1)
                                              : Qt.rgba(accent.r * 0.12 + 0.11, accent.g * 0.12 + 0.11, accent.b * 0.12 + 0.1, 1)
 
-    // Everything is drawn at its real size (Qt and the system already handle high-DPI screens), times
-    // the Size setting (50% to 200%, Ctrl+= and Ctrl+-). See System::uiScale.
+    // Everything is drawn at its design size after the system's own scaling, made bigger on a small, dense
+    // screen (a handheld) so it stays readable and easy to touch, times the Size setting (50% to 200%,
+    // Ctrl+= and Ctrl+-). See System::fitFor.
     readonly property bool desktop: true
     readonly property real s: System.uiScale
     function px(v) { return Math.round(v * s) }

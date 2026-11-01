@@ -1,7 +1,9 @@
 #include "system.h"
 #include "settings.h"
 
+#include "platform/crashlog.h"
 #include "platform/keepawake.h"
+#include "platform/winstart.h"
 
 #ifndef Q_OS_WIN
 #include <QDBusConnection>
@@ -13,6 +15,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QSGRendererInterface>
+#include <QThread>
 #include <QUrl>
 #include <QImage>
 #include <QLocale>
@@ -20,6 +26,16 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVariantMap>
+
+#ifdef Q_OS_WIN
+#include <rhi/qrhi.h>
+#else
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
+#endif
+
+#include <cmath>
+#include <cstdio>
 
 int System::s_qmlWarnings = 0;
 
@@ -29,22 +45,148 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
     , m_tourDir(tourDir)
     , m_windowed(windowed)   // --windowed (and the tour): always a window, whatever Settings › Look says
 {
-    m_gameMode = qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QLatin1String("gamescope"), Qt::CaseInsensitive)
+    m_gameMode = detectGameMode();
+    // The Size setting shares Settings' changed signal with everything else: the whole layout is told only when
+    // the size actually changes (every Theme.px() binding follows it).
+    connect(settings, &Settings::changed, this, &System::refit);
+    watchScreen(QGuiApplication::primaryScreen());
+    refit();
+}
+
+bool System::detectGameMode()
+{
+    return qEnvironmentVariable("XDG_CURRENT_DESKTOP").contains(QLatin1String("gamescope"), Qt::CaseInsensitive)
+        || qEnvironmentVariable("XDG_SESSION_DESKTOP").contains(QLatin1String("gamescope"), Qt::CaseInsensitive)
         || !qEnvironmentVariableIsEmpty("GAMESCOPE_WAYLAND_DISPLAY")
         || qEnvironmentVariable("SteamGamepadUI") == QLatin1String("1");
-    connect(settings, &Settings::changed, this, &System::layoutChanged);
+}
+
+double System::fitFor(const QSize &px, const QSizeF &mm, bool gameMode)
+{
+    if (px.width() <= 0 || px.height() <= 0)
+        return 1.0;
+    const double pxDiag = std::hypot(double(px.width()), double(px.height()));
+    // The screen's diagonal in inches, from its physical size when that can be believed: the same shape as the
+    // picture (either way round: a handheld's panel is often mounted turned) and a size a screen can be.
+    double inches = 0;
+    if (mm.width() > 0 && mm.height() > 0) {
+        const double a = double(px.width()) / px.height(), m = mm.width() / mm.height();
+        const bool sameShape = std::abs(m / a - 1.0) < 0.15 || std::abs(m * a - 1.0) < 0.15;
+        const double d = std::hypot(mm.width(), mm.height()) / 25.4;
+        // Some compositors make a size up from 96 dots per inch when the screen doesn't say: no help in Game Mode.
+        const bool madeUp = std::abs(pxDiag / d - 96.0) < 1.5;
+        if (sameShape && d >= 3.0 && d <= 120.0 && !(gameMode && madeUp))
+            inches = d;
+    }
+    // Game Mode on a screen that doesn't say its size: a handheld's 7 inches.
+    if (inches <= 0 && gameMode)
+        inches = 7.0;
+    // Monitors, TVs and laptops at their usual scaling stay exactly as designed.
+    if (inches <= 0 || inches > 17.5)
+        return 1.0;
+    // Designed for about 150 pixels per inch on a small screen (a 1280x800 handheld draws at 1.45, a 7 inch 1080p
+    // one at 2.1). The pixels are the system's own, after its scaling, so that is never counted twice.
+    const double fit = qBound(1.0, pxDiag / inches / 150.0, 2.5);
+    return std::round(fit * 20.0) / 20.0;
+}
+
+void System::watchScreen(QScreen *screen)
+{
+    if (m_screen == screen)
+        return;
+    if (m_screen)
+        disconnect(m_screen, nullptr, this, nullptr);
+    m_screen = screen;
+    if (screen) {
+        connect(screen, &QScreen::geometryChanged, this, &System::refit);
+        connect(screen, &QScreen::physicalSizeChanged, this, &System::refit);
+    }
+}
+
+void System::refit()
+{
+    // The screenshot tour keeps the design size, so its pictures never depend on the machine.
+    const double fit = m_tourDir.isEmpty() && m_screen ? fitFor(m_screen->size(), m_screen->physicalSize(), m_gameMode) : 1.0;
+    const double ui = fit * qBound(50, m_settings->uiSize().toInt(), 200) / 100.0;
+    if (qFuzzyCompare(fit, m_fit) && qFuzzyCompare(ui, m_uiScale))
+        return;
+    m_fit = fit;
+    m_uiScale = ui;
+    Q_EMIT layoutChanged();
+}
+
+void System::watchWindow(QQuickWindow *window)
+{
+    if (!window)
+        return;
+    watchScreen(window->screen());
+    refit();
+    connect(window, &QQuickWindow::screenChanged, this, [this](QScreen *s) {
+        watchScreen(s);
+        refit();
+    });
+    // What draws the window, noted once it's ready (on the render thread, where the GPU can be asked its name).
+    connect(window, &QQuickWindow::sceneGraphInitialized, this, [this, window] {
+        const QSGRendererInterface *ri = window->rendererInterface();
+        const QSGRendererInterface::GraphicsApi api = ri ? ri->graphicsApi() : QSGRendererInterface::Unknown;
+        QString name;
+        bool software = false;
+        switch (api) {
+        case QSGRendererInterface::Software: name = QStringLiteral("Software"); software = true; break;
+        case QSGRendererInterface::OpenGL: name = QStringLiteral("OpenGL"); break;
+        case QSGRendererInterface::Direct3D11: name = QStringLiteral("Direct3D 11"); break;
+        case QSGRendererInterface::Direct3D12: name = QStringLiteral("Direct3D 12"); break;
+        case QSGRendererInterface::Vulkan: name = QStringLiteral("Vulkan"); break;
+        case QSGRendererInterface::Metal: name = QStringLiteral("Metal"); break;
+        default: name = QStringLiteral("Unknown"); break;
+        }
+        QString gpu;
+#ifdef Q_OS_WIN
+        if (QRhi *rhi = window->rhi()) {
+            const QRhiDriverInfo d = rhi->driverInfo();
+            gpu = QString::fromUtf8(d.deviceName).trimmed();
+            if (d.deviceType == QRhiDriverInfo::CpuDevice)
+                software = true;
+        }
+#else
+        if (api == QSGRendererInterface::OpenGL) {
+            if (QOpenGLContext *ctx = QOpenGLContext::currentContext()) {
+                if (const GLubyte *r = ctx->functions()->glGetString(GL_RENDERER))
+                    gpu = QString::fromLatin1(reinterpret_cast<const char *>(r)).trimmed();
+            }
+        }
+#endif
+        // Mesa's and Windows' drawing on the processor.
+        const QString low = gpu.toLower();
+        for (const char *cpu : {"llvmpipe", "softpipe", "swrast", "lavapipe", "swiftshader", "basic render"})
+            if (low.contains(QLatin1String(cpu)))
+                software = true;
+        const QString what = gpu.isEmpty() ? name : name + QStringLiteral(", ") + gpu;
+        const QString line = QStringLiteral("graphics: ") + what
+            + (QThread::currentThread() != qApp->thread() ? QStringLiteral(" (threaded") : QStringLiteral(" (basic"))
+            + QStringLiteral(" render loop, ") + QGuiApplication::platformName() + QStringLiteral(" platform)")
+            + (software ? QStringLiteral(": drawn by the processor, slow") : QString());
+        QMetaObject::invokeMethod(this, [this, what, software, line] {
+            noteGraphics(what, software);
+            CrashLog::note(line);
+            Platform::startStep(line);
+            std::fprintf(stderr, "%s\n", line.toLocal8Bit().constData());
+        }, Qt::QueuedConnection);
+    }, Qt::DirectConnection);
+}
+
+void System::noteGraphics(const QString &what, bool software)
+{
+    if (what == m_graphics && software == m_software)
+        return;
+    m_graphics = what;
+    m_software = software;
+    Q_EMIT graphicsChanged();
 }
 
 QString System::version() const
 {
     return QCoreApplication::applicationVersion();
-}
-
-double System::uiScale() const
-{
-    // Real size at every resolution: Qt and the system already scale for high-DPI screens (a 4K
-    // monitor at 150% gets 1.5x without us). The person's Size setting (50% to 200%) goes on top.
-    return qBound(50, m_settings->uiSize().toInt(), 200) / 100.0;
 }
 
 QString System::formatSize(qint64 bytes)

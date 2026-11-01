@@ -57,6 +57,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QColor>
 #include <QFont>
 #include <QFontDatabase>
 #include <QQmlApplicationEngine>
@@ -64,6 +65,7 @@
 #include <QQuickWindow>
 #include <QQuickImageProvider>
 #include <QRandomGenerator>
+#include <QStyleHints>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
@@ -80,30 +82,42 @@
 
 namespace
 {
-// "image://noise/tile": a small tile of faint light and dark specks, drawn over the Seasonal ground so its gradient
-// has no visible bands (dithering). The same tile every time, made once.
-class NoiseProvider : public QQuickImageProvider
+// "image://ground/TOP-MID-DEEP": the Seasonal ground (its colors as RRGGBB, lighter near the top), made once per
+// size and color on a loading thread and then shown as one still, opaque picture. A faint speckle in it (about one
+// step of 8-bit color) keeps the gradient smooth, without bands; nothing is blended over the window each frame.
+class GroundProvider : public QQuickImageProvider
 {
 public:
-    NoiseProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
-    QImage requestImage(const QString &, QSize *size, const QSize &) override
+    GroundProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
+    QImage requestImage(const QString &id, QSize *size, const QSize &requested) override
     {
-        static const QImage tile = [] {
-            QImage img(128, 128, QImage::Format_ARGB32_Premultiplied);
-            QRandomGenerator rng(0x5eed1e5u);
-            for (int y = 0; y < img.height(); ++y) {
-                auto *line = reinterpret_cast<QRgb *>(img.scanLine(y));
-                for (int x = 0; x < img.width(); ++x) {
-                    // About one step of 8-bit color either way: white specks lift, black ones lower.
-                    const int a = int(rng.bounded(7u));
-                    line[x] = rng.bounded(2u) ? qRgba(a, a, a, a) : qRgba(0, 0, 0, a * 2);
-                }
+        const QStringList parts = id.split(QLatin1Char('-'));
+        auto colour = [&parts](int i) {
+            const QColor c = QColor::fromString(QString(QLatin1Char('#') + parts.value(i)));
+            return c.isValid() ? c : QColor(0x24, 0x18, 0x10);
+        };
+        const QColor top = colour(0), mid = colour(1), deep = colour(2);
+        // Up to a large screen's size; a bigger window stretches it (the gradient only runs top to bottom).
+        const int w = qBound(1, requested.width() > 0 ? requested.width() : 256, 2560);
+        const int h = qBound(1, requested.height() > 0 ? requested.height() : 256, 1600);
+        QImage img(w, h, QImage::Format_RGB32);
+        QRandomGenerator rng(0x5eed1e5u);
+        for (int y = 0; y < h; ++y) {
+            const double p = h > 1 ? double(y) / (h - 1) : 0.0;
+            const QColor &a = p < 0.45 ? top : mid, &b = p < 0.45 ? mid : deep;
+            const double k = p < 0.45 ? p / 0.45 : (p - 0.45) / 0.55;
+            const double r = a.redF() + (b.redF() - a.redF()) * k, g = a.greenF() + (b.greenF() - a.greenF()) * k,
+                         bl = a.blueF() + (b.blueF() - a.blueF()) * k;
+            auto *line = reinterpret_cast<QRgb *>(img.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const double n = (int(rng.bounded(5u)) - 2) * 0.5;   // -1 to +1 steps of 8-bit color
+                line[x] = qRgb(qBound(0, int(r * 255.0 + 0.5 + n), 255), qBound(0, int(g * 255.0 + 0.5 + n), 255),
+                               qBound(0, int(bl * 255.0 + 0.5 + n), 255));
             }
-            return img;
-        }();
+        }
         if (size)
-            *size = tile.size();
-        return tile;
+            *size = img.size();
+        return img;
     }
 };
 }
@@ -144,6 +158,12 @@ int main(int argc, char *argv[])
     // Windows: a start log next to Huginn.exe and cleanup after an update.
     Platform::beginStart();
     s_previous = qInstallMessageHandler(messages);
+#ifndef Q_OS_WIN
+    // SteamOS Game Mode: gamescope shows games through Xwayland, and Huginn takes the same path as every game
+    // there (gamescope's frame pacing is built around it), unless a platform was set by hand.
+    if (System::detectGameMode() && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM") && !qEnvironmentVariableIsEmpty("DISPLAY"))
+        qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Huginn"));
     QApplication::setOrganizationName(QStringLiteral("Huginn"));
@@ -279,6 +299,13 @@ int main(int argc, char *argv[])
     QApplication::setFont(base);
 
     auto *settings = new Settings(&app);
+    // Less motion: nothing moves by itself, the text cursor included (it stays lit instead of blinking).
+    {
+        const int flash = QGuiApplication::styleHints()->cursorFlashTime();
+        auto applyMotion = [settings, flash] { QGuiApplication::styleHints()->setCursorFlashTime(settings->reduceMotion() ? 0 : flash); };
+        applyMotion();
+        QObject::connect(settings, &Settings::changed, &app, applyMotion);
+    }
     auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
     auto *transfer = new Transfer(settings, &app);
@@ -566,7 +593,7 @@ int main(int argc, char *argv[])
     // thread (which could hang Huginn while it closes).
     engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(vault->anyThreadReader()));
     engine.addImageProvider(QStringLiteral("profile"), new ProfileImageProvider(profile));
-    engine.addImageProvider(QStringLiteral("noise"), new NoiseProvider);
+    engine.addImageProvider(QStringLiteral("ground"), new GroundProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);
@@ -578,6 +605,8 @@ int main(int argc, char *argv[])
     if (!engine.rootObjects().isEmpty()) {
         auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
         Platform::watchMainWindow(window);
+        // The size that fits this screen, and what draws it (crash.log and Settings › About).
+        system->watchWindow(window);
 #ifndef Q_OS_WIN
         // Windows notes these itself (and starts again, winstart.cpp).
         if (window)
