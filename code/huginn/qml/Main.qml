@@ -394,7 +394,7 @@ Window {
         onVisibleChanged: if (visible) app.closePanels()
     }
     // Link your phone (linked devices): the QR code, the 4 emoji and Linked, over the whole window.
-    LinkPhone { id: linkPhone; z: 28.5 }
+    LinkPhone { id: linkPhone; z: 28.5; opacity: app.privacyCovered ? 0 : 1 }   // not drawn under the privacy cover
     function showLinkPhone(first) {
         if (app.touring || linkPhone.visible || moveCover.visible || Vault.screenLocked) return
         app.closePanels()

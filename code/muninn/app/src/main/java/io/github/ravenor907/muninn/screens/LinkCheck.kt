@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -278,9 +279,15 @@ internal fun LinkedDevicesPanel(app: Muninn) {
     var pasting by remember { mutableStateOf(false) }
     var pasted by remember { mutableStateOf("") }
     var unlocking by remember { mutableStateOf(false) }
-    fun take(code: String) {
+    // A new scanner after a code that didn't work (the scanner stops at the first code it reads).
+    var attempt by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    fun take(code: String, scanned: Boolean = false) {
         val err = LinkUi.take(code)
-        if (err != null) Ui.say(err, true) else { scanning = false; pasting = false; pasted = "" }
+        if (err == null) { scanning = false; pasting = false; pasted = ""; return }
+        Ui.say(err, true)
+        // Scanning goes on after a moment, so the message can be read before the same code is seen again.
+        if (scanned) scope.launch { delay(1500); attempt++ }
     }
     Text("Show your chats on a tablet or computer.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
     phone?.let { p ->
@@ -314,7 +321,7 @@ internal fun LinkedDevicesPanel(app: Muninn) {
             // A tablet is the companion: it shows the QR. A phone scans it.
             if (tablet && phone == null) MButton("Link my phone", Modifier.fillMaxWidth(), Kind.Accent, icon = "qr") { LinkUi.companionOpen = true }
             MButton(if (scanning) "Stop scanning" else "Scan to link", Modifier.fillMaxWidth(), if (tablet) Kind.Normal else Kind.Accent, icon = "qr") { scanning = !scanning; pasting = false }
-            if (scanning) QrScanner(Modifier.fillMaxWidth().height(280.dp)) { c -> take(c) }
+            if (scanning) key(attempt) { QrScanner(Modifier.fillMaxWidth().height(280.dp)) { c -> take(c, scanned = true) } }
             if (!scanning) Text(if (pasting) "Paste the code from the other screen." else "Paste a code instead", style = Type.small.copy(color = Palette.textMuted),
                 modifier = Modifier.heightIn(min = 40.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                     .clickable(role = Role.Button, enabled = !pasting) { pasting = true }.padding(horizontal = 4.dp, vertical = 10.dp))

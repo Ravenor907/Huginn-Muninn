@@ -257,18 +257,21 @@ class Muninn : Application() {
         net.refresh()
     }
 
-        /** Privacy first: unless the person allows previews, a notification says only "New message". */
+    /** Privacy first: unless the person allows previews, a notification says only "New message". */
     fun notify(name: String?, text: String?, key: String, quiet: Boolean = false) {
+        // A linked tablet's own chats are put away while its phone's chats show: nothing about who or what, and
+        // tapping it doesn't open the chat.
+        val putAway = ownChatsPutAway()
         // Panic-locked: never a name or text on the notification.
-        val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value
-        val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).putExtra("chat", key)
+        val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
+        val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).apply { if (!putAway) putExtra("chat", key) }
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(key == "inbox")
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
-            .apply { replyAction(key)?.let { addAction(it) } }.build()
+            .apply { if (!putAway) replyAction(key)?.let { addAction(it) } }.build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
         // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps".
         if (!visible) try {
@@ -276,6 +279,11 @@ class Muninn : Application() {
                 io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
     }
+
+    /** This device's own chats are put away while a checked phone's chats are on show (protocol.md section 15). */
+    private fun ownChatsPutAway(): Boolean = try {
+        io.github.ravenor907.muninn.net.Link.phone.value?.ok == true && !io.github.ravenor907.muninn.net.Link.ownShown.value
+    } catch (_: Exception) { false }
 
     /**
      * Reply from the notification is allowed now: Muninn open, not panic-locked, not a Kids' TV, and the

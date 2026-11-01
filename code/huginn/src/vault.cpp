@@ -531,6 +531,26 @@ QByteArray Vault::read(const QString &name) const
 
 void Vault::remove(const QString &name) const { QFile::remove(path(name)); }
 
+std::function<QByteArray()> Vault::reader(const QString &name) const
+{
+    const QByteArray key = m_key;
+    const QString file = path(name);
+    return [key, file]() -> QByteArray {
+        if (key.isEmpty())
+            return {};
+        QFile f(file);
+        if (!f.open(QIODevice::ReadOnly))
+            return {};
+        const QByteArray b = f.readAll();
+        f.close();
+        if (!b.startsWith(kMagic))
+            return {};
+        bool ok = false;
+        const QByteArray plain = Vault::open(key, b.mid(kMagic.size()), &ok);
+        return ok ? plain : QByteArray();
+    };
+}
+
 // ------------------------------------------------------------------ panic lock
 
 bool Vault::panicLock() const { return settings().value(QStringLiteral("chatlock/panic"), true).toBool(); }

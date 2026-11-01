@@ -25,12 +25,20 @@ class LinkTest {
         assertEquals(listOf(100, 100, 50), pages.map { it.size })
         assertEquals("m0", pages[0][0].getString("id"))
         assertEquals("m249", pages[2].last().getString("id"))
-        // Long messages make smaller pages, never one too big for an envelope.
+        // Long messages make smaller pages, never one too big for an envelope: at most 20 KB of UTF-8 JSON.
+        fun bytes(p: List<JSONObject>) = JSONArray(p).toString().toByteArray(Charsets.UTF_8).size
+        assertEquals(20 * 1024, LinkWire.PAGE_BYTES)
         val long = (0 until 100).map { item("l$it", it.toLong(), "x".repeat(LinkWire.TEXT_MAX)) }
         val lp = LinkWire.pages(long)
         assertTrue(lp.size > 1)
-        assertTrue(lp.all { p -> p.sumOf { it.toString().length } <= LinkWire.PAGE_CHARS })
+        assertTrue(lp.all { bytes(it) <= LinkWire.PAGE_BYTES })
         assertEquals(100, lp.sumOf { it.size })
+        // Counted in bytes, not characters: two bytes a character makes twice as many pages.
+        val wide = (0 until 100).map { item("w$it", it.toLong(), "\u00e9".repeat(LinkWire.TEXT_MAX)) }
+        val wp = LinkWire.pages(wide)
+        assertTrue(wp.all { bytes(it) <= LinkWire.PAGE_BYTES && it.size <= 5 })
+        assertTrue(wp.size > lp.size)
+        assertEquals(100, wp.sumOf { it.size })
         assertTrue(LinkWire.pages(emptyList()).isEmpty())
     }
 
@@ -172,6 +180,17 @@ class LinkTest {
         assertTrue(h in Link.stored.value)
         assertArrayEquals(photo, Link.mediaBytes(h))
         assertEquals(4, Link.mirror.value["P"]!!.msgs.size)
+
+        // The same phone linking again with a new code: back to the emoji, its chats kept, the code used up.
+        val again = JSONObject(String(java.util.Base64.getUrlDecoder().decode(Link.myLinkCode().removePrefix(Link.PREFIX)))).getString("i")
+        assertTrue(Link.receive(phone, JSONObject().put("t", "hello").put("i", again).put("n", "Phone")))
+        assertEquals(phone, Link.phone.value?.key)
+        assertFalse(Link.phone.value!!.ok)
+        assertEquals(4, Link.mirror.value["P"]!!.msgs.size)
+        assertFalse(Link.receive(phone, JSONObject().put("t", "hello").put("i", again).put("n", "Phone")))
+        assertFalse(Link.receive(other, JSONObject().put("t", "hello").put("i", again)))
+        Link.confirm(phone)
+        assertTrue(Link.phone.value!!.ok)
 
         // Unlinking takes the phone's chats and media away.
         Link.unlink(phone)

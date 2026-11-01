@@ -7,6 +7,7 @@ import Huginn
 // "Do these match?" with the 4 emoji, then says "Linked". Shown once on first open (after the lock is set,
 // when nothing is linked) and from Settings › Linked devices › Link my phone. The D-pad moves between the
 // buttons, A presses one, B goes back (Skip on first open, Later while the emoji wait, Done once linked).
+// It never shows over the lock: it closes when Huginn locks.
 Item {
     id: screen
     visible: false
@@ -24,7 +25,7 @@ Item {
     readonly property string shownCode: tour ? "MUNINNL1:eyJrIjoidG91ciJ9" : Linked.code
 
     // The buttons on show, in order, and the one the controller is on.
-    readonly property var buttons: stage === "code" ? [skipBtn, pasteBtn] : stage === "match" ? [matchBtn, noBtn] : [doneBtn]
+    readonly property var buttons: stage === "code" ? [skipBtn, copyBtn] : stage === "match" ? [matchBtn, noBtn] : [doneBtn]
     readonly property int focusAt: Math.min(focusIndex, Math.max(0, buttons.length - 1))
     readonly property string backLabel: stage === "linked" ? "Done" : stage === "match" ? "Later" : first ? "Skip" : "Back"
     readonly property var prompts: [{ key: "dpad", label: "Choose" }, { key: "a", label: buttons[focusAt] ? buttons[focusAt].text : "" },
@@ -32,6 +33,7 @@ Item {
 
     // isFirst: the first open. tourStage: the screenshot tour's stage (nothing real is linked or shown).
     function open(isFirst, tourStage) {
+        if (!tourStage && Vault.screenLocked) return   // never over the lock
         tour = !!tourStage
         first = !!isFirst
         stage = tourStage ? tourStage : (Linked.phone.key && !Linked.phone.ok) ? "match" : "code"
@@ -55,7 +57,7 @@ Item {
         if (!tour) { Linked.freshCode(); Ui.say("Not linked. Scan the new code to try again.", true) }
     }
     // For a phone without a camera: the code as text, to paste in Muninn.
-    function pasteInstead() {
+    function copyInstead() {
         if (tour || shownCode === "") return
         Chat.copyText(shownCode)
         Ui.note("Link code copied", "Paste it in Muninn: Settings › Linked devices. Works once, for 10 minutes.")
@@ -73,6 +75,12 @@ Item {
         interval: 5000; repeat: true
         running: screen.visible && screen.stage === "code" && !screen.tour
         onTriggered: Linked.freshCode()
+    }
+    // Huginn locked: this screen closes, so nothing of it shows over the lock.
+    Connections {
+        target: Vault
+        enabled: screen.visible && !screen.tour
+        function onChanged() { if (Vault.screenLocked) screen.close() }
     }
     // The phone took the code, the emoji were checked here or there, or it went away.
     Connections {
@@ -237,13 +245,13 @@ Item {
                 }
             }
             HButton {
-                id: pasteBtn
+                id: copyBtn
                 visible: screen.stage === "code"
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Paste a code instead"; kind: "plain"; fontSize: 13
+                text: "Copy the code instead"; kind: "plain"; fontSize: 13
                 implicitHeight: Theme.px(30)
-                focused: screen.pad && screen.buttons[screen.focusAt] === pasteBtn
-                onClicked: screen.pasteInstead()
+                focused: screen.pad && screen.buttons[screen.focusAt] === copyBtn
+                onClicked: screen.copyInstead()
             }
         }
     }

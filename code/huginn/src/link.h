@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
@@ -47,7 +48,7 @@ public:
     static constexpr qint64 kTokenMs = 10 * 60000;
     static constexpr qint64 kRefreshMs = 60000;        // a new code this long before the old one runs out
     static constexpr int kPageMsgs = 100;              // messages in one "chat" page
-    static constexpr int kPageBytes = 48 * 1024;       // and its JSON at most this long
+    static constexpr int kPageBytes = 20 * 1024;       // and its JSON ("msgs", UTF-8) at most this many bytes
     static constexpr int kText = 2000;                 // characters of "x"
     static constexpr int kPart = 192 * 1024;           // bytes of a file in one "part"
     static constexpr qint64 kMediaMax = 100LL * 1024 * 1024;
@@ -112,7 +113,7 @@ public:
     };
     // Merges a page into a chat's messages by id (a later copy wins), oldest first; never drops one that's there.
     static void merge(QList<M> &into, const QList<M> &page);
-    // Messages (as sent) into "chat" pages: at most kPageMsgs each and kPageBytes of JSON, oldest first.
+    // Messages (as sent) into "chat" pages: at most kPageMsgs each and kPageBytes of UTF-8 JSON, oldest first.
     static QList<QJsonArray> pages(const QJsonArray &msgs);
     // A file that came in parts is the one named: its size and SHA-256 match.
     static bool mediaOk(const QByteArray &bytes, const QString &hash, qint64 size);
@@ -120,6 +121,9 @@ public:
     static bool lanOnly(const QString &via, bool homeNet);
     // How many parts a file of size bytes takes (0 when it's empty or too big).
     static int partsFor(qint64 size);
+    // A file name from the phone made safe to save here: no folder, no character Windows or Linux refuses,
+    // not hidden, not a name Windows keeps for itself, at most 120 characters. fallback when nothing is left.
+    static QString safeName(const QString &name, const QString &fallback);
     // A code shown until it has less than kRefreshMs left, then a new one.
     static bool codeDue(qint64 at, qint64 until);
 
@@ -148,13 +152,23 @@ private:
     static QJsonObject fJson(const M &m);
     static int daysOf(const QJsonObject &o, int fallback);
 
-    // The phone's side of media: SHA-256 and size of each photo id it has sent, and the files being sent now.
+    // The phone's side of media: SHA-256 and size of each photo id it has sent (kept in the vault, link-sums.json),
+    // worked out on a worker thread; and the files being sent now.
     struct Sum {
         QString hash;
         qint64 size = 0;
     };
-    Sum sumOf(const QString &photoId);
+    Sum sumOf(const QString &photoId);       // known sums only, never reads the file
     QString photoWith(const QString &hash);
+    void loadSums();
+    void saveSums(QSet<QString> live);
+    // True when the sums of all these photo ids are known (or can't be had); else they're worked out off the
+    // GUI thread and then() runs once none are left to do.
+    bool sumsReady(const QStringList &photos, std::function<void()> then);
+    bool m_sumsLoaded = false;
+    QSet<QString> m_hashing;
+    QHash<QString, qint64> m_noSum;     // photo ids with no sum to be had, and when that was found (tried again after a minute)
+    QList<std::function<void()>> m_afterSums;
     struct Serve {
         QString to, hash, photo;
     };

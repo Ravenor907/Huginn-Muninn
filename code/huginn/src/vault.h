@@ -78,6 +78,8 @@ public:
     QByteArray read(const QString &name) const;
     void remove(const QString &name) const;
     QString path(const QString &name) const;
+    // read() for another thread: the key and the file are taken now, the file is read and opened when it's called.
+    std::function<QByteArray()> reader(const QString &name) const;
 
     // The math, separate so the self-test can check it.
     static QByteArray seal(const QByteArray &key, const QByteArray &plain);

@@ -1507,7 +1507,9 @@ screen always works; a code shown before stays valid until its own 10 minutes ar
 it), and the first `hello` with any of them uses them all up. The code can also be copied as text, for a phone without a
 camera. The phone takes the code (its QR
 scanner, or the text pasted), keeps the companion, and sends `{"t": "hello", "i": token, "n": its name, "p": its
-mailbox}`. The companion accepts a `hello` only with a token it showed, in time; from then on the phone is its phone.
+mailbox}`. The companion accepts a `hello` only with a token it showed, in time; from then on the phone is its phone. A
+`hello` with a good token from the phone already linked (linking it again) uses the token up too and sets the pair
+back to unchecked: the chats stay, and nothing shows until the emoji are checked again.
 
 **Checking the pair.** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
 the person confirms "They match" on each ("No" unlinks). Until then the phone sends nothing (`chat`, `msg`, `part`) and
@@ -1518,8 +1520,8 @@ anywhere, it says "Mirrored to [name]".
 **From the phone:**
 - `{"t": "chat", "peer", "n", "msgs": [item, ...], "d", "pg": i, "pgs": n}`: one page of a chat's history. On "They
   match" and on every `sync` the phone sends every message it still keeps for each 1:1 chat with a contact (within the
-  chat's limit, section 16), oldest first, in pages `pg` 0 to `pgs` - 1, each at most 100 items and at most 48 KB of JSON
-  in `msgs`. The companion **merges** each page into the chat by message `id` (a
+  chat's limit, section 16), oldest first, in pages `pg` 0 to `pgs` - 1, each at most 100 items and at most 20 KB (20480 bytes) of UTF-8
+  JSON in `msgs`, so a page fits an envelope on every route. The companion **merges** each page into the chat by message `id` (a
   later copy of an id replaces the earlier one): no page ever wipes what an earlier page or `msg` brought.
 - `{"t": "msg", "peer", "n", "m": item, "d"}`: one message in or out, merged the same way.
 - `{"t": "part", ...}`: a file the companion asked for (below).

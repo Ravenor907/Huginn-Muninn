@@ -15,8 +15,8 @@ import java.util.concurrent.Executors
 object LinkWire {
     /** At most this many messages in one "chat" page. */
     const val PAGE_MAX = 100
-    /** A page also stays under this many characters of JSON, so it fits an envelope on every route. */
-    const val PAGE_CHARS = 48_000
+    /** A page's "msgs" is also at most this many bytes of UTF-8 JSON, so it fits an envelope on every route. */
+    const val PAGE_BYTES = 20 * 1024
     /** A message's text in a page or a "msg", at most. */
     const val TEXT_MAX = 2000
     /** Media is sent in pieces of this size, only on the home Wi-Fi. */
@@ -27,15 +27,22 @@ object LinkWire {
     const val REFRESH_EARLY_MS = 90_000L
     val KINDS = setOf("photo", "voice", "video", "file")
 
-    /** Message items, oldest first, in pages of at most [PAGE_MAX] and about [PAGE_CHARS]. Never an empty page. */
+    /** UTF-8 bytes of [o] as JSON. */
+    fun jsonBytes(o: JSONObject): Int = o.toString().toByteArray(Charsets.UTF_8).size
+
+    /**
+     * Message items, oldest first, in pages of at most [PAGE_MAX] and [PAGE_BYTES] of UTF-8 JSON ("[", the items with a
+     * comma between, "]"). Never an empty page.
+     */
     fun pages(items: List<JSONObject>): List<List<JSONObject>> {
         val out = ArrayList<List<JSONObject>>()
         var cur = ArrayList<JSONObject>()
-        var chars = 0
+        var bytes = 2
         for (o in items) {
-            val n = o.toString().length
-            if (cur.isNotEmpty() && (cur.size >= PAGE_MAX || chars + n > PAGE_CHARS)) { out += cur; cur = ArrayList(); chars = 0 }
-            cur += o; chars += n
+            val n = jsonBytes(o)
+            if (cur.isNotEmpty() && (cur.size >= PAGE_MAX || bytes + 1 + n > PAGE_BYTES)) { out += cur; cur = ArrayList(); bytes = 2 }
+            bytes += (if (cur.isEmpty()) 0 else 1) + n
+            cur += o
         }
         if (cur.isNotEmpty()) out += cur
         return out
@@ -185,9 +192,12 @@ object Link {
     /** Link codes still good: token to until (the newest two, so one scanned just before a refresh still works). */
     private val tokens = ArrayList<Pair<String, Long>>()
     private val mirrorLock = Any()
-    /** Long work (hashing, sending pieces) off the thread a message came in on. */
+    /** Long work (hashing, pages, messages) off the thread a message came in on. */
     private val work = Executors.newSingleThreadExecutor { r -> Thread(r, "muninn-link").apply { isDaemon = true } }
     private fun later(f: () -> Unit) = work.execute { try { f() } catch (_: Exception) {} }
+    /** Files going to a companion on their own thread, so a big one never holds up "msg" or "sync". */
+    private val files = Executors.newSingleThreadExecutor { r -> Thread(r, "muninn-link-files").apply { isDaemon = true } }
+    private fun sendFiles(f: () -> Unit) = files.execute { try { f() } catch (_: Exception) {} }
 
     fun load() {
         val h = host ?: return
@@ -380,13 +390,11 @@ object Link {
         if (m.photo.isEmpty() || m.unsent.isNotEmpty()) return null
         val kind = when { m.voice > 0 -> "voice"; m.video > 0 -> "video"; m.file.isNotEmpty() -> "file"; else -> "photo" }
         val name = when (kind) { "voice" -> "voice.m4a"; "video" -> "video.mp4"; "file" -> m.file; else -> "photo.jpg" }
-        val hs = synchronized(hashes) {
-            loadHashes()
-            hashes[m.photo] ?: run {
-                val b = host?.media(m) ?: return null
-                if (b.isEmpty() || b.size > LinkWire.MAX_MEDIA) return null
-                (LinkWire.sha256Hex(b) + " " + b.size).also { hashes[m.photo] = it; hashesChanged = true }
-            }
+        val hs = synchronized(hashes) { loadHashes(); hashes[m.photo] } ?: run {
+            // Read and hashed outside the lock, so a file being sent never waits for it.
+            val b = host?.media(m) ?: return null
+            if (b.isEmpty() || b.size > LinkWire.MAX_MEDIA) return null
+            (LinkWire.sha256Hex(b) + " " + b.size).also { synchronized(hashes) { hashes[m.photo] = it; hashesChanged = true } }
         }
         val h = hs.substringBefore(' ')
         val s = hs.substringAfter(' ').toLongOrNull() ?: return null
@@ -396,15 +404,17 @@ object Link {
     /** A companion asked for [hash] on the home Wi-Fi: the pieces go back the same way, never on another route. */
     private fun serve(d: Device, hash: String) {
         val h = host ?: return
-        later {
-            val m = h.chats().values.flatMap { it.second }.firstOrNull { mediaOf(it)?.h == hash } ?: return@later
-            val b = h.media(m) ?: return@later
-            if (LinkWire.sha256Hex(b) != hash) return@later
+        sendFiles {
+            // Only a file the companion was told about: its SHA-256 is already worked out.
+            val known = synchronized(hashes) { loadHashes(); hashes.filterValues { it.substringBefore(' ') == hash }.keys }
+            val m = h.chats().values.flatMap { it.second }.firstOrNull { it.photo in known && it.unsent.isEmpty() } ?: return@sendFiles
+            val b = h.media(m) ?: return@sendFiles
+            if (LinkWire.sha256Hex(b) != hash) return@sendFiles
             val parts = LinkWire.chunks(b)
             for ((i, p) in parts.withIndex()) {
                 val json = JSONObject().put("t", "part").put("h", hash).put("i", i).put("n", parts.size)
                     .put("b", java.util.Base64.getEncoder().encodeToString(p)).toString()
-                if (!h.sendLan(d, json)) return@later   // off the home Wi-Fi now: the companion asks again later
+                if (!h.sendLan(d, json)) return@sendFiles   // off the home Wi-Fi now: the companion asks again later
             }
         }
     }
@@ -422,12 +432,20 @@ object Link {
         val ph = _phone.value?.takeIf { it.key == from }
         when {
             // Pairing: the phone answers my link code with its token.
-            t == "hello" && ph == null && comp == null -> {
+            t == "hello" && comp == null -> {
                 if (!takeToken(p.optString("i"), System.currentTimeMillis())) return false
-                // Another phone linked before: its chats and media go (this device's own chats always stay).
-                if (_phone.value != null) dropPhone()
-                _phone.value = Device(from, p.optString("p"), p.optString("n").take(40).ifBlank { "Your phone" }, ok = false)
-                save()
+                val name = p.optString("n").take(40).trim()
+                if (ph != null) {
+                    // The same phone linked again: its chats stay, and the 4 emoji are checked again before anything shows.
+                    _phone.value = ph.copy(name = name.ifBlank { ph.name }, mailbox = p.optString("p").takeIf { it.length == 64 } ?: ph.mailbox, ok = false)
+                    _ownShown.value = false
+                    save()
+                } else {
+                    // Another phone linked before: its chats and media go (this device's own chats always stay).
+                    if (_phone.value != null) dropPhone()
+                    _phone.value = Device(from, p.optString("p"), name.ifBlank { "Your phone" }, ok = false)
+                    save()
+                }
             }
             t == "unlink" && (comp != null || ph != null) -> {
                 if (comp != null) { _companions.value = _companions.value - comp }

@@ -13,8 +13,12 @@
 #include <QStandardPaths>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPointer>
+#include <QThread>
 #include <QUuid>
 #include <algorithm>
+#include <memory>
+#include <utility>
 #include <cstdio>
 
 namespace
@@ -53,6 +57,10 @@ Link::Link(Chat *chat, QObject *parent)
         if (!m_chat->ready() && m_loaded) {
             m_loaded = false;
             m_ownOpen = false;
+            m_sums.clear();
+            m_noSum.clear();
+            m_sumsLoaded = false;
+            m_afterSums.clear();
             Q_EMIT changed();
         } else if (m_chat->ready() && !m_loaded) {
             Q_EMIT changed();
@@ -315,12 +323,8 @@ QString Link::saveMedia(const QString &peer, const QString &id) const
         QByteArray bytes = m_chat->blob(mediaId(x.hash));
         if (bytes.isEmpty())
             return QStringLiteral("It isn't here yet. It comes over on your home Wi-Fi.");
-        // Only a plain file name: never a folder, never a hidden file.
-        QString name = QFileInfo(x.name).fileName().remove(QLatin1Char('\\')).trimmed();
-        while (name.startsWith(QLatin1Char('.')))
-            name.remove(0, 1);
-        if (name.isEmpty())
-            name = x.kind == QLatin1String("photo") ? QStringLiteral("photo.jpg") : QStringLiteral("file");
+        // Only a plain file name: never a folder, a hidden file or a name Windows keeps for itself.
+        const QString name = safeName(x.name, x.kind == QLatin1String("photo") ? QStringLiteral("photo.jpg") : QStringLiteral("file"));
         const QString dir = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
         QDir().mkpath(dir);
         const QFileInfo fi(name);
@@ -333,6 +337,38 @@ QString Link::saveMedia(const QString &peer, const QString &id) const
         return ok ? QString() : QStringLiteral("Couldn't save it.");
     }
     return QStringLiteral("That message isn't here any more.");
+}
+
+QString Link::safeName(const QString &raw, const QString &fallback)
+{
+    QString name;
+    for (const QChar c : raw)
+        name += (c.unicode() < 0x20 || c.unicode() == 0x7f || QStringLiteral("<>:\"/\\|?*").contains(c)) ? QChar(QLatin1Char('_')) : c;
+    // At most kNameMax characters, keeping a short extension.
+    constexpr int kNameMax = 120;
+    if (name.size() > kNameMax) {
+        const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+        const QString ext = dot > 0 && name.size() - dot <= 16 ? name.mid(dot) : QString();
+        QString stem = name.left(kNameMax - ext.size());
+        if (!stem.isEmpty() && stem.back().isHighSurrogate())
+            stem.chop(1);
+        name = stem + ext;
+    }
+    name = name.trimmed();
+    while (name.startsWith(QLatin1Char('.')))
+        name.remove(0, 1);
+    // Windows refuses names ending in a dot or a space.
+    while (name.endsWith(QLatin1Char('.')) || name.endsWith(QLatin1Char(' ')))
+        name.chop(1);
+    if (name.isEmpty())
+        name = fallback;
+    // CON, PRN, AUX, NUL, COM1 to COM9 and LPT1 to LPT9, with or without an extension, in any case.
+    const QString stem = name.section(QLatin1Char('.'), 0, 0).trimmed().toUpper();
+    const bool numbered = stem.size() == 4 && (stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT")))
+                          && stem.at(3) >= QLatin1Char('1') && stem.at(3) <= QLatin1Char('9');
+    if (stem == QLatin1String("CON") || stem == QLatin1String("PRN") || stem == QLatin1String("AUX") || stem == QLatin1String("NUL") || numbered)
+        name.prepend(QLatin1Char('_'));
+    return name;
 }
 
 // ------------------------------------------------------------------ pairing
@@ -442,38 +478,131 @@ void Link::unlink(const QString &key)
 
 // ------------------------------------------------------------------ the phone's side
 
+void Link::loadSums()
+{
+    if (m_sumsLoaded || !m_chat->ready())
+        return;
+    m_sumsLoaded = true;
+    const QJsonObject o = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("link-sums.json"))).object();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonObject v = it.value().toObject();
+        const QString h = jstr(v, "h");
+        const double size = v.value(QStringLiteral("s")).toDouble();
+        if (hexOk(h) && size >= 1 && size <= double(kMediaMax))
+            m_sums.insert(it.key(), Sum{h, qint64(size)});
+    }
+}
+
+void Link::saveSums(QSet<QString> live)
+{
+    if (!m_chat->ready())
+        return;
+    // Only photos the chats still have (and the ones just worked out).
+    for (auto it = m_chat->m_private.cbegin(); it != m_chat->m_private.cend(); ++it)
+        for (const QVariant &v : it.value()) {
+            const QString p = vstr(v.toMap(), "photo");
+            if (!p.isEmpty())
+                live.insert(p);
+        }
+    m_sums.removeIf([&live](const QHash<QString, Sum>::iterator it) { return !live.contains(it.key()); });
+    QJsonObject o;
+    for (auto it = m_sums.cbegin(); it != m_sums.cend(); ++it)
+        o.insert(it.key(), QJsonObject{{QStringLiteral("h"), it.value().hash}, {QStringLiteral("s"), double(it.value().size)}});
+    m_chat->m_vault->write(QStringLiteral("link-sums.json"), compact(o));
+}
+
 Link::Sum Link::sumOf(const QString &photoId)
 {
-    if (photoId.isEmpty())
-        return {};
-    const auto hit = m_sums.constFind(photoId);
-    if (hit != m_sums.cend())
-        return *hit;
-    QByteArray bytes = m_chat->blob(photoId);
-    if (bytes.isEmpty() || bytes.size() > kMediaMax)
-        return {};
-    const Sum s{sha256(bytes), bytes.size()};
-    bytes.fill(0);
-    m_sums.insert(photoId, s);
-    return s;
+    loadSums();
+    return photoId.isEmpty() ? Sum() : m_sums.value(photoId);
+}
+
+bool Link::sumsReady(const QStringList &photos, std::function<void()> then)
+{
+    loadSums();
+    QList<QPair<QString, std::function<QByteArray()>>> todo;
+    bool ready = true;
+    for (const QString &p : photos) {
+        if (p.isEmpty() || m_sums.contains(p) || (m_noSum.contains(p) && now() - m_noSum.value(p) < 60000))
+            continue;
+        ready = false;
+        if (!m_hashing.contains(p)) {
+            m_hashing.insert(p);
+            todo << qMakePair(p, m_chat->m_vault->reader(QStringLiteral("photos/") + p));
+        }
+    }
+    if (ready)
+        return true;
+    if (then)
+        m_afterSums << std::move(then);
+    if (todo.isEmpty())
+        return false;
+    // Reading and hashing a big file takes a while: never on the GUI thread.
+    auto out = std::make_shared<QList<QPair<QString, Sum>>>();
+    QThread *t = QThread::create([todo, out] {
+        for (const auto &job : todo) {
+            QByteArray bytes = job.second();
+            Sum s;
+            if (!bytes.isEmpty() && bytes.size() <= kMediaMax)
+                s = Sum{sha256(bytes), bytes.size()};
+            bytes.fill(0);
+            out->append(qMakePair(job.first, s));
+        }
+    });
+    QPointer<Link> self(this);
+    connect(t, &QThread::finished, this, [self, t, out] {
+        t->deleteLater();
+        if (!self)
+            return;
+        for (const auto &r : std::as_const(*out))
+            self->m_hashing.remove(r.first);
+        if (!self->m_chat->ready() || !self->m_sumsLoaded)
+            return;   // locked meanwhile: worked out again next time
+        QSet<QString> fresh;
+        for (const auto &r : std::as_const(*out)) {
+            if (r.second.hash.isEmpty()) {
+                self->m_noSum.insert(r.first, now());   // not there (yet), or too big to mirror: shows as words
+            } else {
+                self->m_sums.insert(r.first, r.second);
+                self->m_noSum.remove(r.first);
+                fresh.insert(r.first);
+            }
+        }
+        self->saveSums(fresh);
+        if (!self->m_hashing.isEmpty())
+            return;
+        // Whatever waited for these goes now (each checks again, so one still missing just waits more).
+        const QList<std::function<void()>> after = std::exchange(self->m_afterSums, {});
+        for (const auto &f : after)
+            f();
+    });
+    t->start();
+    return false;
 }
 
 // The photo id of a file the companions were told about (only in a contact's 1:1 chat), or "".
 QString Link::photoWith(const QString &hash)
 {
-    for (auto it = m_sums.cbegin(); it != m_sums.cend(); ++it)
-        if (it.value().hash == hash)
-            return it.key();
+    loadSums();
     for (auto it = m_chat->m_private.cbegin(); it != m_chat->m_private.cend(); ++it) {
         if (!m_chat->isContact(it.key()) || m_chat->isTrashed(it.key()))
             continue;
         for (const QVariant &v : it.value()) {
             const QString p = vstr(v.toMap(), "photo");
-            if (!p.isEmpty() && vstr(v.toMap(), "unsent").isEmpty() && !m_sums.contains(p) && sumOf(p).hash == hash)
+            if (!p.isEmpty() && vstr(v.toMap(), "unsent").isEmpty() && m_sums.value(p).hash == hash)
                 return p;
         }
     }
     return QString();
+}
+
+// The photo id of a message's file for the companions ("" for none).
+static QString mediaPhoto(const QVariantMap &m)
+{
+    const QString photo = m.value(QStringLiteral("photo")).toString();
+    if (photo.isEmpty() || !m.value(QStringLiteral("unsent")).toString().isEmpty())
+        return QString();
+    return photo;
 }
 
 QJsonObject Link::mJson(const QVariantMap &m, int max)
@@ -515,18 +644,19 @@ QJsonObject Link::mJson(const QVariantMap &m, int max)
 
 QList<QJsonArray> Link::pages(const QJsonArray &msgs)
 {
+    // Bytes of UTF-8 JSON, as the page goes out: "[", the items with a comma between, "]".
     QList<QJsonArray> out;
     QJsonArray page;
-    qsizetype bytes = 0;
+    qsizetype bytes = 2;
     for (const QJsonValue &v : msgs) {
-        const qsizetype size = compact(v.toObject()).size() + 1;
-        if (!page.isEmpty() && (page.size() >= kPageMsgs || bytes + size > kPageBytes)) {
+        const qsizetype size = compact(v.toObject()).size();
+        if (!page.isEmpty() && (page.size() >= kPageMsgs || bytes + 1 + size > kPageBytes)) {
             out << page;
             page = QJsonArray();
-            bytes = 0;
+            bytes = 2;
         }
+        bytes += (page.isEmpty() ? 0 : 1) + size;
         page.append(v);
-        bytes += size;
     }
     if (!page.isEmpty())
         out << page;
@@ -541,6 +671,33 @@ void Link::syncAll(const Device *only)
         if (d.ok)
             to << d;
     if (to.isEmpty())
+        return;
+    // Every file's SHA-256 first (worked out off the GUI thread), so each page names its files.
+    QStringList photos;
+    for (auto it = m_chat->m_private.cbegin(); it != m_chat->m_private.cend(); ++it) {
+        if (it.value().isEmpty() || !m_chat->isContact(it.key()) || m_chat->isTrashed(it.key()))
+            continue;
+        for (const QVariant &v : it.value()) {
+            const QString p = mediaPhoto(v.toMap());
+            if (!p.isEmpty())
+                photos << p;
+        }
+    }
+    const QString onlyKey = only ? only->key : QString();
+    const bool everyone = !only;
+    if (!sumsReady(photos, [this, onlyKey, everyone] {
+            // Again once the sums are known, to the same devices if they're still linked and checked.
+            if (everyone) {
+                syncAll(nullptr);
+                return;
+            }
+            for (const Device &d : std::as_const(m_companions))
+                if (d.key == onlyKey) {
+                    const Device copy = d;
+                    syncAll(&copy);
+                    return;
+                }
+        }))
         return;
     for (auto it = m_chat->m_private.cbegin(); it != m_chat->m_private.cend(); ++it) {
         const QString peer = it.key();
@@ -567,6 +724,17 @@ void Link::onMessage(const QString &peer, const QVariantMap &m)
 {
     ensureLoaded();
     if (m_companions.isEmpty() || !m_chat->isContact(peer) || m.value(QStringLiteral("system")).toBool())
+        return;
+    // A photo or file goes once its SHA-256 is known (worked out off the GUI thread).
+    const QString id = vstr(m, "id");
+    if (!sumsReady({mediaPhoto(m)}, [this, peer, id] {
+            // The message as it is now (it may have been unsent meanwhile); gone: nothing to send.
+            for (const QVariant &v : m_chat->m_private.value(peer))
+                if (vstr(v.toMap(), "id") == id) {
+                    onMessage(peer, v.toMap());
+                    return;
+                }
+        }))
         return;
     const QJsonObject json{{QStringLiteral("t"), QStringLiteral("msg")}, {QStringLiteral("peer"), peer}, {QStringLiteral("n"), m_chat->nameOf(peer)},
                            {QStringLiteral("m"), mJson(m, kText)}, {QStringLiteral("d"), m_chat->chatDays(peer)}};
@@ -760,7 +928,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     const QString t = jstr(p, "t");
     const bool comp = std::any_of(m_companions.cbegin(), m_companions.cend(), [&](const Device &d) { return d.key == from; });
     const bool ph = !m_phone.key.isEmpty() && m_phone.key == from;
-    if (t == QLatin1String("hello") && !comp && !ph) {
+    if (t == QLatin1String("hello") && !comp) {
         // Pairing: a phone answers my link code with its token, in time and only once.
         const QString token = jstr(p, "i");
         if (token.isEmpty() || !m_tokens.contains(token) || now() > m_tokens.value(token))
@@ -771,6 +939,17 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         m_tokenUntil = 0;
         const QString n = jstr(p, "n").left(40).trimmed();
         const QString mb = jstr(p, "p");
+        if (ph) {
+            // The same phone linked again: its chats stay, and the 4 emoji are checked again before anything shows.
+            m_phone.ok = false;
+            if (!n.isEmpty())
+                m_phone.name = n;
+            if (mb.size() == 64)
+                m_phone.mailbox = mb;
+            m_ownOpen = false;
+            save();
+            return true;
+        }
         m_phone = Device{from, mb.size() == 64 ? mb : QString(), n.isEmpty() ? QStringLiteral("Your phone") : n, false};
         m_ownOpen = false;
         m_mirror.clear();
@@ -962,23 +1141,34 @@ bool Link::selfTest(const QJsonObject &v)
             std::fprintf(stderr, "link FAIL: should refuse %s\n", qPrintable(x.toString()));
         }
 
-    // Paging and merging: pages of at most 100 messages and 48 KB, merged by id without losing any.
-    QJsonArray small, big;
+    // Paging and merging: pages of at most 100 messages and 20 KB of UTF-8 JSON, merged by id without losing any.
+    QJsonArray small, big, wide;
     for (int i = 0; i < 250; ++i)
         small.append(QJsonObject{{QStringLiteral("id"), QString::number(i)}, {QStringLiteral("x"), QStringLiteral("hi")}, {QStringLiteral("me"), false},
                                  {QStringLiteral("t"), double(1000 + i)}});
     for (int i = 0; i < 60; ++i)
         big.append(QJsonObject{{QStringLiteral("id"), QString::number(i)}, {QStringLiteral("x"), QString(kText, QLatin1Char('a'))}, {QStringLiteral("me"), true},
                                {QStringLiteral("t"), double(1000 + i)}});
-    const QList<QJsonArray> sp = pages(small), bp = pages(big);
+    // Two bytes a character in UTF-8: counted in bytes, not characters.
+    for (int i = 0; i < 60; ++i)
+        wide.append(QJsonObject{{QStringLiteral("id"), QString::number(i)}, {QStringLiteral("x"), QString(kText, QChar(0x00E9))}, {QStringLiteral("me"), true},
+                                {QStringLiteral("t"), double(1000 + i)}});
+    const QList<QJsonArray> sp = pages(small), bp = pages(big), wp = pages(wide);
     check(sp.size() == 3 && sp.at(0).size() == 100 && sp.at(2).size() == 50, "250 messages make pages of 100, 100 and 50");
     bool under = bp.size() > 1;
     int count = 0;
     for (const QJsonArray &a : bp) {
-        under = under && compact(a).size() <= kPageBytes + a.size();
+        under = under && compact(a).size() <= kPageBytes;
         count += int(a.size());
     }
-    check(under && count == 60, "long messages make pages under 48 KB, none lost");
+    check(under && count == 60, "long messages make pages of at most 20 KB, none lost");
+    bool wideUnder = wp.size() > bp.size();
+    int wideCount = 0;
+    for (const QJsonArray &a : wp) {
+        wideUnder = wideUnder && compact(a).size() <= kPageBytes && a.size() <= 5;
+        wideCount += int(a.size());
+    }
+    check(wideUnder && wideCount == 60, "pages are measured in UTF-8 bytes");
     QList<M> chat;
     for (int k = int(sp.size()) - 1; k >= 0; --k) {   // pages in any order
         QList<M> page;
@@ -1011,6 +1201,18 @@ bool Link::selfTest(const QJsonObject &v)
     check(lanOnly(QStringLiteral("wifi"), true), "the home Wi-Fi carries media");
     check(!lanOnly(QStringLiteral("internet"), true) && !lanOnly(QStringLiteral("bluetooth"), true), "the internet and Bluetooth never carry media");
     check(!lanOnly(QStringLiteral("wifi"), false), "Direct connect never carries media");
+
+    // A file name from the phone is made safe to save.
+    const QString fb = QStringLiteral("file");
+    check(safeName(QStringLiteral("a<b>c:d\"e/f\\g|h?i*j.txt"), fb) == QLatin1String("a_b_c_d_e_f_g_h_i_j.txt"), "characters Windows refuses become _");
+    check(safeName(QStringLiteral("x\ty\nz.txt"), fb) == QLatin1String("x_y_z.txt"), "control characters become _");
+    check(safeName(QStringLiteral("..hidden"), fb) == QLatin1String("hidden") && safeName(QStringLiteral("..."), fb) == fb, "never a hidden file");
+    check(safeName(QStringLiteral("CON"), fb) == QLatin1String("_CON") && safeName(QStringLiteral("nul.txt"), fb) == QLatin1String("_nul.txt")
+              && safeName(QStringLiteral("com1.jpg"), fb) == QLatin1String("_com1.jpg") && safeName(QStringLiteral("LPT9"), fb) == QLatin1String("_LPT9")
+              && safeName(QStringLiteral("COM10.txt"), fb) == QLatin1String("COM10.txt") && safeName(QStringLiteral("console.txt"), fb) == QLatin1String("console.txt"),
+          "names Windows keeps for itself get a _");
+    const QString longName = safeName(QString(300, QLatin1Char('a')) + QStringLiteral(".pdf"), fb);
+    check(longName.size() == 120 && longName.endsWith(QLatin1String(".pdf")), "long names are cut, keeping the extension");
 
     // The code on show is replaced a minute before it runs out.
     const qint64 until = 10000000;
