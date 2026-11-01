@@ -163,8 +163,10 @@ jobs:
           set -e
           cat tour/log.txt
           if [ $code -ne 0 ]; then
-            msg=$( (echo "exit $code"; grep -iE "qml|warning|error" tour/log.txt | head -n 60) | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=Screenshot tour failed::$msg"
+            # One annotation per line, so each reason shows on the run's page.
+            (grep -iE "qml|warning|error" tour/log.txt; cat tour/warnings.txt 2>/dev/null) | sort -u | head -n 25 | cut -c1-300 | tr -d '\r' \
+              | sed 's/%/%25/g; s/::/: :/g' | while IFS= read -r l; do echo "::warning title=Flatpak tour line::$l"; done || true
+            echo "::error title=Screenshot tour failed::exit $code"
           fi
           ls tour/*.png
           exit $code
