@@ -688,6 +688,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
             history.add(0, item.copy(fraction = if (f.done) 1f else 0f, failed = !f.done,
                 status = if (f.done) "From ${s.from} · Saved to ${Received.place(context)}" else "From ${s.from} · Didn't arrive"))
         }
+        // An app a parent sent to this Kids' TV: saved in Downloads like any file; it installs only once a parent
+        // says Install on their phone (TvAppInstall, 7.15).
+        if (ok && s.kids) {
+            val apps = s.files.values.filter { it.done && it.sha != null }.mapNotNull { f ->
+                f.savedAs?.let { t -> io.github.ravenor907.muninn.tv.TvAppInstall.Got(t.name, Received.shareUri(context, t), f.sha!!.lowercase(), f.size) }
+            }
+            (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.let { a -> if (apps.isNotEmpty()) io.github.ravenor907.muninn.tv.TvAppInstall.arrived(a, apps) }
+        }
         while (history.size > 30) history.removeAt(history.size - 1)
         _items.value = history.toList()
         _transfer.value = Transfer()

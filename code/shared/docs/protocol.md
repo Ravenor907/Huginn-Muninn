@@ -65,6 +65,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `k6` | kids' TV reconnect (7.11): `rejoin`, `ask`, `here`, `approve`, `swap`, `orphan`. Muninn only. |
 | `k7` | kids' TV config field `upd`, automatic update checks (7.12). Muninn only. |
 | `k8` | kids' TV config field `keep`, the `allow` message and `off` in `status` (7.13). Muninn only. |
+| `k9` | parent-approved installs on a kids' TV (7.15): `appask`, `appok`, `appno`, `appres`. Muninn only. |
 | `j1` | group invite links and "Members can invite" (section 17): `mi` in the state, control messages `link`, `linkoff`, `links`. Muninn and Huginn. |
 | `x1` | moving to another device (section 18). Muninn and Huginn. |
 | `s1` | proven routes and bound envelopes (section 21): route proofs, the hidden hint, clear fields sealed in, the group state limits. Muninn and Huginn. |
@@ -1069,7 +1070,7 @@ answering 403. The upload itself still checks each file's SHA-256 (as any LocalS
 
 An app on the phone goes out as `<name>.apk`, plus `<name>.split.<part>.apk` for each part Android keeps it
 in. The TV saves them in its Downloads, like any received file, and shows a notice; nothing it receives is
-installed or opened by itself. A TV used normally (not in kids' mode) does the same with any file the person
+installed or opened by itself. A kids' TV then asks its parents to install them (7.15). A TV used normally (not in kids' mode) does the same with any file the person
 accepts. Muninn's own updates are separate (7.5).
 
 ### 7.10 Noise removal on the TV (`k5`)
@@ -1167,6 +1168,27 @@ phone knew, unless the TV itself sent it) and isn't older than the last config t
 the TV (its pending configs and cards too) and says "You're no longer a parent of [TV]". The removed person stays among
 the people the TV can reach.
 
+### 7.15 Installing an app a parent sent (`k9`)
+
+An app that comes to a kids' TV (7.9) is saved in its Downloads and installs only when a parent says so. All
+messages are in room `tvconfig`, sealed pairwise like the rest of section 7, so each one is from the key it says.
+
+| t | from | fields |
+|---|---|---|
+| `appask` | the TV, to each parent whose app says `k9` | `h` (SHA-256 of the app's main file, lowercase hex), `name` (1 to 200 characters, no `/`, `\` or control characters), `size` (all its files, 1 to 2^53 - 1), optional `pkg` (its package name) and `ver` (version name, up to 40 characters) |
+| `appok` | a parent | `h`: install exactly that app |
+| `appno` | a parent | `h`: not now (the TV forgets it; the file stays in Downloads) |
+| `appres` | the TV, to each parent with `k9` | `h`, `r`: `installed`, `perm` (Install updates is off on the TV), `confirm` (Android asks on the TV), `failed`; with `failed` optionally `why` (up to 120 characters) |
+
+- The TV keeps each app it asked about (its parts' places in Downloads and their SHA-256) for 7 days, at most 20.
+- It takes `appok` and `appno` only from a current parent, and only for an `h` it keeps. Without `appok` nothing is
+  installed. Install puts every part of that app in one PackageInstaller session, checking each part's SHA-256 again as
+  it is read; a part that changed or went missing is `failed`.
+- When Android asks to confirm on the TV, the TV shows its box with "Ask a parent" and sends `confirm`; the final
+  result follows. A parent's phone shows the ask in the TV's menu and as a notification (no name without previews on),
+  with Install and Not now, and then the TV's result: "Installed", "Needs Install updates permission", "Failed: …".
+- Malformed messages are ignored; `pkg` or `ver` that don't fit are dropped, not the message.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -1185,6 +1207,7 @@ the people the TV can reach.
 | `tvconfig` | `update` | 7.5 | yes | no | Seen | k2 |
 | `tvconfig` | `card` | 7.6 | yes | no | already a contact | t1 |
 | `tvconfig` | `status` `usage` `clear` | 7.7 | yes | no | Seen | k3 |
+| `tvconfig` | `appask` `appok` `appno` `appres` | 7.15 | yes | no | Seen | k9 |
 | `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |

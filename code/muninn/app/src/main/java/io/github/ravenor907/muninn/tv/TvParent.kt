@@ -243,6 +243,8 @@ object TvParent {
         if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"), o.optJSONObject("cfg"))
         if (o.optString("t") == "status") return takeStatus(app, fromKey, o)
         if (o.optString("t") == "removed") return takeRemoved(app, fromKey, o)
+        // k9 (7.15): an app waiting on a TV this phone looks after, or how its install went.
+        if (o.optString("t") == "appask" || o.optString("t") == "appres") return _tvs.value.containsKey(fromKey) && TvAppAsks.handle(app, fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false

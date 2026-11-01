@@ -7,7 +7,7 @@ import org.json.JSONObject
  * Apps a parent sends to the Kids' TV (k4, 7.9). The TV takes no files from anyone, so the parent's phone
  * first says, in room tvconfig, exactly which files are coming: each one's SHA-256 and size. The files then
  * come over the Wi-Fi with LocalSend, and the TV takes them only if they are exactly those files, once,
- * within half an hour. They are saved in the TV's Downloads; nothing received is installed or opened by itself.
+ * within half an hour. They are saved in the TV's Downloads and install only once a parent says Install (TvAppInstall).
  */
 object TvApps {
     /** One file of an app: its SHA-256 (lowercase hex) and size. */

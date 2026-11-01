@@ -288,6 +288,13 @@ object KidTv {
                 } catch (_: Exception) {}
                 true
             }
+            "appok", "appno" -> {
+                // k9 (7.15): a parent's Install or Not now for an app waiting in the TV's Downloads.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                val (h, yes) = TvInstalls.parseAnswer(o) ?: return false
+                TvAppInstall.answer(app, fromKey, h, yes, s.parents)
+                true
+            }
             "apps" -> {
                 // k4 (7.9): a parent names the files of an app that's coming over the Wi-Fi; only those are taken.
                 if (s.cfg == null || fromKey !in s.parents) return false

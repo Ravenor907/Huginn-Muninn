@@ -410,6 +410,24 @@ private fun Apps(app: Muninn, t: ManagedTv) {
     if (!k2 || !k4 || !k7) Note(UPDATE_FIRST)
     if (installsOff) Note(INSTALLS_OFF)
     MenuRow("Send an app", "", enabled = k4) { sendingApp = true }
+    // Apps waiting in the TV's Downloads (k9, 7.15): nothing installs there until a parent says Install here.
+    val asks by TvAppAsks.items.collectAsState()
+    asks.let { TvAppAsks.of(app, tvKey) }.forEach { item ->
+        val a = item.ask
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text("Install ${a.name} on the TV?", style = Type.normal)
+            Text(listOf(io.github.ravenor907.muninn.net.FileText.size(a.size), a.pkg, a.ver).filter { it.isNotEmpty() }.joinToString(" · "),
+                style = Type.small, modifier = Modifier.padding(top = 2.dp))
+            if (item.answered) Text(if (item.result.isEmpty()) "Sent to the TV…" else TvInstalls.resultText(item.result, item.why),
+                style = Type.small.copy(color = if (item.result == "failed" || item.result == "perm") Palette.danger else Palette.textMuted),
+                modifier = Modifier.padding(top = 4.dp))
+            if (!item.answered || item.result == "failed" || item.result == "perm") androidx.compose.foundation.layout.Row(Modifier.padding(top = 6.dp)) {
+                MButton(if (item.answered) "Try again" else "Install", kind = io.github.ravenor907.muninn.ui.Kind.Accent) { TvAppAsks.answer(app, item, true) }
+                androidx.compose.foundation.layout.Spacer(Modifier.padding(start = 8.dp))
+                MButton("Not now") { TvAppAsks.answer(app, item, false) }
+            }
+        }
+    }
     // An app on its way to the TV: how far, how fast, and Cancel. It lands in the TV's Downloads.
     val moving by app.net.transfer.collectAsState()
     if (moving.active && moving.sending) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -526,7 +544,7 @@ private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>) {
     if (TvParent.tvs.value[tvKey]?.off?.contains("install") == true) { Ui.say(INSTALLS_OFF, true); return }
     if (!TvParent.announceApp(app, tvKey, name, parts)) { Ui.say(UPDATE_FIRST, true); return }
     app.net.send(dev.id, files)
-    Ui.say("Sending $name. It's saved in the TV's Downloads; nothing installs by itself.")
+    Ui.say("Sending $name to the TV's Downloads. You'll be asked here before it installs.")
 }
 
 /** Pick one contact; [waiting]: people who haven't accepted this phone yet. */
