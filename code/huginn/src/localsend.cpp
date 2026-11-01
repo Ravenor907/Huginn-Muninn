@@ -494,7 +494,8 @@ void LocalSend::onDatagrams()
     while (m_udp.hasPendingDatagrams()) {
         QHostAddress from;
         const qint64 size = m_udp.pendingDatagramSize();
-        QByteArray data(int(qBound<qint64>(0, size, 65536)), Qt::Uninitialized);
+        const qsizetype n = size <= 0 ? 0 : (size > 65536 ? qsizetype(65536) : qsizetype(size));
+        QByteArray data(n, Qt::Uninitialized);
         // One that can't be read ends this round (readyRead comes again for what's left).
         if (m_udp.readDatagram(data.data(), data.size(), &from) < 0)
             break;
