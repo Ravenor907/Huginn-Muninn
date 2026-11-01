@@ -26,8 +26,8 @@ Flow {
                 id: chip
                 anchors.centerIn: parent
                 spacing: Theme.px(4)
-                Text { text: modelData.e; font.pixelSize: Theme.fs(14); anchors.verticalCenter: parent.verticalCenter }
-                Text { text: modelData.n; color: modelData.mine ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13); anchors.verticalCenter: parent.verticalCenter }
+                Text { textFormat: Text.PlainText; text: modelData.e; font.pixelSize: Theme.fs(14); anchors.verticalCenter: parent.verticalCenter }
+                Text { textFormat: Text.PlainText; text: modelData.n; color: modelData.mine ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13); anchors.verticalCenter: parent.verticalCenter }
             }
             HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
             TapHandler { onTapped: row.toggled(modelData.e, !!modelData.mine) }

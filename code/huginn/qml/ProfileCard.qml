@@ -171,6 +171,7 @@ Item {
                 width: parent.width
                 spacing: Theme.px(2)
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     elide: Text.ElideRight
                     text: card.shownName
@@ -178,6 +179,7 @@ Item {
                     font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: text !== ""
                     width: parent.width
                     elide: Text.ElideRight
@@ -186,6 +188,7 @@ Item {
                     font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: text !== ""
                     width: parent.width
                     elide: Text.ElideRight
@@ -201,6 +204,7 @@ Item {
                 spacing: Theme.px(3)
                 Label { text: "NOTE" }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     wrapMode: Text.WordWrap
                     maximumLineCount: 5
@@ -235,6 +239,7 @@ Item {
     }
 
     component Label: Text {
+        textFormat: Text.PlainText
         color: Theme.textMuted
         font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
     }
@@ -259,7 +264,7 @@ Item {
             anchors.centerIn: parent
             spacing: Theme.px(6)
             Icon { visible: !!ab.action.icon; anchors.verticalCenter: parent.verticalCenter; name: ab.action.icon || "file"; size: Theme.px(18); color: ab.primary && ab.action.on ? Theme.accent : Theme.textSoft }
-            Text { id: abText; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, ab.width - Theme.px(24) - (ab.action.icon ? Theme.px(24) : 0)); elide: Text.ElideRight; text: ab.action.label || ""; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(ab.primary ? 15 : 13); font.weight: Font.DemiBold }
+            Text { textFormat: Text.PlainText; id: abText; anchors.verticalCenter: parent.verticalCenter; width: Math.min(implicitWidth, ab.width - Theme.px(24) - (ab.action.icon ? Theme.px(24) : 0)); elide: Text.ElideRight; text: ab.action.label || ""; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(ab.primary ? 15 : 13); font.weight: Font.DemiBold }
         }
         HoverHandler { id: abHover; cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: { card.focusIndex = card.actions.findIndex(a => a.id === ab.action.id); card.run(ab.action.id) } }

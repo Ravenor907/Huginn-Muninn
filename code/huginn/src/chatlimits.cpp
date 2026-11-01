@@ -1,4 +1,4 @@
-// Message limits (cap d1, shared/docs/protocol-0.6.md section 16), the Chat side: every chat deletes messages
+// Message limits (cap d1, shared/docs/protocol.md section 16), the Chat side: every chat deletes messages
 // older than its limit, with their photos and voice; a Family or Work group's limit rides in its signed
 // state, each side of a 1:1 chat says its own in "days" and the shorter one counts. Limits has the rules.
 #include "chat.h"
@@ -116,7 +116,7 @@ QString Chat::limitBlocked(const QString &g, const QString &kind) const
             older << memberName(g, k);
     if (older.isEmpty())
         return QString();
-    return QStringLiteral("Everyone needs Muninn or Huginn 0.94 first. Still waiting for: %1.").arg(older.join(QStringLiteral(", ")));
+    return QStringLiteral("Everyone needs an update first. Still waiting for: %1.").arg(older.join(QStringLiteral(", ")));
 }
 
 bool Chat::limitsNote() const { return m_settings.value(QStringLiteral("chat/limitsNote"), false).toBool(); }

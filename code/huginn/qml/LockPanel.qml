@@ -4,19 +4,20 @@ import Huginn
 // Huginn's lock, required like Muninn's. "setup": first time, pick a 9-dot pattern or a password.
 // "unlock": draw or type it. "change": Settings › Privacy and lock › Lock (already unlocked).
 // "off": Settings › Turn off the lock: the current one is drawn or typed again first.
+// "own": Settings › Linked devices › This device's own chats: the current one opens them while a phone is linked.
 // Everything Huginn keeps is locked with it; there's no way to recover it. The pattern sits in the
 // lower half (Settings › Privacy and lock › Pattern position: Top, Middle or Lower).
 Item {
     id: panel
     property string mode: Vault.exists ? "unlock" : "setup"
     // Unlocking, or turning the lock off: the current pattern or password is asked for.
-    readonly property bool asks: mode === "unlock" || mode === "off"
+    readonly property bool asks: mode === "unlock" || mode === "off" || mode === "own"
     property bool usePattern: asks ? Vault.usesPattern : true
     property var first: null
     property string note: ""
     property bool bad: false
     property int wait: Vault.waitSeconds
-    signal finished(string how)   // "setup", "unlock", "change" or "off": what just finished
+    signal finished(string how)   // "setup", "unlock", "change", "off" or "own": what just finished
     signal cancelled()
 
     implicitWidth: Theme.px(520)
@@ -42,10 +43,16 @@ Item {
         if (Vault.turnOffLock(secret)) { note = ""; bad = false; Ui.say("The lock is off."); finished("off") }
         else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
     }
+    function tryOwn(secret) {
+        if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
+        if (Linked.openOwn(secret)) { note = ""; bad = false; finished("own") }
+        else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
+    }
     function onPattern(dots) {
         const secret = "pattern:" + dots.join(",")
         if (mode === "unlock") { tryUnlock(secret); return }
         if (mode === "off") { tryOff(secret); return }
+        if (mode === "own") { tryOwn(secret); return }
         if (dots.length < 6) { note = "Connect at least 6 dots."; bad = true; pad.shake(); return }
         if (first === null) { first = dots; note = "Draw it again to confirm."; bad = false; return }
         if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
@@ -56,6 +63,7 @@ Item {
         const t = pw.text
         if (mode === "unlock") { tryUnlock(t); pw.text = ""; return }
         if (mode === "off") { tryOff(t); pw.text = ""; return }
+        if (mode === "own") { tryOwn(t); pw.text = ""; return }
         if (t.length < 6) { note = "At least 6 characters."; bad = true; return }
         if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
         pw.text = ""; pw2.text = ""
@@ -77,17 +85,19 @@ Item {
             sourceSize.width: 256; sourceSize.height: 256
         }
         Text {
+            textFormat: Text.PlainText
             anchors.horizontalCenter: parent.horizontalCenter
             text: panel.mode === "setup" ? "PROTECT YOUR MESSAGES" : panel.mode === "change" ? "CHANGE THE LOCK"
-                : panel.mode === "off" ? "TURN OFF THE LOCK" : "HUGINN"
+                : panel.mode === "off" ? "TURN OFF THE LOCK" : panel.mode === "own" ? "THIS DEVICE'S OWN CHATS" : "HUGINN"
             color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : "No way to recover it."
+                  : panel.mode === "setup" ? "No way to recover it. You can turn it off later in Settings." : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
@@ -98,6 +108,7 @@ Item {
             HButton { text: "Password"; kind: !panel.usePattern ? "accent" : "normal"; onClicked: { panel.usePattern = false; panel.first = null; panel.note = "" } }
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             visible: text !== ""
@@ -137,7 +148,7 @@ Item {
                 spacing: Theme.px(8)
                 PwField { id: pw; placeholder: panel.asks ? "Password" : "New password (6 or more)"; onEnter: panel.asks ? panel.submitPassword() : pw2.forceActiveFocus() }
                 PwField { id: pw2; visible: !panel.asks; placeholder: "Type it again"; onEnter: panel.submitPassword() }
-                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
+                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : panel.mode === "own" ? "Open" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
             }
         }
     }
@@ -149,6 +160,7 @@ Item {
         spacing: Theme.px(8)
         bottomPadding: Theme.px(16)
         Text {
+            textFormat: Text.PlainText
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             visible: Gamepad.connected && panel.usePattern
@@ -156,7 +168,7 @@ Item {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         HButton {
-            visible: panel.mode === "change" || panel.mode === "off"
+            visible: panel.mode === "change" || panel.mode === "off" || panel.mode === "own"
             anchors.horizontalCenter: parent.horizontalCenter
             kind: "plain"; text: "Cancel"
             onClicked: panel.cancelled()
@@ -188,6 +200,7 @@ Item {
             Keys.onEscapePressed: { input.text = ""; if (Ui.main) Ui.main.restoreFocus() }
         }
         Text {
+            textFormat: Text.PlainText
             visible: input.text.length === 0
             anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
             anchors.verticalCenter: parent.verticalCenter

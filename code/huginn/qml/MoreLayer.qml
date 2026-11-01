@@ -2,7 +2,7 @@ import QtQuick
 import QtMultimedia
 import Huginn
 
-// Cap m2 over a chat or a group channel (shared/docs/protocol-0.6.md section 12), the same as Muninn's ChatMore.kt and
+// Cap m2 over a chat or a group channel (shared/docs/protocol.md section 12), the same as Muninn's ChatMore.kt and
 // CameraScreen.kt: the attach menu (pictures, several at once as an album; a video message; a video file; a
 // poll), an album full size with arrows, a video message playing, the camera recording one (it waits for
 // Send or Discard, never sent by itself), a new poll, and the Shared page (photos, videos and links).
@@ -32,7 +32,7 @@ Item {
         if (tour) return
         if (where === "") { Ui.say("Open a chat first.", true); return }
         Ui.pickFrom("Send to " + title, [{ header: "", items: [
-            { name: "Pictures from this PC", detail: "Up to 10 as an album", url: "files", icon: "image" },
+            { name: "Pictures from this device", detail: "Up to 10 as an album", url: "files", icon: "image" },
             { name: "Recent pictures", url: "recent", icon: "image" },
             { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },
             { name: "Video file", detail: "MP4, up to a minute", url: "videofile", icon: "play" },
@@ -114,7 +114,7 @@ Item {
     }
     function closeVideo() { Videos.stop(); videoId = "" }
     function recordVideo() {
-        if (!Videos.hasCamera()) { Ui.say("No camera found on this computer.", true); return }
+        if (!Videos.hasCamera()) { Ui.say("No camera found on this device.", true); return }
         camera = true
         Qt.callLater(() => { if (!Videos.openCamera(camOut)) { Ui.say(Videos.error, true); camera = false } })
     }
@@ -236,7 +236,7 @@ Item {
                     anchors.centerIn: parent
                     spacing: Theme.px(4)
                     Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "play"; color: "white"; size: Theme.px(30) }
-                    Text { text: Voice.length(modelData.video || 0); color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Text { textFormat: Text.PlainText; text: Voice.length(modelData.video || 0); color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 }
                 Accessible.role: Accessible.Button
                 Accessible.name: (modelData.video > 0 ? "Video from " : "Photo from ") + modelData.name
@@ -279,6 +279,7 @@ Item {
             }
         }
         Text {
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             visible: (layer.sharedTab === "media" ? layer.sharedData.media.length : layer.sharedData.links.length) === 0
             text: layer.sharedTab === "media" ? "No photos or videos yet." : "No links yet."
@@ -341,6 +342,7 @@ Item {
             fillMode: VideoOutput.PreserveAspectFit
         }
         Text {
+            textFormat: Text.PlainText
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top; anchors.topMargin: Theme.px(16)
             text: Videos.reviewing ? "Your video message · " + Voice.length(Videos.reviewMs) + " · it's only sent if you choose Send"
@@ -365,6 +367,7 @@ Item {
             HButton { visible: Videos.reviewing; text: "Send"; kind: "accent"; onClicked: layer.sendRecorded() }
         }
         Text {
+            textFormat: Text.PlainText
             anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: Theme.px(22)
             visible: !!Ui.main && Ui.main.padInUse
             text: Videos.reviewing ? "A: Send · X: watch again · B: Discard" : Videos.recording ? "A: Stop" : "A: Record · B: Cancel"

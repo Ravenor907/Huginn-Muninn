@@ -35,6 +35,14 @@ qint64 now() { return QDateTime::currentMSecsSinceEpoch(); }
 QByteArray compact(const QJsonObject &o) { return QJsonDocument(o).toJson(QJsonDocument::Compact); }
 QString jstr(const QJsonObject &o, const char *k) { return o.value(QLatin1String(k)).toString(); }
 bool shortText(const QJsonValue &v, int max) { return v.isString() && v.toString().size() <= max; }
+// A report carries only its text, its screenshot, lb (app, version, system, model) and the way back (chat key and
+// mailbox): no name, no caps list.
+QJsonObject bare(QJsonObject o)
+{
+    o.remove(QStringLiteral("caps"));
+    o.remove(QStringLiteral("cap"));
+    return o;
+}
 }
 
 Labs::Labs(Chat *chat, Vault *vault, Settings *settings, QObject *parent)
@@ -86,7 +94,7 @@ bool Labs::idOk(const QJsonValue &v)
     return true;
 }
 
-// shared/docs/protocol-0.6.md section 24: app, v, os and model (each at most 80 characters), and s (a screenshot's id)
+// shared/docs/protocol.md section 24: app, v, os and model (each at most 80 characters), and s (a screenshot's id)
 // only on the report itself.
 bool Labs::lbOk(const QJsonObject &lb, bool piece)
 {
@@ -148,7 +156,7 @@ QString Labs::send(const QString &text, bool withShot)
     const Ratchet::NewKey newKey = [] { return ChatCrypto::newKeyPair(); };
     QJsonObject lb = lbField();
     auto fields = [this, &lb](const QString &room, const QString &id) {
-        return QJsonObject{{QStringLiteral("room"), room}, {QStringLiteral("fromKey"), m_chat->chatKey()}, {QStringLiteral("fromName"), m_chat->username()},
+        return QJsonObject{{QStringLiteral("room"), room}, {QStringLiteral("fromKey"), m_chat->chatKey()},
                            {QStringLiteral("mailbox"), m_chat->mailbox()}, {QStringLiteral("id"), id}, {QStringLiteral("lb"), lb}};
     };
     QList<QByteArray> bodies;
@@ -164,13 +172,13 @@ QString Labs::send(const QString &text, bool withShot)
             QJsonObject f = fields(QStringLiteral("photo"), shotId);
             f.insert(QStringLiteral("i"), i);
             f.insert(QStringLiteral("n"), int(parts.size()));
-            bodies << compact(ChatWire::seal(f, sk, key, parts.at(i), nullptr, newKey));
+            bodies << compact(bare(ChatWire::seal(f, sk, key, parts.at(i), nullptr, newKey)));
         }
     }
     // The report itself: an ordinary private message (v1, unbound, as to a newly added contact), naming its screenshot.
     if (!shotId.isEmpty())
         lb.insert(QStringLiteral("s"), shotId);
-    bodies << compact(ChatWire::seal(fields(QStringLiteral("private"), QUuid::createUuid().toString(QUuid::WithoutBraces)), sk, key, t.toUtf8(), nullptr, newKey));
+    bodies << compact(bare(ChatWire::seal(fields(QStringLiteral("private"), QUuid::createUuid().toString(QUuid::WithoutBraces)), sk, key, t.toUtf8(), nullptr, newKey)));
     if (!m_chat->sendInternet(key, bodies, QString::fromLatin1(kMailbox), nullptr, 7))
         return QStringLiteral("The report couldn't be sent. Try again.");
     m_lastSent = now();
@@ -191,25 +199,10 @@ bool Labs::replyAllowed(const QString &fromKey) const
 
 bool Labs::beforeGoingBack()
 {
-    if (m_vault->locked())
-        return false;
-    QSettings plain(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    // Your chat name and who you blocked (Chat keeps them in prefs.json).
-    const QJsonObject prefs = QJsonDocument::fromJson(m_vault->read(QStringLiteral("prefs.json"))).object();
-    if (!jstr(prefs, "username").isEmpty())
-        plain.setValue(QStringLiteral("chat/username"), jstr(prefs, "username"));
-    const QStringList muted = prefs.value(QStringLiteral("muted")).toVariant().toStringList();
-    if (!muted.isEmpty())
-        plain.setValue(QStringLiteral("chat/muted"), muted);
-    // A move under way (Move keeps it in move.json).
-    const QJsonObject move = QJsonDocument::fromJson(m_vault->read(QStringLiteral("move.json"))).object();
-    for (const QString &k : {QStringLiteral("in"), QStringLiteral("out")})
-        if (move.value(k).isObject())
-            plain.setValue(QStringLiteral("move/") + k, compact(move.value(k).toObject()));
-    plain.sync();
+    // The stable release reads the vault as this one does: only Labs and the beta channel are turned off.
     m_settings->setUpdateChannel(QStringLiteral("stable"));
     m_settings->setLabs(false);
-    return plain.status() == QSettings::NoError;
+    return true;
 }
 
 // ------------------------------------------------------------------ the Labs inbox (the Huginn with the Labs key)

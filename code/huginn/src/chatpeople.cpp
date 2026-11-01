@@ -18,7 +18,7 @@ QString str(const QVariantMap &m, const char *k) { return m.value(QLatin1String(
 const QString kFlags = QStringLiteral("chatflags.json");
 }
 
-// Tokens that bring others with them (shared/docs/protocol-0.6.md 1.1): c2 and v1 mean c1, m2 means m1.
+// Tokens that bring others with them (shared/docs/protocol.md 1.1): c2 and v1 mean c1, m2 means m1.
 bool Chat::capIn(const QStringList &caps, const QString &cap)
 {
     if (caps.contains(cap))
@@ -60,10 +60,6 @@ bool Chat::mayHave(const QString &key, const QString &cap)
     }
     return capIn(m_caps.value(key), cap);
 }
-
-bool Chat::mayVideo(const QString &key) { return canCall(key) && mayHave(key, QStringLiteral("c2")); }
-
-bool Chat::mayVideoMessage(const QString &key) { return (isContact(key) || m_met.contains(key)) && mayHave(key, QStringLiteral("m2")); }
 
 // ------------------------------------------------------------------ per person (the press-and-hold sheet)
 
@@ -144,19 +140,6 @@ void Chat::pinChat(const QString &key, bool on)
     m_pinnedChats.removeAll(key);
     if (on)
         m_pinnedChats.prepend(key);
-    saveFlags();
-}
-
-void Chat::orderPinned(const QStringList &keys)
-{
-    QStringList next;
-    for (const QString &k : keys)
-        if (m_pinnedChats.contains(k) && !next.contains(k))
-            next << k;
-    for (const QString &k : std::as_const(m_pinnedChats))
-        if (!next.contains(k))
-            next << k;
-    m_pinnedChats = next;
     saveFlags();
 }
 

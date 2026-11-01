@@ -130,14 +130,15 @@ Rectangle {
     }
     readonly property string chatKey: "g:" + gid + ":" + channelId
 
-    readonly property var prompts: shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
+    readonly property var prompts: Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
+        : shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Group menu" }, { key: "b", label: "Back" }]
         : zone === "members" ? [{ key: "a", label: "Menu" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
-        : (readOnly ? [] : [{ key: "a", label: "Write" }, { key: "y", label: "Hold to talk" }]).concat([{ key: "lt", label: sel >= 0 ? "Options" : "Group menu" }, { key: "b", label: "Back" }])
+        : (readOnly ? [] : [{ key: "a", label: sel >= 0 && messages[sel] && messages[sel].call ? "Call back" : "Write" }, { key: "y", label: "Hold to record" }]).concat([{ key: "lt", label: sel >= 0 ? "Options" : "Group menu" }, { key: "b", label: "Back" }])
     readonly property string status: Chat.netStatus
 
     function clock(ms) { return Qt.formatTime(new Date(ms), "h:mm AP") }
@@ -248,6 +249,7 @@ Rectangle {
                         color: catHover.hovered ? Theme.text : Theme.textMuted
                     }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: foldIcon.right; anchors.leftMargin: Theme.px(4)
                         anchors.verticalCenter: parent.verticalCenter
                         text: modelData.text || ""
@@ -283,6 +285,7 @@ Rectangle {
                         color: Theme.textMuted
                     }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: chanIcon.right; anchors.leftMargin: Theme.px(6)
                         anchors.right: unreadDot.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
@@ -336,13 +339,14 @@ Rectangle {
                                     border.color: Theme.online
                                 }
                             }
-                            Text { anchors.verticalCenter: parent.verticalCenter; text: modelData.name; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                            Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                         }
                     }
                 }
             }
         }
         Text {
+            textFormat: Text.PlainText
             visible: page.locked || !page.exists
             anchors.top: chanHead.bottom
             anchors.topMargin: Theme.px(16)
@@ -400,6 +404,7 @@ Rectangle {
                 height: visible ? goneText.implicitHeight + Theme.px(20) : 0
                 radius: Theme.radius; color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
                 Text {
+                    textFormat: Text.PlainText
                     id: goneText
                     x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
                     wrapMode: Text.WordWrap
@@ -429,9 +434,11 @@ Rectangle {
                     hoverTools: !page.readOnly
                     onChosen: { page.zone = "messages"; page.sel = index }
                     onOptions: { page.zone = "messages"; page.sel = index; page.messageOptions() }
+                    onCallBack: page.callBack()
                 }
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 width: parent.width * 0.7
                 horizontalAlignment: Text.AlignHCenter
@@ -458,7 +465,7 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Release Y to send, B cancels" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { textFormat: Text.PlainText; width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go: send · B: cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
@@ -477,7 +484,7 @@ Rectangle {
                 z: 3
                 Accessible.role: Accessible.Button
                 Accessible.name: "Jump to new messages"
-                Text { id: jumpText; anchors.centerIn: parent; text: "New messages · jump"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                Text { textFormat: Text.PlainText; id: jumpText; anchors.centerIn: parent; text: "New messages · jump"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: list.positionViewAtIndex(page.newFrom, ListView.Beginning) }
             }
@@ -492,7 +499,7 @@ Rectangle {
                     visible: parent.containsDrag
                     color: Qt.rgba(0, 0, 0, 0.55)
                     border.color: Theme.accent; border.width: 2; radius: Theme.radius
-                    Text { anchors.centerIn: parent; text: "Drop to send to #" + page.channel.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20) }
+                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "Drop to send to #" + page.channel.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20) }
                 }
             }
 
@@ -567,6 +574,7 @@ Rectangle {
             }
         }
         Text {
+            textFormat: Text.PlainText
             visible: page.side === "pins" && page.pinnedMsgs.length === 0
             anchors.top: sideHead.bottom; anchors.topMargin: Theme.px(16)
             x: Theme.px(16); width: parent.width - Theme.px(32)
@@ -601,6 +609,7 @@ Rectangle {
         Accessible.role: Accessible.StaticText
         Accessible.name: mentions > 0 ? mentions + (mentions === 1 ? " mention" : " mentions") : unread + " unread"
         Text {
+            textFormat: Text.PlainText
             id: countText
             visible: parent.mentions > 0
             anchors.centerIn: parent
@@ -650,8 +659,9 @@ Rectangle {
                 id: codeCol
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
                 spacing: Theme.px(10)
-                Text { width: parent.width; wrapMode: Text.WordWrap; text: ("Join " + (page.info.name || "")).toUpperCase(); color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
+                Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.WordWrap; text: ("Join " + (page.info.name || "")).toUpperCase(); color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
                 Text {
+                    textFormat: Text.PlainText
                     property real now: Date.now()
                     Timer { interval: 10000; repeat: true; running: page.shownCode !== ""; onTriggered: parent.now = Date.now() }
                     width: parent.width; wrapMode: Text.WordWrap
@@ -747,7 +757,7 @@ Rectangle {
         if (isTour || canInvite || (!readOnly && info.amAdmin)) items.push({ name: "Add people", icon: "plus", url: "add" })
         items.push({ name: "Channels", icon: "hash", url: "channels" },
                    { name: "Group settings", icon: "gear", url: "settings" })
-        items.push(readOnly ? { name: "Delete from this PC", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true })
+        items.push(readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true })
         Ui.pickFrom(info.name || "Group", [{ header: "", items: items }], a => groupAction(a))
     }
     function groupAction(a) {
@@ -763,7 +773,7 @@ Rectangle {
             if (info.amOwner && info.count > 1) { Ui.say("Make someone else owner first.", true); return }
             Ui.sure("Leave " + info.name + "?", "Only an invite brings you back.", "Leave", () => tell(Chat.leaveGroup(g), "You left the group."), false, true)
         } else if (a === "forget") {
-            Ui.sure("Delete " + info.name + " from this PC?", "Can't be undone.", "Hold to delete",
+            Ui.sure("Delete " + info.name + " from this device?", "Can't be undone.", "Hold to delete",
                     () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
         }
     }
@@ -907,6 +917,12 @@ Rectangle {
             else if (a === "remove") Ui.sure("Remove " + m.name + "?", "They're told.", "Remove", () => tell(Chat.removeMember(g, m.key), m.name + " was removed."), false, true)
         }, back)
     }
+    // A group call's line: ring everyone again.
+    function callBack() {
+        if (isTour || locked || gid === "") return
+        const w = Rooms.callGroup(gid, [])
+        Ui.say(w !== "" ? w : "Ringing everyone.", w !== "")
+    }
     function messageOptions() {
         const m = messages[sel]
         if (!m || m.system) { groupMenu(); return }
@@ -1012,7 +1028,7 @@ Rectangle {
         if (isTour) return
         const on = pins.indexOf(id) < 0
         Chat.setPinned(chatKey, id, on)
-        Ui.say(on ? "Pinned on this PC." : "Unpinned.")
+        Ui.say(on ? "Pinned on this device." : "Unpinned.")
     }
     function dropFiles(urls) { more.dropFiles(urls) }
     function pickReaction(m) {
@@ -1123,6 +1139,7 @@ Rectangle {
         case "a":
             if (zone === "channels") openRow()
             else if (zone === "members") memberMenu(memberCol.ordered[memRow])
+            else if (sel >= 0 && messages[sel] && messages[sel].call) callBack()   // a call's line: call back
             else write()
             return true
         case "x":

@@ -132,21 +132,13 @@ void Chat::start()
 {
     if (m_ready)
         return;
-    // Keys live in the vault. Keys found in plain settings are moved in.
+    // The chat key's private half lives in the vault (made the first time).
     QJsonObject secrets = QJsonDocument::fromJson(m_vault->read(QStringLiteral("secrets.json"))).object();
     if (secrets.value(QStringLiteral("chatPriv")).toString().isEmpty()) {
-        QByteArray priv = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/priv")).toByteArray());
-        QByteArray pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
-        if (priv.isEmpty() || pub.isEmpty()) {
-            const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
-            priv = kp.privateDer;
-            pub = kp.publicDer;
-        }
-        secrets.insert(QStringLiteral("chatPriv"), b64(priv));
-        m_settings.setValue(QStringLiteral("chat/pub"), pub.toBase64());
-        // Only drop the plain copy once the vault really has it, or the identity could be lost.
-        if (m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(secrets).toJson(QJsonDocument::Compact)))
-            m_settings.remove(QStringLiteral("chat/priv"));
+        const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
+        secrets.insert(QStringLiteral("chatPriv"), b64(kp.privateDer));
+        m_settings.setValue(QStringLiteral("chat/pub"), kp.publicDer.toBase64());
+        m_vault->write(QStringLiteral("secrets.json"), QJsonDocument(secrets).toJson(QJsonDocument::Compact));
     }
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
     m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
@@ -167,16 +159,6 @@ void Chat::start()
         for (auto it = b.begin(); it != b.end(); ++it)
             m_bound.insert(it.key(), qint64(it.value().toDouble()));
     }
-    // People in the trusted list become contacts.
-    const QVariantMap trusted = m_settings.value(QStringLiteral("chat/trusted")).toMap();
-    for (auto it = trusted.begin(); it != trusted.end(); ++it)
-        if (!m_contacts.contains(it.key()))
-            m_contacts.insert(it.key(), {{QStringLiteral("key"), it.key()}, {QStringLiteral("name"), it.value()}, {QStringLiteral("verified"), true}});
-    if (!trusted.isEmpty()) {
-        saveContacts();
-        m_settings.remove(QStringLiteral("chat/trusted"));
-    }
-
     m_net->chatInfo = [this] {
         QJsonObject o{{QStringLiteral("chatApp"), QStringLiteral("huginn")}};
         // Hidden from people nearby: no name at all, not even the computer's (LocalSend's alias), no chat key,
@@ -275,28 +257,6 @@ void Chat::loadPrefs()
 {
     m_prefs = QJsonDocument::fromJson(m_vault->read(QStringLiteral("prefs.json"))).object();
     m_prefsLoaded = true;
-    // Found in plain settings (a restore or a move puts them there, so they win): moved into the
-    // vault, then removed there.
-    bool moved = false;
-    const QString name = m_settings.value(QStringLiteral("chat/username")).toString();
-    if (!name.isEmpty()) {
-        m_prefs.insert(QStringLiteral("username"), name);
-        moved = true;
-    }
-    const QStringList plainBlocked = m_settings.value(QStringLiteral("chat/muted")).toStringList();
-    if (!plainBlocked.isEmpty()) {
-        QStringList all = blockedKeys();
-        for (const QString &k : plainBlocked)
-            if (!all.contains(k))
-                all << k;
-        m_prefs.insert(QStringLiteral("muted"), QJsonArray::fromStringList(all));
-        moved = true;
-    }
-    // Only dropped from plain settings once the vault really has them.
-    if (moved && !m_vault->write(QStringLiteral("prefs.json"), QJsonDocument(m_prefs).toJson(QJsonDocument::Compact)))
-        return;
-    m_settings.remove(QStringLiteral("chat/username"));
-    m_settings.remove(QStringLiteral("chat/muted"));
 }
 
 void Chat::savePrefs() const
@@ -330,6 +290,13 @@ void Chat::setUsername(const QString &v)
     m_prefs.insert(QStringLiteral("username"), t);
     savePrefs();
     m_net->announce();
+    // Contacts see the new name at once: it rides on every envelope, so each gets an empty receipt now.
+    if (m_ready && !m_moving) {
+        const QJsonObject r{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}};
+        for (auto it = m_contacts.cbegin(); it != m_contacts.cend(); ++it)
+            if (!isBlocked(it.key()) && !isTrashed(it.key()))
+                deliver(it.key(), envelope(QStringLiteral("receipt"), it.key(), compact(r), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(it.key()));
+    }
     Q_EMIT changed();
 }
 
@@ -609,10 +576,12 @@ void Chat::replaceKey(const QString &oldKey, const QString &newKey, const QStrin
 }
 
 // A line in the conversation from Huginn itself (not from them, never sent anywhere).
-void Chat::systemNote(const QString &key, const QString &text)
+void Chat::systemNote(const QString &key, const QString &text, bool call)
 {
     QVariantMap m = message(QUuid::createUuid().toString(QUuid::WithoutBraces), key, QString(), text, false, QString());
     m.insert(QStringLiteral("system"), true);
+    if (call)
+        m.insert(QStringLiteral("call"), true);
     m.insert(QStringLiteral("state"), QStringLiteral("read"));   // never answered with a receipt
     addPrivate(key, m);
 }
@@ -624,10 +593,10 @@ void Chat::noteCall(const QString &where, const QString &text, bool missed)
     if (where.startsWith(QLatin1String("g:"))) {
         const QString g = where.mid(2);
         if (m_groups.contains(g))
-            groupNote(g, text);
+            groupNote(g, text, true);
         return;
     }
-    systemNote(where, text);
+    systemNote(where, text, true);
     if (missed) {
         m_unread.insert(where);
         Q_EMIT changed();
@@ -1094,7 +1063,6 @@ bool Chat::shouldAskKeep(const QString &key) const
     return m.value(QStringLiteral("theySaid")).toBool() || m_private.value(key).size() >= kKeepAfter || route(key).isEmpty();
 }
 
-bool Chat::saidKeep(const QString &key) const { return m_met.value(key).value(QStringLiteral("iSaid")).toBool(); }
 bool Chat::theySaidKeep(const QString &key) const { return m_met.value(key).value(QStringLiteral("theySaid")).toBool(); }
 
 void Chat::keepInTouch(const QString &key)
@@ -1558,6 +1526,16 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     const QByteArray plain = open(o, fromKey, &ok);
     if (!ok)
         return keyWith(fromKey).isEmpty() ? 400 : 403;
+    // A contact's new name (the one they chose; a nickname here still wins) comes with anything they send, once the
+    // envelope proves it's theirs: sealed with its clear fields, or straight from them over Wi-Fi or Bluetooth.
+    if (isContact(fromKey) && (m_openedBound || via != QLatin1String("internet"))) {
+        const QString theirs = o.value(QStringLiteral("fromName")).toString().trimmed().left(40);
+        if (!theirs.isEmpty() && theirs != str(m_contacts.value(fromKey), "name")) {
+            m_contacts[fromKey].insert(QStringLiteral("name"), theirs);
+            saveContacts();
+            Q_EMIT changed();
+        }
+    }
     // Calls: only from contacts and group peers, at most 30 signals in 10 seconds each.
     if (room == QLatin1String("call")) {
         // Contacts and group peers; someone met only while close by or on the same Wi-Fi.
@@ -1592,7 +1570,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     // Caps i1 and f1 and linked devices (trust.cpp): introductions, files straight between devices
     // and a phone's companion, each with its own checks and limits.
     if (room == QLatin1String("intro") || room == QLatin1String("file") || room == QLatin1String("link")) {
-        const int code = receiveExtra(room, fromKey, name, mailbox, QJsonDocument::fromJson(plain).object());
+        const int code = receiveExtra(room, fromKey, name, mailbox, QJsonDocument::fromJson(plain).object(), via);
         if (code != 200) {
             m_pendingPeer.reset();
             return code;
@@ -2024,11 +2002,10 @@ void Chat::loadRecentPictures()
 
 void Chat::copyLink() const
 {
-    if (auto *c = QGuiApplication::clipboard())
-        c->setText(myLink());
+    copyText(myLink());
 }
 
-// Messages and codes copied from Chat: kept out of Windows clipboard history and cloud clipboard, and out of
+// Messages, codes and links copied from Chat: kept out of Windows clipboard history and cloud clipboard, and out of
 // KDE's clipboard history, and cleared after a minute if they're still there.
 void Chat::copyText(const QString &text) const
 {
@@ -2829,7 +2806,7 @@ void Chat::saveMet()
 
 void Chat::saveContacts()
 {
-    // Adding a group peer as a contact just makes them a contact (shared/docs/protocol-0.6.md 3.7).
+    // Adding a group peer as a contact just makes them a contact (shared/docs/protocol.md 3.7).
     bool peers = false;
     for (auto it = m_contacts.begin(); it != m_contacts.end(); ++it)
         if (m_gpeers.remove(it.key()))
@@ -3047,7 +3024,7 @@ int Chat::nearbyCount() const
 }
 
 // ------------------------------------------------------------------ cap m1: reactions, edits, typing, active status
-// shared/docs/protocol-0.6.md section 11, the same as Muninn's net/Chat.kt and Rich.kt. Only ever sent to someone
+// shared/docs/protocol.md section 11, the same as Muninn's net/Chat.kt and Rich.kt. Only ever sent to someone
 // whose app said "m1".
 
 QStringList Chat::quickReactions() const

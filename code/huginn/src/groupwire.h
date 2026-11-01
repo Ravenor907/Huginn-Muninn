@@ -6,7 +6,7 @@
 #include <QString>
 #include <QVariantMap>
 
-// The deterministic parts of group chats (shared/docs/protocol-0.6.md, sections 2 and 3), kept apart
+// The deterministic parts of group chats (shared/docs/protocol.md, sections 2 and 3), kept apart
 // from Chat so the self-test can check them against shared/vectors/proto06-vectors.json byte for byte:
 //  - canonical JSON (what gets signed and hashed), never QJsonDocument's own text
 //  - signed objects: ECDSA P-256 / SHA-256 with the chat key, DER, standard base64

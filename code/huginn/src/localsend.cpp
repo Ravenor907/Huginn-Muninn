@@ -230,8 +230,7 @@ void LocalSend::checkPeer(QNetworkReply *r, const QString &expected)
         const QString got = Tls::fingerprintOf(r->sslConfiguration().peerCertificate());
         r->setProperty("peerFingerprint", got);
         if (!expected.isEmpty() && !Tls::sameFingerprint(got, expected)) {
-            qWarning("Nearby sharing: refused %s, its certificate doesn't match the fingerprint it announced",
-                     qPrintable(r->url().host()));
+            qWarning("Nearby sharing: refused a device, its certificate doesn't match the fingerprint it announced");
             r->setProperty("pinFailed", true);
             r->abort();
         }
@@ -624,9 +623,10 @@ void LocalSend::onData(QTcpSocket *s)
                                  QString::fromUtf8(lines.at(i).mid(colon + 1)).trimmed());
         }
         c.bodyLeft = c.headers.value(QStringLiteral("content-length")).toLongLong();
-        // Chat envelopes are at most 64 KB (protocol 9), other requests a little JSON: anything bigger is refused up front.
+        // Chat envelopes are at most 64 KB (protocol 9; room "link" parts up to 512 KB, checked again once read), other
+        // requests a little JSON: anything bigger is refused up front.
         const bool upload = c.path == kApi + QStringLiteral("/upload");
-        const qint64 most = c.path == QLatin1String("/api/huginn/v1/message") ? 96 * 1024 : 2 * 1024 * 1024;
+        const qint64 most = c.path == QLatin1String("/api/huginn/v1/message") ? 512 * 1024 : 2 * 1024 * 1024;
         if (c.bodyLeft < 0 || (!upload && c.bodyLeft > most)) {
             reply(s, 413);
             return;
@@ -756,6 +756,11 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         return;
     }
     if (path == QStringLiteral("/api/huginn/v1/message")) {
+        // Up to 96 KB, and up to 512 KB only for room "link" (a linked phone's files in 192 KB parts).
+        if (c.body.size() > 96 * 1024 && QJsonDocument::fromJson(c.body).object().value(QStringLiteral("room")).toString() != QLatin1String("link")) {
+            reply(s, 413, "{}");
+            return;
+        }
         reply(s, chatReceive ? chatReceive(c.body, ip) : 404, "{}");
         return;
     }

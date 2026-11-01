@@ -4,24 +4,18 @@
 
 class QQuickWindow;
 
-// Starting up on Windows, and on Linux through Wine or Proton (Steam's "non-Steam game").
-// Everything here does nothing on Linux builds.
+// Starting up on Windows. Everything here does nothing on Linux builds.
 namespace Platform
 {
-// True when this Windows build runs under Wine or Proton.
-bool underWine();
-QString wineVersion();   // "9.0" and so on; empty on Windows
-
 // First thing in main(), before QApplication: starts the start log (its lines wait in memory until
-// startClaimed), logs every Qt warning and a crash into it, and under Wine picks Qt settings that
-// work there. Nothing to undo.
+// startClaimed), logs every Qt warning and a crash into it. Nothing to undo.
 void beginStart();
 // Once this copy holds the single instance (or runs on its own, like the screenshot tour): writes
 // Huginn-start.log next to Huginn.exe (the temp folder if that can't be written), fresh, and with
 // tidy, cleans up after an update.
 void startClaimed(bool tidy);
-// Right after QApplication: picks a Qt Quick graphics backend that actually starts here (Direct3D 11
-// on Windows, OpenGL under Wine, the software renderer if neither does), unless one was set already.
+// Right after QApplication: picks a Qt Quick graphics backend that actually starts here (Direct3D 11,
+// then OpenGL, the software renderer if neither does), unless one was set already.
 void chooseGraphics();
 // A line in the start log ("engine loaded", "window shown"...).
 void startStep(const QString &what);

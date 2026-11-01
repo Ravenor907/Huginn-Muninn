@@ -15,6 +15,8 @@ Item {
     property var cancelCallback: null
     property string tag: ""
     property string cancelText: "Cancel"
+    // Only the answer button (a note to read, like a copied code): B closes it too.
+    property bool single: false
     property real held: 0
 
     visible: false
@@ -23,7 +25,7 @@ Item {
     function open(t, msg, confirm, cb, needsHold, isDanger, onCancel, openTag) {
         title = t; message = msg; confirmText = confirm || "Continue"
         callback = cb || null; hold = !!needsHold; danger = !!isDanger
-        cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"
+        cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"; single = false
         held = 0; visible = true
     }
     function confirm() {
@@ -79,6 +81,7 @@ Item {
                 width: scroller.width
                 spacing: Theme.px(8)
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     wrapMode: Text.Wrap
                     text: dlg.title.toUpperCase()
@@ -90,6 +93,7 @@ Item {
                 }
                 // Wraps at spaces, and inside a long code that has none.
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     wrapMode: Text.Wrap
                     text: dlg.message
@@ -119,7 +123,7 @@ Item {
                 anchors.right: parent.right; anchors.rightMargin: Theme.px(20)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(8)
-                HButton { text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
+                HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
                 HButton {
                     id: go
                     text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : dlg.confirmText

@@ -38,11 +38,11 @@ class CallManager : public QObject
     Q_PROPERTY(bool relayLive READ relayLive NOTIFY changed)
     Q_PROPERTY(bool wifiLive READ wifiLive NOTIFY changed)
     Q_PROPERTY(bool bleLive READ bleLive NOTIFY changed)
-    // The direct internet path between two people who trust each other (shared/docs/protocol-0.6.md 5.8.2).
+    // The direct internet path between two people who trust each other (shared/docs/protocol.md 5.8.2).
     Q_PROPERTY(bool directLive READ directLive NOTIFY changed)
     Q_PROPERTY(bool directTried READ directTried NOTIFY changed)
     Q_PROPERTY(QString outputName READ outputName NOTIFY changed)
-    // Video (shared/docs/protocol-0.6.md 5.8.5): this build can do it; this call can (both c2 with VP8, answered);
+    // Video (shared/docs/protocol.md 5.8.5): this build can do it; this call can (both c2 with VP8, answered);
     // the camera is on; the other person's camera is on; the turn that shows their picture upright;
     // an incoming call that started with video.
     Q_PROPERTY(bool videoAvailable READ videoAvailable CONSTANT)
@@ -113,12 +113,10 @@ public:
     // Default: everyone in the Family folder. The switch overrides it, on or off.
     Q_INVOKABLE bool trusted(const QString &key) const;
     Q_INVOKABLE void setTrusted(const QString &key, bool on);
-    // "On (Family folder)", "On", "Off": for the contact menus.
-    Q_INVOKABLE QString trustText(const QString &key) const;
 
     // Set by main.cpp: true while this device is in a voice room (1:1 offers then get busy, 6.6).
     std::function<bool()> busyElsewhere;
-    // Cap b1 (shared/docs/protocol-0.6.md section 23): a ring envelope opened while Huginn is locked. It rings with
+    // Cap b1 (shared/docs/protocol.md section 23): a ring envelope opened while Huginn is locked. It rings with
     // "Incoming call" and no name (nothing else is known). Answer or Decline on the notification is kept, and the
     // offer itself, read once Huginn is unlocked, follows it.
     void ringLocked(const QString &callId, qint64 ts);
@@ -152,7 +150,7 @@ private:
     int m_lockedChoice = 0;        // 0 nothing yet, 1 answer, 2 decline
     bool m_lockedRinging = false;
     QTimer m_lockedTimer;
-    Q_SLOT void onNotificationAction(uint id, const QString &action);
+    void onNotificationAction(const QString &action);   // a button on the ringing notification
 
     CallSignal *m_signal;
     QPointer<Vault> m_vault;
@@ -162,7 +160,6 @@ private:
     QTimer m_ticker, m_clear, m_ringer;
     Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     QVariantList m_history;      // newest first: {id, key, name, out, result, started, seconds, missed}
-    qint64 m_seen = 0;           // kept in the saved history for older builds (they counted missed calls after it)
     qint64 m_started = 0;
     qint64 m_preparedAt = 0;
     uint m_notification = 0;

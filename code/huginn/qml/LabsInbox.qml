@@ -69,18 +69,21 @@ Item {
             x: Theme.px(24); y: Theme.px(20)
             width: parent.width - Theme.px(48); height: Theme.px(28)
             Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: "LABS REPORTS"
                 color: Theme.text
                 font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                 text: "A reply, X delete, B close"
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
         }
         Text {
+            textFormat: Text.PlainText
             visible: inbox.list.length === 0
             anchors.centerIn: parent
             text: "No reports yet."
@@ -119,6 +122,7 @@ Item {
                             width: parent.width - Theme.px(24)
                             spacing: Theme.px(6)
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 elide: Text.ElideRight
                                 text: card.r.name + "  ·  " + (card.r.app === "muninn" ? "Muninn " : "Huginn ") + card.r.label
@@ -126,6 +130,7 @@ Item {
                                 font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold
                             }
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 wrapMode: Text.Wrap
                                 text: [card.r.os, card.r.model, Qt.formatDateTime(new Date(card.r.time), "d MMM, HH:mm")].filter(t => !!t).join("  ·  ")
@@ -133,6 +138,7 @@ Item {
                                 font.family: Theme.body; font.pixelSize: Theme.fs(13)
                             }
                             Text {
+                                textFormat: Text.PlainText
                                 width: parent.width
                                 wrapMode: Text.Wrap
                                 text: card.r.text || "(no text)"

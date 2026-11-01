@@ -32,6 +32,7 @@ Rectangle {
                 height: Math.max(0, seg.height - 2)
                 color: on ? Theme.accentFill : "transparent"
                 Text {
+                    textFormat: Text.PlainText
                     id: txt
                     anchors.centerIn: parent
                     width: Math.max(0, Math.min(implicitWidth, parent.width - Theme.px(8)))

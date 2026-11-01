@@ -36,6 +36,7 @@ Rectangle {
     property bool tour: false
     property bool changeLock: false
     property bool lockOff: false      // Settings › Turn off the lock: the current lock is asked for first
+    property bool ownLock: false      // Settings › Linked devices › This device's own chats: the lock is asked for first
     // A direct message never shows the member column.
     readonly property bool isGroup: false
     // The controller or its pointer is in use: what opens takes the controller's focus, not a text cursor.
@@ -63,12 +64,20 @@ Rectangle {
     readonly property var threadMsgs: threadRoot === "" ? [] : messages.filter(m => m.id === threadRoot || m.re === threadRoot)
     readonly property bool theyType: openKey !== "" && !locked && Chat.typing[openKey] !== undefined
     readonly property bool theyActive: openKey !== "" && !locked && Chat.active[openKey] !== undefined
+    // The open chat's own color (a contact's menu › Edit › Chat color), else the accent.
+    readonly property string chatColor: openKey === "" || tour || locked ? "" : (Chat.chats, Chat.chatColor(openKey))
+    readonly property color tint: Theme.chatAccent(chatColor)
+    readonly property bool tinted: Theme.validColor(chatColor)
+    // The conversation header's buttons for a controller (Up from the first message): Call, Video and the menu.
+    property int headSel: 0
+    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(["menu"])
 
     function setArgs(a) {
         tour = !!a.tour
         if (tour) picked = true
         changeLock = !!a.changeLock
         lockOff = !!a.lockOff
+        ownLock = !!a.ownChats
         if (a.zone) zone = a.zone
         if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
@@ -86,6 +95,13 @@ Rectangle {
     readonly property var entries: {
         // Rows waiting for an answer carry a short tag instead of a second line.
         const out = []
+        // A linked phone (this device as its companion): only the phone's chats; this device's own are put away.
+        if (Linked.sealed && !tour) {
+            const phoneChats = Linked.mirror
+            phoneChats.forEach(c => out.push({ kind: "mirror", peer: c.peer, name: c.name }))
+            if (!phoneChats.length) out.push({ kind: "mirror", peer: "", name: Linked.phone.name + "'s chats", tag: "Phone" })
+            return out
+        }
         Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, tag: i.waiting ? "Waiting" : "Invite" }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               tag: r.replaces ? "New key" : "Request" }))
@@ -124,17 +140,20 @@ Rectangle {
     function routeWord(r) { return r === "bluetooth" ? "Bluetooth" : r === "wifi" ? "Wi-Fi" : r === "internet" ? "Internet" : "Not reachable" }
 
     // What the hint bar shows (Main.qml adds LB). LT opens the menu (the page gets it as X).
-    readonly property var prompts: lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
+    readonly property var prompts: mirror.visible ? mirror.prompts
+        : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
+        : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusButton === 0 ? "Accept" : "Decline" }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
+        : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
                              { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
         : !picked ? [{ key: "a", label: "Add someone" }, { key: "b", label: "Back" }]
-        : [{ key: "a", label: keep.visible && sel < 0 ? "Keep in touch" : "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to talk" }] : [])
+        : [{ key: "a", label: keep.visible && sel < 0 ? "Keep in touch" : sel >= 0 && messages[sel] && messages[sel].call && openKey !== "" ? "Call back" : "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to record" }] : [])
             .concat(sel >= 0 ? [{ key: "lt", label: "Options" }] : openKey !== "" ? [{ key: "lt", label: "Menu" }] : []).concat([{ key: "b", label: "Back" }])
     readonly property string status: lock.visible ? "" : Chat.netStatus
 
@@ -159,6 +178,7 @@ Rectangle {
 
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
+        if (zone === "head") zone = "messages"
         replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; side = ""
         compose.text = ""
         // Where the unread ones start (after my last message), for the "New messages" line.
@@ -275,6 +295,7 @@ Rectangle {
                     height: entry.labelHeight
                     Rectangle { visible: modelData.kind === "nearby"; anchors.top: parent.top; anchors.topMargin: Theme.px(6); width: parent.width; height: 1; color: Theme.line }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
                         anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(4)
                         text: String(modelData.label || "").toUpperCase()
@@ -304,6 +325,7 @@ Rectangle {
                         color: Theme.textMuted
                     }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: chevron.right; anchors.leftMargin: Theme.px(6)
                         anchors.right: headDot.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
@@ -317,7 +339,8 @@ Rectangle {
                         anchors.right: folderMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.px(8); height: width; radius: width / 2
-                        color: Theme.accent
+                        // A chat with its own color shows it here too.
+                        color: modelData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(modelData.key))) : Theme.accent
                         visible: !!modelData.unread
                     }
                     HoverHandler { id: headHover }
@@ -385,6 +408,7 @@ Rectangle {
                     }
                     // One line: the name, a short tag for what waits for an answer, the unread dot and the three dots.
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
                         anchors.right: tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
@@ -402,6 +426,7 @@ Rectangle {
                         color: "transparent"
                         border.color: modelData.kind === "nearby" || modelData.waiting ? Theme.lineMuted : Theme.accent
                         Text {
+                            textFormat: Text.PlainText
                             id: tagText
                             anchors.centerIn: parent
                             text: modelData.tag || ""
@@ -414,7 +439,8 @@ Rectangle {
                         anchors.right: rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.px(8); height: width; radius: width / 2
-                        color: Theme.accent
+                        // A chat with its own color shows it here too.
+                        color: modelData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(modelData.key))) : Theme.accent
                         visible: !!modelData.unread
                     }
                     HoverHandler { id: rowHover }
@@ -489,6 +515,7 @@ Rectangle {
             border.color: Theme.accent
             opacity: 0.95
             Text {
+                textFormat: Text.PlainText
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
                 anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
@@ -514,6 +541,7 @@ Rectangle {
             }
         }
         Text {
+            textFormat: Text.PlainText
             visible: page.locked
             anchors.top: listHead.bottom
             anchors.topMargin: Theme.px(16)
@@ -547,27 +575,43 @@ Rectangle {
                     : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active"] : [])
                       .concat([page.keyWarning ? "Security key changed" : (Chat.chats, Chat.isVerified(page.openKey)) ? "Verified" : "Not verified"]).join(" · ")
             warn: !page.locked && page.picked && page.keyWarning
-            // Name, Call and the person's one menu.
+            accent: page.tinted && page.picked ? page.tint : "transparent"
+            // Name, Call, Video (when they can) and the person's one menu.
             HButton {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !page.locked && page.openKey !== ""
                 text: "Call"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
+                implicitHeight: Theme.px(30); fontSize: 13; kind: page.tinted ? "accent" : "plain"; accent: page.tint
+                focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "call"
                 onClicked: page.startCall()
+            }
+            HButton {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: !page.locked && page.openKey !== "" && Calls.canVideo(page.openKey)
+                text: "Video"
+                implicitHeight: Theme.px(30); fontSize: 13; kind: page.tinted ? "accent" : "plain"; accent: page.tint
+                focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "video"
+                onClicked: page.startVideo()
             }
             MoreButton {
                 visible: !page.locked && page.openKey !== ""
                 anchors.verticalCenter: parent.verticalCenter
                 label: "More for " + page.openName
                 onClicked: page.chatMenu()
+                Rectangle {
+                    anchors.fill: parent
+                    visible: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "menu"
+                    color: "transparent"; radius: Theme.radius
+                    border.width: Theme.focusWidth; border.color: Theme.text
+                }
             }
         }
 
         // ------------------------------------------------------- locked
         LockPanel {
             id: lock
-            visible: page.locked || page.changeLock || page.lockOff
-            mode: page.lockOff && !page.locked ? "off" : page.changeLock && !page.locked ? "change" : Vault.exists ? "unlock" : "setup"
+            visible: page.locked || page.changeLock || page.lockOff || page.ownLock
+            mode: page.ownLock && !page.locked ? "own" : page.lockOff && !page.locked ? "off" : page.changeLock && !page.locked ? "change" : Vault.exists ? "unlock" : "setup"
             anchors.top: convHead.bottom
             anchors.bottom: parent.bottom
             anchors.horizontalCenter: parent.horizontalCenter
@@ -575,12 +619,15 @@ Rectangle {
             onFinished: how => {
                 if (how === "change") page.changeLock = false   // after an unlock, the change step follows
                 if (how === "off") page.lockOff = false
+                if (how === "own") { page.ownLock = false; Ui.say("This device's own chats are open until Huginn locks.") }
+                // The first time: link a phone, when nothing is linked yet.
+                if (how === "setup" && !Linked.phone.key && Linked.companions.length === 0 && Ui.main) Qt.callLater(() => Ui.main.showLinkPhone(true))
                 // A lock shorter than new ones may be: suggest a stronger one, once.
                 if (how === "unlock" && Vault.askStronger())
                     Ui.sure("Make your lock stronger?", "Your " + (Vault.usesPattern ? "pattern" : "password") + " is shorter than new ones may be. One with at least 6 "
                             + (Vault.usesPattern ? "dots" : "characters") + " is much harder to guess.", "Change it", () => { page.changeLock = true })
             }
-            onCancelled: { if (page.lockOff) page.lockOff = false; else if (page.changeLock) page.changeLock = false; else Ui.closePage() }
+            onCancelled: { if (page.ownLock) page.ownLock = false; else if (page.lockOff) page.lockOff = false; else if (page.changeLock) page.changeLock = false; else Ui.closePage() }
         }
 
         Item {
@@ -604,11 +651,11 @@ Rectangle {
                     id: keepCol
                     x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
                     spacing: Theme.px(6)
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: Chat.theySaidKeep(page.openKey) ? page.openName + " wants to keep in touch" : "Keep in touch with " + page.openName + "?"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold }
-                    Text { width: parent.width; wrapMode: Text.WordWrap; text: "Then message from anywhere."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.WordWrap; text: Chat.theySaidKeep(page.openKey) ? page.openName + " wants to keep in touch" : "Keep in touch with " + page.openName + "?"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold }
+                    Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.WordWrap; text: "Then message from anywhere."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                     Row {
                         spacing: Theme.px(8)
-                        HButton { text: "Yes"; kind: "primary"; focused: page.pad && page.active && page.zone === "messages" && page.sel < 0; implicitHeight: Theme.px(32); fontSize: 13; onClicked: Chat.keepInTouch(page.openKey) }
+                        HButton { text: "Yes"; kind: "primary"; accent: page.tint; focused: page.pad && page.active && page.zone === "messages" && page.sel < 0; implicitHeight: Theme.px(32); fontSize: 13; onClicked: Chat.keepInTouch(page.openKey) }
                         HButton { text: "Not now"; kind: "plain"; implicitHeight: Theme.px(32); fontSize: 13; onClicked: Chat.notNow(page.openKey) }
                     }
                 }
@@ -644,7 +691,14 @@ Rectangle {
                     radius: 0
                     color: picked ? Theme.focusFill : msgHover.hovered ? Theme.panelLow : "transparent"
                     border.width: picked ? Theme.focusWidth : 0
-                    border.color: Theme.accent
+                    border.color: page.tint
+                    // My own messages in a chat with its own color: a thin bar of it down the side.
+                    Rectangle {
+                        visible: page.tinted && !!modelData.mine && !modelData.system
+                        x: Theme.px(Theme.compact ? 6 : 60); y: msg.lineH + msg.gap
+                        width: Theme.px(3); height: Math.max(0, parent.height - msg.lineH - msg.gap - Theme.px(2))
+                        color: page.tint
+                    }
 
                     Item {
                         visible: msg.lineH > 0
@@ -653,7 +707,7 @@ Rectangle {
                         Rectangle {
                             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                             width: newText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(20), newText.implicitHeight + Theme.px(4)); radius: Theme.radius; color: Theme.danger
-                            Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
+                            Text { textFormat: Text.PlainText; id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
                         }
                     }
 
@@ -668,19 +722,23 @@ Rectangle {
                         height: noteText.implicitHeight + Theme.px(16)
                         TextMetrics { id: noteMetrics; font: noteText.font; text: noteText.text }
                         radius: Theme.radius
-                        color: Theme.dangerFill
+                        // A call's line is a quiet one, and a click (or A) calls back; other notes (a changed key) stand out.
+                        color: modelData.call ? Theme.panel : Theme.dangerFill
                         border.width: 1
-                        border.color: Theme.danger
+                        border.color: modelData.call ? (noteHover.hovered ? page.tint : Theme.lineMuted) : Theme.danger
                         Text {
+                            textFormat: Text.PlainText
                             id: noteText
                             anchors.centerIn: parent
                             width: Math.max(0, note.width - Theme.px(28))
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.Wrap
-                            text: modelData.system ? modelData.text : ""
+                            text: modelData.system ? modelData.text + (modelData.call && page.openKey !== "" ? "  ·  Call back" : "") : ""
                             font.italic: true
                             color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                         }
+                        HoverHandler { id: noteHover; enabled: !!modelData.call; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { enabled: !!modelData.call && page.openKey !== ""; onTapped: page.startCall() }
                     }
 
                     Avatar {
@@ -703,17 +761,19 @@ Rectangle {
                             visible: !msg.grouped
                             spacing: Theme.px(8)
                             Text {
+                                textFormat: Text.PlainText
                                 id: who
                                 width: Math.min(implicitWidth, Math.round(col.width * 0.6))
                                 elide: Text.ElideRight
                                 text: page.senderName(modelData)
-                                color: Theme.avatar(page.senderName(modelData), modelData.mine).fg
+                                color: modelData.mine && page.tinted ? page.tint : Theme.avatar(page.senderName(modelData), modelData.mine).fg
                                 font.family: Theme.body; font.pixelSize: Theme.ms(16); font.weight: Font.Medium
                             }
                             Text {
+                                textFormat: Text.PlainText
                                 anchors.baseline: who.baseline
                                 text: page.clock(modelData.time) + (modelData.isEdited ? " · (edited)" : "") + page.stateLabel(modelData)
-                                color: modelData.failed ? Theme.danger : modelData.state === "read" && modelData.mine ? Theme.accent : Theme.textMuted
+                                color: modelData.failed ? Theme.danger : modelData.state === "read" && modelData.mine ? page.tint : Theme.textMuted
                                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
                             }
                         }
@@ -734,14 +794,14 @@ Rectangle {
                         Row {
                             visible: !!modelData.voice && !modelData.unsent
                             spacing: Theme.px(10)
-                            Icon { name: Voice.playing === modelData.id ? "stop" : "play"; color: Theme.accent }
+                            Icon { name: Voice.playing === modelData.id ? "stop" : "play"; color: page.tint }
                             Column {
                                 anchors.verticalCenter: parent.verticalCenter
                                 Rectangle {
                                     width: Theme.px(180); height: Theme.px(4); color: Theme.line
-                                    Rectangle { width: parent.width * (Voice.playing === modelData.id ? Voice.progress : 0); height: parent.height; color: Theme.accent }
+                                    Rectangle { width: parent.width * (Voice.playing === modelData.id ? Voice.progress : 0); height: parent.height; color: page.tint }
                                 }
-                                Text { text: "Voice message · " + Voice.length(modelData.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                                Text { textFormat: Text.PlainText; text: "Voice message · " + Voice.length(modelData.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                             }
                         }
                         Text {
@@ -756,6 +816,7 @@ Rectangle {
                         }
                         // A grouped message keeps its state (edited, sent, read) small under it.
                         Text {
+                            textFormat: Text.PlainText
                             visible: msg.grouped && (!!modelData.isEdited || page.stateLabel(modelData) !== "" || !!modelData.failed)
                             text: (modelData.isEdited ? "(edited)" : "") + page.stateLabel(modelData)
                             color: modelData.failed ? Theme.danger : Theme.textMuted
@@ -772,9 +833,10 @@ Rectangle {
                         }
                         // A thread: how many replies, opening them beside the chat.
                         Text {
+                            textFormat: Text.PlainText
                             visible: page.openKey !== "" && (modelData.replies || 0) > 0 && !modelData.unsent
                             text: (modelData.replies === 1 ? "1 reply" : modelData.replies + " replies") + " ›"
-                            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                            color: page.tint; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
                             Accessible.role: Accessible.Button
                             Accessible.name: "Open the thread"
                             HoverHandler { cursorShape: Qt.PointingHandCursor }
@@ -821,6 +883,7 @@ Rectangle {
                 }
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 width: parent.width * 0.7
                 horizontalAlignment: Text.AlignHCenter
@@ -844,11 +907,13 @@ Rectangle {
                     opacity: 0.8
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
                     text: "PICK A CHAT"
                     color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap
                     text: "Or add someone with +"
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
@@ -875,12 +940,13 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     x: Theme.px(16); spacing: Theme.px(12)
                     Rectangle { width: Theme.px(12); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
-                    Text { width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Release Y to send, B cancels" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                    Text { textFormat: Text.PlainText; width: Math.min(implicitWidth, parent.parent.width - Theme.px(56)); elide: Text.ElideRight; text: Voice.length(Voice.elapsed) + (page.pad ? "   Let go: send · B: cancel" : "   Recording"); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                 }
             }
 
             // "Raven is typing" under the last message (cap m1).
             Text {
+                textFormat: Text.PlainText
                 visible: page.theyType
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(22)
                 anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(2)
@@ -905,7 +971,7 @@ Rectangle {
                 z: 3
                 Accessible.role: Accessible.Button
                 Accessible.name: "Jump to new messages"
-                Text { id: jumpText; anchors.centerIn: parent; text: "New messages · jump"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                Text { textFormat: Text.PlainText; id: jumpText; anchors.centerIn: parent; text: "New messages · jump"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: list.positionViewAtIndex(page.newFrom, ListView.Beginning) }
             }
@@ -920,7 +986,7 @@ Rectangle {
                     visible: parent.containsDrag
                     color: Qt.rgba(0, 0, 0, 0.55)
                     border.color: Theme.accent; border.width: 2; radius: Theme.radius
-                    Text { anchors.centerIn: parent; text: "Drop to send to " + page.openName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20) }
+                    Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: "Drop to send to " + page.openName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(20) }
                 }
             }
 
@@ -942,6 +1008,7 @@ Rectangle {
             height: implicitHeight
             placeholder: page.openKey === "" ? "Message everyone nearby" : "Message " + page.openName
             target: page.openKey
+            accent: page.tint
             editing: page.editId !== ""
             bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.openName) : ""
             bannerText: page.editId !== "" ? "Enter saves, Esc cancels" : page.replyMsg ? (page.replyMsg.photo ? (page.replyMsg.voice ? "Voice message" : "Photo") : page.replyMsg.text || "") : ""
@@ -985,6 +1052,7 @@ Rectangle {
             onCountChanged: if (page.side === "thread") positionViewAtEnd()
             delegate: MessageRow {
                 host: page
+                accent: page.tint
                 width: sideList.width
                 m: modelData
                 at: index
@@ -997,6 +1065,7 @@ Rectangle {
             }
         }
         Text {
+            textFormat: Text.PlainText
             visible: page.side === "pins" && page.pinnedMsgs.length === 0
             anchors.top: sideHead.bottom; anchors.topMargin: Theme.px(16)
             x: Theme.px(16); width: parent.width - Theme.px(32)
@@ -1012,6 +1081,7 @@ Rectangle {
             height: implicitHeight
             placeholder: "Reply in the thread"
             target: page.openKey
+            accent: page.tint
             onSend: t => page.sendText(t, page.threadRoot)
             onHasFocusChanged: if (hasFocus) { page.zone = "side"; page.sideSel = -1 }
             onTyping: on => { if (page.openKey !== "" && !page.tour) Chat.typingTo(page.openKey, on) }
@@ -1047,8 +1117,9 @@ Rectangle {
                 id: codeCol
                 x: Theme.px(20); y: Theme.px(20); width: parent.width - Theme.px(40)
                 spacing: Theme.px(10)
-                Text { text: "MY CODE"; color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
+                Text { textFormat: Text.PlainText; text: "MY CODE"; color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2) }
                 Text {
+                    textFormat: Text.PlainText
                     property real now: Date.now()
                     Timer { interval: 10000; repeat: true; running: page.showCode; onTriggered: parent.now = Date.now() }
                     width: parent.width; wrapMode: Text.WordWrap
@@ -1168,6 +1239,27 @@ Rectangle {
     function startCall() {
         const w = Calls.call(openKey)
         if (w !== "") Ui.say(w, true)
+    }
+    function startVideo() {
+        const w = Calls.callVideo(openKey)
+        if (w !== "") Ui.say(w, true)
+    }
+    // The header's buttons with a controller: Left and Right pick, A presses, Down or B goes back to the messages.
+    function headButton(b) {
+        const n = headButtons.length
+        if (!n) { zone = "messages"; return true }
+        switch (b) {
+        case "left": headSel = Math.max(0, headSel - 1); return true
+        case "right": headSel = Math.min(n - 1, headSel + 1); return true
+        case "a": {
+            const w = headButtons[Math.min(headSel, n - 1)]
+            zone = "messages"
+            if (w === "call") startCall(); else if (w === "video") startVideo(); else chatMenu()
+            return true
+        }
+        case "down": case "b": zone = "messages"; return true
+        }
+        return true
     }
     // ------------------------------------------------------------- sections: folders, order, trash
     function folderName(id) {
@@ -1312,7 +1404,7 @@ Rectangle {
             return
         case "stranger": Chat.meet(e.key, e.name); openKey = e.key; picked = true; zone = "messages"; return
         case "intro": PeopleActions.answer(e); return
-        case "mirror": mirror.open(); return
+        case "mirror": mirror.open(e.peer || ""); return
         default: openKey = e.key; picked = true; zone = "messages"
         }
     }
@@ -1339,7 +1431,7 @@ Rectangle {
             Ui.pickFrom("Security key", [{ header: "", items: items }], a => { if (a === "code") checkCode(k); else if (a === "delete") Chat.deleteMessage(k, m.id) })
             return
         }
-        if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "Only on this PC.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
+        if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "Only on this device.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
         const items = []
         if (openKey !== "" && !m.unsent && !m.failed) {
             items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react" })
@@ -1445,7 +1537,7 @@ Rectangle {
         if (tour || openKey === "") return
         const on = pins.indexOf(id) < 0
         Chat.setPinned(openKey, id, on)
-        Ui.say(on ? "Pinned on this PC." : "Unpinned.")
+        Ui.say(on ? "Pinned on this device." : "Unpinned.")
     }
     // re: the message answered; a reply in a thread passes the thread's first message.
     function sendText(t, re) {
@@ -1531,6 +1623,7 @@ Rectangle {
         if (threadBox.emojiShown) return threadBox.emojiButton(b)
         if (typingIn && boxButton(typingIn, b)) return true
         if (zone === "side") return sideButton(b)
+        if (zone === "head") return headButton(b)
         // A big file waiting: the D-pad is on its Accept and Decline (Up past it goes back to the messages).
         if (zone === "messages" && fileStrip.focusIndex >= 0) {
             if (fileStrip.handleButton(b)) return true
@@ -1544,6 +1637,7 @@ Rectangle {
         switch (b) {
         case "up":
             if (zone === "list") row = Math.max(0, row - 1)
+            else if (openKey !== "" && (sel === 0 || messages.length === 0)) { zone = "head"; sel = -1; headSel = 0 }
             else if (messages.length > 0) { sel = sel < 0 ? messages.length - 1 : Math.max(0, sel - 1); list.positionViewAtIndex(sel, ListView.Contain) }
             return true
         case "down":
@@ -1559,7 +1653,11 @@ Rectangle {
             if (zone === "list") return false
             zone = "list"; sel = -1
             return true
-        case "a": if (zone === "list") choose(); else write(); return true
+        case "a":
+            if (zone === "list") choose()
+            else if (sel >= 0 && messages[sel] && messages[sel].call && openKey !== "") startCall()   // a call's line: call back
+            else write()
+            return true
         case "x":
             if (zone === "list") listOptions()
             else if (zone === "messages" && sel >= 0) options()
@@ -1583,6 +1681,8 @@ Rectangle {
     }
     // A linked phone's chats, over everything (companion side of linked devices).
     MirrorPanel { id: mirror; anchors.fill: parent; z: 20 }
+    // The phone's chats never stay on show under the lock.
+    onLockedChanged: if (locked && mirror.visible) mirror.close()
     Connections {
         target: Voice
         function onErrorChanged() { if (Voice.error !== "") Ui.say(Voice.error, true) }

@@ -24,14 +24,7 @@
 #include <QRandomGenerator>
 #include <QUrl>
 
-#ifdef Q_OS_LINUX
-#include <QDBusConnection>
-#include <QDBusInterface>
-#include <QDBusReply>
-#include <QVariantMap>
-#else
 #include "../platform/notify.h"
-#endif
 #include "../platform/chime.h"
 
 namespace
@@ -90,10 +83,6 @@ CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
             loadTrust();
         }
     }
-#ifdef Q_OS_LINUX
-    QDBusConnection::sessionBus().connect(QString(), QStringLiteral("/org/freedesktop/Notifications"), QStringLiteral("org.freedesktop.Notifications"),
-                                          QStringLiteral("ActionInvoked"), this, SLOT(onNotificationAction(uint, QString)));
-#endif
 }
 
 CallManager::~CallManager()
@@ -364,7 +353,7 @@ QString CallManager::startCall(const QString &key, bool video)
     if (busyElsewhere && busyElsewhere())
         return QStringLiteral("Leave the voice room first.");
     if (!m_signal->canCall(key))
-        return QStringLiteral("Needs Muninn or Huginn 0.6");
+        return QStringLiteral("Needs an update");
     if (!Settings::internetCallsOn() && m_signal->lanHost(key).isEmpty() && !m_signal->bleReady(key))
         return QStringLiteral("Internet calls are off in Settings › Calls. Calls work on the same Wi-Fi.");
     // The internet route's sending sockets close after 20 s of quiet; reopening one (TLS and all)
@@ -568,30 +557,16 @@ void CallManager::ring(bool on)
 
 void CallManager::notifyIncoming(bool on)
 {
-    const bool wanted = on && QGuiApplication::applicationState() != Qt::ApplicationActive;
-#ifdef Q_OS_LINUX
-    QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
-                     QStringLiteral("org.freedesktop.Notifications"));
-    if (!wanted) {
-        if (m_notification)
-            n.call(QStringLiteral("CloseNotification"), m_notification);
+    if (!on || QGuiApplication::applicationState() == Qt::ApplicationActive) {
+        Platform::closeNotification(m_notification);
         m_notification = 0;
         return;
     }
-    const bool preview = !m_vault || !m_vault->screenLocked();
-    QVariantMap hints{{QStringLiteral("urgency"), QVariant::fromValue(uchar(2))}, {QStringLiteral("category"), QStringLiteral("call.incoming")},
-                      {QStringLiteral("resident"), true}};
-    QDBusReply<uint> r = n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), m_notification, QStringLiteral("io.github.ravenor907.Huginn"),
-                                QStringLiteral("Incoming call"), preview ? peerName() + QStringLiteral(" is calling") : QStringLiteral("Someone is calling"),
-                                QStringList{QStringLiteral("answer"), QStringLiteral("Answer"), QStringLiteral("decline"), QStringLiteral("Decline")},
-                                hints, 45000);
-    if (r.isValid())
-        m_notification = r.value();
-#else
-    // Windows: a plain toast (no buttons); answering happens in the app.
-    if (wanted)
-        Platform::notify(QStringLiteral("Incoming call"), (!m_vault || !m_vault->screenLocked()) ? peerName() + QStringLiteral(" is calling") : QStringLiteral("Someone is calling"), 45000);
-#endif
+    // The name only with Show preview on and Huginn unlocked.
+    const bool preview = (!m_vault || !m_vault->screenLocked()) && m_signal->showPreview();
+    m_notification = Platform::notifyCall(m_notification, QStringLiteral("Incoming call"),
+                                          preview ? peerName() + QStringLiteral(" is calling") : QStringLiteral("Someone is calling"),
+                                          [self = QPointer<CallManager>(this)](const QString &a) { if (self) self->onNotificationAction(a); });
 }
 
 void CallManager::ringLocked(const QString &callId, qint64 ts)
@@ -621,34 +596,17 @@ void CallManager::endLockedRing()
 
 void CallManager::notifyLocked(bool on)
 {
-#ifdef Q_OS_LINUX
-    QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
-                     QStringLiteral("org.freedesktop.Notifications"));
     if (!on) {
-        if (m_notification)
-            n.call(QStringLiteral("CloseNotification"), m_notification);
+        Platform::closeNotification(m_notification);
         m_notification = 0;
         return;
     }
-    QVariantMap hints{{QStringLiteral("urgency"), QVariant::fromValue(uchar(2))}, {QStringLiteral("category"), QStringLiteral("call.incoming")},
-                      {QStringLiteral("resident"), true}};
-    QDBusReply<uint> r = n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), m_notification, QStringLiteral("io.github.ravenor907.Huginn"),
-                                QStringLiteral("Incoming call"), QStringLiteral("Unlock Huginn to answer"),
-                                QStringList{QStringLiteral("answer"), QStringLiteral("Answer"), QStringLiteral("decline"), QStringLiteral("Decline")},
-                                hints, 45000);
-    if (r.isValid())
-        m_notification = r.value();
-#else
-    // Windows: a plain toast (no buttons); unlocking Huginn shows the call.
-    if (on)
-        Platform::notify(QStringLiteral("Incoming call"), QStringLiteral("Unlock Huginn to answer"), 45000);
-#endif
+    m_notification = Platform::notifyCall(m_notification, QStringLiteral("Incoming call"), QStringLiteral("Unlock Huginn to answer"),
+                                          [self = QPointer<CallManager>(this)](const QString &a) { if (self) self->onNotificationAction(a); });
 }
 
-void CallManager::onNotificationAction(uint id, const QString &action)
+void CallManager::onNotificationAction(const QString &action)
 {
-    if (!m_notification || id != m_notification)
-        return;
     m_notification = 0;
     // Cap b1: the nameless ring while locked. What was chosen waits for the offer, read once Huginn is unlocked.
     if (m_lockedRinging && !m_session) {
@@ -671,15 +629,6 @@ bool CallManager::trusted(const QString &key) const
     if (m_trustOff.contains(key))
         return false;
     return m_signal->inFamily(key);
-}
-
-QString CallManager::trustText(const QString &key) const
-{
-    if (m_trustOn.contains(key))
-        return QStringLiteral("On");
-    if (m_trustOff.contains(key))
-        return QStringLiteral("Off");
-    return m_signal->inFamily(key) ? QStringLiteral("On (Family folder)") : QStringLiteral("Off");
 }
 
 void CallManager::setTrusted(const QString &key, bool on)
@@ -778,7 +727,6 @@ void CallManager::load()
     QVariantList saved = o.value(QStringLiteral("calls")).toArray().toVariantList();
     if (!m_loaded)
         m_history.append(saved);
-    m_seen = qMax(m_seen, qint64(o.value(QStringLiteral("seen")).toDouble()));
     m_loaded = true;
     save();
     Q_EMIT historyChanged();
@@ -788,6 +736,6 @@ void CallManager::save()
 {
     if (!m_vault || m_vault->locked() || !m_loaded)
         return;
-    const QJsonObject o{{QStringLiteral("seen"), double(m_seen)}, {QStringLiteral("calls"), QJsonArray::fromVariantList(m_history)}};
+    const QJsonObject o{{QStringLiteral("calls"), QJsonArray::fromVariantList(m_history)}};
     m_vault->write(QString::fromLatin1(kFile), QJsonDocument(o).toJson(QJsonDocument::Compact));
 }

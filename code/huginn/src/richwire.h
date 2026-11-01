@@ -6,7 +6,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-// Cap m1 (shared/docs/protocol-0.6.md, section 11): replies, reactions, edits, typing and active status, the
+// Cap m1 (shared/docs/protocol.md, section 11): replies, reactions, edits, typing and active status, the
 // parts Huginn and Muninn must agree on. shared/tools/m1_ref.py is the reference; shared/vectors/m1-vectors.json the vectors.
 //  - room "rich": a 1:1 message with a reply, {text, re}. Handled like "private" in every other way.
 //  - room "mx":   {t:"react", msg, e, ts} and {t:"edit", msg, text, ts} for a 1:1 message.

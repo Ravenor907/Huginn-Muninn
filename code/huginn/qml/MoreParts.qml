@@ -1,7 +1,7 @@
 import QtQuick
 import Huginn
 
-// Cap m2 inside a message (shared/docs/protocol-0.6.md section 12), the same as Muninn's ChatMore.kt: an album's
+// Cap m2 inside a message (shared/docs/protocol.md section 12), the same as Muninn's ChatMore.kt: an album's
 // photos side by side, a video message to play, a poll to vote in (counts, and who voted for what), and a
 // link preview made by the sender (nothing is fetched here; clicking asks before the browser opens it).
 // host: the page (its MoreLayer is host.more); where: the contact's key or "g:<group>:<channel>".
@@ -43,7 +43,7 @@ Column {
                 }
             }
         }
-        Text { text: (parts.m.album || []).length + " photos"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+        Text { textFormat: Text.PlainText; text: (parts.m.album || []).length + " photos"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
     }
 
     // A video message: a dark tile with a play mark and its length. Click to play it.
@@ -59,6 +59,7 @@ Column {
             Icon { anchors.centerIn: parent; name: "play"; color: "white"; size: Theme.px(26) }
         }
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Theme.px(8)
             text: "Video message · " + Voice.length(parts.m.video || 0)
             color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13)
@@ -114,6 +115,7 @@ Column {
                             color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                         }
                         Text {
+                            textFormat: Text.PlainText
                             id: countText
                             anchors.verticalCenter: parent.verticalCenter
                             text: modelData.n
@@ -135,11 +137,13 @@ Column {
                 }
             }
             Text {
+                textFormat: Text.PlainText
                 width: parent.width; wrapMode: Text.Wrap
                 text: (poll.p ? poll.p.total : 0) + ((poll.p && poll.p.total === 1) ? " vote" : " votes") + (poll.p && poll.p.multi ? " · pick any" : "") + " · click to vote"
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
             }
             Text {
+                textFormat: Text.PlainText
                 visible: !!poll.p && poll.p.total > 0
                 text: "Who voted ›"
                 color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold

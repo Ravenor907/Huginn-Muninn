@@ -28,6 +28,19 @@ Item {
         Labs.clearShot()
         if (Ui.main) Ui.main.restoreFocus()
     }
+    function dismiss() {
+        if (tour || report.text.trim() === "") { close(); return }
+        Ui.sure("Discard this report?", "What you wrote is lost.", "Discard", () => report.close(), false, true)
+    }
+    // The controller's focus stays in view.
+    onFocusAtChanged: Qt.callLater(reveal)
+    function reveal() {
+        const it = focusAt === 0 ? shotRow : focusAt === 1 ? textBox : buttons
+        if (!it || !it.visible) return
+        const y = it.mapToItem(col, 0, 0).y
+        if (y < view.contentY) view.contentY = Math.max(0, y)
+        else if (y + it.height > view.contentY + view.height) view.contentY = Math.min(Math.max(0, view.contentHeight - view.height), y + it.height - view.height)
+    }
     function edit() {
         Ui.ask("What went wrong?", "Up to 2000 characters", report.text, "Done", t => report.text = t.slice(0, 2000), false, true)
     }
@@ -51,13 +64,14 @@ Item {
         case "left": if (focusAt === 2) focusAt = 3; else if (focusAt === 3) focusAt = 2; break
         case "right": if (focusAt === 3) focusAt = 2; else if (focusAt === 2) focusAt = 3; break
         case "a": activate(); break
-        case "b": close(); break
+        case "b": dismiss(); break
         }
         return true
     }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
-    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: report.close() }
+    // A click beside it closes it, but never throws away what was typed without asking.
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: report.dismiss() }
 
     Rectangle {
         id: box
@@ -81,6 +95,7 @@ Item {
                 width: view.width
                 spacing: Theme.px(14)
                 Text {
+                    textFormat: Text.PlainText
                     text: "REPORT A BUG"
                     color: Theme.text
                     font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
@@ -103,6 +118,7 @@ Item {
                     }
                 }
                 Rectangle {
+                    id: shotRow
                     visible: Labs.hasShot
                     width: parent.width
                     height: Theme.px(48)
@@ -111,6 +127,7 @@ Item {
                     border.width: report.focusAt === 0 && report.padFocus ? Theme.focusWidth : 0
                     border.color: Theme.accent
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
                         anchors.verticalCenter: parent.verticalCenter
                         text: "Include screenshot"
@@ -126,6 +143,7 @@ Item {
                 }
                 // What went wrong: a click or A opens the keyboard prompt.
                 Rectangle {
+                    id: textBox
                     width: parent.width
                     height: Math.max(Theme.px(96), body.implicitHeight + Theme.px(24))
                     radius: Theme.radius
@@ -135,6 +153,7 @@ Item {
                     Accessible.role: Accessible.EditableText
                     Accessible.name: "What went wrong?"
                     Text {
+                        textFormat: Text.PlainText
                         id: body
                         x: Theme.px(12); y: Theme.px(12)
                         width: parent.width - Theme.px(24)
@@ -147,6 +166,7 @@ Item {
                     TapHandler { onTapped: { report.focusAt = 1; report.edit() } }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     wrapMode: Text.Wrap
                     text: "Also sends Huginn " + Labs.label + ", " + Labs.os
@@ -154,6 +174,7 @@ Item {
                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
                 Row {
+                    id: buttons
                     anchors.right: parent.right
                     spacing: Theme.px(10)
                     HButton { text: "Cancel"; kind: "plain"; focused: report.focusAt === 3 && report.padFocus; onClicked: report.close() }

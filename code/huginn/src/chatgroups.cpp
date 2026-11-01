@@ -1,4 +1,4 @@
-// Group chats (shared/docs/protocol-0.6.md, section 3), the Chat side: keeping states, fan-out to every
+// Group chats (shared/docs/protocol.md, section 3), the Chat side: keeping states, fan-out to every
 // member over their own session, receipts, unsend, photos and voice, invites and group codes.
 // What is deterministic (canonical JSON, signatures, acceptance) lives in GroupWire.
 #include "chat.h"
@@ -417,7 +417,7 @@ QString Chat::change(const QString &g, const QJsonObject &op)
                 if (m.value(QStringLiteral("k")).toString() != me && !hasJ1(m.value(QStringLiteral("k")).toString()))
                     old << m.value(QStringLiteral("n")).toString();
             if (!old.isEmpty())
-                return QStringLiteral("Everyone needs Muninn or Huginn 0.95 first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
+                return QStringLiteral("Everyone needs an update first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
             next.insert(QStringLiteral("mi"), true);
         } else {
             next.remove(QStringLiteral("mi"));
@@ -426,10 +426,10 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         if (GroupWire::isMember(cur, k))
             return QString();
         if (cur.value(QStringLiteral("mi")).toBool() && !hasJ1(k))
-            return QStringLiteral("They need Muninn or Huginn 0.95 to join, because members can invite in this group.");
+            return QStringLiteral("They need an update to join, because members can invite in this group.");
         // An app without d1 refuses a Family or Work group's state.
         if (cur.contains(QStringLiteral("kind")) && !hasD1(k))
-            return QStringLiteral("They need Muninn or Huginn 0.94 to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
+            return QStringLiteral("They need an update to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
         if (members.size() >= GroupWire::kMaxMembers)
             return QStringLiteral("This group is full: 50 people at most.");
         members << GroupWire::member(k, op.value(QStringLiteral("n")).toString(), op.value(QStringLiteral("p")).toString());
@@ -542,11 +542,11 @@ QString Chat::inviteToGroup(const QString &g, const QString &key)
         return QStringLiteral("Only contacts can be invited. Show them the group code instead.");
     if (!canGroup(key)) {
         probeCaps(key);   // the answer shows up next time, if their app has caps
-        return QStringLiteral("Needs Muninn or Huginn 0.6");
+        return QStringLiteral("Needs an update");
     }
     if (it->state.contains(QStringLiteral("kind")) && !hasD1(key)) {
         probeCaps(key);
-        return QStringLiteral("Needs Muninn or Huginn 0.94");
+        return QStringLiteral("Needs an update");
     }
     if (GroupWire::keysOf(it->state).size() >= GroupWire::kMaxMembers)
         return QStringLiteral("This group is full: 50 people at most.");
@@ -1119,10 +1119,12 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
 }
 
 // A line from Huginn itself in the group's first channel (never sent).
-void Chat::groupNote(const QString &g, const QString &text)
+void Chat::groupNote(const QString &g, const QString &text, bool call)
 {
     QVariantMap m{{QStringLiteral("id"), uuid()}, {QStringLiteral("ch"), QStringLiteral("main")}, {QStringLiteral("text"), text},
                   {QStringLiteral("system"), true}, {QStringLiteral("mine"), false}, {QStringLiteral("time"), now()}, {QStringLiteral("state"), QStringLiteral("read")}};
+    if (call)
+        m.insert(QStringLiteral("call"), true);
     storeGroupMessage(g, m, false);
 }
 

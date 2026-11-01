@@ -77,11 +77,13 @@ Column {
                 anchors.right: take.visible ? take.left : stop.left; anchors.rightMargin: Theme.px(10)
                 anchors.verticalCenter: parent.verticalCenter
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; elide: Text.ElideMiddle
                     text: (modelData.mine ? "To them: " : "From them: ") + modelData.name
                     color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; elide: Text.ElideRight
                     text: PeopleActions.fileText(modelData)
                     color: modelData.state === "failed" ? Theme.danger : Theme.textMuted

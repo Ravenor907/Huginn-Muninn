@@ -91,6 +91,7 @@ Item {
             TapHandler { onTapped: picker.goBack() }
         }
         Text {
+            textFormat: Text.PlainText
             id: head
             x: backBtn.visible ? backBtn.x + backBtn.width + Theme.px(6) : Theme.px(20); y: Theme.px(18)
             width: parent.width - x - Theme.px(20)
@@ -132,6 +133,7 @@ Item {
                     color: Theme.line
                 }
                 Text {
+                    textFormat: Text.PlainText
                     id: headText
                     visible: !!modelData.header
                     anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
@@ -179,6 +181,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Theme.px(1)
                         Text {
+                            textFormat: Text.PlainText
                             width: parent.width
                             wrapMode: Text.Wrap
                             text: modelData.name || ""
@@ -188,6 +191,7 @@ Item {
                             font.weight: Font.Medium
                         }
                         Text {
+                            textFormat: Text.PlainText
                             visible: !!modelData.detail
                             width: parent.width
                             wrapMode: Text.WordWrap

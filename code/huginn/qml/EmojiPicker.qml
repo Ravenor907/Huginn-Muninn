@@ -70,7 +70,7 @@ Rectangle {
                 border.color: Theme.accent
                 Accessible.role: Accessible.Button
                 Accessible.name: modelData === picker.current ? "Take back " + modelData : "React " + modelData
-                Text { anchors.centerIn: parent; text: modelData; font.pixelSize: Theme.fs(20) }
+                Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: modelData; font.pixelSize: Theme.fs(20) }
                 HoverHandler { id: qHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: picker.picked(modelData) }
             }
@@ -98,7 +98,7 @@ Rectangle {
             border.color: Theme.accent
             Accessible.role: Accessible.Button
             Accessible.name: modelData
-            Text { anchors.centerIn: parent; text: modelData; font.pixelSize: Theme.fs(20) }
+            Text { textFormat: Text.PlainText; anchors.centerIn: parent; text: modelData; font.pixelSize: Theme.fs(20) }
             HoverHandler { id: eHover; cursorShape: Qt.PointingHandCursor }
             TapHandler { onTapped: picker.picked(modelData) }
         }

@@ -48,6 +48,7 @@ Item {
         opacity: av.dim ? 0.5 : 1
         visible: !av.hasPicture || pic.status !== Image.Ready
         Text {
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: av.initial
             color: av.tone && av.tone.fg ? av.tone.fg : Theme.text

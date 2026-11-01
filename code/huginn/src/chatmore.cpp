@@ -1,4 +1,4 @@
-// Cap m2 (shared/docs/protocol-0.6.md, section 12), the Chat side, the same as Muninn's net/Chat.kt and Groups.kt:
+// Cap m2 (shared/docs/protocol.md, section 12), the Chat side, the same as Muninn's net/Chat.kt and Groups.kt:
 // photo albums, video messages, polls and votes, link previews (made here only, when Settings › Privacy allows
 // it) and the Shared page. What both apps must agree on lives in MoreWire.
 #include "chat.h"

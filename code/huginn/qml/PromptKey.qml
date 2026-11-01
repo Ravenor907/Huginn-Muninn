@@ -36,6 +36,7 @@ Item {
             border.color: Theme.textMuted
             border.width: Theme.hc ? 1 : 0
             Text {
+                textFormat: Text.PlainText
                 id: glyph
                 anchors.centerIn: parent
                 text: Gamepad.glyph(root.key)
@@ -46,6 +47,7 @@ Item {
             }
         }
         Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: root.label
             color: Theme.textSoft

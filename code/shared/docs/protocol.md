@@ -1503,9 +1503,11 @@ a paired device gets past the check below.
 **Pairing.** The companion shows a link code as a QR code: `MUNINNL1:` then base64url (no padding) of
 `{"k": chat key, "p": Nostr mailbox, "n": device name, "i": token}`. The token is 128 random bits, good for 10 minutes and
 once. A companion showing its code makes a new one (a new token) a minute before the old one runs out, so the code on
-screen always works; the code can also be copied as text, for a phone without a camera. The phone takes the code (its QR
+screen always works; a code shown before stays valid until its own 10 minutes are up (a phone may have just scanned
+it), and the first `hello` with any of them uses them all up. The code can also be copied as text, for a phone without a
+camera. The phone takes the code (its QR
 scanner, or the text pasted), keeps the companion, and sends `{"t": "hello", "i": token, "n": its name, "p": its
-mailbox}`. The companion accepts a `hello` only with its current token, in time; from then on the phone is its phone.
+mailbox}`. The companion accepts a `hello` only with a token it showed, in time; from then on the phone is its phone.
 
 **Checking the pair.** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
 the person confirms "They match" on each ("No" unlinks). Until then the phone sends nothing (`chat`, `msg`, `part`) and
@@ -1516,8 +1518,8 @@ anywhere, it says "Mirrored to [name]".
 **From the phone:**
 - `{"t": "chat", "peer", "n", "msgs": [item, ...], "d", "pg": i, "pgs": n}`: one page of a chat's history. On "They
   match" and on every `sync` the phone sends every message it still keeps for each 1:1 chat with a contact (within the
-  chat's limit, section 16), oldest first, in pages `pg` 0 to `pgs` - 1, each at most 100 items and at most 40 KB of JSON
-  in `msgs` (so the envelope stays under 64 KB). The companion **merges** each page into the chat by message `id` (a
+  chat's limit, section 16), oldest first, in pages `pg` 0 to `pgs` - 1, each at most 100 items and at most 48 KB of JSON
+  in `msgs`. The companion **merges** each page into the chat by message `id` (a
   later copy of an id replaces the earlier one): no page ever wipes what an earlier page or `msg` brought.
 - `{"t": "msg", "peer", "n", "m": item, "d"}`: one message in or out, merged the same way.
 - `{"t": "part", ...}`: a file the companion asked for (below).
@@ -1538,8 +1540,8 @@ time, and the phone answers with `{"t": "part", "h", "i", "n", "b": base64}`: th
 the last one shorter), `i` from 0 to `n` - 1, `n` = ceil(`s` / 196608), each part sent once the one before was taken
 (HTTP 200). `get` and `part` go **only** over the LAN route (the HTTPS message endpoint of a device on the same home
 Wi-Fi), never over Nostr, a relay, Bluetooth or Direct (a hotspot one of the devices made); either side drops a `get` or
-`part` that came any other way, and a Huginn on its own Direct connect hotspot neither asks nor answers. The LAN
-endpoint takes bodies up to 512 KB for these. The phone sends only files of its contacts' 1:1 chats, at most 100 MB. The
+`part` that came any other way, and a device on its own Direct connect hotspot neither asks nor answers. The LAN
+message endpoint takes bodies up to 512 KB, but only for room `link`: any other room over 96 KB is answered 413. The phone sends only files of its contacts' 1:1 chats, at most 100 MB. The
 companion takes parts only for the file it asked for and only of the expected sizes, joins them, and keeps the file only
 if its size and SHA-256 match `s` and `h`; it keeps it in its own encrypted store and shows it in the chat. Until then the
 item shows as its word with "On home Wi-Fi". A file that stops coming for a minute is asked for again later.
@@ -2067,10 +2069,11 @@ sealed like a first message to a new contact: always v1 (never the ratchet) and 
 tester's app knows about that key. The report is one envelope in room `private`:
 
 ```
-{ room: "private", fromKey, fromName, fromId, mailbox, id, cap, caps, nonce, data,
+{ room: "private", fromKey, mailbox, id, nonce, data,
   lb: { app: "muninn" | "huginn", v: "<version label>", os: "<system>", model: "<device model>", s: "<screenshot id>" } }
 ```
 
+- No `fromId` and no `caps`. A `fromName` or `cap` is optional and never required by the owner's app.
 - `data` opens to the text: UTF-8, trimmed, 1 to 2000 characters (code points).
 - `v` is the installed version as the app shows it (`0.98`, `0.99 beta 12`), `os` the system (`Android 15`,
   `Windows 11`, `Linux`), `model` the device model. Each at most 80 characters. Nothing else about the device:

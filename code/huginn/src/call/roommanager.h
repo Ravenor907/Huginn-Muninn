@@ -23,7 +23,7 @@ class VideoReceiver;
 class VideoSender;
 struct TurnLogin;
 
-// Voice rooms and group calls for QML (the "Rooms" singleton), shared/docs/protocol-0.6.md section 6.
+// Voice rooms and group calls for QML (the "Rooms" singleton), shared/docs/protocol.md section 6.
 // A room is a full mesh of 1:1 calls: one CallSession per other person (each with its own keys,
 // TURN allocation and paths, so media is encrypted per recipient and nobody learns an IP address).
 // This class owns the microphone and the speaker for all of them: each 20 ms frame from the
@@ -55,7 +55,7 @@ class RoomManager : public QObject
     Q_PROPERTY(QString ringGroup READ ringGroup NOTIFY changed)   // the group's name
     Q_PROPERTY(int presence READ presenceSerial NOTIFY presenceChanged)   // bumps when whoIn() may differ
     Q_PROPERTY(int maxPeople READ maxPeople CONSTANT)
-    // Screen share (shared/docs/protocol-0.6.md 5.8.7): this build can share; this computer shares now; the
+    // Screen share (shared/docs/protocol.md 5.8.7): this build can share; this computer shares now; the
     // name of someone else who shares ("" when nobody does).
     Q_PROPERTY(bool canShare READ canShare CONSTANT)
     Q_PROPERTY(bool sharing READ sharing NOTIFY changed)

@@ -8,7 +8,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-// Cap m2 (shared/docs/protocol-0.6.md, section 12): photo albums, video messages, polls and link previews, the
+// Cap m2 (shared/docs/protocol.md, section 12): photo albums, video messages, polls and link previews, the
 // parts Huginn and Muninn must agree on (Muninn's net/More.kt). shared/tools/m2_ref.py is the reference;
 // shared/vectors/m2-vectors.json the vectors.
 //  - Albums: a photo piece's clear fields "al" (album id), "ai" (its place), "an" (how many). Anyone may get

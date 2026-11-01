@@ -17,7 +17,7 @@ class Vault;
 //    message to a newly added contact and sent over the internet to its mailbox, with "lb" (app, version
 //    label, system, device type, and "s", its screenshot's id) beside it. One screenshot of Huginn's own window
 //    may go with it, as a photo is sent to a contact (scrubbed JPEG pieces, "lb" without "s" on each). No logs, no
-//    addresses. shared/docs/protocol-0.6.md section 24.
+//    addresses. shared/docs/protocol.md section 24.
 //  - The Labs contact is never added to this computer's contacts. After a report, a message from it comes
 //    in as an ordinary request.
 //  - The Huginn whose chat key is the Labs key takes reports from anyone (no code needed), at most 10 a
@@ -66,8 +66,8 @@ public:
     int receive(const QJsonObject &o, const QString &fromKey, const QString &name);
     // A message from the Labs key may come in as a request: this computer sent a report in the last 30 days.
     bool replyAllowed(const QString &fromKey) const;
-    // Go back to stable, once the stable file checked out: what this build moved into the vault goes back to
-    // plain settings (so the older Huginn still finds it), the channel back to Stable and Labs off.
+    // Go back to stable, once the stable file checked out: the channel back to Stable and Labs off (the stable
+    // release reads the vault as this one does).
     bool beforeGoingBack();
 
 Q_SIGNALS:

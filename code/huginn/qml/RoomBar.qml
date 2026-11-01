@@ -6,7 +6,7 @@ import Huginn
 // ring while someone talks, dimmed while they're muted), how long, and Mute, Output, Open and Leave.
 // On a controller the same things are in the voice room's options on its group page (A on the room).
 // Share screen sends this computer's screen to everyone in the room; when someone else shares theirs it
-// shows above the bar (shared/docs/protocol-0.6.md 5.8.7), encrypted to each person like the sound.
+// shows above the bar (shared/docs/protocol.md 5.8.7), encrypted to each person like the sound.
 Rectangle {
     id: bar
     // Docked: the desktop's voice panel (VoicePanel.qml) has the controls, so only a shared screen shows.
@@ -47,6 +47,7 @@ Rectangle {
             onClicked: bar.screenShown = false
         }
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(10)
             width: Math.min(implicitWidth, parent.width - Theme.px(20) - (bar.docked ? Theme.px(140) : 0))
             elide: Text.ElideRight
@@ -68,6 +69,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             width: Math.min(Theme.px(260), bar.width * 0.25)
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 elide: Text.ElideRight
                 text: Rooms.title + (Rooms.groupName ? " · " + Rooms.groupName : "")
@@ -75,6 +77,7 @@ Rectangle {
                 font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold
             }
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 elide: Text.ElideRight
                 text: Rooms.note !== "" ? Rooms.note : (Rooms.statusText + (Rooms.muted ? " · you're muted" : ""))

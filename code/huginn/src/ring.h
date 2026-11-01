@@ -12,7 +12,7 @@
 
 #include "chatcrypto.h"
 
-// Caps b1 and e1 (shared/docs/protocol-0.6.md section 23), the same as Muninn's net/Ring.kt;
+// Caps b1 and e1 (shared/docs/protocol.md section 23), the same as Muninn's net/Ring.kt;
 // shared/tools/e1b1_ref.py is the reference and writes shared/vectors/e1b1-vectors.json.
 //  - e1: over the relays, an envelope is wrapped for the recipient's chat key and one of its day keys ("wrap keys",
 //    a new one every day, each kept 40 days). Once a day key is gone, a stolen chat key and saved relay traffic no

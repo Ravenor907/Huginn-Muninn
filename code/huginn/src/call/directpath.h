@@ -11,7 +11,7 @@
 
 class QUdpSocket;
 
-// The direct internet path between trusted contacts (shared/docs/protocol-0.6.md 5.8.2). Only ever used when
+// The direct internet path between trusted contacts (shared/docs/protocol.md 5.8.2). Only ever used when
 // both sides trust each other: each side learns the public address its call socket has (one STUN
 // Binding to a server in DirectPath::stunServers(), the server reflexive or "srflx" candidate) and its global IPv6
 // addresses ("host" candidates), sends them in the offer or answer, and then both ping each other's

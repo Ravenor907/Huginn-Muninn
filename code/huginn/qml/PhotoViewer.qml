@@ -30,6 +30,7 @@ Rectangle {
         TapHandler { onTapped: viewer.closed() }
     }
     Text {
+        textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top; anchors.topMargin: Theme.px(14)
         text: (viewer.at + 1) + " of " + viewer.photos.length + "   ·   ← → to move · B or Esc to close"

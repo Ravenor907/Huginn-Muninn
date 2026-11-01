@@ -21,7 +21,7 @@
 namespace ChatWire
 {
 extern const char kCap[];   // "r1"
-// What this app can do, sent as "caps" (shared/docs/protocol-0.6.md 1.1). Only what Huginn really does:
+// What this app can do, sent as "caps" (shared/docs/protocol.md 1.1). Only what Huginn really does:
 // no k1 or k2 (managing a kids' TV is Muninn only), or peers would try it and fail. t1: takes a
 // kids' TV card (7.6), so a parent can invite someone on Huginn to talk with the kids. v1: voice
 // rooms and group calls (section 6).

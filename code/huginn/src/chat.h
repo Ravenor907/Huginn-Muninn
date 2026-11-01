@@ -39,7 +39,7 @@ class Vault;
 //  - Contacts whose app says "cap":"r1" get the message ratchet (forward secrecy) for private
 //    messages; everyone else, and the Nearby room, stays on the pair key (v1). See ChatWire.
 //  - Groups (chatgroups.cpp): a signed state per group, every message sealed separately to
-//    each member over that member's own session. See shared/docs/protocol-0.6.md and GroupWire.
+//    each member over that member's own session. See shared/docs/protocol.md and GroupWire.
 //  - Contact folders: local only, never sent.
 //  - Everything kept is encrypted in the Vault.
 class Chat : public QObject
@@ -135,7 +135,7 @@ public:
     Q_INVOKABLE void loadRecentPictures();
     Q_INVOKABLE void copyLink() const;
 
-    // Cap m1 (shared/docs/protocol-0.6.md section 11, RichWire): reactions, edits, typing, active status. Calls that
+    // Cap m1 (shared/docs/protocol.md section 11, RichWire): reactions, edits, typing, active status. Calls that
     // can fail return what to tell the person, "" when done.
     Q_INVOKABLE bool hasM1(const QString &key) const { return m_caps.value(key).contains(QStringLiteral("m1")); }
     Q_INVOKABLE QString react(const QString &key, const QString &id, const QString &emoji);
@@ -159,7 +159,7 @@ public:
     Q_INVOKABLE QString localPath(const QUrl &url) const { return url.toLocalFile(); }
     Q_INVOKABLE bool isPicture(const QString &path) const;
 
-    // Cap m2 (shared/docs/protocol-0.6.md section 12, chatmore.cpp): albums, video messages, polls, link previews and
+    // Cap m2 (shared/docs/protocol.md section 12, chatmore.cpp): albums, video messages, polls, link previews and
     // the Shared page. where: a contact's key or "g:<group>:<channel>". Calls that can fail return what to tell
     // the person, "" when done.
     Q_INVOKABLE bool hasM2(const QString &key) const { return m_caps.value(key).contains(QStringLiteral("m2")); }
@@ -198,7 +198,6 @@ public:
     Q_INVOKABLE void verify(const QString &key);
     Q_INVOKABLE void meet(const QString &key, const QString &name);
     Q_INVOKABLE bool shouldAskKeep(const QString &key) const;
-    Q_INVOKABLE bool saidKeep(const QString &key) const;
     Q_INVOKABLE bool theySaidKeep(const QString &key) const;
     Q_INVOKABLE void keepInTouch(const QString &key);
     Q_INVOKABLE void notNow(const QString &key);
@@ -227,8 +226,6 @@ public:
     // For the screens (chatpeople.cpp): unknown caps count as a current app and a probe asks; the wire
     // still only sends what their caps list. Call (canCall), Video and video messages use these.
     Q_INVOKABLE bool mayHave(const QString &key, const QString &cap);
-    Q_INVOKABLE bool mayVideo(const QString &key);
-    Q_INVOKABLE bool mayVideoMessage(const QString &key);
     static bool capIn(const QStringList &caps, const QString &cap);
     static bool isRing(const QJsonObject &msg);
 
@@ -245,13 +242,10 @@ public:
     // (newest pin first), archived, muted until a time (ms; 0 unmutes, a huge value is for good), marked unread.
     Q_INVOKABLE void pinChat(const QString &key, bool on);
     Q_INVOKABLE bool isPinnedChat(const QString &key) const { return m_pinnedChats.contains(key); }
-    Q_INVOKABLE QStringList pinnedChats() const { return m_pinnedChats; }
-    Q_INVOKABLE void orderPinned(const QStringList &keys);
     Q_INVOKABLE void archiveChat(const QString &key, bool on);
     Q_INVOKABLE bool isArchived(const QString &key) const { return m_archived.contains(key); }
     Q_INVOKABLE void muteChat(const QString &key, qint64 until);
     Q_INVOKABLE bool isMuted(const QString &key) const;
-    Q_INVOKABLE qint64 mutedUntil(const QString &key) const { return m_mutedUntil.value(key, 0); }
     Q_INVOKABLE void markUnread(const QString &key, bool on);
     Q_INVOKABLE bool isMarkedUnread(const QString &key) const { return m_markedUnread.contains(key); }
     // Always right away (as Muninn's list): their messages make a sound and a notification even while muted.
@@ -263,7 +257,7 @@ public:
     // A message arrived for key: false while that chat is muted (unless Always right away); an archived one comes back.
     bool notifyFor(const QString &key);
 
-    // Calls (shared/docs/protocol-0.6.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
+    // Calls (shared/docs/protocol.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
     // room "call" and sends it on every route at once, never through the Outbox.
     void sendCall(const QString &key, const QJsonObject &msg);
     QByteArray signWithChatKey(const QByteArray &bytes) const;
@@ -328,7 +322,7 @@ public:
     Q_INVOKABLE QString setMembersInvite(const QString &g, bool on);   // an admin's signed change
     Q_INVOKABLE bool membersInvite(const QString &g) const;
 
-    // Voice rooms and group calls (call/roommanager.cpp, shared/docs/protocol-0.6.md section 6): the current
+    // Voice rooms and group calls (call/roommanager.cpp, shared/docs/protocol.md section 6): the current
     // state of a group this device is still in (empty otherwise), a member's name in it, whether a
     // member's app can join rooms (caps v1, or not known yet) and whether it is known that it can't.
     QJsonObject groupState(const QString &g) const;
@@ -396,7 +390,7 @@ private:
     Trust *m_trust = nullptr;
     FileLink *m_files = nullptr;
     Link *m_linked = nullptr;
-    int receiveExtra(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p);
+    int receiveExtra(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p, const QString &via);
     void sendEverywhere(const QString &key, const QString &room, const QJsonObject &msg, const QString &mailbox);
     QString sendFileBlob(const QString &key, const QByteArray &bytes, const QString &name);
 
@@ -410,7 +404,7 @@ private:
     QByteArray open(const QJsonObject &o, const QString &fromKey, bool *ok);
     void commitPeer();
     QString deliver(const QString &key, const QJsonObject &body, const QString &mailbox);
-    // Cap s1 (shared/docs/protocol-0.6.md section 21): someone whose app proves its routes and seals its clear fields.
+    // Cap s1 (shared/docs/protocol.md section 21): someone whose app proves its routes and seals its clear fields.
     bool strict(const QString &key) const;
     QString baseTo(const QString &key) const;         // their Wi-Fi address: proven first, an unproven one only when not strict
     bool sendBle(const QString &key, const QByteArray &json);
@@ -449,7 +443,7 @@ private:
     // An existing contact's security key is being replaced: keep them, but unverified and warned.
     void replaceKey(const QString &oldKey, const QString &newKey, const QString &name, const QString &mailbox);
     QString contactWithMailbox(const QString &mailbox, const QString &notKey) const;
-    void systemNote(const QString &key, const QString &text);
+    void systemNote(const QString &key, const QString &text, bool call = false);   // call: a call's line (a click calls back)
     void prune();
     void save();
     void saveMet();
@@ -464,7 +458,7 @@ private:
     QByteArray unwrap(const QString &content, bool *unknownDay = nullptr) const;
     // Within 7 days of restoring a backup (restore/at): a wrapping for an unknown day key is tried again later.
     bool justRestored() const;
-    // Caps b1 and e1 (shared/docs/protocol-0.6.md section 23, ring.*): my day keys for the relay wrapping and what each
+    // Caps b1 and e1 (shared/docs/protocol.md section 23, ring.*): my day keys for the relay wrapping and what each
     // contact announced (both in the vault, made when it opens), my ring key (outside it).
     std::unique_ptr<WrapKeys> m_wrapKeys;
     std::unique_ptr<PeerKeys> m_peerKeys;
@@ -558,7 +552,7 @@ private:
     void storeGroupMessage(const QString &g, const QVariantMap &m, bool notify);
     bool gmsgKnown(const QString &id) const { return m_gidx.contains(id) || m_deleted.contains(id); }
     void processHeld(const QString &g);
-    void groupNote(const QString &g, const QString &text);
+    void groupNote(const QString &g, const QString &text, bool call = false);
     QString groupName(const QString &g) const;
     QString memberName(const QString &g, const QString &key) const;
     QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());

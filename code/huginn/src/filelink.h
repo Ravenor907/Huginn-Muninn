@@ -19,7 +19,7 @@ class QTimer;
 class QUdpSocket;
 class StunProbe;
 
-// Files over the internet, straight from one device to the other (cap f1, shared/docs/protocol-0.6.md
+// Files over the internet, straight from one device to the other (cap f1, shared/docs/protocol.md
 // section 14), the same as Muninn's FileLink.kt. Never through Cloudflare's call relay: both sides
 // learn their own internet address from a STUN server (DirectPath::stunServers(), the address lookup only),
 // swap it in a sealed `file` message, and punch through their routers by sending to each other at

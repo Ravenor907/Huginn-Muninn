@@ -46,15 +46,14 @@ public:
     // Every event for the ring mailbox (its content): never kept, never handed to onEnvelope.
     std::function<void(const QString &content)> onRing;
     // The events already taken are kept in the vault (main.cpp): keepSeen saves the list, restoreSeen
-    // reads it back when the vault opens (and moves in a list found in plain settings, removing it there only once the
-    // vault has it). keepSeen returns whether the list was written.
+    // reads it back when the vault opens (with what came while it was locked). keepSeen returns whether the list was written.
     std::function<bool(const QByteArray &stored)> keepSeen;
     void restoreSeen(const QByteArray &stored);
 
     int connected() const { return int(m_live.size()); }
     // The mailbox (x-only public key in hex). Cached, so it still works while locked; empty if never unlocked.
     QString publicKey() const;
-    // QSettings nostr/relays (one wss:// address per line) when set, otherwise defaultRelays().
+    // The relays Huginn uses: defaultRelays().
     QStringList relays() const;
     // Reconnect by itself when a relay drops (set while Huginn is listening for messages).
     bool keepAlive() const { return m_keepAlive; }
@@ -89,7 +88,7 @@ public:
     // A signed event. createdAt < 0 means now; empty aux means random.
     static QJsonObject event(int kind, const QJsonArray &tags, const QString &content, const QByteArray &secret,
                              qint64 createdAt = -1, const QByteArray &aux = QByteArray());
-    // Envelope padding (shared/docs/protocol-0.6.md section 20): the size a relay sees is one of 1 KB, 4 KB, 16 KB, 32 KB,
+    // Envelope padding (shared/docs/protocol.md section 20): the size a relay sees is one of 1 KB, 4 KB, 16 KB, 32 KB,
     // then 16 KB steps. pad() adds a "z" field of zeros to the wrapping JSON so its base64 is exactly that size.
     static int padBucket(int n);
     static QByteArray pad(const QByteArray &json);

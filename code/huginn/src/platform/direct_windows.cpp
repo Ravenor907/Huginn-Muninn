@@ -32,3 +32,5 @@ void Direct::start()
 void Direct::stop()
 {
 }
+
+void Direct::clearLeftovers() {}

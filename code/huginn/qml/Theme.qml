@@ -154,6 +154,10 @@ QtObject {
     function validColor(v) { return /^#[0-9A-Fa-f]{6}$/.test(String(v || "")) }
     readonly property color accentBase: accents[Settings.accent] || (validColor(Settings.accent) ? Settings.accent : accents.gold)
     readonly property color accent: light ? Qt.darker(accentBase, 1.7) : accentBase
+    // A chat's own color (a contact's menu › Edit › Chat color, one of the accent swatches as "#RRGGBB"), drawn
+    // like the accent; the accent itself when the chat has none.
+    readonly property var chatSwatches: ["", "#C2A25E", "#A9B4BE", "#B07A5A", "#6FAE8C", "#6E9CC8", "#A58BC6", "#CF6F54"]
+    function chatAccent(c) { return validColor(c) ? (light ? Qt.darker(c, 1.7) : c) : accent }
     // Text on a filled accent button.
     readonly property color onAccent: snow ? "#0A1424" : autumn ? "#2A1608" : ground
     readonly property color accentFill: light ? Qt.rgba(accent.r * 0.18 + 0.8, accent.g * 0.18 + 0.78, accent.b * 0.18 + 0.72, 1)

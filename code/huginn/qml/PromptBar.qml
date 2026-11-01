@@ -16,6 +16,7 @@ Rectangle {
     Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.seam }
 
     Text {
+        textFormat: Text.PlainText
         anchors.left: parent.left
         anchors.leftMargin: Theme.px(24)
         anchors.verticalCenter: parent.verticalCenter

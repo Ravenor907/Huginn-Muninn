@@ -1,8 +1,9 @@
 import QtQuick
 import Huginn
 
-// Moving to another device (cap x1): over everything while it's under way. On the new computer: the 4 emoji to check
-// and the parts coming in. On the old one: the emoji, then locked while it moves, then "Moved to [name]".
+// Moving to another device (cap x1): over the pages and panels while it's under way (questions, prompts and toasts
+// show above it). On the new computer: the 4 emoji to check and the parts coming in. On the old one: the emoji, then
+// locked while it moves, then "Moved to [name]". A controller's D-pad moves between its buttons and A presses one.
 Rectangle {
     id: cover
     readonly property var inc: Mover.incoming
@@ -11,7 +12,20 @@ Rectangle {
     readonly property bool away: out.state === "checking" || out.state === "moving" || out.state === "moved"
     visible: here || away
     color: Theme.ground
-    z: 60
+    z: 29
+
+    // The buttons on show, in order, and the one the controller is on.
+    readonly property var buttons: [matchBtn, linkBtn, stopBtn, freshBtn, cancelBtn].filter(b => b.visible)
+    property int focusIndex: 0
+    readonly property int focusAt: Math.min(focusIndex, Math.max(0, buttons.length - 1))
+    onVisibleChanged: focusIndex = 0
+    function handleButton(b) {
+        if (b === "left" || b === "up") focusIndex = Math.max(0, focusAt - 1)
+        else if (b === "right" || b === "down") focusIndex = Math.min(buttons.length - 1, focusAt + 1)
+        else if (b === "a" && buttons.length > 0) buttons[focusAt].clicked()
+        return true
+    }
+    readonly property var prompts: buttons.length > 0 ? [{ key: "dpad", label: "Choose" }, { key: "a", label: buttons[focusAt].text }] : []
 
     MouseArea { anchors.fill: parent }   // nothing behind it can be used
 
@@ -21,6 +35,7 @@ Rectangle {
         spacing: Theme.px(14)
 
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
@@ -31,6 +46,7 @@ Rectangle {
                              : (inc.state === "done" ? "Moved here" : "Moving from " + inc.from)
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: (cover.away && out.state === "checking") || (cover.here && inc.state !== "done")
             horizontalAlignment: Text.AlignHCenter
@@ -39,6 +55,7 @@ Rectangle {
             text: cover.away ? out.emoji : inc.emoji
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
@@ -56,16 +73,22 @@ Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: Theme.px(12)
             HButton {
+                id: matchBtn
+                focused: Ui.main && Ui.main.padInUse && cover.buttons[cover.focusAt] === matchBtn
                 visible: (cover.away && out.state === "checking") || (cover.here && inc.state !== "done" && !inc.confirmed)
                 text: "They match"; kind: "accent"
                 onClicked: cover.away ? Mover.go() : Mover.confirmHere()
             }
             HButton {
+                id: linkBtn
+                focused: Ui.main && Ui.main.padInUse && cover.buttons[cover.focusAt] === linkBtn
                 visible: cover.away && out.state === "moved" && out.canLink
                 text: "Use as a linked device"; kind: "accent"
                 onClicked: Mover.becomeLinked()
             }
             HButton {
+                id: stopBtn
+                focused: Ui.main && Ui.main.padInUse && cover.buttons[cover.focusAt] === stopBtn
                 visible: cover.away && out.state === "moving"
                 text: "Stop moving"
                 // Needs the person's own password.
@@ -73,11 +96,15 @@ Rectangle {
                                   t => { if (!Mover.abort(t)) Ui.say("That isn't your password.", true) }, true)
             }
             HButton {
+                id: freshBtn
+                focused: Ui.main && Ui.main.padInUse && cover.buttons[cover.focusAt] === freshBtn
                 visible: cover.away && out.state === "moved"
                 text: "Start fresh"
                 onClicked: Mover.startFresh()
             }
             HButton {
+                id: cancelBtn
+                focused: Ui.main && Ui.main.padInUse && cover.buttons[cover.focusAt] === cancelBtn
                 visible: (cover.away && out.state === "checking") || (cover.here && inc.state !== "done")
                 text: "Cancel"
                 onClicked: cover.away ? Mover.cancelOut() : Mover.cancelHere()
@@ -105,6 +132,8 @@ Rectangle {
             if (!u.length || u[0].key === cover.checking) return
             const d = u[0]
             cover.checking = d.key
+            // The phone this device mirrors: Link your phone asks, with the emoji big.
+            if (d.key === Linked.phone.key) { if (Ui.main) Ui.main.showLinkPhone(false); return }
             Ui.sure("Check the link with " + d.name, "These must be the same on both screens:\n\n" + d.emoji + "\n\nNothing is mirrored until you choose They match.",
                     "They match", () => { cover.checking = ""; Linked.confirm(d.key) }, false, false, () => { cover.checking = ""; Linked.unlink(d.key) })
         }

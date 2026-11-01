@@ -13,6 +13,7 @@ Item {
     property string bannerTitle: ""        // "Replying to Raven" or "Editing your message"; empty for none
     property string bannerText: ""
     property bool editing: false
+    property color accent: Theme.accent    // a chat's own color on its page
     property var mentionNames: []          // group members, for @ suggestions
     property alias text: field.text
     signal send(string text)
@@ -96,7 +97,7 @@ Item {
                         height: Theme.px(32)
                         radius: Theme.radius
                         color: sugHover.hovered ? Theme.raised : "transparent"
-                        Text { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(10); text: "@" + modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                        Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; x: Theme.px(10); text: "@" + modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
                         HoverHandler { id: sugHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler { onTapped: box.pickMention(modelData) }
                     }
@@ -111,7 +112,7 @@ Item {
             height: Theme.px(40)
             radius: Theme.radius
             color: Theme.panel
-            Icon { id: bannerIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter; name: box.editing ? "edit" : "reply"; size: Theme.px(16); color: Theme.accent }
+            Icon { id: bannerIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(12); anchors.verticalCenter: parent.verticalCenter; name: box.editing ? "edit" : "reply"; size: Theme.px(16); color: box.accent }
             Text {
                 anchors.left: bannerIcon.right; anchors.leftMargin: Theme.px(10)
                 anchors.right: bannerClose.left; anchors.rightMargin: Theme.px(10)
@@ -138,7 +139,7 @@ Item {
             radius: Theme.radius
             color: Theme.raised
             border.width: field.activeFocus ? (box.pad ? Theme.focusWidth : 1) : 0
-            border.color: box.pad ? Theme.accent : Theme.lineMuted
+            border.color: box.pad ? box.accent : Theme.lineMuted
             Icon {
                 id: attachIcon
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)

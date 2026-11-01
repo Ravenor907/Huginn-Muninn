@@ -5,7 +5,7 @@ import Huginn
 // The call on screen, over everything else while it lasts: who, how long, which ways the sound is
 // travelling (never an address), and mute, output and end. Controller: A mute, Y output, B ends (press it
 // twice: the first press says "Press B again to hang up" for 3 seconds), X camera on or off in a video
-// call (shared/docs/protocol-0.6.md 5.8.5), otherwise X ends like B. With a camera on, the
+// call (shared/docs/protocol.md 5.8.5), otherwise X ends like B. With a camera on, the
 // picture fills the top (yours small in its corner), a strip under it shows the name, the ways and the
 // time, and the buttons sit below that. Main.qml shows it while Calls.inCall.
 Rectangle {
@@ -74,6 +74,7 @@ Rectangle {
                         color: modelData.on ? (Theme.hc ? Theme.text : Theme.online) : Theme.textFaint
                     }
                     Text {
+                        textFormat: Text.PlainText
                         id: chip
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(25)
                         anchors.verticalCenter: parent.verticalCenter
@@ -227,6 +228,7 @@ Rectangle {
             Item {
                 width: parent.width; height: Math.max(stripName.implicitHeight, stripStatus.implicitHeight)
                 Text {
+                    textFormat: Text.PlainText
                     id: stripName
                     anchors.left: parent.left; anchors.right: stripStatus.left; anchors.rightMargin: Theme.px(16)
                     anchors.verticalCenter: parent.verticalCenter
@@ -236,6 +238,7 @@ Rectangle {
                     font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
                 }
                 Text {
+                    textFormat: Text.PlainText
                     id: stripStatus
                     anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                     text: Calls.statusText + (Calls.peerMuted ? "  ·  they're muted" : "")
@@ -270,6 +273,7 @@ Rectangle {
             sourceComponent: avatar
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
@@ -278,6 +282,7 @@ Rectangle {
             font.family: Theme.display; font.pixelSize: Theme.fs(28); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap

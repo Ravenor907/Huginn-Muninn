@@ -1,4 +1,4 @@
-// Group invite links (cap j1, shared/docs/protocol-0.6.md section 17), the same as Muninn's Groups.kt.
+// Group invite links (cap j1, shared/docs/protocol.md section 17), the same as Muninn's Groups.kt.
 // A link is a group code after "#" on the add page; the admin it names counts its uses and is the
 // only one that lets people in by it, so the count never goes over. Kept in the vault (grouplinks.json).
 
@@ -191,7 +191,7 @@ QVariantMap Chat::createGroupLink(const QString &g, qint64 ttlMs, int maxUses)
     // An admin's link is counted here; a member's by the owner's device.
     const QString counter = GroupWire::isAdmin(s, me) ? me : s.value(QStringLiteral("owner")).toString();
     if (counter != me && !hasJ1(counter))
-        return fail(QStringLiteral("%1 needs Muninn or Huginn 0.95 first.").arg(memberName(g, counter)));
+        return fail(QStringLiteral("%1 needs an update first.").arg(memberName(g, counter)));
     const QString token = GroupWire::newToken();
     const qint64 x = ttlMs == 0 ? 0 : nowMs() + ttlMs;
     const qint64 codeX = x == 0 ? (nowMs() / 1000 + GroupWire::kNeverS) * 1000 : x;

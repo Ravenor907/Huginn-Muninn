@@ -19,7 +19,7 @@ class QCamera;
 class QMediaCaptureSession;
 class QScreenCapture;
 
-// Cameras, the screen and the pictures of video calls and screen share (shared/docs/protocol-0.6.md 5.8.5
+// Cameras, the screen and the pictures of video calls and screen share (shared/docs/protocol.md 5.8.5
 // to 5.8.7). Frames come from Qt Multimedia (QCamera, QScreenCapture), are scaled to the call's
 // profile and encoded with VP8 on a worker thread; what comes from the other side is decoded there too
 // and shown through a QVideoSink (a QML VideoOutput's). Sealing and sending is CallMedia's.

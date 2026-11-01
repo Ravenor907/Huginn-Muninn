@@ -3,7 +3,7 @@
 #include <QJsonObject>
 #include <QString>
 
-// Cap d1 (shared/docs/protocol-0.6.md, section 16): message limits, the parts Huginn and Muninn must agree on.
+// Cap d1 (shared/docs/protocol.md, section 16): message limits, the parts Huginn and Muninn must agree on.
 // shared/tools/d1_ref.py is the reference; shared/vectors/d1-vectors.json the vectors (Muninn: net/Limits.kt).
 //  - every chat deletes messages older than its limit: 7 days, at most 30
 //  - a Family or Work group carries "kind" and "days" in its signed state (GroupWire::checkState)

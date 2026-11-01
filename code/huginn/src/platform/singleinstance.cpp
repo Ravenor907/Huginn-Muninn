@@ -85,8 +85,7 @@ bool SingleInstance::takeOverStaleLock()
         }
         QThread::msleep(300);
     }
-    // Nobody answers: the lock was left by a copy that was killed. Under Wine and Proton process
-    // numbers start again with every session, so the dead copy's number can look alive.
+    // Nobody answers: the lock was left by a copy that was killed.
     qWarning("single instance: the lock's owner doesn't answer; taking it over");
     m_lock->removeStaleLockFile();
     return m_lock->tryLock(200);

@@ -193,38 +193,52 @@ QtObject {
 
     function linkedDevices() {
         if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
-        const items = []
         const ph = Linked.phone
-        if (ph.key) items.push({ name: "Unlink " + ph.name, url: "ph", danger: true })
-        else items.push({ name: "Show my phone's chats here", detail: "Shows a code for your phone", url: "code" })
-        items.push({ name: "Link a device", detail: "It mirrors this PC's chats", url: "link" })
-        Linked.companions.forEach(c => items.push({ name: "Unlink " + c.name, url: "u:" + c.key, danger: true }))
+        const phone = []
+        if (!ph.key) phone.push({ name: "Link my phone", detail: "Scan a code with Muninn", url: "code" })
+        else {
+            if (!ph.ok) phone.push({ name: "Check the 4 emoji", detail: "Nothing comes over until they match", url: "check" })
+            // While linked, this device's own chats are put away: the lock opens them.
+            if (Linked.ownChats())
+                phone.push(Linked.sealed ? { name: "This device's own chats", detail: Vault.hasLock ? "Needs your lock" : "Put away while linked", url: "own" }
+                                         : { name: "Put this device's chats away", detail: "Shows " + ph.name + "'s chats", url: "seal" })
+            phone.push({ name: "Unlink " + ph.name, detail: "This device's own chats come back", url: "ph", danger: true })
+        }
+        // Huginn as the phone: another device mirrors this one.
+        const others = [{ name: "Link a device", detail: "Paste the code it shows", url: "link" }]
+        Linked.companions.forEach(c => others.push({ name: "Unlink " + c.name, url: "u:" + c.key, danger: true }))
         // Cap x1: everything moves here instead, and the old device is locked out.
         const move = [{ name: "Move here", detail: "The old device is locked out", url: "movehere" },
-                      { name: "Move from this PC", detail: "Paste the new device's code", url: "moveaway" }]
-        Ui.pickFrom("Linked devices", [{ header: "Use on both", items: items },
+                      { name: "Move from this device", detail: "Paste the new device's code", url: "moveaway" }]
+        Ui.pickFrom("Linked devices", [{ header: "Your phone", items: phone },
+                                       { header: "Mirror this device", items: others },
                                        { header: "Move to another device", items: move }], a => {
             if (a === "movehere") {
                 const code = Mover.showCode()
                 if (code === "") { Ui.say("Join your home Wi-Fi first.", true); return }
                 Chat.copyText(code)
-                Ui.sure("Move code copied", "Paste it on the old device, on the same Wi-Fi.\n\n" + code, "Done", () => {}, false, false)
+                Ui.note("Move code copied", "Paste it on the old device, on the same Wi-Fi.\n\n" + code)
             } else if (a === "moveaway") {
-                Ui.ask("Move from this PC", "Only to a device you hold", "", "Next", t => Mover.take(t))
-            } else if (a === "code") {
-                const code = Linked.newCode()
-                Chat.copyText(code)
-                Ui.sure("Link code copied", "Paste it on your phone. Works once, for 10 minutes.\n\n" + code, "Done", () => {}, false, false)
+                Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t))
+            } else if (a === "code" || a === "check") {
+                if (Ui.main) Ui.main.showLinkPhone(false)
+            } else if (a === "own") {
+                if (!Vault.hasLock) { if (Linked.openOwn("")) Ui.say("This device's own chats are open until you put them away.") }
+                else Ui.openPage("dms", { ownChats: true })
+            } else if (a === "seal") {
+                Linked.closeOwn()
+                Ui.say("This device's own chats are put away.")
             } else if (a === "link") {
                 Ui.ask("Link a device", "Paste the code it shows", "", "Link", t => {
                     const r = Linked.link(t)
                     Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
                 })
             } else if (a === "ph") {
-                Ui.sure("Unlink " + ph.name + "?", "Its chats leave this PC.", "Unlink", () => Linked.unlink(ph.key), false, true)
+                Ui.sure("Unlink " + ph.name + "?", "Its chats leave this device, and this device's own chats come back.", "Unlink", () => Linked.unlink(ph.key), false, true)
             } else if (a.indexOf("u:") === 0) {
-                Linked.unlink(a.substring(2))
-                Ui.say("Unlinked.")
+                const key = a.substring(2), c = Linked.companions.find(x => x.key === key)
+                const name = c ? c.name : "this device"
+                Ui.sure("Unlink " + name + "?", "It stops showing this device's chats.", "Unlink", () => { Linked.unlink(key); Ui.say("Unlinked.") }, false, true)
             }
         })
     }

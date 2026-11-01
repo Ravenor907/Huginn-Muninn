@@ -5,7 +5,7 @@
 #include <map>
 #include <vector>
 
-// Video and screen share between two c2 apps (shared/docs/protocol-0.6.md 5.8.5 to 5.8.7), the parts without
+// Video and screen share between two c2 apps (shared/docs/protocol.md 5.8.5 to 5.8.7), the parts without
 // sockets, codecs or cameras, so --call-selftest checks them (and Muninn's VideoWire.kt does the same):
 //  - a VP8 frame cut into fragments, each the plaintext of one media packet of type 3 (video),
 //    sealed with the call's per-direction keys like audio, so video is end-to-end encrypted too

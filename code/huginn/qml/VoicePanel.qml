@@ -55,6 +55,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 width: parent.width - leaveBtn.width - Theme.px(8)
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     elide: Text.ElideRight
                     text: Rooms.note !== "" && !panel.tour ? Rooms.note : "Voice connected"
@@ -62,6 +63,7 @@ Rectangle {
                     font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     elide: Text.ElideRight
                     text: panel.tour ? "Lounge / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
@@ -119,6 +121,7 @@ Rectangle {
             }
         }
         Text {
+            textFormat: Text.PlainText
             width: parent.width
             elide: Text.ElideRight
             text: panel.others.length === 0 ? "Nobody else here yet"
@@ -136,6 +139,7 @@ Rectangle {
             border.width: 1
             border.color: !panel.tour && Rooms.talking ? Theme.accent : Theme.line
             Text {
+                textFormat: Text.PlainText
                 id: pttText
                 anchors.centerIn: parent
                 width: parent.width - Theme.px(12)
@@ -198,12 +202,14 @@ Rectangle {
                 anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
                 anchors.verticalCenter: parent.verticalCenter
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; elide: Text.ElideRight
                     text: Chat.username
                     color: Theme.text
                     font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; elide: Text.ElideRight
                     text: panel.statusText
                     color: Theme.textMuted
@@ -262,6 +268,6 @@ Rectangle {
         radius: Theme.radius
         color: Theme.groundDeep
         border.color: Theme.line
-        Text { id: tipText; anchors.centerIn: parent; text: parent.text; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+        Text { textFormat: Text.PlainText; id: tipText; anchors.centerIn: parent; text: parent.text; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
     }
 }

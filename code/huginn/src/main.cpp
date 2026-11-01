@@ -102,7 +102,7 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
 
 int main(int argc, char *argv[])
 {
-    // Windows: a start log next to Huginn.exe, cleanup after an update, settings that work under Wine.
+    // Windows: a start log next to Huginn.exe and cleanup after an update.
     Platform::beginStart();
     s_previous = qInstallMessageHandler(messages);
     QApplication app(argc, argv);
@@ -142,10 +142,11 @@ int main(int argc, char *argv[])
         s_warningFile = QDir(args.value(tour)).filePath(QStringLiteral("warnings.txt"));
     }
     const bool wifiSelf = args.isSet(wifiTest);
-    if (wifiSelf)
-        WifiSelfTest::isolate();
-    // The screenshot tour and the Wi-Fi self-test stay off the internet and don't claim the single instance.
+    // The screenshot tour and the Wi-Fi self-test run on a throwaway profile (settings, vault and lock), stay off
+    // the internet and don't claim the single instance: the person's own Huginn is never touched.
     const bool quiet = args.isSet(tour) || wifiSelf;
+    if (quiet)
+        WifiSelfTest::isolate();
     // Command-line self-tests: a passing one leaves no start log behind.
     auto selfTested = [](bool ok) {
         if (ok)
@@ -226,7 +227,7 @@ int main(int argc, char *argv[])
     }, &app);
     auto *vault = new Vault(&app);
     if (quiet && !vault->exists())
-        vault->setSecret(QStringLiteral("tour mode only"), false);   // CI screenshots: no lock to draw
+        vault->setSecret(QStringLiteral("tour mode only"), false);   // the throwaway profile only: no lock to draw
     auto *updater = new Updater(settings, &app);
     // The internet inbox's key lives in the vault; empty while locked (the inbox still says "new message").
     auto *nostr = new Nostr([vault] {
@@ -263,7 +264,8 @@ int main(int argc, char *argv[])
     cs->onCanCall = [chat](const QString &k) { return chat->canCall(k); };
     cs->onLanHost = [chat](const QString &k) { return chat->lanHost(k); };
     cs->onWarmUp = [nostr](const QString &) { nostr->warmSenders(); };
-    // Trusted for direct calls by default: anyone in a folder called "Family" (shared/docs/protocol-0.6.md 5.8.1).
+    cs->onShowPreview = [chat] { return chat->showPreview(); };
+    // Trusted for direct calls by default: anyone in a folder called "Family" (shared/docs/protocol.md 5.8.1).
     cs->onInFamily = [chat](const QString &k) {
         const QStringList in = chat->foldersOf(k);
         for (const QVariant &v : chat->folders()) {
@@ -318,7 +320,7 @@ int main(int argc, char *argv[])
     // Profile pictures and status (cap p1).
     auto *profile = new Profile(chat, vault, &app);
     chat->setProfile(profile);
-    // Labs mode: bug reports, and what goes back to plain settings before an older stable release is installed.
+    // Labs mode: bug reports, and the channel back to Stable before the stable release is installed.
     auto *labs = new Labs(chat, vault, settings, &app);
     chat->setLabs(labs);
     updater->beforeGoingBack = [labs] { return labs->beforeGoingBack(); };
@@ -350,12 +352,10 @@ int main(int argc, char *argv[])
         QObject::connect(nostr, &Nostr::publicKeyChanged, nostr, [nostr] { nostr->resubscribe(); });
         nostr->setKeepAlive(true);
         nostr->connectRelays();
-        // Wine and Proton have no Bluetooth of their own to offer Qt.
-        if (!Platform::underWine())
-            ble->start();
+        ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
-    QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault](const QString &name, const QString &text, const QString &key) {
+    QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault, linked](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
         // A muted chat makes no sound; an archived one comes back to the list.
         // Do not disturb: no sound and no notification either.
@@ -363,16 +363,18 @@ int main(int argc, char *argv[])
             return;
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
-            const bool preview = chat->showPreview() && !vault->screenLocked();
+            // While a linked phone's chats are shown, this device's own sealed chats never show who or what.
+            const bool preview = chat->showPreview() && !vault->screenLocked() && !(linked->sealed() && !key.startsWith(QLatin1String("mirror:")));
             Platform::notify(preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"));
         }
     });
     // Calls live in their chats: each one that ends goes into that chat's timeline. A missed one raises a
-    // notification (unless Do not disturb is on), and a click on it opens the chat.
+    // notification (unless Do not disturb is on), and a click on it opens the chat. Who called shows only
+    // with Show preview on and Huginn unlocked.
     auto missedNote = [chat, vault](const QString &where, const QString &who, const QString &text) {
         if (Settings::silenced())
             return;
-        const bool hide = vault->screenLocked();
+        const bool hide = vault->screenLocked() || !chat->showPreview();
         Platform::notify(hide ? QStringLiteral("Huginn") : QStringLiteral("Missed call"), hide ? QStringLiteral("Missed call") : text.isEmpty() ? who : text, 15000,
                          [chat, where] { Q_EMIT chat->showChat(where); });
     };
@@ -399,9 +401,12 @@ int main(int argc, char *argv[])
             missedNote(QStringLiteral("g:") + g, QString(), text);
     });
     auto *direct = new Direct(&app);
+    // A linked phone's photos, voice and files come over the home Wi-Fi only, never over Direct connect's hotspot.
+    linked->homeWifi = [direct] { return !direct->on(); };
     if (wifiSelf)
         localSend->start();
     if (!quiet) {
+        direct->clearLeftovers();
         if (settings->nearbySharing())
             localSend->start();
         QObject::connect(settings, &Settings::changed, localSend, [settings, localSend] {

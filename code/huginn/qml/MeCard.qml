@@ -105,8 +105,8 @@ Item {
             anchors.left: faceRing.right; anchors.leftMargin: Theme.px(10)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
             y: banner.height + Theme.px(4)
-            Text { width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Bold }
-            Text { width: parent.width; elide: Text.ElideRight; text: "Only contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+            Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Bold }
+            Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: "Only contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
         }
 
         // The rows: they scroll when the window is short or the Size is large.
@@ -156,6 +156,7 @@ Item {
                         onActiveFocusChanged: if (!activeFocus && text.trim() !== Profile.myCustomStatus) Profile.setCustomStatus(text.trim())
                     }
                     Text {
+                        textFormat: Text.PlainText
                         visible: customInput.text.length === 0 && !customInput.activeFocus
                         anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
                         anchors.verticalCenter: parent.verticalCenter
@@ -213,6 +214,7 @@ Item {
         Accessible.onPressAction: card.run(rowId)
         Item { id: leadItem; anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom; width: Theme.px(28) }
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left; anchors.leftMargin: Theme.px(30)
             anchors.right: noteText.left; anchors.rightMargin: Theme.px(6)
             anchors.verticalCenter: parent.verticalCenter
@@ -222,6 +224,7 @@ Item {
             font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: row.picked ? Font.DemiBold : Font.Normal
         }
         Text {
+            textFormat: Text.PlainText
             id: noteText
             anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
             anchors.verticalCenter: parent.verticalCenter

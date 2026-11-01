@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <map>
 
-// The deterministic parts of 1:1 calls (shared/docs/protocol-0.6.md 5.2 to 5.4), kept free of sockets and
+// The deterministic parts of 1:1 calls (shared/docs/protocol.md 5.2 to 5.4), kept free of sockets and
 // timers so --call-selftest can check them byte for byte against shared/vectors/proto06-vectors.json:
 //  - the ephemeral P-256 key of each call, signed with the chat key (domain "huginn-muninn call v1")
 //  - ECDH, the call root, the chain of epochs and each epoch's per-direction AES-256-GCM keys
@@ -24,7 +24,7 @@ const int kEpochBits = 14;              // a new epoch every 16384 packets
 const int kMaxAhead = 2;                // epochs a packet may be ahead of the receiver
 const unsigned char kVersion = 0x81;
 
-// 3 to 6 only between two c2 apps (shared/docs/protocol-0.6.md 5.8): video fragments, receiver reports,
+// 3 to 6 only between two c2 apps (shared/docs/protocol.md 5.8): video fragments, receiver reports,
 // keyframe requests and resend requests (NACK). An app without c2 refuses them as "type"; nobody sends them to one.
 enum Type { Audio = 0, Ping = 1, Pong = 2, Video = 3, Report = 4, KeyRequest = 5, Nack = 6 };
 enum Direction { O2A = 0, A2O = 1 };    // offerer to answerer, and back

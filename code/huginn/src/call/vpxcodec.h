@@ -3,7 +3,7 @@
 #include <QByteArray>
 #include <QtGlobal>
 
-// VP8 for video calls and screen share (shared/docs/protocol-0.6.md 5.8.5), with libvpx: realtime, error
+// VP8 for video calls and screen share (shared/docs/protocol.md 5.8.5), with libvpx: realtime, error
 // resilient, one token partition, a keyframe on request. Muninn uses Android's MediaCodec VP8, the same
 // bitstream. Only vpxcodec.cpp includes <vpx/...>; without HUGINN_HAVE_VPX (CMake found no libvpx)
 // both classes exist but ok() is false and this build offers no video (vpxAvailable()).

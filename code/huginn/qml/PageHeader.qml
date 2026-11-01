@@ -12,6 +12,7 @@ Item {
     property bool carved: true        // Cinzel for section names; conversations use the body font
     property bool backShown: false
     property bool warn: false         // the subtitle is a warning (a changed security key)
+    property color accent: "transparent"   // a chat's own color: the line underneath takes it
     signal back()
     default property alias trailing: right.data
 
@@ -43,6 +44,7 @@ Item {
         spacing: Theme.px(8)
         clip: true
         Text {
+            textFormat: Text.PlainText
             id: glyphText
             visible: header.glyph !== ""
             anchors.verticalCenter: parent.verticalCenter
@@ -51,6 +53,7 @@ Item {
             font.family: Theme.body; font.pixelSize: Theme.fs(20)
         }
         Text {
+            textFormat: Text.PlainText
             id: titleText
             anchors.verticalCenter: parent.verticalCenter
             width: Math.min(implicitWidth, parent.width - (glyphText.visible ? glyphText.width + parent.spacing : 0))
@@ -69,6 +72,7 @@ Item {
             color: Theme.line
         }
         Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             width: Math.max(0, parent.width - titleText.width - (glyphText.visible ? glyphText.width : 0) - Theme.px(30))
             elide: Text.ElideRight
@@ -86,5 +90,5 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.px(8)
     }
-    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam }
+    Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: header.accent.a > 0 ? Theme.px(2) : 1; color: header.accent.a > 0 ? header.accent : Theme.seam }
 }

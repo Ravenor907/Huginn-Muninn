@@ -3,7 +3,7 @@
 #include <QByteArray>
 #include <QtGlobal>
 
-// libopus for calls, the settings both apps use (shared/docs/protocol-0.6.md 5.5): VOIP, mono, 16 kHz,
+// libopus for calls, the settings both apps use (shared/docs/protocol.md 5.5): VOIP, mono, 16 kHz,
 // 16 kbps VBR, 20 ms frames, in-band FEC (10 % expected loss), DTX, complexity 5.
 // Only opuscodec.cpp includes <opus.h>, so nothing else needs the library's headers. Without
 // HUGINN_HAVE_OPUS (CMake found no libopus) both classes exist but ok() is false.
@@ -29,7 +29,7 @@ public:
     // isSilence() says so and the caller sends only some of those.
     QByteArray encode(const qint16 *pcm320);
     static bool isSilence(const QByteArray &packet) { return packet.size() <= 2; }
-    // Between two c2 apps (shared/docs/protocol-0.6.md 5.8.4): 24 or 32 kbps, and the loss the other side
+    // Between two c2 apps (shared/docs/protocol.md 5.8.4): 24 or 32 kbps, and the loss the other side
     // reports, so in-band FEC carries as much as the network needs. Unchanged when the same.
     void setBitrate(int bps);
     void setLossPercent(int pct);

@@ -41,4 +41,6 @@ QtObject {
     property var person: null
     function showPerson(key, name, extra) { if (person && key) person.show(key, name || "", extra || {}) }
     function sure(title, message, confirmText, cb, hold, danger, onCancel, tag) { confirm.open(title, message, confirmText, cb, hold, danger, onCancel, tag) }
+    // A note with one Done button (a code that was just copied, and the like).
+    function note(title, message) { confirm.open(title, message, "Done", null, false, false); confirm.single = true }
 }

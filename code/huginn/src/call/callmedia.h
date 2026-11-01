@@ -23,7 +23,7 @@ class QUdpSocket;
 class TurnClient;
 
 // The sound (and, between two c2 apps, the video) of one call, on every path at once
-// (shared/docs/protocol-0.6.md 5.4 to 5.8):
+// (shared/docs/protocol.md 5.4 to 5.8):
 //  - Relay: through our TURN allocation to the peer's relayed address.
 //  - Wi-Fi: straight to the peer's own address on the network Chat already reaches them on.
 //  - Bluetooth: the MEDIA characteristic, when the BLE link can carry it.

@@ -13,7 +13,8 @@ Rectangle {
     property int row: 0
     function setArgs(a) {}
 
-    readonly property var people: Chat.people.concat(Chat.trash.map(t => ({ key: t.key, name: t.name, trashed: true, daysLeft: t.daysLeft, contact: false, verified: false, blocked: false })))
+    // While a linked phone's chats are on show, this device's own contacts are put away with its chats.
+    readonly property var people: Linked.sealed ? [] : Chat.people.concat(Chat.trash.map(t => ({ key: t.key, name: t.name, trashed: true, daysLeft: t.daysLeft, contact: false, verified: false, blocked: false })))
     readonly property var person: people[row] || null
     readonly property var prompts: [{ key: "a", label: "Menu" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
     readonly property string status: ""
@@ -68,8 +69,8 @@ Rectangle {
                 Column {
                     anchors.left: ava.right; anchors.leftMargin: Theme.px(10); anchors.right: rowMore.left; anchors.rightMargin: Theme.px(6)
                     anchors.verticalCenter: parent.verticalCenter
-                    Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                    Text { width: parent.width; elide: Text.ElideRight; text: page.stateText(modelData); color: modelData.blocked ? Theme.danger : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                    Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: page.stateText(modelData); color: modelData.blocked ? Theme.danger : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 }
                 HoverHandler { id: hover }
                 TapHandler {
@@ -87,11 +88,12 @@ Rectangle {
             }
         }
         Text {
+            textFormat: Text.PlainText
             anchors.top: header.bottom; anchors.topMargin: Theme.px(16)
             x: Theme.px(20); width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
             visible: list.count === 0
-            text: "Nobody yet."
+            text: Linked.sealed ? "This device's own contacts are put away while your phone is linked." : "Nobody yet."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
     }
@@ -120,6 +122,7 @@ Rectangle {
                 backdrop: Theme.ground
             }
             Text {
+                textFormat: Text.PlainText
                 width: parent.width; horizontalAlignment: Text.AlignHCenter
                 text: page.person ? page.stateText(page.person) : ""
                 color: page.person && page.person.blocked ? Theme.danger : Theme.textSoft

@@ -42,6 +42,7 @@ Item {
             ["Bigger", "Ctrl+="],
             ["Smaller", "Ctrl+-"],
             ["Normal size", "Ctrl+0"],
+            ["Full screen", "F11"],
             ["Lock Huginn now", "Ctrl+Shift+Q"],
             ["This list", "Ctrl+/"] ] }]
     ]
@@ -65,12 +66,14 @@ Item {
             x: Theme.px(24); y: Theme.px(20)
             width: parent.width - Theme.px(48); height: Theme.px(28)
             Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: "KEYBOARD SHORTCUTS"
                 color: Theme.text
                 font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                 text: "Esc closes"
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
@@ -103,6 +106,7 @@ Item {
                                 width: parent.width
                                 spacing: Theme.px(2)
                                 Text {
+                                    textFormat: Text.PlainText
                                     bottomPadding: Theme.px(6)
                                     text: modelData.title
                                     color: Theme.textMuted
@@ -115,6 +119,7 @@ Item {
                                         height: Theme.px(34)
                                         Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.seam }
                                         Text {
+                                            textFormat: Text.PlainText
                                             anchors.left: parent.left
                                             anchors.right: cap.left; anchors.rightMargin: Theme.px(10)
                                             anchors.verticalCenter: parent.verticalCenter
@@ -132,6 +137,7 @@ Item {
                                             color: Theme.raised
                                             border.color: Theme.lineStrong
                                             Text {
+                                                textFormat: Text.PlainText
                                                 id: capText
                                                 anchors.centerIn: parent
                                                 text: modelData[1]

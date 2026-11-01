@@ -14,7 +14,7 @@ class Chat;
 class Link;
 class LocalSend;
 
-// Moving to another device (cap x1, shared/docs/protocol-0.6.md section 18), the same as Muninn's MoveWire.kt and Move.kt.
+// Moving to another device (cap x1, shared/docs/protocol.md section 18), the same as Muninn's MoveWire.kt and Move.kt.
 // The new device shows a code; the old one takes it, both show the same 4 emoji, the old one says go and is locked
 // from then on: it sends everything straight over the home Wi-Fi in parts sealed with K, and once the new device has it
 // all and took it, the old one erases its keys and shows "Moved to [name]", with one tap to become a linked device.
@@ -104,7 +104,6 @@ private:
     Vault *m_vault;
     Link *m_link;
     LocalSend *m_net;
-    QSettings m_settings;          // only to move anything found under move/ into the vault, then drop it
     QHash<QString, QJsonObject> m_mem;   // in and out while the vault is locked or erased (this run only)
     void vaultOpened();
     void resume();                 // a move that was under way when Huginn closed goes on

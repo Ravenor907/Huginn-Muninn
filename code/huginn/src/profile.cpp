@@ -239,18 +239,6 @@ bool Profile::setMyPicture(const QImage &image)
     return true;
 }
 
-QString Profile::setMyPictureFile(const QString &path)
-{
-    const QUrl u(path);
-    const QString p = u.isLocalFile() ? u.toLocalFile() : path;
-    QImageReader r(p);
-    r.setAutoTransform(true);
-    const QImage img = r.read();
-    if (img.isNull())
-        return QStringLiteral("That file isn't a picture Huginn can read.");
-    return setMyPicture(img) ? QString() : QStringLiteral("That picture couldn't be made small enough.");
-}
-
 void Profile::clearMyPicture()
 {
     if (m_me.pic.isEmpty())
@@ -284,8 +272,6 @@ QString Profile::statusOf(const QString &key) const
         return QString();
     return shownStatus(m_chat->m_active.contains(key), m_statuses.value(key).first, m_heard.contains(key) || m_chat->hasM1(key));
 }
-
-QString Profile::customStatusOf(const QString &key) const { return key == kMe ? m_custom : m_statuses.value(key).second; }
 
 QString Profile::colourOf(const QString &key) const
 {

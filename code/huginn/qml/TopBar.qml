@@ -23,6 +23,7 @@ Rectangle {
             smooth: true; mipmap: true
         }
         Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             text: "HUGINN"
             color: Theme.textMuted
@@ -42,6 +43,7 @@ Rectangle {
         Accessible.onPressAction: bar.search()
         Icon { id: lens; anchors.left: parent.left; anchors.leftMargin: Theme.px(8); anchors.verticalCenter: parent.verticalCenter; name: "search"; size: Theme.px(14); color: Theme.textMuted }
         Text {
+            textFormat: Text.PlainText
             id: boxText
             anchors.left: lens.right; anchors.leftMargin: Theme.px(6)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
@@ -55,6 +57,7 @@ Rectangle {
         TapHandler { onTapped: bar.search() }
     }
     Text {
+        textFormat: Text.PlainText
         anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
         anchors.verticalCenter: parent.verticalCenter
         visible: parent.width > Theme.px(520)

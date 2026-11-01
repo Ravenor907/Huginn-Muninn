@@ -30,6 +30,8 @@ public:
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void stop();
+    // At start: a Direct connect hotspot left behind by a crash is removed (NetworkManager keeps it otherwise).
+    void clearLeftovers();
 
 Q_SIGNALS:
     void changed();

@@ -25,8 +25,6 @@ if(WIN32)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Quick QuickControls2 Network WebSockets Bluetooth Multimedia)
     # The updater unpacks the release zip itself with Qt's zip reader (src/platform/winupdate.cpp).
     find_package(Qt6 6.6 REQUIRED COMPONENTS CorePrivate GuiPrivate)
-    # For main.cpp, which sends some notifications over D-Bus.
-    find_package(Qt6 6.6 QUIET OPTIONAL_COMPONENTS DBus)
     find_package(OpenSSL REQUIRED)
     find_package(SDL2 CONFIG REQUIRED)
     find_path(QRENCODE_INCLUDE_DIR qrencode.h REQUIRED)
@@ -99,7 +97,7 @@ qt_add_executable(huginn
     src/tls.cpp src/tls.h
     src/lan.cpp src/lan.h
     src/wifiselftest.cpp src/wifiselftest.h
-    # 1:1 calls (shared/docs/protocol-0.6.md section 5: TURN relay over the internet, direct between trusted
+    # 1:1 calls (shared/docs/protocol.md section 5: TURN relay over the internet, direct between trusted
     # contacts, video and screen share between two c2 apps, 5.8)
     src/call/relayconfig.h
     src/call/callsignal.h
@@ -229,7 +227,6 @@ qt_add_qml_module(huginn
         qml/ListPicker.qml
         qml/Rail.qml
         qml/Splitter.qml
-        qml/PaneToggle.qml
         qml/MemberList.qml
         qml/VoicePanel.qml
         qml/MeCard.qml
@@ -263,6 +260,7 @@ qt_add_qml_module(huginn
         qml/PeopleActions.qml
         qml/FileStrip.qml
         qml/MirrorPanel.qml
+        qml/LinkPhone.qml
         qml/TopBar.qml
         qml/PersonPanel.qml
         qml/InvitePanel.qml
@@ -281,11 +279,11 @@ foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton Tog
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel
-                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox)
+                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox LinkPhone)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels.
-foreach(f IN ITEMS Splitter PaneToggle MemberList VoicePanel MeCard ProfileCard ShortcutsPanel TopBar PersonPanel InvitePanel)
+foreach(f IN ITEMS Splitter MemberList VoicePanel MeCard ProfileCard ShortcutsPanel TopBar PersonPanel InvitePanel)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)
@@ -308,9 +306,6 @@ if(WIN32)
         winmm      # PlaySound, for the raven call (src/platform/chime_windows.cpp)
         advapi32   # the Wi-Fi self-test's separate registry key
     )
-    if(TARGET Qt6::DBus)
-        target_link_libraries(huginn PRIVATE Qt6::DBus)
-    endif()
 else()
     target_link_libraries(huginn PRIVATE Qt6::DBus KF6::Prison PkgConfig::SDL2)
 endif()

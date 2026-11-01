@@ -273,11 +273,7 @@ bool Vault::turnOffLock(const QString &secret)
     }
     // No secret: the data key itself goes in vault.key. Nothing outside Huginn keeps it.
     const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(m_key.toBase64())}};
-    QSaveFile f(keyFile());
-    if (!f.open(QIODevice::WriteOnly))
-        return false;
-    f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    if (!f.commit())
+    if (!writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact)))
         return false;
     m_weak = false;
     m_screenLocked = false;
@@ -353,14 +349,9 @@ bool Vault::unlock(const QString &secret)
     settings().remove(QStringLiteral("vault/wait"));
     settings().remove(QStringLiteral("vault/at"));
     settings().remove(QStringLiteral("vault/started"));
-    settings().remove(QStringLiteral("vault/until"));   // a clock-based wait, not used
     const bool first = m_key.isEmpty();
     m_key = key;
     m_weak = !strongSecret(secret);
-    // A PBKDF2-only lock: store it again with Argon2id or scrypt, now that the secret is known.
-    const bool redo = o.value(QStringLiteral("kdf")).toString().isEmpty();
-    if (redo)
-        writeLock(secret, o.value(QStringLiteral("kind")).toString() == QLatin1String("pattern"));
     m_screenLocked = false;
     Q_EMIT changed();
     if (first)
@@ -461,11 +452,23 @@ bool Vault::writeLock(const QString &secret, bool pattern) const
     // opens on any computer with the right pattern or password.
     const QByteArray wrapped = seal(kek, m_key);
     o.insert(QStringLiteral("wrapped"), QString::fromLatin1(wrapped.toBase64()));
+    return writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+// vault.key, readable and writable by this user only (like ring-key.json and the TLS key): with the lock off it
+// holds the data key itself.
+bool Vault::writeKeyFile(const QByteArray &bytes) const
+{
+    const QFileDevice::Permissions owner = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
     QSaveFile f(keyFile());
     if (!f.open(QIODevice::WriteOnly))
         return false;
-    f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    return f.commit();
+    f.setPermissions(owner);
+    f.write(bytes);
+    if (!f.commit())
+        return false;
+    QFile::setPermissions(keyFile(), owner);
+    return true;
 }
 
 bool Vault::askStronger()
@@ -981,7 +984,7 @@ void Vault::backup(const QString &password)
         files.emplace_back(kSettingsEntry, extra);
         const QByteArray bytes = packBackup(password, files, QStringLiteral("huginn"));
         if (bytes.isEmpty()) {
-            *result = QStringLiteral("Couldn't make the backup's key on this computer.");
+            *result = QStringLiteral("Couldn't make the backup's key on this device.");
             return;
         }
         QDir().mkpath(folder);

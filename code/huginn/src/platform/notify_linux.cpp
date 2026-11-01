@@ -19,10 +19,22 @@ class NotifyClicks : public QObject
 
 public:
     QHash<uint, std::function<void()>> pending;
+    QHash<uint, std::function<void(const QString &)>> calls;   // notifyCall's buttons
 
 public Q_SLOTS:
     void invoked(uint id, const QString &action)
     {
+        if (calls.contains(id)) {
+            // A click on the ringing notification itself only brings Huginn up; its buttons stay live.
+            if (action != QLatin1String("answer") && action != QLatin1String("decline")) {
+                SingleInstance::bringToFront();
+                return;
+            }
+            const std::function<void(const QString &)> a = calls.take(id);
+            if (a)
+                a(action);
+            return;
+        }
         const std::function<void()> f = pending.take(id);
         if (!f || action != QLatin1String("default"))
             return;
@@ -33,11 +45,28 @@ public Q_SLOTS:
     {
         Q_UNUSED(reason);
         pending.remove(id);
+        calls.remove(id);
     }
 };
 
 namespace
 {
+// A desktop that reads markup in the body (and may fetch an <img> from the web) gets names and texts escaped,
+// so they always show as plain text.
+QString plainBody(const QString &body)
+{
+    static int markup = -1;
+    if (markup < 0) {
+        QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
+                         QStringLiteral("org.freedesktop.Notifications"));
+        n.setTimeout(2000);
+        const QDBusMessage r = n.call(QStringLiteral("GetCapabilities"));
+        markup = r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty()
+                 && r.arguments().constFirst().toStringList().contains(QStringLiteral("body-markup")) ? 1 : 0;
+    }
+    return markup ? body.toHtmlEscaped() : body;
+}
+
 NotifyClicks *clicks()
 {
     static NotifyClicks *c = nullptr;
@@ -64,13 +93,42 @@ void notify(const QString &title, const QString &body, int timeoutMs, std::funct
     QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
                      QStringLiteral("org.freedesktop.Notifications"));
     const QStringList actions = onClick ? QStringList{QStringLiteral("default"), QStringLiteral("Open")} : QStringList();
-    const QDBusMessage r = n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), 0u, QStringLiteral("io.github.ravenor907.Huginn"), title, body,
+    const QDBusMessage r = n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), 0u, QStringLiteral("io.github.ravenor907.Huginn"), title, plainBody(body),
                                   actions, QVariantMap(), timeoutMs);
     if (c && r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty()) {
         if (c->pending.size() > 50)
             c->pending.clear();
         c->pending.insert(r.arguments().constFirst().toUInt(), std::move(onClick));
     }
+}
+
+uint notifyCall(uint replaces, const QString &title, const QString &body, std::function<void(const QString &)> onAction)
+{
+    NotifyClicks *c = clicks();
+    QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
+                     QStringLiteral("org.freedesktop.Notifications"));
+    const QVariantMap hints{{QStringLiteral("urgency"), QVariant::fromValue(uchar(2))}, {QStringLiteral("category"), QStringLiteral("call.incoming")},
+                            {QStringLiteral("resident"), true}};
+    const QDBusMessage r = n.call(QStringLiteral("Notify"), QStringLiteral("Huginn"), replaces, QStringLiteral("io.github.ravenor907.Huginn"), title, plainBody(body),
+                                  QStringList{QStringLiteral("answer"), QStringLiteral("Answer"), QStringLiteral("decline"), QStringLiteral("Decline")},
+                                  hints, 45000);
+    if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
+        return 0;
+    const uint id = r.arguments().constFirst().toUInt();
+    if (replaces && replaces != id)
+        c->calls.remove(replaces);
+    c->calls.insert(id, std::move(onAction));
+    return id;
+}
+
+void closeNotification(uint id)
+{
+    if (!id)
+        return;
+    clicks()->calls.remove(id);
+    QDBusInterface n(QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("/org/freedesktop/Notifications"),
+                     QStringLiteral("org.freedesktop.Notifications"));
+    n.call(QStringLiteral("CloseNotification"), id);
 }
 }
 

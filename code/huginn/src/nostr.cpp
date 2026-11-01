@@ -159,12 +159,9 @@ Nostr::Nostr(std::function<QByteArray()> secret, QObject *parent)
 void Nostr::restoreSeen(const QByteArray &stored)
 {
     QStringList all = QJsonDocument::fromJson(stored).object().value(QStringLiteral("seen")).toVariant().toStringList();
-    QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    const QStringList plain = s.value(QStringLiteral("nostr/seen")).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
     QSet<QString> have(all.begin(), all.end());
-    // Then what plain settings had, then what came while the vault was locked.
-    const QStringList mem = m_seen;
-    for (const QString &id : plain + mem)
+    // Then what came while the vault was locked.
+    for (const QString &id : std::as_const(m_seen))
         if (!have.contains(id)) {
             have.insert(id);
             all << id;
@@ -173,11 +170,6 @@ void Nostr::restoreSeen(const QByteArray &stored)
         have.remove(all.takeFirst());
     m_seen = all;
     m_seenSet = have;
-    // The plain list goes only once the vault really has it.
-    if (!plain.isEmpty() || s.contains(QStringLiteral("nostr/seen"))) {
-        if (keepSeen && keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact)))
-            s.remove(QStringLiteral("nostr/seen"));
-    }
 }
 
 Nostr::~Nostr()
@@ -227,14 +219,7 @@ QString Nostr::publicKey() const
 
 QStringList Nostr::relays() const
 {
-    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    QStringList list;
-    const QStringList lines = s.value(QStringLiteral("nostr/relays")).toString().split(QLatin1Char('\n'));
-    for (const QString &l : lines) {
-        if (l.trimmed().startsWith(QLatin1String("wss://")))
-            list << l.trimmed();
-    }
-    return list.isEmpty() ? defaultRelays() : list;
+    return defaultRelays();
 }
 
 void Nostr::setKeepAlive(bool on)

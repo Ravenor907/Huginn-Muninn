@@ -19,7 +19,7 @@ class StunProbe;
 class TurnClient;
 struct TurnLogin;
 
-// One 1:1 call, from the first offer to the last hangup (shared/docs/protocol-0.6.md 5.2, 5.6 and 5.8).
+// One 1:1 call, from the first offer to the last hangup (shared/docs/protocol.md 5.2, 5.6 and 5.8).
 // The offer, answer and cands carry:
 //   cands: [{"t":"relay","a":"<TURN relayed IP>","p":<port>}]   when a relay allocation is up
 //          [{"t":"lan","p":<UDP port>}]                          when Chat reaches them on Wi-Fi

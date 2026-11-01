@@ -11,7 +11,8 @@ class LocalSend;
 // notification). It also checks that nothing listens outside the home network (not on 127.0.0.1).
 namespace WifiSelfTest
 {
-// Before anything reads settings or app data: test folders and (Windows) a separate registry key.
+// Before anything reads settings or app data: test folders and (Windows) a separate registry key. The
+// screenshot tour uses it too.
 void isolate();
 // Once the window is up. Ends the app with 0 when everything worked, 1 otherwise.
 void start(Chat *chat, LocalSend *net, Chime *chime);

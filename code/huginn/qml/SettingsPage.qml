@@ -78,7 +78,7 @@ Rectangle {
         case "you": return [
             { kind: "button", key: "chatName", title: "Name", note: Chat.username, label: "Change" },
             { kind: "button", key: "picture", title: "Picture", label: Profile.hasMyPicture ? "Change" : "Choose" },
-            { kind: "swatches", key: "myColour", title: "Color" },
+            { kind: "swatches", key: "myColour", title: "Avatar color" },
             { kind: "button", key: "myCode", title: "My code", label: "Show" }
         ]
         case "notify": return [
@@ -127,6 +127,7 @@ Rectangle {
             { group: "Lock", kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw" },
             { group: "Lock", kind: "toggle", key: "lockOnLeave", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Lock when I leave" },
             { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
+            { group: "Lock", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" },
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
             { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
             { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews" },
@@ -134,8 +135,7 @@ Rectangle {
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "One day" }] },
             { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Let people nearby find you" },
             { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
-            { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" },
-            { group: " ", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" }
+            { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" }
         ].filter(r => !r.hide)
         case "devices": return [
             { kind: "button", key: "linked", title: "Linked devices", note: Linked.phone.key ? "Linked to " + Linked.phone.name : "", label: "Open" },
@@ -164,7 +164,7 @@ Rectangle {
         ].filter(r => !r.hide)
         case "erase": return [
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
-            { kind: "button", key: "eraseChat", title: "Erase everything", note: "Deletes everything on this PC.", label: "Erase" }
+            { kind: "button", key: "eraseChat", title: "Erase everything", note: "Deletes everything on this device.", label: "Erase" }
         ]
         }
         return []
@@ -262,6 +262,7 @@ Rectangle {
                                 color: modelData.danger ? Theme.danger : navRow.here ? Theme.accent : Theme.textMuted
                             }
                             Text {
+                                textFormat: Text.PlainText
                                 id: navText
                                 anchors.left: navIcon.right; anchors.leftMargin: Theme.px(12)
                                 anchors.right: chev.left; anchors.rightMargin: Theme.px(8)
@@ -320,6 +321,7 @@ Rectangle {
                     width: rowsCol.width
                     spacing: Theme.px(6)
                     Text {
+                        textFormat: Text.PlainText
                         visible: groupCol.groupData.title.trim() !== ""
                         leftPadding: Theme.px(4)
                         text: groupCol.groupData.title.toUpperCase()
@@ -378,8 +380,8 @@ Rectangle {
             anchors.rightMargin: Theme.px(16)
             y: rowItem.stacked ? Theme.px(10) : (parent.height - implicitHeight) / 2
             spacing: Theme.px(2)
-            Text { width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.title || ""; color: rowItem.danger ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
-            Text { visible: !!rowItem.r.note; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.note || ""; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+            Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.title || ""; color: rowItem.danger ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
+            Text { textFormat: Text.PlainText; visible: !!rowItem.r.note; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.note || ""; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
         }
         Item {
             id: control
@@ -547,6 +549,7 @@ Rectangle {
                     Accessible.name: "Default"
                     Accessible.checked: on
                     Text {
+                        textFormat: Text.PlainText
                         id: defaultText
                         anchors.centerIn: parent
                         text: "Default"
@@ -690,7 +693,7 @@ Rectangle {
                                             "Turn off", () => Ui.openPage("chat", { lockOff: true }), false, true)
         else if (key === "deleteMessages" && !Chat.ready) Ui.say("Unlock Huginn first.", true)
         else if (key === "deleteMessages") Ui.sure("Delete all messages?", "Can't be undone.", "Hold to delete", () => { Chat.deleteAll(); Ui.say("All messages deleted.") }, true, true)
-        else if (key === "eraseChat") Ui.sure("Erase everything?", "Deletes everything on this PC. Can't be undone.",
+        else if (key === "eraseChat") Ui.sure("Erase everything?", "Deletes everything on this device. Can't be undone." + (job ? " " + job : ""),
                                               "Hold to erase", () => { Vault.eraseAll(); Qt.quit() }, true, true)
         else if (key === "raven") tapRaven()
         else if (key === "report") Ui.main.openReport()
@@ -728,6 +731,8 @@ Rectangle {
             // The named colors, then Any color (A on it asks for a code).
             const order = Theme.accentNames.concat(["custom"])
             const at = Theme.accentNames.indexOf(Settings.accent) < 0 ? order.length - 1 : Theme.accentNames.indexOf(Settings.accent)
+            // A on Any color (a code is in use) asks for another code instead of going round to gold.
+            if (dir === 0 && order[at] === "custom") { pickColor(); return }
             const i = dir === 0 ? (at + 1) % order.length : Math.max(0, Math.min(order.length - 1, at + dir))
             if (i === at && dir !== 0) return
             if (order[i] === "custom") pickColor()
@@ -806,6 +811,7 @@ Rectangle {
             border.color: Theme.text
         }
         Text {
+            textFormat: Text.PlainText
             id: lowText
             visible: sl.ends
             x: 0; y: Theme.px(26)
@@ -813,6 +819,7 @@ Rectangle {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         Text {
+            textFormat: Text.PlainText
             visible: sl.ends
             x: sl.width - width; y: Theme.px(26)
             text: sl.high

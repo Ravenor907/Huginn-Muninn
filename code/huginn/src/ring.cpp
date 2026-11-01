@@ -368,8 +368,6 @@ void RingKey::load()
         const QJsonObject old = o.value(QStringLiteral("old")).toObject();
         m_old = pairOf(old);
         m_oldUntil = m_old.mailbox.isEmpty() ? 0 : old.value(QStringLiteral("until")).toInteger();
-        // Written by an older Huginn with the default permissions: this user only from now on.
-        QFile::setPermissions(m_path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
     if (m_now.mailbox.isEmpty()) {
         m_now.keys = ChatCrypto::newKeyPair();

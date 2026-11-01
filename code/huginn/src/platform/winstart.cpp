@@ -4,8 +4,6 @@
 
 namespace Platform
 {
-bool underWine() { return false; }
-QString wineVersion() { return {}; }
 void beginStart() {}
 void startClaimed(bool) {}
 void chooseGraphics() {}
@@ -213,19 +211,6 @@ bool probe(QRhi::Implementation impl)
 
 namespace Platform
 {
-bool underWine()
-{
-    static const bool wine = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
-    return wine;
-}
-
-QString wineVersion()
-{
-    using Fn = const char *(__cdecl *)();
-    const auto fn = reinterpret_cast<Fn>(reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version")));
-    return fn ? QString::fromLatin1(fn()) : QString();
-}
-
 void beginStart()
 {
     s_keep = envSet("HUGINN_KEEP_START_LOG");
@@ -246,15 +231,6 @@ void beginStart()
     const QString lib = dir + QStringLiteral("/lib");
     if (!dir.isEmpty() && QFileInfo::exists(lib + QStringLiteral("/lib.manifest")))
         qputenv("PATH", QDir::toNativeSeparators(lib).toLocal8Bit() + ';' + qgetenv("PATH"));
-
-    if (underWine()) {
-        logLine(QStringLiteral("running under Wine %1%2").arg(wineVersion(), envSet("STEAM_COMPAT_DATA_PATH") ? QStringLiteral(" (Proton)") : QString()));
-        // Fonts through GDI, which Wine has had the longest, and no Windows dark-mode lookups:
-        // Huginn draws its own dark theme anyway. Anyone who set QT_QPA_PLATFORM keeps their choice.
-        logLine(QStringLiteral("QT_QPA_PLATFORM was \"%1\"").arg(qEnvironmentVariable("QT_QPA_PLATFORM")));
-        if (!envSet("QT_QPA_PLATFORM"))
-            qputenv("QT_QPA_PLATFORM", "windows:fontengine=gdi,darkmode=0");
-    }
 }
 
 void startClaimed(bool tidy)
@@ -288,9 +264,7 @@ void chooseGraphics()
         logLine(QStringLiteral("graphics: software (no screen)"));
         return;
     }
-    // Under Wine, OpenGL goes straight to the Linux driver; Direct3D is a translation on top.
-    const QList<QRhi::Implementation> order = underWine() ? QList<QRhi::Implementation>{QRhi::OpenGLES2, QRhi::D3D11}
-                                                          : QList<QRhi::Implementation>{QRhi::D3D11, QRhi::OpenGLES2};
+    const QList<QRhi::Implementation> order{QRhi::D3D11, QRhi::OpenGLES2};
     for (const QRhi::Implementation impl : order) {
         if (probe(impl)) {
             QQuickWindow::setGraphicsApi(apiFor(impl));
@@ -314,7 +288,7 @@ void watchMainWindow(QQuickWindow *window)
         startFailed(QStringLiteral("no main window"));
         return;
     }
-    // No window could be made (no screen Windows or Wine can draw on): say so and stop, rather than
+    // No window could be made (no screen Windows can draw on): say so and stop, rather than
     // run on with nothing to see.
     QTimer::singleShot(0, window, [window] {
         if (!window->handle()) {

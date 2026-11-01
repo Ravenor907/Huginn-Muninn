@@ -40,8 +40,8 @@ public:
     Q_INVOKABLE void install();
     // Labs: the latest stable release, even though it's older than this pre-release (asked first on screen).
     Q_INVOKABLE void goBackToStable();
-    // Runs once the stable file checked out, before it's installed (main.cpp: settings an older Huginn reads,
-    // the channel back to Stable and Labs off). False stops the install.
+    // Runs once the stable file checked out, before it's installed (main.cpp: the channel back to Stable and Labs
+    // off). False stops the install.
     std::function<bool()> beforeGoingBack;
 
     static QString versionFromTag(const QString &tag);   // v0.31 -> "0.31"; anything else -> empty

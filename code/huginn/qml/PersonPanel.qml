@@ -74,7 +74,7 @@ Item {
             Ui.ask("Note about " + shownName, "Only you see it", Chat.noteOf(k), "Save", t => { Chat.setNote(k, t); panel.revision++ }, false, true)
         else if (id === "color") pickColor(1)
         // The list opens over this panel (it stays open on the same row); back here after a pick or B.
-        else if (id === "days") PeopleActions.daysMenu(k, () => { panel.revision++; if (Ui.main) Ui.main.restoreFocus() })
+        else if (id === "days") PeopleActions.daysMenu(k, () => { panel.reopen(); if (Ui.main) Ui.main.restoreFocus() })
         else if (id === "direct") { Calls.setTrusted(k, !Calls.trusted(k)); revision++ }
         else if (setters[id] && has(setters[id])) { Chat[setters[id]](k, !isOn(id)); revision++ }
     }
@@ -132,6 +132,7 @@ Item {
                 backdrop: Theme.panel
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.left: face.right; anchors.leftMargin: Theme.px(10)
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
@@ -180,6 +181,7 @@ Item {
                             Accessible.onPressAction: panel.act(modelData.id)
                             Rectangle { visible: index > 0; width: parent.width; height: 1; color: Theme.seam }
                             Text {
+                                textFormat: Text.PlainText
                                 id: label
                                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
                                 anchors.right: right.left; anchors.rightMargin: Theme.px(10)
@@ -233,6 +235,7 @@ Item {
                                     anchors.verticalCenter: parent.verticalCenter
                                     spacing: Theme.px(6)
                                     Text {
+                                        textFormat: Text.PlainText
                                         anchors.verticalCenter: parent.verticalCenter
                                         width: Math.min(implicitWidth, row.width * 0.45)
                                         elide: Text.ElideRight

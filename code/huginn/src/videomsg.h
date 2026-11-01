@@ -13,7 +13,7 @@ class QMediaPlayer;
 class QMediaRecorder;
 class Chat;
 
-// Video messages (cap m2, shared/docs/protocol-0.6.md 12.2), the same as Muninn's Videos.kt and CameraScreen.kt:
+// Video messages (cap m2, shared/docs/protocol.md 12.2), the same as Muninn's Videos.kt and CameraScreen.kt:
 //  - Recorded with the camera as an MP4 of at most a minute, small enough to go through the relays like a
 //    photo (about 2 MB). While recording it's written to Huginn's runtime folder, read back and wiped at once.
 //  - After recording it waits: the person watches it and picks Send or Discard. Never sent by itself.

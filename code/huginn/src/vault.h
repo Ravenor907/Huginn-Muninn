@@ -160,6 +160,7 @@ Q_SIGNALS:
 private:
     QString keyFile() const;
     bool writeLock(const QString &secret, bool pattern) const;
+    bool writeKeyFile(const QByteArray &bytes) const;
     void wrongTry();   // counts a wrong pattern or password (the wait doubles every 5)
     QByteArray m_key;
     bool m_weak = false;   // the lock just opened is shorter than new ones may be

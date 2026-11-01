@@ -41,9 +41,10 @@ Window {
     // Contacts, Files, Settings (the valknut) and the power button (lock or close). Calls live in their chats.
     readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2, mentions: 1 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
                                        { id: "tour-folk", name: "Folk", unread: 3 }]
-    readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
+    // A linked phone's chats are on show: this device's own groups are put away with its chats.
+    readonly property var groupList: touring ? tourGroups : Vault.screenLocked || Linked.sealed ? [] : Chat.groups
     readonly property var railItems: [
-        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked || Linked.sealed ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
     // A group: its @mentions of me as a number, and a dot for anything else unread (like Discord).
     ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?",
                                    badge: g.mentions || 0, unread: g.unread || 0 })))
@@ -297,7 +298,7 @@ Window {
     PromptBar {
         id: hints
         anchors.bottom: parent.bottom
-        z: callPage.visible || incomingCall.visible ? 38 : 0   // the call's buttons stay on show over it
+        z: callPage.visible || incomingCall.visible || moveCover.visible || linkPhone.visible ? 38 : 0   // a call's, a move's or Link your phone's buttons stay on show over it
         width: parent.width
         visible: (app.legend && Gamepad.connected) || LocalSend.busy
         showKeys: app.legend && Gamepad.connected
@@ -306,6 +307,8 @@ Window {
         prompts: {
             if (incomingCall.visible) return incomingCall.prompts
             if (callPage.visible) return callPage.prompts
+            if (moveCover.visible && !prompt.visible && !confirm.visible) return moveCover.prompts.concat([{ key: "back", label: "Hide buttons" }])
+            if (linkPhone.visible && !prompt.visible && !confirm.visible) return linkPhone.prompts.concat([{ key: "back", label: "Hide buttons" }])
             const lb = [{ key: "lb", label: "Next section" }]
             // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
             const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
@@ -383,8 +386,32 @@ Window {
     IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
-    // Moving to another device (cap x1): over everything while it's under way.
-    MoveCover { anchors.fill: parent }
+    // Moving to another device (cap x1): over the pages and panels while it's under way; questions, prompts,
+    // calls and toasts show above it. Panels that were open close.
+    MoveCover {
+        id: moveCover
+        anchors.fill: parent
+        onVisibleChanged: if (visible) app.closePanels()
+    }
+    // Link your phone (linked devices): the QR code, the 4 emoji and Linked, over the whole window.
+    LinkPhone { id: linkPhone; z: 28.5 }
+    function showLinkPhone(first) {
+        if (app.touring || linkPhone.visible || moveCover.visible || Vault.screenLocked) return
+        app.closePanels()
+        linkPhone.open(first)
+    }
+    function closePanels() {
+        if (picker.visible) picker.close()
+        if (switcher.visible) switcher.close()
+        if (profileCard.visible) profileCard.close()
+        if (personPanel.visible) personPanel.close()
+        if (shortcutsPanel.visible) shortcutsPanel.close()
+        if (labsReport.visible) labsReport.close()
+        if (labsInbox.visible) labsInbox.close()
+        if (meCard.visible) meCard.close()
+        if (rail.menuOpen) rail.closeMenu()
+        if (linkPhone.visible) linkPhone.close()
+    }
     // Linked devices: always says where this computer's chats are mirrored.
     Rectangle {
         readonly property var on: Linked.companions.filter(c => c.ok)
@@ -397,6 +424,7 @@ Window {
         width: Math.min(mirroredText.implicitWidth + Theme.px(24), parent.width / 2)
         height: mirroredText.implicitHeight + Theme.px(12)
         Text {
+            textFormat: Text.PlainText
             id: mirroredText
             anchors.centerIn: parent
             width: Math.min(implicitWidth, parent.width - Theme.px(24))
@@ -453,6 +481,7 @@ Window {
                 sourceSize.width: 256; sourceSize.height: 256
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: app.width - Theme.px(32)
                 horizontalAlignment: Text.AlignHCenter
@@ -465,6 +494,7 @@ Window {
                 font.letterSpacing: Theme.px(3)
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: app.width - Theme.px(32)
                 horizontalAlignment: Text.AlignHCenter
@@ -526,7 +556,9 @@ Window {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // An @mention always says so (without the text unless previews are on).
             const mention = name.indexOf(" mentioned you in ") > 0
-            Ui.say(Chat.showPreview && !Vault.screenLocked ? name + ": " + text : mention && !Vault.screenLocked ? name + "." : "New message.")
+            // While a linked phone's chats are on show, this device's own put-away chats say nothing about who or what.
+            const hidden = Vault.screenLocked || (Linked.sealed && key.indexOf("mirror:") !== 0)
+            Ui.say(Chat.showPreview && !hidden ? name + ": " + text : mention && !hidden ? name + "." : "New message.")
         }
     }
     // Calls: how a call ended, as a toast.
@@ -543,15 +575,7 @@ Window {
         target: Vault
         function onPanicked() {
             if (prompt.visible) prompt.cancel()
-            if (picker.visible) picker.close()
-            if (switcher.visible) switcher.close()
-            if (profileCard.visible) profileCard.close()
-            if (personPanel.visible) personPanel.close()
-            if (shortcutsPanel.visible) shortcutsPanel.close()
-            if (labsReport.visible) labsReport.close()
-            if (labsInbox.visible) labsInbox.close()
-            if (meCard.visible) meCard.close()
-            if (rail.menuOpen) rail.closeMenu()
+            app.closePanels()
             Ui.say("Huginn locked.")
         }
     }
@@ -576,6 +600,8 @@ Window {
         if (incomingCall.visible) return incomingCall
         if (callPage.visible) return callPage
         if (prompt.visible) return prompt
+        if (moveCover.visible) return moveCover
+        if (linkPhone.visible) return linkPhone
         if (picker.visible) return picker
         if (switcher.visible) return switcher
         if (shortcutsPanel.visible) return shortcutsPanel
@@ -798,7 +824,12 @@ Window {
             { page: "dms", labsInbox: true, file: "35-labs-reports" },
             // Seasonal in Snow: the Look page with the season's settings, then a conversation.
             { page: "settings", section: "look", theme: "seasonal", season: "snow", file: "36-snow-look" },
-            { page: "g:tour-crew", zone: "messages", theme: "seasonal", season: "snow", file: "37-snow" }
+            { page: "g:tour-crew", zone: "messages", theme: "seasonal", season: "snow", file: "37-snow" },
+            // Link your phone: the code, the 4 emoji and Linked (the code on the Snow ground too).
+            { page: "dms", linkPhone: "code", file: "38-link-phone" },
+            { page: "dms", linkPhone: "match", file: "39-link-match" },
+            { page: "dms", linkPhone: "linked", file: "40-linked" },
+            { page: "dms", linkPhone: "code", theme: "seasonal", season: "snow", file: "41-link-phone-snow" }
         ]
         interval: 1500
         repeat: true
@@ -806,7 +837,7 @@ Window {
             if (step > 0) System.grab(app, steps[step - 1].file)
             prompt.visible = false; confirm.visible = false; picker.visible = false
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
-            labsReport.visible = false; labsInbox.visible = false
+            labsReport.visible = false; labsInbox.visible = false; linkPhone.visible = false
             if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
             if (step >= steps.length) {
                 Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
@@ -840,6 +871,7 @@ Window {
             if (s.newGroup) app.newGroup()
             if (s.report) Qt.callLater(app.openReport)
             if (s.labsInbox) app.openLabsReports()
+            if (s.linkPhone) linkPhone.open(true, s.linkPhone)
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }

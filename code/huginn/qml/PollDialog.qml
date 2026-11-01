@@ -88,7 +88,7 @@ Item {
                 id: col
                 width: parent.width
                 spacing: Theme.px(10)
-                Text { text: dlg.title.toUpperCase(); color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(2) }
+                Text { textFormat: Text.PlainText; text: dlg.title.toUpperCase(); color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(2) }
                 TextField {
                     id: question
                     width: parent.width; height: Theme.px(52)
@@ -144,12 +144,13 @@ Item {
                     border.color: dlg.row === dlg.answers.length + 2 ? Theme.accent : "transparent"; border.width: Theme.focusWidth
                     Column {
                         anchors.verticalCenter: parent.verticalCenter; x: Theme.px(8)
-                        Text { text: "Several answers"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17) }
-                        Text { text: dlg.multi ? "People can pick more than one" : "People pick one"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+                        Text { textFormat: Text.PlainText; text: "Several answers"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17) }
+                        Text { textFormat: Text.PlainText; text: dlg.multi ? "People can pick more than one" : "People pick one"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
                     }
                     ToggleSwitch { anchors.right: parent.right; anchors.rightMargin: Theme.px(8); anchors.verticalCenter: parent.verticalCenter; checked: dlg.multi; onToggled: dlg.multi = !dlg.multi }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: dlg.same
                     text: "Two answers are the same."
                     color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(15)
@@ -158,6 +159,7 @@ Item {
                     spacing: Theme.px(14)
                     anchors.right: parent.right
                     Text {
+                        textFormat: Text.PlainText
                         anchors.verticalCenter: parent.verticalCenter
                         text: Ui.main && Ui.main.padInUse ? "X: add an answer · Y: several · Menu: send" : ""
                         color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)

@@ -6,6 +6,7 @@
 #include <QDBusMetaType>
 #include <QDBusObjectPath>
 #include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDBusReply>
 #include <QRandomGenerator>
 
@@ -13,6 +14,7 @@ namespace
 {
 const QString kNm = QStringLiteral("org.freedesktop.NetworkManager");
 const QString kNmPath = QStringLiteral("/org/freedesktop/NetworkManager");
+const QString kProfileName = QStringLiteral("Huginn Direct connect");
 using Settings = QMap<QString, QVariantMap>;
 
 QString randomText(const char *alphabet, int n)
@@ -85,7 +87,7 @@ void Direct::start()
     m_password = randomText("abcdefghjkmnpqrstuvwxyz23456789", 10);
     const QString user = qEnvironmentVariable("USER");
     Settings s;
-    s[QStringLiteral("connection")] = {{QStringLiteral("id"), QStringLiteral("Huginn Direct connect")}, {QStringLiteral("type"), QStringLiteral("802-11-wireless")},
+    s[QStringLiteral("connection")] = {{QStringLiteral("id"), kProfileName}, {QStringLiteral("type"), QStringLiteral("802-11-wireless")},
                                        {QStringLiteral("autoconnect"), false}};
     // Owned by this user only, which NetworkManager allows without a password.
     if (!user.isEmpty())
@@ -138,4 +140,31 @@ void Direct::stop()
     m_password.clear();
     if (was)
         Q_EMIT changed();
+}
+
+void Direct::clearLeftovers()
+{
+    const QString settingsPath = kNmPath + QStringLiteral("/Settings");
+    QDBusMessage m = QDBusMessage::createMethodCall(kNm, settingsPath, kNm + QStringLiteral(".Settings"), QStringLiteral("ListConnections"));
+    auto *w = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(m, 5000), this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [this, w] {
+        w->deleteLater();
+        const QDBusPendingReply<QList<QDBusObjectPath>> list = *w;
+        if (list.isError())
+            return;
+        for (const QDBusObjectPath &c : list.value()) {
+            const QString path = c.path();
+            QDBusMessage g = QDBusMessage::createMethodCall(kNm, path, kNm + QStringLiteral(".Settings.Connection"), QStringLiteral("GetSettings"));
+            auto *each = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(g, 5000), this);
+            connect(each, &QDBusPendingCallWatcher::finished, this, [this, each, path] {
+                each->deleteLater();
+                const QDBusPendingReply<Settings> s = *each;
+                // Only Huginn's own profile, and never the one this run has just made.
+                if (s.isError() || path == m_connection || s.value().value(QStringLiteral("connection")).value(QStringLiteral("id")).toString() != kProfileName)
+                    return;
+                QDBusMessage d = QDBusMessage::createMethodCall(kNm, path, kNm + QStringLiteral(".Settings.Connection"), QStringLiteral("Delete"));
+                QDBusConnection::systemBus().asyncCall(d, 5000);
+            });
+        }
+    });
 }

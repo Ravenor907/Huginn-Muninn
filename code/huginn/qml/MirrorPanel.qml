@@ -1,37 +1,70 @@
 import QtQuick
 import Huginn
 
-// On a companion (linked devices, section 15): the phone's 1:1 chats, over the conversation. Up and
-// Down pick a chat, A answers through the phone, X asks it for everything again, B closes. Photos,
-// voice and files show as words; they stay on the phone.
+// On a companion (linked devices, section 15): the phone's 1:1 chats, over the conversation. Up and Down pick a
+// chat, Right goes into its messages (Up and Down pick one, A plays or saves its photo, voice, video or file),
+// A answers through the phone, X asks it for everything again, B goes back. Photos, voice, video and files come
+// over the home Wi-Fi; until then they show as words with "On home Wi-Fi".
 Rectangle {
     id: panel
     visible: false
     color: Theme.ground
     property int row: 0
+    property string zone: "chats"     // "chats" or "talk"
+    property int msgSel: -1
+    readonly property bool pad: !!Ui.main && Ui.main.padInUse
     readonly property var chats: visible ? Linked.mirror : []
     readonly property var current: chats[row] || null
     readonly property var msgs: current ? (Linked.mirror, Linked.messages(current.peer)) : []
+    readonly property var picked: zone === "talk" ? msgs[msgSel] || null : null
+    readonly property var prompts: zone === "talk"
+        ? [{ key: "a", label: picked && picked.media ? actionWord(picked) : "Write" }, { key: "x", label: "Get chats again" }, { key: "b", label: "Back" }]
+        : [{ key: "a", label: "Write" }, { key: "x", label: "Get chats again" }, { key: "b", label: "Close" }]
 
-    function open() { row = 0; visible = true; Linked.sync() }
-    function close() { visible = false }
+    function open(peer) {
+        row = 0; zone = "chats"; msgSel = -1
+        visible = true
+        Linked.sync()
+        if (peer) { const i = Linked.mirror.findIndex(c => c.peer === peer); if (i >= 0) row = i }
+    }
+    function close() { visible = false; zone = "chats"; msgSel = -1; if (Ui.main) Ui.main.restoreFocus() }
     function reply() {
         if (!current) return
         const c = current
-        Ui.ask("Message " + c.name, "Sent by " + Linked.phone.name + " as its own message, while it's online", "", "Send", t => {
+        Ui.ask("Message " + c.name, "Sent by " + (Linked.phone.name || "your phone") + " as its own message, while it's online", "", "Send", t => {
             if (!Linked.send(c.peer, t)) Ui.say("No phone is linked any more.", true)
         }, false, true)
     }
+    function actionWord(m) { return m.kind === "voice" ? (Voice.playing === m.media ? "Stop" : "Play") : "Save" }
+    // A photo, voice, video or file that's here: voice plays, the rest is saved in Downloads.
+    function act(m) {
+        if (!m || !m.media || !current) return
+        if (m.kind === "voice") { if (Voice.playing === m.media) Voice.stop(); else Voice.play(m.media); return }
+        const r = Linked.saveMedia(current.peer, m.id)
+        Ui.say(r === "" ? "Saved in Downloads." : r, r !== "")
+    }
     function handleButton(b) {
+        if (zone === "talk") {
+            switch (b) {
+            case "up": msgSel = Math.max(0, msgSel - 1); talk.positionViewAtIndex(msgSel, ListView.Contain); return true
+            case "down": msgSel = Math.min(msgs.length - 1, msgSel + 1); talk.positionViewAtIndex(msgSel, ListView.Contain); return true
+            case "a": if (picked && picked.media) act(picked); else reply(); return true
+            case "x": Linked.sync(); Ui.say("Asked " + (Linked.phone.name || "your phone") + " for its chats."); return true
+            case "left": case "b": zone = "chats"; msgSel = -1; return true
+            }
+            return true
+        }
         switch (b) {
         case "up": row = Math.max(0, row - 1); return true
         case "down": row = Math.min(chats.length - 1, row + 1); return true
+        case "right": if (msgs.length) { zone = "talk"; msgSel = msgs.length - 1; talk.positionViewAtEnd() } return true
         case "a": reply(); return true
-        case "x": Linked.sync(); Ui.say("Asked " + Linked.phone.name + " for its chats."); return true
+        case "x": Linked.sync(); Ui.say("Asked " + (Linked.phone.name || "your phone") + " for its chats."); return true
         case "b": close(); return true
         }
         return true
     }
+    onRowChanged: { msgSel = -1; if (zone === "talk") zone = "chats" }
 
     PageHeader {
         id: head
@@ -48,14 +81,17 @@ Rectangle {
         delegate: Rectangle {
             width: side.width; height: Theme.px(56)
             color: index === panel.row ? Theme.tile : "transparent"
+            border.width: index === panel.row && panel.pad && panel.zone === "chats" ? Theme.focusWidth : 0
+            border.color: Theme.accent
             Column {
                 anchors.fill: parent; anchors.margins: Theme.px(10)
-                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                Text { width: parent.width; elide: Text.ElideRight; text: modelData.last; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.last; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
             }
-            TapHandler { onTapped: panel.row = index }
+            TapHandler { onTapped: { panel.row = index; panel.zone = "chats" } }
         }
         Text {
+            textFormat: Text.PlainText
             visible: panel.chats.length === 0
             anchors.centerIn: parent; width: parent.width - Theme.px(20); wrapMode: Text.WordWrap
             text: "Nothing yet. The phone's chats show here while it's on and online."
@@ -69,18 +105,58 @@ Rectangle {
         clip: true
         spacing: Theme.px(6)
         model: panel.msgs
-        onCountChanged: positionViewAtEnd()
-        delegate: Column {
+        onCountChanged: if (panel.zone !== "talk") positionViewAtEnd()
+        delegate: Rectangle {
+            readonly property bool sel: panel.zone === "talk" && index === panel.msgSel
             width: talk.width
-            Text {
-                width: parent.width
-                elide: Text.ElideRight
-                text: (modelData.mine ? "You" : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
-                color: modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
-            }
-            Text {
-                width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
-                text: modelData.text; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+            height: body.implicitHeight + Theme.px(8)
+            radius: Theme.radius
+            color: sel ? Theme.tile : "transparent"
+            border.width: sel && panel.pad ? Theme.focusWidth : 0
+            border.color: Theme.accent
+            Column {
+                id: body
+                x: Theme.px(6); y: Theme.px(4)
+                width: parent.width - Theme.px(12)
+                spacing: Theme.px(4)
+                Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    elide: Text.ElideRight
+                    text: (modelData.mine ? "You" : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
+                    color: modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
+                }
+                // A photo that's here.
+                Image {
+                    visible: modelData.kind === "photo" && modelData.media !== ""
+                    width: Math.min(parent.width, Theme.px(260)); height: visible ? Math.max(Theme.px(40), width * (implicitWidth > 0 ? implicitHeight / implicitWidth : 0.75)) : 0
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    source: visible ? "image://thumb/" + modelData.media : ""
+                    TapHandler { onTapped: panel.act(modelData) }
+                }
+                Text {
+                    width: parent.width; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                    visible: !(modelData.kind === "photo" && modelData.media !== "")
+                    text: modelData.text; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+                }
+                // Voice, video and files: play or save once here; until then, where they come from.
+                Row {
+                    visible: modelData.kind !== ""
+                    spacing: Theme.px(8)
+                    HButton {
+                        visible: modelData.media !== "" && modelData.kind !== "photo"
+                        implicitHeight: Theme.px(28); fontSize: 12; kind: "accent"
+                        text: panel.actionWord(modelData)
+                        onClicked: panel.act(modelData)
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        visible: modelData.media === ""
+                        text: "On home Wi-Fi"
+                        color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.italic: true
+                    }
+                }
             }
         }
     }

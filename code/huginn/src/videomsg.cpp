@@ -73,7 +73,7 @@ bool VideoMsg::openCamera(QObject *videoOutput)
     m_error.clear();
     const QCameraDevice dev = QMediaDevices::defaultVideoInput();
     if (dev.isNull()) {
-        setError(QStringLiteral("No camera found on this computer."));
+        setError(QStringLiteral("No camera found on this device."));
         return false;
     }
     m_camera = new QCamera(dev, this);
@@ -188,7 +188,7 @@ void VideoMsg::stopRecording()
         if (ms < 700 || mp4.isEmpty())
             return;
         if (!MoreWire::isVideo(mp4)) {
-            setError(QStringLiteral("The video couldn't be recorded on this computer."));
+            setError(QStringLiteral("The video couldn't be recorded on this device."));
             return;
         }
         m_clip = mp4;

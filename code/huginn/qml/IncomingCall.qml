@@ -10,7 +10,7 @@ Item {
     readonly property bool group: Calls.state !== "incoming" && Rooms.ringing
     visible: Calls.state === "incoming" || Rooms.ringing
 
-    // A video call (shared/docs/protocol-0.6.md 5.8.5): X answers with the camera on, A as a voice call.
+    // A video call (shared/docs/protocol.md 5.8.5): X answers with the camera on, A as a voice call.
     readonly property bool video: !group && Calls.incomingVideo
     readonly property var prompts: video ? [{ key: "x", label: "Answer with video" }, { key: "a", label: "Voice only" }, { key: "b", label: "Decline" }]
                                          : [{ key: "a", label: group ? "Join" : "Answer" }, { key: "b", label: "Decline" }]
@@ -41,6 +41,7 @@ Item {
             anchors.margins: Theme.px(28)
             spacing: Theme.px(16)
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
@@ -65,6 +66,7 @@ Item {
                 }
             }
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight

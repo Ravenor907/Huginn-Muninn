@@ -44,4 +44,12 @@ void notify(const QString &title, const QString &body, int timeoutMs, std::funct
     s_onClick = std::move(onClick);
     tray->showMessage(title, body, tray->icon(), timeoutMs);
 }
+
+uint notifyCall(uint, const QString &title, const QString &body, std::function<void(const QString &)>)
+{
+    notify(title, body, 45000);
+    return 0;
+}
+
+void closeNotification(uint) {}
 }

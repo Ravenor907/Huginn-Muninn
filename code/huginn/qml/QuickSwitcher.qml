@@ -22,7 +22,8 @@ Item {
     }
     property int row: 0
     readonly property var everything: {
-        if (!visible) return []
+        // While a linked phone's chats are on show, this device's own are put away: nothing of them here.
+        if (!visible || Linked.sealed) return []
         const out = []
         Chat.chats.forEach(c => out.push({ kind: "dm", key: c.key, name: c.name, detail: "Direct message", unread: !!c.unread }))
         Chat.groups.forEach(g => {
@@ -63,7 +64,7 @@ Item {
             x: Theme.px(14); y: Theme.px(14)
             width: parent.width - Theme.px(28)
             spacing: Theme.px(8)
-            Text { id: askText; width: parent.width; elide: Text.ElideRight; text: "Go to a chat or channel"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+            Text { textFormat: Text.PlainText; id: askText; width: parent.width; elide: Text.ElideRight; text: "Go to a chat or channel"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             TextField {
                 id: field
                 width: parent.width
@@ -118,6 +119,7 @@ Item {
                         Icon { visible: modelData.kind !== "dm"; anchors.centerIn: parent; name: "hash"; size: Theme.px(18); color: Theme.textMuted }
                     }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: hitIcon.right; anchors.leftMargin: Theme.px(10)
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width * 0.5
@@ -126,6 +128,7 @@ Item {
                         color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: modelData.unread ? Font.Bold : Font.Normal
                     }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width * 0.35
@@ -138,7 +141,7 @@ Item {
                     TapHandler { onTapped: sw.go(modelData) }
                 }
             }
-            Text { visible: sw.shown.length === 0; text: "Nothing matches."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+            Text { textFormat: Text.PlainText; visible: sw.shown.length === 0; text: "Nothing matches."; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
         }
     }
     function handleButton(b) {

@@ -156,6 +156,7 @@ Rectangle {
                     Icon { id: miIcon; anchors.left: parent.left; anchors.leftMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter
                            name: modelData.icon; size: Theme.px(16); color: modelData.danger ? Theme.danger : Theme.textSoft }
                     Text {
+                        textFormat: Text.PlainText
                         anchors.left: miIcon.right; anchors.leftMargin: Theme.px(10)
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
                         anchors.verticalCenter: parent.verticalCenter
@@ -181,6 +182,7 @@ Rectangle {
         color: Theme.groundDeep
         border.color: Theme.line
         Text {
+            textFormat: Text.PlainText
             id: tipLabel
             anchors.centerIn: parent
             text: rail.tipText
@@ -242,6 +244,7 @@ Rectangle {
                 smooth: true
             }
             Text {
+                textFormat: Text.PlainText
                 visible: rb.entry.kind === "group"
                 anchors.centerIn: parent
                 text: rb.entry.letter || ""
@@ -318,6 +321,7 @@ Rectangle {
                 border.width: 2
                 border.color: Theme.rail
                 Text {
+                    textFormat: Text.PlainText
                     id: badgeText
                     anchors.centerIn: parent
                     text: rb.entry.badge > 99 ? "99+" : String(rb.entry.badge || 0)

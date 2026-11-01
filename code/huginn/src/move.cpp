@@ -421,7 +421,7 @@ bool MoveWire::selfTest(const QString &vectorsPath)
 // ------------------------------------------------------------------ the app side
 
 Move::Move(Chat *chat, Vault *vault, Link *link, LocalSend *net, QObject *parent)
-    : QObject(parent), m_chat(chat), m_vault(vault), m_link(link), m_net(net), m_settings(QStringLiteral("Huginn"), QStringLiteral("Huginn"))
+    : QObject(parent), m_chat(chat), m_vault(vault), m_link(link), m_net(net)
 {
     m_timer.setInterval(1500);
     connect(&m_timer, &QTimer::timeout, this, &Move::tick);
@@ -450,22 +450,13 @@ void Move::resume()
     }
 }
 
-// Everything about a move is kept in the vault ("move.json"). Anything found in plain settings
-// (under move/) is moved in once the vault opens and removed from there; what is stored while the
-// vault is locked waits in memory until then.
+// Everything about a move is kept in the vault ("move.json"); what is stored while the vault is locked waits in
+// memory until it opens.
 void Move::vaultOpened()
 {
     QJsonObject all = QJsonDocument::fromJson(m_vault->read(QStringLiteral("move.json"))).object();
     bool changedAll = false;
     for (const QString &k : {QStringLiteral("in"), QStringLiteral("out")}) {
-        const QString key = QStringLiteral("move/") + k;
-        if (!all.contains(k) && m_settings.contains(key)) {
-            const QJsonObject o = QJsonDocument::fromJson(m_settings.value(key).toByteArray()).object();
-            if (!o.isEmpty()) {
-                all.insert(k, o);
-                changedAll = true;
-            }
-        }
         if (m_mem.contains(k)) {
             const QJsonObject o = m_mem.take(k);
             if (o.isEmpty())
@@ -475,16 +466,10 @@ void Move::vaultOpened()
             changedAll = true;
         }
     }
-    bool kept = true;
     if (changedAll && all.isEmpty())
         m_vault->remove(QStringLiteral("move.json"));
     else if (changedAll)
-        kept = m_vault->write(QStringLiteral("move.json"), compact(all));
-    // Only dropped from plain settings once the vault really has it.
-    if (kept && m_settings.childGroups().contains(QStringLiteral("move"))) {
-        m_settings.remove(QStringLiteral("move"));
-        m_settings.sync();
-    }
+        m_vault->write(QStringLiteral("move.json"), compact(all));
     resume();
     publish();
 }
@@ -775,7 +760,7 @@ void Move::take(const QString &text)
             if (MoveWire::sameNetwork(a.section(QLatin1Char(':'), 0, 0), ip, prefix) && !addrs.contains(a))
                 addrs << a;
     if (addrs.isEmpty()) {
-        Q_EMIT notice(QStringLiteral("%1 isn't on the same Wi-Fi as this computer. Moving only works on your own network.").arg(c.n), true);
+        Q_EMIT notice(QStringLiteral("%1 isn't on the same Wi-Fi as this device. Moving only works on your own network.").arg(c.n), true);
         return;
     }
     c.a = addrs;
@@ -1182,11 +1167,12 @@ Vault::Files Move::fromCommon(const QJsonObject &o, QString *error) const
         out.emplace_back(QStringLiteral("profile/me.json"), compact({{QStringLiteral("k"), QStringLiteral("me")}, {QStringLiteral("v"), p.value(QStringLiteral("v")).toInteger()},
                                                                      {QStringLiteral("col"), jstr(p, "col")}, {QStringLiteral("pic"), jstr(p, "pic")},
                                                                      {QStringLiteral("st"), jstr(p, "st")}, {QStringLiteral("cs"), jstr(p, "cs")}}));
-    // This computer's settings, with the identity and name of the one that moved here (the inbox key is worked out again).
+    // The name of the one that moved here, in the vault like everything else.
     const QString name = jstr(me, "name").left(24).trimmed();
-    QVariantMap set{{QStringLiteral("chat/pub"), b64d(jstr(me, "pub")).toBase64()}};
     if (!name.isEmpty())
-        set.insert(QStringLiteral("chat/username"), name);
+        out.emplace_back(QStringLiteral("prefs.json"), compact({{QStringLiteral("username"), name}}));
+    // This device's settings, with the identity of the one that moved here (the inbox key is worked out again).
+    const QVariantMap set{{QStringLiteral("chat/pub"), b64d(jstr(me, "pub")).toBase64()}};
     out.emplace_back(Vault::settingsEntry(), Vault::settingsWith(set, {QStringLiteral("nostr/pub"), QStringLiteral("chat/trusted"), QStringLiteral("chat/priv")}));
     return out;
 }

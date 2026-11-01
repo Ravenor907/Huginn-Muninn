@@ -69,6 +69,7 @@ Rectangle {
             width: parent.width
             spacing: Theme.px(2)
             Text {
+                textFormat: Text.PlainText
                 visible: !list.statusOn
                 width: parent.width
                 wrapMode: Text.WordWrap
@@ -85,6 +86,7 @@ Rectangle {
                     width: memCol.width
                     spacing: Theme.px(2)
                     Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         elide: Text.ElideRight
                         leftPadding: Theme.px(8)
@@ -154,6 +156,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 0
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 elide: Text.ElideRight
                 text: (mr.person.name || "") + (mr.person.me ? " (you)" : "")
@@ -161,6 +164,7 @@ Rectangle {
                 font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium
             }
             Text {
+                textFormat: Text.PlainText
                 visible: text !== ""
                 width: parent.width
                 elide: Text.ElideRight

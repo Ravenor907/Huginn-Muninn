@@ -7,7 +7,7 @@
 #include <functional>
 
 // What calls need from Chat, and nothing more. Chat owns the envelope, the pairwise sealing and the
-// routes; calls only ever see plaintext room "call" objects (shared/docs/protocol-0.6.md 5.2).
+// routes; calls only ever see plaintext room "call" objects (shared/docs/protocol.md 5.2).
 //
 //  send(key, msg)          seal msg as room "call" for that contact, exactly like a private message,
 //                          and send it on every route at once. Never kept in the day-long Outbox.
@@ -23,6 +23,7 @@
 //  bleReady(key) / sendMedia(key, packet) / mediaReceived(key, packet)
 //                          the Bluetooth LE MEDIA characteristic (5.6). Optional: without it,
 //                          bleReady is false and calls use the relay and Wi-Fi only.
+//  showPreview()           Settings > Show preview: a ringing call's notification may name the caller. Optional.
 //  warmUp(key)             a call to them is about to start: open the internet routes now, so the
 //                          offer isn't held up by a connection that went quiet. Optional.
 class CallSignal : public QObject
@@ -43,6 +44,7 @@ public:
     virtual bool bleReady(const QString &) const { return false; }
     virtual bool sendMedia(const QString &, const QByteArray &) { return false; }
     virtual void warmUp(const QString &) {}
+    virtual bool showPreview() const { return true; }
 
 Q_SIGNALS:
     void received(const QString &contactKey, const QJsonObject &msg);
@@ -68,6 +70,7 @@ public:
     std::function<bool(const QString &)> onBleReady;
     std::function<bool(const QString &, const QByteArray &)> onSendMedia;
     std::function<void(const QString &)> onWarmUp;
+    std::function<bool()> onShowPreview;
 
     void send(const QString &k, const QJsonObject &m) override { if (onSend) onSend(k, m); }
     QByteArray sign(const QByteArray &b) const override { return onSign ? onSign(b) : QByteArray(); }
@@ -81,6 +84,7 @@ public:
     bool bleReady(const QString &k) const override { return onBleReady && onBleReady(k); }
     bool sendMedia(const QString &k, const QByteArray &p) override { return onSendMedia && onSendMedia(k, p); }
     void warmUp(const QString &k) override { if (onWarmUp) onWarmUp(k); }
+    bool showPreview() const override { return !onShowPreview || onShowPreview(); }
 
     void deliver(const QString &k, const QJsonObject &m) { Q_EMIT received(k, m); }
     void deliverMedia(const QString &k, const QByteArray &p) { Q_EMIT mediaReceived(k, p); }

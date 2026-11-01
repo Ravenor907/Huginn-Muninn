@@ -25,6 +25,7 @@ Rectangle {
     visible: opacity > 0
     Behavior on opacity { NumberAnimation { duration: Theme.motion ? 180 : 0 } }
     Text {
+        textFormat: Text.PlainText
         id: msg
         anchors.centerIn: parent
         width: Math.max(0, toast.width - Theme.px(48))

@@ -15,7 +15,7 @@
 class Chat;
 class Vault;
 
-// Cap p1 (shared/docs/protocol-0.6.md, section 22), the same as Muninn's net/Profile.kt: profile pictures and status.
+// Cap p1 (shared/docs/protocol.md, section 22), the same as Muninn's net/Profile.kt: profile pictures and status.
 //  - Room "profile" {t:"profile", v, pic, col}: my picture (a 256x256 JPEG, base64) and colour, sealed through the
 //    ratchet, to every contact and everyone in a group with me whose app said p1, once per person per version.
 //    A receiver takes at most 24 KB; a sender keeps it at 12 KB or less so one relay event carries it.
@@ -51,14 +51,11 @@ public:
     // Crops to the centre square, scales to 256x256, encodes small enough to send, stores and sends it.
     // False when the picture can't be made small enough (or is empty).
     Q_INVOKABLE bool setMyPicture(const QImage &image);
-    // The same from a picture file (or a file: URL). "" when done, else what to tell the person.
-    Q_INVOKABLE QString setMyPictureFile(const QString &path);
     Q_INVOKABLE void clearMyPicture();
 
     // Everyone: the status to show ("online", "away", "dnd", "offline", or "" when nothing is known; "me" is mine),
-    // their custom text, the colour for their initial disc (the one they sent, else one from their key).
+    // and the colour for their initial disc (the one they sent, else one from their key).
     Q_INVOKABLE QString statusOf(const QString &key) const;
-    Q_INVOKABLE QString customStatusOf(const QString &key) const;
     Q_INVOKABLE QString colourOf(const QString &key) const;
     // image://profile/<key>?v=<n> when they have a picture here, else an empty URL. "me" for mine.
     Q_INVOKABLE QUrl pictureUrl(const QString &key) const;

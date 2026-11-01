@@ -115,6 +115,7 @@ Item {
                 width: chooseView.width
                 spacing: Theme.px(14)
                 Text {
+                    textFormat: Text.PlainText
                     text: "YOUR PICTURE"
                     color: Theme.accent
                     font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
@@ -123,7 +124,7 @@ Item {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: Theme.px(8)
                     Avatar { anchors.horizontalCenter: parent.horizontalCenter; key: "me"; name: Chat.username; size: Theme.px(96); backdrop: Theme.panel }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: Chat.username; color: Theme.textBright; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
+                    Text { textFormat: Text.PlainText; anchors.horizontalCenter: parent.horizontalCenter; text: Chat.username; color: Theme.textBright; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
                 }
                 Column {
                     width: parent.width
@@ -162,6 +163,7 @@ Item {
                     }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     wrapMode: Text.WordWrap
                     text: "Sent only to your contacts and the groups you're in, encrypted like a message."
@@ -179,6 +181,7 @@ Item {
             width: parent.width - Theme.px(48)
             spacing: Theme.px(14)
             Text {
+                textFormat: Text.PlainText
                 text: "MOVE AND SCALE"
                 color: Theme.accent
                 font.family: Theme.display; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
@@ -241,6 +244,7 @@ Item {
                         onWheel: event => crop.zoomBy(event.angleDelta.y > 0 ? 0.1 : -0.1)
                     }
                     Text {
+                        textFormat: Text.PlainText
                         visible: crop.status === Image.Error
                         anchors.centerIn: parent
                         width: parent.width - Theme.px(24)
@@ -273,7 +277,7 @@ Item {
             Row {
                 width: parent.width
                 spacing: Theme.px(10)
-                Text { id: zoomCaption; anchors.verticalCenter: parent.verticalCenter; text: "Zoom"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                Text { textFormat: Text.PlainText; id: zoomCaption; anchors.verticalCenter: parent.verticalCenter; text: "Zoom"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 HSlider {
                     anchors.verticalCenter: parent.verticalCenter
                     width: parent.width - zoomCaption.width - zoomText.width - Theme.px(20)
@@ -282,9 +286,10 @@ Item {
                     label: "Zoom"
                     onMoved: v => crop.zoomTo(v)
                 }
-                Text { id: zoomText; anchors.verticalCenter: parent.verticalCenter; width: Theme.px(44); horizontalAlignment: Text.AlignRight; text: Math.round(crop.zoom * 100) + "%"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                Text { textFormat: Text.PlainText; id: zoomText; anchors.verticalCenter: parent.verticalCenter; width: Theme.px(44); horizontalAlignment: Text.AlignRight; text: Math.round(crop.zoom * 100) + "%"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
             }
             Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: "Drag to move, scroll or pinch to zoom. Saved small (256 by 256). Sent only to your contacts and the groups you're in, encrypted like a message."
@@ -331,6 +336,7 @@ Item {
             color: cr.choice.danger ? Theme.danger : Theme.textSoft
         }
         Text {
+            textFormat: Text.PlainText
             anchors.left: parent.left; anchors.leftMargin: cr.choice.icon ? Theme.px(42) : Theme.px(12)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
             anchors.verticalCenter: parent.verticalCenter

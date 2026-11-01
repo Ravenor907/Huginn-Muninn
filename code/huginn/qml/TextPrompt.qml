@@ -100,6 +100,7 @@ Item {
                 width: headView.width
                 spacing: Theme.px(8)
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     wrapMode: Text.Wrap
                     text: prompt.title.toUpperCase()
@@ -111,6 +112,7 @@ Item {
                 }
                 // Wraps at spaces, and inside a long code that has none.
                 Text {
+                    textFormat: Text.PlainText
                     visible: prompt.context.length > 0
                     width: parent.width
                     wrapMode: Text.Wrap
@@ -130,6 +132,7 @@ Item {
             width: parent.width - Theme.px(40)
             spacing: Theme.px(6)
             Text {
+                textFormat: Text.PlainText
                 visible: prompt.label.length > 0
                 text: prompt.label.toUpperCase()
                 color: Theme.textSoft
@@ -157,6 +160,7 @@ Item {
                 Keys.onEscapePressed: prompt.cancel()
             }
             Text {
+                textFormat: Text.PlainText
                 visible: prompt.choices.length > 0 && prompt.choicesLabel.length > 0
                 width: parent.width
                 wrapMode: Text.WordWrap
@@ -182,6 +186,7 @@ Item {
                         Accessible.name: modelData.label
                         Accessible.checked: on
                         Text {
+                            textFormat: Text.PlainText
                             anchors.centerIn: parent
                             width: parent.width - Theme.px(8)
                             horizontalAlignment: Text.AlignHCenter

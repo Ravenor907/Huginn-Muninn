@@ -16,9 +16,11 @@ Rectangle {
     property int lineH: 0
     property bool hoverTools: false
     property bool inThread: false
+    property color accent: Theme.accent   // a chat's own color on its page
     // Under the one before from the same person within 7 minutes: no name or picture again (Discord).
     property bool grouped: false
     signal options()
+    signal callBack()        // a call's line was clicked
     signal chosen()          // clicked: the page picks it (its tools show)
     // A click on the name or picture: their profile card (in a group, with their member menu).
     function showWho() {
@@ -36,8 +38,8 @@ Rectangle {
     radius: 0
     color: picked ? Theme.focusFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : "transparent"
     border.width: picked ? Theme.focusWidth : 0
-    border.color: Theme.accent
-    Rectangle { visible: !!msg.m.mention && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH; color: Theme.accent }
+    border.color: msg.accent
+    Rectangle { visible: !!msg.m.mention && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH; color: msg.accent }
 
     Item {
         visible: msg.lineH > 0
@@ -46,7 +48,7 @@ Rectangle {
         Rectangle {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
             width: newText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(20), newText.implicitHeight + Theme.px(4)); radius: Theme.radius; color: Theme.danger
-            Text { id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
+            Text { textFormat: Text.PlainText; id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
         }
     }
     // A note from Huginn itself (someone joined, the group was renamed).
@@ -62,16 +64,20 @@ Rectangle {
         radius: Theme.radius
         color: Theme.panel
         border.width: 1
-        border.color: Theme.line
+        border.color: msg.m.call && noteHover.hovered ? msg.accent : Theme.line
         Text {
+            textFormat: Text.PlainText
             id: noteText
             anchors.centerIn: parent
             width: Math.max(0, note.width - Theme.px(28))
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
-            text: msg.m.system ? (msg.m.text || "") : ""
+            text: msg.m.system ? (msg.m.text || "") + (msg.m.call ? "  ·  Call back" : "") : ""
             color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
+        // A call's line: a click calls back.
+        HoverHandler { id: noteHover; enabled: !!msg.m.call; cursorShape: Qt.PointingHandCursor }
+        TapHandler { enabled: !!msg.m.call; onTapped: msg.callBack() }
     }
     Avatar {
         id: face
@@ -98,6 +104,7 @@ Rectangle {
             visible: !msg.grouped
             spacing: Theme.px(8)
             Text {
+                textFormat: Text.PlainText
                 id: whoText
                 width: Math.min(implicitWidth, Math.round(col.width * 0.6))
                 elide: Text.ElideRight
@@ -113,9 +120,10 @@ Rectangle {
                 }
             }
             Text {
+                textFormat: Text.PlainText
                 anchors.baseline: whoText.baseline
                 text: host.clock(msg.m.time) + (msg.m.isEdited ? " · (edited)" : "") + host.stateLabel(msg.m)
-                color: msg.m.failed ? Theme.danger : msg.m.mine && msg.m.state === "read" ? Theme.accent : Theme.textMuted
+                color: msg.m.failed ? Theme.danger : msg.m.mine && msg.m.state === "read" ? msg.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
             // Mine and read: a check mark and how many have read it, in a circle.
@@ -125,12 +133,12 @@ Rectangle {
                 spacing: Theme.px(3)
                 Accessible.role: Accessible.StaticText
                 Accessible.name: "Read by " + (msg.m.readCount || 0)
-                Icon { anchors.verticalCenter: parent.verticalCenter; name: "check"; size: Theme.px(15); color: Theme.accent }
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "check"; size: Theme.px(15); color: msg.accent }
                 Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: Math.max(Theme.px(18), readN.implicitWidth + Theme.px(8)); height: Theme.px(18); radius: height / 2
-                    color: "transparent"; border.color: Theme.accent; border.width: 1
-                    Text { id: readN; anchors.centerIn: parent; text: msg.m.readCount || 0; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold }
+                    color: "transparent"; border.color: msg.accent; border.width: 1
+                    Text { textFormat: Text.PlainText; id: readN; anchors.centerIn: parent; text: msg.m.readCount || 0; color: msg.accent; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold }
                 }
             }
         }
@@ -150,14 +158,14 @@ Rectangle {
         Row {
             visible: !!msg.m.voice && !msg.m.unsent
             spacing: Theme.px(10)
-            Icon { name: Voice.playing === msg.m.id ? "stop" : "play"; color: Theme.accent }
+            Icon { name: Voice.playing === msg.m.id ? "stop" : "play"; color: msg.accent }
             Column {
                 anchors.verticalCenter: parent.verticalCenter
                 Rectangle {
                     width: Theme.px(180); height: Theme.px(4); color: Theme.line
-                    Rectangle { width: parent.width * (Voice.playing === msg.m.id ? Voice.progress : 0); height: parent.height; color: Theme.accent }
+                    Rectangle { width: parent.width * (Voice.playing === msg.m.id ? Voice.progress : 0); height: parent.height; color: msg.accent }
                 }
-                Text { text: "Voice message · " + Voice.length(msg.m.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                Text { textFormat: Text.PlainText; text: "Voice message · " + Voice.length(msg.m.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
             }
         }
         Text {
@@ -180,9 +188,10 @@ Rectangle {
         }
         // A thread: how many replies, opening them beside the channel.
         Text {
+            textFormat: Text.PlainText
             visible: !msg.inThread && (msg.m.replies || 0) > 0 && !msg.m.unsent
             text: (msg.m.replies === 1 ? "1 reply" : msg.m.replies + " replies") + " ›"
-            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+            color: msg.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
             Accessible.role: Accessible.Button
             Accessible.name: "Open the thread"
             HoverHandler { cursorShape: Qt.PointingHandCursor }

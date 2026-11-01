@@ -81,6 +81,7 @@ Rectangle {
                         // "Nearby" label above the first device.
                         height: (index === page.actionCount ? label.height : 0) + tile.height
                         Text {
+                            textFormat: Text.PlainText
                             id: label
                             visible: index === page.actionCount
                             height: visible ? Theme.px(34) : 0
@@ -123,8 +124,8 @@ Rectangle {
                                 anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
                                 anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                                 anchors.verticalCenter: parent.verticalCenter
-                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: tile.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                                Text { visible: text !== ""; width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "pick" ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                                Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.name; color: tile.on ? Theme.text : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                                Text { textFormat: Text.PlainText; visible: text !== ""; width: parent.width; elide: Text.ElideRight; text: modelData.detail; color: modelData.kind === "pick" ? Theme.accent : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                             }
                             HoverHandler { id: tileHover }
                             TapHandler { onTapped: { page.current = index; page.choose() } }
@@ -141,7 +142,9 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            textFormat: Text.StyledText
+            // Markup only for our own "Look again" line; anything else (an error can name a device) is plain text.
+            readonly property bool linkLine: Settings.nearbySharing && LocalSend.running && !LocalSend.scanning
+            textFormat: linkLine ? Text.StyledText : Text.PlainText
             linkColor: Theme.accent
             text: !Settings.nearbySharing ? "Nearby sharing is off."
                 : !LocalSend.running ? (LocalSend.error || "Starting…")
@@ -192,6 +195,7 @@ Rectangle {
 
                 SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? "Pick a device" : "" }
                 Text {
+                    textFormat: Text.PlainText
                     visible: Transfer.sharedCount === 0
                     width: parent.width
                     wrapMode: Text.WordWrap
@@ -200,9 +204,10 @@ Rectangle {
                 }
                 Repeater {
                     model: page.sharedNames.slice(0, 4)
-                    Text { width: lists.width; elide: Text.ElideMiddle; text: modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
+                    Text { textFormat: Text.PlainText; width: lists.width; elide: Text.ElideMiddle; text: modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: page.sharedNames.length > 4
                     text: "and " + (page.sharedNames.length - 4) + " more"
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
@@ -224,8 +229,8 @@ Rectangle {
                             spacing: Theme.px(7)
                             Item {
                                 width: parent.width; height: Theme.px(19)
-                                Text { width: parent.width - st.width - Theme.px(12); elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
-                                Text { id: st; anchors.right: parent.right; text: modelData.status; color: modelData.failed ? Theme.danger : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                                Text { textFormat: Text.PlainText; width: parent.width - st.width - Theme.px(12); elide: Text.ElideMiddle; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
+                                Text { textFormat: Text.PlainText; id: st; anchors.right: parent.right; text: modelData.status; color: modelData.failed ? Theme.danger : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                             }
                             Rectangle {
                                 width: parent.width; height: Theme.px(4); radius: 1; color: Theme.line
@@ -235,6 +240,7 @@ Rectangle {
                     }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: page.incoming.length === 0
                     width: parent.width
                     wrapMode: Text.WordWrap
@@ -281,9 +287,9 @@ Rectangle {
                 anchors.rightMargin: Theme.px(14)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(6)
-                Text { visible: Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: "Scan with the phone's camera"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                Text { visible: Direct.on; width: parent.width; wrapMode: Text.Wrap; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
-                Text { visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+                Text { textFormat: Text.PlainText; visible: Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: "Scan with the phone's camera"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                Text { textFormat: Text.PlainText; visible: Direct.on; width: parent.width; wrapMode: Text.Wrap; text: "Wi-Fi " + Direct.ssid + "  ·  password " + Direct.password; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
+                Text { textFormat: Text.PlainText; visible: Direct.error.length > 0 && !Direct.on; width: parent.width; wrapMode: Text.WordWrap; text: Direct.error; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             }
         }
     }
@@ -294,12 +300,14 @@ Rectangle {
         width: parent ? parent.width : 0
         height: Theme.px(22)
         Text {
+            textFormat: Text.PlainText
             id: labelText
             anchors.verticalCenter: parent.verticalCenter
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1.5)
         }
         Text {
+            textFormat: Text.PlainText
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             text: parent.detail

@@ -496,7 +496,7 @@ bool Trust::ok(const QJsonObject &p)
 
 // ------------------------------------------------------------------ Chat's side of rooms intro, file and link
 
-int Chat::receiveExtra(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p)
+int Chat::receiveExtra(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QJsonObject &p, const QString &via)
 {
     if (p.isEmpty())
         return 400;
@@ -517,7 +517,7 @@ int Chat::receiveExtra(const QString &room, const QString &fromKey, const QStrin
         return 200;
     }
     if (room == QLatin1String("link"))
-        return m_linked && m_linked->receive(fromKey, p) ? 200 : 403;
+        return m_linked && m_linked->receive(fromKey, p, via) ? 200 : 403;
     return 400;
 }
 

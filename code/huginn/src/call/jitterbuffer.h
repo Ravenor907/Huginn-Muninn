@@ -4,7 +4,7 @@
 #include <deque>
 #include <map>
 
-// Plays a call's audio in order at a steady pace (shared/docs/protocol-0.6.md 5.5). Packets come in with
+// Plays a call's audio in order at a steady pace (shared/docs/protocol.md 5.5). Packets come in with
 // the sender's ts (ms since its first packet, 20 ms per frame); pop() is called once per 20 ms by
 // the sound card and says what to play next:
 //  - Packet: the frame that belongs here.

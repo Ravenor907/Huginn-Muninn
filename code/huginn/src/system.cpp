@@ -7,30 +7,19 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
-#include <QDBusPendingCall>
-#include <QDBusPendingCallWatcher>
 #endif
 #include <QCoreApplication>
-#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
-#include <QSet>
 #include <QFileDialog>
 #include <QUrl>
-#include <QFileInfo>
-#include <QGuiApplication>
 #include <QImage>
 #include <QLocale>
-#include <QPair>
-#include <QProcess>
 #include <QQuickWindow>
-#include <QScreen>
 #include <QStandardPaths>
-#include <QStorageInfo>
 #include <QTimer>
 #include <QVariantMap>
-#include <algorithm>
 
 int System::s_qmlWarnings = 0;
 
@@ -75,25 +64,10 @@ QString System::displayPath(const QUrl &url)
     }
     QString p = url.toLocalFile();
     const QString home = QDir::homePath();
-    // SD cards and USB drives mount under /run/media/<user>/<label>.
-    static const QString media = QStringLiteral("/run/media/");
-    if (p.startsWith(media)) {
-        const QStringList parts = p.mid(media.size()).split(QLatin1Char('/'), Qt::SkipEmptyParts);
-        if (parts.size() >= 2) {
-            QStringList rest = parts.mid(2);
-            const QString label = parts.at(1);
-            const bool card = QString::fromUtf8(QStorageInfo(p).device()).contains(QLatin1String("mmcblk"));
-            const QString name = card ? QStringLiteral("SD Card") : label;
-            rest.prepend(name);
-            return rest.join(QStringLiteral(" / "));
-        }
-    }
     if (p == home)
         return QStringLiteral("Home");
     if (p.startsWith(home + QLatin1Char('/'))) {
-        QString rest = p.mid(home.size() + 1);
-        if (rest.startsWith(QLatin1String(".local/share/Steam/")))
-            rest = QStringLiteral("Steam / ") + rest.mid(19);
+        const QString rest = p.mid(home.size() + 1);
         return QStringLiteral("Home / ") + rest.split(QLatin1Char('/'), Qt::SkipEmptyParts).join(QStringLiteral(" / "));
     }
     return p == QLatin1String("/") ? QStringLiteral("System") : p.split(QLatin1Char('/'), Qt::SkipEmptyParts).join(QStringLiteral(" / "));

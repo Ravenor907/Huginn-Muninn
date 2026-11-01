@@ -426,7 +426,8 @@ void RoomManager::startRing(const QString &from, const QString &g, const QString
     m_ringer.start();
     const QString who = ringName(), grp = ringGroup();
     if (QGuiApplication::applicationState() != Qt::ApplicationActive)
-        Platform::notify(QStringLiteral("Group call"), QStringLiteral("%1 is calling %2").arg(who, grp), int(RoomWire::kRingMs));
+        Platform::notify(QStringLiteral("Group call"), m_signal->showPreview() ? QStringLiteral("%1 is calling %2").arg(who, grp) : QStringLiteral("Someone is calling"),
+                         int(RoomWire::kRingMs));
     Q_EMIT incoming(who, grp);
     Q_EMIT changed();
 }

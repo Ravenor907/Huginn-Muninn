@@ -10,7 +10,7 @@
 
 class Chat;
 
-// Cap i1 (shared/docs/protocol-0.6.md section 13), the same as Muninn's Trust.kt: becoming contacts through
+// Cap i1 (shared/docs/protocol.md section 13), the same as Muninn's Trust.kt: becoming contacts through
 // someone you already trust.
 //  - Room "intro" t "intro" {id, k, n, p}: a contact introduces me to k. Nothing happens until I say yes.
 //  - t "yes" {id}: an introduced person says yes, straight to the other one. Both said yes: contacts.

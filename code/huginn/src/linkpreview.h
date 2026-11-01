@@ -7,7 +7,7 @@
 #include <QString>
 #include <functional>
 
-// Link previews (cap m2, shared/docs/protocol-0.6.md 12.4), the same as Muninn's LinkPreview.kt: made on the sending
+// Link previews (cap m2, shared/docs/protocol.md 12.4), the same as Muninn's LinkPreview.kt: made on the sending
 // computer only, never on the receiving one, so no website learns who got a link or when it was read. The
 // page's title, description and picture come from its Open Graph tags (or its <title>); the picture is shrunk
 // to a small JPEG with nothing but pixels.

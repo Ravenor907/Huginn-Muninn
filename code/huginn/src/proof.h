@@ -5,7 +5,7 @@
 #include <QString>
 #include <QStringList>
 
-// Cap s1 (shared/docs/protocol-0.6.md section 21; shared/tools/s1_ref.py writes shared/vectors/s1-vectors.json), the same as Muninn's Proof.kt:
+// Cap s1 (shared/docs/protocol.md section 21; shared/tools/s1_ref.py writes shared/vectors/s1-vectors.json), the same as Muninn's Proof.kt:
 //  - route proofs: a device signs, with its chat key, the TLS certificate it answers on (Wi-Fi) or the other side's
 //    one-off number (Bluetooth LE). Only a proven route is taken as a contact's; one without a proof (an app without s1)
 //    is only ever an extra route next to the internet.

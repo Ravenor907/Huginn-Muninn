@@ -75,11 +75,13 @@ Item {
                 width: parent.width
                 spacing: Theme.px(10)
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; wrapMode: Text.WordWrap
                     text: (panel.mode === "list" ? "Active links" : "Invite link").toUpperCase()
                     color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
                 }
                 Text {
+                    textFormat: Text.PlainText
                     width: parent.width; wrapMode: Text.WordWrap
                     visible: text !== ""
                     text: !panel.ready ? "" : panel.mode === "list" ? "Revoke stops a link at once." : "Anyone with this link can join."
@@ -97,6 +99,7 @@ Item {
                         color: Theme.groundDeep
                         border.color: Theme.line
                         Text {
+                            textFormat: Text.PlainText
                             anchors.fill: parent; anchors.leftMargin: Theme.px(10); anchors.rightMargin: Theme.px(10)
                             verticalAlignment: Text.AlignVCenter
                             elide: Text.ElideMiddle
@@ -112,6 +115,7 @@ Item {
                     }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: panel.mode === "create" && panel.ready
                     text: "Expires after " + panel.expireChoices[panel.expireAt].label.toLowerCase() + " · " + panel.useChoices[panel.usesAt].label.toLowerCase()
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
@@ -123,6 +127,7 @@ Item {
                     Image { anchors.fill: parent; anchors.margins: Theme.px(10); smooth: false; source: parent.visible ? "image://qr/" + encodeURIComponent(panel.link) : "" }
                 }
                 Text {
+                    textFormat: Text.PlainText
                     visible: panel.mode === "create" && panel.ready
                     text: panel.editing ? "Edit invite link ▴" : "Edit invite link ▾"
                     color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
@@ -135,9 +140,9 @@ Item {
                     visible: panel.mode === "create" && panel.ready && panel.editing
                     width: parent.width
                     spacing: Theme.px(6)
-                    Text { text: "EXPIRE AFTER"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
+                    Text { textFormat: Text.PlainText; text: "EXPIRE AFTER"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
                     Choices { width: parent.width; options: panel.expireChoices; at: panel.expireAt; onPicked: i => panel.expireAt = i }
-                    Text { topPadding: Theme.px(6); text: "MAX USES"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
+                    Text { textFormat: Text.PlainText; topPadding: Theme.px(6); text: "MAX USES"; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold }
                     Choices { width: parent.width; options: panel.useChoices; at: panel.usesAt; onPicked: i => panel.usesAt = i }
                     HButton { text: "Make a new link"; onClicked: panel.make() }
                 }
@@ -178,6 +183,7 @@ Item {
                         }
                     }
                     Text {
+                        textFormat: Text.PlainText
                         visible: panel.ready && panel.links.length === 0
                         topPadding: Theme.px(6)
                         text: "No invite links yet."
@@ -195,6 +201,7 @@ Item {
     }
 
     component Cell: Text {
+        textFormat: Text.PlainText
         property real w: 0.2
         property bool head: false
         width: parent ? parent.width * w : 0
@@ -222,7 +229,7 @@ Item {
                 Accessible.role: Accessible.RadioButton
                 Accessible.name: modelData.label
                 Accessible.checked: on
-                Text { id: optText; anchors.centerIn: parent; text: modelData.label; color: parent.on ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                Text { textFormat: Text.PlainText; id: optText; anchors.centerIn: parent; text: modelData.label; color: parent.on ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 HoverHandler { id: optHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: flow.picked(index) }
             }
