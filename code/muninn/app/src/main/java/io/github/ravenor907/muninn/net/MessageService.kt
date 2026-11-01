@@ -34,10 +34,11 @@ class MessageService : Service() {
         ensureChannel(this)
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle("Muninn")
-            .setContentText("Listening for messages").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
+            .setContentText("Listening for messages · Tap to hide this").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET).setShowWhen(false).setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setContentIntent(open)
-            // "Hide": Android's page for this one channel, where it's turned off (as Settings › Battery › Hide the Listening notification).
+            // A tap (or Hide) opens Android's page for this one channel, where it's turned off (as Settings › Notifications ›
+            // Hide the Listening notification). Muninn keeps listening either way.
+            .setContentIntent(hideIntent(this@MessageService) ?: open)
             .apply { hideIntent(this@MessageService)?.let { addAction(0, "Hide", it) } }
             .build()
         try {

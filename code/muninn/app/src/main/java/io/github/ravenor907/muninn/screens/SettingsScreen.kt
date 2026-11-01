@@ -256,6 +256,12 @@ private fun NotifyPage(app: Muninn) {
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, Muninn.MESSAGES))
             } catch (_: Exception) {}
         }
+        if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "Muninn keeps listening") {
+            try {
+                ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, io.github.ravenor907.muninn.net.MessageService.CHANNEL))
+            } catch (_: Exception) {}
+        }
     }
     Framed("Always right away") { RightAwayRow(app) }
     Framed("Quiet hours") { QuietHours(app) }
@@ -482,7 +488,7 @@ private fun BatteryPage(app: Muninn) {
         ToggleRow("Save more on low battery", "Below 30%", low) { low = it; app.power.lowBatterySave = it; byHand() }
         ToggleRow("Check less when quiet", "After 3 quiet hours", adaptive) { adaptive = it; app.power.adaptive = it; byHand() }
         ToggleRow("Data saver", "Big files wait for Wi-Fi", data) { data = it; app.power.dataSaver = it; byHand() }
-        if (stay && Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "") {
+        if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "Muninn keeps listening") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, io.github.ravenor907.muninn.net.MessageService.CHANNEL))
