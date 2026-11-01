@@ -444,13 +444,14 @@ Window {
         app.closePanels()
         linkPhone.open(first)
     }
-    function closePanels() {
+    // keepReport: Report a bug stays (the panic lock): it hides behind its own lock, and what was written stays.
+    function closePanels(keepReport) {
         if (picker.visible) picker.close()
         if (switcher.visible) switcher.close()
         if (profileCard.visible) profileCard.close()
         if (personPanel.visible) personPanel.close()
         if (shortcutsPanel.visible) shortcutsPanel.close()
-        if (labsReport.visible) labsReport.close()
+        if (labsReport.visible && !keepReport) labsReport.close()
         if (labsInbox.visible) labsInbox.close()
         if (appStorage.visible) appStorage.close()
         if (perfPanel.visible) perfPanel.close()
@@ -676,12 +677,13 @@ Window {
         target: Rooms
         function onFinished(t) { Ui.say(t) }
     }
-    // Panic lock (hold L3 and R3): close anything open over the screen.
+    // Panic lock (hold L3 and R3): close anything open over the screen. Report a bug stays, behind its own lock
+    // (Labs › Performance check's results stay too, for when it's opened again).
     Connections {
         target: Vault
         function onPanicked() {
             if (prompt.visible) prompt.cancel()
-            app.closePanels()
+            app.closePanels(true)
             Ui.say("Huginn locked.")
         }
         function onNotice(text) { Ui.say(text, true) }

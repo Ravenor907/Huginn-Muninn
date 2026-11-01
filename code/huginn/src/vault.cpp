@@ -31,6 +31,7 @@
 #include <memory>
 
 #include <QElapsedTimer>
+#include <QEvent>
 
 #include <openssl/core_names.h>
 #include <openssl/evp.h>
@@ -174,7 +175,7 @@ Vault::Vault(QObject *parent)
 {
     // Every change of the key (unlock, panic, erase, restore) is followed by changed(): the copy for other threads follows.
     connect(this, &Vault::changed, this, &Vault::shareKey);
-    // Away from Chat: look every few seconds, so the lock is up before anyone comes back.
+    // Away from Huginn: look every few seconds, so the lock is up before anyone comes back.
     m_awayTimer.setInterval(5000);
     connect(&m_awayTimer, &QTimer::timeout, this, [this] { if (!m_awaySince || checkAway()) m_awayTimer.stop(); });
     // Panic lock: both stick clicks held this long.
@@ -189,23 +190,94 @@ Vault::Vault(QObject *parent)
     }
     // "Lock when I leave Huginn": another app, or the computer going to sleep.
     // Otherwise the privacy cover goes up at once and the away clock is checked right away.
+    // Steam's on-screen keyboard can take the focus while it's up: that isn't leaving, unless it stays that way
+    // longer than anyone types (then it counts as leaving after all).
+    m_keyboardTimer.setSingleShot(true);
+    m_keyboardTimer.setInterval(10 * 60000);
+    connect(&m_keyboardTimer, &QTimer::timeout, this, [this] {
+        if (!m_keyboardUp)
+            return;
+        m_keyboardUp = false;
+        // Away since the keyboard went up.
+        if (!locked() && !m_awaySince) {
+            m_awaySince = m_keyboardAt;
+            m_awayTimer.start();
+        }
+        left();
+    });
     if (qGuiApp)
         connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
             if (state == Qt::ApplicationActive) {
+                m_keyboardUp = false;
+                m_keyboardTimer.stop();
                 returning();
                 return;
             }
             // Sticks held while switching to a game don't count there.
             m_l3 = m_r3 = false;
             m_combo.stop();
-            if (lockOnLeave() && hasLock() && !locked() && !m_screenLocked) {
-                lockScreen();
-                Q_EMIT panicked();
+            if (state == Qt::ApplicationInactive && keyboardFocus()) {
+                if (!m_keyboardUp) {
+                    m_keyboardUp = true;
+                    m_keyboardTimer.start();
+                }
+                return;
             }
-            leaving();
+            m_keyboardUp = false;
+            m_keyboardTimer.stop();
+            left();
         });
+    if (qApp)
+        qApp->installEventFilter(this);
     // Windows can sleep and wake with the window still in front, so Qt's state never changes.
     Platform::watchPower(this, [this] { sleeping(); }, [this] { woke(); });
+}
+
+void Vault::left()
+{
+    // The away clock starts here, wherever in Huginn the person was.
+    if (!locked() && !m_awaySince) {
+        m_awaySince = QDateTime::currentMSecsSinceEpoch();
+        m_awayTimer.start();
+    }
+    if (lockOnLeave() && hasLock() && !locked() && !m_screenLocked) {
+        lockScreen();
+        Q_EMIT panicked();
+    }
+    leaving();
+}
+
+bool Vault::keyboardFocus() const
+{
+    if (!qGuiApp || QGuiApplication::applicationState() != Qt::ApplicationInactive)
+        return false;
+    return m_keyboardUp || (m_keyboardAt && QDateTime::currentMSecsSinceEpoch() - m_keyboardAt < 5000);
+}
+
+bool Vault::eventFilter(QObject *watched, QEvent *event)
+{
+    switch (event->type()) {
+    case QEvent::KeyPress:
+    case QEvent::MouseButtonPress:
+    case QEvent::Wheel:
+    case QEvent::TouchBegin:
+    case QEvent::TabletPress:
+    case QEvent::InputMethod:
+        // Input reached the window: someone is here (a window behind another can still get the wheel or a click).
+        // Past the minute already: the lock goes up first, so coming back with a click never skips it.
+        if (m_awaySince && !m_screenLocked && !m_asleep && !checkAway()) {
+            if (qGuiApp && QGuiApplication::applicationState() == Qt::ApplicationActive) {
+                m_awaySince = 0;
+                m_awayTimer.stop();
+            } else {
+                m_awaySince = QDateTime::currentMSecsSinceEpoch();
+            }
+        }
+        break;
+    default:
+        break;
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void Vault::leaving()
@@ -219,7 +291,7 @@ void Vault::leaving()
 
 void Vault::returning()
 {
-    checkAway();   // past the relock time: the lock is up before the cover comes off
+    back();   // past the relock time: the lock is up before the cover comes off; the clock stops
     if (m_covered) {
         m_covered = false;
         Q_EMIT changed();

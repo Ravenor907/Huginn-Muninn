@@ -17,6 +17,10 @@ Item {
     property string note: ""
     property bool bad: false
     property int wait: Vault.waitSeconds
+    // Asking from somewhere else (Report a bug): a Cancel button with this text, and a line saying why.
+    property bool cancelable: false
+    property string cancelText: "Cancel"
+    property string lead: ""
     signal finished(string how)   // "setup", "unlock", "change", "off" or "own": what just finished
     signal cancelled()
 
@@ -96,7 +100,7 @@ Item {
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
-                  ? (panel.usePattern ? "Draw your pattern" : "Type your password")
+                  ? (panel.lead !== "" ? panel.lead + "\n" : "") + (panel.usePattern ? "Draw your pattern" : "Type your password")
                   : panel.mode === "setup" ? "It protects your messages. No way to recover it. You can turn it off later in Settings." : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
@@ -168,9 +172,9 @@ Item {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         HButton {
-            visible: panel.mode === "change" || panel.mode === "off" || panel.mode === "own"
+            visible: panel.cancelable || panel.mode === "change" || panel.mode === "off" || panel.mode === "own"
             anchors.horizontalCenter: parent.horizontalCenter
-            kind: "plain"; text: "Cancel"
+            kind: "plain"; text: panel.cancelText
             onClicked: panel.cancelled()
         }
     }

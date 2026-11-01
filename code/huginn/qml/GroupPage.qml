@@ -184,7 +184,7 @@ Rectangle {
     }
     onMessagesChanged: if (!locked && !isTour && gid !== "" && Qt.application.state === Qt.ApplicationActive) Chat.markGroupRead(gid, channelId)
     Component.onCompleted: { Vault.back(); if (!locked && !isTour && gid !== "") { Chat.openChat = chatKey; Chat.markGroupRead(gid, channelId) } }
-    Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
+    Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
 
     // ============================================================= channel column
     // The desktop can hide the channel list (Ctrl+Shift+L); the controller still opens it with Left.
@@ -1254,7 +1254,6 @@ Rectangle {
         target: Qt.application
         function onStateChanged() {
             if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (!page.locked && !page.isTour && page.gid !== "") Chat.markGroupRead(page.gid, page.channelId) }
-            else Vault.away()
         }
     }
 

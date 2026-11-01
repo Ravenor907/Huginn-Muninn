@@ -161,6 +161,8 @@ QString Labs::send(const QString &text, bool withShot, bool withLog, const QStri
         if (!tail.isEmpty() && GroupWire::length(t + head + tail) <= kMaxText)
             t += head + tail;
     }
+    if (!m_vault->exists())
+        return QStringLiteral("Set a lock in Chats first.");
     if (!m_chat->ready() || m_vault->screenLocked())
         return QStringLiteral("Unlock Huginn first.");
     if (m_chat->moving())

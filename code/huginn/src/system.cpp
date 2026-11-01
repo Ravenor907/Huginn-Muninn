@@ -454,8 +454,10 @@ void System::showSteamKeyboard()
 {
     // Steam's own keyboard types into whatever has focus, in game mode and Handheld mode (when Steam is there to
     // show it). Desktop users have a real keyboard; Windows shows its own touch keyboard for a tapped text field.
-    if (gameLike() && steamAround(m_gameMode))
+    if (gameLike() && steamAround(m_gameMode)) {
+        Q_EMIT keyboardAsked();
         openSteamUrl(QStringLiteral("steam://open/keyboard"));
+    }
 }
 
 void System::hideSteamKeyboard()

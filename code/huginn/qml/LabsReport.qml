@@ -4,7 +4,10 @@ import Huginn
 // Labs › Report a bug: the screenshot of Huginn taken just before this opened, Include screenshot (on unless
 // switched off), what went wrong (up to 2000 characters), Include performance check (when Labs › Performance
 // check opened it; on unless switched off), Include crash log (off unless ticked; only when there is one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
-// opens it (openReport).
+// opens it (openReport). Sending needs Huginn unlocked: when it's locked, the lock asks right here in the report and
+// the report goes once it opens. Huginn locking while the report is open (away, or the panic lock) hides the report
+// behind the same lock until it's opened again; what was written, the screenshot and the performance check stay
+// (in memory only).
 Item {
     id: report
     visible: false
@@ -23,6 +26,21 @@ Item {
     readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
     // Top to bottom (Cancel sits beside Send).
     readonly property var order: (Labs.hasShot ? [0] : []).concat([1]).concat(perf !== "" ? [5] : []).concat(hasLog ? [4] : []).concat([2])
+    // The lock asks inside the report: Send while locked (sendAfter), or Huginn locked while it was open (guarded:
+    // what it shows came from an unlocked Huginn, so it stays hidden until the lock is opened).
+    readonly property bool lockedNow: !tour && Vault.exists && Vault.screenLocked
+    property bool asking: false
+    property bool sendAfter: false
+    property bool guarded: false
+    readonly property bool showLock: visible && lockedNow && (asking || guarded)
+    onLockedNowChanged: {
+        if (lockedNow && visible) { guarded = true; asking = true }
+        if (!lockedNow) {
+            const go = sendAfter && visible
+            asking = false; guarded = false; sendAfter = false
+            if (go) Qt.callLater(report.send)
+        }
+    }
 
     function open(asTour) {
         tour = !!asTour
@@ -33,6 +51,7 @@ Item {
         perf = ""
         includePerf = true
         focusAt = 1
+        asking = false; sendAfter = false; guarded = false
         visible = true
     }
     // From Labs › Performance check: its report goes along.
@@ -43,6 +62,8 @@ Item {
     }
     function close() {
         visible = false
+        asking = false; sendAfter = false; guarded = false
+        text = ""; perf = ""
         Labs.clearShot()
         if (Ui.main) Ui.main.restoreFocus()
     }
@@ -64,6 +85,9 @@ Item {
     }
     function send() {
         if (tour) return
+        if (report.text.trim() === "") { Ui.say("Say what went wrong first.", true); return }
+        // Locked: the lock asks here, and the report goes once it opens.
+        if (lockedNow) { sendAfter = true; asking = true; return }
         const err = Labs.send(report.text, report.include && Labs.hasShot, report.includeLog && report.hasLog, report.includePerf ? report.perf : "")
         if (err !== "") { Ui.say(err, true); return }
         Ui.say("Report sent. Thank you.")
@@ -77,7 +101,18 @@ Item {
         else if (focusAt === 2) send()
         else close()
     }
+    // Back from the lock without opening it: to the report, unless it was hidden by Huginn locking (then only
+    // closing it is left, after asking).
+    function lockBack() {
+        if (guarded) { dismiss(); return }
+        asking = false; sendAfter = false
+    }
     function handleButton(b) {
+        if (showLock) {
+            if (b === "b") { lockBack(); return true }
+            lockPad.handleButton(b)
+            return true
+        }
         switch (b) {
         // Top to bottom as in order, with 2 and 3 side by side at the end.
         case "up": {
@@ -107,14 +142,27 @@ Item {
         id: box
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(32), Theme.px(620))
-        height: Math.min(parent.height - Theme.px(32), col.implicitHeight + Theme.px(40))
+        height: Math.min(parent.height - Theme.px(32), report.showLock ? Theme.px(600) : col.implicitHeight + Theme.px(40))
         radius: Theme.radius
         color: Theme.panel
         border.color: Theme.line
         clip: true
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+        // The lock, asking inside the report (the report itself isn't drawn meanwhile).
+        LockPanel {
+            id: lockPad
+            visible: report.showLock
+            mode: "unlock"
+            cancelable: true
+            cancelText: report.guarded ? "Close the report" : "Back to the report"
+            lead: report.guarded ? "Huginn locked. Your report is kept." : "Unlock to send the report."
+            anchors.fill: parent
+            anchors.margins: Theme.px(12)
+            onCancelled: report.lockBack()
+        }
         Flickable {
             id: view
+            visible: !report.showLock
             anchors.fill: parent
             anchors.margins: Theme.px(20)
             contentHeight: col.implicitHeight

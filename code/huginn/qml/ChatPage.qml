@@ -211,7 +211,7 @@ Rectangle {
         // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
         if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
     }
-    Component.onCompleted: { Vault.back(); showLimitsNote() }   // away more than a minute: locked again
+    Component.onCompleted: { Vault.back(); showLimitsNote() }   // Huginn away more than a minute: locked again
     // Cap d1: told once, on the chat list, that messages don't stay forever. The one place this is explained.
     function showLimitsNote() {
         if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
@@ -219,12 +219,11 @@ Rectangle {
         Ui.sure("Messages disappear", "After 7 days, on every device. Family and Work can keep them up to 30 days.", "Got it", () => {})
     }
     Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
-    Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop(); Vault.away() }
+    Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
     Connections {
         target: Qt.application
         function onStateChanged() {
             if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (page.openKey !== "" && !page.locked) Chat.markRead(page.openKey) }
-            else Vault.away()
         }
     }
 

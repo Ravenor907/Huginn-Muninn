@@ -55,13 +55,17 @@ public:
     // messages are still saved (encrypted) in the background.
     // Without a lock there is nothing to unlock with, so nothing happens.
     Q_INVOKABLE void lockScreen() { if (!hasLock()) return; m_screenLocked = true; Q_EMIT changed(); }
-    // Leaving Chat (or Huginn going to the background) starts the clock; back after a minute = locked again.
-    // The lock also goes up while still away, once the minute is past, so the window's last picture
-    // (shown again on wake before Huginn draws) is already the lock and never the chat.
-    Q_INVOKABLE void away() { if (!locked()) { m_awaySince = QDateTime::currentMSecsSinceEpoch(); m_awayTimer.start(); } }
+    // The away clock: Huginn leaving the front (another app, a minimized window, sleep) starts it; back after a
+    // minute = locked. The lock also goes up while still away, once the minute is past, so the window's last picture
+    // (shown again on wake before Huginn draws) is already the lock and never the chat. Moving between pages inside
+    // Huginn never starts it, and Steam's on-screen keyboard taking the focus isn't leaving.
+    // back(): in front again (the pages call it as they open; Vault also does on its own).
     Q_INVOKABLE void back() { checkAway(); m_awaySince = 0; m_awayTimer.stop(); }
     // Wall clock, so time asleep counts. True when the lock went up.
     bool checkAway() { if (m_awaySince && !m_screenLocked && QDateTime::currentMSecsSinceEpoch() - m_awaySince > kRelockMs) { lockScreen(); return true; } return false; }
+    // Huginn just asked for Steam's on-screen keyboard (System::keyboardAsked): the focus change that follows is
+    // the keyboard, not leaving Huginn.
+    void keyboardAsked() { m_keyboardAt = QDateTime::currentMSecsSinceEpoch(); }
     static constexpr qint64 kRelockMs = 60000;
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
     bool screenLocked() const { return m_screenLocked || locked(); }
@@ -210,4 +214,12 @@ private:
     QTimer m_awayTimer;
     bool m_l3 = false;
     bool m_r3 = false;
+    qint64 m_keyboardAt = 0; // when Steam's keyboard was last asked for
+    bool m_keyboardUp = false;   // Huginn lost focus to that keyboard
+    QTimer m_keyboardTimer;  // the keyboard up this long: counted as leaving after all
+    bool keyboardFocus() const;
+    void left();             // Huginn stopped being the app in front: the away clock starts, the cover goes up
+protected:
+    // Any key, click, tap or wheel reaching Huginn while the away clock runs: someone is here, so it starts over.
+    bool eventFilter(QObject *watched, QEvent *event) override;
 };

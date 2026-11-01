@@ -96,6 +96,7 @@ Q_SIGNALS:
     void layoutChanged();
     void graphicsChanged();
     void handheldChanged();
+    void keyboardAsked();   // Steam's on-screen keyboard was just asked for (Vault: its focus change isn't leaving)
 
 private:
     QString m_inhibitHandle;     // portal request path
