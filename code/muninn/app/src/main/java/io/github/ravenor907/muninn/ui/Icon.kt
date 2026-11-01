@@ -71,7 +71,8 @@ object Icons {
 @Composable
 fun MIcon(name: String, color: Color = Palette.textMuted, size: Dp = 24.dp, modifier: Modifier = Modifier, weight: Float = 1.6f, filled: Boolean = false) {
     val path = remember(name) { PathParser().parsePathString(Icons.paths[name] ?: Icons.paths.getValue("file")).toPath() }
-    val boldness = weight * maxOf(1f, size.value / 28f)
+    // In the icon's own 24-unit space, so it scales with the icon once (big icons on a TV stay as light as small ones).
+    val boldness = weight
     Canvas(modifier.size(size)) {
         val k = this.size.width / 24f
         scale(k, k, pivot = Offset.Zero) {

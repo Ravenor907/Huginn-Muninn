@@ -30,7 +30,7 @@ internal fun TvIcon(name: String, color: Color, size: Dp, modifier: Modifier = M
     val own = TvIcons.paths[name]
     if (own == null) { MIcon(name, color, size, modifier); return }
     val path = remember(name) { PathParser().parsePathString(own).toPath() }
-    val boldness = 1.6f * maxOf(1f, size.value / 28f)
+    val boldness = 1.6f
     Canvas(modifier.size(size)) {
         val k = this.size.width / 24f
         scale(k, k, pivot = Offset.Zero) {
