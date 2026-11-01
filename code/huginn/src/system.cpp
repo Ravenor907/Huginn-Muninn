@@ -3,6 +3,7 @@
 
 #include "platform/crashlog.h"
 #include "platform/keepawake.h"
+#include "platform/singleinstance.h"
 #include "platform/winstart.h"
 
 #ifndef Q_OS_WIN
@@ -450,12 +451,27 @@ void System::openSteamUrl(const QString &url)
 }
 
 
+void System::minimize(QQuickWindow *window)
+{
+    if (!window)
+        return;
+    if (!m_gameMode) {
+        window->showMinimized();
+        return;
+    }
+    // Game mode can't minimize: Steam's library comes to the front and Huginn's window stays as it is behind it, so
+    // Resume in Steam always shows Huginn again. Hidden only when Steam isn't there to switch to.
+    if (steamAround(m_gameMode))
+        openSteamUrl(QStringLiteral("steam://open/games"));
+    else
+        SingleInstance::tuck(window);
+}
+
 void System::showSteamKeyboard()
 {
     // Steam's own keyboard types into whatever has focus, in game mode and Handheld mode (when Steam is there to
     // show it). Desktop users have a real keyboard; Windows shows its own touch keyboard for a tapped text field.
     if (gameLike() && steamAround(m_gameMode)) {
-        Q_EMIT keyboardAsked();
         openSteamUrl(QStringLiteral("steam://open/keyboard"));
     }
 }

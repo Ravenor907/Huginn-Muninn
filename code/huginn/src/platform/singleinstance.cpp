@@ -18,6 +18,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QPointer>
 #include <QWindow>
 #include <cstdio>
 
@@ -302,8 +303,28 @@ bool SingleInstance::startAgain(const QString &program, const QString &workDir, 
     return ok;
 }
 
+namespace
+{
+QPointer<QWindow> s_tucked;
+QWindow::Visibility s_tuckedAs = QWindow::Windowed;
+}
+
+void SingleInstance::tuck(QWindow *window)
+{
+    if (!window)
+        return;
+    s_tucked = window;
+    s_tuckedAs = window->visibility() == QWindow::Hidden ? QWindow::FullScreen : window->visibility();
+    window->hide();
+}
+
 void SingleInstance::bringToFront()
 {
+    if (s_tucked) {
+        if (!s_tucked->isVisible())
+            s_tucked->setVisibility(s_tuckedAs);
+        s_tucked = nullptr;
+    }
     for (QWindow *w : QGuiApplication::topLevelWindows()) {
         if (!w->isVisible() || w->type() == Qt::ToolTip || w->type() == Qt::Popup)
             continue;

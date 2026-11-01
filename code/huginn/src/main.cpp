@@ -335,7 +335,6 @@ int main(int argc, char *argv[])
         return QJsonDocument(o).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
-    QObject::connect(system, &System::keyboardAsked, vault, &Vault::keyboardAsked);
     if (quiet && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // the throwaway profile only: no lock to draw
     auto *updater = new Updater(settings, &app);

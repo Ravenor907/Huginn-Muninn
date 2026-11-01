@@ -145,7 +145,7 @@ Rectangle {
             { group: "Lock", kind: "segmented", key: "lockPosition", title: "Pattern position",
               options: [{ value: "top", label: "Top" }, { value: "middle", label: "Middle" }, { value: "lower", label: "Lower" }] },
             { group: "Lock", kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw" },
-            { group: "Lock", kind: "toggle", key: "lockOnLeave", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Lock when I leave" },
+            { group: "Lock", kind: "info", hide: Vault.exists && !Vault.hasLock, title: "When it locks", note: "Locks when you choose. Closing asks first." },
             { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
             { group: "Lock", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" },
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },

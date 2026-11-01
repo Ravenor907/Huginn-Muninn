@@ -196,9 +196,9 @@ class Identity(context: Context, private val vault: Vault) {
     var secureScreen: Boolean
         get() = prefs.getBoolean("secureScreen", false)
         set(v) = prefs.edit().putBoolean("secureScreen", v).apply()
-    /** With a password: ask again after Muninn has been in the background this long (ms). */
+    /** With a password: ask again after Muninn has been in the background this long (ms). Never while in use. */
     var lockAfter: Long
-        get() = prefs.getLong("lockAfter", 60_000L)
+        get() = prefs.getLong("lockAfter", io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER)
         set(v) = prefs.edit().putLong("lockAfter", v).apply()
     val publicKey: String get() = ChatCrypto.b64(keys.public.encoded)
 

@@ -183,7 +183,7 @@ Rectangle {
         if (!locked && !isTour) { Chat.openChat = chatKey; Chat.markGroupRead(gid, channelId) }
     }
     onMessagesChanged: if (!locked && !isTour && gid !== "" && Qt.application.state === Qt.ApplicationActive) Chat.markGroupRead(gid, channelId)
-    Component.onCompleted: { Vault.back(); if (!locked && !isTour && gid !== "") { Chat.openChat = chatKey; Chat.markGroupRead(gid, channelId) } }
+    Component.onCompleted: { if (!locked && !isTour && gid !== "") { Chat.openChat = chatKey; Chat.markGroupRead(gid, channelId) } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
 
     // ============================================================= channel column
@@ -1253,7 +1253,7 @@ Rectangle {
     Connections {
         target: Qt.application
         function onStateChanged() {
-            if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (!page.locked && !page.isTour && page.gid !== "") Chat.markGroupRead(page.gid, page.channelId) }
+            if (Qt.application.state === Qt.ApplicationActive) { if (!page.locked && !page.isTour && page.gid !== "") Chat.markGroupRead(page.gid, page.channelId) }
         }
     }
 

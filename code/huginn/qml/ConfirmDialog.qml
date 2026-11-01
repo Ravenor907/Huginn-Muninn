@@ -15,6 +15,9 @@ Item {
     property var cancelCallback: null
     property string tag: ""
     property string cancelText: "Cancel"
+    // A third answer between Cancel and the main one (X on a controller), set after open().
+    property string otherText: ""
+    property var otherCallback: null
     // Only the answer button (a note to read, like a copied code): B closes it too.
     property bool single: false
     property real held: 0
@@ -26,6 +29,7 @@ Item {
         title = t; message = msg; confirmText = confirm || "Continue"
         callback = cb || null; hold = !!needsHold; danger = !!isDanger
         cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"; single = false
+        otherText = ""; otherCallback = null
         held = 0; visible = true
     }
     function confirm() {
@@ -33,6 +37,12 @@ Item {
         visible = false
         holdTimer.stop()
         if (callback) callback()
+    }
+    function other() {
+        const o = otherCallback
+        cancelCallback = null; otherCallback = null
+        visible = false; holdTimer.stop(); held = 0
+        if (o) o()
     }
     function cancel() {
         visible = false; holdTimer.stop(); held = 0
@@ -125,6 +135,11 @@ Item {
                 spacing: Theme.px(8)
                 HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
                 HButton {
+                    visible: !dlg.single && dlg.otherText !== ""
+                    text: (Ui.main && Ui.main.padInUse ? "X: " : "") + dlg.otherText
+                    onClicked: dlg.other()
+                }
+                HButton {
                     id: go
                     text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : dlg.confirmText
                     kind: dlg.danger ? "danger" : "primary"
@@ -147,6 +162,7 @@ Item {
     function handleButton(b) {
         if (b === "a") startHold()
         else if (b === "b") cancel()
+        else if (b === "x" && !single && otherText !== "") other()
         else if ((b === "up" || b === "down") && scroller.interactive)
             scroller.contentY = Math.max(0, Math.min(scroller.contentHeight - scroller.height, scroller.contentY + (b === "up" ? -1 : 1) * Theme.px(60)))
         return true

@@ -5,7 +5,7 @@ import Huginn
 // switched off), what went wrong (up to 2000 characters), Include performance check (when Labs › Performance
 // check opened it; on unless switched off), Include crash log (off unless ticked; only when there is one), then Send. The D-pad moves between them, A uses one, B or Esc closes. Main.qml takes the screenshot and
 // opens it (openReport). Sending needs Huginn unlocked: when it's locked, the lock asks right here in the report and
-// the report goes once it opens. Huginn locking while the report is open (away, or the panic lock) hides the report
+// the report goes once it opens. Huginn locking while the report is open (Lock now, or the panic lock) hides the report
 // behind the same lock until it's opened again; what was written, the screenshot and the performance check stay
 // (in memory only).
 Item {

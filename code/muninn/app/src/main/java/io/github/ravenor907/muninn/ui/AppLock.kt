@@ -7,6 +7,12 @@ package io.github.ravenor907.muninn.ui
  * (counts while the phone sleeps, can't be moved by changing the clock).
  */
 object AppLock {
+    /** Lock again after this long in the background unless the person picks another time. Never while in use. */
+    const val DEFAULT_AFTER = 15 * 60_000L
+
+    /** The times Settings offers, in ms. */
+    val AFTERS = listOf(0L, 60_000L, 5 * 60_000L, DEFAULT_AFTER, 30 * 60_000L)
+
     /** When the last Muninn screen went to the background. 0 while one is on screen. */
     @Volatile var awaySince = 0L
 

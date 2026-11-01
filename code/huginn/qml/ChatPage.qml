@@ -211,7 +211,7 @@ Rectangle {
         // A hidden thread box can't keep the keyboard: back to the page (the chat's box keeps it).
         if (side !== "thread" && !compose.hasFocus && Ui.main) Ui.main.restoreFocus()
     }
-    Component.onCompleted: { Vault.back(); showLimitsNote() }   // Huginn away more than a minute: locked again
+    Component.onCompleted: showLimitsNote()
     // Cap d1: told once, on the chat list, that messages don't stay forever. The one place this is explained.
     function showLimitsNote() {
         if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
@@ -223,7 +223,7 @@ Rectangle {
     Connections {
         target: Qt.application
         function onStateChanged() {
-            if (Qt.application.state === Qt.ApplicationActive) { Vault.back(); if (page.openKey !== "" && !page.locked) Chat.markRead(page.openKey) }
+            if (Qt.application.state === Qt.ApplicationActive) { if (page.openKey !== "" && !page.locked) Chat.markRead(page.openKey) }
         }
     }
 

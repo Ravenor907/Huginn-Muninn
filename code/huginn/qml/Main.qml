@@ -148,12 +148,17 @@ Window {
         openPage("dms", {})
         Ui.say("Huginn locked.")
     }
-    // Every Exit goes through here (the window's X too), so a transfer is never cut off by surprise.
+    // Every Exit goes through here (the window's X, Exit, B or Esc at the top), so a transfer is never cut off by
+    // surprise. Huginn never locks on its own: closing asks. Lock and close (A) quits, and Huginn opens locked next
+    // time; Minimize (X) keeps it running out of sight, still getting messages and calls; Stay (B).
     function requestExit() {
-        if (LocalSend.busy)
-            Ui.sure("Exit while this runs?", LocalSend.status + " Closing now stops it partway.", "Exit anyway", () => app.quitNow(), true, true)
-        else
-            Ui.sure("Exit Huginn?", "Messages wait for you until you open Huginn again.", "Exit", () => app.quitNow(), false, false)
+        const busy = LocalSend.busy
+        const locks = Vault.hasLock && !Vault.screenLocked
+        const why = busy ? LocalSend.status + " Closing now stops it partway." : "Minimized, messages and calls still arrive."
+        Ui.sure("Leave Huginn?", why, locks ? "Lock and close" : "Close", () => { if (locks) Vault.lockScreen(); app.quitNow() }, busy, busy)
+        confirm.otherText = "Minimize"
+        confirm.otherCallback = () => System.minimize(app)
+        confirm.cancelText = "Stay"
     }
     // Answered: Huginn closes (the window's close question isn't asked again).
     property bool quitting: false
@@ -168,7 +173,6 @@ Window {
     // The slim bar along the top: the raven, search (Ctrl+K) and the shortcuts (Ctrl+/).
     TopBar {
         id: topBar
-        opacity: app.privacyCovered ? 0 : 1
         width: parent.width
         onSearch: if (!app.touring) switcher.open()
         onShortcuts: shortcutsPanel.open()
@@ -177,7 +181,6 @@ Window {
     Rail {
         id: rail
         z: 4   // its labels show over the page
-        opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         // Portrait: only beside the list, not over an open conversation.
         visible: !app.portrait || app.pageList
         anchors.top: topBar.bottom
@@ -203,7 +206,6 @@ Window {
 
     Loader {
         id: pageLoader
-        opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.top: topBar.bottom
         anchors.bottom: roomBar.visible ? roomBar.top : hints.visible ? hints.top : parent.bottom
         anchors.left: rail.visible ? rail.right : parent.left
@@ -224,7 +226,6 @@ Window {
     // In a voice room or group call: who's in it and the controls, under every page.
     RoomBar {
         id: roomBar
-        opacity: app.privacyCovered ? 0 : 1   // not drawn under the privacy cover
         anchors.bottom: hints.visible ? hints.top : parent.bottom
         anchors.left: voicePanel.visible ? voicePanel.right : rail.visible ? rail.right : parent.left
         anchors.right: parent.right
@@ -244,7 +245,7 @@ Window {
         roomBar: roomBar
         cardOpen: meCard.visible
         onMeClicked: meCard.toggle()
-        visible: app.pageList && !app.privacyCovered
+        visible: app.pageList
         anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
         anchors.bottom: hints.visible ? hints.top : parent.bottom
         anchors.bottomMargin: Theme.px(8)
@@ -264,7 +265,7 @@ Window {
         anchors.bottomMargin: Ui.dock
         x: rail.width + app.pageListEdge - width / 2
         z: 3
-        visible: !app.portrait && app.pageList && app.pageListResizable && !app.privacyCovered
+        visible: !app.portrait && app.pageList && app.pageListResizable
         label: "list"
         value: Ui.listW; minimum: 200; maximum: 360; fallback: 240
         onMoved: v => Ui.listW = v
@@ -274,7 +275,7 @@ Window {
         anchors.top: topBar.bottom; anchors.bottom: pageLoader.bottom
         x: app.width - Theme.memberWidth - width / 2
         z: 3
-        visible: !app.portrait && app.pageMembers && !app.privacyCovered
+        visible: !app.portrait && app.pageMembers
         label: "member list"
         direction: -1
         value: Ui.memberW; minimum: 200; maximum: 360; fallback: 240
@@ -364,7 +365,7 @@ Window {
         onActivated: switcher.visible ? switcher.close() : switcher.open()
     }
     // The rest of the keyboard shortcuts (all listed in ShortcutsPanel.qml).
-    readonly property bool keysOn: !app.touring && !updating.visible && !app.privacyCovered
+    readonly property bool keysOn: !app.touring && !updating.visible
     Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode && !System.handheld; onActivated: Settings.fullScreen = !Settings.fullScreen }
     // The window's place and size, kept a moment after it stops moving (only while it's a normal window).
     Timer { id: keepRect; interval: 800; onTriggered: if (app.placed && app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
@@ -412,13 +413,11 @@ Window {
     // Labs › Performance check (under Report a bug, which it can open with its report).
     PerfPanel { id: perfPanel; z: 27.5 }
     function openReport() {
-        if (app.privacyCovered) return
         Labs.capture(app)
         labsReport.open(app.touring)
     }
     // Report a bug with a performance report going along (the person can switch it off there).
     function openReportWith(perfText) {
-        if (app.privacyCovered) return
         Labs.capture(app)
         labsReport.openWith(perfText)
     }
@@ -426,8 +425,8 @@ Window {
     function openLabsReports() { labsInbox.open(app.touring) }
     function openAppStorage() { appStorage.open(app.touring) }
     TextPrompt { id: prompt; z: 30 }
-    CallPage { id: callPage; z: 36; opacity: app.privacyCovered ? 0 : 1 }
-    IncomingCall { id: incomingCall; z: 37; opacity: app.privacyCovered ? 0 : 1 }
+    CallPage { id: callPage; z: 36 }
+    IncomingCall { id: incomingCall; z: 37 }
     ConfirmDialog { id: confirm; z: 40 }
     Toast { id: toast }
     // Moving to another device (cap x1): over the pages and panels while it's under way; questions, prompts,
@@ -438,7 +437,7 @@ Window {
         onVisibleChanged: if (visible) app.closePanels()
     }
     // Link your phone (linked devices): the QR code, the 4 emoji and Linked, over the whole window.
-    LinkPhone { id: linkPhone; z: 28.5; opacity: app.privacyCovered ? 0 : 1 }   // not drawn under the privacy cover
+    LinkPhone { id: linkPhone; z: 28.5 }
     function showLinkPhone(first) {
         if (app.touring || linkPhone.visible || moveCover.visible || Vault.screenLocked) return
         app.closePanels()
@@ -488,26 +487,6 @@ Window {
         z: 1000
         host: app
         onClicked: (x, y) => { if (app.focusZone === "rail" && x > rail.width) app.focusZone = "content" }
-    }
-
-    // The privacy cover (see Vault.covered): Huginn is in the background with Chat open behind a lock.
-    // Nothing under it is drawn, so a minimized window, a taskbar preview or the picture Windows
-    // shows on wake has no chat in it. It goes when Huginn is in front again (or the lock shows).
-    readonly property bool privacyCovered: Vault.covered && !app.touring
-    Rectangle {
-        id: privacyCover
-        anchors.fill: parent
-        z: 99
-        visible: app.privacyCovered
-        color: Theme.ground
-        MouseArea { anchors.fill: parent }
-        Image {
-            anchors.centerIn: parent
-            source: "assets/raven-gold.png"
-            width: Theme.px(96); height: width
-            sourceSize.width: 256; sourceSize.height: 256
-            opacity: 0.5
-        }
     }
 
     // A checked update waiting: a slim bar along the top; Huginn installs it only on Restart now.

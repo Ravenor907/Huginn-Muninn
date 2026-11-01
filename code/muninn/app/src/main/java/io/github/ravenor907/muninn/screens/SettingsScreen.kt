@@ -380,9 +380,10 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
         }
         if (app.vault.hasPassword) {
             Text("Lock again after", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
-            val afters = listOf(0L to "Right away", 60_000L to "1 min", 5 * 60_000L to "5 min", 30 * 60_000L to "30 min")
+            val afters = io.github.ravenor907.muninn.ui.AppLock.AFTERS
             ChoiceRow(afters.size, Modifier.padding(top = 6.dp, bottom = 4.dp)) { i, m ->
-                val (ms, label) = afters[i]
+                val ms = afters[i]
+                val label = if (ms == 0L) "Right away" else "${ms / 60_000L} min"
                 MButton(label, m, if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
             }
             var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }

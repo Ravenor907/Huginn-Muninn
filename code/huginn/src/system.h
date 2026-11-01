@@ -78,6 +78,9 @@ public:
     QString version() const;
     QString tourDir() const { return m_tourDir; }
 
+    // Leave Huginn running out of sight: minimized, or in game mode (no minimizing there) hidden with Steam in front.
+    // A notification, the tray, the taskbar or starting Huginn again brings it back.
+    Q_INVOKABLE void minimize(QQuickWindow *window);
     Q_INVOKABLE void showSteamKeyboard();
     Q_INVOKABLE void hideSteamKeyboard();
     // The computer's own file picker, several at once. Empty when nothing was picked.
@@ -96,7 +99,6 @@ Q_SIGNALS:
     void layoutChanged();
     void graphicsChanged();
     void handheldChanged();
-    void keyboardAsked();   // Steam's on-screen keyboard was just asked for (Vault: its focus change isn't leaving)
 
 private:
     QString m_inhibitHandle;     // portal request path

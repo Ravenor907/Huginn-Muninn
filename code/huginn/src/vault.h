@@ -36,7 +36,7 @@ public:
     bool usesPattern() const;
     bool hasLock() const;
     // Turns the lock off (must be unlocked, and the current pattern or password given again; a wrong one counts as a
-    // wrong try): the data key is kept beside the chats, unprotected. Panic lock and locking when away stop working.
+    // wrong try): the data key is kept beside the chats, unprotected. Panic lock and Lock now stop working.
     // setSecret() turns it on again, with a new data key (everything is sealed again with it).
     Q_INVOKABLE bool turnOffLock(const QString &secret);
     // At start (main.cpp, once everything listens for opened()): a vault without a lock opens by itself.
@@ -55,26 +55,9 @@ public:
     // messages are still saved (encrypted) in the background.
     // Without a lock there is nothing to unlock with, so nothing happens.
     Q_INVOKABLE void lockScreen() { if (!hasLock()) return; m_screenLocked = true; Q_EMIT changed(); }
-    // The away clock: Huginn leaving the front (another app, a minimized window, sleep) starts it; back after a
-    // minute = locked. The lock also goes up while still away, once the minute is past, so the window's last picture
-    // (shown again on wake before Huginn draws) is already the lock and never the chat. Moving between pages inside
-    // Huginn never starts it, and Steam's on-screen keyboard taking the focus isn't leaving.
-    // back(): in front again (the pages call it as they open; Vault also does on its own).
-    Q_INVOKABLE void back() { checkAway(); m_awaySince = 0; m_awayTimer.stop(); }
-    // Wall clock, so time asleep counts. True when the lock went up.
-    bool checkAway() { if (m_awaySince && !m_screenLocked && QDateTime::currentMSecsSinceEpoch() - m_awaySince > kRelockMs) { lockScreen(); return true; } return false; }
-    // Huginn just asked for Steam's on-screen keyboard (System::keyboardAsked): the focus change that follows is
-    // the keyboard, not leaving Huginn.
-    void keyboardAsked() { m_keyboardAt = QDateTime::currentMSecsSinceEpoch(); }
-    static constexpr qint64 kRelockMs = 60000;
+    // Huginn never locks on its own: only Lock now, the panic lock, or Lock and close when leaving (Main.qml) do.
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
     bool screenLocked() const { return m_screenLocked || locked(); }
-    // The privacy cover: from the moment Huginn isn't the app in front (or the computer goes to
-    // sleep) while Chat is open behind a lock, the window shows nothing of it, so a minimized
-    // window, a taskbar preview or the picture shown on wake can't give a chat away. Back within
-    // the relock time it simply goes; past it, the lock is up instead.
-    Q_PROPERTY(bool covered READ covered NOTIFY changed)
-    bool covered() const { return m_covered && exists() && !screenLocked(); }
     // Erases every message, photo, voice message, contact and key, the cache and a move's state. Huginn's other settings stay.
     Q_INVOKABLE void eraseAll();
 
@@ -163,12 +146,8 @@ public:
     // Hold L3 and R3 for a second anywhere in Huginn (while it's the app in front): Chat locks at once.
     // Main.qml passes every controller press and release here.
     Q_PROPERTY(bool panicLock READ panicLock WRITE setPanicLock NOTIFY changed)
-    // Lock the moment Huginn stops being the app in front.
-    Q_PROPERTY(bool lockOnLeave READ lockOnLeave WRITE setLockOnLeave NOTIFY changed)
     bool panicLock() const;
     void setPanicLock(bool on);
-    bool lockOnLeave() const;
-    void setLockOnLeave(bool on);
     Q_INVOKABLE void button(const QString &name, bool down);
     // Lock at once (the keyboard's Ctrl+Shift+Q, or L3 and R3 held for a second): the lock screen goes up and
     // anything that could show Chat closes. Huginn keeps running (messages are still saved behind the lock).
@@ -198,28 +177,11 @@ private:
     void wrongTry();   // counts a wrong pattern or password (the wait doubles every 5)
     QByteArray m_key;
     bool m_weak = false;   // the lock just opened is shorter than new ones may be
-    void leaving();   // Huginn went to the background: cover at once
-    void returning(); // in front again: lock if away too long, then uncover
-    void sleeping();  // Windows is going to sleep
-    void woke();      // and woke up
     bool m_screenLocked = false;
-    bool m_covered = false;
-    qint64 m_awaySince = 0;
-    qint64 m_awayBeforeSleep = 0;   // the away clock as it was when sleep started (0: Chat was open)
-    bool m_asleep = false;
     bool m_busy = false;
     bool m_restarting = false;   // restored: nothing may be saved until Huginn starts again
     Files m_opened;
     QTimer m_combo;
-    QTimer m_awayTimer;
     bool m_l3 = false;
     bool m_r3 = false;
-    qint64 m_keyboardAt = 0; // when Steam's keyboard was last asked for
-    bool m_keyboardUp = false;   // Huginn lost focus to that keyboard
-    QTimer m_keyboardTimer;  // the keyboard up this long: counted as leaving after all
-    bool keyboardFocus() const;
-    void left();             // Huginn stopped being the app in front: the away clock starts, the cover goes up
-protected:
-    // Any key, click, tap or wheel reaching Huginn while the away clock runs: someone is here, so it starts over.
-    bool eventFilter(QObject *watched, QEvent *event) override;
 };
