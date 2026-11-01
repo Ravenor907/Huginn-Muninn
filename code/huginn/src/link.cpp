@@ -751,6 +751,7 @@ bool Link::sumsReady(const QStringList &photos, std::function<void()> then)
             out->append(qMakePair(job.first, s));
         }
     });
+    t->setObjectName(QStringLiteral("huginn-link-hash"));
     QPointer<Link> self(this);
     connect(t, &QThread::finished, this, [self, t, out] {
         t->deleteLater();

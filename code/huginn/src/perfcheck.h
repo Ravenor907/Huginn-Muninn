@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QMutex>
 #include <QObject>
 #include <QPointer>
@@ -19,7 +20,8 @@ class System;
 
 // Labs › Performance check: about 25 seconds of measuring in three phases (still, scrolling a long list, an
 // animation) and a 5 second idle sample: frame rate, frame-time spikes, drawing time, Huginn's processor time and
-// memory, what used the window's thread the most (Busiest, busy.h), with the facts
+// memory, what used the window's thread the most (Busiest, busy.h) and its slowest events (every event it handles is
+// timed while a check runs), each thread's share of the idle sample (Linux), with the facts
 // that decide how Huginn draws and sizes itself. A short verdict names the main suspect. Tried settings (display
 // mode, drawing, render loop, animations) are kept as Labs overrides and used from the next start; one that
 // keeps the window from starting is dropped on the start after, which says so. The report holds no names,
@@ -41,6 +43,8 @@ class PerfCheck : public QObject
     Q_PROPERTY(QString idleLine READ idleLine NOTIFY changed)
     // "Busiest: message retries 840 ms (longest 310 ms)": what held the window's thread the most during the check.
     Q_PROPERTY(QString busiest READ busiest NOTIFY changed)
+    // "Threads at idle: window thread 2%, ...": the three busiest threads in the idle sample (Linux).
+    Q_PROPERTY(QString threadsLine READ threadsLine NOTIFY changed)
     // What is saved for the next start: {display, drawing, loop, animations}.
     Q_PROPERTY(QVariantMap overrides READ overrides NOTIFY overridesChanged)
     Q_PROPERTY(bool overridesOn READ overridesOn NOTIFY overridesChanged)
@@ -84,6 +88,7 @@ public:
     QVariantList phases() const;
     QString idleLine() const;
     QString busiest() const { return m_busiest; }
+    QString threadsLine() const { return m_threadsLine; }
     QVariantMap overrides() const;
     bool overridesOn() const;
     bool restartNeeded() const;
@@ -137,6 +142,12 @@ private:
     QString scrubbed(const QString &text) const;
     static double cpuMs();
     static double memoryMb();
+    // Each thread's processor time so far in ms, by thread id, with its name (Linux; empty elsewhere).
+    struct ThreadTime {
+        QString name;
+        double ms = 0;
+    };
+    static QHash<qint64, ThreadTime> threadTimes();
     static QString words(const QString &key, const QString &value);
 
     Settings *m_settings;
@@ -163,6 +174,17 @@ private:
     QString m_busiest;
     QString m_busyName;      // the busiest part's name, for the suspect
     QStringList m_busyTop;   // the five busiest parts, for the full report
+    // What the window's thread spent its time on, by event (busy.h): the five slowest single ones, and the three
+    // that took the most in all.
+    QString m_slowLine, m_mostLine;
+    // The idle sample: the busiest threads, how much of it the window's thread spent handling events, and how
+    // often the window was asked for a frame (drawn or not).
+    QHash<qint64, ThreadTime> m_threads0;
+    QString m_threadsLine;
+    QString m_idleTopThread;   // the busiest thread at idle when it isn't the window's (5% or more)
+    double m_eventMs0 = 0;
+    double m_idleEventPct = -1;
+    int m_idleAsked = 0, m_idleSyncs = 0;
 
     // Written on the render thread, read on the main thread.
     QMutex m_lock;
@@ -173,6 +195,8 @@ private:
     double m_drawTotal = 0;
     int m_drawCount = 0;
     std::atomic<bool> m_firstFrame{true};
+    std::atomic<int> m_asked{0};   // frames the window's thread got ready (animations advanced, layout done)
+    std::atomic<int> m_syncs{0};   // frames handed to the drawing (drawn only when something changed)
     bool m_seasonal = false;
 
     static bool s_animationsOff;

@@ -9,10 +9,12 @@
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QGuiApplication>
 #include <QHash>
 #include <QList>
+#include <QMetaEnum>
 #include <QPair>
 #include <QQuickWindow>
 #include <QRegularExpression>
@@ -20,6 +22,7 @@
 #include <QSettings>
 #include <QSysInfo>
 #include <QThread>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -130,10 +133,44 @@ const QRegularExpression &stampRe()
 
 namespace Busy
 {
-bool on = false;
+std::atomic<bool> on{false};
 int depth = 0;
 namespace
 {
+// Events, by who got them and what kind they were.
+struct EventKey {
+    const QMetaObject *receiver = nullptr;
+    const QMetaObject *parent = nullptr;
+    int type = 0;
+    int interval = -1;   // a QTimer's, so timers without a parent can still be told apart
+    bool operator==(const EventKey &o) const
+    {
+        return receiver == o.receiver && parent == o.parent && type == o.type && interval == o.interval;
+    }
+};
+size_t qHash(const EventKey &k, size_t seed = 0) noexcept { return qHashMulti(seed, k.receiver, k.parent, k.type, k.interval); }
+struct EventCount {
+    QString what;
+    qint64 ns = 0, longest = 0;
+    int times = 0;
+};
+QHash<EventKey, int> s_eventIndex;
+QList<EventCount> s_events;
+qint64 s_eventNs = 0;
+int s_eventDepth = 0;
+
+QString eventWords(const EventKey &k)
+{
+    const QMetaEnum types = QMetaEnum::fromType<QEvent::Type>();
+    const char *type = types.valueToKey(k.type);
+    QString out = (type ? QString::fromLatin1(type) : QStringLiteral("Event %1").arg(k.type)) + QStringLiteral(" to ")
+        + QString::fromLatin1(k.receiver ? k.receiver->className() : "?");
+    if (k.parent)
+        out += QStringLiteral(" in ") + QString::fromLatin1(k.parent->className());
+    if (k.interval >= 0)
+        out += QStringLiteral(" (every %1 ms)").arg(k.interval);
+    return out;
+}
 struct Count {
     qint64 ns = 0, longest = 0;
     int times = 0;
@@ -161,6 +198,9 @@ void add(const char *what, qint64 ns)
 void start()
 {
     s_counts.clear();
+    s_eventIndex.clear();
+    s_events.clear();
+    s_eventNs = 0;
     timer();
     on = true;
 }
@@ -182,6 +222,76 @@ QList<Entry> sorted()
     std::sort(out.begin(), out.end(), [](const Entry &a, const Entry &b) { return a.ms > b.ms; });
     return out;
 }
+
+Event::Event(QObject *receiver, QEvent *event)
+{
+    if (!on || !receiver || !event || !QThread::isMainThread())
+        return;
+    m_in = true;
+    // Only the outermost event is counted; the ones handled inside it are part of its time.
+    if (s_eventDepth++ > 0)
+        return;
+    EventKey k;
+    k.receiver = receiver->metaObject();
+    k.parent = receiver->parent() ? receiver->parent()->metaObject() : nullptr;
+    k.type = int(event->type());
+    if (event->type() == QEvent::Timer)
+        if (QTimer *t = qobject_cast<QTimer *>(receiver))
+            k.interval = t->interval();
+    auto it = s_eventIndex.constFind(k);
+    if (it == s_eventIndex.cend()) {
+        EventCount c;
+        c.what = eventWords(k);
+        s_events.append(c);
+        it = s_eventIndex.insert(k, int(s_events.size() - 1));
+    }
+    m_key = it.value();
+    m_start = clockNs();
+}
+
+Event::~Event()
+{
+    if (!m_in)
+        return;
+    --s_eventDepth;
+    // A check started inside this event cleared the counts.
+    if (m_key < 0 || m_key >= s_events.size())
+        return;
+    const qint64 ns = clockNs() - m_start;
+    EventCount &c = s_events[m_key];
+    c.ns += ns;
+    c.longest = qMax(c.longest, ns);
+    ++c.times;
+    s_eventNs += ns;
+}
+
+namespace
+{
+QList<EventEntry> eventEntries()
+{
+    QList<EventEntry> out;
+    for (const EventCount &c : std::as_const(s_events))
+        if (c.times > 0)
+            out.append(EventEntry{c.what, c.ns / 1e6, c.longest / 1e6, c.times});
+    return out;
+}
+}
+
+QList<EventEntry> slowestEvents()
+{
+    QList<EventEntry> out = eventEntries();
+    std::sort(out.begin(), out.end(), [](const EventEntry &a, const EventEntry &b) { return a.longest > b.longest; });
+    return out;
+}
+
+QList<EventEntry> busiestEvents()
+{
+    QList<EventEntry> out = eventEntries();
+    std::sort(out.begin(), out.end(), [](const EventEntry &a, const EventEntry &b) { return a.ms > b.ms; });
+    return out;
+}
+
+double eventMs() { return s_eventNs / 1e6; }
 }
 
 PerfCheck::PerfCheck(Settings *settings, System *system, QObject *parent)
@@ -297,6 +407,16 @@ void PerfCheck::watch(QQuickWindow *window)
         if (m_active.load() && m_window)
             QMetaObject::invokeMethod(m_window.data(), "update", Qt::QueuedConnection);
     }, Qt::DirectConnection);
+    // Frames the window's thread got ready and frames handed to the drawing: in the idle sample, many of them with
+    // nothing drawn means something keeps asking for frames that change nothing.
+    connect(window, &QQuickWindow::afterAnimating, this, [this] {
+        if (m_recording.load())
+            ++m_asked;
+    }, Qt::DirectConnection);
+    connect(window, &QQuickWindow::beforeSynchronizing, this, [this] {
+        if (m_recording.load())
+            ++m_syncs;
+    }, Qt::DirectConnection);
     connect(window, &QQuickWindow::beforeRendering, this, [this] {
         if (m_recording.load()) {
             QMutexLocker l(&m_lock);
@@ -407,6 +527,13 @@ void PerfCheck::start(bool seasonal)
     m_stallLongest = 0;
     m_busiest.clear();
     m_busyTop.clear();
+    m_slowLine.clear();
+    m_mostLine.clear();
+    m_threadsLine.clear();
+    m_threads0.clear();
+    m_idleTopThread.clear();
+    m_idleEventPct = -1;
+    m_idleAsked = m_idleSyncs = 0;
     Busy::start();
     m_running = true;
     m_phase = 0;
@@ -439,6 +566,10 @@ void PerfCheck::cancel()
     m_idleCpu = -1;
     m_busiest.clear();
     m_busyTop.clear();
+    m_slowLine.clear();
+    m_mostLine.clear();
+    m_threadsLine.clear();
+    m_idleEventPct = -1;
     Q_EMIT changed();
     Q_EMIT progressChanged();
 }
@@ -491,6 +622,12 @@ void PerfCheck::beginMeasure()
         m_drawCount = 0;
         m_drawStart = 0;
     }
+    m_asked = 0;
+    m_syncs = 0;
+    if (m_phase == 3) {
+        m_threads0 = threadTimes();
+        m_eventMs0 = Busy::eventMs();
+    }
     m_cpu0 = cpuMs();
     m_wall0 = m_clock.elapsed();
     m_measuring = true;
@@ -514,6 +651,25 @@ void PerfCheck::endMeasure()
     if (m_phase == 3) {
         m_idleFrames = int(stamps.size());
         m_idleCpu = 100.0 * (cpuMs() - m_cpu0) / wall;
+        m_idleAsked = m_asked.load();
+        m_idleSyncs = m_syncs.load();
+        m_idleEventPct = 100.0 * (Busy::eventMs() - m_eventMs0) / wall;
+        // Each thread's share of the idle sample, the busiest three.
+        const QHash<qint64, ThreadTime> now = threadTimes();
+        QList<QPair<double, QString>> used;
+        for (auto it = now.cbegin(); it != now.cend(); ++it) {
+            const double ms = it.value().ms - m_threads0.value(it.key()).ms;
+            if (ms > 0)
+                used.append({100.0 * ms / wall, it.value().name});
+        }
+        std::sort(used.begin(), used.end(), [](const QPair<double, QString> &a, const QPair<double, QString> &b) { return a.first > b.first; });
+        QStringList top;
+        for (qsizetype i = 0; i < qMin<qsizetype>(3, used.size()); ++i)
+            top << QStringLiteral("%1 %2%").arg(used.at(i).second).arg(qRound(used.at(i).first));
+        m_idleTopThread = !used.isEmpty() && used.first().second != QLatin1String("window thread") && used.first().first >= 5 ? used.first().second : QString();
+        if (!now.isEmpty())
+            m_threadsLine = QStringLiteral("Threads at idle: ") + (top.isEmpty() ? QStringLiteral("none busy") : top.join(QStringLiteral(", ")));
+        m_threads0.clear();
         return;
     }
     Result r;
@@ -582,7 +738,16 @@ void PerfCheck::judge()
     if (!slow(still) && !slow(scroll) && !slow(anim) && !spiky(still) && !spiky(scroll) && !spiky(anim)) {
         if (m_idleCpu >= 5) {
             m_verdict = QStringLiteral("Busy while idle: %1% CPU").arg(qRound(m_idleCpu));
-            m_suspect = !m_busyName.isEmpty() ? m_busyName : m_idleFrames > 0 ? QStringLiteral("Something keeps drawing") : QStringLiteral("Not found");
+            if (!m_busyName.isEmpty())
+                m_suspect = m_busyName;
+            else if (m_idleFrames > 0)
+                m_suspect = QStringLiteral("Something keeps drawing");
+            else if (m_idleAsked > 20)
+                m_suspect = QStringLiteral("Something keeps asking for frames that change nothing");
+            else if (!m_idleTopThread.isEmpty())
+                m_suspect = QStringLiteral("The %1 thread").arg(m_idleTopThread);
+            else
+                m_suspect = QStringLiteral("Not found");
             return;
         }
         m_verdict = QStringLiteral("Smooth: %1 fps").arg(qRound(std::min({still.fps, scroll.fps, anim.fps})));
@@ -629,14 +794,31 @@ void PerfCheck::noteBusiest()
                              .arg(top.at(i).what).arg(qRound(top.at(i).ms)).arg(top.at(i).times).arg(qRound(top.at(i).longest));
     const bool measured = !top.isEmpty() && top.first().ms >= 1;
     const bool unexplained = m_stalls > 0 && (!measured || top.first().longest < m_stallLongest * 0.5);
+    // Every event the window's thread handled, timed (busy.h): the slowest single ones, and the most in all.
+    const QList<Busy::EventEntry> slow = Busy::slowestEvents();
+    QStringList slowWords;
+    for (qsizetype i = 0; i < qMin<qsizetype>(5, slow.size()); ++i)
+        if (slow.at(i).longest >= 5)
+            slowWords << QStringLiteral("%1 %2 ms (%3 times, %4 ms in all)")
+                             .arg(slow.at(i).what).arg(qRound(slow.at(i).longest)).arg(slow.at(i).times).arg(qRound(slow.at(i).ms));
+    m_slowLine = QStringLiteral("Slowest events: ") + (slowWords.isEmpty() ? QStringLiteral("none over 5 ms") : slowWords.join(QStringLiteral("; ")));
+    const QList<Busy::EventEntry> most = Busy::busiestEvents();
+    QStringList mostWords;
+    for (qsizetype i = 0; i < qMin<qsizetype>(3, most.size()); ++i)
+        if (most.at(i).ms >= 1)
+            mostWords << QStringLiteral("%1 %2 ms in %3 times").arg(most.at(i).what).arg(qRound(most.at(i).ms)).arg(most.at(i).times);
+    m_mostLine = mostWords.isEmpty() ? QString() : QStringLiteral("Most event time: ") + mostWords.join(QStringLiteral("; "));
+    // A hold-up none of Huginn's parts explains: the slowest event names it when it was about that long.
+    const QString slowName = !slow.isEmpty() && m_stallLongest > 0 && slow.first().longest >= m_stallLongest * 0.5 ? slow.first().what : QString();
     m_busyName.clear();
     if (unexplained)
-        m_busyName = QStringLiteral("layout and bindings");
+        m_busyName = slowName.isEmpty() ? QStringLiteral("layout and bindings") : slowName;
     else if (measured && (top.first().ms >= 50 || m_stalls > 0))
         m_busyName = top.first().what;
     QString text;
     if (unexplained)
-        text = QStringLiteral("layout and bindings (none of Huginn's measured parts)");
+        text = slowName.isEmpty() ? QStringLiteral("layout and bindings (none of Huginn's measured parts)")
+                                  : slowName + QStringLiteral(" (none of Huginn's measured parts)");
     else if (measured)
         text = QStringLiteral("%1 %2 ms (longest %3 ms)").arg(top.first().what).arg(qRound(top.first().ms)).arg(qRound(top.first().longest));
     else
@@ -650,7 +832,11 @@ QString PerfCheck::idleLine() const
 {
     if (m_idleCpu < 0)
         return QString();
-    return QStringLiteral("Idle CPU: %1% (%2 frames drawn)").arg(qRound(m_idleCpu)).arg(m_idleFrames);
+    QString out = QStringLiteral("Idle CPU: %1% (%2 frames drawn, %3 got ready, %4 handed to drawing").arg(qRound(m_idleCpu)).arg(m_idleFrames)
+                      .arg(m_idleAsked).arg(m_idleSyncs);
+    if (m_idleEventPct >= 0)
+        out += QStringLiteral("; window thread in events %1%").arg(qRound(m_idleEventPct));
+    return out + QLatin1Char(')');
 }
 
 QVariantList PerfCheck::phases() const
@@ -696,6 +882,36 @@ double PerfCheck::memoryMb()
         return 0;
     return parts.at(1).toDouble() * double(sysconf(_SC_PAGESIZE)) / 1048576.0;
 #endif
+}
+
+QHash<qint64, PerfCheck::ThreadTime> PerfCheck::threadTimes()
+{
+    QHash<qint64, ThreadTime> out;
+#ifdef Q_OS_LINUX
+    const double tick = 1000.0 / double(qMax(1L, sysconf(_SC_CLK_TCK)));
+    const qint64 self = qint64(getpid());
+    const QDir dir(QStringLiteral("/proc/self/task"));
+    for (const QString &tid : dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        QFile f(dir.filePath(tid + QStringLiteral("/stat")));
+        if (!f.open(QIODevice::ReadOnly))
+            continue;
+        // "tid (name) state ppid ...": the name may hold spaces and brackets, so it ends at the last ')'.
+        const QByteArray line = f.readAll();
+        const qsizetype open = line.indexOf('('), close = line.lastIndexOf(')');
+        if (open < 0 || close < open)
+            continue;
+        const QList<QByteArray> rest = line.mid(close + 2).simplified().split(' ');
+        // After the name: state is field 3, utime 14 and stime 15 (counted from 1).
+        if (rest.size() < 13)
+            continue;
+        ThreadTime t;
+        const qint64 id = tid.toLongLong();
+        t.name = id == self ? QStringLiteral("window thread") : QString::fromUtf8(line.mid(open + 1, close - open - 1)).trimmed();
+        t.ms = (rest.at(11).toDouble() + rest.at(12).toDouble()) * tick;
+        out.insert(id, t);
+    }
+#endif
+    return out;
 }
 
 // ------------------------------------------------------------------ the report
@@ -746,8 +962,19 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
                .arg(fixed(m_system->screenScale(), 2), m_settings->uiSize(), m_settings->textSize(), fixed(m_system->uiScale(), 2));
     if (!winSize.isEmpty())
         out << QStringLiteral("Window: ") + winSize + QStringLiteral(", ") + state;
+    // The Animation setting, and whether it's held still now (Theme.motion): Less motion, Battery saver or a tried
+    // Animations: Off lay everything still whatever the setting says.
+    QString seasonal = m_settings->seasonAnimation();
+    if (seasonal != QLatin1String("off")) {
+        const QString still = m_settings->reduceMotion() ? QStringLiteral("Less motion")
+                              : m_system->batterySaving() ? QStringLiteral("Battery saver")
+                              : s_animationsOff           ? QStringLiteral("Animations off")
+                                                          : QString();
+        if (!still.isEmpty())
+            seasonal += QStringLiteral(" (held still: ") + still + QLatin1Char(')');
+    }
     out << QStringLiteral("Theme: ") + theme + (look.isEmpty() || look == theme ? QString() : QString(QStringLiteral(" (") + look + QLatin1Char(')')))
-               + QStringLiteral(", Seasonal animation ") + m_settings->seasonAnimation() + QStringLiteral(", Less motion ")
+               + QStringLiteral(", Seasonal animation ") + seasonal + QStringLiteral(", Less motion ")
                + (m_settings->reduceMotion() ? QStringLiteral("on") : QStringLiteral("off")) + QStringLiteral(", High contrast ")
                + (m_settings->highContrast() ? QStringLiteral("on") : QStringLiteral("off"));
     out << QStringLiteral("Tried settings in use: ") + describe(s_started);
@@ -756,6 +983,7 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
     if (!fellBack().isEmpty())
         out << QStringLiteral("Dropped after a failed start: ") + fellBack();
     out << QStringLiteral("Memory: %1 MB").arg(qRound(memoryMb()));
+    const qsizetype resultsAt = out.size();
     out << QString();
     if (m_results.size() < 3) {
         out << QStringLiteral("No check run yet.");
@@ -766,6 +994,12 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
             out << idleLine();
         if (!m_busiest.isEmpty())
             out << m_busiest;
+        if (!m_threadsLine.isEmpty())
+            out << m_threadsLine;
+        if (!m_slowLine.isEmpty())
+            out << m_slowLine;
+        if (full && !m_mostLine.isEmpty())
+            out << m_mostLine;
         if (full) {
             out << QStringLiteral("Phase       fps  median ms  1% ms  worst ms  spikes %  draw ms  CPU %  MB");
             for (const Result &r : m_results)
@@ -785,6 +1019,12 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
                                                                 (r.draw < 0 ? QStringLiteral("n/a") : fixed(r.draw)))
                            .arg(qRound(r.cpu));
         }
+    }
+    // The short one leads with the results (after the title and version), so a bug report's limit cuts the facts
+    // instead.
+    if (!full && resultsAt > 2) {
+        const QStringList results = out.mid(resultsAt + 1);
+        out = out.mid(0, 2) + results + QStringList{QString()} + out.mid(2, resultsAt - 2);
     }
     if (full) {
         // The last 50 graphics, warning and crash lines of crash.log.
@@ -843,7 +1083,8 @@ QString PerfCheck::scrub(const QString &text, const QStringList &words)
         QStringLiteral("(?<![\\w:])(?:[0-9A-Fa-f]{1,4}:){1,7}:(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})?(?![\\w:])"));
     static const QRegularExpression v6lead(QStringLiteral("(?<![\\w:])::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,6})(?![\\w:])"));
     static const QRegularExpression hexId(QStringLiteral("\\b[0-9A-Fa-f]{16,}\\b"));
-    static const QRegularExpression b64Id(QStringLiteral("(?<![\\w+/])[A-Za-z0-9+/]{32,}={0,2}"));
+    // Not a long run of letters only: that's a name in code (OrgFreedesktopDBusPropertiesInterface), not an id.
+    static const QRegularExpression b64Id(QStringLiteral("(?<![\\w+/])(?=[A-Za-z]*[0-9+/])[A-Za-z0-9+/]{32,}={0,2}"));
     static const QRegularExpression phone(QStringLiteral("\\+\\d[\\d \\-().]{7,}\\d|\\(\\d{3}\\)\\s?\\d{3}[\\-\\s]\\d{4}|\\b\\d{3}[\\-.]\\d{3}[\\-.]\\d{4}\\b"));
 
     QStringList lines = text.split(QLatin1Char('\n'));
@@ -897,6 +1138,7 @@ bool PerfCheck::selfTest()
                                       "from 192.168.1.20 and fe80::1 and 2001:db8:0:0:0:0:0:7 and ::1\n"
                                       "mac 0a:1b:2c:3d:4e:5f id 123e4567-e89b-12d3-a456-426614174000 key 9f86d081884c7d659a2feaa0c55ad015\n"
                                       "chat key MCowBQYDK2VwAyEAq83vEu9F8pZzYbQmH1lO0hX5mF2s3T8r7c6u4w1y2z0=\n"
+                                      "Most event time: MetaCall to OrgFreedesktopDBusPropertiesInterface in QBluetoothDeviceDiscoveryAgentPrivate\n"
                                       "Mira Stone wrote to mira@example.com, call +1 555-123-4567\n")
         + QStringLiteral("file ") + home + QStringLiteral("/Pictures/holiday photo.jpg and /var/tmp/x/y.log and C:\\Users\\mira\\a.txt and photo_12.jpg\n")
         + QStringLiteral("2026-11-01 14:09:50 graphics: OpenGL (threaded render loop, xcb platform)\n"
@@ -919,7 +1161,8 @@ bool PerfCheck::selfTest()
     for (const char *kept : {"Huginn: 1.1 beta 3", "OpenGL, AMD Custom GPU 0405 (radeonsi, vangogh, LLVM 15.0.7, DRM 3.54)",
                              "2026-11-01 14:09:50 graphics: OpenGL (threaded render loop, xcb platform)", "1920 x 1080 px, 155 x 87 mm",
                              "Handheld mode: on (Automatic; detected: handheld, ROG Ally X, 6 to 9 inch screen, controller)",
-                             "Scrolling    60       16.7     18.2      33.4       2.0      3.1     45  210"}) {
+                             "Scrolling    60       16.7     18.2      33.4       2.0      3.1     45  210",
+                             "MetaCall to OrgFreedesktopDBusPropertiesInterface in QBluetoothDeviceDiscoveryAgentPrivate"}) {
         if (!out.contains(QLatin1String(kept))) {
             std::printf("performance report scrub lost: %s\n", kept);
             ok = false;

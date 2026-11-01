@@ -22,7 +22,8 @@ class QLowEnergyService;
 // Texting Muninn over Bluetooth LE when there is no Wi-Fi or internet.
 // Muninn is the peripheral (GATT server); Huginn is only ever the central, because in a Flatpak
 // Qt can reach BlueZ over D-Bus for central mode but peripheral mode needs raw HCI access.
-//  - Scans for Muninn's service UUID now and every 30 seconds while running.
+//  - Scans for Muninn's service UUID for 10 seconds now and every 2 minutes while Huginn is in front (every 10
+//    minutes behind other windows or with Battery saver). Links already made stay either way.
 //  - Connects to a few at once, reads HELLO (who they are), turns on OUTBOX notifications,
 //    then sends our own hello as the first message.
 //  - Messages are split into frames (bleframes.h) and written one at a time with response.
@@ -62,6 +63,8 @@ public:
     std::function<bool()> hidden;
     // Hidden from people nearby was turned on or off: goes silent at once, or starts looking again.
     void hiddenChanged();
+    // Battery saver (main.cpp follows System::batterySaving): scans further apart.
+    void setRelaxed(bool relaxed);
 
 Q_SIGNALS:
     void changed();
@@ -91,11 +94,17 @@ private:
         quint32 nextNumber = 0;
         QList<QByteArray> frames;   // waiting to be written, in order
         bool writing = false;
+        qint64 readyMs = 0;         // when it became ready: one that ends soon after counts as failed
         BleFrames::Reassembler in;
     };
 
+    // Asks D-Bus whether BlueZ is there (without waiting on it), then scanNow().
     void scan();
+    void scanNow();
     bool checkAdapter();
+    void retime();
+    // The MTU BlueZ negotiated, looked up on another thread (BlueZ can take a while to answer) and kept by address.
+    void lookUpMtu(const QString &address);
     void tick();
     void connectTo(const QString &address);
     void onServiceState(Link *l);
@@ -107,7 +116,7 @@ private:
     void dropAll();
     void setError(const QString &e);
     void unusable(const QString &why);
-    int linkMtu(Link *l) const;
+    int linkMtu(Link *l);
     QByteArray helloFor(Link *l) const;
     Link *linkFor(const QString &chatKey, bool strict) const;
     // Compares pointers only, so it's safe to ask about a link that was already deleted.
@@ -120,7 +129,12 @@ private:
     QTimer m_scanTimer, m_tickTimer;
     QHash<QString, Seen> m_seen;     // Muninn devices heard advertising, by address
     QHash<QString, Link *> m_links;  // connecting or connected, by address
+    QHash<QString, int> m_mtus;      // BlueZ's MTU by address, once looked up
+    QHash<QString, bool> m_mtuLooking;
     QString m_error;
+    bool m_bluezUp = false;          // BlueZ answered on the system bus the last time we asked
+    bool m_askingBluez = false;
+    bool m_relaxed = false;
     quint64 m_nextId = 0;
     bool m_running = false;
 };

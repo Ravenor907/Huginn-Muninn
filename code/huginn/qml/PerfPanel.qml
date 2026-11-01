@@ -579,7 +579,7 @@ Item {
                     width: parent.width
                     wrapMode: Text.Wrap
                     text: panel.tour ? "Idle CPU: 1% (0 frames drawn)\nBusiest: nothing measurable"
-                                     : [Perf.idleLine, Perf.busiest].filter(t => t !== "").join("\n")
+                                     : [Perf.idleLine, Perf.busiest, Perf.threadsLine].filter(t => t !== "").join("\n")
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
 

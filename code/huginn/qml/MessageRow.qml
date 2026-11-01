@@ -158,7 +158,7 @@ Rectangle {
             asynchronous: true
             source: visible && !host.isTour ? Chat.photoUrl(msg.m.photo) : ""
         }
-        // A GIF (cap a1): it moves while Huginn is in front; with Less motion it holds its first frame until played.
+        // A GIF (cap a1): it moves while Huginn is in front; with Less motion or Battery saver it holds its first frame until played.
         Item {
             id: gifBox
             property bool asked: false
@@ -171,10 +171,10 @@ Rectangle {
                 cache: false
                 // Chat.gifUrl checks the GIF limits again before anything decodes it.
                 source: gifBox.visible && !msg.host.isTour ? Chat.gifUrl(msg.m.photo) : ""
-                playing: gifBox.visible && (!Settings.reduceMotion || gifBox.asked) && Qt.application.state === Qt.ApplicationActive
+                playing: gifBox.visible && (Theme.motion || gifBox.asked) && Qt.application.state === Qt.ApplicationActive
             }
             Rectangle {
-                visible: Settings.reduceMotion
+                visible: !Theme.motion
                 anchors.centerIn: parent
                 width: Theme.px(48); height: width; radius: width / 2
                 color: Qt.rgba(0, 0, 0, 0.55)

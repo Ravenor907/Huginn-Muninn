@@ -978,7 +978,7 @@ Rectangle {
                 color: "black"
                 id: fullPhoto
                 property bool asked: false
-                // Cap a1: a GIF moves full size too (held still with Less motion until played); "" for a photo.
+                // Cap a1: a GIF moves full size too (held still with Less motion or Battery saver until played); "" for a photo.
                 readonly property string gif: page.viewing !== "" && !page.isTour ? Chat.gifUrl(page.viewing) : ""
                 onVisibleChanged: asked = false
                 Image { anchors.fill: parent; anchors.margins: Theme.px(10); fillMode: Image.PreserveAspectFit; visible: fullPhoto.gif === ""; source: page.viewing !== "" && fullPhoto.gif === "" ? Chat.photoUrl(page.viewing) : "" }
@@ -986,11 +986,11 @@ Rectangle {
                     anchors.fill: parent; anchors.margins: Theme.px(10); fillMode: Image.PreserveAspectFit; cache: false
                     visible: fullPhoto.gif !== ""
                     source: fullPhoto.gif
-                    playing: visible && (!Settings.reduceMotion || fullPhoto.asked) && Qt.application.state === Qt.ApplicationActive
+                    playing: visible && (Theme.motion || fullPhoto.asked) && Qt.application.state === Qt.ApplicationActive
                 }
                 TapHandler { onTapped: page.viewing = "" }
                 Rectangle {
-                    visible: fullPhoto.gif !== "" && Settings.reduceMotion
+                    visible: fullPhoto.gif !== "" && !Theme.motion
                     anchors.centerIn: parent
                     width: Theme.px(64); height: width; radius: width / 2
                     color: Qt.rgba(0, 0, 0, 0.55)

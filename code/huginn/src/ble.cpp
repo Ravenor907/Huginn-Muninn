@@ -7,18 +7,23 @@
 #include <QBluetoothUuid>
 #ifdef Q_OS_LINUX
 #include <QDBusConnection>
-#include <QDBusConnectionInterface>
 #include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
 #include <QDBusVariant>
 #endif
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLowEnergyController>
 #include <QLowEnergyDescriptor>
 #include <QLowEnergyService>
+#include <QPointer>
+#include <QThread>
 #include <QXmlStreamReader>
 #include <QtGlobal>
+
+#include <memory>
 
 namespace
 {
@@ -27,8 +32,12 @@ const QBluetoothUuid kHello(QStringLiteral("7b1e0002-6d75-6e69-6e6e-48756767696e
 const QBluetoothUuid kInbox(QStringLiteral("7b1e0003-6d75-6e69-6e6e-48756767696e"));
 const QBluetoothUuid kOutbox(QStringLiteral("7b1e0004-6d75-6e69-6e6e-48756767696e"));
 
-constexpr int kScanEveryMs = 30000;
+// Scanning keeps BlueZ and Qt busy with every device around (each advertisement is a D-Bus message Qt handles on the
+// window's thread), so it comes in short bursts: 10 seconds every 2 minutes in front, every 10 minutes otherwise.
+constexpr int kScanEveryMs = 120000;
+constexpr int kScanRelaxedMs = 600000;
 constexpr int kScanForMs = 10000;
+constexpr qint64 kShortLinkMs = 30000;   // a link that ends sooner than this counts as failed (backs off)
 constexpr int kTickMs = 5000;
 constexpr qint64 kForgetAfterMs = 120000;
 constexpr int kSetupTimeoutMs = 25000;   // connect, discover, HELLO and notifications all inside this
@@ -43,7 +52,7 @@ qint64 nowMs()
 #ifdef Q_OS_LINUX
 const QString kBluez = QStringLiteral("org.bluez");
 
-// Small blocking D-Bus helpers with a short timeout, so a stuck BlueZ can't freeze the screen for long.
+// Small blocking D-Bus helpers with a short timeout. Used only off the window's thread (lookUpMtu).
 QDBusMessage bluezCall(const QString &path, const QString &iface, const QString &method, const QVariantList &args)
 {
     QDBusMessage m = QDBusMessage::createMethodCall(kBluez, path, iface, method);
@@ -100,17 +109,9 @@ int bluezMtu(const QString &address)
     return 0;
 }
 
-bool bluezReachable()
-{
-    QDBusConnectionInterface *bus = QDBusConnection::systemBus().interface();
-    return bus && bus->isServiceRegistered(kBluez).value();
-}
-#else
+#endif
 // Windows (and anything else): Qt talks to the system's Bluetooth stack itself (WinRT on Windows),
 // and QLowEnergyController::mtu() reports the negotiated MTU for a central there.
-int bluezMtu(const QString &) { return 0; }
-bool bluezReachable() { return true; }
-#endif
 }
 
 Ble::Ble(std::function<QByteArray()> hello, QObject *parent)
@@ -125,6 +126,7 @@ Ble::Ble(std::function<QByteArray()> hello, QObject *parent)
 
     m_scanTimer.setInterval(kScanEveryMs);
     connect(&m_scanTimer, &QTimer::timeout, this, &Ble::scan);
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, &Ble::retime);
     m_tickTimer.setInterval(kTickMs);
     connect(&m_tickTimer, &QTimer::timeout, this, &Ble::tick);
 }
@@ -184,11 +186,28 @@ void Ble::setError(const QString &e)
     Q_EMIT changed();
 }
 
+void Ble::setRelaxed(bool relaxed)
+{
+    if (relaxed == m_relaxed)
+        return;
+    m_relaxed = relaxed;
+    retime();
+}
+
+void Ble::retime()
+{
+    const bool front = QGuiApplication::applicationState() == Qt::ApplicationActive;
+    const int ms = front && !m_relaxed ? kScanEveryMs : kScanRelaxedMs;
+    if (m_scanTimer.interval() != ms)
+        m_scanTimer.setInterval(ms);
+}
+
 void Ble::start()
 {
     if (m_running)
         return;
     m_running = true;
+    retime();
     m_scanTimer.start();
     m_tickTimer.start();
     Q_EMIT changed();
@@ -213,7 +232,7 @@ void Ble::stop()
 // Works out whether Bluetooth can be used right now and says why not in plain English.
 bool Ble::checkAdapter()
 {
-    if (!bluezReachable()) {
+    if (!m_bluezUp) {
         unusable(QStringLiteral("Huginn can't reach the Bluetooth service on this device. Bluetooth may not be set up, "
                                 "or Huginn wasn't given permission to use it."));
         return false;
@@ -263,6 +282,32 @@ void Ble::hiddenChanged()
 
 void Ble::scan()
 {
+    if (!m_running || silent())
+        return;
+#ifdef Q_OS_LINUX
+    // Is BlueZ there? Asked without waiting: a busy bluetoothd never holds up the window.
+    if (m_askingBluez)
+        return;
+    m_askingBluez = true;
+    QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.DBus"), QStringLiteral("/org/freedesktop/DBus"),
+                                                    QStringLiteral("org.freedesktop.DBus"), QStringLiteral("NameHasOwner"));
+    m.setArguments({kBluez});
+    auto *w = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(m, 3000), this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *done) {
+        done->deleteLater();
+        m_askingBluez = false;
+        const QDBusMessage r = done->reply();
+        m_bluezUp = r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty() && r.arguments().constFirst().toBool();
+        scanNow();
+    });
+#else
+    m_bluezUp = true;
+    scanNow();
+#endif
+}
+
+void Ble::scanNow()
+{
     Busy::Scope busy("Bluetooth");
     // Hidden from people nearby: nothing at all goes out over Bluetooth.
     if (!m_running || silent() || !checkAdapter())
@@ -271,13 +316,18 @@ void Ble::scan()
         m_agent = new QBluetoothDeviceDiscoveryAgent(this);
         m_agent->setLowEnergyDiscoveryTimeout(kScanForMs);
         auto found = [this](const QBluetoothDeviceInfo &info) {
+            Busy::Scope seen("Bluetooth");
             if (!(info.coreConfigurations() & QBluetoothDeviceInfo::LowEnergyCoreConfiguration) || !info.serviceUuids().contains(kService))
                 return;
             const QString address = info.address().toString();
+            const bool known = m_seen.contains(address);
             Seen &s = m_seen[address];
             s.info = info;
             s.seenMs = nowMs();
-            tick();
+            // Updates come with every advertisement: only a phone not seen before is worth a connect attempt now
+            // (the others are tried by the tick when their wait is over).
+            if (!known)
+                tick();
         };
         connect(m_agent, &QBluetoothDeviceDiscoveryAgent::deviceDiscovered, this, found);
         connect(m_agent, &QBluetoothDeviceDiscoveryAgent::deviceUpdated, this,
@@ -352,8 +402,12 @@ void Ble::connectTo(const QString &address)
     m_links.insert(address, l);
 
     QLowEnergyController *ctl = l->ctl;
-    connect(ctl, &QLowEnergyController::connected, l->ctx, [ctl] { ctl->discoverServices(); });
+    connect(ctl, &QLowEnergyController::connected, l->ctx, [ctl] {
+        Busy::Scope busy("Bluetooth");
+        ctl->discoverServices();
+    });
     connect(ctl, &QLowEnergyController::discoveryFinished, l->ctx, [this, l] {
+        Busy::Scope busy("Bluetooth");
         if (!l->ctl->services().contains(kService)) {
             drop(l, true);
             return;
@@ -381,6 +435,7 @@ void Ble::connectTo(const QString &address)
             pump(l);
         });
         connect(l->svc, &QLowEnergyService::characteristicChanged, l->ctx, [this, l](const QLowEnergyCharacteristic &c, const QByteArray &value) {
+            Busy::Scope busy("Bluetooth");
             // Taken as soon as we know who it is: the phone may send before our notification setup reports back.
             if (c.uuid() != kOutbox || l->chatKey.isEmpty())
                 return;
@@ -421,6 +476,7 @@ void Ble::connectTo(const QString &address)
 
 void Ble::onServiceState(Link *l)
 {
+    Busy::Scope busy("Bluetooth");
     if (l->svc->state() != QLowEnergyService::RemoteServiceDiscovered)
         return;
     const QLowEnergyCharacteristic hello = l->svc->characteristic(kHello);
@@ -434,6 +490,7 @@ void Ble::onServiceState(Link *l)
 
 void Ble::onHello(Link *l, const QByteArray &value)
 {
+    Busy::Scope busy("Bluetooth");
     const QJsonObject o = QJsonDocument::fromJson(value).object();
     // Hidden from people nearby, a phone sends a daily hint instead of its key: only a contact's can be matched.
     QString key = o.value(QStringLiteral("chatKey")).toString();
@@ -470,7 +527,11 @@ void Ble::onHello(Link *l, const QByteArray &value)
 
 void Ble::onReady(Link *l)
 {
+    Busy::Scope busy("Bluetooth");
     l->ready = true;
+    l->readyMs = nowMs();
+    // Looked up again for each new link (it can differ); the last one is used meanwhile.
+    lookUpMtu(l->address);
     l->mtu = linkMtu(l);
     Seen &s = m_seen[l->address];
     s.failures = 0;
@@ -535,13 +596,43 @@ bool Ble::proven(const QString &chatKey) const
     return l != nullptr;
 }
 
-int Ble::linkMtu(Link *l) const
+int Ble::linkMtu(Link *l)
 {
     // On BlueZ the MTU is negotiated by itself (BlueZ asks for 517); Qt can't request one as a central.
     int mtu = l->ctl ? l->ctl->mtu() : 0;
-    if (mtu <= BleFrames::kMinMtu)
-        mtu = bluezMtu(l->address);
+    if (mtu <= BleFrames::kMinMtu) {
+        mtu = m_mtus.value(l->address, 0);
+        if (mtu <= 0)
+            lookUpMtu(l->address);
+    }
     return qBound(BleFrames::kMinMtu, mtu, BleFrames::kMaxMtu);
+}
+
+void Ble::lookUpMtu(const QString &address)
+{
+#ifdef Q_OS_LINUX
+    if (m_mtuLooking.value(address))
+        return;
+    m_mtuLooking.insert(address, true);
+    auto result = std::make_shared<int>(0);
+    QThread *t = QThread::create([address, result] { *result = bluezMtu(address); });
+    t->setObjectName(QStringLiteral("huginn-ble-mtu"));
+    QPointer<Ble> self(this);
+    connect(t, &QThread::finished, this, [self, t, address, result] {
+        t->deleteLater();
+        if (!self)
+            return;
+        self->m_mtuLooking.remove(address);
+        if (*result <= 0)
+            return;
+        self->m_mtus.insert(address, *result);
+        if (Link *l = self->m_links.value(address))
+            l->mtu = qBound(BleFrames::kMinMtu, *result, BleFrames::kMaxMtu);
+    });
+    t->start();
+#else
+    Q_UNUSED(address);
+#endif
 }
 
 bool Ble::send(const QString &chatKey, const QByteArray &json, bool strict)
@@ -577,6 +668,11 @@ void Ble::drop(Link *l, bool failed, qint64 retryInMs)
 {
     if (!alive(l))
         return;
+    Busy::Scope busy("Bluetooth");
+    // A link that ends soon after it was made (the phone keeps closing it) backs off like a failed one, so it isn't
+    // made again every 2 seconds.
+    if (!failed && l->ready && nowMs() - l->readyMs < kShortLinkMs)
+        failed = true;
     m_links.remove(l->address);
     const bool wasReady = l->ready;
 

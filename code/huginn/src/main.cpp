@@ -12,6 +12,7 @@
 #include "ratchet.h"
 #include "ble.h"
 #include "bleframes.h"
+#include "busy.h"
 #include "nostr.h"
 #include "photos.h"
 #include "schnorr.h"
@@ -52,6 +53,7 @@
 #include "ring.h"
 
 #include <QApplication>
+#include <QEvent>
 #include <QCommandLineParser>
 #include <QTimer>
 #include <QDateTime>
@@ -71,6 +73,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
+#include <atomic>
 #include <cstdio>
 #include <memory>
 
@@ -150,9 +153,32 @@ void messages(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
             }
         }
     }
+    // Labs › Performance check: layout that keeps redoing itself is named in crash.log (the full report shows it).
+    if (type == QtWarningMsg && (msg.contains(QLatin1String("polish() loop")) || msg.contains(QLatin1String("Binding loop")))) {
+        static std::atomic<int> noted{0};
+        if (noted.fetch_add(1) < 20)
+            CrashLog::note(QStringLiteral("warning: ") + msg.left(240));
+    }
     if (s_previous)
         s_previous(type, ctx, msg);
 }
+
+// Labs › Performance check: every event the window's thread handles is timed while a check runs (busy.h).
+class HuginnApp : public QApplication
+{
+public:
+    HuginnApp(int &argc, char **argv)
+        : QApplication(argc, argv)
+    {
+    }
+    bool notify(QObject *receiver, QEvent *event) override
+    {
+        if (!Busy::on)
+            return QApplication::notify(receiver, event);
+        Busy::Event timed(receiver, event);
+        return QApplication::notify(receiver, event);
+    }
+};
 }
 
 int main(int argc, char *argv[])
@@ -168,7 +194,7 @@ int main(int argc, char *argv[])
     if (System::detectGameMode() && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM") && !qEnvironmentVariableIsEmpty("DISPLAY"))
         qputenv("QT_QPA_PLATFORM", "xcb");
 #endif
-    QApplication app(argc, argv);
+    HuginnApp app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Huginn"));
     QApplication::setOrganizationName(QStringLiteral("Huginn"));
     QApplication::setApplicationVersion(QStringLiteral(HUGINN_VERSION_LABEL));
@@ -566,13 +592,14 @@ int main(int argc, char *argv[])
                 settings->nearbySharing() ? localSend->start() : localSend->stop();
         });
     }
-    // Battery saver: background checks further apart and the controller read less often while it's on.
+    // Battery saver: background checks and Bluetooth scans further apart and the controller read less often while it's on.
     {
-        auto relax = [system, chat, gamepad, localSend] {
+        auto relax = [system, chat, gamepad, localSend, ble] {
             const bool saving = system->batterySaving();
             chat->setRelaxed(saving);
             gamepad->setRelaxed(saving);
             localSend->setRelaxed(saving);
+            ble->setRelaxed(saving);
         };
         relax();
         QObject::connect(system, &System::powerChanged, &app, relax);

@@ -122,6 +122,7 @@ void hashFile(QObject *ctx, const QString &path, std::function<void(QString)> do
         if (h.addData(&f))
             *result = QString::fromLatin1(h.result().toHex());
     });
+    t->setObjectName(QStringLiteral("huginn-file-hash"));
     QObject::connect(t, &QThread::finished, ctx, [t, result, done] {
         t->deleteLater();
         done(*result);

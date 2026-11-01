@@ -1054,6 +1054,7 @@ void Vault::backup(const QString &password)
         *good = true;
         *result = QStringLiteral("Backed up to Documents as ") + QFileInfo(file).fileName() + QStringLiteral(" (") + sizeText(bytes.size()) + QStringLiteral(").");
     });
+    t->setObjectName(QStringLiteral("huginn-backup"));
     QPointer<Vault> self(this);
     connect(t, &QThread::finished, this, [self, t, result, good] {
         t->deleteLater();
@@ -1126,6 +1127,7 @@ void Vault::openBackup(const QString &file, const QString &password)
         *result = QStringLiteral("Backup from ") + (c.isValid() ? QLocale().toString(c.toLocalTime(), QStringLiteral("d MMM yyyy, h:mm AP")) : QStringLiteral("an unknown date"))
             + QStringLiteral(", ") + QString::number(count) + (count == 1 ? QStringLiteral(" file.") : QStringLiteral(" files."));
     });
+    t->setObjectName(QStringLiteral("huginn-restore"));
     QPointer<Vault> self(this);
     connect(t, &QThread::finished, this, [self, t, files, result, good] {
         t->deleteLater();

@@ -22,7 +22,7 @@ Rectangle {
         return true
     }
 
-    // Cap a1: a GIF moves here too (held still with Less motion until played); "" for a photo.
+    // Cap a1: a GIF moves here too (held still with Less motion or Battery saver until played); "" for a photo.
     readonly property string gif: visible && !tour && photos[at] ? Chat.gifUrl(photos[at]) : ""
     property bool asked: false
     onAtChanged: asked = false
@@ -40,11 +40,11 @@ Rectangle {
         cache: false
         visible: viewer.gif !== ""
         source: viewer.gif
-        playing: visible && (!Settings.reduceMotion || viewer.asked) && Qt.application.state === Qt.ApplicationActive
+        playing: visible && (Theme.motion || viewer.asked) && Qt.application.state === Qt.ApplicationActive
         TapHandler { onTapped: viewer.closed() }
     }
     Rectangle {
-        visible: viewer.gif !== "" && Settings.reduceMotion
+        visible: viewer.gif !== "" && !Theme.motion
         anchors.centerIn: parent
         width: Theme.px(64); height: width; radius: width / 2
         color: Qt.rgba(0, 0, 0, 0.55)
