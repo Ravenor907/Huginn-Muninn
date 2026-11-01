@@ -378,9 +378,9 @@ QJsonObject Link::readCode(const QString &text)
         body += c;
     }
     const auto dec = QByteArray::fromBase64Encoding(body.toLatin1(), QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
-    if (!dec)
+    if (dec.decodingStatus != QByteArray::Base64DecodingStatus::Ok)
         return {};
-    const QJsonObject o = QJsonDocument::fromJson(*dec).object();
+    const QJsonObject o = QJsonDocument::fromJson(dec.decoded).object();
     const QString k = jstr(o, "k");
     if (k.size() < 40 || k.size() > 200)
         return {};
@@ -857,7 +857,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         const auto b = QByteArray::fromBase64Encoding(jstr(p, "b").toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
         const qint64 size = m_sizes.value(h);
         const qint64 expect = i < n - 1 ? kPart : size - qint64(kPart) * (n - 1);
-        if (!b || b->size() != expect) {
+        if (b.decodingStatus != QByteArray::Base64DecodingStatus::Ok || b.decoded.size() != expect) {
             m_failed.insert(h);
             m_want.remove(h);
             m_fetching.clear();
@@ -866,7 +866,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         }
         m_fetchAt = now();
         if (m_parts.at(i).isEmpty()) {
-            m_parts[i] = *b;
+            m_parts[i] = b.decoded;
             m_partsHave++;
         }
         if (m_partsHave < n)
