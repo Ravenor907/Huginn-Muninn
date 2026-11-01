@@ -6,6 +6,8 @@
 #include <QPointF>
 #include <QTimer>
 
+#include <cmath>
+
 struct _SDL_GameController;
 class QQuickWindow;
 
@@ -33,6 +35,11 @@ public:
     // True while a held d-pad direction is repeating (not a fresh press).
     Q_INVOKABLE bool repeating() const { return m_repeating; }
     double stickX() const { return m_stickX; }
+    // A stick pushed past a small rest zone (drift at rest says nothing about someone being there).
+    bool stickInUse(double rest = 0.12) const
+    {
+        return std::abs(m_stickX) >= rest || std::abs(m_stickY) >= rest || std::abs(m_rightX) >= rest || std::abs(m_rightY) >= rest;
+    }
     double stickY() const { return m_stickY; }
     double rightX() const { return m_rightX; }
     double rightY() const { return m_rightY; }
@@ -79,4 +86,6 @@ private:
     bool m_relaxed = false;
     Qt::MouseButtons m_held = Qt::NoButton;   // stick-pointer buttons down right now
     QElapsedTimer m_clock;                    // timestamps for those events (double clicks)
+    qint64 m_lastActive = -100000;            // m_clock time of the last press, release or stick move
+    bool inUse() const;
 };

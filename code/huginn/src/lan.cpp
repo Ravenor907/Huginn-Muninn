@@ -1,5 +1,7 @@
 #include "lan.h"
 
+#include <QElapsedTimer>
+#include <QMutex>
 #include <QStringList>
 #include <cstdio>
 
@@ -116,15 +118,44 @@ QString firstIPv4()
     return {};
 }
 
+namespace
+{
+struct Subnet {
+    QHostAddress ip;
+    int prefix = 0;
+};
+QMutex s_subnetLock;
+QList<Subnet> s_subnets;
+QElapsedTimer s_subnetAge;
+}
+
+void refresh()
+{
+    QMutexLocker l(&s_subnetLock);
+    s_subnetAge.invalidate();
+}
+
 bool isNeighbour(const QHostAddress &peer)
 {
     const QHostAddress p = plain(peer);
     if (!isPrivate(p))
         return false;
-    for (const QNetworkInterface &iface : interfaces())
-        for (const QNetworkAddressEntry &e : iface.addressEntries())
-            if (isPrivate(e.ip()) && e.prefixLength() > 0 && p.protocol() == e.ip().protocol() && p.isInSubnet(e.ip(), e.prefixLength()))
-                return true;
+    QList<Subnet> nets;
+    {
+        QMutexLocker l(&s_subnetLock);
+        if (!s_subnetAge.isValid() || s_subnetAge.elapsed() > 30000) {
+            s_subnets.clear();
+            for (const QNetworkInterface &iface : interfaces())
+                for (const QNetworkAddressEntry &e : iface.addressEntries())
+                    if (isPrivate(e.ip()) && e.prefixLength() > 0)
+                        s_subnets.append(Subnet{e.ip(), e.prefixLength()});
+            s_subnetAge.start();
+        }
+        nets = s_subnets;
+    }
+    for (const Subnet &n : std::as_const(nets))
+        if (p.protocol() == n.ip.protocol() && p.isInSubnet(n.ip, n.prefix))
+            return true;
     return false;
 }
 

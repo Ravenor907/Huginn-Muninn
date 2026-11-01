@@ -8,7 +8,10 @@
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
 #include <QDBusReply>
+#include <QDBusVariant>
 #include <QRandomGenerator>
+
+#include <memory>
 
 namespace
 {
@@ -37,7 +40,7 @@ Direct::Direct(QObject *parent)
 Direct::~Direct()
 {
     // Don't leave the handheld stuck on its own hotspot after Huginn closes.
-    stop();
+    takeDown(true);
 }
 
 QString Direct::qr() const
@@ -54,23 +57,63 @@ QString Direct::qr() const
     return QStringLiteral("WIFI:T:WPA;S:%1;P:%2;;").arg(esc(m_ssid), esc(m_password));
 }
 
-QString Direct::wifiDevice(QString *error) const
+void Direct::findWifiDevice(std::function<void(const QString &, const QString &)> done)
 {
     QDBusMessage m = QDBusMessage::createMethodCall(kNm, kNmPath, kNm, QStringLiteral("GetDevices"));
-    const QDBusReply<QList<QDBusObjectPath>> devices = QDBusConnection::systemBus().call(m, QDBus::Block, 5000);
-    if (!devices.isValid()) {
-        *error = QStringLiteral("Couldn't reach the network service: %1").arg(devices.error().message());
-        return {};
-    }
-    for (const QDBusObjectPath &d : devices.value()) {
-        QDBusMessage g = QDBusMessage::createMethodCall(kNm, d.path(), QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
-        g.setArguments({kNm + QStringLiteral(".Device"), QStringLiteral("DeviceType")});
-        const QDBusReply<QVariant> t = QDBusConnection::systemBus().call(g, QDBus::Block, 3000);
-        if (t.isValid() && t.value().toUInt() == 2)   // NM_DEVICE_TYPE_WIFI
-            return d.path();
-    }
-    *error = QStringLiteral("This device has no Wi-Fi adapter NetworkManager can use.");
-    return {};
+    auto *w = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(m, 5000), this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [this, w, done] {
+        w->deleteLater();
+        const QDBusPendingReply<QList<QDBusObjectPath>> devices = *w;
+        if (devices.isError()) {
+            done(QString(), QStringLiteral("Couldn't reach the network service: %1").arg(devices.error().message()));
+            return;
+        }
+        const QList<QDBusObjectPath> all = devices.value();
+        if (all.isEmpty()) {
+            done(QString(), QStringLiteral("This device has no Wi-Fi adapter NetworkManager can use."));
+            return;
+        }
+        // Each one's kind, asked all at once; the first Wi-Fi one in NetworkManager's order wins.
+        struct Ask {
+            QList<QString> paths;
+            QList<int> kinds;   // -1: no answer yet
+            int left = 0;
+            bool finished = false;
+        };
+        auto ask = std::make_shared<Ask>();
+        for (const QDBusObjectPath &d : all) {
+            ask->paths << d.path();
+            ask->kinds << -1;
+        }
+        ask->left = int(all.size());
+        for (int i = 0; i < int(all.size()); ++i) {
+            QDBusMessage g = QDBusMessage::createMethodCall(kNm, all.at(i).path(), QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+            g.setArguments({kNm + QStringLiteral(".Device"), QStringLiteral("DeviceType")});
+            auto *each = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(g, 3000), this);
+            connect(each, &QDBusPendingCallWatcher::finished, this, [each, ask, i, done] {
+                each->deleteLater();
+                const QDBusPendingReply<QDBusVariant> t = *each;
+                ask->kinds[i] = t.isError() ? 0 : int(t.value().variant().toUInt());
+                --ask->left;
+                if (ask->finished)
+                    return;
+                // Decided once every device before the first Wi-Fi one has answered.
+                for (int j = 0; j < int(ask->kinds.size()); ++j) {
+                    if (ask->kinds.at(j) < 0)
+                        return;
+                    if (ask->kinds.at(j) == 2) {   // NM_DEVICE_TYPE_WIFI
+                        ask->finished = true;
+                        done(ask->paths.at(j), QString());
+                        return;
+                    }
+                }
+                if (ask->left == 0) {
+                    ask->finished = true;
+                    done(QString(), QStringLiteral("This device has no Wi-Fi adapter NetworkManager can use."));
+                }
+            });
+        }
+    });
 }
 
 void Direct::start()
@@ -78,11 +121,21 @@ void Direct::start()
     if (on() || m_busy)
         return;
     m_error.clear();
-    const QString dev = wifiDevice(&m_error);
-    if (dev.isEmpty()) {
-        Q_EMIT changed();
-        return;
-    }
+    m_busy = true;
+    Q_EMIT changed();
+    findWifiDevice([this](const QString &dev, const QString &error) {
+        if (dev.isEmpty()) {
+            m_busy = false;
+            m_error = error;
+            Q_EMIT changed();
+            return;
+        }
+        activate(dev);
+    });
+}
+
+void Direct::activate(const QString &dev)
+{
     m_ssid = QStringLiteral("Huginn-") + randomText("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 4);
     m_password = randomText("abcdefghjkmnpqrstuvwxyz23456789", 10);
     const QString user = qEnvironmentVariable("USER");
@@ -101,8 +154,6 @@ void Direct::start()
     QDBusMessage m = QDBusMessage::createMethodCall(kNm, kNmPath, kNm, QStringLiteral("AddAndActivateConnection"));
     m.setArguments({QVariant::fromValue(s), QVariant::fromValue(QDBusObjectPath(dev)), QVariant::fromValue(QDBusObjectPath(QStringLiteral("/")))});
     m.setInteractiveAuthorizationAllowed(true);
-    m_busy = true;
-    Q_EMIT changed();
     auto *w = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(m, 60000), this);
     connect(w, &QDBusPendingCallWatcher::finished, this, [this, w] {
         w->deleteLater();
@@ -124,14 +175,25 @@ void Direct::start()
 
 void Direct::stop()
 {
+    takeDown(false);
+}
+
+void Direct::takeDown(bool wait)
+{
+    const auto send = [wait](const QDBusMessage &m) {
+        if (wait)
+            QDBusConnection::systemBus().call(m, QDBus::Block, 5000);
+        else
+            QDBusConnection::systemBus().asyncCall(m, 5000);
+    };
     if (!m_active.isEmpty()) {
         QDBusMessage m = QDBusMessage::createMethodCall(kNm, kNmPath, kNm, QStringLiteral("DeactivateConnection"));
         m.setArguments({QVariant::fromValue(QDBusObjectPath(m_active))});
-        QDBusConnection::systemBus().call(m, QDBus::Block, 5000);
+        send(m);
     }
     if (!m_connection.isEmpty()) {
         QDBusMessage d = QDBusMessage::createMethodCall(kNm, m_connection, kNm + QStringLiteral(".Settings.Connection"), QStringLiteral("Delete"));
-        QDBusConnection::systemBus().call(d, QDBus::Block, 5000);
+        send(d);
     }
     const bool was = on();
     m_active.clear();

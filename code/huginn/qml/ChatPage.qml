@@ -839,7 +839,9 @@ Rectangle {
                             width: Math.min(Theme.px(280), col.width); height: Math.round(width * 170 / 280)
                             fillMode: Image.PreserveAspectCrop
                             asynchronous: true
-                            source: visible ? Chat.photoUrl(modelData.photo) : ""
+                            sourceSize.width: Math.ceil(width * 2)
+                            sourceSize.height: Math.ceil(height * 2)
+                            source: visible ? "image://thumb/" + modelData.photo : ""
                         }
                         Row {
                             visible: !!modelData.voice && !modelData.unsent

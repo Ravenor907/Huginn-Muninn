@@ -131,6 +131,7 @@ private:
     QString m_inhibitHandle;     // portal request path
     uint m_screensaverCookie = 0;
     bool m_awake = false;
+    int m_awakeAsk = 0;          // each change: an answer for an older one lets go of what it got
     void openSteamUrl(const QString &url);
     Settings *m_settings;
     QString m_tourDir;

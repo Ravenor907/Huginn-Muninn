@@ -1,4 +1,5 @@
 #include "turnclient.h"
+#include "../busy.h"
 
 #include "callcrypto.h"
 #include "relayconfig.h"
@@ -296,6 +297,7 @@ void TurnClient::tryNext()
 void TurnClient::connectUdp(const QHostAddress &host, quint16 port)
 {
     m_udp = new QUdpSocket(this);
+    Busy::nameSocket(m_udp, "turn");
     const bool v4 = host.protocol() == QAbstractSocket::IPv4Protocol;
     if (!m_udp->bind(v4 ? QHostAddress(QHostAddress::AnyIPv4) : QHostAddress(QHostAddress::AnyIPv6), 0)) {
         tryNext();
@@ -311,6 +313,7 @@ void TurnClient::connectUdp(const QHostAddress &host, quint16 port)
 void TurnClient::connectTls(const Server &s, const QHostAddress &ip)
 {
     m_tls = new QSslSocket(this);
+    Busy::nameSocket(m_tls, "turn");
     m_serverPort = s.port;
     connect(m_tls, &QSslSocket::encrypted, this, [this] { allocate(); });
     connect(m_tls, &QSslSocket::readyRead, this, &TurnClient::onTlsData);
@@ -441,6 +444,7 @@ void TurnClient::writeRaw(const QByteArray &bytes)
 
 void TurnClient::onDatagrams()
 {
+    Busy::Scope busy("call relay");
     while (m_udp && m_udp->hasPendingDatagrams()) {
         QByteArray b(int(qMax<qint64>(0, m_udp->pendingDatagramSize())), 0);
         QHostAddress from;
@@ -458,6 +462,7 @@ void TurnClient::onDatagrams()
 
 void TurnClient::onTlsData()
 {
+    Busy::Scope busy("call relay");
     if (!m_tls)
         return;
     m_tlsBuf += m_tls->readAll();

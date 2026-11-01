@@ -453,9 +453,23 @@ void Vault::eraseAll()
     Q_EMIT changed();
 }
 
+namespace
+{
+// What kind of file it is, for Labs › Performance check's counts: "chats", "photos", "ratchet" (never a name).
+QString kindOf(const QString &name)
+{
+    const QString first = name.section(QLatin1Char('/'), 0, 0);
+    qsizetype n = 0;
+    while (n < first.size() && n < 24 && ((first.at(n) >= QLatin1Char('a') && first.at(n) <= QLatin1Char('z')) || first.at(n) == QLatin1Char('-')))
+        ++n;
+    return n > 0 ? first.left(n) : QStringLiteral("other");
+}
+}
+
 bool Vault::write(const QString &name, const QByteArray &data) const
 {
     Busy::Scope busy("saving files");
+    Busy::count(QStringLiteral("files saved: ") + kindOf(name));
     if (m_key.isEmpty() || m_restarting)
         return false;
     // Loaded as empty because it couldn't be read: saving now would replace what is really there.
@@ -489,6 +503,8 @@ Vault::ReadStatus Vault::readOnly(const QString &name) const
 
 QByteArray Vault::read(const QString &name, ReadStatus *status) const
 {
+    Busy::Scope busy("reading files");
+    Busy::count(QStringLiteral("files read: ") + kindOf(name));
     if (status)
         *status = ReadFailed;
     if (m_key.isEmpty())

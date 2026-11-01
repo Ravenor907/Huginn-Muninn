@@ -1,4 +1,5 @@
 #include "filelink.h"
+#include "busy.h"
 #include "chat.h"
 #include "call/directpath.h"
 #include "call/turnclient.h"
@@ -400,6 +401,17 @@ FileLink::FileLink(Chat *chat, QObject *parent)
     relay = [chat](const QString &peer, const QByteArray &bytes, const QString &name) { return chat->sendFileBlob(peer, bytes, name); };
     nameOf = [chat](const QString &peer) { return chat->nameOf(peer); };
     connect(this, &FileLink::notice, chat, &Chat::notice);
+    // Labs › Performance check: the transfers going on at the end of a check (no names, no file names).
+    Busy::addStatus(this, [this] {
+        QStringList out;
+        for (const Xfer *x : std::as_const(m_x))
+            out << QStringLiteral("file transfer: %1, %2, %3%, %4").arg(x->mine ? QStringLiteral("sending") : QStringLiteral("receiving"), x->state)
+                       .arg(x->size > 0 ? int(100 * x->done / x->size) : 0)
+                       .arg(x->moving ? QStringLiteral("moving") : x->punching ? QStringLiteral("finding a way") : QStringLiteral("waiting"));
+        if (out.isEmpty())
+            out << QStringLiteral("file transfers: none");
+        return out;
+    });
 }
 
 FileLink::~FileLink()
@@ -524,6 +536,7 @@ QString FileLink::send(const QString &peer, const QString &path)
 void FileLink::startSocket(Xfer *x, std::function<void(QJsonArray)> ready)
 {
     x->sock = new QUdpSocket(this);
+    Busy::nameSocket(x->sock, "file link");
     if (!x->sock->bind(testLocal ? QHostAddress(QHostAddress::LocalHost) : QHostAddress(QHostAddress::Any), 0)) {
         if (x->mine)
             fallBack(x, QStringLiteral("No internet connection that can go direct. Try on the same Wi-Fi."));
@@ -533,6 +546,7 @@ void FileLink::startSocket(Xfer *x, std::function<void(QJsonArray)> ready)
     }
     const QString id = x->id;
     connect(x->sock, &QUdpSocket::readyRead, this, [this, id] {
+        Busy::Scope busy("file transfers");
         if (Xfer *x = m_x.value(id))
             onDatagram(x);
     });
@@ -793,6 +807,9 @@ void FileLink::onDatagram(Xfer *x)
 {
     while (x->sock && x->sock->hasPendingDatagrams()) {
         const QNetworkDatagram d = x->sock->receiveDatagram(2048);
+        Busy::count("file link datagrams received");
+        if (!d.isValid())
+            break;   // couldn't be read: readyRead comes again for what's left
         const QByteArray bytes = d.data();
         const QHostAddress from = d.senderAddress();
         const quint16 port = quint16(d.senderPort());

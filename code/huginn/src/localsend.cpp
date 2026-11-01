@@ -70,15 +70,31 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
         cfg.setCaCertificates({});
         m_serverTls = cfg;
     }
-    // Wi-Fi comes and goes (and a VPN may come up): follow the home network's addresses.
-    m_lanTimer.setInterval(5000);
+    // Wi-Fi comes and goes (and a VPN may come up): follow the home network's addresses every 30 seconds.
+    m_lanTimer.setInterval(30000);
+    m_lanTimer.setObjectName(QStringLiteral("lan addresses"));
     connect(&m_lanTimer, &QTimer::timeout, this, &LocalSend::bindLan);
+    Busy::nameSocket(&m_udp, "lan announce");
     connect(&m_udp, &QUdpSocket::readyRead, this, &LocalSend::onDatagrams);
+    // Labs › Performance check: what nearby sharing is doing at the end of a check.
+    Busy::addStatus(this, [this] {
+        int done = 0;
+        for (const InFile &f : std::as_const(m_session.files))
+            done += f.done ? 1 : 0;
+        return QStringList{
+            QStringLiteral("nearby sharing: %1, %2 servers listening, %3 connections open, %4 devices known")
+                .arg(m_on ? QStringLiteral("on") : QStringLiteral("off")).arg(m_servers.size()).arg(m_conns.size()).arg(m_devices.size()),
+            QStringLiteral("nearby sharing receiving: %1").arg(m_session.active ? QStringLiteral("%1 of %2 files").arg(done).arg(m_session.files.size())
+                                                                : m_pending.socket ? QStringLiteral("waiting for an answer") : QStringLiteral("nothing")),
+            QStringLiteral("nearby sharing sending: %1").arg(m_send.active ? QStringLiteral("file %1 of %2").arg(m_send.next + 1).arg(m_send.files.size())
+                                                                          : QStringLiteral("nothing"))};
+    });
     // Peers' certificates are self-signed, so the usual checks can't apply; makeRequest() turns them
     // off and checkPeer() checks the fingerprint instead. This stays for any error that still comes up.
     connect(&m_net, &QNetworkAccessManager::sslErrors, this, [](QNetworkReply *r, const QList<QSslError> &) { r->ignoreSslErrors(); });
 
     m_announceTimer.setInterval(60000);
+    m_announceTimer.setObjectName(QStringLiteral("lan announce"));
     connect(&m_announceTimer, &QTimer::timeout, this, [this] {
         announce();
         // Forget devices not heard from in 10 minutes.
@@ -305,7 +321,8 @@ void LocalSend::bindLan()
 {
     if (!m_on)
         return;
-    Busy::Scope busy("nearby sharing");
+    Busy::Scope busy("nearby sharing: addresses");
+    Lan::refresh();
     hiddenChanged();
     const QList<QHostAddress> want = Lan::addresses();
     bool changed = false;
@@ -338,6 +355,7 @@ void LocalSend::bindLan()
             server = new QTcpServer(this);
             connect(server, &QTcpServer::newConnection, this, [this, server] { onConnection(server); });
         }
+        Busy::nameSocket(server, "lan server");
         if (!server->listen(a, kPort)) {
             if (a.protocol() == QAbstractSocket::IPv4Protocol)
                 failed = a.toString();
@@ -393,6 +411,8 @@ void LocalSend::announce()
     // Hidden from people nearby: nothing goes out on its own.
     if (!running() || !listening() || (silent && silent()))
         return;
+    Busy::Scope busy("nearby sharing: announcing");
+    Busy::count("LAN announcements sent");
     const QByteArray msg = QJsonDocument(info(true, true)).toJson(QJsonDocument::Compact);
     for (const QNetworkInterface &iface : Lan::interfaces()) {
         if (!(iface.flags() & QNetworkInterface::CanMulticast))
@@ -433,6 +453,7 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
     QNetworkReply *r = m_net.post(req, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
     checkPeer(r, pinTo);
     connect(r, &QNetworkReply::finished, this, [this, r, ip, port, protocol, scan] {
+        Busy::Scope busy("nearby sharing: answers");
         r->deleteLater();
         const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
         const bool ok = r->error() == QNetworkReply::NoError && !o.isEmpty();
@@ -469,11 +490,15 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
 
 void LocalSend::onDatagrams()
 {
-    Busy::Scope busy("nearby sharing");
+    Busy::Scope busy("nearby sharing: datagrams");
     while (m_udp.hasPendingDatagrams()) {
         QHostAddress from;
-        QByteArray data(int(m_udp.pendingDatagramSize()), Qt::Uninitialized);
-        m_udp.readDatagram(data.data(), data.size(), &from);
+        const qint64 size = m_udp.pendingDatagramSize();
+        QByteArray data(int(qBound<qint64>(0, size, 65536)), Qt::Uninitialized);
+        // One that can't be read ends this round (readyRead comes again for what's left).
+        if (m_udp.readDatagram(data.data(), data.size(), &from) < 0)
+            break;
+        Busy::count("LAN datagrams received");
         if (!Lan::isNeighbour(from))
             continue;   // only devices on the same home network (not a VPN or anything farther away)
         const QJsonObject o = QJsonDocument::fromJson(data).object();
@@ -483,6 +508,8 @@ void LocalSend::onDatagrams()
         const QString ip = Lan::text(from);
         // A multicast message proves nothing: a device is only listed once its certificate answered (register).
         const bool announce = o.value(QStringLiteral("announce")).toBool(o.value(QStringLiteral("announcement")).toBool());
+        if (announce)
+            Busy::count("LAN announcements heard");
         const auto known = m_devices.constFind(fp.toUpper());
         if (!announce && known != m_devices.constEnd() && known->ip == ip)
             continue;
@@ -555,7 +582,10 @@ QVariantList LocalSend::devices() const
 
 void LocalSend::onConnection(QTcpServer *server)
 {
+    Busy::Scope busy("nearby sharing: connections");
     while (QTcpSocket *s = server->nextPendingConnection()) {
+        Busy::count("LAN connections");
+        Busy::nameSocket(s, "lan conn");
         // At most 32 at once (nobody can pile them up), and only from this very network.
         if (!Lan::isNeighbour(s->peerAddress()) || m_conns.size() >= 32) {
             // Reached our home-network address from somewhere else (routed in over a VPN, say): no.
@@ -567,8 +597,12 @@ void LocalSend::onConnection(QTcpServer *server)
         if (auto *ssl = qobject_cast<QSslSocket *>(s))
             conn.peerFp = Tls::fingerprintOf(ssl->peerCertificate());
         m_conns.insert(s, conn);
-        connect(s, &QTcpSocket::readyRead, this, [this, s] { onData(s); });
+        connect(s, &QTcpSocket::readyRead, this, [this, s] {
+            Busy::Scope busy("nearby sharing: requests");
+            onData(s);
+        });
         connect(s, &QTcpSocket::disconnected, this, [this, s] {
+            Busy::Scope busy("nearby sharing: connections");
             auto it = m_conns.find(s);
             if (it != m_conns.end()) {
                 if (it->file) {
@@ -595,7 +629,10 @@ void LocalSend::onConnection(QTcpServer *server)
         // The request may have arrived together with the end of the handshake, before we were
         // listening for it. Read it from the event loop rather than inside the server's signal.
         if (s->bytesAvailable() > 0)
-            QTimer::singleShot(0, s, [this, s] { onData(s); });
+            QTimer::singleShot(0, s, [this, s] {
+                Busy::Scope busy("nearby sharing: requests");
+                onData(s);
+            });
     }
 }
 
@@ -766,7 +803,13 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
     }
 
     if (path == QStringLiteral("/api/huginn/v1/move")) {
-        const QPair<int, QByteArray> r = moveReceive ? moveReceive(c.body) : qMakePair(404, QByteArrayLiteral("{}"));
+        QPair<int, QByteArray> r(404, QByteArrayLiteral("{}"));
+        {
+            Busy::Scope busy("nearby sharing: move");
+            if (moveReceive)
+                r = moveReceive(c.body);
+        }
+        Busy::Scope busy("nearby sharing: replies");
         reply(s, r.first, r.second);
         return;
     }
@@ -776,7 +819,15 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             reply(s, 413, "{}");
             return;
         }
-        reply(s, chatReceive ? chatReceive(c.body, ip) : 404, "{}");
+        int code = 404;
+        {
+            // Unsealing, taking in and a linked device's part each have parts of their own inside (chat.cpp).
+            Busy::Scope busy("nearby sharing: messages");
+            if (chatReceive)
+                code = chatReceive(c.body, ip);
+        }
+        Busy::Scope busy("nearby sharing: replies");
+        reply(s, code, "{}");
         return;
     }
     const QJsonObject body = QJsonDocument::fromJson(c.body).object();
@@ -802,7 +853,11 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
         return;
     }
     if (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")) {
-        learn(body);
+        {
+            Busy::Scope busy("nearby sharing: learning devices");
+            learn(body);
+        }
+        Busy::Scope busy("nearby sharing: replies");
         reply(s, 200, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
         return;
     }
@@ -1005,8 +1060,13 @@ void LocalSend::reply(QTcpSocket *s, int code, const QByteArray &body)
     if (!s)
         return;
     auto conn = m_conns.find(s);
-    if (conn != m_conns.end())
+    if (conn != m_conns.end()) {
         conn->replied = true;
+        // By path and answer; a path that isn't one of Huginn's or LocalSend's is just "other".
+        static const QRegularExpression known(QStringLiteral("^/api/(localsend/v[12]|huginn/v1)/[a-z\\-]{1,24}$"));
+        const QString path = known.match(conn->path).hasMatch() ? conn->path : QStringLiteral("other");
+        Busy::count(QStringLiteral("LAN requests: %1 %2").arg(path).arg(code));
+    }
     QByteArray reason = "OK";
     switch (code) {
     case 204: reason = "No Content"; break;

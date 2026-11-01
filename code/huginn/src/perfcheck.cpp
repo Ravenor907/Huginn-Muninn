@@ -6,23 +6,31 @@
 #include "platform/crashlog.h"
 #include "platform/singleinstance.h"
 
+#include <QAbstractSocket>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QHash>
 #include <QList>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QMetaEnum>
 #include <QPair>
 #include <QQuickWindow>
 #include <QRegularExpression>
 #include <QScreen>
+#include <QSet>
 #include <QSettings>
+#include <QSocketNotifier>
 #include <QSysInfo>
+#include <QTcpServer>
 #include <QThread>
 #include <QTimer>
+#include <QWebSocket>
 
 #include <algorithm>
 #include <cmath>
@@ -35,8 +43,22 @@
 #include <windows.h>
 #include <psapi.h>
 #else
+#include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#endif
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <cstring>
+#include <cxxabi.h>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <new>
+#include <pthread.h>
+#include <thread>
 #endif
 
 bool PerfCheck::s_animationsOff = false;
@@ -143,39 +165,139 @@ struct EventKey {
     const QMetaObject *parent = nullptr;
     int type = 0;
     int interval = -1;   // a QTimer's, so timers without a parent can still be told apart
+    QString extra;       // a socket's owners and port, or a timer's name
     bool operator==(const EventKey &o) const
     {
-        return receiver == o.receiver && parent == o.parent && type == o.type && interval == o.interval;
+        return receiver == o.receiver && parent == o.parent && type == o.type && interval == o.interval && extra == o.extra;
     }
 };
-size_t qHash(const EventKey &k, size_t seed = 0) noexcept { return qHashMulti(seed, k.receiver, k.parent, k.type, k.interval); }
+size_t qHash(const EventKey &k, size_t seed = 0) noexcept { return qHashMulti(seed, k.receiver, k.parent, k.type, k.interval, k.extra); }
 struct EventCount {
     QString what;
     qint64 ns = 0, longest = 0;
     int times = 0;
+    bool timer = false;
 };
 QHash<EventKey, int> s_eventIndex;
 QList<EventCount> s_events;
 qint64 s_eventNs = 0;
 int s_eventDepth = 0;
+int s_generation = 0;   // start() clears the lists: an event begun before it isn't counted into the new ones
+
+struct SocketCount {
+    QString what;
+    qint64 ns = 0, longest = 0, in = 0, out = 0;
+    int events = 0;
+};
+QHash<QString, int> s_socketIndex;
+QList<SocketCount> s_sockets;
+// Sockets events came for during the check, and the ones nameSocket() was told about: listed at the end.
+QHash<QObject *, QPointer<QObject>> s_seen;
+QList<QPointer<QObject>> s_named;
+QList<QPair<QPointer<QObject>, std::function<QStringList()>>> s_status;
+QHash<QString, qint64> s_tally;
 
 QString eventWords(const EventKey &k)
 {
     const QMetaEnum types = QMetaEnum::fromType<QEvent::Type>();
     const char *type = types.valueToKey(k.type);
-    QString out = (type ? QString::fromLatin1(type) : QStringLiteral("Event %1").arg(k.type)) + QStringLiteral(" to ")
-        + QString::fromLatin1(k.receiver ? k.receiver->className() : "?");
+    const QString typeWords = type ? QString::fromLatin1(type) : QStringLiteral("Event %1").arg(k.type);
+    // A socket's event: the socket and what owns it ("SockAct: QSslSocket in QWebSocket 'nostr relay' in Nostr, peer port 443").
+    if ((k.type == QEvent::SockAct || k.type == QEvent::SockClose) && !k.extra.isEmpty())
+        return typeWords + QStringLiteral(": ") + k.extra;
+    QString out = typeWords + QStringLiteral(" to ") + QString::fromLatin1(k.receiver ? k.receiver->className() : "?");
+    if (k.type == QEvent::Timer && !k.extra.isEmpty())
+        out += QStringLiteral(" '") + k.extra + QLatin1Char('\'');
     if (k.parent)
         out += QStringLiteral(" in ") + QString::fromLatin1(k.parent->className());
     if (k.interval >= 0)
         out += QStringLiteral(" (every %1 ms)").arg(k.interval);
     return out;
 }
+
+// A socket's own port only, never an address. The far side's port for a connection Huginn made (443 for a relay); this
+// side's for one a server took and for UDP (53317 for nearby sharing), so one socket's events stay together.
+QString portWords(QObject *o, bool accepted)
+{
+    if (auto *server = qobject_cast<QTcpServer *>(o))
+        return server->isListening() ? QStringLiteral("listening on port %1").arg(server->serverPort()) : QStringLiteral("not listening");
+    if (auto *s = qobject_cast<QAbstractSocket *>(o)) {
+        if (accepted || s->socketType() == QAbstractSocket::UdpSocket)
+            return s->localPort() ? QStringLiteral("local port %1").arg(s->localPort()) : QString();
+        return s->peerPort() ? QStringLiteral("peer port %1").arg(s->peerPort()) : QString();
+    }
+    if (auto *ws = qobject_cast<QWebSocket *>(o))
+        return ws->peerPort() ? QStringLiteral("peer port %1").arg(ws->peerPort()) : QString();
+    return QString();
+}
+
+// The object and up to three of its owners, by class and name, then the port: "QTcpSocket in QSslSocket in QWebSocket
+// 'nostr relay' in Nostr, peer port 443".
+QString chainWords(QObject *start)
+{
+    QStringList chain;
+    QObject *portOf = nullptr;
+    bool accepted = false;
+    QObject *o = start;
+    for (int i = 0; o && i < 4; ++i, o = o->parent()) {
+        QString part = QString::fromLatin1(o->metaObject()->className());
+        if (!o->objectName().isEmpty())
+            part += QStringLiteral(" '") + o->objectName().left(40) + QLatin1Char('\'');
+        chain << part;
+        if (!portOf && (qobject_cast<QAbstractSocket *>(o) || qobject_cast<QTcpServer *>(o) || qobject_cast<QWebSocket *>(o)))
+            portOf = o;
+        else if (portOf && qobject_cast<QAbstractSocket *>(portOf) && qobject_cast<QTcpServer *>(o))
+            accepted = true;   // a connection a server took
+    }
+    QString out = chain.isEmpty() ? QStringLiteral("a socket without an owner") : chain.join(QStringLiteral(" in "));
+    const QString port = portOf ? portWords(portOf, accepted) : QString();
+    if (!port.isEmpty())
+        out += QStringLiteral(", ") + port;
+    return out;
+}
+
+// What a socket notifier belongs to: past Qt's socket engine to the socket or server itself.
+QObject *socketOf(QSocketNotifier *n)
+{
+    QObject *o = n->parent();
+    if (o && (o->inherits("QAbstractSocketEngine") || qstrcmp(o->metaObject()->className(), "QNativeSocketEngine") == 0))
+        o = o->parent();
+    return o;
+}
+
+// Bytes waiting to be read on a socket descriptor (for UDP, the next datagram's).
+qint64 waiting(qintptr fd)
+{
+#ifndef Q_OS_WIN
+    int n = 0;
+    if (fd >= 0 && ::ioctl(int(fd), FIONREAD, &n) == 0 && n > 0)
+        return n;
+#else
+    Q_UNUSED(fd);
+#endif
+    return 0;
+}
+
+QString stateWords(int state)
+{
+    switch (state) {
+    case QAbstractSocket::UnconnectedState: return QStringLiteral("not connected");
+    case QAbstractSocket::HostLookupState: return QStringLiteral("looking up");
+    case QAbstractSocket::ConnectingState: return QStringLiteral("connecting");
+    case QAbstractSocket::ConnectedState: return QStringLiteral("connected");
+    case QAbstractSocket::BoundState: return QStringLiteral("bound");
+    case QAbstractSocket::ListeningState: return QStringLiteral("listening");
+    case QAbstractSocket::ClosingState: return QStringLiteral("closing");
+    }
+    return QStringLiteral("state %1").arg(state);
+}
+
 struct Count {
     qint64 ns = 0, longest = 0;
     int times = 0;
 };
 QHash<const char *, Count> s_counts;   // by the name's address: each kind of work names itself with one literal
+QHash<const char *, Count> s_all;      // the same, nested parts too
 QElapsedTimer &timer()
 {
     static QElapsedTimer t;
@@ -183,34 +305,19 @@ QElapsedTimer &timer()
         t.start();
     return t;
 }
-}
 
-qint64 clockNs() { return timer().nsecsElapsed(); }
-
-void add(const char *what, qint64 ns)
+void addTo(QHash<const char *, Count> &to, const char *what, qint64 ns)
 {
-    Count &c = s_counts[what];
+    Count &c = to[what];
     c.ns += ns;
     c.longest = qMax(c.longest, ns);
     ++c.times;
 }
 
-void start()
-{
-    s_counts.clear();
-    s_eventIndex.clear();
-    s_events.clear();
-    s_eventNs = 0;
-    timer();
-    on = true;
-}
-
-void stop() { on = false; }
-
-QList<Entry> sorted()
+QList<Entry> entriesOf(const QHash<const char *, Count> &counts)
 {
     QHash<QString, Entry> byName;
-    for (auto it = s_counts.cbegin(); it != s_counts.cend(); ++it) {
+    for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
         const QString name = QString::fromUtf8(it.key());
         Entry &e = byName[name];
         e.what = name;
@@ -222,31 +329,179 @@ QList<Entry> sorted()
     std::sort(out.begin(), out.end(), [](const Entry &a, const Entry &b) { return a.ms > b.ms; });
     return out;
 }
+}
+
+qint64 clockNs() { return timer().nsecsElapsed(); }
+
+void add(const char *what, qint64 ns) { addTo(s_counts, what, ns); }
+void addAll(const char *what, qint64 ns) { addTo(s_all, what, ns); }
+
+void count(const QString &what, int n)
+{
+    if (!on || !QThread::isMainThread())
+        return;
+    s_tally[what] += n;
+}
+
+void count(const char *what, int n)
+{
+    if (!on || !QThread::isMainThread())
+        return;
+    s_tally[QString::fromUtf8(what)] += n;
+}
+
+void nameSocket(QObject *socket, const char *name)
+{
+    if (!socket)
+        return;
+    socket->setObjectName(QString::fromLatin1(name));
+    if (!QThread::isMainThread())
+        return;
+    if (s_named.size() >= 64)
+        s_named.removeIf([](const QPointer<QObject> &p) { return p.isNull(); });
+    s_named.append(QPointer<QObject>(socket));
+}
+
+void addStatus(QObject *owner, std::function<QStringList()> lines)
+{
+    if (!owner || !QThread::isMainThread())
+        return;
+    s_status.removeIf([](const QPair<QPointer<QObject>, std::function<QStringList()>> &p) { return p.first.isNull(); });
+    s_status.append({QPointer<QObject>(owner), std::move(lines)});
+}
+
+void start()
+{
+    s_counts.clear();
+    s_all.clear();
+    s_eventIndex.clear();
+    s_events.clear();
+    s_socketIndex.clear();
+    s_sockets.clear();
+    s_seen.clear();
+    s_tally.clear();
+    s_eventNs = 0;
+    ++s_generation;
+    timer();
+    on = true;
+}
+
+void stop() { on = false; }
+
+QList<Entry> sorted() { return entriesOf(s_counts); }
+QList<Entry> allParts() { return entriesOf(s_all); }
+
+QList<QPair<QString, qint64>> counts()
+{
+    QList<QPair<QString, qint64>> out;
+    for (auto it = s_tally.cbegin(); it != s_tally.cend(); ++it)
+        out.append({it.key(), it.value()});
+    std::sort(out.begin(), out.end(), [](const QPair<QString, qint64> &a, const QPair<QString, qint64> &b) { return a.first < b.first; });
+    return out;
+}
+
+QList<SocketEntry> sockets()
+{
+    QList<SocketEntry> out;
+    for (const SocketCount &c : std::as_const(s_sockets))
+        if (c.events > 0)
+            out.append(SocketEntry{c.what, c.events, c.ns / 1e6, c.longest / 1e6, c.in, c.out});
+    std::sort(out.begin(), out.end(), [](const SocketEntry &a, const SocketEntry &b) { return a.ms > b.ms; });
+    return out;
+}
+
+QStringList openSockets()
+{
+    QList<QObject *> all;
+    for (const QPointer<QObject> &p : std::as_const(s_named))
+        if (p && !all.contains(p.data()))
+            all << p.data();
+    for (const QPointer<QObject> &p : std::as_const(s_seen))
+        if (p && !all.contains(p.data()))
+            all << p.data();
+    QStringList out;
+    for (QObject *o : std::as_const(all)) {
+        QString state;
+        if (auto *s = qobject_cast<QAbstractSocket *>(o))
+            state = stateWords(int(s->state()));
+        else if (auto *server = qobject_cast<QTcpServer *>(o))
+            state = server->isListening() ? QStringLiteral("listening") : QStringLiteral("not listening");
+        else if (auto *ws = qobject_cast<QWebSocket *>(o))
+            state = stateWords(int(ws->state()));
+        else if (auto *ls = qobject_cast<QLocalSocket *>(o))
+            state = stateWords(int(ls->state()));
+        else if (auto *lserver = qobject_cast<QLocalServer *>(o))
+            state = lserver->isListening() ? QStringLiteral("listening") : QStringLiteral("not listening");
+        out << chainWords(o) + (state.isEmpty() ? QString() : QStringLiteral(": ") + state);
+    }
+    out.sort();
+    return out;
+}
+
+QStringList statusLines()
+{
+    QStringList out;
+    for (const auto &p : std::as_const(s_status))
+        if (p.first && p.second)
+            out << p.second();
+    return out;
+}
 
 Event::Event(QObject *receiver, QEvent *event)
 {
     if (!on || !receiver || !event || !QThread::isMainThread())
         return;
     m_in = true;
-    // Only the outermost event is counted; the ones handled inside it are part of its time.
-    if (s_eventDepth++ > 0)
+    m_gen = s_generation;
+    QString extra;
+    const QEvent::Type type = event->type();
+    if (type == QEvent::SockAct || type == QEvent::SockClose) {
+        if (auto *n = qobject_cast<QSocketNotifier *>(receiver)) {
+            QObject *owner = socketOf(n);
+            extra = owner ? chainWords(owner) : QStringLiteral("a socket without an owner");
+            auto it = s_socketIndex.constFind(extra);
+            if (it == s_socketIndex.cend()) {
+                SocketCount c;
+                c.what = extra;
+                s_sockets.append(c);
+                it = s_socketIndex.insert(extra, int(s_sockets.size() - 1));
+            }
+            m_socket = it.value();
+            if (owner)
+                s_seen.insert(owner, QPointer<QObject>(owner));
+            auto *sock = qobject_cast<QAbstractSocket *>(owner);
+            if (n->type() == QSocketNotifier::Read) {
+                m_bytesIn = waiting(n->socket());
+            } else if (n->type() == QSocketNotifier::Write && sock) {
+                m_sock = sock;
+                m_toWrite = sock->bytesToWrite();
+            }
+        }
+    } else if (type == QEvent::Timer) {
+        extra = receiver->objectName().left(40);
+    }
+    m_start = clockNs();
+    // Only the outermost event is counted among events; the ones handled inside it are part of its time.
+    m_outer = s_eventDepth++ == 0;
+    if (!m_outer)
         return;
     EventKey k;
     k.receiver = receiver->metaObject();
     k.parent = receiver->parent() ? receiver->parent()->metaObject() : nullptr;
-    k.type = int(event->type());
-    if (event->type() == QEvent::Timer)
+    k.type = int(type);
+    k.extra = extra;
+    if (type == QEvent::Timer)
         if (QTimer *t = qobject_cast<QTimer *>(receiver))
             k.interval = t->interval();
     auto it = s_eventIndex.constFind(k);
     if (it == s_eventIndex.cend()) {
         EventCount c;
         c.what = eventWords(k);
+        c.timer = type == QEvent::Timer;
         s_events.append(c);
         it = s_eventIndex.insert(k, int(s_events.size() - 1));
     }
     m_key = it.value();
-    m_start = clockNs();
 }
 
 Event::~Event()
@@ -254,10 +509,22 @@ Event::~Event()
     if (!m_in)
         return;
     --s_eventDepth;
-    // A check started inside this event cleared the counts.
-    if (m_key < 0 || m_key >= s_events.size())
+    // A check started inside this event cleared the lists.
+    if (m_gen != s_generation)
         return;
     const qint64 ns = clockNs() - m_start;
+    if (m_socket >= 0 && m_socket < s_sockets.size()) {
+        SocketCount &c = s_sockets[m_socket];
+        ++c.events;
+        c.ns += ns;
+        c.longest = qMax(c.longest, ns);
+        c.in += m_bytesIn;
+        if (m_toWrite >= 0)
+            if (auto *s = qobject_cast<QAbstractSocket *>(m_sock.data()))
+                c.out += qMax<qint64>(0, m_toWrite - s->bytesToWrite());
+    }
+    if (!m_outer || m_key < 0 || m_key >= s_events.size())
+        return;
     EventCount &c = s_events[m_key];
     c.ns += ns;
     c.longest = qMax(c.longest, ns);
@@ -272,7 +539,7 @@ QList<EventEntry> eventEntries()
     QList<EventEntry> out;
     for (const EventCount &c : std::as_const(s_events))
         if (c.times > 0)
-            out.append(EventEntry{c.what, c.ns / 1e6, c.longest / 1e6, c.times});
+            out.append(EventEntry{c.what, c.ns / 1e6, c.longest / 1e6, c.times, c.timer});
     return out;
 }
 }
@@ -294,6 +561,237 @@ QList<EventEntry> busiestEvents()
 double eventMs() { return s_eventNs / 1e6; }
 }
 
+// ------------------------------------------------------------------ Hot spots (Linux)
+
+// Every 5 ms while a check runs, a helper thread interrupts the window's thread and the interrupted thread notes where it
+// was (its return addresses, nothing else). Afterwards the addresses are named: the functions it was in most ("Hot spots")
+// and the ones most often on its way there ("Hot paths"). Huginn is linked with its own function names exported for this
+// (CMakeLists.txt); a function without an exported name shows as its file and offset.
+#ifdef Q_OS_LINUX
+namespace
+{
+namespace Sampler
+{
+constexpr int kDepth = 32;
+constexpr int kMax = 8192;   // about 40 seconds at one every 5 ms
+void **s_frames = nullptr;
+int *s_depths = nullptr;
+std::atomic<int> s_used{0};
+std::atomic<bool> s_recording{false};
+std::atomic<bool> s_run{false};
+pthread_t s_target;
+std::thread *s_thread = nullptr;
+bool s_installed = false;
+
+// On the window's thread, in the middle of whatever it was doing: only stores return addresses. No allocation and no
+// locks (backtrace() ran once before, so its unwinder is already loaded).
+void onSignal(int)
+{
+    if (!s_recording.load(std::memory_order_relaxed))
+        return;
+    const int saved = errno;
+    const int i = s_used.fetch_add(1, std::memory_order_relaxed);
+    if (i < kMax)
+        s_depths[i] = backtrace(s_frames + size_t(i) * kDepth, kDepth);
+    errno = saved;
+}
+
+void stop()
+{
+    if (s_run.exchange(false) && s_thread) {
+        s_thread->join();
+        delete s_thread;
+        s_thread = nullptr;
+    }
+    s_recording = false;
+}
+
+// On the window's thread.
+bool start()
+{
+    stop();
+    if (!s_frames) {
+        s_frames = new (std::nothrow) void *[size_t(kMax) * kDepth];
+        s_depths = new (std::nothrow) int[kMax];
+        if (!s_frames || !s_depths) {
+            delete[] s_frames;
+            delete[] s_depths;
+            s_frames = nullptr;
+            s_depths = nullptr;
+            return false;
+        }
+    }
+    void *warm[4];
+    backtrace(warm, 4);
+    if (!s_installed) {
+        struct sigaction sa;
+        std::memset(&sa, 0, sizeof sa);
+        sa.sa_handler = onSignal;
+        sa.sa_flags = SA_RESTART;
+        sigemptyset(&sa.sa_mask);
+        if (sigaction(SIGPROF, &sa, nullptr) != 0)
+            return false;
+        s_installed = true;   // kept: a signal still on its way after a check finds it and does nothing
+    }
+    s_used = 0;
+    s_target = pthread_self();
+    s_recording = true;
+    s_run = true;
+    s_thread = new std::thread([] {
+        pthread_setname_np(pthread_self(), "perf sampler");
+        while (s_run.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (s_run.load() && s_used.load(std::memory_order_relaxed) < kMax)
+                pthread_kill(s_target, SIGPROF);
+        }
+    });
+    return true;
+}
+
+// "QSslSocketPrivate::transmit()", without arguments or template arguments.
+QString shortName(QString full)
+{
+    full.replace(QStringLiteral("(anonymous namespace)"), QStringLiteral("anon"));
+    QString out;
+    int angle = 0, paren = 0;
+    for (const QChar c : std::as_const(full)) {
+        if (c == QLatin1Char('<')) {
+            if (angle++ == 0 && paren == 0)
+                out += QStringLiteral("<>");
+            continue;
+        }
+        if (c == QLatin1Char('>')) {
+            if (angle > 0)
+                --angle;
+            continue;
+        }
+        if (angle > 0)
+            continue;
+        if (c == QLatin1Char('(')) {
+            if (paren++ == 0)
+                out += QStringLiteral("()");
+            continue;
+        }
+        if (c == QLatin1Char(')')) {
+            if (paren > 0)
+                --paren;
+            continue;
+        }
+        if (paren > 0)
+            continue;
+        out += c;
+    }
+    if (out.endsWith(QLatin1String(" const")))
+        out.chop(6);
+    return out.trimmed().left(110);
+}
+
+QString nameAt(const void *addr)
+{
+    Dl_info info;
+    if (!dladdr(addr, &info) || !info.dli_fname)
+        return QStringLiteral("(unknown)");
+    const QString file = QFileInfo(QString::fromLocal8Bit(info.dli_fname)).fileName();
+    if (!info.dli_sname)
+        return QStringLiteral("%1 +0x%2").arg(file).arg(quintptr(static_cast<const char *>(addr) - static_cast<const char *>(info.dli_fbase)), 0, 16);
+    int status = 0;
+    char *plain = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+    const QString name = status == 0 && plain ? QString::fromLatin1(plain) : QString::fromLatin1(info.dli_sname);
+    std::free(plain);
+    return shortName(name) + QStringLiteral(" (") + file + QLatin1Char(')');
+}
+
+// The event loop and the calls every event goes through: on every path, so they say nothing.
+bool everywhere(const QString &name)
+{
+    static const QRegularExpression re(QStringLiteral(
+        "^(main|__libc_start\\w*|_start|g_main\\w*|g_poll|\\w*SourceDispatch|.*::exec|.*::processEvents|.*::notify\\w*|.*notify_helper|"
+        ".*::sendEvent|.*Dispatcher\\w*::\\w*)\\(\\)"));
+    return re.match(name).hasMatch();
+}
+
+struct Hot {
+    int samples = 0;
+    QStringList self, paths;
+};
+
+// After stop(), on the window's thread.
+Hot analyse(int top)
+{
+    Hot h;
+    const int n = qMin(s_used.load(), kMax);
+    QHash<const void *, QString> names;
+    auto nameOf = [&names](const void *a) {
+        auto it = names.constFind(a);
+        if (it == names.cend())
+            it = names.insert(a, nameAt(a));
+        return it.value();
+    };
+    QHash<QString, int> self, on;
+    for (int i = 0; i < n; ++i) {
+        void *const *f = s_frames + size_t(i) * kDepth;
+        const int d = s_depths[i];
+        // [0] is onSignal, [1] the way back from a signal; from [2] on, what the thread was doing ([2] exactly where,
+        // the rest return addresses, named by the call just before them).
+        if (d <= 2)
+            continue;
+        ++h.samples;
+        ++self[nameOf(f[2])];
+        QSet<QString> seen;
+        for (int j = 2; j < d; ++j) {
+            const QString name = nameOf(j == 2 ? f[j] : static_cast<const char *>(f[j]) - 1);
+            if (!seen.contains(name)) {
+                seen.insert(name);
+                ++on[name];
+            }
+        }
+    }
+    auto lines = [&h, top](const QHash<QString, int> &counts, bool skipEverywhere) {
+        QList<QPair<int, QString>> list;
+        for (auto it = counts.cbegin(); it != counts.cend(); ++it)
+            if (!skipEverywhere || !everywhere(it.key()))
+                list.append({it.value(), it.key()});
+        std::sort(list.begin(), list.end(), [](const QPair<int, QString> &a, const QPair<int, QString> &b) { return a.first > b.first; });
+        QStringList out;
+        for (qsizetype i = 0; i < qMin<qsizetype>(top, list.size()); ++i)
+            out << QStringLiteral("%1% %2 %3")
+                       .arg(QString::number(100.0 * list.at(i).first / qMax(1, h.samples), 'f', 1).rightJustified(5))
+                       .arg(QString::number(list.at(i).first).rightJustified(5))
+                       .arg(list.at(i).second);
+        return out;
+    };
+    h.self = lines(self, false);
+    h.paths = lines(on, true);
+    return h;
+}
+}
+}
+#endif
+
+void PerfCheck::sampleStart()
+{
+#ifdef Q_OS_LINUX
+    m_sampling = Sampler::start();
+#else
+    m_sampling = false;
+#endif
+}
+
+void PerfCheck::sampleStop(bool keep)
+{
+#ifdef Q_OS_LINUX
+    Sampler::stop();
+    if (!keep || !m_sampling)
+        return;
+    const Sampler::Hot h = Sampler::analyse(15);
+    m_hotSamples = h.samples;
+    m_hotSelf = h.self;
+    m_hotPaths = h.paths;
+#else
+    Q_UNUSED(keep);
+#endif
+}
+
 PerfCheck::PerfCheck(Settings *settings, System *system, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
@@ -306,6 +804,13 @@ PerfCheck::PerfCheck(Settings *settings, System *system, QObject *parent)
     m_timer.setInterval(100);
     connect(&m_timer, &QTimer::timeout, this, &PerfCheck::tick);
     connect(settings, &Settings::changed, this, &PerfCheck::overridesChanged);   // Labs on or off
+}
+
+PerfCheck::~PerfCheck()
+{
+    // The sampling thread never outlives the check (a check still running as Huginn closes).
+    sampleStop(false);
+    Busy::stop();
 }
 
 void PerfCheck::applyAtStart(int argc, char **argv)
@@ -534,7 +1039,13 @@ void PerfCheck::start(bool seasonal)
     m_idleTopThread.clear();
     m_idleEventPct = -1;
     m_idleAsked = m_idleSyncs = 0;
+    m_details.clear();
+    m_hotSamples = 0;
+    m_hotSelf.clear();
+    m_hotPaths.clear();
+    m_threadsCheck0 = threadTimes();
     Busy::start();
+    sampleStart();
     m_running = true;
     m_phase = 0;
     m_progress = 0;
@@ -554,6 +1065,7 @@ void PerfCheck::cancel()
         return;
     m_timer.stop();
     Busy::stop();
+    sampleStop(false);
     m_active = false;
     m_recording = false;
     m_running = false;
@@ -704,11 +1216,13 @@ void PerfCheck::finish()
 {
     m_timer.stop();
     Busy::stop();
+    sampleStop(true);
     m_active = false;
     m_running = false;
     m_phase = -1;
     m_progress = 1;
     noteBusiest();
+    noteDetails(double(m_clock.elapsed()));
     judge();
     CrashLog::note(QStringLiteral("performance check: ") + m_verdict);
     Q_EMIT changed();
@@ -826,6 +1340,97 @@ void PerfCheck::noteBusiest()
     if (m_stalls > 0)
         text += QStringLiteral("; held up %1 times, longest %2 ms").arg(m_stalls).arg(qRound(m_stallLongest));
     m_busiest = QStringLiteral("Busiest: ") + text;
+}
+
+namespace
+{
+QString bytesWords(qint64 b)
+{
+    if (b >= 1048576)
+        return QString::number(b / 1048576.0, 'f', 1) + QStringLiteral(" MB");
+    if (b >= 1024)
+        return QString::number(qRound(b / 1024.0)) + QStringLiteral(" KB");
+    return QString::number(b) + QStringLiteral(" B");
+}
+}
+
+void PerfCheck::noteDetails(double wallMs)
+{
+    QStringList d;
+    const double wall = qMax(1.0, wallMs);
+    d << QStringLiteral("Hot spots (where the window's thread was, %1 samples, one every 5 ms):").arg(m_hotSamples);
+    if (!m_sampling)
+        d << QStringLiteral("  not sampled on this system");
+    else if (m_hotSelf.isEmpty())
+        d << QStringLiteral("  no samples");
+    for (const QString &l : std::as_const(m_hotSelf))
+        d << QStringLiteral("  ") + l;
+    if (!m_hotPaths.isEmpty()) {
+        d << QStringLiteral("Hot paths (functions on the window's thread's way there):");
+        for (const QString &l : std::as_const(m_hotPaths))
+            d << QStringLiteral("  ") + l;
+    }
+
+    d << QStringLiteral("Sockets (events, ms in all, slowest, bytes waiting when they came, bytes written from the socket's buffer):");
+    const QList<Busy::SocketEntry> socks = Busy::sockets();
+    if (socks.isEmpty())
+        d << QStringLiteral("  none");
+    for (const Busy::SocketEntry &e : socks)
+        d << QStringLiteral("  %1: %2 events, %3 ms, slowest %4 ms, %5 in, %6 out")
+                 .arg(e.what).arg(e.events).arg(qRound(e.ms)).arg(qRound(e.longest)).arg(bytesWords(e.in), bytesWords(e.out));
+
+    d << QStringLiteral("Huginn's parts (each on its own, parts inside others too):");
+    const QList<Busy::Entry> parts = Busy::allParts();
+    if (parts.isEmpty())
+        d << QStringLiteral("  none");
+    for (const Busy::Entry &e : parts)
+        d << QStringLiteral("  %1: %2 times, %3 ms, slowest %4 ms").arg(e.what).arg(e.times).arg(fixed(e.ms)).arg(fixed(e.longest));
+
+    const QList<Busy::EventEntry> events = Busy::busiestEvents();
+    d << QStringLiteral("Events by kind and receiver (the 15 that took the most time):");
+    for (qsizetype i = 0; i < qMin<qsizetype>(15, events.size()); ++i)
+        d << QStringLiteral("  %1: %2 times, %3 ms, slowest %4 ms")
+                 .arg(events.at(i).what).arg(events.at(i).times).arg(fixed(events.at(i).ms)).arg(fixed(events.at(i).longest));
+    QList<Busy::EventEntry> timers;
+    for (const Busy::EventEntry &e : events)
+        if (e.timer)
+            timers << e;
+    std::sort(timers.begin(), timers.end(), [](const Busy::EventEntry &a, const Busy::EventEntry &b) { return a.times > b.times; });
+    d << QStringLiteral("Timers fired (most first):");
+    if (timers.isEmpty())
+        d << QStringLiteral("  none");
+    for (qsizetype i = 0; i < qMin<qsizetype>(25, timers.size()); ++i)
+        d << QStringLiteral("  %1: %2 times, %3 ms").arg(timers.at(i).what).arg(timers.at(i).times).arg(fixed(timers.at(i).ms));
+
+    d << QStringLiteral("Counts during the check:");
+    const QList<QPair<QString, qint64>> counts = Busy::counts();
+    if (counts.isEmpty())
+        d << QStringLiteral("  none");
+    for (const auto &c : counts)
+        d << QStringLiteral("  %1: %2").arg(c.first).arg(c.second);
+
+    d << QStringLiteral("At the end of the check:");
+    const QStringList status = Busy::statusLines();
+    for (const QString &l : status)
+        d << QStringLiteral("  ") + l;
+    d << QStringLiteral("Open sockets at the end of the check:");
+    const QStringList open = Busy::openSockets();
+    if (open.isEmpty())
+        d << QStringLiteral("  none");
+    for (const QString &l : open)
+        d << QStringLiteral("  ") + l;
+
+    const QHash<qint64, ThreadTime> now = threadTimes();
+    if (!now.isEmpty()) {
+        QList<QPair<double, QString>> used;
+        for (auto it = now.cbegin(); it != now.cend(); ++it)
+            used.append({100.0 * qMax(0.0, it.value().ms - m_threadsCheck0.value(it.key()).ms) / wall, it.value().name});
+        std::sort(used.begin(), used.end(), [](const QPair<double, QString> &a, const QPair<double, QString> &b) { return a.first > b.first; });
+        d << QStringLiteral("Threads over the whole check (processor time, %1 threads):").arg(used.size());
+        for (const auto &u : std::as_const(used))
+            d << QStringLiteral("  %1 %2%").arg(u.second, fixed(u.first));
+    }
+    m_details = d;
 }
 
 QString PerfCheck::idleLine() const
@@ -994,6 +1599,15 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
             out << idleLine();
         if (!m_busiest.isEmpty())
             out << m_busiest;
+        // The functions the window's thread was in most (Hot spots below has all 15).
+        if (!m_hotSelf.isEmpty()) {
+            QStringList top;
+            for (qsizetype i = 0; i < qMin<qsizetype>(5, m_hotSelf.size()); ++i) {
+                const QString l = m_hotSelf.at(i).simplified();
+                top << l.section(QLatin1Char(' '), 2) + QLatin1Char(' ') + l.section(QLatin1Char(' '), 0, 0);
+            }
+            out << QStringLiteral("Hot spots: ") + top.join(QStringLiteral("; "));
+        }
         if (!m_threadsLine.isEmpty())
             out << m_threadsLine;
         if (!m_slowLine.isEmpty())
@@ -1027,18 +1641,19 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
         out = out.mid(0, 2) + results + QStringList{QString()} + out.mid(2, resultsAt - 2);
     }
     if (full) {
-        // The last 50 graphics, warning and crash lines of crash.log.
-        static const QRegularExpression wanted(
-            QStringLiteral("graphic|warning|fatal|crash|render|vulkan|opengl|egl|glx|xcb|wayland|rhi|qsg|scene|gpu|driver|tried settings|performance check|ended without closing"),
-            QRegularExpression::CaseInsensitiveOption);
+        if (!m_details.isEmpty()) {
+            out << QString();
+            out << QStringLiteral("Details");
+            out << m_details;
+        }
+        // The last 50 lines of crash.log.
         QStringList lines;
         for (const QString &l : CrashLog::tail(60000).split(QLatin1Char('\n'), Qt::SkipEmptyParts))
-            if (l.contains(wanted))
-                lines << l.trimmed().left(300);
+            lines << l.trimmed().left(300);
         if (lines.size() > 50)
             lines = lines.mid(lines.size() - 50);
         out << QString();
-        out << QStringLiteral("crash.log, graphics and warning lines (last %1):").arg(lines.size());
+        out << QStringLiteral("crash.log (last %1 lines):").arg(lines.size());
         if (lines.isEmpty())
             out << QStringLiteral("none");
         out << lines;

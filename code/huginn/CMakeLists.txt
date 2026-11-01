@@ -315,6 +315,12 @@ if(WIN32)
 else()
     target_link_libraries(huginn PRIVATE Qt6::DBus KF6::Prison PkgConfig::SDL2)
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Labs › Performance check's Hot spots name Huginn's own functions: they go in the dynamic symbol table (-rdynamic),
+    # which stripping keeps. dladdr() comes from libdl on older systems.
+    set_target_properties(huginn PROPERTIES ENABLE_EXPORTS ON)
+    target_link_libraries(huginn PRIVATE ${CMAKE_DL_LIBS})
+endif()
 # Opus (voice calls, src/call/): linked and HUGINN_HAVE_OPUS defined when it's there.
 if(TARGET Opus::opus)
     target_link_libraries(huginn PRIVATE Opus::opus)

@@ -688,30 +688,58 @@ void System::setKeepAwake(bool on, const QString &reason)
     Q_UNUSED(reason);
     Platform::keepAwake(on);
 #else
+    // Never waits for an answer (the window's thread keeps going); an answer for an older change lets go of what it got.
+    const int ask = ++m_awakeAsk;
     QDBusConnection bus = QDBusConnection::sessionBus();
-    auto call = [&bus](const QString &service, const QString &path, const QString &iface, const QString &method, const QVariantList &args) {
+    auto send = [bus](const QString &service, const QString &path, const QString &iface, const QString &method, const QVariantList &args) mutable {
         QDBusMessage m = QDBusMessage::createMethodCall(service, path, iface, method);
         m.setArguments(args);
-        return bus.call(m, QDBus::Block, 2000);
+        return bus.asyncCall(m, 2000);
+    };
+    auto closeRequest = [send](const QString &handle) mutable {
+        send(QStringLiteral("org.freedesktop.portal.Desktop"), handle, QStringLiteral("org.freedesktop.portal.Request"), QStringLiteral("Close"), {});
+    };
+    auto unInhibit = [send](uint cookie) mutable {
+        send(QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/org/freedesktop/ScreenSaver"), QStringLiteral("org.freedesktop.ScreenSaver"),
+             QStringLiteral("UnInhibit"), {cookie});
     };
     if (on) {
         // The desktop portal is the sandbox-friendly way; the screensaver interface covers sessions without it.
-        const QDBusMessage r = call(QStringLiteral("org.freedesktop.portal.Desktop"), QStringLiteral("/org/freedesktop/portal/desktop"),
-                                    QStringLiteral("org.freedesktop.portal.Inhibit"), QStringLiteral("Inhibit"),
-                                    {QString(), uint(4 | 8), QVariantMap{{QStringLiteral("reason"), reason}}});
-        if (r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty())
-            m_inhibitHandle = r.arguments().first().value<QDBusObjectPath>().path();
-        const QDBusMessage c = call(QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/org/freedesktop/ScreenSaver"),
-                                    QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("Inhibit"), {QStringLiteral("Huginn"), reason});
-        if (c.type() == QDBusMessage::ReplyMessage && !c.arguments().isEmpty())
-            m_screensaverCookie = c.arguments().first().toUInt();
+        auto *portal = new QDBusPendingCallWatcher(send(QStringLiteral("org.freedesktop.portal.Desktop"), QStringLiteral("/org/freedesktop/portal/desktop"),
+                                                        QStringLiteral("org.freedesktop.portal.Inhibit"), QStringLiteral("Inhibit"),
+                                                        {QString(), uint(4 | 8), QVariantMap{{QStringLiteral("reason"), reason}}}),
+                                                   this);
+        connect(portal, &QDBusPendingCallWatcher::finished, this, [this, ask, closeRequest](QDBusPendingCallWatcher *w) mutable {
+            w->deleteLater();
+            const QDBusMessage r = w->reply();
+            if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
+                return;
+            const QString handle = r.arguments().first().value<QDBusObjectPath>().path();
+            if (ask == m_awakeAsk && m_awake)
+                m_inhibitHandle = handle;
+            else if (!handle.isEmpty())
+                closeRequest(handle);
+        });
+        auto *saver = new QDBusPendingCallWatcher(send(QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/org/freedesktop/ScreenSaver"),
+                                                       QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("Inhibit"), {QStringLiteral("Huginn"), reason}),
+                                                  this);
+        connect(saver, &QDBusPendingCallWatcher::finished, this, [this, ask, unInhibit](QDBusPendingCallWatcher *w) mutable {
+            w->deleteLater();
+            const QDBusMessage r = w->reply();
+            if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
+                return;
+            const uint cookie = r.arguments().first().toUInt();
+            if (ask == m_awakeAsk && m_awake)
+                m_screensaverCookie = cookie;
+            else if (cookie)
+                unInhibit(cookie);
+        });
     } else {
         if (!m_inhibitHandle.isEmpty())
-            call(QStringLiteral("org.freedesktop.portal.Desktop"), m_inhibitHandle, QStringLiteral("org.freedesktop.portal.Request"), QStringLiteral("Close"), {});
+            closeRequest(m_inhibitHandle);
         m_inhibitHandle.clear();
         if (m_screensaverCookie)
-            call(QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("/org/freedesktop/ScreenSaver"),
-                 QStringLiteral("org.freedesktop.ScreenSaver"), QStringLiteral("UnInhibit"), {m_screensaverCookie});
+            unInhibit(m_screensaverCookie);
         m_screensaverCookie = 0;
     }
 #endif

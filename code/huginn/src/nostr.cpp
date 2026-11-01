@@ -21,10 +21,61 @@
 
 namespace
 {
-constexpr int kMaxSeen = 2000;
+constexpr int kMaxSeen = 20000;
+constexpr int kMaxRejected = 5000;
 constexpr int kAuthKind = 22242;
 // A sending socket closes this long after the last thing given to it.
-constexpr int kSendMs = 20000;
+constexpr int kSendMs = 180000;
+// The handled events' list is written at most this often.
+constexpr int kSeenSaveMs = 30000;
+
+// The event id in a relay's ["EVENT", sub, {...}] without reading the whole message: 32 bytes, or empty when it isn't
+// written the usual way (then the message is read in full). A quote can't stand unescaped inside a JSON string, so
+// "id":" only ever starts the event's own id.
+QByteArray quickId(const QString &text)
+{
+    if (!text.startsWith(QLatin1String("[\"EVENT\"")))
+        return {};
+    const qsizetype at = text.indexOf(QLatin1String("\"id\":\""));
+    if (at < 0 || at + 6 + 64 > text.size())
+        return {};
+    const QString hex = text.mid(at + 6, 64);
+    for (const QChar c : hex)
+        if (!((c >= QLatin1Char('0') && c <= QLatin1Char('9')) || (c >= QLatin1Char('a') && c <= QLatin1Char('f'))))
+            return {};
+    if (at + 6 + 64 >= text.size() || text.at(at + 6 + 64) != QLatin1Char('"'))
+        return {};
+    return QByteArray::fromHex(hex.toLatin1());
+}
+
+// The subscription an ["EVENT", sub, ...] came on, and the event's created_at, read the same quick way.
+QString quickSub(const QString &text)
+{
+    const qsizetype start = text.indexOf(QLatin1Char('"'), 8);
+    const qsizetype end = start < 0 ? -1 : text.indexOf(QLatin1Char('"'), start + 1);
+    return end > start + 1 && end - start < 80 ? text.mid(start + 1, end - start - 1) : QString();
+}
+
+qint64 quickCreatedAt(const QString &text)
+{
+    const qsizetype at = text.indexOf(QLatin1String("\"created_at\":"));
+    if (at < 0)
+        return 0;
+    qint64 v = 0;
+    int digits = 0;
+    for (qsizetype i = at + 13; i < text.size() && digits < 12; ++i) {
+        const QChar c = text.at(i);
+        if (c == QLatin1Char(' ') && digits == 0)
+            continue;
+        if (c < QLatin1Char('0') || c > QLatin1Char('9'))
+            break;
+        v = v * 10 + (c.unicode() - '0');
+        ++digits;
+    }
+    return digits > 0 ? v : 0;
+}
+
+QString hostOf(const QString &url) { return QUrl(url).host(); }
 
 QString compact(const QJsonArray &a)
 {
@@ -157,6 +208,25 @@ Nostr::Nostr(std::function<QByteArray()> secret, QObject *parent)
     m_ringSubId = QStringLiteral("huginn-r") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
     if (QCoreApplication *app = QCoreApplication::instance())
         connect(app, &QCoreApplication::aboutToQuit, this, &Nostr::flushSeen);
+    m_pageSubId = QStringLiteral("huginn-p") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
+    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    const QVariantMap eose = s.value(QStringLiteral("nostr/eose")).toMap();
+    for (auto it = eose.cbegin(); it != eose.cend(); ++it)
+        m_eoseAt.insert(it.key(), it.value().toLongLong());
+    // Labs › Performance check: how the relays stand at the end of a check.
+    Busy::addStatus(this, [this] {
+        int low = 0, open = 0;
+        for (const Out &o : std::as_const(m_outbox))
+            low += o.low ? 1 : 0;
+        for (const Sender &sn : std::as_const(m_senders))
+            open += sn.open ? 1 : 0;
+        return QStringList{QStringLiteral("relays open: %1 of %2, inbox live on %3").arg(m_live.size()).arg(relays().size()).arg(m_eosed.size()),
+                           QStringLiteral("relay sending sockets: %1 (%2 open)").arg(m_senders.size()).arg(open),
+                           QStringLiteral("events waiting for a relay: %1 (%2 a linked device's), waiting for OK: %3")
+                               .arg(m_outbox.size() - low).arg(low).arg(m_okWait.size()),
+                           QStringLiteral("handled events kept: %1, refused: %2, left for later: %3")
+                               .arg(m_seen.size()).arg(m_rejected.size()).arg(m_later.size())};
+    });
 }
 
 void Nostr::noteSeenSoon()
@@ -164,7 +234,7 @@ void Nostr::noteSeenSoon()
     if (m_seenDirty)
         return;
     m_seenDirty = true;
-    QTimer::singleShot(2000, this, &Nostr::flushSeen);
+    QTimer::singleShot(kSeenSaveMs, this, &Nostr::flushSeen);
 }
 
 void Nostr::flushSeen()
@@ -172,18 +242,34 @@ void Nostr::flushSeen()
     if (!m_seenDirty)
         return;
     m_seenDirty = false;
-    if (keepSeen)
-        keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact));
+    if (keepSeen) {
+        QJsonArray ids;
+        for (const QByteArray &id : std::as_const(m_seen))
+            ids.append(QString::fromLatin1(id.toHex()));
+        keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), ids}}).toJson(QJsonDocument::Compact));
+    }
     QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    s.setValue(QStringLiteral("nostr/since"), m_takenAt);
+    if (m_takenAt > 0)
+        s.setValue(QStringLiteral("nostr/since"), m_takenAt);
+    QVariantMap eose;
+    for (auto it = m_eoseAt.cbegin(); it != m_eoseAt.cend(); ++it)
+        eose.insert(it.key(), it.value());
+    s.setValue(QStringLiteral("nostr/eose"), eose);
 }
 
 void Nostr::restoreSeen(const QByteArray &stored)
 {
-    QStringList all = QJsonDocument::fromJson(stored).object().value(QStringLiteral("seen")).toVariant().toStringList();
-    QSet<QString> have(all.begin(), all.end());
+    QList<QByteArray> all;
+    QSet<QByteArray> have;
+    for (const QJsonValue &v : QJsonDocument::fromJson(stored).object().value(QStringLiteral("seen")).toArray()) {
+        const QByteArray id = QByteArray::fromHex(v.toString().toLatin1());
+        if (id.size() == 32 && !have.contains(id)) {
+            have.insert(id);
+            all << id;
+        }
+    }
     // Then what came while the vault was locked.
-    for (const QString &id : std::as_const(m_seen))
+    for (const QByteArray &id : std::as_const(m_seen))
         if (!have.contains(id)) {
             have.insert(id);
             all << id;
@@ -192,6 +278,16 @@ void Nostr::restoreSeen(const QByteArray &stored)
         have.remove(all.takeFirst());
     m_seen = all;
     m_seenSet = have;
+}
+
+void Nostr::noteSeen(const QByteArray &id)
+{
+    if (id.isEmpty() || m_seenSet.contains(id))
+        return;
+    m_seen << id;
+    m_seenSet.insert(id);
+    while (m_seen.size() > kMaxSeen)
+        m_seenSet.remove(m_seen.takeFirst());
 }
 
 Nostr::~Nostr()
@@ -213,10 +309,21 @@ Nostr::~Nostr()
 
 QByteArray Nostr::secret() const
 {
+    if (!m_secretCache.isEmpty())
+        return m_secretCache;
     QByteArray b = m_secret ? m_secret() : QByteArray();
     if (b.size() == 64)
         b = QByteArray::fromHex(b);
-    return b.size() == 32 ? b : QByteArray();
+    if (b.size() != 32)
+        return QByteArray();
+    m_secretCache = b;   // kept until the vault locks or is erased (forgetSecret)
+    return b;
+}
+
+void Nostr::forgetSecret()
+{
+    m_secretCache.fill(0);
+    m_secretCache.clear();
 }
 
 QString Nostr::publicKey() const
@@ -266,10 +373,27 @@ void Nostr::open(const QString &url)
     if (m_links.contains(url))
         return;
     auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+    Busy::nameSocket(ws, "nostr relay");
+    Busy::count(QStringLiteral("relay connects: ") + hostOf(url));
     m_links.insert(url, Link{ws, true});
-    connect(ws, &QWebSocket::connected, this, [this, url, ws] { opened(url, ws); });
-    connect(ws, &QWebSocket::disconnected, this, [this, url, ws] { gone(url, ws); });
-    connect(ws, &QWebSocket::errorOccurred, this, [this, url, ws](QAbstractSocket::SocketError) { gone(url, ws); });
+    m_signedIn.remove(url);
+    m_authClosed.remove(url);
+    m_askedAgain.remove(url);
+    m_eosed.remove(url);
+    m_pages.remove(url);
+    connect(ws, &QWebSocket::connected, this, [this, url, ws] {
+        Busy::Scope busy("relay connections");
+        opened(url, ws);
+    });
+    connect(ws, &QWebSocket::disconnected, this, [this, url, ws] {
+        Busy::Scope busy("relay connections");
+        gone(url, ws);
+    });
+    connect(ws, &QWebSocket::errorOccurred, this, [this, url, ws](QAbstractSocket::SocketError) {
+        Busy::Scope busy("relay connections");
+        Busy::count(QStringLiteral("relay errors: ") + hostOf(url));
+        gone(url, ws);
+    });
     connect(ws, &QWebSocket::textMessageReceived, this, [this, url, ws](const QString &text) { onMessage(url, ws, text); });
     connect(ws, &QWebSocket::pong, this, [this, url, ws] {
         auto it = m_links.find(url);
@@ -310,15 +434,22 @@ void Nostr::opened(const QString &url, QWebSocket *ws)
         ws->ping();
     });
     ping->start();
+    Busy::count(QStringLiteral("relay opened: ") + hostOf(url));
     setLive(url, true);
     subscribe(ws);
     // This relay is reachable again: what still waits for it goes on a sending socket, never on this one. Real messages
-    // first, a linked device's frames after them (only those meant for this relay).
+    // first, a linked device's frames after them (those meant for this relay, and ones whose relays are all down).
     QStringList again;
     for (int pass = 0; pass < 2; ++pass)
-        for (const Out &o : std::as_const(m_outbox))
-            if (o.low == (pass == 1) && (o.relays.isEmpty() || o.relays.contains(url)))
+        for (const Out &o : std::as_const(m_outbox)) {
+            if (o.low != (pass == 1))
+                continue;
+            bool anyLive = false;
+            for (const QString &r : o.relays)
+                anyLive = anyLive || (r != url && m_live.contains(r));
+            if (o.relays.isEmpty() || o.relays.contains(url) || !anyLive)
                 again << o.msg;
+        }
     if (!again.isEmpty())
         send(url, again);
 }
@@ -331,9 +462,13 @@ void Nostr::gone(const QString &url, QWebSocket *ws)
         return;
     m_links.erase(it);
     drop(ws);
+    m_eosed.remove(url);
+    m_pages.remove(url);
+    Busy::count(QStringLiteral("relay dropped: ") + hostOf(url));
     setLive(url, false);
     if (!m_keepAlive)
         return;
+    Busy::count(QStringLiteral("relay reconnects: ") + hostOf(url));
     // Try again: 2 s, 4 s, 8 s ... up to a minute between tries.
     const int n = m_retries.value(url) + 1;
     m_retries.insert(url, n);
@@ -399,6 +534,10 @@ void Nostr::disconnect()
 
 void Nostr::resubscribe()
 {
+    // Unlocked (or the keys changed): what was left for later comes again (the cursors stayed where they were), and
+    // the cursors may move on once it is taken.
+    if (!secret().isEmpty())
+        m_refused = false;
     for (auto it = m_links.begin(); it != m_links.end(); ++it)
         if (m_live.contains(it.key()) && it->ws) {
             // A relay that asked for a sign-in while locked gets one now, as the mailbox the vault holds the key of.
@@ -420,24 +559,90 @@ void Nostr::signIn(const QString &url, QWebSocket *ws, const QString &challenge)
             ws->sendTextMessage(compact(QJsonArray{QStringLiteral("AUTH"), event(kAuthKind, tags, QString(), rs)}));
 }
 
+qint64 Nostr::sinceFor(const QString &url) const
+{
+    // From 20 minutes before this relay last finished sending what it held (created_at is blurred up to kBlurS, and
+    // clocks differ). A relay with no cursor yet: from two days before the last event taken, as before. Never further
+    // back than the longest message limit (nothing older is kept anywhere).
+    const qint64 floor = qMax<qint64>(0, now() - (qint64(kLongestDays) + 1) * 86400);
+    const qint64 cursor = m_eoseAt.value(url, 0);
+    if (cursor > 0)
+        return qMax(floor, cursor - 20 * 60);
+    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    return qMax(floor, s.value(QStringLiteral("nostr/since"), 0).toLongLong() - 2 * 86400);
+}
+
+void Nostr::storedEvent(const QString &url, const QString &sub, qint64 createdAt)
+{
+    // Only stored events count (before EOSE), on the inbox request or a page request still going.
+    if (sub == m_subId ? m_eosed.contains(url) : (sub != m_pageSubId || m_pages.value(url).until == 0))
+        return;
+    Page &pg = m_pages[url];
+    ++pg.count;
+    if (createdAt > 0 && (pg.oldest <= 0 || createdAt < pg.oldest))
+        pg.oldest = createdAt;
+}
+
+void Nostr::endOfStored(const QString &url, QWebSocket *ws, const QString &sub)
+{
+    if (sub != m_subId && sub != m_pageSubId)
+        return;
+    if (m_links.value(url).ws != ws)
+        return;
+    if (sub == m_subId)
+        m_eosed.insert(url);   // from here on the inbox request is live on this relay
+    Page &pg = m_pages[url];
+    const bool full = pg.count >= kPageFull && pg.oldest > 0 && (pg.until == 0 || pg.oldest < pg.until);
+    if (full) {
+        // A full page: there may be more before it. Asked for on a request of its own (the inbox request stays live).
+        Busy::count("relay inbox pages asked for");
+        pg.until = pg.oldest;
+        pg.count = 0;
+        const QString pub = publicKey();
+        if (!pub.isEmpty()) {
+            const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
+                                     {QStringLiteral("#p"), QJsonArray{pub}},
+                                     {QStringLiteral("since"), sinceFor(url)},
+                                     {QStringLiteral("until"), pg.until}};
+            ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_pageSubId, filter}));
+            return;
+        }
+    }
+    if (sub == m_pageSubId)
+        ws->sendTextMessage(compact(QJsonArray{QStringLiteral("CLOSE"), m_pageSubId}));
+    m_pages.remove(url);
+    // Everything this relay held has come: next time only what is newer. Not while something was left for later.
+    if (!m_refused) {
+        m_eoseAt.insert(url, now());
+        noteSeenSoon();
+    }
+}
+
 void Nostr::subscribe(QWebSocket *ws)
 {
-    // Events can be backdated a little (see publish), so look back two days and skip ones already seen.
-    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    const qint64 since = qMax<qint64>(0, s.value(QStringLiteral("nostr/since"), 0).toLongLong() - 2 * 86400);
+    // A new request: what was left for later is tried again when its copies come.
+    m_later.clear();
+    QString url;
+    for (auto it = m_links.cbegin(); it != m_links.cend(); ++it)
+        if (it->ws == ws)
+            url = it.key();
+    // Stored events are counted again from here (a full page asks for the ones before it).
+    m_eosed.remove(url);
+    m_pages.remove(url);
     const QString pub = publicKey();
     if (!pub.isEmpty()) {
         const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
                                  {QStringLiteral("#p"), QJsonArray{pub}},
-                                 {QStringLiteral("since"), since}};
+                                 {QStringLiteral("since"), sinceFor(url)}};
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_subId, filter}));
+        Busy::count("relay inbox requests");
     }
     // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
     const QStringList rings = ringMailboxes ? ringMailboxes() : QStringList();
     if (!rings.isEmpty()) {
         const QJsonObject filter{{QStringLiteral("kinds"), QJsonArray{Kind}},
                                  {QStringLiteral("#p"), QJsonArray::fromStringList(rings)},
-                                 {QStringLiteral("since"), qMax<qint64>(0, now() - 2 * 86400)}};
+                                 {QStringLiteral("since"), sinceFor(url)}};
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("REQ"), m_ringSubId, filter}));
     }
 }
@@ -445,33 +650,85 @@ void Nostr::subscribe(QWebSocket *ws)
 void Nostr::onMessage(const QString &url, QWebSocket *ws, const QString &text)
 {
     Busy::Scope busy("relay messages");
+    // The same event comes from every relay: a copy already handled (or refused, or left for later) is skipped before
+    // the message is read in full.
+    const QByteArray quick = quickId(text);
+    if (!quick.isEmpty()) {
+        Busy::count("relay EVENTs received");
+        if (m_seenSet.contains(quick) || m_rejectedSet.contains(quick) || m_later.contains(quick)) {
+            Busy::count("relay EVENTs skipped as already handled");
+            storedEvent(url, quickSub(text), quickCreatedAt(text));
+            return;
+        }
+    }
     const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
     if (!doc.isArray())
         return;
     const QJsonArray a = doc.array();
     const QString type = a.at(0).toString();
     if (type == QLatin1String("EVENT")) {
-        if (a.at(2).isObject())
-            handle(a.at(2).toObject());
+        if (quick.isEmpty())
+            Busy::count("relay EVENTs received");
+        if (a.at(2).isObject()) {
+            const QJsonObject ev = a.at(2).toObject();
+            storedEvent(url, a.at(1).toString(), ev.value(QStringLiteral("created_at")).toInteger());
+            handle(url, ev);
+        }
+    } else if (type == QLatin1String("EOSE")) {
+        endOfStored(url, ws, a.at(1).toString());
     } else if (type == QLatin1String("AUTH")) {
         // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
+        Busy::count("relay sign-in requests");
         m_challenges.insert(url, a.at(1).toString());
         if (secret().isEmpty() && !(ringSecrets && !ringSecrets().isEmpty()))
             return;
         signIn(url, ws, a.at(1).toString());
-        subscribe(ws);
+        m_signedIn.insert(url);
+        // The inbox request went out when the relay opened. Asked for once more after the sign-in (a relay may hand
+        // out the mailbox's events only now), unless it already sent everything it held on it.
+        if ((m_authClosed.contains(url) || !m_eosed.contains(url)) && !m_askedAgain.contains(url)) {
+            m_authClosed.remove(url);
+            m_askedAgain.insert(url);
+            subscribe(ws);
+        }
+    } else if (type == QLatin1String("CLOSED")) {
+        const QString sub = a.at(1).toString();
+        if ((sub != m_subId && sub != m_ringSubId) || !a.at(2).toString().startsWith(QLatin1String("auth-required")))
+            return;
+        Busy::count("relay inbox requests closed until signed in");
+        if (!m_signedIn.contains(url)) {
+            m_authClosed.insert(url);   // asked again right after the sign-in
+        } else if (!m_askedAgain.contains(url)) {
+            // Signed in already: once more, a moment later (the relay may not have taken the sign-in yet).
+            m_askedAgain.insert(url);
+            QPointer<QWebSocket> w(ws);
+            QTimer::singleShot(1500, this, [this, url, w] {
+                if (w && m_links.value(url).ws == w && m_live.contains(url))
+                    subscribe(w.data());
+            });
+        }
     } else if (type == QLatin1String("OK")) {
         if (a.at(2).toBool())
             takeOk(a.at(1).toString());
     }
 }
 
-void Nostr::handle(const QJsonObject &ev)
+void Nostr::handle(const QString &url, const QJsonObject &ev)
 {
+    Q_UNUSED(url);
     const QString id = ev.value(QStringLiteral("id")).toString();
+    const QByteArray raw = QByteArray::fromHex(id.toLatin1());
     // The same event comes from every relay at once: only one copy is handled at a time.
-    if (id.isEmpty() || m_seenSet.contains(id) || m_working.contains(id))
+    if (id.isEmpty() || raw.size() != 32 || m_seenSet.contains(raw) || m_rejectedSet.contains(raw) || m_later.contains(raw)
+        || m_working.contains(id))
         return;
+    const auto reject = [this, &raw] {
+        Busy::count("relay EVENTs refused (id or signature)");
+        m_rejected << raw;
+        m_rejectedSet.insert(raw);
+        while (m_rejected.size() > kMaxRejected)
+            m_rejectedSet.remove(m_rejected.takeFirst());
+    };
     // Cap b1: an event for the ring mailbox is only ever a ring envelope. Tried with the ring key, then dropped.
     const QStringList rings = ringMailboxes ? ringMailboxes() : QStringList();
     if (!rings.isEmpty()) {
@@ -483,13 +740,16 @@ void Nostr::handle(const QJsonObject &ev)
             }
         if (!p.isEmpty() && rings.contains(p)) {
             const bool good = idOf(ev) == id
-                && Schnorr::verify(Schnorr::unhex(id), Schnorr::unhex(ev.value(QStringLiteral("pubkey")).toString()),
+                && Schnorr::verify(raw, Schnorr::unhex(ev.value(QStringLiteral("pubkey")).toString()),
                                    Schnorr::unhex(ev.value(QStringLiteral("sig")).toString()));
-            m_seen << id;
-            m_seenSet.insert(id);
-            while (m_seen.size() > kMaxSeen)
-                m_seenSet.remove(m_seen.takeFirst());
-            if (good && onRing)
+            if (!good) {
+                reject();
+                return;
+            }
+            Busy::count("relay EVENTs for the ring mailbox");
+            noteSeen(raw);
+            noteSeenSoon();
+            if (onRing)
                 onRing(ev.value(QStringLiteral("content")).toString());
             return;
         }
@@ -500,19 +760,29 @@ void Nostr::handle(const QJsonObject &ev)
             return;
         m_announced.insert(id);
     }
-    m_working.insert(id);
     // Only trust what the event's own signature covers.
     const bool valid = idOf(ev) == id
-        && Schnorr::verify(Schnorr::unhex(id), Schnorr::unhex(ev.value(QStringLiteral("pubkey")).toString()),
+        && Schnorr::verify(raw, Schnorr::unhex(ev.value(QStringLiteral("pubkey")).toString()),
                            Schnorr::unhex(ev.value(QStringLiteral("sig")).toString()));
-    const bool taken = valid && onEnvelope && onEnvelope(ev.value(QStringLiteral("content")).toString());
-    m_working.remove(id);
-    if (!taken)
+    if (!valid) {
+        reject();
         return;
-    m_seen << id;
-    m_seenSet.insert(id);
-    while (m_seen.size() > kMaxSeen)
-        m_seenSet.remove(m_seen.takeFirst());
+    }
+    m_working.insert(id);
+    const bool taken = onEnvelope && onEnvelope(ev.value(QStringLiteral("content")).toString());
+    m_working.remove(id);
+    if (!taken) {
+        // Left for later (locked, or a key not here yet): its copies from other relays are skipped until the inbox is
+        // asked for again, and no relay's cursor moves on past it.
+        Busy::count("relay EVENTs left for later");
+        if (m_later.size() > 5000)
+            m_later.clear();
+        m_later.insert(raw);
+        m_refused = true;   // the cursors stay where they are until it is taken
+        return;
+    }
+    Busy::count("relay EVENTs taken");
+    noteSeen(raw);
     m_takenAt = now();
     noteSeenSoon();
 }
@@ -524,11 +794,15 @@ void Nostr::send(const QString &url, const QStringList &msgs)
     auto it = m_senders.find(url);
     if (it == m_senders.end() || !it->ws) {
         auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+        Busy::nameSocket(ws, "nostr send");
+        Busy::count(QStringLiteral("relay sending sockets opened: ") + hostOf(url));
         auto *closer = new QTimer(ws);
+        closer->setObjectName(QStringLiteral("nostr send closer"));
         closer->setSingleShot(true);
         closer->setInterval(kSendMs);
         connect(closer, &QTimer::timeout, this, [this, url, ws] { dropSender(url, ws); });
         connect(ws, &QWebSocket::connected, this, [this, url, ws] {
+            Busy::Scope busy("relay sending");
             auto s = m_senders.find(url);
             if (s == m_senders.end() || s->ws != ws) {
                 ws->close();
@@ -539,10 +813,18 @@ void Nostr::send(const QString &url, const QStringList &msgs)
                 ws->sendTextMessage(m);
             s->queue.clear();
         });
-        connect(ws, &QWebSocket::disconnected, this, [this, url, ws] { dropSender(url, ws); });
-        connect(ws, &QWebSocket::errorOccurred, this, [this, url, ws](QAbstractSocket::SocketError) { dropSender(url, ws); });
+        connect(ws, &QWebSocket::disconnected, this, [this, url, ws] {
+            Busy::Scope busy("relay sending");
+            dropSender(url, ws);
+        });
+        connect(ws, &QWebSocket::errorOccurred, this, [this, url, ws](QAbstractSocket::SocketError) {
+            Busy::Scope busy("relay sending");
+            Busy::count(QStringLiteral("relay sending errors: ") + hostOf(url));
+            dropSender(url, ws);
+        });
         // Only "OK" matters here. "AUTH" is never answered: signing in would name this computer's mailbox.
         connect(ws, &QWebSocket::textMessageReceived, this, [this](const QString &text) {
+            Busy::Scope busy("relay sending");
             const QJsonArray a = QJsonDocument::fromJson(text.toUtf8()).array();
             if (a.at(0).toString() == QLatin1String("OK") && a.at(2).toBool())
                 takeOk(a.at(1).toString());
@@ -562,7 +844,7 @@ void Nostr::send(const QString &url, const QStringList &msgs)
 
 void Nostr::warmSenders()
 {
-    for (const QString &url : relays())
+    for (const QString &url : pickRelays(relays(), m_live, kSpread))
         send(url, {});
 }
 
@@ -625,7 +907,7 @@ int Nostr::publishTo(const QString &mailboxHex, const QString &content, int days
     const QJsonObject ev = event(Kind, tags, content, Schnorr::newSecret(), createdAt);
     const QString msg = compact(QJsonArray{QStringLiteral("EVENT"), ev});
     const QString id = ev.value(QStringLiteral("id")).toString();
-    const QStringList to = maxRelays > 0 ? pickRelays(relays(), m_live, maxRelays) : QStringList();
+    const QStringList to = pickRelays(relays(), m_live, maxRelays > 0 ? maxRelays : kSpread);
     m_outbox << Out{msg, id, to, low};
     // Each kind has its own cap: a linked device's frames only ever push out older ones of their own.
     int count = 0;
@@ -644,8 +926,8 @@ int Nostr::publishTo(const QString &mailboxHex, const QString &content, int days
             m_okWait.clear();
         m_okWait.insert(id, std::move(onStored));
     }
-    // Every relay (or the few chosen) gets it, each on a sending socket of its own that never asks for the inbox or signs in.
-    for (const QString &url : to.isEmpty() ? relays() : to)
+    // The few relays chosen get it, each on a sending socket of its own that never asks for the inbox or signs in.
+    for (const QString &url : to)
         send(url, {msg});
     if (m_links.isEmpty())
         connectRelays();

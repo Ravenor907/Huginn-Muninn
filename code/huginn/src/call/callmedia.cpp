@@ -1,4 +1,5 @@
 #include "callmedia.h"
+#include "../busy.h"
 
 #include "audioio.h"
 #include "turnclient.h"
@@ -41,6 +42,7 @@ CallMedia::~CallMedia()
 QUdpSocket *CallMedia::bindLan(QObject *parent)
 {
     auto *s = new QUdpSocket(parent);
+    Busy::nameSocket(s, "call media");
     if (!s->bind(QHostAddress::Any, 0)) {
         delete s;
         return nullptr;
@@ -320,6 +322,7 @@ void CallMedia::onPull(qint16 *pcm)
 
 void CallMedia::onLan()
 {
+    Busy::Scope busy("call media");
     while (m_lan && m_lan->hasPendingDatagrams()) {
         QByteArray b(int(qMax<qint64>(0, m_lan->pendingDatagramSize())), 0);
         QHostAddress from;

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QObject>
+
+#include <functional>
 #include <QString>
 
 // Direct connect: the handheld makes its own private Wi-Fi (NetworkManager hotspot, no internet
@@ -37,7 +39,11 @@ Q_SIGNALS:
     void changed();
 
 private:
-    QString wifiDevice(QString *error) const;
+    // Finds the Wi-Fi adapter without waiting on the window's thread, then calls done with its path (empty: none, error said).
+    void findWifiDevice(std::function<void(const QString &path, const QString &error)> done);
+    void activate(const QString &dev);
+    // Takes the hotspot down; wait: only as Huginn closes (the messages must go before it ends).
+    void takeDown(bool wait);
 
     bool m_busy = false;
     QString m_ssid, m_password, m_error, m_connection, m_active;

@@ -1,4 +1,5 @@
 #include "callsession.h"
+#include "../busy.h"
 
 #include "callmedia.h"
 #include "callsignal.h"
@@ -358,6 +359,7 @@ void CallSession::startProbe()
 
 void CallSession::onLanEarly()
 {
+    Busy::Scope busy("call media");
     // The socket is ours until the media takes it: the STUN answer is used, media kept for later.
     while (m_lan && m_lan->hasPendingDatagrams()) {
         QByteArray b(int(qMax<qint64>(0, m_lan->pendingDatagramSize())), 0);

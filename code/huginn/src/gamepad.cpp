@@ -84,16 +84,28 @@ Gamepad::~Gamepad()
         SDL_Quit();
 }
 
-// Read the controller often only while one is plugged in and Huginn is in front (60 times a second, 30 with Battery
-// saver); behind other windows 10 times a second (4 with Battery saver); with none, look for one every 2 seconds.
+// Read the controller often only while it is in use and Huginn is in front (60 times a second, 30 with Battery saver);
+// at rest in front, and behind other windows, 10 times a second (4 behind them with Battery saver); with none, look
+// for one every 2 seconds. Nothing is lost at rest: SDL keeps the presses until they are read.
 int Gamepad::pollInterval() const
 {
     if (!m_pad)
         return 2000;
     const bool front = QGuiApplication::applicationState() == Qt::ApplicationActive;
-    if (front)
+    if (front && inUse())
         return m_relaxed ? 33 : 16;
+    if (front)
+        return 100;
     return m_relaxed ? 250 : 100;
+}
+
+// Something held, a stick pushed past its rest zone, or a press or move in the last second and a half.
+bool Gamepad::inUse() const
+{
+    bool held = !m_repeatButton.isEmpty() || m_held != Qt::NoButton || stickInUse();
+    for (auto it = m_axisHeld.cbegin(); it != m_axisHeld.cend() && !held; ++it)
+        held = it.value();
+    return held || m_clock.elapsed() - m_lastActive < 1500;
 }
 
 void Gamepad::retime()
@@ -176,8 +188,11 @@ void Gamepad::poll()
 {
     Busy::Scope busy("controller");
     bool moved = false;
+    bool button = false;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_CONTROLLERBUTTONDOWN || e.type == SDL_CONTROLLERBUTTONUP)
+            button = true;
         switch (e.type) {
         case SDL_CONTROLLERDEVICEADDED:
             open(e.cdevice.which);
@@ -235,6 +250,9 @@ void Gamepad::poll()
     // Once a read, however many moves came in: the bindings on the sticks run once, not once per event.
     if (moved)
         Q_EMIT stickChanged();
+    if (button || moved)
+        m_lastActive = m_clock.elapsed();
+    retime();
 }
 
 QString Gamepad::glyph(const QString &button) const

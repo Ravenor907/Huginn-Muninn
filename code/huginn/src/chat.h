@@ -4,6 +4,7 @@
 #include "ratchet.h"
 #include "ring.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
 #include <functional>
@@ -483,6 +484,20 @@ private:
     void saveSoon();
     // changed, once for a burst: what only the network side noticed (a relay, a nearby device, Bluetooth).
     void changedSoon();
+    // Says changed: at once for what the person did; once for a burst (changedSoon) for what came over the network.
+    void noteChanged();
+    // While one lives, what changes came over the network (a message, a relay's OK).
+    struct FromNetwork {
+        explicit FromNetwork(Chat *c) : chat(c) { if (chat) ++chat->m_netDepth; }
+        ~FromNetwork() { if (chat) --chat->m_netDepth; }
+        FromNetwork(const FromNetwork &) = delete;
+        FromNetwork &operator=(const FromNetwork &) = delete;
+        Chat *chat;
+    };
+    int m_netDepth = 0;
+    // chats(), kept until something changes (or a second has passed): many parts of the screen read it after each change.
+    mutable QVariantList m_chatsCache;
+    mutable QElapsedTimer m_chatsAge;
     // How often retryLoop runs: every second in front, every 3 seconds behind other windows or with Battery saver.
     void retimeRetry();
     void saveMet();
@@ -609,6 +624,7 @@ private:
     bool saveGroups();
     void saveGroupsSoon();
     void saveGroupChats();
+    void saveGroupChatsSoon();   // once for a burst (flushSaves writes it at once)
     // Messages past each group's limit go; their ids are added to gone. cutoff: the oldest time kept for a limit in days.
     void pruneGroups(const std::function<qint64(int)> &cutoff, QStringList *gone);
     // cap j1 (grouplinks.cpp)
@@ -649,6 +665,9 @@ private:
     bool m_ready = false;
     QString m_openChat;
     QByteArray m_priv, m_pub;
+    // keyWith()'s shared keys by their key, made once (an ECDH and HKDF each); cleared when my key changes.
+    mutable QHash<QString, QByteArray> m_sharedKeys;
+    mutable QByteArray m_sharedFor;
     QVariantList m_nearby;
     QHash<QString, QVariantList> m_private;
     QHash<QString, QVariantMap> m_contacts;            // key -> {key, name, mailbox, verified}
@@ -694,6 +713,7 @@ private:
     QHash<QString, GroupOut> m_gout;                    // envelope id -> waiting for that member's receipt
     QHash<QString, qint64> m_syncAsked;                 // group|key -> when
     bool m_groupsDirty = false;
+    bool m_gchatsDirty = false;   // the group messages wait to be saved (saveGroupChatsSoon)
     bool m_chatsDirty = false;
     bool m_changedSoon = false;
     bool m_relaxed = false;

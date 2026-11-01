@@ -40,6 +40,19 @@ struct Curve {
     Point point() const { return Point(EC_POINT_new(group)); }
 };
 
+// One curve and scratch context per thread, made once (making the curve costs more than a signature check).
+// Failed checks on bad input leave errors behind: each call clears them as it ends.
+struct Use {
+    Curve &c;
+    Use() : c(curve()) {}
+    ~Use() { ERR_clear_error(); }
+    static Curve &curve()
+    {
+        thread_local Curve made;
+        return made;
+    }
+};
+
 const unsigned char *u(const QByteArray &b) { return reinterpret_cast<const unsigned char *>(b.constData()); }
 
 Bn number(const QByteArray &b)
@@ -102,7 +115,8 @@ Bn secretNumber(const Curve &c, const QByteArray &secret)
 
 QByteArray Schnorr::newSecret()
 {
-    Curve c;
+    const Use use;
+    Curve &c = use.c;
     QByteArray b(32, 0);
     while (c.ok()) {
         if (RAND_bytes(reinterpret_cast<unsigned char *>(b.data()), 32) == 1 && secretNumber(c, b))
@@ -113,7 +127,8 @@ QByteArray Schnorr::newSecret()
 
 QByteArray Schnorr::publicKey(const QByteArray &secret)
 {
-    Curve c;
+    const Use use;
+    Curve &c = use.c;
     if (!c.ok())
         return QByteArray();
     Bn d = secretNumber(c, secret);
@@ -125,7 +140,8 @@ QByteArray Schnorr::publicKey(const QByteArray &secret)
 
 QByteArray Schnorr::sign(const QByteArray &msg, const QByteArray &secret, const QByteArray &aux)
 {
-    Curve c;
+    const Use use;
+    Curve &c = use.c;
     if (!c.ok())
         return QByteArray();
     QByteArray rand = aux;
@@ -175,7 +191,8 @@ bool Schnorr::verify(const QByteArray &msg, const QByteArray &pubkey, const QByt
 {
     if (sig.size() != 64 || pubkey.size() != 32)
         return false;
-    Curve c;
+    const Use use;
+    Curve &c = use.c;
     if (!c.ok())
         return false;
     // lift_x: the point with this x and an even y; fails when x isn't on the curve.

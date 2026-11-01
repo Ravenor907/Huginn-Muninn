@@ -156,7 +156,10 @@ Rectangle {
             width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
-            source: visible && !host.isTour ? Chat.photoUrl(msg.m.photo) : ""
+            // Read, shrunk to the bubble (sharp up to twice its size) and kept in memory on the loading thread (ThumbProvider).
+            sourceSize.width: Math.ceil(width * 2)
+            sourceSize.height: Math.ceil(height * 2)
+            source: visible && !host.isTour ? "image://thumb/" + msg.m.photo : ""
         }
         // A GIF (cap a1): it moves while Huginn is in front; with Less motion or Battery saver it holds its first frame until played.
         Item {

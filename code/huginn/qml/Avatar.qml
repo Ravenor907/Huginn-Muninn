@@ -61,7 +61,8 @@ Item {
         anchors.fill: parent
         visible: av.hasPicture && status === Image.Ready
         asynchronous: true
-        cache: false
+        // Kept once made: the version in its URL brings a new one after a change.
+        cache: true
         smooth: true; mipmap: true
         fillMode: Image.PreserveAspectFit
         sourceSize.width: 256; sourceSize.height: 256

@@ -1101,8 +1101,8 @@ void Chat::updateGroupMessage(const QString &g, const QString &id, const std::fu
         break;
     }
     if (touched) {
-        saveGroupChats();
-        Q_EMIT changed();
+        saveGroupChatsSoon();
+        noteChanged();
     }
 }
 
@@ -1137,8 +1137,8 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
         const bool mention = RichWire::mentions(str(m, "text"), username());
         Q_EMIT arrived((mention ? QStringLiteral("%1 mentioned you in %2") : QStringLiteral("%1 in %2")).arg(memberName(g, str(m, "from")), groupName(g)), what, key);
     }
-    saveGroupChats();
-    Q_EMIT changed();
+    saveGroupChatsSoon();
+    noteChanged();
 }
 
 // A line from Huginn itself in the group's first channel (never sent).
@@ -1253,6 +1253,7 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                         dropped = true;
                     }
                 }
+                const QVariantMap before = m;
                 QStringList dlv = m.value(QStringLiteral("dlv")).toStringList(), rd = m.value(QStringLiteral("rd")).toStringList();
                 if (!dlv.contains(fromKey))
                     dlv << fromKey;
@@ -1266,13 +1267,15 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                         m.insert(QStringLiteral("state"), st);
                     m.insert(QStringLiteral("failed"), false);
                 }
+                if (m == before)
+                    continue;   // already so: nothing to save or show
                 v = m;
                 touched = true;
             }
         }
         if (touched) {
-            saveGroupChats();
-            Q_EMIT changed();
+            saveGroupChatsSoon();
+            noteChanged();
         }
         if (dropped)
             saveGroupsSoon();
@@ -1323,7 +1326,7 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                 Q_EMIT notice(QStringLiteral("%1 invited you to %2. Open Chats to answer.").arg(nameOf(fromKey), gname));
                 Q_EMIT arrived(nameOf(fromKey), QStringLiteral("Invited you to ") + gname, QStringLiteral("invite:") + g);
             }
-            Q_EMIT changed();
+            noteChanged();
         }
     } else if (t == QLatin1String("join")) {
         const QString inv = p.value(QStringLiteral("inv")).toString();
@@ -1647,7 +1650,7 @@ void Chat::stateAccepted(const QString &g, const QJsonObject &old, bool first)
     refreshGroupPeers();
     processHeld(g);
     saveGroups();
-    Q_EMIT changed();
+    noteChanged();
 }
 
 // Everyone in a group with us who isn't a contact is a group peer: reachable for the group only.
@@ -1709,6 +1712,8 @@ void Chat::flushSaves()
         save();
     if (m_groupsDirty)
         saveGroups();
+    if (m_gchatsDirty)
+        saveGroupChats();
     if (m_seen.dirty())
         m_vault->write(QStringLiteral("seen.json"), m_seen.save());
 }
@@ -1722,6 +1727,14 @@ void Chat::saveSoon()
         if (m_chatsDirty && m_ready)
             save();
     });
+}
+
+void Chat::noteChanged()
+{
+    if (m_netDepth > 0)
+        changedSoon();
+    else
+        Q_EMIT changed();
 }
 
 void Chat::changedSoon()
@@ -1806,8 +1819,20 @@ bool Chat::saveGroups()
     return ok;
 }
 
+void Chat::saveGroupChatsSoon()
+{
+    if (m_gchatsDirty)
+        return;
+    m_gchatsDirty = true;
+    QTimer::singleShot(400, this, [this] {
+        if (m_gchatsDirty)
+            saveGroupChats();
+    });
+}
+
 void Chat::saveGroupChats()
 {
+    m_gchatsDirty = false;
     if (!m_ready)
         return;
     QJsonObject o;

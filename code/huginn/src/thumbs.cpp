@@ -6,6 +6,7 @@
 namespace
 {
 const int kSide = 320;
+const int kMaxSide = 1280;
 }
 
 ThumbProvider::ThumbProvider(std::function<QByteArray(const QString &)> read)
@@ -17,10 +18,14 @@ ThumbProvider::ThumbProvider(std::function<QByteArray(const QString &)> read)
 
 QImage ThumbProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
 {
-    Q_UNUSED(requestedSize)
+    // Asked for a size (a photo in a chat): big enough to fill that box, never bigger than kMaxSide; otherwise kSide.
+    int side = kSide;
+    if (requestedSize.isValid() && requestedSize.width() > 0 && requestedSize.height() > 0)
+        side = qBound(64, qMax(requestedSize.width(), requestedSize.height()), kMaxSide);
+    const QString key = side == kSide ? id : id + QLatin1Char('@') + QString::number(side);
     {
         QMutexLocker l(&m_lock);
-        if (const QImage *hit = m_cache.object(id)) {
+        if (const QImage *hit = m_cache.object(key)) {
             if (size)
                 *size = hit->size();
             return *hit;
@@ -36,11 +41,16 @@ QImage ThumbProvider::requestImage(const QString &id, QSize *size, const QSize &
     bytes.fill(0);
     if (img.isNull())
         return {};
-    if (qMax(img.width(), img.height()) > kSide)
-        img = img.scaled(kSide, kSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    // Its shorter side fills the box (a chat crops it); a grid's square still gets the whole picture within kSide.
+    if (side == kSide) {
+        if (qMax(img.width(), img.height()) > kSide)
+            img = img.scaled(kSide, kSide, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    } else if (qMin(img.width(), img.height()) > side) {
+        img = img.scaled(side, side, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    }
     if (size)
         *size = img.size();
     QMutexLocker l(&m_lock);
-    m_cache.insert(id, new QImage(img), int(img.sizeInBytes()));
+    m_cache.insert(key, new QImage(img), int(img.sizeInBytes()));
     return img;
 }

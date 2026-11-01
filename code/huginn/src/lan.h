@@ -21,7 +21,9 @@ QList<QHostAddress> addresses();
 QString firstIPv4();
 // True when the address is inside one of the LAN interfaces' own subnets: someone on the same Wi-Fi.
 // IPv4 and IPv6 alike (an IPv4 peer seen through an IPv6 socket counts as IPv4).
+// The subnets are looked up at most every 30 seconds (refresh() makes the next call look again).
 bool isNeighbour(const QHostAddress &peer);
+void refresh();
 // A peer's address as text: dotted IPv4 (also for ::ffff:a.b.c.d), otherwise IPv6 with its scope.
 QString text(const QHostAddress &peer);
 // The same, ready for a URL's host: IPv6 in brackets, its scope written %25.

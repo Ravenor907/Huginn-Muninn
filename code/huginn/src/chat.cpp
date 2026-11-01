@@ -91,6 +91,11 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     , m_ble(ble)
     , m_settings(QStringLiteral("Huginn"), QStringLiteral("Huginn"))
 {
+    // First of all: chats() is made again after any change (everything else reads it after this).
+    connect(this, &Chat::changed, this, [this] {
+        m_chatsAge.invalidate();
+        Busy::count("chat changes");
+    });
     // Link previews are off for new installs. An install that already has chat settings keeps them on unless it turned them off.
     if (m_settings.contains(QStringLiteral("chat/pub")) && !m_settings.contains(QStringLiteral("chat/linkPreviews")))
         m_settings.setValue(QStringLiteral("chat/linkPreviews"), true);
@@ -103,6 +108,7 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     connect(m_vault, &Vault::changed, this, [this] {
         if (!m_vault->exists()) {
             m_chatsDirty = false;   // nothing waiting to be saved goes back after an erase
+            m_gchatsDirty = false;
             m_peers.clear();
             m_capable.clear();
             m_caps.clear();
@@ -638,7 +644,19 @@ void Chat::noteCall(const QString &where, const QString &text, bool missed)
 
 QByteArray Chat::keyWith(const QString &theirKey) const
 {
-    return ChatCrypto::sharedKey(m_priv, m_pub, QByteArray::fromBase64(theirKey.toLatin1()));
+    if (m_sharedFor != m_pub || m_sharedKeys.size() > 4000) {
+        for (QByteArray &k : m_sharedKeys)
+            k.fill(0);
+        m_sharedKeys.clear();
+        m_sharedFor = m_pub;
+    }
+    const auto it = m_sharedKeys.constFind(theirKey);
+    if (it != m_sharedKeys.cend())
+        return it.value();
+    const QByteArray k = ChatCrypto::sharedKey(m_priv, m_pub, QByteArray::fromBase64(theirKey.toLatin1()));
+    if (!k.isEmpty())
+        m_sharedKeys.insert(theirKey, k);
+    return k;
 }
 
 QString Chat::codeWith(const QString &key) const { return ChatCrypto::pairingCode(keyWith(key)); }
@@ -756,6 +774,7 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
         ok = [self, left, sent, step, n] {
             if (!self)
                 return;
+            const FromNetwork net(self.data());
             const int l = --*left;
             if (step)
                 step(n - l);
@@ -792,7 +811,7 @@ void Chat::noteCaps(const QString &key, bool present, const QStringList &caps)
     const QStringList before = m_caps.value(key);
     m_caps.insert(key, have);
     saveRatchet(key);
-    Q_EMIT changed();
+    noteChanged();
     // Caps b1 and e1: their app says so now, so my ring key and day key go to them.
     const QString ringCap = QLatin1String(RingWire::kRingCap), wrapCap = QLatin1String(RingWire::kWrapCap);
     if ((have.contains(ringCap) && !before.contains(ringCap)) || (have.contains(wrapCap) && !before.contains(wrapCap)))
@@ -1418,8 +1437,11 @@ void Chat::pruneTrash()
 
 int Chat::receive(const QByteArray &body, const QString &via, const QString &from)
 {
+    Busy::Scope busy("messages: taking in");
+    Busy::count(QStringLiteral("messages taken in: ") + via);
     if (!m_ready)
         return 503;
+    const FromNetwork net(this);
     m_pendingPeer.reset();
     m_openedFrom.clear();
     const QJsonObject o = QJsonDocument::fromJson(body).object();
@@ -1499,6 +1521,7 @@ QString Chat::stranger(const QString &name) { return QStringLiteral("\u201C%1\u2
 // and before anything is sent back (a reply moves the same peer on).
 QByteArray Chat::open(const QJsonObject &o, const QString &fromKey, bool *ok)
 {
+    Busy::Scope busy("messages: unsealing");
     *ok = false;
     const QByteArray sk = keyWith(fromKey);
     if (sk.isEmpty())
@@ -1630,7 +1653,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         if (!theirs.isEmpty() && theirs != str(m_contacts.value(fromKey), "name")) {
             m_contacts[fromKey].insert(QStringLiteral("name"), theirs);
             saveContacts();
-            Q_EMIT changed();
+            noteChanged();
         }
     }
     // Calls: only from contacts and group peers, at most 30 signals in 10 seconds each.
@@ -1667,6 +1690,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
     // Caps i1 and f1 and linked devices (trust.cpp): introductions, files straight between devices
     // and a phone's companion, each with its own checks and limits.
     if (room == QLatin1String("intro") || room == QLatin1String("file") || room == QLatin1String("link")) {
+        Busy::Scope busy(room == QLatin1String("link") ? "messages: linked device" : "messages: introductions and files");
         const int code = receiveExtra(room, fromKey, name, mailbox, QJsonDocument::fromJson(plain).object(), via);
         if (code != 200) {
             m_pendingPeer.reset();
@@ -1846,7 +1870,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
                 Q_EMIT arrived(name, QStringLiteral("Wants to chat with you"), fromKey);
             }
         }
-        Q_EMIT changed();
+        noteChanged();
         return 200;
     }
     if (room == QLatin1String("receipt")) {
@@ -1910,7 +1934,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             dropSealed(id);   // there: no more resends
         if (any) {
             save();
-            Q_EMIT changed();
+            noteChanged();
         }
         return 200;
     }
@@ -1943,7 +1967,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         }
         save();
         receipt(fromKey, {gone}, QStringLiteral("unsent"), mailbox);
-        Q_EMIT changed();
+        noteChanged();
         return 200;
     }
     if (room == QLatin1String("keep")) {
@@ -1976,7 +2000,7 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             Q_EMIT notice(nameOf(fromKey) + QStringLiteral(" wants to keep in touch"));
             Q_EMIT arrived(nameOf(fromKey), QStringLiteral("Wants to keep in touch"), fromKey);
         }
-        Q_EMIT changed();
+        noteChanged();
         return 200;
     }
     return 400;
@@ -2903,10 +2927,10 @@ bool Chat::addPrivate(const QString &peer, const QVariantMap &m)
     l << m;
     while (l.size() > 1000)
         l.removeFirst();
-    save();
+    saveSoon();   // once for a burst of messages (and at once when Huginn closes)
     if (m_linked)
         m_linked->onMessage(peer, m);   // a linked companion gets it too
-    Q_EMIT changed();
+    noteChanged();
     return true;
 }
 
@@ -2931,7 +2955,7 @@ void Chat::update(const QString &peer, const QString &id, const std::function<vo
     if (!any)
         return;
     saveSoon();
-    Q_EMIT changed();
+    noteChanged();
 }
 
 void Chat::addNearby(const QVariantMap &m)
@@ -2944,7 +2968,7 @@ void Chat::addNearby(const QVariantMap &m)
         m_nearby.removeFirst();
     if (keepNearby())
         save();
-    Q_EMIT changed();
+    noteChanged();
 }
 
 void Chat::deleteMessage(const QString &key, const QString &id)
@@ -3097,6 +3121,8 @@ void Chat::load()
 
 QVariantList Chat::chats() const
 {
+    if (m_chatsAge.isValid() && m_chatsAge.elapsed() < 1000)
+        return m_chatsCache;
     Busy::Scope busy("chat lists");
     // Contacts, plus anyone else there's a conversation with (met close by, or removed as a contact).
     QSet<QString> keys;
@@ -3149,6 +3175,8 @@ QVariantList Chat::chats() const
             return px < py;
         return x.value(QStringLiteral("time")).toLongLong() > y.value(QStringLiteral("time")).toLongLong();
     });
+    m_chatsCache = out;
+    m_chatsAge.start();
     return out;
 }
 

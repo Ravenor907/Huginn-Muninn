@@ -567,11 +567,14 @@ ProfileImageProvider::ProfileImageProvider(Profile *profile)
 
 QImage ProfileImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize)
 {
-    Q_UNUSED(requestedSize)
     // "<hash>?v=<n>" or "me?v=<n>": the version only makes QML ask again after a change.
     const QString who = id.section(QLatin1Char('?'), 0, 0);
     const QByteArray bytes = m_profile->sharedPicture(who);
     QImage img = bytes.isEmpty() ? QImage() : QImage::fromData(bytes, "JPEG");
+    // No bigger than asked for: the rounding below then works on a small picture.
+    const int want = requestedSize.isValid() ? qMax(requestedSize.width(), requestedSize.height()) : 0;
+    if (!img.isNull() && want > 0 && qMin(img.width(), img.height()) > want)
+        img = img.scaled(want, want, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     // Round here, so QML needs no shader effect: everything outside the circle is clear.
     if (!img.isNull()) {
         const int side = qMin(img.width(), img.height());

@@ -1,4 +1,5 @@
 #include "singleinstance.h"
+#include "../busy.h"
 #include "winstart.h"
 
 #include <QCoreApplication>
@@ -125,9 +126,12 @@ void SingleInstance::listen()
     QFile::remove(m_closing);   // left by a copy that ended while closing
     QLocalServer::removeServer(m_name);   // left behind by a crash (Unix sockets only)
     m_server = new QLocalServer(this);
+    Busy::nameSocket(m_server, "single instance");
     m_server->setSocketOptions(QLocalServer::UserAccessOption);
     connect(m_server, &QLocalServer::newConnection, this, [this] {
+        Busy::Scope busy("another copy started");
         while (QLocalSocket *s = m_server->nextPendingConnection()) {
+            Busy::nameSocket(s, "single instance");
             connect(s, &QLocalSocket::disconnected, s, &QObject::deleteLater);
             // The answer says this copy is alive (the knocking copy then quits).
             s->write("ok\n");

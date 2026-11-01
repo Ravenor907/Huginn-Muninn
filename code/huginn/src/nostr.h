@@ -18,8 +18,12 @@ class QWebSocket;
 // run). Each device has a Nostr key; its public half is its mailbox. A message is an event of
 // kind 1059 addressed to the mailbox, signed by a throwaway key, so the event itself doesn't name its sender.
 // The content is already sealed with the chat keys (ChatCrypto), so relays only see scrambled text, padded
-// to a few fixed sizes (Chat::wrap). Sending uses its own short-lived sockets that never ask for the inbox
-// or sign in as this computer's mailbox; the internet address can still link the two unless a VPN is used.
+// to a few fixed sizes (Chat::wrap). Sending uses sockets of its own that never ask for the inbox or sign in as this
+// computer's mailbox (they close after a few quiet minutes); the internet address can still link the two unless a VPN is used.
+// The inbox is asked for from 20 minutes before each relay last finished sending what it held (never past the longest
+// message limit);
+// a relay that sends a full page is asked again for what came before it, until a page comes back short. Events
+// already handled are skipped before they are read in full.
 // Same behaviour and wire format as Muninn's Nostr.kt.
 class Nostr : public QObject
 {
@@ -67,14 +71,21 @@ public:
     Q_INVOKABLE void resubscribe();
     // Closes every relay and turns keepAlive off. Hides QObject::disconnect; call that one as QObject::disconnect.
     Q_INVOKABLE void disconnect();
-    // Sends sealed content to someone's mailbox through every relay, on sending sockets of their own.
+    // Sends sealed content to someone's mailbox through every relay (open ones first), on sending sockets of their own.
     // days > 0: the event carries a NIP-40 expiration tag (expiration(), the same for every chat). Returns how many relays are connected now.
     Q_INVOKABLE int publish(const QString &mailboxHex, const QString &content, int days = 0);
     // The same, with more say: onStored runs once the first relay answers OK to it (NIP-20 ["OK", id, true, ...]), never
-    // before; maxRelays > 0 sends it to at most that many relays (open ones first); low marks a linked device's frame
+    // before; maxRelays > 0 sends it to at most that many relays (open ones first; kSpread otherwise); low marks a linked device's frame
     // (section 15), which waits in an outbox of its own (kMaxLowOutbox) and never pushes a real message out of the main one.
     int publishTo(const QString &mailboxHex, const QString &content, int days, std::function<void()> onStored, int maxRelays = 0, bool low = false);
     static constexpr int kMaxOutbox = 200;
+    // How many relays an event goes to unless asked otherwise.
+    // Every relay: a phone saving battery listens on only one of them, so a message must be on all.
+    static constexpr int kSpread = 99;
+    // A relay that sends this many stored events before EOSE may have held more: it is asked for the ones before them.
+    static constexpr int kPageFull = 100;
+    // The vault was locked or erased: the cached inbox key goes.
+    void forgetSecret();
     static constexpr int kMaxLowOutbox = 40;
     // The relays an event limited to n goes to: the open ones first (in list order), then the rest.
     static QStringList pickRelays(const QStringList &all, const QSet<QString> &live, int n);
@@ -87,7 +98,7 @@ public:
     // every chat, so a relay learns neither the sending time nor the chat's limit from it (section 20.3).
     static qint64 expiration(qint64 createdAt);
     // Opens the sending sockets now (a call is starting), so the next publish goes out at once.
-    // They close after the usual 20 s of quiet: nothing is sent to keep them open.
+    // They close after the usual few minutes of quiet: nothing is sent to keep them open.
     void warmSenders();
 
     // NIP-01: the event id is the SHA-256 of [0,pubkey,created_at,kind,tags,content] as compact JSON.
@@ -114,7 +125,7 @@ private:
         bool ponged = true;
     };
 
-    // A socket that only sends: no REQ, no AUTH. Closes 20 s after the last thing given to it.
+    // A socket that only sends: no REQ, no AUTH. Closes a few minutes after the last thing given to it.
     struct Sender {
         QPointer<QWebSocket> ws;
         QStringList queue;
@@ -126,7 +137,8 @@ private:
     QHash<QString, Sender> m_senders;
 
     QByteArray secret() const;
-    // The taken events' list and the time of the last one are written 2 seconds after a burst, not once per event
+    mutable QByteArray m_secretCache;   // read from the vault once, not for every event
+    // The taken events' list and the time of the last one are written at most every 30 seconds, not once per event
     // (and at once when Huginn closes).
     void noteSeenSoon();
     void flushSeen();
@@ -142,7 +154,7 @@ private:
     QString m_ringSubId;
     QHash<QString, QString> m_challenges;   // per relay: its last sign-in challenge, to sign in again once unlocked
     void onMessage(const QString &url, QWebSocket *ws, const QString &text);
-    void handle(const QJsonObject &ev);
+    void handle(const QString &url, const QJsonObject &ev);
     void setLive(const QString &url, bool live);
 
     std::function<QByteArray()> m_secret;
@@ -161,8 +173,34 @@ private:
     QList<Out> m_outbox;
     void takeOk(const QString &id);   // a relay said OK to it
     QHash<QString, std::function<void()>> m_okWait;   // event id: what runs on its first OK
-    QStringList m_seen;               // oldest first, at most 2000
-    QSet<QString> m_seenSet;
+    // Event ids (32 bytes) already handled: oldest first, at most kMaxSeen. Copies from other relays are skipped before
+    // they are read in full.
+    QList<QByteArray> m_seen;
+    QSet<QByteArray> m_seenSet;
+    void noteSeen(const QByteArray &id);
+    // Ones whose id or signature didn't check out (never trusted, never checked again), and ones handed over and left
+    // for later (locked, a key not here yet): skipped until the inbox is asked for again.
+    QList<QByteArray> m_rejected;
+    QSet<QByteArray> m_rejectedSet;
+    QSet<QByteArray> m_later;
     QSet<QString> m_working;
     QSet<QString> m_announced;        // announced while locked, not opened yet
+    // The inbox request's cursor: per relay, when it last finished sending what it held (EOSE, seconds; kept). Never
+    // moved on while an event was left for later (locked, a key not here yet): it must come again.
+    QHash<QString, qint64> m_eoseAt;
+    QSet<QString> m_eosed;            // relays whose stored events have all come on the open socket (live since)
+    bool m_refused = false;
+    qint64 sinceFor(const QString &url) const;
+    // A full page of stored events: the ones before it are asked for on a request of their own (m_pageSubId).
+    struct Page {
+        int count = 0;        // stored events on the request now going
+        qint64 oldest = 0;    // the oldest created_at among them
+        qint64 until = 0;     // what the page request asked up to (0: the inbox request itself)
+    };
+    QHash<QString, Page> m_pages;
+    QString m_pageSubId;
+    void storedEvent(const QString &url, const QString &sub, qint64 createdAt);
+    void endOfStored(const QString &url, QWebSocket *ws, const QString &sub);
+    // NIP-42: a relay that closed the inbox request until it is signed in to gets it again once, after the sign-in.
+    QSet<QString> m_signedIn, m_authClosed, m_askedAgain;
 };

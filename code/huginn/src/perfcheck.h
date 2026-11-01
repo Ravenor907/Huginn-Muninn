@@ -21,7 +21,9 @@ class System;
 // Labs › Performance check: about 25 seconds of measuring in three phases (still, scrolling a long list, an
 // animation) and a 5 second idle sample: frame rate, frame-time spikes, drawing time, Huginn's processor time and
 // memory, what used the window's thread the most (Busiest, busy.h) and its slowest events (every event it handles is
-// timed while a check runs), each thread's share of the idle sample (Linux), with the facts
+// timed while a check runs; a socket's event names the socket and what owns it), each thread's share of the idle
+// sample (Linux), Hot spots (the window's thread sampled every 5 ms, Linux), and in the full report a Details section
+// (sockets, every part, events, timers, counts, what is open and each thread over the whole check), with the facts
 // that decide how Huginn draws and sizes itself. A short verdict names the main suspect. Tried settings (display
 // mode, drawing, render loop, animations) are kept as Labs overrides and used from the next start; one that
 // keeps the window from starting is dropped on the start after, which says so. The report holds no names,
@@ -63,6 +65,7 @@ class PerfCheck : public QObject
 
 public:
     PerfCheck(Settings *settings, System *system, QObject *parent = nullptr);
+    ~PerfCheck() override;
 
     // Before QApplication: the saved overrides go into the environment (only with Labs on, never for the tour or a
     // self-test). A start that never drew its window drops them first.
@@ -138,6 +141,11 @@ private:
     void finish();
     void judge();
     void noteBusiest();
+    // The full report's Details, taken as the check ends: sockets, parts, events, counts, what is open, threads.
+    void noteDetails(double wallMs);
+    // Hot spots: the window's thread sampled every 5 ms while a check runs (Linux).
+    void sampleStart();
+    void sampleStop(bool keep);
     QString factsText(const QVariantMap &ui, bool full) const;
     QString scrubbed(const QString &text) const;
     static double cpuMs();
@@ -185,6 +193,14 @@ private:
     double m_eventMs0 = 0;
     double m_idleEventPct = -1;
     int m_idleAsked = 0, m_idleSyncs = 0;
+    // The whole check: each thread's processor time when it began, and the Details taken at its end.
+    QHash<qint64, ThreadTime> m_threadsCheck0;
+    QStringList m_details;
+    // Hot spots: how many samples were taken, the functions the window's thread was in most, and the ones most often on
+    // its way there ("12.3%   615 QSslSocketPrivate::transmit() (libQt6Network.so.6)").
+    bool m_sampling = false;
+    int m_hotSamples = 0;
+    QStringList m_hotSelf, m_hotPaths;
 
     // Written on the render thread, read on the main thread.
     QMutex m_lock;

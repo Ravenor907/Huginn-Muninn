@@ -390,6 +390,12 @@ int main(int argc, char *argv[])
         }
         return secret;
     }, &app);
+    // The inbox key is read from the vault once and kept in memory until the vault locks or is erased.
+    QObject::connect(vault, &Vault::erased, nostr, [nostr] { nostr->forgetSecret(); });
+    QObject::connect(vault, &Vault::changed, nostr, [vault, nostr] {
+        if (vault->locked())
+            nostr->forgetSecret();
+    });
     // The internet inbox's list of events already taken: in the vault too.
     nostr->keepSeen = [vault](const QByteArray &stored) {
         return !vault->locked() && vault->write(QStringLiteral("nostrseen.json"), stored);
@@ -427,6 +433,8 @@ int main(int argc, char *argv[])
     cs->onMayHave = [chat](const QString &k, const QString &c) { return chat->mayHave(k, c); };
     QObject::connect(chat, &Chat::callMessage, cs, &CallSignalHooks::deliver);
     auto *calls = new CallManager(cs, vault, &app);
+    // Labs › Performance check: a call going on at the end of a check.
+    Busy::addStatus(calls, [calls] { return QStringList{QStringLiteral("calls: ") + (calls->inCall() ? calls->state() : QStringLiteral("none"))}; });
     // Cap b1: the ring key lives in Huginn's own data folder but outside the vault (never an OS key store), so a call
     // rings even while Huginn is locked: only "Incoming call", no name, until it's unlocked.
     auto *ringKey = new RingKey(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ring-key.json"));
@@ -605,7 +613,11 @@ int main(int argc, char *argv[])
         QObject::connect(system, &System::powerChanged, &app, relax);
         // A controller press or stick move is input too (keys, the mouse and touch System sees itself).
         QObject::connect(gamepad, &Gamepad::pressed, system, [system] { system->noteInput(); });
-        QObject::connect(gamepad, &Gamepad::stickChanged, system, [system] { system->noteInput(); });
+        // A stick counts as someone there once it is pushed past its rest zone, not for drift.
+        QObject::connect(gamepad, &Gamepad::stickChanged, system, [system, gamepad] {
+            if (gamepad->stickInUse())
+                system->noteInput();
+        });
     }
     // Sending, receiving or a call keeps the handheld awake until it finishes.
     auto awake = [system, localSend, calls, rooms] {
