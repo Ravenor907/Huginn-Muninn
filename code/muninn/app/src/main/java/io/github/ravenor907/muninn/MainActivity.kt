@@ -559,7 +559,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * The main Settings button: the valknut, black and grey. A very faint glow shows behind it while Settings is open. TalkBack
-     * reads "Settings", and holding it shows the word too, for anyone who doesn't know the knot.
+     * reads "Settings", and holding it shows the word too, for anyone who doesn't know the valknut.
      */
     @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
     @Composable
@@ -569,15 +569,15 @@ class MainActivity : ComponentActivity() {
             tooltip = { PlainTooltip { Text("Settings") } },
             state = androidx.compose.material3.rememberTooltipState(),
         ) {
-            // No circle behind the knot: while Settings is open, a very faint glow comes from its centre instead.
+            // No circle behind the valknut: while Settings is open, a very faint glow comes from its centre instead.
             Box(Modifier.size(48.dp).tourSpot("settings")
                 .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
                 .semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
-                // Centred on the knot's weight, a touch below the middle of the button.
+                // Centred on the valknut's weight, a touch below the middle of the button.
                 if (open) Box(Modifier.size(48.dp).offset(y = 1.dp).background(androidx.compose.ui.graphics.Brush.radialGradient(
                     0f to Palette.goldBright.copy(alpha = 0.35f), 0.5f to Palette.goldBright.copy(alpha = 0.12f),
                     1f to androidx.compose.ui.graphics.Color.Transparent)))
-                // The knot's weight sits low in its picture (wide base, pointed tops): lift it 2dp so it looks centred.
+                // The valknut's weight sits low in its picture (wide base, pointed tops): lift it 2dp so it looks centred.
                 Box(Modifier.offset(y = (-2).dp)) { Valknut(28.dp) }
             }
         }

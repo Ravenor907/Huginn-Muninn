@@ -314,7 +314,7 @@ Rectangle {
                     }
                 }
             }
-            // Settings: no tile behind the knot. Open, a small soft glow comes from its centre.
+            // Settings: no tile behind the valknut. Open, a small soft glow comes from its centre.
             Shape {
                 visible: rb.entry.id === "settings" && (rb.here || hover.hovered)
                 opacity: rb.here ? 1 : 0.6

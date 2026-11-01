@@ -61,7 +61,7 @@ object SetupFlow {
         Stop("plus", "Tap + to start a chat, make a group or add someone."),
         Stop("menu", "The ⋮ next to search has more for your chat list."),
         Stop("row", "Press and hold a chat for its options.", "Once you have chats, press and hold one for its options."),
-        Stop("settings", "The knot opens Settings."),
+        Stop("settings", "The valknut opens Settings."),
         Stop("files", "Files sends photos and files to devices nearby."),
     )
 
