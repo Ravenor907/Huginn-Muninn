@@ -65,6 +65,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
+#include <memory>
 
 #ifndef HUGINN_VERSION
 #define HUGINN_VERSION "0.1"
@@ -393,7 +394,7 @@ int main(int argc, char *argv[])
             const qint64 t = QDateTime::currentMSecsSinceEpoch();
             if (t - last > 5 * 60000) {
                 last = t;
-                if (!Settings::silenced())
+                if (!Settings::hushed() && Settings::messageSoundOn())
                     sound->play();
                 Q_EMIT chat->notice(QStringLiteral("New message. Unlock Huginn to read it."));
             }
@@ -414,7 +415,9 @@ int main(int argc, char *argv[])
         // Do not disturb: no sound and no notification either.
         if (!chat->notifyFor(key) || looking || Settings::silenced())
             return;
-        sound->play();
+        // Quiet hours and Settings › Notifications › Message sound: the notification still shows.
+        if (!Settings::hushed() && Settings::messageSoundOn())
+            sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
             // While a linked phone's chats are shown, this device's own sealed chats never show who or what.
             const bool preview = chat->showPreview() && !vault->screenLocked();
@@ -518,10 +521,27 @@ int main(int argc, char *argv[])
     vault->openWithoutLock();
     Platform::startStep(QStringLiteral("loading the main screen"));
     engine.loadFromModule("Huginn", "Main");
-    if (!engine.rootObjects().isEmpty())
-        Platform::watchMainWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()));
+    if (!engine.rootObjects().isEmpty()) {
+        auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
+        Platform::watchMainWindow(window);
+        // Settings › Privacy › Block screenshots (Windows), set again whenever it's switched.
+        if (window) {
+            auto shield = std::make_shared<int>(-1);
+            auto applyShield = [window, settings, shield] {
+                const int on = settings->blockScreenshots() ? 1 : 0;
+                if (on == *shield)
+                    return;
+                *shield = on;
+                Platform::blockCapture(window, on == 1);
+            };
+            applyShield();
+            QObject::connect(settings, &Settings::changed, window, applyShield);
+        }
+    }
     if (wifiSelf)
         WifiSelfTest::start(chat, localSend, sound);
+    QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::flushSaves);
     if (!quiet)
         updater->startAutoUpdate();
     return app.exec();

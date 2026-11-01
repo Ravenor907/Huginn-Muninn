@@ -40,7 +40,8 @@ class LocalSend : public QObject
     Q_OBJECT
     Q_PROPERTY(bool running READ running NOTIFY stateChanged)
     Q_PROPERTY(QString error READ error NOTIFY stateChanged)
-    Q_PROPERTY(QString alias READ alias CONSTANT)
+    // Settings › Privacy › This computer's name.
+    Q_PROPERTY(QString alias READ alias NOTIFY aliasChanged)
     Q_PROPERTY(QVariantList devices READ devices NOTIFY devicesChanged)
     Q_PROPERTY(bool scanning READ scanning NOTIFY devicesChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY progressChanged)
@@ -78,6 +79,7 @@ public:
 
 Q_SIGNALS:
     void stateChanged();
+    void aliasChanged();
     void devicesChanged();
     void progressChanged();
     void requestChanged();

@@ -79,7 +79,7 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
             Q_EMIT logged(rg, text, true);
             return;
         }
-        if (!Settings::silenced())
+        if (!Settings::hushed())
             m_ringtone->play();
     });
 }
@@ -425,7 +425,7 @@ void RoomManager::startRing(const QString &from, const QString &g, const QString
     m_ringCh = ch;
     m_ringFrom = from;
     m_ringSince = now();
-    if (!Settings::silenced())
+    if (!Settings::hushed())
         m_ringtone->play();
     m_ringer.start();
     const QString who = ringName(), grp = ringGroup();

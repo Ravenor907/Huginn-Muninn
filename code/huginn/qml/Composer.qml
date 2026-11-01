@@ -6,6 +6,8 @@ import Huginn
 // a new line, Ctrl+V pastes a picture, Up in an empty box edits your last message, Esc cancels a reply
 // or an edit (or marks the chat read). With a controller, A on the conversation puts you in it and
 // Steam's keyboard comes up; the page then routes the buttons here (see boxButton in the pages).
+// The microphone on the right: press and hold to record a voice message, let go to send, drag off it
+// or press Esc to cancel (a controller holds Y on the conversation instead).
 Item {
     id: box
     property string placeholder: ""
@@ -15,6 +17,13 @@ Item {
     property bool editing: false
     property color accent: Theme.accent    // a chat's own color on its page
     property var mentionNames: []          // group members, for @ suggestions
+    // Voice messages: where they go (a contact's key or "g:<group>:<channel>"; "" records nothing), and
+    // whether the microphone shows at all (the tour shows it without recording).
+    property string voiceTo: ""
+    property bool micShown: voiceTo !== ""
+    // The microphone is held down with the mouse: recording here (the page hides its own banner).
+    property bool micHeld: false
+    readonly property bool micAway: micHeld && !micArea.containsMouse
     property alias text: field.text
     signal send(string text)
     signal typing(bool on)
@@ -63,6 +72,25 @@ Item {
         field.cursorPosition = head.length
         field.forceActiveFocus()
     }
+    // Press and hold on the microphone.
+    function micDown() {
+        if (box.voiceTo === "" || Voice.recording) return
+        if (!Voice.start(box.voiceTo)) { Ui.say("The microphone isn't available right now.", true); return }
+        box.micHeld = true
+    }
+    function micUp(send) {
+        if (!box.micHeld) return
+        box.micHeld = false
+        if (!Voice.recording) return
+        if (send) Voice.finish(box.voiceTo)
+        else { Voice.cancel(); Ui.say("Recording cancelled.") }
+    }
+    // Recording stopped by itself (the 5-minute limit, a microphone error): nothing is held any more.
+    Connections {
+        target: Voice
+        function onChanged() { if (!Voice.recording) box.micHeld = false }
+    }
+    Shortcut { sequence: "Escape"; enabled: box.micHeld; onActivated: box.micUp(false) }
     function submit() {
         const t = field.text.trim()
         if (t.length === 0) return
@@ -179,7 +207,10 @@ Item {
                     onActiveFocusChanged: if (activeFocus && focusReason !== Qt.ActiveWindowFocusReason && focusReason !== Qt.PopupFocusReason)
                         System.showSteamKeyboard()
                     Keys.onPressed: event => {
-                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
+                        if (event.key === Qt.Key_Escape && box.micHeld) {
+                            box.micUp(false)
+                            event.accepted = true
+                        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ShiftModifier)) {
                             box.enter()
                             event.accepted = true
                         } else if (event.key === Qt.Key_Up && field.text.length === 0) {
@@ -196,15 +227,67 @@ Item {
                     }
                 }
             }
+            // Recording: the time over the text, and what letting go does.
+            Rectangle {
+                visible: box.micHeld
+                anchors.left: attachIcon.left; anchors.right: emojiIcon.right
+                anchors.top: parent.top; anchors.bottom: parent.bottom
+                anchors.topMargin: 1; anchors.bottomMargin: 1
+                color: Theme.raised
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width
+                    spacing: Theme.px(10)
+                    Rectangle { width: Theme.px(10); height: width; radius: width / 2; color: Theme.danger; anchors.verticalCenter: parent.verticalCenter }
+                    Text {
+                        textFormat: Text.PlainText
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.max(0, parent.width - Theme.px(20))
+                        elide: Text.ElideRight
+                        text: Voice.length(Voice.elapsed) + "   " + (box.micAway ? "Let go to cancel" : "Let go to send · drag away or Esc to cancel")
+                        color: box.micAway ? Theme.danger : Theme.text
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                    }
+                }
+            }
             Icon {
                 id: emojiIcon
-                anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
+                anchors.right: micIcon.visible ? micIcon.left : parent.right; anchors.rightMargin: Theme.px(14)
                 anchors.bottom: parent.bottom; anchors.bottomMargin: (Theme.px(46) - size) / 2
                 name: "smile"; size: Theme.px(20); color: emojiHover.hovered || picker.visible ? Theme.text : Theme.textMuted
                 Accessible.role: Accessible.Button
                 Accessible.name: "Emoji"
                 HoverHandler { id: emojiHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: picker.visible = !picker.visible }
+            }
+            // Press and hold to record; let go on it to send, off it to cancel.
+            Rectangle {
+                id: micIcon
+                visible: box.micShown
+                anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
+                anchors.bottom: parent.bottom; anchors.bottomMargin: (Theme.px(46) - height) / 2
+                width: Theme.px(32); height: width
+                radius: Theme.radius
+                color: box.micHeld ? (box.micAway ? Theme.raised : Theme.dangerFill) : micArea.containsMouse ? Theme.tile : "transparent"
+                border.width: box.micHeld ? 1 : 0
+                border.color: Theme.danger
+                Accessible.role: Accessible.Button
+                Accessible.name: "Hold to record a voice message"
+                Icon {
+                    anchors.centerIn: parent
+                    name: "mic"; size: Theme.px(20)
+                    color: box.micHeld ? Theme.danger : micArea.containsMouse ? Theme.text : Theme.textMuted
+                }
+                MouseArea {
+                    id: micArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    preventStealing: true
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: box.micDown()
+                    onReleased: box.micUp(containsMouse)
+                    onCanceled: box.micUp(false)
+                }
             }
         }
     }

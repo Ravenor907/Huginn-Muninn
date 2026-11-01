@@ -246,6 +246,7 @@ qt_add_qml_module(huginn
         qml/LockPanel.qml
         qml/PatternPad.qml
         qml/Composer.qml
+        qml/FindBar.qml
         qml/EmojiPicker.qml
         qml/Reactions.qml
         qml/QuoteLine.qml
@@ -277,7 +278,7 @@ qt_add_qml_module(huginn
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
-                   ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer EmojiPicker Reactions QuoteLine
+                   ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer FindBar EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel
                    Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox LinkPhone)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)

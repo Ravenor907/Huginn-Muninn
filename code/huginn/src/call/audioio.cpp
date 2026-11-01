@@ -19,6 +19,8 @@ const int kStep = AudioDsp::kRate / 100;   // the echo canceller works in 10 ms 
 
 AudioIO::AudioIO(QObject *parent) : QObject(parent)
 {
+    // Settings › Calls › Speaker: where calls start (the Speaker button still steps through them).
+    m_outputId = Settings::savedSpeaker();
     m_devices = new QMediaDevices(this);
     connect(m_devices, &QMediaDevices::audioOutputsChanged, this, [this] {
         // The chosen output went away (headphones unplugged): back to the default.
@@ -104,7 +106,12 @@ void AudioIO::stop()
 
 bool AudioIO::startInput()
 {
-    const QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    // Settings › Calls › Microphone, while it's plugged in; the system default otherwise.
+    QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    const QString mic = Settings::savedMic();
+    for (const QAudioDevice &d : QMediaDevices::audioInputs())
+        if (!mic.isEmpty() && QString::fromLatin1(d.id()) == mic)
+            dev = d;
     if (dev.isNull())
         return false;
     m_inFormat = pick(dev);

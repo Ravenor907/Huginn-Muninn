@@ -266,6 +266,27 @@ QString Chat::revokeGroupLink(const QString &g, const QString &id)
     return QString();
 }
 
+QString Chat::revokeGroupCodes(const QString &g)
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->state.isEmpty())
+        return QStringLiteral("That group isn't here anymore.");
+    const bool admin = GroupWire::isAdmin(it->state, myKey());
+    // Group codes are the tokens made for no one in particular; a contact's own invite stays.
+    for (const QString &t : m_gtokens.keys())
+        if (str(m_gtokens.value(t), "g") == g && !m_gtokens.value(t).contains(QStringLiteral("for")))
+            m_gtokens.remove(t);
+    saveGroups();
+    const QVariantList links = groupLinks(g);
+    for (const QVariant &v : links) {
+        const QVariantMap l = v.toMap();
+        if (admin || l.value(QStringLiteral("mine")).toBool())
+            revokeGroupLink(g, str(l, "id"));
+    }
+    Q_EMIT changed();
+    return QString();
+}
+
 QString Chat::setMembersInvite(const QString &g, bool on)
 {
     return change(g, {{QStringLiteral("op"), QStringLiteral("invites")}, {QStringLiteral("on"), on}});

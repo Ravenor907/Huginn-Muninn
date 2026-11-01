@@ -547,7 +547,7 @@ void CallManager::ring(bool on)
 {
     if (on) {
         // Do not disturb: the call still shows, without sound.
-        if (Settings::silenced())
+        if (Settings::hushed())
             return;
         m_ringtone->play();
         m_ringer.start();

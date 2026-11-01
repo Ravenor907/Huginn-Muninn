@@ -1671,6 +1671,16 @@ void Chat::refreshGroupPeers()
 
 // ------------------------------------------------------------------ keeping
 
+void Chat::flushSaves()
+{
+    if (!m_ready)
+        return;
+    if (m_groupsDirty)
+        saveGroups();
+    if (m_seen.dirty())
+        m_vault->write(QStringLiteral("seen.json"), m_seen.save());
+}
+
 void Chat::saveGroupsSoon()
 {
     if (m_groupsDirty)

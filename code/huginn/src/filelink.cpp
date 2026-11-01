@@ -4,6 +4,7 @@
 #include "call/turnclient.h"
 #include "groupwire.h"
 #include "photos.h"
+#include "settings.h"
 #include "vault.h"
 
 #include <QCryptographicHash>
@@ -491,10 +492,13 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         x->mine = false;
         x->dir = 1;
         m_x.insert(id, x);
-        if (x->size >= kAutoBytes && (!waitsForAsk || waitsForAsk(from))) {
+        // Settings › Data saver: every file asks first (only when their app waits for the answer).
+        const bool saving = !testLocal && Settings::dataSaverOn();
+        if ((x->size >= kAutoBytes || saving) && (!waitsForAsk || waitsForAsk(from))) {
             // A big file asks first, as from anyone else. The sender gives up after kAskAnswerMs.
             x->state = QStringLiteral("asking");
-            x->note = QStringLiteral("Wants to send you a big file. Accept or decline");
+            x->note = x->size >= kAutoBytes ? QStringLiteral("Wants to send you a big file. Accept or decline")
+                                            : QStringLiteral("Wants to send you a file. Accept or decline");
             put(x, true);
             Q_EMIT notice(QStringLiteral("%1 wants to send you %2. Accept or decline it in your chat with them.").arg(who(from), x->name));
             x->wait = new QTimer(this);

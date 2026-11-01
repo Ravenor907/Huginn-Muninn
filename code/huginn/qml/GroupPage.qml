@@ -130,8 +130,9 @@ Rectangle {
     }
     readonly property string chatKey: "g:" + gid + ":" + channelId
 
-    readonly property var prompts: Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
-        : shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
+    readonly property var prompts: finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
+        : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
+        : shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "y", label: "Stop codes" }, { key: "b", label: "Close" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
@@ -159,7 +160,15 @@ Rectangle {
     }
     function selectable(i) { return !!rows[i] && (rows[i].kind === "channel" || rows[i].kind === "header") }
 
+    // Find in this channel (the search icon, Ctrl+F, or the group menu).
+    // t: words to look for (the screenshot tour).
+    function openFind(t) {
+        if (locked || !exists) return
+        zone = "messages"; sel = -1; finder.open()
+        if (t !== undefined) finder.text = t
+    }
     onChatKeyChanged: {
+        finder.close()
         sel = -1; replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; if (side === "thread") side = ""
         compose.text = ""
         // Where the unread ones start, for the "New messages" line (before they're marked read).
@@ -377,6 +386,20 @@ Rectangle {
             glyph: page.locked || !page.exists ? "" : "#"
             title: page.locked || !page.exists ? "" : page.channel.name
             subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only" : (page.info.name || "")
+            // Find in this channel (Ctrl+F too).
+            Rectangle {
+                visible: !page.locked && page.exists
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: findHover.hovered || finder.visible ? Theme.raised : "transparent"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Find in this channel"
+                Accessible.onPressAction: page.openFind()
+                Icon { anchors.centerIn: parent; name: "search"; size: Theme.px(18); color: findHover.hovered || finder.visible ? Theme.text : Theme.textMuted }
+                HoverHandler { id: findHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.openFind() }
+            }
             // The group's one menu, in every layout.
             MoreButton {
                 visible: !page.locked && page.exists
@@ -413,11 +436,21 @@ Rectangle {
                 }
             }
 
+            // Find in this channel: over the messages, which start under it.
+            FindBar {
+                id: finder
+                anchors.top: gone.visible ? gone.bottom : parent.top
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.margins: Theme.px(12)
+                messages: page.messages
+                onJump: i => list.positionViewAtIndex(i, ListView.Center)
+                onClosed: if (Ui.main && !compose.hasFocus) Ui.main.restoreFocus()
+            }
             // Messages change in place (LiveList): a new one adds a row instead of redrawing them all.
             LiveList { id: messageModel; keys: ["id"]; items: page.messages }
             ListView {
                 id: list
-                anchors.top: gone.visible ? gone.bottom : parent.top
+                anchors.top: finder.visible ? finder.bottom : gone.visible ? gone.bottom : parent.top
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: 0
@@ -429,6 +462,7 @@ Rectangle {
                     m: modelData
                     at: index
                     picked: page.active && page.zone === "messages" && page.sel === index
+                    found: finder.visible && finder.hits.indexOf(index) >= 0 ? (finder.current === index ? 2 : 1) : 0
                     lineH: index === page.newFrom ? Theme.px(30) : 0
                     grouped: page.groupedAt(index)
                     hoverTools: !page.readOnly
@@ -459,7 +493,7 @@ Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                 anchors.margins: Theme.px(12)
                 height: Theme.px(52)
-                visible: Voice.recording
+                visible: Voice.recording && !compose.micHeld
                 radius: Theme.radius; color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
                 Row {
                     anchors.verticalCenter: parent.verticalCenter
@@ -520,6 +554,8 @@ Rectangle {
             height: implicitHeight
             placeholder: "Message #" + page.channel.name
             target: page.isTour ? "" : page.chatKey
+            voiceTo: page.isTour || page.readOnly ? "" : page.chatKey
+            micShown: true
             mentionNames: page.memberNames
             editing: page.editId !== ""
             bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.replyMsg.name) : ""
@@ -681,6 +717,7 @@ Rectangle {
                     HButton { text: "New code"; onClicked: page.showCode() }
                     HButton { text: "Copy code"; kind: "primary"; onClicked: { Chat.copyText(page.shownCode); Ui.say("Group code copied.") } }
                 }
+                HButton { anchors.right: parent.right; text: "Stop this group's codes"; kind: "danger"; onClicked: page.stopCodes() }
             }
         }
     }
@@ -735,6 +772,17 @@ Rectangle {
         if (readOnly || isTour) return
         more.attach()
     }
+    // Every group code and invite link out there stops working (a contact's own invite stays).
+    function stopCodes() {
+        if (isTour) return
+        const g = gid
+        Ui.sure("Stop the group codes?", "Codes and invite links for this group stop working at once.", "Stop", () => {
+            const r = Chat.revokeGroupCodes(g)
+            if (r !== "") { Ui.say(r, true); return }
+            page.shownCode = ""
+            Ui.say("Those group codes don't work any more.")
+        }, false, true)
+    }
     function showCode() {
         if (isTour) return
         const c = Chat.groupCode(gid)
@@ -753,6 +801,7 @@ Rectangle {
             items.push({ name: "Call everyone", icon: "call", url: "callall" })
             if (isTour || info.count > 2) items.push({ name: "Call some people", icon: "call", url: "callsome" })
         }
+        items.push({ name: "Find in this channel", icon: "search", url: "find" })
         items.push({ name: "People", icon: "people", url: "people" })
         if (isTour || canInvite || (!readOnly && info.amAdmin)) items.push({ name: "Add people", icon: "plus", url: "add" })
         items.push({ name: "Channels", icon: "hash", url: "channels" },
@@ -763,6 +812,7 @@ Rectangle {
     function groupAction(a) {
         const g = gid
         if (a === "people") { peopleMenu(); return }
+        if (a === "find") { openFind(); return }
         if (isTour) return
         if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone.")
         else if (a === "callsome") pickCallees([])
@@ -1103,11 +1153,13 @@ Rectangle {
         if (shownCode !== "") {
             if (b === "a") { Chat.copyText(shownCode); Ui.say("Group code copied.") }
             else if (b === "x") showCode()
+            else if (b === "y") stopCodes()
             else if (b === "b") shownCode = ""
             return true
         }
         if (viewing !== "") { if (b === "b" || b === "a") viewing = ""; return true }
         if (Voice.recording) { if (b === "b") { Voice.cancel(); Ui.say("Recording cancelled.") } return true }
+        if (finder.visible && finder.handleButton(b)) return true
         if (!exists) return b !== "left" && b !== "b"
         if (reactPicker.visible) return reactPicker.handleButton(b)
         if (compose.emojiShown) return compose.emojiButton(b)
@@ -1166,6 +1218,12 @@ Rectangle {
     Connections {
         target: Voice
         function onErrorChanged() { if (Voice.error !== "") Ui.say(Voice.error, true) }
+    }
+    // Ctrl+F: find in this channel.
+    Shortcut {
+        sequence: StandardKey.Find
+        enabled: !page.locked && page.exists && !page.isTour && !!Ui.main && Ui.main.keysOn
+        onActivated: page.openFind()
     }
     Connections {
         target: Qt.application

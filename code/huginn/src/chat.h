@@ -289,6 +289,8 @@ public:
     QVariantList groupInvites() const;
     // kind: "" (Standard), "family" or "work" (cap d1).
     Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
+    // Writes everything still waiting to be saved (before Huginn closes or restarts for an update).
+    void flushSaves();
     Q_INVOKABLE QVariantMap groupInfo(const QString &g) const;
     Q_INVOKABLE QVariantList groupMessages(const QString &g, const QString &ch) const;
     Q_INVOKABLE void sendGroup(const QString &g, const QString &ch, const QString &text, const QString &re = QString());
@@ -321,6 +323,9 @@ public:
     Q_INVOKABLE QVariantMap createGroupLink(const QString &g, qint64 ttlMs, int maxUses);
     Q_INVOKABLE QVariantList groupLinks(const QString &g) const;
     Q_INVOKABLE QString revokeGroupLink(const QString &g, const QString &id);
+    // "Stop this group's codes", as Muninn's Groups.revokeCodes: every group code this computer made for g stops
+    // at once (only this computer checks them, protocol.md section 3), and so does every invite link I may stop.
+    Q_INVOKABLE QString revokeGroupCodes(const QString &g);
     Q_INVOKABLE QString setMembersInvite(const QString &g, bool on);   // an admin's signed change
     Q_INVOKABLE bool membersInvite(const QString &g) const;
 

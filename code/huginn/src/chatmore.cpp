@@ -2,6 +2,7 @@
 // photo albums, video messages, polls and votes, link previews (made here only, when Settings › Privacy allows
 // it) and the Shared page. What both apps must agree on lives in MoreWire.
 #include "chat.h"
+#include "settings.h"
 #include "groupwire.h"
 #include "linkpreview.h"
 #include "morewire.h"
@@ -239,7 +240,7 @@ void Chat::attemptWithPreview(const QString &key, const QString &id)
     for (const QVariant &v : m_private.value(key))
         if (str(v.toMap(), "id") == id)
             m = v.toMap();
-    const QString link = linkPreviews() && !m.contains(QStringLiteral("poll")) && hasM1(key) ? MoreWire::firstLink(str(m, "text")) : QString();
+    const QString link = linkPreviews() && !Settings::dataSaverOn() && !m.contains(QStringLiteral("poll")) && hasM1(key) ? MoreWire::firstLink(str(m, "text")) : QString();
     if (link.isEmpty()) {
         attempt(key, id);
         return;
@@ -265,7 +266,7 @@ void Chat::queueGroupMessage(const QString &g, const QString &id, const QStringL
         for (const QString &k : to)
             queueGroup(g, k, QStringLiteral("gmsg"), id, plain);
     };
-    const QString link = linkPreviews() && !p.contains(QStringLiteral("poll")) && !to.isEmpty() ? MoreWire::firstLink(p.value(QStringLiteral("text")).toString()) : QString();
+    const QString link = linkPreviews() && !Settings::dataSaverOn() && !p.contains(QStringLiteral("poll")) && !to.isEmpty() ? MoreWire::firstLink(p.value(QStringLiteral("text")).toString()) : QString();
     if (link.isEmpty()) {
         go(p);
         return;
@@ -368,13 +369,18 @@ QVariantMap Chat::shared(const QString &where) const
     } else {
         all = m_private.value(where);
     }
-    QVariantList media, links;
+    QVariantList media, links, voices;
     for (int i = int(all.size()) - 1; i >= 0; --i) {
         const QVariantMap m = all.at(i).toMap();
         if (!str(m, "unsent").isEmpty() || m.value(QStringLiteral("system")).toBool())
             continue;
         const bool mine = m.value(QStringLiteral("mine")).toBool();
         const QString name = mine ? QStringLiteral("You") : group ? memberName(g, str(m, "from")) : nameOf(where);
+        if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() > 0) {
+            voices << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("voice"), m.value(QStringLiteral("voice")).toInt()},
+                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))}};
+            continue;
+        }
         if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() == 0) {
             media << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("video"), m.value(QStringLiteral("video")).toInt()},
                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))}};
@@ -389,7 +395,7 @@ QVariantMap Chat::shared(const QString &where) const
                              {QStringLiteral("thumb"), str(lp, "i").isEmpty() ? QString() : QStringLiteral("data:image/jpeg;base64,") + str(lp, "i")},
                              {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))}};
     }
-    return {{QStringLiteral("media"), media}, {QStringLiteral("links"), links}};
+    return {{QStringLiteral("media"), media}, {QStringLiteral("links"), links}, {QStringLiteral("voices"), voices}};
 }
 
 QString Chat::linkHost(const QString &url) const { return MoreWire::host(url); }

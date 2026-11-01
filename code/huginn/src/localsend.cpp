@@ -46,10 +46,17 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
     m_tls = Tls::load();
     m_secure = m_tls.isValid() && QSslSocket::supportsSsl();
     m_fingerprint = m_secure ? m_tls.fingerprint : randomToken();
-    QString host = QSysInfo::machineHostName();
-    if (host.isEmpty() || host == QLatin1String("localhost"))
-        host = QStringLiteral("handheld");
-    m_alias = QStringLiteral("Huginn on %1").arg(host);
+    // Settings › Privacy › This computer's name ("Huginn on <computer>" unless it was changed).
+    m_alias = settings ? settings->deviceName() : Settings::defaultDeviceName();
+    if (settings)
+        connect(settings, &Settings::changed, this, [this] {
+            const QString name = m_settings->deviceName();
+            if (name == m_alias)
+                return;
+            m_alias = name;
+            Q_EMIT aliasChanged();
+            announce();   // devices nearby see the new name now
+        });
 
     if (m_secure) {
         QSslConfiguration cfg = QSslConfiguration::defaultConfiguration();

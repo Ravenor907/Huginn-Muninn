@@ -476,12 +476,37 @@ Window {
         }
     }
 
-    // Shown while Huginn updates itself at launch; it restarts on the new version after.
+    // A checked update waiting: a slim bar along the top; Huginn installs it only on Restart now.
+    Rectangle {
+        id: updateBar
+        anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: Theme.px(8)
+        z: 55
+        visible: Updater.ready && !Updater.installing && !app.touring
+        width: barRow.implicitWidth + Theme.px(24); height: barRow.implicitHeight + Theme.px(12)
+        color: Theme.panel
+        border.color: Theme.accent; border.width: Math.max(1, Theme.px(1))
+        Row {
+            id: barRow
+            anchors.centerIn: parent
+            spacing: Theme.px(12)
+            Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Huginn " + Updater.latest + " is ready"
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(15)
+            }
+            HButton { text: "Restart now"; kind: "primary"; onClicked: Updater.restartToUpdate() }
+        }
+    }
+
+    // Shown while an update installs; Huginn restarts on the new version after.
     Rectangle {
         id: updating
         anchors.fill: parent
         z: 100
-        visible: Updater.autoUpdating
+        visible: Updater.installing
         color: Theme.ground
         MouseArea { anchors.fill: parent }
         Column {
@@ -842,7 +867,10 @@ Window {
             { page: "dms", linkPhone: "code", file: "38-link-phone" },
             { page: "dms", linkPhone: "match", file: "39-link-match" },
             { page: "dms", linkPhone: "linked", file: "40-linked" },
-            { page: "dms", linkPhone: "code", theme: "seasonal", season: "snow", file: "41-link-phone-snow" }
+            { page: "dms", linkPhone: "code", theme: "seasonal", season: "snow", file: "41-link-phone-snow" },
+            // Settings › Notifications, and Find in a channel with its matches lit.
+            { page: "settings", section: "notify", file: "42-notifications" },
+            { page: "g:tour-crew", zone: "messages", find: "in", file: "43-find" }
         ]
         interval: 1500
         repeat: true
@@ -885,6 +913,7 @@ Window {
             if (s.report) Qt.callLater(app.openReport)
             if (s.labsInbox) app.openLabsReports()
             if (s.linkPhone) linkPhone.open(true, s.linkPhone)
+            if (s.find) Qt.callLater(() => { const p = app.page(); if (p && p.openFind) p.openFind(s.find) })
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }

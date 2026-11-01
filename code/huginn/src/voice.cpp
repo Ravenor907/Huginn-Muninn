@@ -1,13 +1,16 @@
 #include "voice.h"
 #include "chat.h"
 #include "platform/scratch.h"
+#include "settings.h"
 
+#include <QAudioDevice>
 #include <QAudioInput>
 #include <QAudioOutput>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QMediaCaptureSession>
+#include <QMediaDevices>
 #include <QMediaFormat>
 #include <QMediaPlayer>
 #include <QMediaRecorder>
@@ -79,6 +82,13 @@ bool Voice::start(const QString &key)
             cancel();
         });
     }
+    // Settings › Calls › Microphone, while it's plugged in.
+    QAudioDevice mic = QMediaDevices::defaultAudioInput();
+    const QString micId = Settings::savedMic();
+    for (const QAudioDevice &d : QMediaDevices::audioInputs())
+        if (!micId.isEmpty() && QString::fromLatin1(d.id()) == micId)
+            mic = d;
+    m_input->setDevice(mic);
     Scratch::shred(tempFile());
     m_recorder->setOutputLocation(QUrl::fromLocalFile(tempFile()));
     m_recorder->record();
@@ -145,6 +155,13 @@ void Voice::play(const QString &id)
                 stop();
         });
     }
+    // Settings › Calls › Speaker, while it's plugged in.
+    QAudioDevice out = QMediaDevices::defaultAudioOutput();
+    const QString outId = Settings::savedSpeaker();
+    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+        if (!outId.isEmpty() && QString::fromLatin1(d.id()) == outId)
+            out = d;
+    m_output->setDevice(out);
     m_buffer.close();
     m_buffer.setData(m_sound);
     m_buffer.open(QIODevice::ReadOnly);

@@ -70,7 +70,9 @@ Rectangle {
     readonly property bool tinted: Theme.validColor(chatColor)
     // The conversation header's buttons for a controller (Up from the first message): Call, Video and the menu.
     property int headSel: 0
-    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(["menu"])
+    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(["find", "menu"])
+    // Find in this chat (the search icon or Ctrl+F).
+    function openFind() { if (picked && !locked) { zone = "messages"; sel = -1; finder.open() } }
 
     function setArgs(a) {
         tour = !!a.tour
@@ -144,6 +146,7 @@ Rectangle {
 
     // What the hint bar shows (Main.qml adds LB). LT opens the menu (the page gets it as X).
     readonly property var prompts: mirror.visible ? mirror.prompts
+        : finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
         : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
@@ -180,7 +183,7 @@ Rectangle {
     function senderName(m) { return m.mine ? Ui.myName : openKey === "" ? (m.name || "Someone") : openName }
 
     onOpenKeyChanged: {
-        sel = -1; Voice.stop()
+        sel = -1; Voice.stop(); finder.close()
         if (zone === "head") zone = "messages"
         replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; side = ""
         compose.text = ""
@@ -609,6 +612,22 @@ Rectangle {
                 focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "video"
                 onClicked: page.startVideo()
             }
+            // Find in this chat (Ctrl+F too).
+            Rectangle {
+                visible: !page.locked && page.picked
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: findHover.hovered || finder.visible ? Theme.raised : "transparent"
+                border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "find" ? Theme.focusWidth : 0
+                border.color: Theme.text
+                Accessible.role: Accessible.Button
+                Accessible.name: "Find in this chat"
+                Accessible.onPressAction: page.openFind()
+                Icon { anchors.centerIn: parent; name: "search"; size: Theme.px(18); color: findHover.hovered || finder.visible ? Theme.text : Theme.textMuted }
+                HoverHandler { id: findHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.openFind() }
+            }
             MoreButton {
                 visible: !page.locked && page.openKey !== ""
                 anchors.verticalCenter: parent.verticalCenter
@@ -685,11 +704,22 @@ Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                 anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
             }
+            // Find in this chat: over the messages, which start under it.
+            FindBar {
+                id: finder
+                anchors.top: keep.visible ? keep.bottom : parent.top
+                anchors.left: parent.left; anchors.right: parent.right
+                anchors.margins: Theme.px(12)
+                messages: page.messages
+                accent: page.tint
+                onJump: i => list.positionViewAtIndex(i, ListView.Center)
+                onClosed: if (Ui.main && !compose.hasFocus) Ui.main.restoreFocus()
+            }
             // Messages change in place (LiveList): a new one adds a row instead of redrawing them all.
             LiveList { id: messageModel; keys: ["id"]; items: page.messages }
             ListView {
                 id: list
-                anchors.top: keep.visible ? keep.bottom : parent.top
+                anchors.top: finder.visible ? finder.bottom : keep.visible ? keep.bottom : parent.top
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: fileStrip.visible ? fileStrip.top : parent.bottom
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: 0
@@ -706,9 +736,13 @@ Rectangle {
                     width: list.width
                     height: modelData.system ? note.height + Theme.px(12) : lineH + gap + Math.max(face.visible ? face.height : 0, col.implicitHeight) + Theme.px(grouped ? 2 : 4)
                     radius: 0
-                    color: picked ? Theme.focusFill : msgHover.hovered ? Theme.panelLow : "transparent"
+                    // Find in this chat: every match lit, the one shown more.
+                    readonly property bool found: finder.visible && finder.hits.indexOf(index) >= 0
+                    readonly property bool foundNow: found && finder.current === index
+                    color: picked ? Theme.focusFill : foundNow ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : found ? Theme.panel : "transparent"
                     border.width: picked ? Theme.focusWidth : 0
                     border.color: page.tint
+                    Rectangle { visible: msg.found && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: Math.max(0, parent.height - msg.lineH); color: msg.foundNow ? page.tint : Theme.lineMuted }
                     // My own messages in a chat with its own color: a thin bar of it down the side.
                     Rectangle {
                         visible: page.tinted && !!modelData.mine && !modelData.system
@@ -951,7 +985,7 @@ Rectangle {
                 anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                 anchors.margins: Theme.px(12)
                 height: Theme.px(52)
-                visible: Voice.recording
+                visible: Voice.recording && !compose.micHeld
                 radius: Theme.radius; color: Theme.dangerFill; border.color: Theme.danger; border.width: 1
                 Row {
                     anchors.verticalCenter: parent.verticalCenter
@@ -1025,6 +1059,8 @@ Rectangle {
             height: implicitHeight
             placeholder: page.openKey === "" ? "Message everyone nearby" : "Message " + page.openName
             target: page.openKey
+            voiceTo: page.tour ? "" : page.openKey
+            micShown: page.openKey !== ""
             accent: page.tint
             editing: page.editId !== ""
             bannerTitle: page.editId !== "" ? "Editing your message" : page.replyMsg ? "Replying to " + (page.replyMsg.mine ? "yourself" : page.openName) : ""
@@ -1271,7 +1307,7 @@ Rectangle {
         case "a": {
             const w = headButtons[Math.min(headSel, n - 1)]
             zone = "messages"
-            if (w === "call") startCall(); else if (w === "video") startVideo(); else chatMenu()
+            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else chatMenu()
             return true
         }
         case "down": case "b": zone = "messages"; return true
@@ -1662,6 +1698,7 @@ Rectangle {
         }
         if (viewing !== "") { if (b === "b" || b === "a") viewing = ""; return true }
         if (Voice.recording) { if (b === "b") { Voice.cancel(); Ui.say("Recording cancelled.") } return true }
+        if (finder.visible && finder.handleButton(b)) return true
         if (reactPicker.visible) return reactPicker.handleButton(b)
         if (compose.emojiShown) return compose.emojiButton(b)
         if (threadBox.emojiShown) return threadBox.emojiButton(b)
@@ -1722,6 +1759,12 @@ Rectangle {
     function handleRelease(b) {
         if (b === "y" && Voice.recording && openKey !== "") Voice.finish(openKey)
         return true
+    }
+    // Ctrl+F: find in this chat.
+    Shortcut {
+        sequence: StandardKey.Find
+        enabled: page.picked && !page.locked && !page.tour && !mirror.visible && !!Ui.main && Ui.main.keysOn
+        onActivated: page.openFind()
     }
     // A linked phone's chats, over everything (companion side of linked devices).
     MirrorPanel { id: mirror; anchors.fill: parent; z: 20 }

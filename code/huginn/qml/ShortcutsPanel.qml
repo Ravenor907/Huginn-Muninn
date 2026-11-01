@@ -31,7 +31,8 @@ Item {
             ["Edit your last message", "Up"],
             ["Stop replying or editing", "Esc"],
             ["Paste a picture to send it", "Ctrl+V"],
-            ["Mention someone in a group", "@name"] ] }],
+            ["Mention someone in a group", "@name"],
+            ["Find in this chat", "Ctrl+F"] ] }],
         [{ title: "CALLS AND VOICE", keys: [
             ["Mute", "Ctrl+Shift+M"],
             ["Deafen", "Ctrl+Shift+D"],

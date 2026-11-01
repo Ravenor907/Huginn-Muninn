@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QProcess>
+#include <QFileInfo>
 #include <QTimer>
 #include "platform/singleinstance.h"
 #include "platform/winupdate.h"
@@ -288,6 +289,10 @@ void Updater::chosen(const QString &bestVer, const QString &bestTag, const QStri
 
 void Updater::install()
 {
+    if (!m_readyPath.isEmpty()) {
+        restartToUpdate();
+        return;
+    }
     if (m_busy || m_assetUrl.isEmpty())
         return;
     m_goingBack = false;
@@ -347,6 +352,7 @@ void Updater::installFlatpak(const QString &path)
         p->deleteLater();
         m_busy = false;
         if (st != QProcess::NormalExit || code != 0) {
+            m_installing = false;
             m_auto = false;
             m_goingBack = false;
             m_status = QStringLiteral("Installing the update failed.");
@@ -364,6 +370,7 @@ void Updater::installFlatpak(const QString &path)
 
 void Updater::failed(const QString &status)
 {
+    m_installing = false;
     m_busy = false;
     m_auto = false;
     m_goingBack = false;
@@ -458,6 +465,32 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
         failed(QStringLiteral("Unlock Huginn first, then try again."));
         return;
     }
+    // An automatic update never closes Huginn by itself: it waits, checked, until the person picks Restart now.
+    if (m_auto && !goingBack) {
+        m_auto = false;
+        m_busy = false;
+        m_readyPath = path;
+        m_status = QStringLiteral("Huginn %1 is ready. It installs when you restart.").arg(version);
+        Q_EMIT changed();
+        return;
+    }
+    installNow(path);
+}
+
+void Updater::restartToUpdate()
+{
+    if (m_busy || m_readyPath.isEmpty() || !QFileInfo::exists(m_readyPath))
+        return;
+    m_busy = true;
+    const QString path = m_readyPath;
+    m_readyPath.clear();
+    installNow(path);
+}
+
+void Updater::installNow(const QString &path)
+{
+    m_installing = true;
+    Q_EMIT aboutToRestart();   // everything is saved before the update replaces Huginn
     if (!WinUpdate::supported()) {
         installFlatpak(path);
         return;
@@ -467,6 +500,7 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
     WinUpdate::install(path, this, [this](bool ok, const QString &msg) {
         m_busy = false;
         if (!ok) {
+            m_installing = false;
             m_auto = false;
             m_goingBack = false;
         }

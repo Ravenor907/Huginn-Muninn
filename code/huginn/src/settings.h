@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QRect>
 #include <QSettings>
+#include <QVariantList>
 
 // Everything the person can change, saved as they change it.
 class Settings : public QObject
@@ -67,6 +68,22 @@ class Settings : public QObject
     // bug reports. updateChannel: "stable" or "beta" (Pre-release); only read while Labs is on.
     Q_PROPERTY(bool labs READ labs WRITE setLabs NOTIFY changed)
     Q_PROPERTY(QString updateChannel READ updateChannel WRITE setUpdateChannel NOTIFY changed)
+    // Settings › Notifications: the raven call for new messages (on unless switched off), and quiet
+    // hours: from and to on the hour (0 to 23), no sounds in between (notifications still show).
+    Q_PROPERTY(bool messageSound READ messageSound WRITE setMessageSound NOTIFY changed)
+    Q_PROPERTY(bool quietHours READ quietHours WRITE setQuietHours NOTIFY changed)
+    Q_PROPERTY(int quietFrom READ quietFrom WRITE setQuietFrom NOTIFY changed)
+    Q_PROPERTY(int quietTo READ quietTo WRITE setQuietTo NOTIFY changed)
+    // Settings › Calls: the microphone and the speaker by id ("" = the system default). Calls and voice
+    // messages use them; one that isn't plugged in falls back to the default.
+    Q_PROPERTY(QString micDevice READ micDevice WRITE setMicDevice NOTIFY changed)
+    Q_PROPERTY(QString speakerDevice READ speakerDevice WRITE setSpeakerDevice NOTIFY changed)
+    // Settings › Privacy: the name nearby devices and LocalSend see (empty: "Huginn on <computer>").
+    Q_PROPERTY(QString deviceName READ deviceName WRITE setDeviceName NOTIFY changed)
+    // Settings › Privacy (Windows): screenshots and screen recordings show nothing of Huginn's window.
+    Q_PROPERTY(bool blockScreenshots READ blockScreenshots WRITE setBlockScreenshots NOTIFY changed)
+    // Settings › Data saver: files wait for Accept, and no link previews are made.
+    Q_PROPERTY(bool dataSaver READ dataSaver WRITE setDataSaver NOTIFY changed)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -150,6 +167,26 @@ public:
     bool preRelease() const { return labs() && updateChannel() == QLatin1String("beta"); }
     // The same, read where no Settings object is at hand (the ring in src/call).
     static bool silenced() { return s_quiet; }
+    bool messageSound() const { return value("messageSound", true).toBool(); }
+    bool quietHours() const { return value("quietHours", false).toBool(); }
+    int quietFrom() const { return ((value("quietFrom", 23).toInt() % 24) + 24) % 24; }
+    int quietTo() const { return ((value("quietTo", 7).toInt() % 24) + 24) % 24; }
+    // Do not disturb, or now is in quiet hours: no sounds (the ring and the raven call).
+    static bool hushed();
+    static bool messageSoundOn() { return saved(QStringLiteral("messageSound"), true).toBool(); }
+    QString micDevice() const { return value("micDevice", "").toString(); }
+    QString speakerDevice() const { return value("speakerDevice", "").toString(); }
+    static QString savedMic() { return saved(QStringLiteral("micDevice"), QString()).toString(); }
+    static QString savedSpeaker() { return saved(QStringLiteral("speakerDevice"), QString()).toString(); }
+    // The microphones (input) or speakers to pick from: [{id, name}], "System default" first.
+    Q_INVOKABLE QVariantList audioDevices(bool input) const;
+    // A device's name for its id ("System default" for "" or one not plugged in now).
+    Q_INVOKABLE QString audioDeviceName(bool input, const QString &id) const;
+    QString deviceName() const;
+    static QString defaultDeviceName();
+    bool blockScreenshots() const { return value("blockScreenshots", false).toBool(); }
+    bool dataSaver() const { return value("dataSaver", false).toBool(); }
+    static bool dataSaverOn() { return saved(QStringLiteral("dataSaver"), false).toBool(); }
     // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
     static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).value(key, fallback); }
 
@@ -196,6 +233,16 @@ public:
     void setQuiet(bool v);
     void setLabs(bool v) { set("labs/on", v); }
     void setUpdateChannel(const QString &v) { set("labs/channel", v == QLatin1String("beta") ? QStringLiteral("beta") : QStringLiteral("stable")); }
+    void setMessageSound(bool v) { set("messageSound", v); }
+    void setQuietHours(bool v) { set("quietHours", v); }
+    void setQuietFrom(int v) { set("quietFrom", ((v % 24) + 24) % 24); }
+    void setQuietTo(int v) { set("quietTo", ((v % 24) + 24) % 24); }
+    void setMicDevice(const QString &v) { set("micDevice", v); }
+    void setSpeakerDevice(const QString &v) { set("speakerDevice", v); }
+    // Trimmed, at most 40 characters; empty (or the usual name) goes back to the usual name.
+    void setDeviceName(const QString &v);
+    void setBlockScreenshots(bool v) { set("blockScreenshots", v); }
+    void setDataSaver(bool v) { set("dataSaver", v); }
 
 Q_SIGNALS:
     void changed();

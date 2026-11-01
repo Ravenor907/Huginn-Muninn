@@ -23,6 +23,9 @@ void startStep(const QString &what);
 // (kept when HUGINN_KEEP_START_LOG is set). If its graphics fail, Huginn restarts once with the
 // software renderer instead of stopping with an error.
 void watchMainWindow(QQuickWindow *window);
+// Settings › Privacy › Block screenshots: on, screenshots and screen recordings leave the window out
+// (black on Windows 10 before 2004). Does nothing on Linux.
+void blockCapture(QQuickWindow *window, bool on);
 // Something stopped the start (the QML didn't load): keep the log and say where it is.
 void startFailed(const QString &why);
 // A command-line run (self-tests): no start log is left behind.

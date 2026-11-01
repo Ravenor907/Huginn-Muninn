@@ -36,10 +36,13 @@ Rectangle {
     readonly property int pad: grouped ? Theme.px(1) : Theme.px(Theme.compact ? 2 : Theme.spacious ? 8 : 5)
     height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
     radius: 0
-    color: picked ? Theme.focusFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : "transparent"
+    // Find in this chat: 1 a match, 2 the match shown (the page's find bar).
+    property int found: 0
+    color: picked ? Theme.focusFill : found === 2 ? Theme.accentFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : found === 1 ? Theme.panel : "transparent"
     border.width: picked ? Theme.focusWidth : 0
     border.color: msg.accent
-    Rectangle { visible: !!msg.m.mention && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH; color: msg.accent }
+    Rectangle { visible: (!!msg.m.mention || msg.found > 0) && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH
+                color: msg.found === 1 && !msg.m.mention ? Theme.lineMuted : msg.accent }
 
     Item {
         visible: msg.lineH > 0

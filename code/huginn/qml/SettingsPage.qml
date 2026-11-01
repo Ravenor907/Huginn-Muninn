@@ -85,8 +85,15 @@ Rectangle {
             { kind: "button", key: "myCode", title: "My code", label: "Show" }
         ]
         case "notify": return [
-            { kind: "toggle", key: "showPreview", chat: true, title: "Show message text", note: "Off: only “New message”" }
-        ]
+            { kind: "toggle", key: "showPreview", chat: true, title: "Show message text", note: "Off: only “New message”" },
+            { kind: "toggle", key: "messageSound", title: "Message sound" },
+            // The same as Do not disturb on your status card.
+            { kind: "toggle", key: "dnd", own: true, on: Ui.myStatus === "dnd", title: "Do not disturb", note: "No sounds or notifications" },
+            { group: "Quiet hours", kind: "toggle", key: "quietHours", title: "Quiet hours",
+              note: Settings.quietHours ? page.hourName(Settings.quietFrom) + " to " + page.hourName(Settings.quietTo) + ", no sounds" : "No sounds overnight" },
+            { group: "Quiet hours", kind: "button", key: "quietFrom", hide: !Settings.quietHours, title: "From: " + page.hourName(Settings.quietFrom), label: "Change" },
+            { group: "Quiet hours", kind: "button", key: "quietTo", hide: !Settings.quietHours, title: "To: " + page.hourName(Settings.quietTo), label: "Change" }
+        ].filter(r => !r.hide)
         case "look": return [
             // Seasonal names its season; pressing it again steps to the next season.
             { group: "Theme", kind: "segmented", key: "theme", title: "Theme", value: Theme.choice,
@@ -122,7 +129,9 @@ Rectangle {
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
             { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
             { kind: "toggle", key: "pushToTalk", title: "Push to talk", note: "Voice rooms: hold a key" },
-            { kind: "button", key: "talkKey", title: "Talk key: " + TalkKey.keyName, note: TalkKey.capturing ? "Press the new key" : "", label: TalkKey.capturing ? "Press a key" : "Change" }
+            { kind: "button", key: "talkKey", title: "Talk key: " + TalkKey.keyName, note: TalkKey.capturing ? "Press the new key" : "", label: TalkKey.capturing ? "Press a key" : "Change" },
+            { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
+            { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" }
         ]
         case "privacy": return [
             { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
@@ -135,7 +144,10 @@ Rectangle {
             { group: "Lock", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" },
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
             { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
-            { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews" },
+            { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: Settings.dataSaver ? "Off while Data saver is on" : "" },
+            { group: "Privacy", kind: "toggle", key: "dataSaver", title: "Data saver", note: "Files ask first. No link previews" },
+            // Windows only: screenshots and screen recordings leave Huginn's window out.
+            { group: "Privacy", kind: "toggle", key: "blockScreenshots", hide: Qt.platform.os !== "windows", title: "Block screenshots", note: "Hides Huginn from captures" },
             { group: "Privacy", kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages",
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "One day" }] },
             { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Let people nearby find you" },
@@ -144,7 +156,8 @@ Rectangle {
         ].filter(r => !r.hide)
         case "devices": return [
             { kind: "button", key: "linked", title: "Linked devices", note: Linked.phone.key ? "Linked to " + Linked.phone.name : "", label: "Open" },
-            { kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" }
+            { kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" },
+            { kind: "button", key: "deviceName", title: "This computer's name", note: Settings.deviceName, label: "Change" }
         ]
         case "controller": return [
             { kind: "info", title: "Show the buttons", note: "Press View (Select)" },
@@ -158,7 +171,7 @@ Rectangle {
         case "about": return [
             { kind: "raven", key: "raven", title: "Huginn " + System.version, note: Settings.labs ? "Labs mode on" : "" },
             { kind: "button", key: "check", title: Updater.status,
-              label: Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
+              label: Updater.ready ? "Restart now" : Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
             { kind: "toggle", key: "autoUpdate", title: "Update automatically" },
             { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" },
             { group: "Labs", kind: "segmented", key: "updateChannel", hide: !Settings.labs, title: "Update channel",
@@ -453,8 +466,8 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: rowItem.r.kind === "toggle"
                 // invert: the switch reads the other way round from the setting (Hide the pattern = trail off).
-                checked: rowItem.r.kind === "toggle" ? (page.source(rowItem.r)[rowItem.r.key] !== !!rowItem.r.invert) : false
-                onToggled: { const o = page.source(rowItem.r); o[rowItem.r.key] = !o[rowItem.r.key] }
+                checked: rowItem.r.kind !== "toggle" ? false : rowItem.r.own ? !!rowItem.r.on : (page.source(rowItem.r)[rowItem.r.key] !== !!rowItem.r.invert)
+                onToggled: page.flip(rowItem.r)
             }
             Row {
                 id: sizeCtl
@@ -629,6 +642,25 @@ Rectangle {
     }
     // Where a toggle's value lives.
     function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
+    // A switch flipped. Do not disturb is your status (the same as the status card's).
+    function flip(r) {
+        if (r.key === "dnd") { Ui.setMyStatus(Ui.myStatus === "dnd" ? "online" : "dnd"); if (Ui.main) Ui.main.autoAway = false; return }
+        const o = source(r)
+        o[r.key] = !o[r.key]
+    }
+    // Quiet hours: an hour of the day, the way the clock shows it.
+    function hourName(h) { return h === 0 ? "12 AM" : h === 12 ? "12 PM" : h < 12 ? h + " AM" : (h - 12) + " PM" }
+    function pickHour(key) {
+        const items = []
+        for (let h = 0; h < 24; h++) items.push({ name: hourName(h), url: String(h), check: Settings[key] === h })
+        Ui.pickFrom(key === "quietFrom" ? "Quiet from" : "Quiet until", [{ header: "", items: items }], v => Settings[key] = Number(v))
+    }
+    // Settings › Calls: a microphone or speaker, "System default" first.
+    function pickDevice(key) {
+        const input = key === "micDevice"
+        const items = Settings.audioDevices(input).map(d => ({ name: d.name, url: d.id === "" ? "default" : d.id, check: d.id === Settings[key] }))
+        Ui.pickFrom(input ? "Microphone" : "Speaker", [{ header: "", items: items }], v => Settings[key] = v === "default" ? "" : v)
+    }
     // A choice in a row of choices. Seasonal picked again (a click, or A on it) steps to the next season.
     function pickSegment(r, v) {
         if (r.chat) Chat[r.key] = Number(v)
@@ -688,6 +720,9 @@ Rectangle {
         else if (key === "sizeUp") Ui.main.stepSize(1)
         else if (key === "sizeReset") Ui.main.stepSize(0)
         else if (key === "linked") PeopleActions.linkedDevices()
+        else if (key === "quietFrom" || key === "quietTo") pickHour(key)
+        else if (key === "micDevice" || key === "speakerDevice") pickDevice(key)
+        else if (key === "deviceName") Ui.ask("This computer's name", "Nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
         else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
         else if (key === "resetPanels") { Ui.resetPanels(); Ui.say("Panels reset.") }
         else if (key === "shortcuts") Ui.main.showShortcuts()
@@ -708,7 +743,8 @@ Rectangle {
                     "Go back", () => Updater.goBackToStable(), false, true)
         }
         else if (key === "check") {
-            if (!Updater.available) Updater.check()
+            if (Updater.ready) Updater.restartToUpdate()
+            else if (!Updater.available) Updater.check()
             else if (job) Ui.sure("Update now?", job, "Update anyway", () => Updater.install(), true, true)
             else Updater.install()
         }
@@ -717,7 +753,7 @@ Rectangle {
     function change(dir) {
         const r = rows[row]
         if (!r) return
-        if (r.kind === "toggle") { const o = source(r); o[r.key] = !o[r.key] }
+        if (r.kind === "toggle") flip(r)
         else if (r.kind === "segmented") {
             const opts = r.options
             const now = r.value !== undefined ? r.value : r.chat ? String(Chat[r.key]) : Settings[r.key]

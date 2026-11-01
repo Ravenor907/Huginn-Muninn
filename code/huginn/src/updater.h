@@ -23,6 +23,10 @@ class Updater : public QObject
     Q_PROPERTY(QString latest READ latest NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(bool autoUpdating READ autoUpdating NOTIFY changed)
+    // A checked update is waiting for Restart now (an automatic update never closes Huginn by itself).
+    Q_PROPERTY(bool ready READ ready NOTIFY changed)
+    // Installing now: Huginn restarts on the new version after.
+    Q_PROPERTY(bool installing READ installing NOTIFY changed)
 
 public:
     explicit Updater(Settings *settings, QObject *parent = nullptr);
@@ -32,9 +36,12 @@ public:
     QString latest() const { return m_latest; }
     QString status() const { return m_status; }
     bool autoUpdating() const { return m_auto; }
+    bool ready() const { return !m_readyPath.isEmpty(); }
+    bool installing() const { return m_installing; }
 
-    // At launch: if a newer release is out, install it and restart.
+    // At launch: if a newer release is out, download and check it; it installs only on Restart now.
     void startAutoUpdate();
+    Q_INVOKABLE void restartToUpdate();
 
     Q_INVOKABLE void check();
     Q_INVOKABLE void install();
@@ -66,8 +73,10 @@ public:
 
 Q_SIGNALS:
     void changed();
+    void aboutToRestart();
 
 private:
+    void installNow(const QString &path);
     void fetch(bool installAfter, bool autoMode = false);
     // GitHub's API limits each address to 60 questions an hour: when it refuses, the "latest release" page (a redirect to the tag) says the same thing.
     void fetchLatestPage(bool installAfter, bool autoMode);
@@ -98,4 +107,6 @@ private:
     QString m_status;
     bool m_busy = false;
     bool m_auto = false;
+    bool m_installing = false;
+    QString m_readyPath;
 };

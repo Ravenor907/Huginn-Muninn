@@ -9,6 +9,7 @@ void startClaimed(bool) {}
 void chooseGraphics() {}
 void startStep(const QString &) {}
 void watchMainWindow(QQuickWindow *) {}
+void blockCapture(QQuickWindow *, bool) {}
 void startFailed(const QString &) {}
 void noStartLog() {}
 }
@@ -280,6 +281,23 @@ void chooseGraphics()
 void startStep(const QString &what)
 {
     logLine(what);
+}
+
+void blockCapture(QQuickWindow *window, bool on)
+{
+    if (!window)
+        return;
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    if (!on) {
+        SetWindowDisplayAffinity(hwnd, WDA_NONE);
+        return;
+    }
+    // Windows 10 2004 and newer leave the window out; older ones only know WDA_MONITOR (shown black).
+    if (!SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE))
+        SetWindowDisplayAffinity(hwnd, WDA_MONITOR);
 }
 
 void watchMainWindow(QQuickWindow *window)

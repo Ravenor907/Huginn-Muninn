@@ -5,7 +5,7 @@ import Huginn
 // Cap m2 over a chat or a group channel (shared/docs/protocol.md section 12), the same as Muninn's ChatMore.kt and
 // CameraScreen.kt: the attach menu (pictures, several at once as an album; a video message; a video file; a
 // poll), an album full size with arrows, a video message playing, the camera recording one (it waits for
-// Send or Discard, never sent by itself), a new poll, and the Shared page (photos, videos and links).
+// Send or Discard, never sent by itself), a new poll, and the Shared page (photos, videos, links and voice).
 // where: the contact's key or "g:<group>:<channel>"; title: who or what it goes to.
 Item {
     id: layer
@@ -22,7 +22,11 @@ Item {
     // The Shared page loads a page at a time: more as you scroll near the end.
     readonly property int pageSize: 60
     property int sharedShown: pageSize
-    readonly property var sharedData: sharedOpen ? (Chat.chats, Chat.groups, Chat.shared(where)) : ({ media: [], links: [] })
+    readonly property var sharedData: sharedOpen ? (Chat.chats, Chat.groups, Chat.shared(where)) : ({ media: [], links: [], voices: [] })
+    readonly property var sharedVoices: sharedData.voices || []
+    // The tabs in order, for X on a controller.
+    readonly property var sharedTabs: ["media", "links", "voice"]
+    function sharedCount() { return sharedTab === "media" ? sharedData.media.length : sharedTab === "links" ? sharedData.links.length : sharedVoices.length }
     readonly property bool busy: photos.length > 0 || videoId !== "" || camera || pollDlg.visible || sharedOpen
     anchors.fill: parent
     z: 40
@@ -135,6 +139,12 @@ Item {
     function openShared() { if (!tour && where !== "") { sharedTab = "media"; sharedSel = -1; sharedShown = pageSize; sharedOpen = true } }
     function openSharedItem(i) {
         const media = sharedData.media, links = sharedData.links
+        if (sharedTab === "voice") {
+            const v = sharedVoices[i]
+            if (!v) return
+            if (Voice.playing === v.photo) Voice.stop(); else Voice.play(v.photo)
+            return
+        }
         if (sharedTab === "media") {
             const it = media[i]
             if (!it) return
@@ -165,14 +175,14 @@ Item {
         }
         if (pollDlg.visible) return pollDlg.handleButton(b)
         if (sharedOpen) {
-            const n = sharedTab === "media" ? sharedData.media.length : sharedData.links.length
+            const n = sharedCount()
             const cols = sharedTab === "media" ? mediaGrid.columns : 1
             switch (b) {
             case "left": if (sharedTab === "media" && sharedSel > 0) sharedSel--; break
             case "right": if (sharedTab === "media" && sharedSel < n - 1) sharedSel++; break
             case "up": sharedSel = Math.max(0, sharedSel - cols); break
             case "down": sharedSel = n ? Math.min(n - 1, sharedSel < 0 ? 0 : sharedSel + cols) : -1; if (sharedSel >= sharedShown - cols) sharedShown += pageSize; break
-            case "x": sharedTab = sharedTab === "media" ? "links" : "media"; sharedSel = -1; break
+            case "x": sharedTab = sharedTabs[(sharedTabs.indexOf(sharedTab) + 1) % sharedTabs.length]; sharedSel = -1; sharedShown = pageSize; break
             case "a": if (sharedSel >= 0) openSharedItem(sharedSel); break
             case "b": sharedOpen = false; break
             }
@@ -196,14 +206,14 @@ Item {
             width: parent.width
             carved: false
             title: "Shared with " + layer.title
-            subtitle: layer.sharedData.media.length + " photos and videos · " + layer.sharedData.links.length + " links"
+            subtitle: layer.sharedData.media.length + " photos and videos · " + layer.sharedData.links.length + " links · " + layer.sharedVoices.length + " voice messages"
             HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: layer.sharedOpen = false }
         }
         Segmented {
             id: sharedTabs
             anchors.top: sharedHead.bottom; anchors.topMargin: Theme.px(10)
             x: Theme.px(20)
-            options: [{ value: "media", label: "Photos and videos" }, { value: "links", label: "Links" }]
+            options: [{ value: "media", label: "Photos and videos" }, { value: "links", label: "Links" }, { value: "voice", label: "Voice" }]
             value: layer.sharedTab
             onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1; layer.sharedShown = layer.pageSize }
         }
@@ -278,11 +288,56 @@ Item {
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { layer.sharedSel = index; layer.openSharedItem(index) } }
             }
         }
+        // Voice messages, newest first: a click (or A) plays one, again stops it.
+        ListView {
+            id: voiceList
+            visible: layer.sharedTab === "voice"
+            anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
+            clip: true
+            spacing: Theme.px(8)
+            model: layer.sharedTab === "voice" ? layer.sharedVoices.slice(0, layer.sharedShown) : []
+            currentIndex: layer.sharedSel
+            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedVoices.length) layer.sharedShown += layer.pageSize
+            delegate: Rectangle {
+                id: voiceRow
+                readonly property bool playingThis: Voice.playing !== "" && Voice.playing === modelData.photo
+                width: voiceList.width
+                height: Math.max(Theme.px(56), voiceCol.implicitHeight + Theme.px(16))
+                radius: Theme.radius
+                color: voiceHover.hovered ? Theme.raised : Theme.panel
+                border.color: index === layer.sharedSel ? Theme.accent : Theme.line; border.width: index === layer.sharedSel ? Theme.focusWidth : 1
+                Accessible.role: Accessible.Button
+                Accessible.name: "Voice message from " + modelData.name + ", " + Voice.length(modelData.voice || 0)
+                Accessible.onPressAction: { layer.sharedSel = index; layer.openSharedItem(index) }
+                Icon {
+                    id: voiceIcon
+                    x: Theme.px(14); anchors.verticalCenter: parent.verticalCenter
+                    name: voiceRow.playingThis ? "stop" : "play"; size: Theme.px(22); color: Theme.accent
+                }
+                Column {
+                    id: voiceCol
+                    anchors.left: voiceIcon.right; anchors.leftMargin: Theme.px(14)
+                    anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.px(4)
+                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.name + " · " + Voice.length(modelData.voice || 0); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold }
+                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: Qt.formatDateTime(new Date(modelData.time || 0), "MMM d, h:mm AP"); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Rectangle {
+                        width: parent.width; height: Theme.px(3); radius: Theme.radiusSmall; color: Theme.lineMuted
+                        Rectangle { width: parent.width * (voiceRow.playingThis ? Voice.progress : 0); height: parent.height; radius: parent.radius; color: Theme.accent }
+                    }
+                }
+                HoverHandler { id: voiceHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: { layer.sharedSel = index; layer.openSharedItem(index) } }
+            }
+        }
         Text {
             textFormat: Text.PlainText
             anchors.centerIn: parent
-            visible: (layer.sharedTab === "media" ? layer.sharedData.media.length : layer.sharedData.links.length) === 0
-            text: layer.sharedTab === "media" ? "No photos or videos yet." : "No links yet."
+            visible: layer.sharedCount() === 0
+            text: layer.sharedTab === "media" ? "No photos or videos yet." : layer.sharedTab === "links" ? "No links yet." : "No voice messages yet."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
         }
     }
@@ -387,5 +442,7 @@ Item {
         target: Videos
         function onChanged() { if (Videos.error !== "" && (layer.camera || layer.videoId !== "")) { Ui.say(Videos.error, true) } }
     }
+    // A voice message from the Shared page stops when it closes.
+    onSharedOpenChanged: if (!sharedOpen && Voice.playing !== "") Voice.stop()
     Component.onDestruction: { Videos.stop(); if (camera) Videos.closeCamera() }
 }
