@@ -1,4 +1,5 @@
 #include "localsend.h"
+#include "busy.h"
 #include "proof.h"
 #include "lan.h"
 #include "settings.h"
@@ -304,6 +305,7 @@ void LocalSend::bindLan()
 {
     if (!m_on)
         return;
+    Busy::Scope busy("nearby sharing");
     hiddenChanged();
     const QList<QHostAddress> want = Lan::addresses();
     bool changed = false;
@@ -467,6 +469,7 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
 
 void LocalSend::onDatagrams()
 {
+    Busy::Scope busy("nearby sharing");
     while (m_udp.hasPendingDatagrams()) {
         QHostAddress from;
         QByteArray data(int(m_udp.pendingDatagramSize()), Qt::Uninitialized);

@@ -44,6 +44,8 @@ public:
 
     // The label for a button prompt in the current controller's style.
     Q_INVOKABLE QString glyph(const QString &button) const;
+    // Battery saver: read less often (main.cpp follows System::batterySaving).
+    void setRelaxed(bool relaxed);
 
 Q_SIGNALS:
     void pressed(const QString &button);
@@ -58,6 +60,9 @@ private:
     void down(const QString &button, bool repeats);
     void up(const QString &button);
     void axisAsButton(const QString &button, bool active, bool repeats);
+    // A stick's new value, a little rounded so its jitter at rest says nothing; true when it changed.
+    static bool setAxis(double &axis, int raw);
+    void retime();
 
     QTimer m_poll;
     QTimer m_repeat;
@@ -71,6 +76,7 @@ private:
     double m_stickY = 0;
     double m_rightX = 0;
     double m_rightY = 0;
+    bool m_relaxed = false;
     Qt::MouseButtons m_held = Qt::NoButton;   // stick-pointer buttons down right now
     QElapsedTimer m_clock;                    // timestamps for those events (double clicks)
 };

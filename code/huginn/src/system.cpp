@@ -10,10 +10,13 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
+#include <QDBusPendingCallWatcher>
+#include <QDBusVariant>
 #endif
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QGuiApplication>
@@ -116,6 +119,172 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
     watchScreen(QGuiApplication::primaryScreen());
     detectHandheld();
     refit();
+    watchPower();
+    // Input: every key, mouse, touch and controller press notes the time; 30 seconds without any is idle.
+    m_inputClock.start();
+    m_idleCheck.setInterval(5000);
+    connect(&m_idleCheck, &QTimer::timeout, this, [this] {
+        if (m_inputIdle || m_inputClock.elapsed() - m_lastInput < 30000)
+            return;
+        m_inputIdle = true;
+        m_idleCheck.stop();
+        Q_EMIT inputIdleChanged();
+    });
+    m_idleCheck.start();
+    if (QCoreApplication *app = QCoreApplication::instance())
+        app->installEventFilter(this);
+}
+
+// ------------------------------------------------------------------ battery and input
+
+namespace
+{
+#ifdef Q_OS_LINUX
+// Without UPower (not reachable from here): the kernel's power supplies. A mains supply that is offline, or else a
+// system battery that is discharging. known: there was something to go by.
+bool batteryFromSys(bool *known)
+{
+    *known = false;
+    const QDir dir(QStringLiteral("/sys/class/power_supply"));
+    bool mains = false, mainsOnline = false, discharging = false;
+    for (const QString &name : dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        auto read = [&dir, &name](const char *field) {
+            QFile f(dir.filePath(name + QLatin1Char('/') + QLatin1String(field)));
+            return f.open(QIODevice::ReadOnly) ? QString::fromLatin1(f.readAll()).trimmed() : QString();
+        };
+        const QString type = read("type");
+        if (type == QLatin1String("Mains")) {
+            mains = true;
+            mainsOnline = mainsOnline || read("online") == QLatin1String("1");
+        } else if (type == QLatin1String("Battery") && read("scope") != QLatin1String("Device")) {
+            *known = true;
+            discharging = discharging || read("status") == QLatin1String("Discharging");
+        }
+    }
+    if (mains) {
+        *known = true;
+        return !mainsOnline;
+    }
+    return discharging;
+}
+#endif
+}
+
+void System::watchPower()
+{
+    connect(m_settings, &Settings::changed, this, &System::updateSaving);
+    // The screenshot tour draws the same on every machine: never on battery there.
+    if (!m_tourDir.isEmpty())
+        return;
+    m_powerPoll.setInterval(60000);
+    connect(&m_powerPoll, &QTimer::timeout, this, &System::askBattery);
+#ifdef Q_OS_WIN
+    m_powerPoll.start();
+#elif defined(Q_OS_LINUX)
+    // UPower says when it changes; asked once now (without waiting on it).
+    QDBusConnection::systemBus().connect(QStringLiteral("org.freedesktop.UPower"), QStringLiteral("/org/freedesktop/UPower"),
+                                         QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("PropertiesChanged"), this,
+                                         SLOT(upowerChanged(QString,QVariantMap,QStringList)));
+#endif
+    askBattery();
+    updateSaving();
+}
+
+void System::askBattery()
+{
+#ifdef Q_OS_WIN
+    bool known = false;
+    const bool on = Platform::onBattery(&known);
+    if (known)
+        setOnBattery(on);
+#elif defined(Q_OS_LINUX)
+    QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.UPower"), QStringLiteral("/org/freedesktop/UPower"),
+                                                    QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+    m.setArguments({QStringLiteral("org.freedesktop.UPower"), QStringLiteral("OnBattery")});
+    auto *watch = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(m, 3000), this);
+    connect(watch, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        const QDBusMessage r = w->reply();
+        if (r.type() == QDBusMessage::ReplyMessage && !r.arguments().isEmpty()) {
+            m_powerPoll.stop();   // UPower's signal follows it from here
+            setOnBattery(qvariant_cast<QDBusVariant>(r.arguments().constFirst()).variant().toBool());
+            return;
+        }
+        // No UPower: the kernel's view, looked at again every minute.
+        bool known = false;
+        const bool on = batteryFromSys(&known);
+        if (known)
+            setOnBattery(on);
+        if (!m_powerPoll.isActive())
+            m_powerPoll.start();
+    });
+#endif
+}
+
+void System::upowerChanged(const QString &iface, const QVariantMap &changed, const QStringList &invalidated)
+{
+    if (iface != QLatin1String("org.freedesktop.UPower"))
+        return;
+    if (changed.contains(QStringLiteral("OnBattery")))
+        setOnBattery(changed.value(QStringLiteral("OnBattery")).toBool());
+    else if (invalidated.contains(QStringLiteral("OnBattery")))
+        askBattery();
+}
+
+void System::setOnBattery(bool on)
+{
+    if (on == m_onBattery)
+        return;
+    m_onBattery = on;
+    CrashLog::note(on ? QStringLiteral("power: on battery") : QStringLiteral("power: plugged in"));
+    Q_EMIT powerChanged();
+    updateSaving();
+}
+
+void System::updateSaving()
+{
+    const QString mode = m_settings->batterySaver();
+    const bool on = m_tourDir.isEmpty() && (mode == QLatin1String("on") || (mode == QLatin1String("auto") && m_onBattery));
+    if (on == m_saving)
+        return;
+    m_saving = on;
+    Q_EMIT powerChanged();
+}
+
+QString System::powerSummary() const
+{
+    const QString mode = m_settings->batterySaver();
+    const QString setting = mode == QLatin1String("on") ? QStringLiteral("On") : mode == QLatin1String("off") ? QStringLiteral("Off") : QStringLiteral("Automatic");
+    return (m_onBattery ? QStringLiteral("on battery") : QStringLiteral("plugged in or not known")) + QStringLiteral(", Battery saver ") + setting
+        + (m_saving ? QStringLiteral(" (on)") : QStringLiteral(" (off)"));
+}
+
+void System::noteInput()
+{
+    m_lastInput = m_inputClock.elapsed();
+    if (!m_inputIdle)
+        return;
+    m_inputIdle = false;
+    m_idleCheck.start();
+    Q_EMIT inputIdleChanged();
+}
+
+bool System::eventFilter(QObject *watched, QEvent *event)
+{
+    switch (event->type()) {
+    case QEvent::KeyPress:
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseMove:
+    case QEvent::Wheel:
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+    case QEvent::TabletPress:
+        noteInput();
+        break;
+    default:
+        break;
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void System::detectHandheld()

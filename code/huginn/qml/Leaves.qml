@@ -6,15 +6,14 @@ import Huginn
 // Look page) and what falls behind the frosted panes. One engine for both seasons; kind only picks
 // the shapes. Autumn: three leaf shapes (maple, oak and a serrated elm) in seven colors, and maple
 // seeds. Snow: six-armed crystals in the leaves' and seeds' places, white and a little see-through.
-// A 30 fps timer moves them: they glide sideways as they fall, rock and tumble, flip edge-on and
-// back, and lean into a gust now and then; the seeds spin and orbit as they drop. Up to 180 (and
-// while that many small canvases cost less than one the size of the window), each is drawn once on
-// its own small Canvas and only moved after that; more than that are all drawn on one Canvas each
-// frame (at 15 frames a second), the same way and in the same places. The timer stops while the window is
-// hidden or minimized, or after a minute in the background, and with Less motion on everything lies still,
-// scattered across the ground.
-// Settings › Look: Animation (Off draws nothing and stops the timer), Amount (1 to 400 on screen;
-// until it's moved, Theme.fallCount scales it by the window's area) and Size (15% to 600%).
+// Each is drawn once on its own small Canvas; Fall (fall.cpp) moves them from C++ at most 30 times a
+// second (15 in the background), no script per frame: they glide sideways as they fall, rock and tumble,
+// flip edge-on and back, and lean into a gust now and then; the seeds spin and orbit as they drop. It
+// stops while the window is hidden or minimized, after a minute in the background, and after 30 seconds
+// without input on battery; Less motion and Battery saver lay everything still, scattered across the ground.
+// Settings › Look: Animation (Off draws nothing and stops it), Amount (1 to 400 on screen; until it's moved,
+// Theme.fallCount scales it by the window's area) and Size (15% to 600%). Very big ones are fewer, so all
+// of them together hold at most twice the window's pixels.
 Item {
     id: leaves
     visible: Theme.seasonal
@@ -24,20 +23,20 @@ Item {
     readonly property bool falling: Settings.seasonAnimation !== "off"
 
     readonly property real sizeScale: (Number(Settings.fallSize) || 60) / 100 * Theme.s
-    readonly property int count: falling ? Theme.fallCount(width, height) : 0
+    // At most as many as fit in twice the window's pixels at this size (only ever fewer for a few dozen huge ones).
+    readonly property int fits: Math.max(1, Math.floor(Math.max(width * height, 1440000) * 2 / Math.pow(30 * sizeScale, 2)))
+    readonly property int count: falling ? Math.min(Theme.fallCount(width, height), fits) : 0
     // About 5 seeds in every 23; the rest are leaves (all flakes in Snow).
     readonly property int nSeeds: Math.round(count * 5 / 23)
     readonly property int nLeaves: count - nSeeds
-    // All on one Canvas: past 180, or when the small canvases together would hold more than twice
-    // the window's pixels (a few dozen huge ones).
-    readonly property bool one: count > 180 || count * Math.pow(30 * sizeScale, 2) > Math.max(width * height, 1440000) * 2
     readonly property bool winActive: Window.active
     readonly property bool onScreen: visible && Window.visibility !== Window.Hidden && Window.visibility !== Window.Minimized
     // In the background for a minute: everything holds still until Huginn is in front again.
     property bool resting: false
-    Timer { interval: 60000; running: !leaves.winActive && leaves.onScreen; onTriggered: leaves.resting = true }
+    Timer { interval: 60000; running: !leaves.winActive && leaves.onScreen && leaves.falling; onTriggered: leaves.resting = true }
     onWinActiveChanged: if (winActive) resting = false
-    readonly property bool moving: onScreen && Theme.motion && falling && !resting
+    // On battery, 30 seconds without input holds it still too, until the next key, touch, mouse or button.
+    readonly property bool moving: onScreen && Theme.motion && falling && !resting && !(System.onBattery && System.inputIdle)
 
     // Where each leaf starts and how it moves. The same index always gets the same leaf, so the
     // sliders add or take away leaves without reshuffling the rest.
@@ -47,7 +46,7 @@ Item {
         for (let i = 0; i < nSeeds; ++i) out.push(make(1000 + i, "seed"))
         return out
     }
-    // A small, repeatable random source per leaf. px, py, rot and flip are where it is now (pose).
+    // A small, repeatable random source per leaf; Fall (fall.cpp) reads how it moves from these.
     function make(i, kind) {
         let s = (i * 2654435761 + 97) >>> 0
         const r = function() { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296 }
@@ -55,14 +54,13 @@ Item {
         if (kind === "seed")
             return { kind: "seed", sym: 15 + Math.floor(r() * 6), x0: r(), speed: 0.062 + r() * 0.016, sway: 12, swayT: 4 + r(),
                      w: 20 + r() * 5, rps: (1.8 + r() * 0.7) * (r() < 0.5 ? -1 : 1), phase: r() * 100, dir: r() < 0.5 ? -1 : 1,
-                     orbit: 10 + r() * 7, orbitT: 3.2 + r() * 0.8, op: 0.9, wx: 0, lastFall: -1, px: 0, py: 0, rot: 0, flip: 1, placed: false }
+                     orbit: 10 + r() * 7, orbitT: 3.2 + r() * 0.8, op: 0.9 }
         const w = depth === 0 ? 17 + r() * 5 : depth === 1 ? 22 + r() * 8 : 30 + r() * 10
         return { kind: "leaf", sym: Math.floor(r() * 15), x0: r(), depth: depth,
                  speed: depth === 0 ? 0.03 + r() * 0.012 : depth === 1 ? 0.048 + r() * 0.016 : 0.068 + r() * 0.024,
                  sway: w * (0.6 + r() * 0.6), swayT: 2.6 + r() * 2.2, w: w, spin: (4 + r() * 26) * (r() < 0.5 ? -1 : 1),
                  flipT: 1.9 + r() * 1.3, phase: r() * 100, dir: r() < 0.5 ? -1 : 1, glide: 0.5 + r() * 0.75,
-                 tumbleT: 2.7 + r() * 2.8, zig: 0.65 + r() * 0.75, op: depth === 0 ? 0.6 : depth === 1 ? 0.85 : 1, wx: 0, lastFall: -1,
-                 px: 0, py: 0, rot: 0, flip: 1, placed: false }
+                 tumbleT: 2.7 + r() * 2.8, zig: 0.65 + r() * 0.75, op: depth === 0 ? 0.6 : depth === 1 ? 0.85 : 1 }
     }
     // The drawn size of a leaf: its own width times the slider.
     function sideOf(q) { return Math.max(3, Math.ceil((q.w || 24) * sizeScale)) }
@@ -103,91 +101,30 @@ Item {
         smooth: true
     }
 
-    // The clock. Date.now() costs nothing to read and never allocates.
-    property real t0: Date.now()
-    readonly property real tau: Math.PI * 2
-    // A gust everyone feels: 0 most of the time, rising to 1 for a few seconds now and then.
-    function gustAt(t) {
-        const g = Math.sin(t * 0.21) * Math.sin(t * 0.07 + 1.3)
-        return g > 0 ? g * g : 0
-    }
-    Timer {
-        // 30 frames a second at most (Handheld mode too, with half as many falling, Theme.fallCount); all on one
-        // Canvas (redrawn whole each frame), or in the background, 15.
-        interval: leaves.winActive && !leaves.one ? 33 : 66
-        repeat: true
+    // What moves them (fall.cpp): 30 frames a second in front, 15 behind other windows.
+    Fall {
+        id: driver
         running: leaves.moving
-        onTriggered: leaves.step((Date.now() - leaves.t0) / 1000, interval / 1000)
+        fps: leaves.winActive ? 30 : 15
+        areaWidth: leaves.width
+        areaHeight: leaves.height
+        sizeScale: leaves.sizeScale
+        snow: leaves.kind === "snow"
     }
-    function step(t, dt) {
-        const g = gustAt(t)
-        if (one) {
-            const pl = plan
-            for (let i = 0; i < pl.length; ++i) { const q = pl[i]; pose(q, t, dt, g, sideOf(q)) }
-            sky.requestPaint()
-            return
-        }
-        const n = rep.count
-        for (let i = 0; i < n; ++i) { const it = rep.itemAt(i); if (it) it.place(t, dt, g) }
-    }
-    // Less motion, or nothing drawn yet: everything in its place for one moment, no wind.
-    function settle() { if (!moving) step(37.3, 0) }
-    onMovingChanged: settle()
+    readonly property real tau: Math.PI * 2
+    // Less motion, Animation off, or nothing drawn yet: everything in its place for one moment, no wind. Held
+    // still for another reason (in the background, idle on battery), everything stays where it was.
+    function settle() { driver.settle() }
+    onMovingChanged: if (!moving && (!Theme.motion || !falling)) settle()
     onPlanChanged: Qt.callLater(settle)
     onKindChanged: Qt.callLater(settle)
-    onOneChanged: Qt.callLater(settle)
     onSizeScaleChanged: Qt.callLater(settle)
     onWidthChanged: { Qt.callLater(settle); sizeSoon.restart() }
     onHeightChanged: { Qt.callLater(settle); sizeSoon.restart() }
 
-    // Where leaf q is at time t (seconds), side pixels across: its turning point (px, py; the stem's
-    // base, or a flake's middle), its turn in degrees (rot) and how far it faces you (flip, 1 flat
-    // on, near 0 edge-on). Kept on q, so nothing is allocated.
-    function pose(q, t, dt, gust, side) {
-        const W = width, H = height, ss = sizeScale
-        const tt = t + q.phase
-        // Top to bottom and round again: from 12% above the window to 13% below it, or by its own
-        // size for a big one, so it leaves whole before it starts again at the top.
-        const top = Math.min(-0.12 * H, -side)
-        const drop = Math.max(1.13 * H, H + side) - top
-        const fallen = (tt * q.speed * H) % drop
-        // Back at the top: the wind's push starts over.
-        if (fallen < q.lastFall) q.wx = 0
-        q.lastFall = fallen
-        let x = q.x0 * W + Math.sin(tt / q.swayT * tau) * q.sway * ss + Math.sin(tt / (q.swayT * 2.7) * tau) * q.sway * 0.4 * ss
-        let y = top + fallen
-        let rot, flip
-        // In Snow every flake, seed slots included, rocks, tumbles and flips like a leaf.
-        if (q.kind === "seed" && kind !== "snow") {
-            rot = (tt * q.rps * 360) % 360
-            flip = 1
-            x += Math.cos(tt / q.orbitT * tau) * q.orbit * ss
-            y += Math.sin(tt / q.orbitT * tau) * q.orbit * 0.5 * ss
-            q.wx += gust * 70 * ss * dt
-        } else {
-            // Rock with the sway, a slow tumble each way, and a lean into the gust.
-            const spin = q.spin !== undefined ? q.spin : 16 * q.dir
-            const tumbleT = q.tumbleT !== undefined ? q.tumbleT : q.orbitT + 0.6
-            const flipT = q.flipT !== undefined ? q.flipT : 2.2 + (q.phase % 1)
-            const glide = q.glide !== undefined ? q.glide : 0.6
-            const zig = q.zig !== undefined ? q.zig : 0.8
-            rot = spin * Math.sin(tt / q.swayT * tau) + Math.sin(tt * 0.6) * 10
-                + q.dir * 18 * Math.sin(tt / tumbleT * tau) + gust * 28 * q.dir
-            flip = 0.55 + 0.45 * Math.cos(tt / flipT * tau)
-            // Gliding sideways as it falls, and pushed along by the gust.
-            x += q.dir * glide * zig * fallen * 0.16
-            q.wx += gust * zig * 110 * ss * dt
-        }
-        x += q.wx
-        // Off one side by its own size comes back in on the other.
-        const span = W + side * 2
-        x = ((x + side) % span + span) % span - side
-        q.px = x; q.py = y; q.rot = rot; q.flip = flip; q.placed = true
-    }
-
     Repeater {
         id: rep
-        model: leaves.visible && !leaves.one ? leaves.plan.length : 0
+        model: leaves.visible ? leaves.plan.length : 0
         delegate: Item {
             id: leaf
             required property int index
@@ -195,30 +132,23 @@ Item {
             // The drawn size: the leaf's own width times the slider. The canvas is drawn at that size,
             // so it stays crisp; the slider repaints it once, not every frame.
             readonly property int side: leaves.sideOf(p)
-            width: side; height: side
+            // No size of its own: it sits at the turning point (the stem's base, or a flake's middle), where Fall
+            // turns and flips it.
+            width: 0; height: 0
             opacity: p.op || 1
-            // The stem's base, where the leaf turns; a snowflake turns about its middle.
-            readonly property real ox: side * (leaves.kind === "snow" ? 0.5 : 0.25)
-            readonly property real oy: side * 0.5
             transform: [
-                Scale { id: flipT; origin.x: leaf.ox; origin.y: leaf.oy; xScale: 1 },
-                Rotation { id: rotT; origin.x: leaf.ox; origin.y: leaf.oy; angle: 0 }
+                Scale { id: flipT; xScale: 1 },
+                Rotation { id: rotT; angle: 0 }
             ]
-            Component.onCompleted: place(37.3, 0, 0)
-
-            function place(t, dt, gust) {
-                const q = p
-                if (!q.kind) return
-                leaves.pose(q, t, dt, gust, side)
-                leaf.x = q.px - ox
-                leaf.y = q.py - oy
-                rotT.angle = q.rot
-                flipT.xScale = q.flip
-            }
+            onPChanged: if (p.kind) driver.add(leaf, flipT, rotT, p)
+            Component.onCompleted: if (p.kind) driver.add(leaf, flipT, rotT, p)
+            Component.onDestruction: driver.remove(leaf)
 
             Canvas {
                 id: cv
-                anchors.fill: parent
+                x: -leaf.side * (leaves.kind === "snow" ? 0.5 : 0.25)
+                y: -leaf.side * 0.5
+                width: leaf.side; height: leaf.side
                 renderTarget: Canvas.Image
                 renderStrategy: Canvas.Immediate
                 onWidthChanged: requestPaint()
@@ -239,39 +169,6 @@ Item {
                     else if (sym >= 15) leaves.drawSeed(ctx, sym - 15, 1)
                     else leaves.drawLeaf(ctx, sym, 1, null)
                 }
-            }
-        }
-    }
-
-    // Many at once: all of them on this one Canvas, redrawn each frame from where pose put them. Each
-    // is turned, flipped and sized exactly as its own small canvas would be, with the same opacity.
-    Canvas {
-        id: sky
-        anchors.fill: parent
-        visible: leaves.one
-        renderTarget: Canvas.Image
-        renderStrategy: Canvas.Immediate
-        onPaint: {
-            const ctx = getContext("2d")
-            ctx.reset()
-            ctx.clearRect(0, 0, width, height)
-            if (!leaves.one) return
-            const pl = leaves.plan
-            const snow = leaves.kind === "snow"
-            ctx.lineJoin = "round"; ctx.lineCap = "round"
-            // The leaves' gradients, made once a frame and shared by every leaf of a color.
-            const fills = snow ? null : leaves.leafFills(ctx)
-            for (let i = 0; i < pl.length; ++i) {
-                const q = pl[i]
-                if (!q.placed) continue
-                const k = leaves.sideOf(q) / 48
-                const a = q.rot * Math.PI / 180
-                const c = Math.cos(a) * k, s = Math.sin(a) * k
-                // Scale by k, flip across, turn, then move to the turning point.
-                ctx.setTransform(c * q.flip, s * q.flip, -s, c, q.px, q.py)
-                if (snow) leaves.drawFlake(ctx, q.sym, 0, q.op)
-                else if (q.sym >= 15) leaves.drawSeed(ctx, q.sym - 15, q.op)
-                else leaves.drawLeaf(ctx, q.sym, q.op, fills)
             }
         }
     }

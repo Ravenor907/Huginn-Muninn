@@ -1,4 +1,5 @@
 #include "ble.h"
+#include "busy.h"
 #include "proof.h"
 
 #include <QBluetoothDeviceDiscoveryAgent>
@@ -262,6 +263,7 @@ void Ble::hiddenChanged()
 
 void Ble::scan()
 {
+    Busy::Scope busy("Bluetooth");
     // Hidden from people nearby: nothing at all goes out over Bluetooth.
     if (!m_running || silent() || !checkAdapter())
         return;
@@ -316,6 +318,7 @@ void Ble::tick()
 {
     if (!m_running)
         return;
+    Busy::Scope busy("Bluetooth");
     const qint64 now = nowMs();
     for (auto it = m_seen.begin(); it != m_seen.end();) {
         // A linked phone may stop showing up in scans while connected, so the link itself counts as seen.

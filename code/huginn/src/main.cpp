@@ -30,6 +30,7 @@
 #include "talkkey.h"
 #include "system.h"
 #include "transfer.h"
+#include "fall.h"
 #include "livelist.h"
 #include "updater.h"
 #include "labs.h"
@@ -309,14 +310,18 @@ int main(int argc, char *argv[])
     QApplication::setFont(base);
 
     auto *settings = new Settings(&app);
-    // Less motion: nothing moves by itself, the text cursor included (it stays lit instead of blinking).
+    auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
+    // Less motion and Battery saver: nothing moves by itself, the text cursor included (it stays lit instead of
+    // blinking, so a focused text box doesn't redraw twice a second).
     {
         const int flash = QGuiApplication::styleHints()->cursorFlashTime();
-        auto applyMotion = [settings, flash] { QGuiApplication::styleHints()->setCursorFlashTime(settings->reduceMotion() ? 0 : flash); };
+        auto applyMotion = [settings, system, flash] {
+            QGuiApplication::styleHints()->setCursorFlashTime(settings->reduceMotion() || system->batterySaving() ? 0 : flash);
+        };
         applyMotion();
         QObject::connect(settings, &Settings::changed, &app, applyMotion);
+        QObject::connect(system, &System::powerChanged, &app, applyMotion);
     }
-    auto *system = new System(settings, args.value(tour), args.isSet(windowed) || quiet, &app);
     auto *gamepad = new Gamepad(&app);
     // Handheld mode's last fact: a controller there from the start (a handheld's own).
     system->noteControllerAtStart(gamepad->connected());
@@ -369,7 +374,7 @@ int main(int argc, char *argv[])
     chat = new Chat(localSend, vault, nostr, ble, &app);
     // Hidden from people nearby: Bluetooth is silent too (section 21.3).
     ble->hidden = [chat] { return !chat->visibleNearby(); };
-    vault->beforeBackup = [chat] { chat->pruneNow(); };
+    vault->beforeBackup = [chat] { chat->flushSaves(); chat->pruneNow(); };
     auto *voice = new Voice(chat, &app);
     auto *videos = new VideoMsg(chat, &app);
     // Calls: everything they send and receive goes through Chat's sealing and routes.
@@ -561,6 +566,20 @@ int main(int argc, char *argv[])
                 settings->nearbySharing() ? localSend->start() : localSend->stop();
         });
     }
+    // Battery saver: background checks further apart and the controller read less often while it's on.
+    {
+        auto relax = [system, chat, gamepad, localSend] {
+            const bool saving = system->batterySaving();
+            chat->setRelaxed(saving);
+            gamepad->setRelaxed(saving);
+            localSend->setRelaxed(saving);
+        };
+        relax();
+        QObject::connect(system, &System::powerChanged, &app, relax);
+        // A controller press or stick move is input too (keys, the mouse and touch System sees itself).
+        QObject::connect(gamepad, &Gamepad::pressed, system, [system] { system->noteInput(); });
+        QObject::connect(gamepad, &Gamepad::stickChanged, system, [system] { system->noteInput(); });
+    }
     // Sending, receiving or a call keeps the handheld awake until it finishes.
     auto awake = [system, localSend, calls, rooms] {
         if (calls->inCall() || rooms->inRoom())
@@ -577,6 +596,7 @@ int main(int argc, char *argv[])
     auto *talkKey = new TalkKey(settings, rooms, &app);
 
     qmlRegisterType<LiveList>("Huginn", 1, 0, "LiveList");
+    qmlRegisterType<Fall>("Huginn", 1, 0, "Fall");
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Settings", settings);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "System", system);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Gamepad", gamepad);

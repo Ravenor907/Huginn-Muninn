@@ -1,9 +1,13 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
+#include <QTimer>
+#include <QStringList>
 #include <QUrl>
 #include <QVariantList>
+#include <QVariantMap>
 
 class QQuickWindow;
 class QScreen;
@@ -35,6 +39,13 @@ class System : public QObject
     Q_PROPERTY(bool handheldDetected READ handheldDetected NOTIFY handheldChanged)
     Q_PROPERTY(QString version READ version CONSTANT)
     Q_PROPERTY(QString tourDir READ tourDir CONSTANT)
+    // Running on battery (UPower on Linux, the Flatpak too; GetSystemPowerStatus on Windows). False when not known.
+    Q_PROPERTY(bool onBattery READ onBattery NOTIFY powerChanged)
+    // Settings › Look › Battery saver is on now (On, or Automatic on battery): nothing moves by itself (Theme.motion),
+    // background checks are further apart and Huginn's own frame timers run at 30 a second.
+    Q_PROPERTY(bool batterySaving READ batterySaving NOTIFY powerChanged)
+    // No key, mouse, touch or controller input for 30 seconds.
+    Q_PROPERTY(bool inputIdle READ inputIdle NOTIFY inputIdleChanged)
 
 public:
     System(Settings *settings, const QString &tourDir, bool windowed, QObject *parent = nullptr);
@@ -77,6 +88,13 @@ public:
     bool windowed() const { return m_windowed; }
     QString version() const;
     QString tourDir() const { return m_tourDir; }
+    bool onBattery() const { return m_onBattery; }
+    bool batterySaving() const { return m_saving; }
+    bool inputIdle() const { return m_inputIdle; }
+    // A controller press or stick move counts as input (main.cpp); keys, the mouse and touch are seen by eventFilter.
+    void noteInput();
+    // For the Performance check: "on battery, saver Automatic (on)".
+    QString powerSummary() const;
 
     // Leave Huginn running out of sight: minimized, or in game mode (no minimizing there) hidden with Steam in front.
     // A notification, the tray, the taskbar or starting Huginn again brings it back.
@@ -99,6 +117,15 @@ Q_SIGNALS:
     void layoutChanged();
     void graphicsChanged();
     void handheldChanged();
+    void powerChanged();
+    void inputIdleChanged();
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
+private Q_SLOTS:
+    // UPower's PropertiesChanged (Linux): OnBattery may have changed.
+    void upowerChanged(const QString &iface, const QVariantMap &changed, const QStringList &invalidated);
 
 private:
     QString m_inhibitHandle;     // portal request path
@@ -128,4 +155,17 @@ private:
     void watchScreen(QScreen *screen);
     void refit();
     void noteGraphics(const QString &what, bool software, const QString &loop);
+    // Battery: asked at start and followed (UPower's signal on Linux, every minute on Windows).
+    void watchPower();
+    void askBattery();
+    void setOnBattery(bool on);
+    void updateSaving();
+    bool m_onBattery = false;
+    bool m_saving = false;
+    QTimer m_powerPoll;
+    // Input: the time of the last one, looked at every 5 seconds until 30 have passed without any.
+    QElapsedTimer m_inputClock;
+    qint64 m_lastInput = 0;
+    bool m_inputIdle = false;
+    QTimer m_idleCheck;
 };

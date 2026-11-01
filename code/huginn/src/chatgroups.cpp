@@ -2,6 +2,7 @@
 // member over their own session, receipts, unsend, photos and voice, invites and group codes.
 // What is deterministic (canonical JSON, signatures, acceptance) lives in GroupWire.
 #include "chat.h"
+#include "busy.h"
 #include "profile.h"
 #include "richwire.h"
 #include "morewire.h"
@@ -86,6 +87,7 @@ int unreadMentions(const QVariantList &messages, const QString &ch, int unread, 
 
 QVariantList Chat::groups() const
 {
+    Busy::Scope busy("chat lists");
     QList<QPair<qint64, QVariantMap>> rows;
     for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it) {
         const Group &gr = it.value();
@@ -192,6 +194,7 @@ QVariantMap Chat::groupInfo(const QString &g) const
 
 QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
 {
+    Busy::Scope busy("chat lists");
     QVariantList out;
     const auto it = m_groups.constFind(g);
     if (it == m_groups.cend())
@@ -1702,10 +1705,49 @@ void Chat::flushSaves()
 {
     if (!m_ready)
         return;
+    if (m_chatsDirty)
+        save();
     if (m_groupsDirty)
         saveGroups();
     if (m_seen.dirty())
         m_vault->write(QStringLiteral("seen.json"), m_seen.save());
+}
+
+void Chat::saveSoon()
+{
+    if (m_chatsDirty)
+        return;
+    m_chatsDirty = true;
+    QTimer::singleShot(400, this, [this] {
+        if (m_chatsDirty && m_ready)
+            save();
+    });
+}
+
+void Chat::changedSoon()
+{
+    if (m_changedSoon)
+        return;
+    m_changedSoon = true;
+    QTimer::singleShot(250, this, [this] {
+        m_changedSoon = false;
+        Q_EMIT changed();
+    });
+}
+
+void Chat::setRelaxed(bool relaxed)
+{
+    if (relaxed == m_relaxed)
+        return;
+    m_relaxed = relaxed;
+    retimeRetry();
+}
+
+void Chat::retimeRetry()
+{
+    const int ms = m_front && !m_relaxed ? 1000 : 3000;
+    if (m_retry.interval() != ms)
+        m_retry.setInterval(ms);
 }
 
 void Chat::saveGroupsSoon()

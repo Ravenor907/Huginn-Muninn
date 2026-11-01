@@ -9,5 +9,7 @@ namespace Platform
 {
 #ifdef Q_OS_WIN
 void keepAwake(bool on);
+// Running on battery (GetSystemPowerStatus); known is false when Windows can't tell.
+bool onBattery(bool *known);
 #endif
 }

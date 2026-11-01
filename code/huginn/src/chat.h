@@ -295,6 +295,8 @@ public:
     Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
     // Writes everything still waiting to be saved (before Huginn closes or restarts for an update).
     void flushSaves();
+    // Battery saver: retries and other background checks further apart (main.cpp follows System::batterySaving).
+    void setRelaxed(bool relaxed);
     // True when the last save of the groups or folders didn't go through (createGroup and addFolder then return "").
     Q_INVOKABLE bool saveFailed() const { return m_saveFailed; }
     // The identity keys: made only when there are none yet. secrets.json there but unreadable (or not a JSON object)
@@ -364,7 +366,12 @@ public:
     // Before a backup: nothing past a chat's limit goes in it.
     void pruneNow() { prune(); }
     // Moving to another device (cap x1, move.cpp): nothing is sealed, sent or taken in while true.
-    void setMoving(bool on) { m_moving = on; }
+    void setMoving(bool on)
+    {
+        if (on)
+            flushSaves();   // what goes to the other device is what's on disk
+        m_moving = on;
+    }
     bool moving() const { return m_moving; }
     // Caps i1 and f1 and linked devices live in their own classes (trust.*, filelink.*, link.*), made in main.cpp.
     void setExtras(Trust *trust, FileLink *files, Link *link) { m_trust = trust; m_files = files; m_linked = link; }
@@ -472,6 +479,12 @@ private:
     void systemNote(const QString &key, const QString &text, bool call = false);   // call: a call's line (a click calls back)
     void prune();
     void save();
+    // The chats saved a moment later, once for a burst of changes (flushSaves writes it at once).
+    void saveSoon();
+    // changed, once for a burst: what only the network side noticed (a relay, a nearby device, Bluetooth).
+    void changedSoon();
+    // How often retryLoop runs: every second in front, every 3 seconds behind other windows or with Battery saver.
+    void retimeRetry();
     void saveMet();
     void saveContacts();
     void forgetPerson(const QString &key);
@@ -681,6 +694,9 @@ private:
     QHash<QString, GroupOut> m_gout;                    // envelope id -> waiting for that member's receipt
     QHash<QString, qint64> m_syncAsked;                 // group|key -> when
     bool m_groupsDirty = false;
+    bool m_chatsDirty = false;
+    bool m_changedSoon = false;
+    bool m_relaxed = false;
     bool m_saveFailed = false;
     qint64 m_saveSaid = 0;   // when "Couldn't save" was last said
     int m_startTries = 0;    // secrets.json couldn't be read: Chat starts again a few times

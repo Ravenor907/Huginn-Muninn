@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "busy.h"
 #include "profile.h"
 #include "proof.h"
 #include "richwire.h"
@@ -101,6 +102,7 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     // Erase everything: the ratchet state and kept envelopes go with the vault's files.
     connect(m_vault, &Vault::changed, this, [this] {
         if (!m_vault->exists()) {
+            m_chatsDirty = false;   // nothing waiting to be saved goes back after an erase
             m_peers.clear();
             m_capable.clear();
             m_caps.clear();
@@ -209,10 +211,11 @@ void Chat::start()
     m_ble->hintKey = m_net->hintKey;
     m_ble->prove = [this](const QString &n) { return Proof::close(m_priv, myKey(), n); };
     m_net->chatReceive = [this](const QByteArray &body, const QString &ip) { return receive(body, QStringLiteral("wifi"), QStringLiteral("ip:") + ip); };
-    connect(m_net, &LocalSend::devicesChanged, this, &Chat::changed);
+    // Network noise (a device nearby, Bluetooth, a relay coming and going) is told once for a burst, not every time.
+    connect(m_net, &LocalSend::devicesChanged, this, &Chat::changedSoon);
     connect(m_ble, &Ble::message, this, [this](const QString &key, const QByteArray &json) { receive(json, QStringLiteral("bluetooth"), QStringLiteral("ble:") + key); });
-    connect(m_ble, &Ble::changed, this, &Chat::changed);
-    connect(m_nostr, &Nostr::connectedChanged, this, &Chat::changed);
+    connect(m_ble, &Ble::changed, this, &Chat::changedSoon);
+    connect(m_nostr, &Nostr::connectedChanged, this, &Chat::changedSoon);
     m_nostr->onEnvelope = [this](const QString &content) {
         bool unknownDay = false;
         const QByteArray body = unwrap(content, &unknownDay);
@@ -237,10 +240,11 @@ void Chat::start()
         if (front == m_front)
             return;
         m_front = front;
+        retimeRetry();
         if (activeStatus())
             sendActive(front);
     });
-    m_retry.setInterval(1000);
+    retimeRetry();
     connect(&m_retry, &QTimer::timeout, this, &Chat::retryLoop);
     m_retry.start();
     m_prune.setInterval(60000);
@@ -2551,6 +2555,7 @@ void Chat::uploaded(const QString &id, double fraction)
 
 void Chat::retryLoop()
 {
+    Busy::Scope busy("message retries");
     const qint64 t0 = now();
     // Half a photo or file that never finished.
     for (auto it = m_incoming.begin(); it != m_incoming.end();) {
@@ -2685,7 +2690,7 @@ void Chat::markRead(const QString &key)
     }
     if (fresh.isEmpty())
         return;
-    save();
+    saveSoon();
     receipt(key, fresh, QStringLiteral("read"), QString());
 }
 
@@ -2910,14 +2915,22 @@ void Chat::update(const QString &peer, const QString &id, const std::function<vo
     if (!m_private.contains(peer))
         return;
     QVariantList &l = m_private[peer];
+    bool any = false;
     for (QVariant &v : l) {
         QVariantMap m = v.toMap();
         if (str(m, "id") == id) {
+            const QVariantMap before = m;
             f(m);
-            v = m;
+            if (m != before) {
+                v = m;
+                any = true;
+            }
         }
     }
-    save();
+    // Nothing different (a retry that found it sent already): nothing to save or redraw.
+    if (!any)
+        return;
+    saveSoon();
     Q_EMIT changed();
 }
 
@@ -2988,6 +3001,8 @@ void Chat::prune()
 
 void Chat::save()
 {
+    Busy::Scope busy("saving chats");
+    m_chatsDirty = false;
     QJsonObject priv;
     for (auto it = m_private.begin(); it != m_private.end(); ++it)
         priv.insert(it.key(), QJsonArray::fromVariantList(it.value()));
@@ -3082,6 +3097,7 @@ void Chat::load()
 
 QVariantList Chat::chats() const
 {
+    Busy::Scope busy("chat lists");
     // Contacts, plus anyone else there's a conversation with (met close by, or removed as a contact).
     QSet<QString> keys;
     for (auto it = m_contacts.begin(); it != m_contacts.end(); ++it)
@@ -3149,6 +3165,7 @@ QVariantList Chat::requests() const
 
 QVariantList Chat::messagesWith(const QString &key) const
 {
+    Busy::Scope busy("chat lists");
     // Their messages show the name they have here now (the nickname when there is one).
     QVariantList out = m_private.value(key);
     const QString shown = nameOf(key);
@@ -3193,6 +3210,7 @@ QVariantList Chat::around() const
 
 QVariantList Chat::people() const
 {
+    Busy::Scope busy("chat lists");
     // Contacts: in touch, met close by, and blocked.
     QVariantList out;
     QSet<QString> seen;

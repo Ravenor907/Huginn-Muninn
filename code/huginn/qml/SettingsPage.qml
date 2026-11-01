@@ -127,6 +127,10 @@ Rectangle {
             { group: "Window", kind: "segmented", key: "handheldMode", title: "Handheld mode",
               note: "Detected: " + (System.handheldModel !== "" ? System.handheldModel : System.handheldDetected ? "a handheld" : "not a handheld"),
               options: [{ value: "auto", label: "Automatic" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
+            // No animations, fewer background checks and 30 fps timers. Automatic: on while on battery.
+            { group: "Window", kind: "segmented", key: "batterySaver", title: "Battery saver",
+              note: (System.onBattery ? "On battery" : "Plugged in") + (System.batterySaving ? ". Saving now" : ""),
+              options: [{ value: "auto", label: "Automatic" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
             { group: "Panels", kind: "toggle", key: "showList", title: "Show the chat list", note: "Ctrl+Shift+L" },
             { group: "Panels", kind: "toggle", key: "showMembers", title: "Show group members", note: "Ctrl+Shift+U" },
             { group: "Panels", kind: "button", key: "resetPanels", title: "Panel sizes", label: "Reset" }

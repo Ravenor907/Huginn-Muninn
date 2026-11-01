@@ -1,4 +1,5 @@
 #include "link.h"
+#include "busy.h"
 #include "chat.h"
 #include "chatcrypto.h"
 #include "msglimits.h"
@@ -88,6 +89,7 @@ Link::Link(Chat *chat, QObject *parent)
     connect(&m_fetchTimer, &QTimer::timeout, this, [this] {
         if (!m_chat->ready())
             return;
+        Busy::Scope busy("linked phone");
         ensureLoaded();
         lanTick();
         if (m_phone.key.isEmpty() || !m_phone.ok)
@@ -1135,6 +1137,7 @@ void Link::merge(QList<M> &into, const QList<M> &page)
 
 bool Link::receive(const QString &from, const QJsonObject &p, const QString &via)
 {
+    Busy::Scope busy("linked phone");
     ensureLoaded();
     if (!m_chat->ready())
         return false;

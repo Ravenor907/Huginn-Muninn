@@ -81,6 +81,8 @@ public:
 
     Q_INVOKABLE void start();
     Q_INVOKABLE void stop();
+    // Battery saver: the home network's addresses are looked at every 20 seconds instead of every 5.
+    void setRelaxed(bool relaxed) { m_lanTimer.setInterval(relaxed ? 20000 : 5000); }
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void accept();
     Q_INVOKABLE void decline();

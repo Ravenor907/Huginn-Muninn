@@ -126,6 +126,12 @@ private:
     QHash<QString, Sender> m_senders;
 
     QByteArray secret() const;
+    // The taken events' list and the time of the last one are written 2 seconds after a burst, not once per event
+    // (and at once when Huginn closes).
+    void noteSeenSoon();
+    void flushSeen();
+    bool m_seenDirty = false;
+    qint64 m_takenAt = 0;
     void open(const QString &url);
     void opened(const QString &url, QWebSocket *ws);
     void gone(const QString &url, QWebSocket *ws);

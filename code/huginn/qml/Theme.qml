@@ -8,8 +8,9 @@ QtObject {
     // Settings › Look › Accessibility.
     readonly property bool hc: Settings.highContrast
     readonly property real textScale: Number(Settings.textSize) / 100
-    // Labs › Performance check › Animations: Off holds everything still too (from the start it was tried at).
-    readonly property bool motion: !Settings.reduceMotion && !Perf.animationsOff
+    // Labs › Performance check › Animations: Off holds everything still too (from the start it was tried at), and so
+    // does Settings › Look › Battery saver while it's on.
+    readonly property bool motion: !Settings.reduceMotion && !Perf.animationsOff && !System.batterySaving
 
     // Seasonal: each season's look and the days it runs, as month * 100 + day, both ends included (a
     // range that wraps past the new year, like 1201 to 229, works too). The first that holds the day

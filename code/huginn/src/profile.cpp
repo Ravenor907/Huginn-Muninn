@@ -1,4 +1,5 @@
 #include "profile.h"
+#include "busy.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -458,6 +459,7 @@ void Profile::reconcileSoon()
 // someone out of reach gets it on a later pass.
 void Profile::reconcile()
 {
+    Busy::Scope busy("profile sharing");
     Chat *c = m_chat;
     if (!m_loaded || !c->ready() || c->moving() || m_me.v == 0)
         return;
@@ -480,6 +482,9 @@ void Profile::reconcile()
         if (c->isBlocked(k) || c->isTrashed(k) || (!c->isContact(k) && !c->isGroupPeer(k)) || !c->hasCap(k, QLatin1String(kCap)))
             continue;
         if (m_sent.value(k, 0) == m_me.v)
+            continue;
+        // No way to reach them right now: nothing is sealed (that would use up a ratchet step and a save each pass).
+        if (c->route(k).isEmpty() && c->mailboxOf(k).isEmpty())
             continue;
         const QJsonObject env = c->envelope(QStringLiteral("profile"), k, plain, QUuid::createUuid().toString(QUuid::WithoutBraces));
         if (c->deliver(k, env, c->mailboxOf(k)).isEmpty())

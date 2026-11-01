@@ -1,8 +1,9 @@
 import QtQuick
 import Huginn
 
-// Labs › Performance check: Run check measures about 20 seconds (standing still, scrolling a long list, then the
-// Seasonal animation or a test animation) and gives a short verdict with the main suspect. Try settings keeps a
+// Labs › Performance check: Run check measures about 25 seconds (standing still, scrolling a long list, the
+// Seasonal animation or a test animation, then 5 seconds idle) and gives a short verdict with the main suspect, the
+// idle processor use and what kept Huginn busiest. Try settings keeps a
 // display mode, drawing, render loop or animations choice for the next start (Restart uses it, Undo all goes back
 // to Automatic); Size changes at once. The report shows here before Copy report or Send with Report a bug. Up and
 // Down move, Left and Right change a choice, A uses it, B closes (or cancels a check under way).
@@ -272,7 +273,8 @@ Item {
                 width: parent.width - cancel.width - Theme.px(12)
                 elide: Text.ElideRight
                 text: (Perf.phase === 0 ? "Standing still" : Perf.phase === 1 ? "Scrolling a long list"
-                       : Perf.phase === 2 ? (panel.seasonalMoving ? "Seasonal animation" : "Test animation") : "Measuring")
+                       : Perf.phase === 2 ? (panel.seasonalMoving ? "Seasonal animation" : "Test animation")
+                       : Perf.phase === 3 ? "Idle" : "Measuring")
                       + "  ·  " + Math.round(Perf.progress * 100) + "%"
                 color: Theme.text
                 font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold
@@ -392,8 +394,9 @@ Item {
                     width: parent.width
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.Wrap
-                    visible: Perf.phase === 0 || (Perf.phase === 2 && panel.seasonalMoving)
-                    text: Perf.phase === 0 ? "Measuring the screen as it is." : "Measuring the Seasonal animation."
+                    visible: Perf.phase === 0 || Perf.phase === 3 || (Perf.phase === 2 && panel.seasonalMoving)
+                    text: Perf.phase === 0 ? "Measuring the screen as it is." : Perf.phase === 3 ? "Measuring Huginn at rest. Hands off."
+                                                                                 : "Measuring the Seasonal animation."
                     color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
@@ -517,7 +520,7 @@ Item {
                             textFormat: Text.PlainText
                             width: parent.width
                             wrapMode: Text.Wrap
-                            text: panel.hasResult ? "Main suspect: " + panel.suspect : "About 20 seconds. Measures smoothness and load."
+                            text: panel.hasResult ? "Main suspect: " + panel.suspect : "About 25 seconds. Measures smoothness and load."
                             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
                         }
                     }
@@ -568,6 +571,16 @@ Item {
                             }
                         }
                     }
+                }
+                // At rest, and what kept Huginn busiest.
+                Text {
+                    textFormat: Text.PlainText
+                    visible: panel.hasResult && text !== ""
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    text: panel.tour ? "Idle CPU: 1% (0 frames drawn)\nBusiest: nothing measurable"
+                                     : [Perf.idleLine, Perf.busiest].filter(t => t !== "").join("\n")
+                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
                 }
 
                 Heading { text: "TRY SETTINGS" }

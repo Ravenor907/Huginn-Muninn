@@ -1,11 +1,15 @@
 #include "gamepad.h"
+#include "busy.h"
 
 #include <SDL.h>
 
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QDebug>
 #include <QMouseEvent>
 #include <QQuickWindow>
+
+#include <cmath>
 
 namespace
 {
@@ -58,6 +62,8 @@ Gamepad::Gamepad(QObject *parent)
     }
     connect(&m_poll, &QTimer::timeout, this, &Gamepad::poll);
     m_poll.start(pollInterval());
+    // Read as often as a frame while Huginn is in front, much less behind other windows.
+    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [this] { retime(); });
 
     m_repeat.setSingleShot(false);
     connect(&m_repeat, &QTimer::timeout, this, [this] {
@@ -78,10 +84,42 @@ Gamepad::~Gamepad()
         SDL_Quit();
 }
 
-// Read the controller often only while one is plugged in; otherwise just look for one now and then.
+// Read the controller often only while one is plugged in and Huginn is in front (60 times a second, 30 with Battery
+// saver); behind other windows 10 times a second (4 with Battery saver); with none, look for one every 2 seconds.
 int Gamepad::pollInterval() const
 {
-    return m_pad ? 10 : 1000;
+    if (!m_pad)
+        return 2000;
+    const bool front = QGuiApplication::applicationState() == Qt::ApplicationActive;
+    if (front)
+        return m_relaxed ? 33 : 16;
+    return m_relaxed ? 250 : 100;
+}
+
+void Gamepad::retime()
+{
+    const int ms = pollInterval();
+    if (m_poll.interval() != ms)
+        m_poll.setInterval(ms);
+}
+
+void Gamepad::setRelaxed(bool relaxed)
+{
+    if (relaxed == m_relaxed)
+        return;
+    m_relaxed = relaxed;
+    retime();
+}
+
+bool Gamepad::setAxis(double &axis, int raw)
+{
+    double v = qBound(-1.0, raw / 32767.0, 1.0);
+    // Rest jitter is 0; the rest in steps of 1/128, far finer than anything the scrolling or pointer can show.
+    v = std::abs(v) < 0.06 ? 0.0 : std::round(v * 128.0) / 128.0;
+    if (v == axis)
+        return false;
+    axis = v;
+    return true;
 }
 
 void Gamepad::open(int index)
@@ -136,6 +174,8 @@ void Gamepad::axisAsButton(const QString &button, bool active, bool repeats)
 
 void Gamepad::poll()
 {
+    Busy::Scope busy("controller");
+    bool moved = false;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
@@ -176,26 +216,25 @@ void Gamepad::poll()
                 axisAsButton(QStringLiteral("rt"), v > kTrigger, false);
                 break;
             case SDL_CONTROLLER_AXIS_LEFTX:
-                m_stickX = qBound(-1.0, v / 32767.0, 1.0);
-                Q_EMIT stickChanged();
+                moved = setAxis(m_stickX, v) || moved;
                 break;
             case SDL_CONTROLLER_AXIS_LEFTY:
-                m_stickY = qBound(-1.0, v / 32767.0, 1.0);
-                Q_EMIT stickChanged();
+                moved = setAxis(m_stickY, v) || moved;
                 break;
             case SDL_CONTROLLER_AXIS_RIGHTX:
-                m_rightX = qBound(-1.0, v / 32767.0, 1.0);
-                Q_EMIT stickChanged();
+                moved = setAxis(m_rightX, v) || moved;
                 break;
             case SDL_CONTROLLER_AXIS_RIGHTY:
-                m_rightY = qBound(-1.0, v / 32767.0, 1.0);
-                Q_EMIT stickChanged();
+                moved = setAxis(m_rightY, v) || moved;
                 break;
             }
             break;
         }
         }
     }
+    // Once a read, however many moves came in: the bindings on the sticks run once, not once per event.
+    if (moved)
+        Q_EMIT stickChanged();
 }
 
 QString Gamepad::glyph(const QString &button) const

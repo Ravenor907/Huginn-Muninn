@@ -21,6 +21,7 @@
         "--talk-name=org.freedesktop.Notifications",
         "--socket=pulseaudio",
         "--system-talk-name=org.bluez",
+        "--system-talk-name=org.freedesktop.UPower",
         "--env=BLUETOOTH_FORCE_DBUS_LE_VERSION=5.64.0"
     ],
     "cleanup": [

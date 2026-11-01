@@ -95,7 +95,7 @@ Item {
     // The right stick: slow near the middle for aiming, quick at the edge, and quicker still
     // while it's held all the way over.
     Timer {
-        interval: 16
+        interval: System.batterySaving ? 33 : 16   // Battery saver: 30 a second
         repeat: true
         running: pointer.host !== null && Math.hypot(Gamepad.rightX, Gamepad.rightY) > pointer.dead
         onTriggered: {

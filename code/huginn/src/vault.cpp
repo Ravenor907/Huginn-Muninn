@@ -1,4 +1,5 @@
 #include "vault.h"
+#include "busy.h"
 #include "platform/crashlog.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
@@ -454,6 +455,7 @@ void Vault::eraseAll()
 
 bool Vault::write(const QString &name, const QByteArray &data) const
 {
+    Busy::Scope busy("saving files");
     if (m_key.isEmpty() || m_restarting)
         return false;
     // Loaded as empty because it couldn't be read: saving now would replace what is really there.

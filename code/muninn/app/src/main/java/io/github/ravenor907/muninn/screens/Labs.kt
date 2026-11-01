@@ -217,6 +217,12 @@ private fun ReportCard(app: Muninn, r: LabsInbox.Report) {
             modifier = Modifier.padding(top = 8.dp).fillMaxWidth().heightIn(max = 480.dp).border(1.dp, Palette.line, Corner))
         Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Reply", Modifier.weight(1f), Kind.Accent) { app.chat.labsReply(r); ChatNav.open = r.from }
+            val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+            MButton("Copy", Modifier.weight(1f)) {
+                val head = listOf(r.app.replaceFirstChar { it.uppercase() }, r.version, r.os, r.model).filter { it.isNotBlank() }.joinToString(" · ")
+                clip.setText(androidx.compose.ui.text.AnnotatedString(head + "\n\n" + r.text))
+                Ui.say("Report copied.")
+            }
             MButton("Delete", Modifier.weight(1f), Kind.Danger) {
                 Ui.sure(Ask("Delete this report?", "Its screenshot goes too.", "Delete", danger = true) { app.chat.labs.delete(r.id) })
             }

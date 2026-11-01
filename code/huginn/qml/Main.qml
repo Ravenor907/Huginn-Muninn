@@ -808,7 +808,7 @@ Window {
     }
     Timer {
         readonly property real dead: 0.2
-        interval: 16
+        interval: System.batterySaving ? 33 : 16   // Battery saver: 30 a second
         repeat: true
         running: Math.abs(Gamepad.stickY) > dead
         // Slow near the middle, quick pushed all the way.

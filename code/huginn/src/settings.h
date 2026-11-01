@@ -19,6 +19,9 @@ class Settings : public QObject
     Q_PROPERTY(bool fullScreen READ fullScreen WRITE setFullScreen NOTIFY changed)
     // Settings › Look › Handheld mode: "auto" (System decides at start), "on" or "off".
     Q_PROPERTY(QString handheldMode READ handheldMode WRITE setHandheldMode NOTIFY changed)
+    // Settings › Look › Battery saver: "auto" (on while on battery), "on" or "off". On: nothing moves by itself, things
+    // checked in the background are checked less often, and Huginn's own frame timers run at 30 a second (System).
+    Q_PROPERTY(QString batterySaver READ batterySaver WRITE setBatterySaver NOTIFY changed)
     // The window's last place and size (empty: 80% of the screen, centered).
     Q_PROPERTY(QRect windowRect READ windowRect WRITE setWindowRect NOTIFY changed)
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
@@ -101,6 +104,11 @@ public:
     QString handheldMode() const
     {
         const QString v = value("handheldMode", "auto").toString();
+        return v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto");
+    }
+    QString batterySaver() const
+    {
+        const QString v = value("batterySaver", "auto").toString();
         return v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto");
     }
     QRect windowRect() const { return value("windowRect", QRect()).toRect(); }
@@ -205,6 +213,7 @@ public:
     void setReduceMotion(bool v) { set("reduceMotion", v); }
     void setFullScreen(bool v) { set("fullScreen", v); }
     void setHandheldMode(const QString &v) { set("handheldMode", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
+    void setBatterySaver(const QString &v) { set("batterySaver", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
     void setWindowRect(const QRect &r) { if (r.width() >= 320 && r.height() >= 240) set("windowRect", r); }
     void setAutoUpdate(bool v) { set("autoUpdate", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }

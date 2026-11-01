@@ -31,9 +31,21 @@ void Settings::setQuiet(bool v)
     Q_EMIT changed();
 }
 
+namespace
+{
+// The same value again: a saved bool or number reads back as text, which never equals the bool or number itself.
+bool same(const QVariant &old, const QVariant &v)
+{
+    if (old == v)
+        return true;
+    const QString t = v.toString();
+    return old.metaType() != v.metaType() && !t.isEmpty() && old.toString() == t;
+}
+}
+
 void Settings::set(const QString &key, const QVariant &v)
 {
-    if (m_settings.value(key) == v)
+    if (same(m_settings.value(key), v))
         return;
     m_settings.setValue(key, v);
     m_settings.sync();
@@ -43,7 +55,7 @@ void Settings::set(const QString &key, const QVariant &v)
 // Appearance: saved the same way, told only to what draws the screen.
 void Settings::setLook(const QString &key, const QVariant &v)
 {
-    if (m_settings.value(key) == v)
+    if (same(m_settings.value(key), v))
         return;
     m_settings.setValue(key, v);
     m_settings.sync();

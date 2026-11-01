@@ -1,4 +1,5 @@
 #include "livelist.h"
+#include "busy.h"
 
 #include <QHash>
 #include <QSet>
@@ -30,6 +31,7 @@ QString LiveList::keyOf(const QVariant &v, int at) const
 
 void LiveList::setItems(const QVariantList &next)
 {
+    Busy::Scope busy("list updates");
     // Keys of the rows on show now, kept in step with every change below.
     QStringList shown;
     shown.reserve(m_items.size());

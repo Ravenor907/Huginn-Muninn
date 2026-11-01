@@ -1,6 +1,8 @@
 #include "nostr.h"
+#include "busy.h"
 #include "schnorr.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -153,6 +155,27 @@ Nostr::Nostr(std::function<QByteArray()> secret, QObject *parent)
 {
     m_subId = QStringLiteral("huginn-") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
     m_ringSubId = QStringLiteral("huginn-r") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
+    if (QCoreApplication *app = QCoreApplication::instance())
+        connect(app, &QCoreApplication::aboutToQuit, this, &Nostr::flushSeen);
+}
+
+void Nostr::noteSeenSoon()
+{
+    if (m_seenDirty)
+        return;
+    m_seenDirty = true;
+    QTimer::singleShot(2000, this, &Nostr::flushSeen);
+}
+
+void Nostr::flushSeen()
+{
+    if (!m_seenDirty)
+        return;
+    m_seenDirty = false;
+    if (keepSeen)
+        keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact));
+    QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    s.setValue(QStringLiteral("nostr/since"), m_takenAt);
 }
 
 void Nostr::restoreSeen(const QByteArray &stored)
@@ -421,6 +444,7 @@ void Nostr::subscribe(QWebSocket *ws)
 
 void Nostr::onMessage(const QString &url, QWebSocket *ws, const QString &text)
 {
+    Busy::Scope busy("relay messages");
     const QJsonDocument doc = QJsonDocument::fromJson(text.toUtf8());
     if (!doc.isArray())
         return;
@@ -489,10 +513,8 @@ void Nostr::handle(const QJsonObject &ev)
     m_seenSet.insert(id);
     while (m_seen.size() > kMaxSeen)
         m_seenSet.remove(m_seen.takeFirst());
-    if (keepSeen)
-        keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), QJsonArray::fromStringList(m_seen)}}).toJson(QJsonDocument::Compact));
-    QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
-    s.setValue(QStringLiteral("nostr/since"), now());
+    m_takenAt = now();
+    noteSeenSoon();
 }
 
 // ------------------------------------------------------------------ sending

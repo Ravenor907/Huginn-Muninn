@@ -17,8 +17,9 @@ class QQuickWindow;
 class Settings;
 class System;
 
-// Labs › Performance check: about 20 seconds of measuring in three phases (still, scrolling a long list, an
-// animation): frame rate, frame-time spikes, drawing time, Huginn's processor time and memory, with the facts
+// Labs › Performance check: about 25 seconds of measuring in three phases (still, scrolling a long list, an
+// animation) and a 5 second idle sample: frame rate, frame-time spikes, drawing time, Huginn's processor time and
+// memory, what used the window's thread the most (Busiest, busy.h), with the facts
 // that decide how Huginn draws and sizes itself. A short verdict names the main suspect. Tried settings (display
 // mode, drawing, render loop, animations) are kept as Labs overrides and used from the next start; one that
 // keeps the window from starting is dropped on the start after, which says so. The report holds no names,
@@ -27,7 +28,8 @@ class PerfCheck : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool running READ running NOTIFY changed)
-    // -1 before and after; 0 still, 1 scrolling, 2 animation. The panel scrolls its list or runs its test animation.
+    // -1 before and after; 0 still, 1 scrolling, 2 animation, 3 idle (nothing asked to draw). The panel scrolls its list
+    // or runs its test animation.
     Q_PROPERTY(int phase READ phase NOTIFY changed)
     Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(bool hasResult READ hasResult NOTIFY changed)
@@ -35,6 +37,10 @@ class PerfCheck : public QObject
     Q_PROPERTY(QString suspect READ suspect NOTIFY changed)
     // [{name, fps, median, worst, spikes, draw, cpu}], numbers rounded for showing.
     Q_PROPERTY(QVariantList phases READ phases NOTIFY changed)
+    // "Idle CPU: 2% (0 frames drawn)" from the idle sample; empty before a check.
+    Q_PROPERTY(QString idleLine READ idleLine NOTIFY changed)
+    // "Busiest: message retries 840 ms (longest 310 ms)": what held the window's thread the most during the check.
+    Q_PROPERTY(QString busiest READ busiest NOTIFY changed)
     // What is saved for the next start: {display, drawing, loop, animations}.
     Q_PROPERTY(QVariantMap overrides READ overrides NOTIFY overridesChanged)
     Q_PROPERTY(bool overridesOn READ overridesOn NOTIFY overridesChanged)
@@ -76,6 +82,8 @@ public:
     QString verdict() const { return m_verdict; }
     QString suspect() const { return m_suspect; }
     QVariantList phases() const;
+    QString idleLine() const;
+    QString busiest() const { return m_busiest; }
     QVariantMap overrides() const;
     bool overridesOn() const;
     bool restartNeeded() const;
@@ -124,6 +132,7 @@ private:
     void endMeasure();
     void finish();
     void judge();
+    void noteBusiest();
     QString factsText(const QVariantMap &ui, bool full) const;
     QString scrubbed(const QString &text) const;
     static double cpuMs();
@@ -144,6 +153,16 @@ private:
     qint64 m_wall0 = 0;
     QVector<Result> m_results;
     QString m_verdict, m_suspect;
+    // The idle sample: processor % and frames drawn (-1: not measured).
+    double m_idleCpu = -1;
+    int m_idleFrames = 0;
+    // The window's thread held up: ticks that came late (more than 250 ms), in all and the longest.
+    qint64 m_lastTick = 0;
+    int m_stalls = 0;
+    double m_stallMs = 0, m_stallLongest = 0;
+    QString m_busiest;
+    QString m_busyName;      // the busiest part's name, for the suspect
+    QStringList m_busyTop;   // the five busiest parts, for the full report
 
     // Written on the render thread, read on the main thread.
     QMutex m_lock;
