@@ -15,11 +15,10 @@ QString Direct::qr() const
     return {};
 }
 
-QString Direct::wifiDevice(QString *error) const
+void Direct::findWifiDevice(std::function<void(const QString &path, const QString &error)> done)
 {
-    if (error)
-        *error = QStringLiteral("No NetworkManager on Windows.");
-    return {};
+    if (done)
+        done(QString(), QStringLiteral("No NetworkManager on Windows."));
 }
 
 void Direct::start()
