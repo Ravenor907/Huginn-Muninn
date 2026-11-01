@@ -52,7 +52,7 @@ Item {
         if (overOn) out.push("undo")
         if (restartNeeded) out.push("restart")
         out.push("run")
-        if (Perf.linux) out.push("display")
+        if (Perf.onLinux) out.push("display")
         out.push("drawing", "loop", "animations", "size", "report", "copy", "send")
         return out
     }
@@ -571,7 +571,7 @@ Item {
                 }
                 OptRow {
                     id: rowDisplay
-                    visible: Perf.linux
+                    visible: Perf.onLinux
                     title: "Display mode"
                     lit: panel.lit("display"); options: panel.displayOptions; value: panel.over.display
                     onPicked: v => panel.pick("display", v)

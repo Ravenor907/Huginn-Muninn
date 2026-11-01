@@ -49,7 +49,7 @@ class PerfCheck : public QObject
     // Labs override: nothing moves by itself this run (Theme.motion).
     Q_PROPERTY(bool animationsOff READ animationsOff CONSTANT)
     // Display mode applies only on Linux.
-    Q_PROPERTY(bool linux READ isLinux CONSTANT)
+    Q_PROPERTY(bool onLinux READ isLinux CONSTANT)
 
 public:
     PerfCheck(Settings *settings, System *system, QObject *parent = nullptr);
