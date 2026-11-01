@@ -182,6 +182,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         _myStatus.value = s
         saveMe()
         chat.announceStatus()
+        Link.sendMe()   // a linked companion shows it too
     }
 
     fun setCustomStatus(s: String) {
@@ -190,6 +191,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         _myCustomStatus.value = c
         saveMe()
         chat.announceStatus()
+        Link.sendMe()
     }
 
     /** My colour for the initial-and-colour fallback ("#rrggbb"); goes out with the picture. */
@@ -211,6 +213,9 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         return true
     }
 
+    /** My picture as sent (a 256x256 JPEG), empty when none. */
+    fun myPicture(): ByteArray = me.pic
+
     fun clearMyPicture() {
         if (me.pic.isEmpty()) return
         change(Entry(me.v + 1, me.col, ByteArray(0)))
@@ -225,6 +230,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         _myColour.value = e.col
         publishPictures()
         reconcileSoon()
+        Link.sendMe()   // name or picture: a linked companion shows it too
     }
 
     /** The JPEG to send: the centre square at 256x256, the first quality of the ladder that fits, or null. */

@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // The slim bar along the top, like Discord's: the raven and HUGINN, a search box in the middle (it
-// opens Find or start a chat, Ctrl+K) and the keyboard shortcuts (Ctrl+/) on the right.
+// opens Go to a chat, Ctrl+K) and the keyboard shortcuts (Ctrl+/) on the right.
 Rectangle {
     id: bar
     signal search()
@@ -39,7 +39,7 @@ Rectangle {
         radius: Theme.radius
         color: boxHover.hovered ? Theme.tile : Theme.raised
         Accessible.role: Accessible.Button
-        Accessible.name: "Find or start a chat (Ctrl+K)"
+        Accessible.name: "Go to a chat (Ctrl+K)"
         Accessible.onPressAction: bar.search()
         Icon { id: lens; anchors.left: parent.left; anchors.leftMargin: Theme.px(8); anchors.verticalCenter: parent.verticalCenter; name: "search"; size: Theme.px(14); color: Theme.textMuted }
         Text {
@@ -49,7 +49,7 @@ Rectangle {
             anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
             anchors.verticalCenter: parent.verticalCenter
             elide: Text.ElideRight
-            text: "Find or start a chat"
+            text: "Go to a chat"
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(13)
         }

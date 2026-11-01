@@ -87,7 +87,7 @@ Item {
         Text {
             textFormat: Text.PlainText
             anchors.horizontalCenter: parent.horizontalCenter
-            text: panel.mode === "setup" ? "PROTECT YOUR MESSAGES" : panel.mode === "change" ? "CHANGE THE LOCK"
+            text: panel.mode === "setup" ? "SET A LOCK" : panel.mode === "change" ? "CHANGE THE LOCK"
                 : panel.mode === "off" ? "TURN OFF THE LOCK" : panel.mode === "own" ? "THIS DEVICE'S OWN CHATS" : "HUGINN"
             color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
         }
@@ -97,7 +97,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : panel.mode === "setup" ? "No way to recover it. You can turn it off later in Settings." : "No way to recover it."
+                  : panel.mode === "setup" ? "It protects your messages. No way to recover it. You can turn it off later in Settings." : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
@@ -163,7 +163,7 @@ Item {
             textFormat: Text.PlainText
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
-            visible: Gamepad.connected && panel.usePattern
+            visible: Gamepad.connected && panel.usePattern && !!Ui.main && Ui.main.padInUse
             text: "D-pad moves. A starts and ends. B clears."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }

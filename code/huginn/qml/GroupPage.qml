@@ -78,7 +78,7 @@ Rectangle {
         channels: [{ id: "main", name: "general", type: "text", unread: 0 }, { id: "s", name: "screenshots", type: "text", unread: 2, mentions: 1 },
                    { id: "p", name: "plans", type: "text", unread: 0 }, { id: "l", name: "Lounge", type: "voice", unread: 0 },
                    { id: "r", name: "Raid night", type: "voice", unread: 0 }],
-        members: [{ key: "me", name: Chat.username, owner: true, admin: true, me: true, contact: false, route: "" },
+        members: [{ key: "me", name: Ui.myName, owner: true, admin: true, me: true, contact: false, route: "" },
                   { key: "j", name: "Jake", admin: true, owner: false, me: false, contact: true, route: "wifi" },
                   { key: "s", name: "Sam", admin: false, owner: false, me: false, contact: true, route: "internet" },
                   { key: "m", name: "Mike", admin: false, owner: false, me: false, contact: false, route: "internet" },
@@ -125,7 +125,7 @@ Rectangle {
             return channelId !== "main" ? [] : [
                 { id: "1", name: "Jake", from: "j", text: "Who's on tonight? I can host at 8.", mine: false, time: Date.now() - 600000 },
                 { id: "2", name: "Sam", from: "s", text: "In. Grabbing food first.", mine: false, time: Date.now() - 480000 },
-                { id: "3", name: Chat.username, from: "me", text: "Jumping in the Lounge now.", mine: true, time: Date.now() - 60000, state: "delivered", receipt: "Delivered to 4 of 5" }]
+                { id: "3", name: Ui.myName, from: "me", text: "Jumping in the Lounge now.", mine: true, time: Date.now() - 60000, state: "delivered", receipt: "Delivered to 4 of 5" }]
         return (Chat.groups, Chat.groupMessages(gid, channelId))
     }
     readonly property string chatKey: "g:" + gid + ":" + channelId
@@ -710,8 +710,8 @@ Rectangle {
             items.push({ name: "Output: " + Rooms.outputName, icon: "speaker", url: "output" },
                        { name: "Leave " + r.name, url: "leave", danger: true })
             Ui.pickFrom(r.name, [{ header: "", items: items }], a => {
-                if (a === "mute") Rooms.toggleMute()
-                else if (a === "deafen") Rooms.toggleDeafen()
+                if (a === "mute") Ui.toggleMic()
+                else if (a === "deafen") Ui.toggleDeaf()
                 else if (a === "share") Rooms.toggleShare()
                 else if (a === "output") Rooms.nextOutput()
                 else if (a === "leave") Rooms.leave()

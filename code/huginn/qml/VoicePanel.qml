@@ -18,18 +18,18 @@ Rectangle {
     readonly property string statusText: {
         if (vaultLocked) return "Locked"
         if (Settings.pushToTalk && inVoice) return "Push to talk: " + TalkKey.keyName
-        if (Profile.myCustomStatus !== "") return Profile.myCustomStatus
-        return statusName(Profile.myStatus)
+        if (Ui.myCustomStatus !== "") return Ui.myCustomStatus
+        return statusName(Ui.myStatus)
     }
     function statusName(s) { return s === "away" ? "Away" : s === "dnd" ? "Do not disturb" : s === "invisible" ? "Invisible" : "Online" }
     readonly property bool inVoice: Rooms.inRoom || tour
-    readonly property var people: tour ? [{ key: "me", name: Chat.username, me: true, speaking: false, muted: false, state: "live" },
+    readonly property var people: tour ? [{ key: "me", name: Ui.myName, me: true, speaking: false, muted: false, state: "live" },
                                           { key: "j", name: "Jake", speaking: true, state: "live" },
                                           { key: "s", name: "Sam", muted: true, state: "live" }]
                                        : Rooms.people
     readonly property var others: people.filter(p => !p.me)
-    readonly property bool muted: !tour && (Rooms.inRoom ? Rooms.muted : Calls.inCall && Calls.muted)
-    readonly property bool deafened: !tour && Rooms.deafened
+    readonly property bool muted: !tour && Ui.micMuted
+    readonly property bool deafened: !tour && Ui.deafened
     readonly property bool talking: tour || Rooms.inRoom || Calls.inCall
     height: (voice.visible ? voice.implicitHeight : 0) + me.height
     radius: Theme.radius
@@ -185,14 +185,14 @@ Rectangle {
             radius: Theme.radius
             color: panel.cardOpen || meHover.hovered ? Theme.tile : "transparent"
             Accessible.role: Accessible.Button
-            Accessible.name: Chat.username + ", " + panel.statusText + ". Your status and profile"
+            Accessible.name: Ui.myName + ", " + panel.statusText + ". Your status and profile"
             Accessible.onPressAction: if (!panel.tour) panel.meClicked()
             Avatar {
                 id: meFace
                 x: Theme.px(6)
                 anchors.verticalCenter: parent.verticalCenter
                 key: "me"
-                name: Chat.username
+                name: Ui.myName
                 size: Theme.px(32)
                 showDot: !panel.vaultLocked
             }
@@ -204,7 +204,7 @@ Rectangle {
                 Text {
                     textFormat: Text.PlainText
                     width: parent.width; elide: Text.ElideRight
-                    text: Chat.username
+                    text: Ui.myName
                     color: Theme.text
                     font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
                 }
@@ -226,13 +226,11 @@ Rectangle {
             spacing: Theme.px(2)
             PanelButton {
                 icon: panel.muted ? "micoff" : "mic"; label: (panel.muted ? "Unmute" : "Mute") + " (Ctrl+Shift+M)"; lit: panel.muted
-                enabled: panel.talking
-                onClicked: Rooms.inRoom ? Rooms.toggleMute() : Calls.toggleMute()
+                onClicked: if (!panel.tour) Ui.toggleMic()
             }
             PanelButton {
                 icon: panel.deafened ? "deafened" : "headphones"; label: (panel.deafened ? "Undeafen" : "Deafen") + " (Ctrl+Shift+D)"; lit: panel.deafened
-                enabled: panel.inVoice
-                onClicked: Rooms.toggleDeafen()
+                onClicked: if (!panel.tour) Ui.toggleDeaf()
             }
         }
     }

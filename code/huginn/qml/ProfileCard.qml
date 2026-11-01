@@ -20,8 +20,8 @@ Item {
     // Chat.chats and Chat.people make these follow renames, notes and folder changes.
     readonly property bool contact: !me && !tour && (Chat.people, Chat.isContact(key))
     readonly property string nick: me || tour ? "" : (Chat.chats, Chat.nicknameOf(key))
-    readonly property string realName: me ? Chat.username : tour ? name : (Chat.chats, Chat.realNameOf(key)) || name
-    readonly property string shownName: me ? Chat.username : nick !== "" ? nick : realName
+    readonly property string realName: me ? Ui.myName : tour ? name : (Chat.chats, Chat.realNameOf(key)) || name
+    readonly property string shownName: me ? Ui.myName : nick !== "" ? nick : realName
     readonly property string note: me ? "" : tour ? (extra.note || "") : (Chat.people, Chat.noteOf(key))
     readonly property string status: {
         if (extra.room) return "In " + extra.room
@@ -49,7 +49,7 @@ Item {
     function close() { visible = false; pickingOnly = false; if (picker.visible) picker.visible = false }
     // Your picture on its own, from Settings.
     function pickPicture() {
-        if (!visible) { key = "me"; name = Chat.username; extra = {}; pickingOnly = true; visible = true }
+        if (!visible) { key = "me"; name = Ui.myName; extra = {}; pickingOnly = true; visible = true }
         picker.open()
     }
     function run(id) {

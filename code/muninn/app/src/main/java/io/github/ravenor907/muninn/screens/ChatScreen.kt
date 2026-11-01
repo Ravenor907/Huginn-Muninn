@@ -466,11 +466,8 @@ private fun PersonRow(name: String, preview: String, time: String, unread: Int, 
 
 @Composable
 private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
-    // A tablet linked to a phone: the phone's chats are the list; this device's own are sealed away until opened
-    // from Settings › Linked devices (after the lock).
-    val mirrorPhone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
-    val ownShown by io.github.ravenor907.muninn.net.Link.ownShown.collectAsState()
-    if (mirrorPhone?.ok == true && !ownShown) { MirrorList(inline = true); return }
+    // A tablet linked to a phone: the phone's chats are one row at the top ("From your phone"); this device's own chats,
+    // groups and folders stay on show below it.
     val contacts by app.chat.contacts.all.collectAsState()
     val convos by app.chat.conversations.collectAsState()
     val requests by app.chat.requests.collectAsState()
@@ -631,11 +628,14 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     ExtremeBanner("Battery") { SettingsNav.goSettings = "battery" }
                 }
             }
-            // A linked tablet showing its own chats for now: one row back to the phone's.
+            // A linked tablet: the phone's chats, one row at the top.
             linkedPhone?.takeIf { it.ok }?.let { ph -> item(key = "mirror") {
-                PersonRow("${ph.name}'s chats", "Back to your phone's chats", "", 0, false, {
-                    Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
-                        MIcon("phone", Palette.goldBright, 22.dp) } }) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
+                Column {
+                    ListLabel("From your phone")
+                    PersonRow("${ph.name}'s chats", "Open your phone's chats", "", 0, false, {
+                        Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
+                            MIcon("phone", Palette.goldBright, 22.dp) } }) { ChatNav.open = "mirror" }
+                }
             } }
             // With folders, the chats in none of them sit under their own label (also where a dragged chat lands).
             if (folders.isNotEmpty() && sectioned) item(key = "h") {

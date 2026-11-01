@@ -254,7 +254,7 @@ QString Chat::createGroup(const QString &name, const QString &kind)
     gr.history << s;
     gr.since = now();
     m_groups.insert(g, gr);
-    groupNote(g, QStringLiteral("You made %1. Invite people with X: Invite, or show them the group code.").arg(n));
+    groupNote(g, QStringLiteral("You made %1. Add people from the group's menu (its three dots): Add people.").arg(n));
     saveGroups();
     Q_EMIT changed();
     return g;

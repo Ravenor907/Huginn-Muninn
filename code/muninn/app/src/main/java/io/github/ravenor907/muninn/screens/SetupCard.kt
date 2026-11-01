@@ -110,7 +110,7 @@ private class Todo(val id: String, val title: String, val detail: String, val bu
 private const val FINISH_HIDDEN = "finishHidden"
 
 /**
- * "1 thing to finish" on the chat list: the permissions Muninn still needs, close-by chat, and where this phone's chats are mirrored, as one row that opens a small sheet. The row can be put away;
+ * "1 thing to finish" on the chat list: the permissions Muninn still needs, and close-by chat, as one row that opens a small sheet. The row can be put away;
  * it comes back when something new is added. Never on a Kids' TV (a parent sets that up from the TV's own checklist).
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -132,8 +132,6 @@ fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modif
         tick++
     }
     val closeError by app.ble.error.collectAsState()
-    val companions by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
-    val mirrored = companions.filter { it.ok }
     // Said once, the first time the chat list opens (new phones and upgraded ones alike).
     LaunchedEffect(Unit) {
         if (!prefs.getBoolean(KEEP_NOTICE, false)) { prefs.edit().putBoolean(KEEP_NOTICE, true).remove("limitsNote").apply(); io.github.ravenor907.muninn.ui.Ui.sure(keepNotice()) }
@@ -152,8 +150,6 @@ fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modif
                 }
             })
         }
-        if (mirrored.isNotEmpty()) add(Todo("mirror:" + mirrored.joinToString(",") { it.name }, "Mirrored to " + mirrored.joinToString(", ") { it.name },
-            "They can send as you.", "Open") { open = false; SettingsNav.goSettings = "link" })
     }
     val shown = todos.filter { it.id !in hidden }
     if (shown.isEmpty()) return

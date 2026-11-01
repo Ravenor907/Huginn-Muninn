@@ -267,7 +267,7 @@ QByteArray Profile::activeMsg(bool on, qint64 ts) const { return RichWire::activ
 QString Profile::statusOf(const QString &key) const
 {
     if (key == kMe)
-        return m_status;
+        return m_phoneOn ? m_phoneStatus : m_status;
     if (!m_chat->activeStatus())
         return QString();
     return shownStatus(m_chat->m_active.contains(key), m_statuses.value(key).first, m_heard.contains(key) || m_chat->hasM1(key));
@@ -283,6 +283,8 @@ QString Profile::colourOf(const QString &key) const
 
 int Profile::pictureVersion(const QString &key) const
 {
+    if (key == kMe && m_phoneOn)
+        return m_phonePic.isEmpty() ? 0 : int(qMin<qint64>(m_phoneV, INT_MAX));
     const Entry e = key == kMe ? m_me : m_peers.value(key);
     return e.pic.isEmpty() ? 0 : int(qMin<qint64>(e.v, INT_MAX));
 }
@@ -292,6 +294,8 @@ QUrl Profile::pictureUrl(const QString &key) const
     const int v = pictureVersion(key);
     if (v == 0)
         return {};
+    if (key == kMe && m_phoneOn)
+        return QUrl(QStringLiteral("image://profile/phone?v=") + QString::number(v));
     return QUrl(QStringLiteral("image://profile/") + (key == kMe ? kMe : hashOf(key)) + QStringLiteral("?v=") + QString::number(v));
 }
 
@@ -300,7 +304,7 @@ QImage Profile::picture(const QString &key)
     const auto hit = m_cache.constFind(key);
     if (hit != m_cache.cend())
         return *hit;
-    const QByteArray bytes = key == kMe ? m_me.pic : m_peers.value(key).pic;
+    const QByteArray bytes = key == kMe ? (m_phoneOn ? m_phonePic : m_me.pic) : m_peers.value(key).pic;
     if (bytes.isEmpty())
         return {};
     const QImage img = QImage::fromData(bytes, "JPEG");
@@ -312,10 +316,32 @@ QImage Profile::picture(const QString &key)
     return img;
 }
 
+void Profile::setPhoneMe(bool on, const QByteArray &pic, const QString &status)
+{
+    const QByteArray p = on && pictureOk(pic) ? pic : QByteArray();
+    const QString st = on ? (kMyStatuses.contains(status) ? status : QStringLiteral("online")) : QString();
+    if (on == m_phoneOn && p == m_phonePic && st == m_phoneStatus)
+        return;
+    const bool picChanged = on != m_phoneOn || p != m_phonePic;
+    m_phoneOn = on;
+    m_phonePic = p;
+    m_phoneStatus = st;
+    if (picChanged) {
+        // A new version each time, so a picture URL shown before never stands for this one.
+        ++m_phoneV;
+        m_cache.remove(kMe);
+        Q_EMIT pictureChanged(kMe);
+    }
+    Q_EMIT statusChanged(kMe);
+    Q_EMIT changed();
+}
+
 QImage Profile::pictureById(const QString &id)
 {
     if (id == kMe)
-        return picture(kMe);
+        return m_phoneOn ? QImage() : picture(kMe);
+    if (id == QLatin1String("phone"))
+        return m_phoneOn ? picture(kMe) : QImage();
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
         if (hashOf(it.key()) == id)
             return picture(it.key());

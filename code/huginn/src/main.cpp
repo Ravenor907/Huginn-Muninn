@@ -60,6 +60,8 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QQuickImageProvider>
+#include <QRandomGenerator>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QVariantMap>
@@ -71,6 +73,36 @@
 #ifndef HUGINN_VERSION_LABEL
 #define HUGINN_VERSION_LABEL HUGINN_VERSION
 #endif
+
+namespace
+{
+// "image://noise/tile": a small tile of faint light and dark specks, drawn over the Seasonal ground so its gradient
+// has no visible bands (dithering). The same tile every time, made once.
+class NoiseProvider : public QQuickImageProvider
+{
+public:
+    NoiseProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
+    QImage requestImage(const QString &, QSize *size, const QSize &) override
+    {
+        static const QImage tile = [] {
+            QImage img(128, 128, QImage::Format_ARGB32_Premultiplied);
+            QRandomGenerator rng(0x5eed1e5u);
+            for (int y = 0; y < img.height(); ++y) {
+                auto *line = reinterpret_cast<QRgb *>(img.scanLine(y));
+                for (int x = 0; x < img.width(); ++x) {
+                    // About one step of 8-bit color either way: white specks lift, black ones lower.
+                    const int a = int(rng.bounded(7u));
+                    line[x] = rng.bounded(2u) ? qRgba(a, a, a, a) : qRgba(0, 0, 0, a * 2);
+                }
+            }
+            return img;
+        }();
+        if (size)
+            *size = tile.size();
+        return tile;
+    }
+};
+}
 
 namespace
 {
@@ -320,6 +352,27 @@ int main(int argc, char *argv[])
     // Profile pictures and status (cap p1).
     auto *profile = new Profile(chat, vault, &app);
     chat->setProfile(profile);
+    // Linked devices: a linked phone's name, picture and status are "you" on this screen while it's linked; on the
+    // phone's side, my own go to every companion (and a companion's name or status change comes back here).
+    linked->myProfile = [chat, profile] {
+        QJsonObject me{{QStringLiteral("n"), chat->username()}, {QStringLiteral("st"), profile->myStatus()}};
+        if (!profile->myCustomStatus().isEmpty())
+            me.insert(QStringLiteral("cs"), profile->myCustomStatus());
+        const QByteArray pic = profile->myPictureJpeg();
+        if (!pic.isEmpty())
+            me.insert(QStringLiteral("pic"), QString::fromLatin1(pic.toBase64()));
+        return me;
+    };
+    linked->setMyProfile = [chat, profile](const QString &name, const QString &status, const QString &custom) {
+        if (!name.isEmpty())
+            chat->setUsername(name);
+        if (!status.isEmpty())
+            profile->setStatus(status);
+        profile->setCustomStatus(custom);
+    };
+    auto phoneMe = [linked, profile] { profile->setPhoneMe(!linked->me().isEmpty(), linked->mePicture(), linked->meStatus()); };
+    QObject::connect(linked, &Link::changed, profile, phoneMe);
+    QObject::connect(profile, &Profile::changed, linked, [linked] { linked->sendMe(false); });
     // Labs mode: bug reports, and the channel back to Stable before the stable release is installed.
     auto *labs = new Labs(chat, vault, settings, &app);
     chat->setLabs(labs);
@@ -364,7 +417,7 @@ int main(int argc, char *argv[])
         sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
             // While a linked phone's chats are shown, this device's own sealed chats never show who or what.
-            const bool preview = chat->showPreview() && !vault->screenLocked() && !(linked->sealed() && !key.startsWith(QLatin1String("mirror:")));
+            const bool preview = chat->showPreview() && !vault->screenLocked();
             Platform::notify(preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"));
         }
     });
@@ -456,6 +509,7 @@ int main(int argc, char *argv[])
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
     engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(chat));
     engine.addImageProvider(QStringLiteral("profile"), new ProfileImageProvider(profile));
+    engine.addImageProvider(QStringLiteral("noise"), new NoiseProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);

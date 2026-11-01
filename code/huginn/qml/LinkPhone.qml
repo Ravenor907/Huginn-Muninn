@@ -25,7 +25,7 @@ Item {
     readonly property string shownCode: tour ? "MUNINNL1:eyJrIjoidG91ciJ9" : Linked.code
 
     // The buttons on show, in order, and the one the controller is on.
-    readonly property var buttons: stage === "code" ? [skipBtn, copyBtn] : stage === "match" ? [matchBtn, noBtn] : [doneBtn]
+    readonly property var buttons: stage === "code" ? [skipBtn, copyBtn] : stage === "match" ? [matchBtn, noBtn, laterBtn] : [doneBtn]
     readonly property int focusAt: Math.min(focusIndex, Math.max(0, buttons.length - 1))
     readonly property string backLabel: stage === "linked" ? "Done" : stage === "match" ? "Later" : first ? "Skip" : "Back"
     readonly property var prompts: [{ key: "dpad", label: "Choose" }, { key: "a", label: buttons[focusAt] ? buttons[focusAt].text : "" },
@@ -60,7 +60,7 @@ Item {
     function copyInstead() {
         if (tour || shownCode === "") return
         Chat.copyText(shownCode)
-        Ui.note("Link code copied", "Paste it in Muninn: Settings › Linked devices. Works once, for 10 minutes.")
+        Ui.note("Link code copied", "Paste it in Muninn: Settings › Linked devices › Scan to link. Works once, for 10 minutes.")
     }
     function handleButton(b) {
         if (b === "left" || b === "up") focusIndex = Math.max(0, focusAt - 1)
@@ -228,6 +228,14 @@ Item {
                     text: "No"
                     focused: screen.pad && screen.buttons[screen.focusAt] === noBtn
                     onClicked: screen.notMatching()
+                }
+                // Later: the emoji wait; Settings › Linked devices asks again.
+                HButton {
+                    id: laterBtn
+                    visible: screen.stage === "match"
+                    text: "Later"; kind: "plain"
+                    focused: screen.pad && screen.buttons[screen.focusAt] === laterBtn
+                    onClicked: screen.close()
                 }
                 HButton {
                     id: doneBtn

@@ -13,6 +13,9 @@ Item {
     property string confirmText: "Done"
     property bool password: false
     property var acceptCallback: null
+    // Set after opening, for a prompt whose way out is a choice too (like Skip): its label and what it does.
+    property string cancelText: "Cancel"
+    property var cancelCallback: null
     // Optional: [{ value, label }] shown as a row of buttons under the field; the callback gets the pick too.
     property var choices: []
     property string choice: ""
@@ -35,6 +38,8 @@ Item {
         confirmText = confirm || "Done"
         password = !!isPassword
         acceptCallback = callback || null
+        cancelText = "Cancel"
+        cancelCallback = null
         choices = opts || []
         choice = pick || (choices.length ? choices[0].value : "")
         choicesLabel = optsLabel || ""
@@ -56,6 +61,7 @@ Item {
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()
         const pick = choice
+        cancelCallback = null
         if (acceptCallback) acceptCallback(t, pick)
         accepted(t)
     }
@@ -67,7 +73,10 @@ Item {
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()
+        const after = cancelCallback
+        cancelCallback = null
         cancelled()
+        if (after) after()
     }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
@@ -213,7 +222,7 @@ Item {
                 anchors.right: parent.right; anchors.rightMargin: Theme.px(20)
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(8)
-                HButton { text: "Cancel"; kind: "plain"; onClicked: prompt.cancel() }
+                HButton { text: prompt.cancelText; kind: "plain"; onClicked: prompt.cancel() }
                 HButton { text: prompt.confirmText; kind: "primary"; onClicked: prompt.accept() }
             }
         }

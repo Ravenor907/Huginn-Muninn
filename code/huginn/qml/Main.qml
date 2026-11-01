@@ -10,12 +10,21 @@ Window {
     id: app
     // A normal window: where it was last time, else 80% of the screen and centered. Full screen only when
     // Settings › Look › Open full screen is on (F11 switches), or in a handheld's game mode.
-    readonly property rect savedRect: Settings.windowRect
-    readonly property bool hasSaved: savedRect.width >= 320 && savedRect.height >= 240
-    width: System.tourDir.length > 0 ? 1920 : hasSaved ? savedRect.width : Math.round(Screen.desktopAvailableWidth * 0.8)
-    height: System.tourDir.length > 0 ? 1080 : hasSaved ? savedRect.height : Math.round(Screen.desktopAvailableHeight * 0.8)
-    x: hasSaved ? savedRect.x : Math.round((Screen.desktopAvailableWidth - width) / 2)
-    y: hasSaved ? savedRect.y : Math.round((Screen.desktopAvailableHeight - height) / 2)
+    // Set once at start (never bound to the saved value, so the window manager stays in charge of where it is).
+    width: 1280
+    height: 800
+    function placeWindow() {
+        if (touring) { width = 1920; height = 1080; return }
+        const r = Settings.windowRect
+        const sw = Screen.desktopAvailableWidth, sh = Screen.desktopAvailableHeight
+        if (r.width >= 320 && r.height >= 240 && r.width <= sw && r.height <= sh) {
+            width = r.width; height = r.height
+            if (r.x >= 0 && r.y >= 0 && r.x + 120 <= sw && r.y + 60 <= sh) { x = r.x; y = r.y }
+        } else {
+            width = Math.round(sw * 0.8); height = Math.round(sh * 0.8)
+            x = Math.round((sw - width) / 2); y = Math.round((sh - height) / 2)
+        }
+    }
     minimumWidth: 480
     minimumHeight: 360
     visible: true
@@ -41,10 +50,9 @@ Window {
     // Contacts, Files, Settings (the valknut) and the power button (lock or close). Calls live in their chats.
     readonly property var tourGroups: [{ id: "tour-family", name: "Family", unread: 2, mentions: 1 }, { id: "tour-crew", name: "Gaming Crew", unread: 0 },
                                        { id: "tour-folk", name: "Folk", unread: 3 }]
-    // A linked phone's chats are on show: this device's own groups are put away with its chats.
-    readonly property var groupList: touring ? tourGroups : Vault.screenLocked || Linked.sealed ? [] : Chat.groups
+    readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
-        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked || Linked.sealed ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
     // A group: its @mentions of me as a number, and a dot for anything else unread (like Discord).
     ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?",
                                    badge: g.mentions || 0, unread: g.unread || 0 })))
@@ -89,17 +97,22 @@ Window {
         openPage(e.id, {})
     }
     function newGroup() {
-        if (Vault.screenLocked || !Vault.exists) { Ui.say("Unlock Huginn first.", true); openPage("dms", {}); return }
+        if (!Vault.exists) { Ui.say("Set a lock first.", true); openPage("dms", {}); return }
+        if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); openPage("dms", {}); return }
         // Family and Work groups can keep messages up to 30 days (set later under Messages).
         Ui.askWith("New group", "Everyone in it sees the name", "", "Make the group",
-                   [{ value: "family", label: "Family" }, { value: "work", label: "Work" }, { value: "standard", label: "Standard" }], "family",
+                   [{ value: "standard", label: "Standard" }, { value: "family", label: "Family" }, { value: "work", label: "Work" }], "standard",
                    "Type", (t, kind) => {
             const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
-            if (g === "") { Ui.say("Give the group a name.", true); return }
+            if (g === "") { Ui.say(Chat.ready ? "Give the group a name." : "Unlock Huginn first.", true); return }
+            Ui.say("Made " + t + ".")
             openPage("g:" + g, {})
         })
         prompt.label = "Group name"
     }
+    // A person dragged with the mouse: the group in the rail under a point of the window ("" when none), and its outline.
+    function railGroupAt(wx, wy) { const id = rail.groupAt(wx, wy); return id.indexOf("g:") === 0 ? id.substring(2) : "" }
+    function railDropHint(g) { rail.dropGroup = g !== "" ? "g:" + g : "" }
     function stepSection(dir) {
         const i = cycle.indexOf(section)
         openPage(cycle[(i + dir + cycle.length) % cycle.length], {})
@@ -262,7 +275,7 @@ Window {
 
     // ------------------------------------------------------------- your status
     // Do not disturb: no message sound, notification or ring (Settings.quiet is read by main.cpp and the ring).
-    Binding { target: Settings; property: "quiet"; value: Profile.myStatus === "dnd" }
+    Binding { target: Settings; property: "quiet"; value: Ui.myStatus === "dnd" }
     // Away by itself after 10 minutes without a key, mouse or controller press while Online; back
     // to Online at the first press after. A status picked by hand on the card stays as picked.
     property real lastInput: Date.now()
@@ -335,7 +348,8 @@ Window {
     readonly property bool keysOn: !app.touring && !updating.visible && !app.privacyCovered
     Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode; onActivated: Settings.fullScreen = !Settings.fullScreen }
     // The window's place and size, kept a moment after it stops moving (only while it's a normal window).
-    Timer { id: keepRect; interval: 800; onTriggered: if (app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
+    Timer { id: keepRect; interval: 800; onTriggered: if (app.placed && app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
+    property bool placed: false
     onXChanged: keepRect.restart()
     onYChanged: keepRect.restart()
     onWidthChanged: keepRect.restart()
@@ -346,9 +360,8 @@ Window {
     Shortcut { sequence: "Ctrl+Shift+U"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("members") }
     // Panic lock from the keyboard (a controller holds L3 and R3).
     Shortcut { sequence: "Ctrl+Shift+Q"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Vault.panicLock; onActivated: Vault.panic() }
-    Shortcut { sequence: "Ctrl+Shift+M"; context: Qt.ApplicationShortcut; enabled: app.keysOn && (Rooms.inRoom || Calls.inCall)
-               onActivated: Rooms.inRoom ? Rooms.toggleMute() : Calls.toggleMute() }
-    Shortcut { sequence: "Ctrl+Shift+D"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.toggleDeafen() }
+    Shortcut { sequence: "Ctrl+Shift+M"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: Ui.toggleMic() }
+    Shortcut { sequence: "Ctrl+Shift+D"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: Ui.toggleDeaf() }
     Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.leave() }
     Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(1) }
     Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(-1) }
@@ -508,6 +521,7 @@ Window {
     }
 
     Component.onCompleted: {
+        placeWindow(); placed = true
         Ui.main = app
         Ui.prompt = prompt
         Ui.confirm = confirm
@@ -556,8 +570,7 @@ Window {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // An @mention always says so (without the text unless previews are on).
             const mention = name.indexOf(" mentioned you in ") > 0
-            // While a linked phone's chats are on show, this device's own put-away chats say nothing about who or what.
-            const hidden = Vault.screenLocked || (Linked.sealed && key.indexOf("mirror:") !== 0)
+            const hidden = Vault.screenLocked
             Ui.say(Chat.showPreview && !hidden ? name + ": " + text : mention && !hidden ? name + "." : "New message.")
         }
     }
@@ -863,7 +876,7 @@ Window {
             if (s.rail) app.focusRail()
             // A contact's one menu, as the three dots, a right click or LT open it.
             if (s.picker) PeopleActions.contactMenu("tour", "Mira", { tour: true })
-            if (s.prompt) prompt.open("Message everyone nearby", "You're " + Chat.username, "", "Send", null, false, true)
+            if (s.prompt) prompt.open("Message everyone nearby", "You're " + Ui.myName, "", "Send", null, false, true)
             if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Lounge", note: "Hosts raid night on Fridays. Bring snacks." })
             if (s.shortcuts) shortcutsPanel.open()
             if (s.person) personPanel.show("tour", "Mira", { tour: true, page: s.personPage || "can" })

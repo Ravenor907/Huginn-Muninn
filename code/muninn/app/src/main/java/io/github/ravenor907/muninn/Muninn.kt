@@ -280,10 +280,8 @@ class Muninn : Application() {
         } catch (_: Exception) {}
     }
 
-    /** This device's own chats are put away while a checked phone's chats are on show (protocol.md section 15). */
-    private fun ownChatsPutAway(): Boolean = try {
-        io.github.ravenor907.muninn.net.Link.phone.value?.ok == true && !io.github.ravenor907.muninn.net.Link.ownShown.value
-    } catch (_: Exception) { false }
+    /** Never: a linked tablet's own chats stay on show beside its phone's (protocol.md section 15). */
+    private fun ownChatsPutAway(): Boolean = false   // this device's own chats stay on show beside a linked phone's
 
     /**
      * Reply from the notification is allowed now: Muninn open, not panic-locked, not a Kids' TV, and the

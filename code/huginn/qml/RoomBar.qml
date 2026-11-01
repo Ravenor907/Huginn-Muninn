@@ -136,8 +136,8 @@ Rectangle {
         anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.px(8)
-        HButton { text: Rooms.muted ? "Unmute" : "Mute"; kind: Rooms.muted ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleMute() }
-        HButton { text: Rooms.deafened ? "Undeafen" : "Deafen"; kind: Rooms.deafened ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleDeafen() }
+        HButton { text: Rooms.muted ? "Unmute" : "Mute"; kind: Rooms.muted ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Ui.toggleMic() }
+        HButton { text: Rooms.deafened ? "Undeafen" : "Deafen"; kind: Rooms.deafened ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Ui.toggleDeaf() }
         HButton { visible: Rooms.canShare; text: Rooms.sharing ? "Stop sharing" : "Share screen"; kind: Rooms.sharing ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleShare() }
         HButton { visible: Rooms.sharerName !== ""; text: bar.screenShown ? "Hide screen" : "Show screen"; implicitHeight: Theme.px(44); onClicked: bar.screenShown = !bar.screenShown }
         HButton { visible: bar.width > Theme.px(900); text: "Output: " + Rooms.outputName; implicitHeight: Theme.px(44); onClicked: Rooms.nextOutput() }

@@ -73,6 +73,11 @@ public:
     void forget(const QString &key);
     QByteArray activeMsg(bool on, qint64 ts) const;
     bool invisible() const { return m_status == QLatin1String("invisible"); }
+    // While a linked phone is the account here (Link::sealed): its picture (a JPEG as pictureOk, or empty) and status show
+    // as mine on this screen ("me" in pictureUrl, picture and statusOf). Nothing of it is ever sent from here. on false:
+    // my own again.
+    void setPhoneMe(bool on, const QByteArray &pic, const QString &status);
+    QByteArray myPictureJpeg() const { return m_me.pic; }   // my own picture as sent (empty when none)
 
     // The wire parts, shared with the self-test.
     static bool colourOk(const QJsonValue &v);
@@ -121,6 +126,10 @@ private:
     QSet<QString> m_wasActive;
     QHash<QString, QImage> m_cache;
     QTimer m_soon, m_every;
+    bool m_phoneOn = false;
+    QByteArray m_phonePic;
+    QString m_phoneStatus;
+    qint64 m_phoneV = 0;
 };
 
 // "image://profile/<key>?v=<n>": the picture of key ("me" for mine). The vault is only read on the main thread.

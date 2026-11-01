@@ -81,13 +81,15 @@ public:
     Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
 
     bool ready() const { return m_ready; }
+    // For the self-tests: one of the vault's files as it is on disk now (what a restart reads back).
+    QByteArray savedFile(const QString &name) const;
     QVariantList nearby() const { return m_nearby; }
     QVariantList chats() const;
     QVariantList requests() const;
     QVariantList around() const;
     QVariantList people() const;
     int nearbyCount() const;
-    int unreadCount() const { return int(m_unread.size()); }
+    int unreadCount() const { return int((m_unread | m_markedUnread).size()); }
     QString username() const;
     void setUsername(const QString &v);
     // The Nearby room is off too while hidden from people nearby.

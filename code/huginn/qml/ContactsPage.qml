@@ -13,8 +13,7 @@ Rectangle {
     property int row: 0
     function setArgs(a) {}
 
-    // While a linked phone's chats are on show, this device's own contacts are put away with its chats.
-    readonly property var people: Linked.sealed ? [] : Chat.people.concat(Chat.trash.map(t => ({ key: t.key, name: t.name, trashed: true, daysLeft: t.daysLeft, contact: false, verified: false, blocked: false })))
+    readonly property var people: Chat.people.concat(Chat.trash.map(t => ({ key: t.key, name: t.name, trashed: true, daysLeft: t.daysLeft, contact: false, verified: false, blocked: false })))
     readonly property var person: people[row] || null
     readonly property var prompts: [{ key: "a", label: "Menu" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
     readonly property string status: ""
@@ -33,7 +32,25 @@ Rectangle {
         anchors.bottomMargin: Theme.portrait ? parent.height * 0.45 : Ui.dock
         width: Theme.portrait ? parent.width : Theme.listWidth
         color: Theme.column
-        PageHeader { id: header; width: parent.width; title: "Contacts" }
+        PageHeader {
+            id: header
+            width: parent.width
+            title: "Contacts"
+            // Add someone: their code or link (on the Chats page, where they then show).
+            Rectangle {
+                visible: Vault.exists && !Vault.screenLocked
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: addHover.hovered ? Theme.raised : "transparent"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Add someone"
+                Accessible.onPressAction: Ui.openPage("dms", { add: true })
+                Icon { anchors.centerIn: parent; name: "plus"; size: Theme.px(18); lineWidth: 2; color: addHover.hovered ? Theme.text : Theme.textMuted }
+                HoverHandler { id: addHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: Ui.openPage("dms", { add: true }) }
+            }
+        }
 
         ListView {
             id: list
@@ -93,7 +110,7 @@ Rectangle {
             x: Theme.px(20); width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
             visible: list.count === 0
-            text: Linked.sealed ? "This device's own contacts are put away while your phone is linked." : "Nobody yet."
+            text: "Nobody yet. Add someone with +"
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
     }

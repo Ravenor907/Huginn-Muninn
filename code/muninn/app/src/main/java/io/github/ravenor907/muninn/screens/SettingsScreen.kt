@@ -75,7 +75,6 @@ private class Page(val id: String, val title: String, val parent: String = "")
 private val MORE = listOf(
     Page("calls", "Calls", "more"),
     Page("nearby", "Nearby", "more"),
-    Page("link", "Linked devices", "more"),
     Page("backup", "Backup", "more"),
     Page("tv", "Kids' TV", "more"),
     Page("access", "Accessibility", "more"),
@@ -85,7 +84,7 @@ private val MORE = listOf(
 
 private val PAGES = listOf(
     Page("profile", "Profile"), Page("notify", "Notifications"), Page("look", "Look"), Page("lock", "Lock and privacy"),
-    Page("battery", "Battery"), Page("more", "More"), Page("lockset", "Change lock", "lock"),
+    Page("battery", "Battery"), Page("link", "Linked devices"), Page("more", "More"), Page("lockset", "Change lock", "lock"),
 ) + MORE
 
 @Composable
@@ -125,7 +124,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     }
 }
 
-/** The short list: Kids' TV when there is one, then six rows that open a page each. */
+/** The short list: Kids' TV when there is one, then seven rows that open a page each. */
 @Composable
 private fun ShortList(app: Muninn) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
@@ -141,6 +140,7 @@ private fun ShortList(app: Muninn) {
         NavRow("Look", icon = "smile") { SettingsNav.folder = "look" }
         NavRow("Lock and privacy", icon = "lock") { SettingsNav.folder = "lock" }
         NavRow("Battery", BatteryChoice.of(app)?.title ?: "Your own mix", icon = "clock") { SettingsNav.folder = "battery" }
+        NavRow("Linked devices", "Scan to link a computer or tablet", icon = "qr") { SettingsNav.folder = "link" }
         NavRow("More", icon = "more") { SettingsNav.folder = "more" }
     }
     if (Labs.on(app)) LabsSection(app)
@@ -149,9 +149,15 @@ private fun ShortList(app: Muninn) {
 /** Your picture, name and status at the top of Settings; tap for Your profile. */
 @Composable
 private fun MeRow(app: Muninn) {
-    val status by app.profile.myStatus.collectAsState()
-    val custom by app.profile.myCustomStatus.collectAsState()
-    val name = app.identity.username
+    val ownStatus by app.profile.myStatus.collectAsState()
+    val ownCustom by app.profile.myCustomStatus.collectAsState()
+    // A linked tablet: the phone is the account, so its name and status are "you" here.
+    val phoneMe by io.github.ravenor907.muninn.net.Link.me.collectAsState()
+    val linkedPhone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
+    val me = phoneMe?.takeIf { linkedPhone?.ok == true }
+    val status = me?.status ?: ownStatus
+    val custom = me?.custom ?: ownCustom
+    val name = me?.name ?: app.identity.username
     val line = Status.of(status).title + if (custom.isNotBlank()) " · $custom" else ""
     Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(role = androidx.compose.ui.semantics.Role.Button) { SettingsNav.folder = "profile" }
         .semantics(mergeDescendants = true) { contentDescription = "Your profile: $name, $line" }

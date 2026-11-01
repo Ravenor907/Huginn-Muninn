@@ -18,7 +18,7 @@ Item {
 
     readonly property var columns: [
         [{ title: "GETTING AROUND", keys: [
-            ["Find or start a chat", "Ctrl+K"],
+            ["Go to a chat", "Ctrl+K"],
             ["Next or previous section", "Tab"],
             ["Hide the list", "Ctrl+Shift+L"],
             ["Hide members", "Ctrl+Shift+U"],

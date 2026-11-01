@@ -123,8 +123,8 @@ Item {
                 Column {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: Theme.px(8)
-                    Avatar { anchors.horizontalCenter: parent.horizontalCenter; key: "me"; name: Chat.username; size: Theme.px(96); backdrop: Theme.panel }
-                    Text { textFormat: Text.PlainText; anchors.horizontalCenter: parent.horizontalCenter; text: Chat.username; color: Theme.textBright; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
+                    Avatar { anchors.horizontalCenter: parent.horizontalCenter; key: "me"; name: Ui.myName; size: Theme.px(96); backdrop: Theme.panel }
+                    Text { textFormat: Text.PlainText; anchors.horizontalCenter: parent.horizontalCenter; text: Ui.myName; color: Theme.textBright; font.family: Theme.body; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold }
                 }
                 Column {
                     width: parent.width

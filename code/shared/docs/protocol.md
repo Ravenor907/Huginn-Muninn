@@ -1524,6 +1524,14 @@ anywhere, it says "Mirrored to [name]".
   JSON in `msgs`, so a page fits an envelope on every route. The companion **merges** each page into the chat by message `id` (a
   later copy of an id replaces the earlier one): no page ever wipes what an earlier page or `msg` brought.
 - `{"t": "msg", "peer", "n", "m": item, "d"}`: one message in or out, merged the same way.
+- `{"t": "me", "n": name, "st": status, "cs": custom status (omitted when none), "pic": base64 JPEG (omitted when none)}`:
+  the phone's own profile. The phone sends it on "They match", on every `sync`, and whenever its name, status, custom
+  status or picture changes. `st` is `online`, `away`, `dnd` or `invisible` (anything else reads as `online`), `n` at most
+  40 characters (a blank one is ignored), `cs` cleaned as in section 22, `pic` the phone's profile picture as sent in room
+  `profile` (a 256x256 JPEG of at most 24 KB; any other is dropped). The companion keeps the last one and, while the
+  phone is linked and checked, shows it everywhere as "you": its name, picture and status, never the companion's own.
+  The companion's own name and picture stay with its own chats (put away below) and are shown again only when they're
+  opened or the phone is unlinked.
 - `{"t": "part", ...}`: a file the companion asked for (below).
 - `{"t": "unlink"}`.
 
@@ -1535,7 +1543,9 @@ well-formed (or `s` over 100 MB) is ignored and the item shows as words. `d` is 
 
 **From the companion:** `{"t": "send", "peer", "text", "id"}` (the phone sends `text` to its contact `peer` as its own
 message, each `id` once; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "get", "h"}`
-(below), `{"t": "unlink"}`.
+(below), `{"t": "setme", "n", "st", "cs"}` (the person changed their name, status or custom status on the companion: the
+phone is the account, so it takes them as its own, read as in `me`, and sends `me` to every checked companion; a blank
+`n` or `st` leaves that one as it is; a picture is changed only on the phone), `{"t": "unlink"}`.
 
 **Media, on the home Wi-Fi only.** The companion asks for a file it doesn't have with `{"t": "get", "h"}`, one file at a
 time, and the phone answers with `{"t": "part", "h", "i", "n", "b": base64}`: the file in parts of 192 KB (196608 bytes,
@@ -1549,10 +1559,9 @@ if its size and SHA-256 match `s` and `h`; it keeps it in its own encrypted stor
 item shows as its word with "On home Wi-Fi". A file that stops coming for a minute is asked for again later.
 
 **This device's own chats.** A companion that had its own account and chats when it links keeps them: nothing is
-erased. While a checked phone is linked they are put away: the chat list shows only the phone's chats, its own groups
-and chats are hidden, and notifications from them say nothing about who or what. Settings › Linked devices › "This
-device's own chats" opens them with the app lock (pattern or password; without a lock, at once) until the lock goes up
-again or they're put away. Unlinking brings them back as the main list.
+erased, and nothing of them is hidden. The phone's chats show in their own section ("From your phone") at the top of the
+chat list; this device's own chats, folders, groups and contacts stay on show and in use beside them. Unlinking takes
+the phone's chats (and their files) off the companion.
 
 Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.
 

@@ -200,4 +200,19 @@ class LinkTest {
         assertTrue(host.bytes.isEmpty())
         Link.host = null
     }
+
+    @Test
+    fun meCarriesThePhonesNameStatusAndCustomStatus() {
+        val m = LinkWire.readMe(JSONObject().put("t", "me").put("n", "  Ravenor  ").put("st", "dnd").put("cs", "At work"))
+        assertNotNull(m)
+        assertEquals("Ravenor", m!!.name)
+        assertEquals("dnd", m.status)
+        assertEquals("At work", m.custom)
+        assertEquals(0, m.pic.size)
+        assertNull(LinkWire.readMe(JSONObject().put("n", "   ")))
+        assertEquals("online", LinkWire.readMe(JSONObject().put("n", "A").put("st", "busy"))!!.status)
+        assertEquals(40, LinkWire.readMe(JSONObject().put("n", "x".repeat(60)))!!.name.length)
+        // Not a 256x256 JPEG: no picture.
+        assertEquals(0, LinkWire.readMe(JSONObject().put("n", "A").put("pic", "bm90IGEganBlZw=="))!!.pic.size)
+    }
 }

@@ -375,6 +375,8 @@ void CallManager::adopt(CallSession *s)
     if (m_session)
         m_session->deleteLater();
     m_session = s;
+    // Muted or deafened in your card before the call: it starts muted.
+    s->setMuted(Settings::savedMicMuted() || Settings::savedDeafened());
     m_endText.clear();
     m_clear.stop();
     m_lastPeer = s->peerKey();

@@ -2,6 +2,7 @@
 #include "chat.h"
 #include "chatcrypto.h"
 #include "msglimits.h"
+#include "profile.h"
 #include "trust.h"
 #include "vault.h"
 
@@ -73,6 +74,14 @@ Link::Link(Chat *chat, QObject *parent)
             Q_EMIT changed();
         }
     });
+    // The phone's side: my profile goes to the companions a moment after it changes.
+    m_meSoon.setSingleShot(true);
+    m_meSoon.setInterval(600);
+    connect(&m_meSoon, &QTimer::timeout, this, [this] { sendMe(false); });
+    connect(m_chat, &Chat::changed, &m_meSoon, [this] {
+        if (m_loaded && !m_companions.isEmpty())
+            m_meSoon.start();
+    });
     // A companion asks for what's missing every half minute while it's on the home Wi-Fi (one file at a time).
     m_fetchTimer.setInterval(30000);
     connect(&m_fetchTimer, &QTimer::timeout, this, [this] {
@@ -105,6 +114,17 @@ void Link::ensureLoaded() const
         m_companions << dev(v.toObject());
     if (o.contains(QStringLiteral("phone")))
         m_phone = dev(o.value(QStringLiteral("phone")).toObject());
+    m_meName.clear();
+    m_meStatus.clear();
+    m_meCustom.clear();
+    m_mePic.clear();
+    if (!m_phone.key.isEmpty()) {
+        const QVariantMap me = readMe(o.value(QStringLiteral("me")).toObject());
+        m_meName = vstr(me, "name");
+        m_meStatus = vstr(me, "status");
+        m_meCustom = vstr(me, "custom");
+        m_mePic = me.value(QStringLiteral("pic")).toByteArray();
+    }
     const QJsonObject mo = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("mirror.json"))).object();
     for (auto it = mo.begin(); it != mo.end(); ++it) {
         const QJsonObject c = it.value().toObject();
@@ -123,8 +143,17 @@ void Link::save()
     for (const Device &d : std::as_const(m_companions))
         c.append(devJson(d));
     QJsonObject o{{QStringLiteral("companions"), c}};
-    if (!m_phone.key.isEmpty())
+    if (!m_phone.key.isEmpty()) {
         o.insert(QStringLiteral("phone"), devJson(m_phone));
+        if (!m_meName.isEmpty()) {
+            QJsonObject me{{QStringLiteral("t"), QStringLiteral("me")}, {QStringLiteral("n"), m_meName}, {QStringLiteral("st"), m_meStatus}};
+            if (!m_meCustom.isEmpty())
+                me.insert(QStringLiteral("cs"), m_meCustom);
+            if (!m_mePic.isEmpty())
+                me.insert(QStringLiteral("pic"), QString::fromLatin1(m_mePic.toBase64()));
+            o.insert(QStringLiteral("me"), me);
+        }
+    }
     m_chat->m_vault->write(QStringLiteral("link.json"), compact(o));
     Q_EMIT changed();
 }
@@ -218,8 +247,99 @@ QVariantList Link::companions() const
 
 bool Link::sealed() const
 {
+    // This device's own chats, groups, folders and contacts stay on show beside a linked phone's chats.
+    return false;
+}
+
+QVariantMap Link::me() const
+{
     ensureLoaded();
-    return !m_phone.key.isEmpty() && m_phone.ok && !m_ownOpen;
+    if (m_phone.key.isEmpty() || !m_phone.ok || m_meName.isEmpty())
+        return {};
+    return {{QStringLiteral("name"), m_meName}, {QStringLiteral("status"), m_meStatus}, {QStringLiteral("custom"), m_meCustom},
+            {QStringLiteral("picture"), !m_mePic.isEmpty()}};
+}
+
+QByteArray Link::mePicture() const
+{
+    ensureLoaded();
+    return m_phone.key.isEmpty() || !m_phone.ok ? QByteArray() : m_mePic;
+}
+
+QString Link::meStatus() const
+{
+    ensureLoaded();
+    return m_phone.key.isEmpty() || !m_phone.ok || m_meName.isEmpty() ? QString() : m_meStatus;
+}
+
+QVariantMap Link::readMe(const QJsonObject &p)
+{
+    static const QStringList statuses{QStringLiteral("online"), QStringLiteral("away"), QStringLiteral("dnd"), QStringLiteral("invisible")};
+    const QString n = jstr(p, "n").simplified().left(40);
+    if (n.isEmpty())
+        return {};
+    const QString st = statuses.contains(jstr(p, "st")) ? jstr(p, "st") : QStringLiteral("online");
+    QByteArray pic;
+    const QString b = jstr(p, "pic");
+    if (!b.isEmpty()) {
+        const auto d = QByteArray::fromBase64Encoding(b.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+        if (d.decodingStatus == QByteArray::Base64DecodingStatus::Ok && Profile::pictureOk(d.decoded))
+            pic = d.decoded;   // anything else: no picture
+    }
+    return {{QStringLiteral("name"), n}, {QStringLiteral("status"), st}, {QStringLiteral("custom"), Profile::cleanCustom(jstr(p, "cs"))},
+            {QStringLiteral("pic"), pic}};
+}
+
+QString Link::setMe(const QString &name, const QString &status, const QString &custom)
+{
+    ensureLoaded();
+    if (m_phone.key.isEmpty() || !m_phone.ok)
+        return QStringLiteral("No phone is linked.");
+    const QVariantMap me = readMe(QJsonObject{{QStringLiteral("n"), name.isEmpty() ? m_meName : name},
+                                              {QStringLiteral("st"), status.isEmpty() ? m_meStatus : status}, {QStringLiteral("cs"), custom}});
+    if (me.isEmpty())
+        return QStringLiteral("Give it a name.");
+    m_meName = vstr(me, "name");
+    m_meStatus = vstr(me, "status");
+    m_meCustom = vstr(me, "custom");
+    save();
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("setme")}, {QStringLiteral("n"), m_meName}, {QStringLiteral("st"), m_meStatus},
+                                {QStringLiteral("cs"), m_meCustom}});
+    return QString();
+}
+
+void Link::sendMe(bool force)
+{
+    ensureLoaded();
+    if (!myProfile || !m_chat->ready())
+        return;
+    QList<Device> to;
+    for (const Device &d : std::as_const(m_companions))
+        if (d.ok)
+            to << d;
+    if (to.isEmpty())
+        return;
+    QJsonObject me = myProfile();
+    me.insert(QStringLiteral("t"), QStringLiteral("me"));
+    const QByteArray bytes = compact(me);
+    if (!force && bytes == m_meSent)
+        return;
+    m_meSent = bytes;
+    for (const Device &d : std::as_const(to))
+        sendTo(d, me);
+}
+
+void Link::forgetPhone()
+{
+    m_phone = Device();
+    m_ownOpen = false;
+    m_mirror.clear();
+    m_meName.clear();
+    m_meStatus.clear();
+    m_meCustom.clear();
+    m_mePic.clear();
+    saveMirror();
+    dropMedia();
 }
 
 bool Link::ownChats() const
@@ -273,6 +393,7 @@ void Link::confirm(const QString &key)
             save();
             const Device copy = d;
             syncAll(&copy);
+            sendMe(true);
             return;
         }
     if (m_phone.key == key && !m_phone.ok) {
@@ -448,8 +569,10 @@ QString Link::link(const QString &text, bool confirmed)
     save();
     sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("i"), jstr(o, "i")}, {QStringLiteral("n"), m_chat->username()},
                           {QStringLiteral("p"), m_chat->mailbox()}});
-    if (confirmed)
+    if (confirmed) {
         syncAll(&d);
+        sendMe(true);
+    }
     return QString();
 }
 
@@ -467,11 +590,7 @@ void Link::unlink(const QString &key)
             m_serve.removeAt(i);
     if (!m_phone.key.isEmpty() && m_phone.key == key) {
         sendTo(m_phone, bye);
-        m_phone = Device();
-        m_ownOpen = false;
-        m_mirror.clear();
-        saveMirror();
-        dropMedia();
+        forgetPhone();
     }
     save();
 }
@@ -950,12 +1069,9 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
             save();
             return true;
         }
+        forgetPhone();   // another phone: nothing of the last one stays
         m_phone = Device{from, mb.size() == 64 ? mb : QString(), n.isEmpty() ? QStringLiteral("Your phone") : n, false};
-        m_ownOpen = false;
-        m_mirror.clear();
         save();
-        saveMirror();
-        dropMedia();
         return true;
     }
     if (t == QLatin1String("unlink") && (comp || ph)) {
@@ -963,11 +1079,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
             m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == from; }), m_companions.end());
         if (ph) {
             Q_EMIT m_chat->notice(QStringLiteral("%1 unlinked this device.").arg(m_phone.name));
-            m_phone = Device();
-            m_ownOpen = false;
-            m_mirror.clear();
-            saveMirror();
-            dropMedia();
+            forgetPhone();
         }
         save();
         return true;
@@ -975,7 +1087,33 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     // Nothing goes either way until this screen's emoji were checked.
     const bool okHere = ph ? m_phone.ok : std::any_of(m_companions.cbegin(), m_companions.cend(), [&](const Device &d) { return d.key == from && d.ok; });
     if (!okHere && (comp || ph))
-        return t == QLatin1String("chat") || t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("sync");
+        return t == QLatin1String("chat") || t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("sync")
+            || t == QLatin1String("me") || t == QLatin1String("setme");
+    if (ph && t == QLatin1String("me")) {
+        // The phone's own profile: shown here as "you" while it's linked.
+        const QVariantMap me = readMe(p);
+        if (me.isEmpty())
+            return true;
+        m_meName = vstr(me, "name");
+        m_meStatus = vstr(me, "status");
+        m_meCustom = vstr(me, "custom");
+        m_mePic = me.value(QStringLiteral("pic")).toByteArray();
+        save();
+        return true;
+    }
+    if (comp && t == QLatin1String("setme")) {
+        // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
+        if (setMyProfile) {
+            QJsonObject q = p;
+            if (jstr(p, "n").trimmed().isEmpty())
+                q.insert(QStringLiteral("n"), m_chat->username());   // a blank name leaves mine as it is
+            const QVariantMap me = readMe(q);
+            if (!me.isEmpty())
+                setMyProfile(vstr(me, "name"), jstr(p, "st").isEmpty() ? QString() : vstr(me, "status"), vstr(me, "custom"));
+        }
+        sendMe(true);
+        return true;
+    }
     if (ph && t == QLatin1String("chat")) {
         // A page of a chat's history: merged by message id, so a later page never wipes an earlier one.
         const QString peer = jstr(p, "peer");
@@ -1091,6 +1229,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
                 const Device copy = d;
                 syncAll(&copy);
             }
+        sendMe(true);
         return true;
     }
     return comp || ph;
@@ -1217,5 +1356,18 @@ bool Link::selfTest(const QJsonObject &v)
     // The code on show is replaced a minute before it runs out.
     const qint64 until = 10000000;
     check(!codeDue(until - kRefreshMs - 1, until) && codeDue(until - kRefreshMs + 1, until) && codeDue(until + 1, until), "a new code a minute before the old one runs out");
+    // "me": the phone's profile as the companion takes it.
+    {
+        const QVariantMap m = readMe(QJsonObject{{QStringLiteral("t"), QStringLiteral("me")}, {QStringLiteral("n"), QStringLiteral("  Ravenor  ")},
+                                                 {QStringLiteral("st"), QStringLiteral("dnd")}, {QStringLiteral("cs"), QStringLiteral("At work")}});
+        check(vstr(m, "name") == QLatin1String("Ravenor") && vstr(m, "status") == QLatin1String("dnd") && vstr(m, "custom") == QLatin1String("At work")
+                  && m.value(QStringLiteral("pic")).toByteArray().isEmpty(), "me: name, status and custom status");
+        check(readMe(QJsonObject{{QStringLiteral("n"), QStringLiteral("   ")}}).isEmpty(), "me: no name, not taken");
+        check(vstr(readMe(QJsonObject{{QStringLiteral("n"), QStringLiteral("A")}, {QStringLiteral("st"), QStringLiteral("busy")}}), "status") == QLatin1String("online"),
+              "me: an unknown status is online");
+        check(readMe(QJsonObject{{QStringLiteral("n"), QString(60, QLatin1Char('x'))}}).value(QStringLiteral("name")).toString().size() == 40, "me: a name is cut at 40");
+        check(readMe(QJsonObject{{QStringLiteral("n"), QStringLiteral("A")}, {QStringLiteral("pic"), QStringLiteral("bm90IGEganBlZw==")}})
+                  .value(QStringLiteral("pic")).toByteArray().isEmpty(), "me: a picture that isn't a 256x256 JPEG is dropped");
+    }
     return bad == 0;
 }

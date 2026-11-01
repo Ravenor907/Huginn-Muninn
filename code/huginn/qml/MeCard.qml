@@ -30,12 +30,17 @@ Item {
     function dotColour(id) { return id === "online" ? Theme.online : id === "away" ? Theme.away : id === "dnd" ? Theme.dnd : Theme.offline }
     function statusName(s) { return s === "away" ? "Away" : s === "dnd" ? "Do not disturb" : s === "invisible" ? "Invisible" : "Online" }
 
+    // Your picture or name (or A on them): Settings › You, where the name, picture and status are changed.
+    function editProfile() {
+        close()
+        Ui.openPage("settings", { section: "you" })
+    }
     function run(id) {
         if (id === "custom") {
-            Ui.ask("Custom status", "Empty: none", Profile.myCustomStatus, "Save",
-                   t => Profile.setCustomStatus(t.slice(0, 80)), false, true)
+            Ui.ask("Custom status", "Empty: none", Ui.myCustomStatus, "Save",
+                   t => Ui.setMyCustomStatus(t.slice(0, 80)), false, true)
         } else if (id === "online" || id === "away" || id === "dnd" || id === "invisible") {
-            Profile.setStatus(id)
+            Ui.setMyStatus(id)
             if (Ui.main) Ui.main.autoAway = false
         }
     }
@@ -57,8 +62,8 @@ Item {
         const n = rows.length
         const r = rows[focusIndex]
         if (b === "b" || b === "left") close()
-        else if (b === "a") { if (r) run(r.id) }
-        else if (b === "up") { focusIndex = Math.max(0, focusIndex - 1); Qt.callLater(showFocused) }
+        else if (b === "a") { if (focusIndex < 0) editProfile(); else if (r) run(r.id) }
+        else if (b === "up") { focusIndex = Math.max(-1, focusIndex - 1); Qt.callLater(showFocused) }
         else if (b === "down") { focusIndex = Math.min(n - 1, focusIndex + 1); Qt.callLater(showFocused) }
         return true
     }
@@ -82,7 +87,7 @@ Item {
         border.color: Theme.line
         clip: true
         Accessible.role: Accessible.Dialog
-        Accessible.name: "You: " + Chat.username + ", " + card.statusName(Profile.myStatus)
+        Accessible.name: "You: " + Ui.myName + ", " + card.statusName(Ui.myStatus)
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
         // The banner in your color, and your picture over its edge.
@@ -92,12 +97,28 @@ Item {
             height: Theme.px(36)
             color: Qt.rgba(card.myTone.r, card.myTone.g, card.myTone.b, 0.35)
         }
+        // Your picture and name open Settings › You (a click, or A with the controller on them).
+        readonly property bool headOn: card.focusIndex < 0 && !!Ui.main && Ui.main.padInUse
+        Rectangle {
+            x: Theme.px(8); y: faceRing.y - Theme.px(4)
+            width: parent.width - Theme.px(16)
+            height: Math.max(faceRing.height, nameBlock.y + nameBlock.height - faceRing.y) + Theme.px(8)
+            radius: Theme.radius
+            color: headHover.hovered ? Theme.raised : "transparent"
+            border.width: box.headOn ? Theme.focusWidth : 0
+            border.color: Theme.accent
+            Accessible.role: Accessible.Button
+            Accessible.name: "Edit your profile"
+            Accessible.onPressAction: card.editProfile()
+            HoverHandler { id: headHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: card.editProfile() }
+        }
         Rectangle {
             id: faceRing
             x: Theme.px(16); y: banner.height - Theme.px(26)
             width: Theme.px(60); height: width; radius: width / 2
             color: Theme.panel
-            Avatar { anchors.centerIn: parent; key: "me"; name: Chat.username; size: Theme.px(54); showDot: true; backdrop: Theme.panel }
+            Avatar { anchors.centerIn: parent; key: "me"; name: Ui.myName; size: Theme.px(54); showDot: true; backdrop: Theme.panel }
         }
         // Your name and who sees it, beside the picture.
         Column {
@@ -105,8 +126,8 @@ Item {
             anchors.left: faceRing.right; anchors.leftMargin: Theme.px(10)
             anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
             y: banner.height + Theme.px(4)
-            Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: Chat.username; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Bold }
-            Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: "Only contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+            Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: Ui.myName; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(18); font.weight: Font.Bold }
+            Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: "Edit profile · Only contacts see this"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
         }
 
         // The rows: they scroll when the window is short or the Size is large.
@@ -143,17 +164,17 @@ Item {
                         anchors.left: customIcon.right; anchors.leftMargin: Theme.px(8)
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                         anchors.verticalCenter: parent.verticalCenter
-                        text: Profile.myCustomStatus
+                        text: Ui.myCustomStatus
                         maximumLength: 80
                         color: Theme.text
                         selectionColor: Theme.accentFill
                         font.family: Theme.body; font.pixelSize: Theme.fs(14)
                         clip: true
-                        function keep() { Profile.setCustomStatus(text.trim()); if (Ui.main) Ui.main.restoreFocus() }
+                        function keep() { Ui.setMyCustomStatus(text.trim()); if (Ui.main) Ui.main.restoreFocus() }
                         Keys.onReturnPressed: keep()
                         Keys.onEnterPressed: keep()
-                        Keys.onEscapePressed: { text = Profile.myCustomStatus; if (Ui.main) Ui.main.restoreFocus() }
-                        onActiveFocusChanged: if (!activeFocus && text.trim() !== Profile.myCustomStatus) Profile.setCustomStatus(text.trim())
+                        Keys.onEscapePressed: { text = Ui.myCustomStatus; if (Ui.main) Ui.main.restoreFocus() }
+                        onActiveFocusChanged: if (!activeFocus && text.trim() !== Ui.myCustomStatus) Ui.setMyCustomStatus(text.trim())
                     }
                     Text {
                         textFormat: Text.PlainText
@@ -175,7 +196,7 @@ Item {
                         rowId: modelData.id
                         label: modelData.label
                         note: modelData.note
-                        picked: Profile.myStatus === modelData.id
+                        picked: Ui.myStatus === modelData.id
                         Rectangle { anchors.verticalCenter: parent.verticalCenter; x: Theme.px(8); width: Theme.px(12); height: width; radius: width / 2; color: card.dotColour(modelData.id) }
                     }
                 }

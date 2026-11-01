@@ -62,14 +62,28 @@ Item {
     // The drawn size of a leaf: its own width times the slider.
     function sideOf(q) { return Math.max(3, Math.ceil((q.w || 24) * sizeScale)) }
 
-    // The ground: the season's (or the picked background), a little lighter near the top.
+    // The ground: the season's (or the picked background), a little lighter near the top. Settings › Look › Gradient
+    // sets how strong (flat to twice the usual); a faint speckle over it keeps the gradient smooth, without bands.
+    readonly property real gradientK: Settings.seasonGradient / 100
+    function towards(from, to, k) {
+        const c = v => Math.max(0, Math.min(1, v))
+        return Qt.rgba(c(from.r + (to.r - from.r) * k), c(from.g + (to.g - from.g) * k), c(from.b + (to.b - from.b) * k), 1)
+    }
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: Theme.groundTop }
+            GradientStop { position: 0.0; color: leaves.towards(Theme.groundMid, Theme.groundTop, leaves.gradientK) }
             GradientStop { position: 0.45; color: Theme.groundMid }
-            GradientStop { position: 1.0; color: Theme.groundDeep }
+            GradientStop { position: 1.0; color: leaves.towards(Theme.groundMid, Theme.groundDeep, leaves.gradientK) }
         }
+    }
+    Image {
+        anchors.fill: parent
+        visible: leaves.gradientK > 0
+        source: "image://noise/tile"
+        fillMode: Image.Tile
+        smooth: false
+        cache: true
     }
 
     // The clock. Date.now() costs nothing to read and never allocates.

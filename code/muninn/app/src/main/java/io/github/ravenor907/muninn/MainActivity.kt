@@ -395,8 +395,8 @@ class MainActivity : ComponentActivity() {
         }
         // A lock is suggested on first open, before anything else (Skip goes without one).
         var locked by remember { mutableStateOf(lockChosen(app) || ciSkip) }
-        // Then, on that same first open, the name others see.
-        var naming by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+        // Then the name others see, until it's been asked (a restart in between still asks).
+        var naming by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(!app.identity.nameAsked && !ciSkip && lockChosen(app)) }
         // Last, on a tablet with nothing linked: "Link your phone" (once; Settings › Linked devices has it after).
         val offerLink: () -> Unit = { if (io.github.ravenor907.muninn.screens.LinkUi.offerFirst(app)) io.github.ravenor907.muninn.screens.LinkUi.companionOpen = true }
         if (!locked) { FirstLock(app) { locked = true; naming = !app.identity.nameAsked; if (!naming) offerLink() }; return }

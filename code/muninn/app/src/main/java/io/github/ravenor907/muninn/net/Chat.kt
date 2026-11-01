@@ -315,6 +315,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun readBytes(name: String): ByteArray? = vault.readBytes(File(context.filesDir, name))
             override fun writeBytes(name: String, b: ByteArray) { val f = File(context.filesDir, name); f.parentFile?.mkdirs(); vault.writeBytes(f, b) }
             override fun delete(name: String) { try { File(context.filesDir, name).delete() } catch (_: Exception) {} }
+            override fun myProfile(): JSONObject = JSONObject().put("n", id.username).put("st", profile?.myStatus?.value ?: "online").apply {
+                profile?.myCustomStatus?.value?.takeIf { it.isNotEmpty() }?.let { put("cs", it) }
+                profile?.myPicture()?.takeIf { it.isNotEmpty() }?.let { put("pic", java.util.Base64.getEncoder().encodeToString(it)) }
+            }
+            override fun setMyProfile(name: String, status: String, custom: String) {
+                if (name.isNotBlank() && name != id.username) { id.username = name; profile?.nameChanged() }
+                if (status.isNotEmpty()) profile?.setStatus(status)
+                profile?.setCustomStatus(custom)
+            }
         }
         Link.load()
         outbox.sweep()

@@ -37,6 +37,11 @@ class Settings : public QObject
     Q_PROPERTY(bool showMembers READ showMembers WRITE setShowMembers NOTIFY appearanceChanged)
     // Settings › Calls › Push to talk: in a voice room the microphone only sends while the key is held.
     Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY changed)
+    // Mute and Deafen in your card (and Ctrl+Shift+M and D), kept between calls: every call and voice room starts this
+    // way. Deafen mutes too; mutedByDeaf says the mic was on before, so undeafening turns it back on.
+    Q_PROPERTY(bool micMuted READ micMuted WRITE setMicMuted NOTIFY changed)
+    Q_PROPERTY(bool deafened READ deafened WRITE setDeafened NOTIFY changed)
+    Q_PROPERTY(bool mutedByDeaf READ mutedByDeaf WRITE setMutedByDeaf NOTIFY changed)
     // Settings › Privacy and lock: the pattern's line and lit dots show while it's drawn (off: only
     // a brief pulse on each dot, so someone looking over your shoulder can't read it).
     Q_PROPERTY(bool patternTrail READ patternTrail WRITE setPatternTrail NOTIFY changed)
@@ -53,6 +58,8 @@ class Settings : public QObject
     Q_PROPERTY(QString season READ season WRITE setSeason NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonGround READ seasonGround WRITE setSeasonGround NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonAnimation READ seasonAnimation WRITE setSeasonAnimation NOTIFY appearanceChanged)
+    // Seasonal: how strong the ground's gradient is, 0 (flat) to 200 percent of the usual (100).
+    Q_PROPERTY(int seasonGradient READ seasonGradient WRITE setSeasonGradient NOTIFY appearanceChanged)
     // Do not disturb: no message sound, no desktop notification and no ring while it's on. Set by
     // the status card for this run only; it isn't saved here (the status is).
     Q_PROPERTY(bool quiet READ quiet WRITE setQuiet NOTIFY changed)
@@ -101,6 +108,13 @@ public:
     bool showList() const { return value("showList", true).toBool(); }
     bool showMembers() const { return value("showMembers", true).toBool(); }
     bool pushToTalk() const { return value("pushToTalk", false).toBool(); }
+    bool micMuted() const { return value("micMuted", false).toBool(); }
+    bool deafened() const { return value("deafened", false).toBool(); }
+    bool mutedByDeaf() const { return value("mutedByDeaf", false).toBool(); }
+    // The same, read where no Settings object is at hand (CallManager and RoomManager, when a call or room starts).
+    static bool savedMicMuted() { return saved(QStringLiteral("micMuted"), false).toBool(); }
+    static bool savedDeafened() { return saved(QStringLiteral("deafened"), false).toBool(); }
+    static bool savedMutedByDeaf() { return saved(QStringLiteral("mutedByDeaf"), false).toBool(); }
     bool patternTrail() const { return value("patternTrail", true).toBool(); }
     int fallCount() const
     {
@@ -123,6 +137,7 @@ public:
     }
     QString season() const { return value("season", "auto").toString(); }
     QString seasonGround() const { return value("seasonGround", "").toString(); }
+    int seasonGradient() const { return qBound(0, value("seasonGradient", 100).toInt(), 200); }
     QString seasonAnimation() const
     {
         const QString v = value("seasonAnimation", "full").toString();
@@ -161,12 +176,16 @@ public:
     void setShowList(bool v) { setLook("showList", v); }
     void setShowMembers(bool v) { setLook("showMembers", v); }
     void setPushToTalk(bool v) { set("pushToTalk", v); }
+    void setMicMuted(bool v) { set("micMuted", v); }
+    void setDeafened(bool v) { set("deafened", v); }
+    void setMutedByDeaf(bool v) { set("mutedByDeaf", v); }
     void setPatternTrail(bool v) { set("patternTrail", v); }
     // 0 goes back to following the window.
     void setFallCount(int v) { setLook("fallCount", v <= 0 ? 0 : qBound(1, v, 400)); }
     void setFallSize(int v) { setLook("fallSize", qBound(15, v, 600)); }
     void setSeason(const QString &v) { setLook("season", v); }
     void setSeasonGround(const QString &v) { setLook("seasonGround", v); }
+    void setSeasonGradient(int v) { setLook("seasonGradient", qBound(0, v, 200)); }
     void setSeasonAnimation(const QString &v)
     {
         // An older Light or "how many" percent lives on in fallBase once the choice is saved again.

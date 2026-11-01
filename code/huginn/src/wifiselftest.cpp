@@ -187,6 +187,32 @@ void begin(Run *run)
         run->check("not listening on 127.0.0.1", !probe.waitForConnected(2000));
         probe.abort();
     }
+    // Groups and contact folders are on disk the moment they're made, so they're there after a restart.
+    if (run->chat->ready()) {
+        Chat *c = run->chat;
+        const QString g = c->createGroup(QStringLiteral("Self-test group"), QString());
+        run->check("a new group is made", !g.isEmpty());
+        bool listed = false;
+        for (const QVariant &v : c->groups())
+            listed = listed || v.toMap().value(QStringLiteral("id")).toString() == g;
+        run->check("a new group is listed", listed);
+        run->check("a new group is kept on disk", !g.isEmpty() && c->savedFile(QStringLiteral("groups.json")).contains(g.toUtf8()));
+        const QString f = c->addFolder(QStringLiteral("Self-test folder"));
+        run->check("a new folder is made and kept on disk", !f.isEmpty() && c->savedFile(QStringLiteral("folders.json")).contains(f.toUtf8()));
+        const QString someone = QStringLiteral("self-test-key");
+        c->placeIn(someone, QString(), f, {someone});
+        run->check("someone dropped in a folder is in it, on disk too",
+                   c->foldersOf(someone).contains(f) && c->savedFile(QStringLiteral("folders.json")).contains(someone.toUtf8()));
+        if (!g.isEmpty())
+            c->forgetGroup(g);
+        if (!f.isEmpty())
+            c->deleteFolder(f);
+        run->check("a forgotten group and a deleted folder are gone from disk",
+                   (g.isEmpty() || !c->savedFile(QStringLiteral("groups.json")).contains(g.toUtf8()))
+                       && (f.isEmpty() || !c->savedFile(QStringLiteral("folders.json")).contains(f.toUtf8())));
+    } else {
+        std::printf("wifi groups and folders: chat not open, not checked\n");
+    }
     run->huginnKey = run->chat->chatKey();
     run->me = ChatCrypto::newKeyPair();
     run->myKey = QString::fromLatin1(run->me.publicDer.toBase64());

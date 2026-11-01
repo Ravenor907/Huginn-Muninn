@@ -31,7 +31,7 @@ Rectangle {
         if (hangArmed) { endCall(); return }
         hangArmed = true
         hangTimer.restart()
-        Ui.say("Press B again to hang up")
+        Ui.say((Ui.main && Ui.main.padInUse ? "Press B" : "Press Esc") + " again to hang up")
     }
     onVisibleChanged: if (!visible) { hangArmed = false; hangTimer.stop() }
 
@@ -105,7 +105,7 @@ Rectangle {
                 width: buttonRow.squeezed ? buttonRow.share : implicitWidth
                 text: Calls.muted ? "Unmute" : "Mute"
                 kind: Calls.muted ? "accent" : "normal"
-                onClicked: Calls.toggleMute()
+                onClicked: Ui.toggleMic()
             }
             HButton {
                 id: outputBtn
@@ -310,7 +310,7 @@ Rectangle {
     function handleButton(b) {
         if (ended) return true
         switch (b) {
-        case "a": Calls.toggleMute(); break
+        case "a": Ui.toggleMic(); break
         case "y": Calls.nextOutput(); break
         case "x": if (Calls.videoPossible) Calls.toggleCamera(); else pressHangup(); break
         case "b": pressHangup(); break

@@ -27,6 +27,20 @@ object LinkWire {
     const val REFRESH_EARLY_MS = 90_000L
     val KINDS = setOf("photo", "voice", "video", "file")
 
+    /** The phone's own profile in "me" (section 15): shown as "you" on a linked companion. [pic]: a JPEG, or empty. */
+    class Me(val name: String, val status: String, val custom: String, val pic: ByteArray)
+
+    /** A "me" (or "setme") as taken: the name cut at 40 (none: null), an unknown status online, a picture that isn't a profile picture dropped. */
+    fun readMe(o: JSONObject): Me? {
+        val n = o.optString("n").trim().replace(Regex("\\s+"), " ").take(40)
+        if (n.isEmpty()) return null
+        val st = o.optString("st").takeIf { it in ProfileWire.MY_STATUSES } ?: "online"
+        val pic = o.optString("pic").takeIf { it.isNotEmpty() }?.let {
+            try { java.util.Base64.getDecoder().decode(it) } catch (e: Exception) { null }
+        }?.takeIf { ProfileWire.pictureOk(it) } ?: ByteArray(0)
+        return Me(n, st, ProfileWire.cleanCustom(o.optString("cs")), pic)
+    }
+
     /** UTF-8 bytes of [o] as JSON. */
     fun jsonBytes(o: JSONObject): Int = o.toString().toByteArray(Charsets.UTF_8).size
 
@@ -171,6 +185,10 @@ object Link {
         fun readBytes(name: String): ByteArray? = null
         fun writeBytes(name: String, b: ByteArray) {}
         fun delete(name: String) {}
+        /** On the phone: my profile for "me": {n, st, cs, pic (base64 JPEG)}, the last two only when set. */
+        fun myProfile(): JSONObject = JSONObject().put("n", myName()).put("st", "online")
+        /** On the phone: a companion's "setme" (an empty name or status leaves that one as it is). */
+        fun setMyProfile(name: String, status: String, custom: String) {}
     }
 
     @Volatile var host: Host? = null
@@ -185,6 +203,11 @@ object Link {
     private val _stored = MutableStateFlow<Set<String>>(emptySet())
     /** On a companion: the photos and files (by SHA-256) already here. */
     val stored: StateFlow<Set<String>> = _stored.asStateFlow()
+    private val _me = MutableStateFlow<LinkWire.Me?>(null)
+    /** On a companion: the phone's own profile ("me"), shown as "you" while it's linked and checked. */
+    val me: StateFlow<LinkWire.Me?> = _me.asStateFlow()
+    /** On the phone: the last "me" sent, so a change goes once. */
+    @Volatile private var meSent = ""
     private val _ownShown = MutableStateFlow(false)
     /** On a linked companion: this device's own chats are open (after the lock) instead of the phone's. */
     val ownShown: StateFlow<Boolean> = _ownShown.asStateFlow()
@@ -206,6 +229,7 @@ object Link {
                 val o = JSONObject(t)
                 _companions.value = o.optJSONArray("companions")?.let { a -> (0 until a.length()).map { dev(a.getJSONObject(it)) } }.orEmpty()
                 _phone.value = o.optJSONObject("phone")?.let { dev(it) }
+                _me.value = if (_phone.value != null) o.optJSONObject("me")?.let { LinkWire.readMe(it) } else null
             }
             h.read("mirror.json")?.let { t ->
                 val o = JSONObject(t)
@@ -218,7 +242,13 @@ object Link {
     private fun save() {
         val h = host ?: return
         h.write("link.json", JSONObject().put("companions", JSONArray().apply { _companions.value.forEach { put(devJson(it)) } })
-            .apply { _phone.value?.let { put("phone", devJson(it)) } }.toString())
+            .apply { _phone.value?.let { put("phone", devJson(it)) } }
+            .apply { if (_phone.value != null) _me.value?.let { put("me", meJson(it)) } }.toString())
+    }
+
+    private fun meJson(m: LinkWire.Me): JSONObject = JSONObject().put("t", "me").put("n", m.name).put("st", m.status).apply {
+        if (m.custom.isNotEmpty()) put("cs", m.custom)
+        if (m.pic.isNotEmpty()) put("pic", java.util.Base64.getEncoder().encodeToString(m.pic))
     }
 
     private fun saveMirror() {
@@ -274,7 +304,7 @@ object Link {
         _companions.value = _companions.value.filterNot { it.key == k } + d
         save()
         h.send(d, JSONObject().put("t", "hello").put("i", o.optString("i")).put("n", h.myName()).put("p", h.myMailbox()).toString())
-        if (confirmed) syncAll(d)
+        if (confirmed) { syncAll(d); sendMe(true) }
         return null
     }
 
@@ -284,7 +314,7 @@ object Link {
         _companions.value.firstOrNull { it.key == key && !it.ok }?.let { d ->
             val now = d.copy(ok = true)
             _companions.value = _companions.value.map { if (it.key == key) now else it }
-            save(); syncAll(now)
+            save(); syncAll(now); sendMe(true)
         }
         _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
             _phone.value = p.copy(ok = true); _ownShown.value = false; save()
@@ -301,9 +331,34 @@ object Link {
     }
 
     /** On a companion: the phone is gone, with its chats and media; this device's own chats are the main list again. */
+    /** On the phone: my profile to every checked companion, when it changed since it last went ([force]: anyway). */
+    fun sendMe(force: Boolean = false) {
+        val h = host ?: return
+        val to = _companions.value.filter { it.ok }
+        if (to.isEmpty()) return
+        val json = h.myProfile().put("t", "me").toString()
+        if (!force && json == meSent) return
+        meSent = json
+        to.forEach { h.send(it, json) }
+    }
+
+    /** On a companion: a new name, status or custom status for the phone (the account), shown here at once. Null when sent. */
+    fun setMe(name: String, status: String, custom: String): String? {
+        val h = host ?: return "Not ready."
+        val p = _phone.value?.takeIf { it.ok } ?: return "No phone is linked."
+        val old = _me.value
+        val m = LinkWire.readMe(JSONObject().put("n", name.ifBlank { old?.name ?: "" }).put("st", status.ifBlank { old?.status ?: "" }).put("cs", custom))
+            ?: return "Give it a name."
+        _me.value = LinkWire.Me(m.name, m.status, m.custom, old?.pic ?: ByteArray(0))
+        save()
+        h.send(p, JSONObject().put("t", "setme").put("n", m.name).put("st", m.status).put("cs", m.custom).toString())
+        return null
+    }
+
     private fun dropPhone() {
         val h = host
         _phone.value = null
+        _me.value = null
         synchronized(mirrorLock) { _mirror.value = emptyMap(); saveMirror() }
         _stored.value.forEach { h?.delete(MEDIA_DIR + it) }
         _stored.value = emptySet(); saveStored()
@@ -453,7 +508,9 @@ object Link {
                 save()
             }
             // Nothing from the phone shows until this screen's emoji were checked.
-            ph != null && !ph.ok && (t == "chat" || t == "msg" || t == "part") -> {}
+            ph != null && !ph.ok && (t == "chat" || t == "msg" || t == "part" || t == "me") -> {}
+            // The phone's own profile: "you" here while it's linked.
+            ph != null && t == "me" -> LinkWire.readMe(p)?.let { _me.value = it; save() }
             ph != null && t == "chat" -> {
                 val peer = p.optString("peer")
                 if (peer.isEmpty()) return true
@@ -480,13 +537,19 @@ object Link {
                 fetchMissing()
             }
             ph != null && t == "part" -> if (lan) takePart(p)
-            comp != null && !comp.ok && (t == "send" || t == "sync" || t == "get") -> {}
+            comp != null && !comp.ok && (t == "send" || t == "sync" || t == "get" || t == "setme") -> {}
+            // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
+            comp != null && t == "setme" -> {
+                val q = JSONObject(p.toString()).apply { if (p.optString("n").isBlank()) put("n", h.myProfile().optString("n")) }
+                LinkWire.readMe(q)?.let { m -> h.setMyProfile(m.name, if (p.optString("st").isEmpty()) "" else m.status, m.custom) }
+                sendMe(true)
+            }
             comp != null && t == "send" -> {
                 val text = p.optString("text").trim()
                 // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice.
                 if (text.isNotEmpty() && firstSend(p.optString("id"))) h.sendAsMe(p.optString("peer"), text.take(LinkWire.TEXT_MAX))
             }
-            comp != null && t == "sync" -> syncAll(comp)
+            comp != null && t == "sync" -> { syncAll(comp); sendMe(true) }
             // Photos and files only on the home Wi-Fi: asked any other way, nothing is sent.
             comp != null && t == "get" -> if (lan) p.optString("h").takeIf { it.length == 64 }?.let { serve(comp, it) }
             else -> return comp != null || ph != null

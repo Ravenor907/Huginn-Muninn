@@ -46,6 +46,21 @@ Rectangle {
         return true
     }
 
+    // A person dragged with the mouse from a list: the group under the pointer (its rail id, "g:<id>") is outlined, and
+    // groupAt says which group, if any, is under a point of the window.
+    property string dropGroup: ""
+    function groupAt(wx, wy) {
+        const p = rail.mapFromItem(null, wx, wy)
+        if (!visible || p.x < 0 || p.x > rail.width || p.y < groupView.y || p.y > groupView.y + groupView.height) return ""
+        for (let i = 0; i < groupRep.count; ++i) {
+            const b = groupRep.itemAt(i)
+            if (!b || b.entry.kind !== "group") continue
+            const q = b.mapFromItem(null, wx, wy)
+            if (q.y >= 0 && q.y < b.height) return String(b.entry.id)
+        }
+        return ""
+    }
+
     readonly property var withIndex: items.map((e, i) => Object.assign({ idx: i }, e))
     readonly property var ravenItems: withIndex.filter(e => !e.bottom && e.kind === "raven")
     readonly property var groupItems: withIndex.filter(e => !e.bottom && e.kind !== "raven")
@@ -102,6 +117,7 @@ Rectangle {
             width: groupView.width
             spacing: Theme.px(8)
             Repeater {
+                id: groupRep
                 model: rail.groupItems
                 RailButton { entry: modelData }
             }
@@ -196,6 +212,7 @@ Rectangle {
         property var entry: ({})
         readonly property bool here: entry.id === rail.current
         readonly property bool on: rail.focused && rail.focusIndex === entry.idx
+        readonly property bool dropOn: rail.dropGroup !== "" && rail.dropGroup === entry.id
         readonly property bool big: entry.kind === "raven" || entry.kind === "group" || entry.kind === "add"
         readonly property var tone: Theme.avatar(entry.label || "")
         width: rail.width
@@ -232,8 +249,8 @@ Rectangle {
                  : rb.entry.kind === "add" ? (rb.on || hover.hovered ? Theme.raised : "transparent")
                  : rb.entry.id === "settings" ? "transparent"
                  : rb.on || rb.here || hover.hovered ? Theme.raised : "transparent"
-            border.width: rb.on ? Theme.focusWidth : 0
-            border.color: rb.entry.kind === "group" && rb.here ? Theme.text : Theme.accent
+            border.width: rb.on || rb.dropOn ? Theme.focusWidth : 0
+            border.color: rb.dropOn ? Theme.accent : rb.entry.kind === "group" && rb.here ? Theme.text : Theme.accent
             Behavior on radius { enabled: Theme.motion; NumberAnimation { duration: 120 } }
             Image {
                 visible: rb.entry.kind === "raven"

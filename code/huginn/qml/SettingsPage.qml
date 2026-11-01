@@ -46,14 +46,17 @@ Rectangle {
     // Look › Amount: how many fall in this window now (the Amount picked, or the window's own).
     readonly property int fallShown: Theme.fallCount(Ui.main ? Ui.main.width : 1600, Ui.main ? Ui.main.height : 900)
     // Look › Amount and Size: where the slider sits (0 to 100) and what a position sets.
-    function fallPos(key) { return key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
+    // Gradient: 0 (flat) to 200%, the slider's 0 to 100.
+    function fallPos(key) { return key === "seasonGradient" ? Settings.seasonGradient / 2 : key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
     function setFall(key, v) {
-        if (key === "fallCount") Settings.fallCount = Theme.fallCountAt(v)
+        if (key === "seasonGradient") Settings.seasonGradient = Math.round(v) * 2
+        else if (key === "fallCount") Settings.fallCount = Theme.fallCountAt(v)
         else Settings.fallSize = Theme.fallSizeAt(v)
     }
     // One notch left or right: on to the next number the slider gives (near 1 several positions give
     // the same one). A puts it back: Amount follows the window again, Size goes to 60%.
     function stepFall(key, dir) {
+        if (key === "seasonGradient") { Settings.seasonGradient = dir === 0 ? 100 : Math.max(0, Math.min(200, Settings.seasonGradient + dir * 10)); return }
         if (dir === 0) {
             if (key === "fallCount") Settings.fallCount = 0
             else Settings.fallSize = 60
@@ -76,7 +79,7 @@ Rectangle {
     readonly property var rows: {
         switch (section) {
         case "you": return [
-            { kind: "button", key: "chatName", title: "Name", note: Chat.username, label: "Change" },
+            { kind: "button", key: "chatName", title: "Name", note: Ui.myName, label: "Change" },
             { kind: "button", key: "picture", title: "Picture", label: Profile.hasMyPicture ? "Change" : "Choose" },
             { kind: "swatches", key: "myColour", title: "Avatar color" },
             { kind: "button", key: "myCode", title: "My code", label: "Show" }
@@ -92,6 +95,8 @@ Rectangle {
             { group: "Theme", kind: "segmented", key: "season", hide: Theme.choice !== "seasonal", title: "Season", note: "Auto follows the date",
               value: Theme.seasonPick, options: Theme.seasonChoices },
             { group: "Theme", kind: "grounds", key: "seasonGround", hide: Theme.choice !== "seasonal", title: "Background" },
+            { group: "Theme", kind: "slider", key: "seasonGradient", hide: Theme.choice !== "seasonal",
+              title: "Gradient: " + (Settings.seasonGradient === 0 ? "Flat" : Settings.seasonGradient + "%"), low: "Flat", high: "Strong" },
             { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: Theme.choice !== "seasonal", title: "Animation", note: "Less motion holds it still",
               options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }] },
             { group: "Theme", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
@@ -672,8 +677,8 @@ Rectangle {
 
     function press(key) {
         const job = running()
-        if (key === "chatName") Ui.ask("Your name", "Not your real one", Chat.username, "Save", t => Chat.username = t)
-        else if (key === "picture") { if (Ui.profile) Ui.profile.pickPicture() }
+        if (key === "chatName") Ui.ask("Your name", "Not your real one", Ui.myName, "Save", t => Ui.setMyName(t))
+        else if (key === "picture") { if (Ui.phoneIsMe) Ui.say("Your picture comes from your phone while it's linked. Change it there."); else if (Ui.profile) Ui.profile.pickPicture() }
         else if (key === "myCode") {
             if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
             Ui.openPage("dms", {})

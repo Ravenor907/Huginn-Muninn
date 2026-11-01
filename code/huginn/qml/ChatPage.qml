@@ -81,6 +81,7 @@ Rectangle {
         if (a.zone) zone = a.zone
         if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
+        if (a.add) Qt.callLater(addSomeone)   // Contacts › +
         // A contact's menu › Chat › Pinned messages or Shared.
         if (a.open && a.show === "pins") Qt.callLater(openPins)
         if (a.open && a.show === "shared") Qt.callLater(() => page.more.openShared())
@@ -95,32 +96,34 @@ Rectangle {
     readonly property var entries: {
         // Rows waiting for an answer carry a short tag instead of a second line.
         const out = []
-        // A linked phone (this device as its companion): only the phone's chats; this device's own are put away.
-        if (Linked.sealed && !tour) {
-            const phoneChats = Linked.mirror
-            phoneChats.forEach(c => out.push({ kind: "mirror", peer: c.peer, name: c.name }))
-            if (!phoneChats.length) out.push({ kind: "mirror", peer: "", name: Linked.phone.name + "'s chats", tag: "Phone" })
-            return out
+        // A linked phone (this device as its companion): its chats in their own section at the top, then this device's own.
+        if (Linked.phone.key && !tour) {
+            const phoneChats = Linked.phone.ok ? Linked.mirror : []
+            phoneChats.forEach((c, i) => out.push({ kind: "mirror", peer: c.peer, name: c.name, label: i === 0 ? "From your phone" : "" }))
+            if (!phoneChats.length) out.push({ kind: "mirror", peer: "", name: Linked.phone.name + "'s chats", tag: "Phone", label: "From your phone" })
         }
         Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, tag: i.waiting ? "Waiting" : "Invite" }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               tag: r.replaces ? "New key" : "Request" }))
         // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
         PeopleActions.pendingEntries().forEach(e => out.push(Object.assign({ unread: true, tag: e.pendingKind === "intro" ? "Intro" : "Request" }, e)))
-        if (Linked.phone.key) out.push({ kind: "mirror", name: Linked.phone.name + "'s chats", tag: "Phone" })
-        const chats = Chat.chats, byKey = {}
+        // Archived chats wait behind one Archived row; pinned ones sit at the top.
+        const all = Chat.chats, chats = all.filter(c => !c.archived), byKey = {}
         chats.forEach(c => byKey[c.key] = c)
-        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, route: c.route, section: section })
+        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, route: c.route, section: section, tag: c.pinned && section === "" ? "Pinned" : "" })
         const order = Chat.topOrder
         const loose = chats.filter(c => !(c.folders || []).length)
-        loose.filter(c => order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
-        order.forEach(k => { const c = byKey[k]; if (c && !(c.folders || []).length) out.push(person(c, "")) })
+        loose.filter(c => c.pinned).forEach(c => out.push(person(c, "")))
+        loose.filter(c => !c.pinned && order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
+        order.forEach(k => { const c = byKey[k]; if (c && !c.pinned && !(c.folders || []).length) out.push(person(c, "")) })
         Chat.folders.forEach(f => {
             const keys = (f.keys || []).filter(k => !!byKey[k])
             out.push({ kind: "folder", id: f.id, name: f.name, collapsed: !!f.collapsed, count: keys.length,
                        unread: !!f.collapsed && keys.some(k => byKey[k].unread) })
             if (!f.collapsed) keys.forEach(k => out.push(person(byKey[k], f.id)))
         })
+        const archived = all.filter(c => c.archived)
+        if (archived.length) out.push({ kind: "archived", name: "Archived", tag: String(archived.length), unread: archived.some(c => c.unread) })
         // Nearby always last, in its own section. Hidden from people nearby: none of it.
         if (Chat.visibleNearby) {
             out.push({ kind: "nearby", name: "Nearby room", label: "Nearby", tag: Chat.nearbyOn ? "" : "Off" })
@@ -131,7 +134,7 @@ Rectangle {
     readonly property var messages: {
         if (tour && openKey === "")
             return [{ id: "1", name: "Raven 4821", text: "Anyone have the Emerald save from yesterday?", mine: false, time: Date.now() - 60000 },
-                    { id: "2", name: Chat.username, text: "Sending it over LocalSend now", mine: true, time: Date.now(), state: "read" }]
+                    { id: "2", name: Ui.myName, text: "Sending it over LocalSend now", mine: true, time: Date.now(), state: "read" }]
         return openKey === "" ? (picked && Chat.visibleNearby ? Chat.nearby : []) : (Chat.chats, Chat.messagesWith(openKey))
     }
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
@@ -174,7 +177,7 @@ Rectangle {
         return Math.abs((b.time || 0) - (a.time || 0)) < 420000
     }
     function initial(name) { const n = String(name || "").trim(); return n.length ? n.charAt(0).toUpperCase() : "?" }
-    function senderName(m) { return m.mine ? Chat.username : openKey === "" ? (m.name || "Someone") : openName }
+    function senderName(m) { return m.mine ? Ui.myName : openKey === "" ? (m.name || "Someone") : openName }
 
     onOpenKeyChanged: {
         sel = -1; Voice.stop()
@@ -394,7 +397,7 @@ Rectangle {
                             visible: !parent.parent.person
                             anchors.centerIn: parent
                             size: Theme.px(18)
-                            name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : "people"
+                            name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : modelData.kind === "archived" ? "folder" : "people"
                             color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
                         }
                         // Requests wait for an answer: a lock badge so they stand out.
@@ -456,19 +459,32 @@ Rectangle {
                         enabled: modelData.kind === "chat"
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         property real startY: 0
+                        property real startX: 0
                         property bool moved: false
                         onPressed: mouse => {
                             startY = mouse.y
+                            startX = mouse.x
                             moved = false
                             preventStealing = mouse.button === Qt.LeftButton && mouse.source === Qt.MouseEventNotSynthesized
                         }
                         onPositionChanged: mouse => {
                             if (!preventStealing) return
-                            if (!moved && Math.abs(mouse.y - startY) > Theme.px(8)) { moved = true; page.startDrag(modelData) }
-                            if (moved) page.dragTo(mapToItem(listPane, mouse.x, mouse.y).y)
+                            if (!moved && (Math.abs(mouse.y - startY) > Theme.px(8) || Math.abs(mouse.x - startX) > Theme.px(8))) { moved = true; page.startDrag(modelData) }
+                            if (!moved) return
+                            page.dragTo(mapToItem(listPane, mouse.x, mouse.y).y)
+                            // Over a group in the rail: let go there to invite them.
+                            const w = mapToItem(null, mouse.x, mouse.y)
+                            if (Ui.main) Ui.main.railDropHint(Ui.main.railGroupAt(w.x, w.y))
                         }
-                        onReleased: { if (moved) page.dropHere() }
-                        onCanceled: { if (moved) page.cancelDrag(); moved = false }
+                        onReleased: mouse => {
+                            if (!moved) return
+                            const w = mapToItem(null, mouse.x, mouse.y)
+                            const g = Ui.main ? Ui.main.railGroupAt(w.x, w.y) : ""
+                            if (Ui.main) Ui.main.railDropHint("")
+                            if (g !== "") { const k = page.dragKey, n = page.dragName; page.cancelDrag(); page.inviteTo(g, k, n) }
+                            else page.dropHere()
+                        }
+                        onCanceled: { if (moved) { page.cancelDrag(); if (Ui.main) Ui.main.railDropHint("") } moved = false }
                         onClicked: mouse => {
                             if (moved) return
                             page.zone = "list"; page.row = index
@@ -621,7 +637,8 @@ Rectangle {
                 if (how === "off") page.lockOff = false
                 if (how === "own") { page.ownLock = false; Ui.say("This device's own chats are open until Huginn locks.") }
                 // The first time: link a phone, when nothing is linked yet.
-                if (how === "setup" && !Linked.phone.key && Linked.companions.length === 0 && Ui.main) Qt.callLater(() => Ui.main.showLinkPhone(true))
+                // The first time: the name people see, then link a phone when nothing is linked yet.
+                if (how === "setup") Qt.callLater(page.askFirstName)
                 // A lock shorter than new ones may be: suggest a stronger one, once.
                 if (how === "unlock" && Vault.askStronger())
                     Ui.sure("Make your lock stronger?", "Your " + (Vault.usesPattern ? "pattern" : "password") + " is shorter than new ones may be. One with at least 6 "
@@ -1148,7 +1165,7 @@ Rectangle {
         if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
         if (openKey === "") {
             if (!Chat.nearbyOn) { Ui.say("Nearby room is off: Settings › Privacy and lock.", true); return }
-            Ui.ask("Message everyone nearby", "You're " + Chat.username, "", "Send", t => Chat.sendNearby(t), false, true)
+            Ui.ask("Message everyone nearby", "You're " + Ui.myName, "", "Send", t => Chat.sendNearby(t), false, true)
         } else {
             const k = openKey, re = replyId
             Ui.ask(re !== "" && replyMsg ? "Reply to " + (replyMsg.mine ? "yourself" : openName) : "Message " + openName, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
@@ -1277,8 +1294,9 @@ Rectangle {
     function newFolder(key, from) {
         Ui.ask("New folder", "Only you see it", "", "Make it", t => {
             const f = Chat.addFolder(t)
-            if (f === "") { Ui.say("Give the folder a name.", true); return }
+            if (f === "") { Ui.say(Chat.folders.length >= 30 ? "30 folders at most." : "Give the folder a name.", true); return }
             if (key) Chat.placeIn(key, from || "", f, [key])
+            Ui.say("Made " + t + ".")
         }, false, true)
     }
     // X (or a right click) on a row of the list: a person's menu, a folder's, or the list's own.
@@ -1301,6 +1319,25 @@ Rectangle {
             else if (a === "up" || a === "down") { Chat.moveFolder(id, a === "up" ? -1 : 1); focusEntry(x => x.kind === "folder" && x.id === id) }
             else if (a === "rename") Ui.ask("Rename " + e.name, "Only you see it", e.name, "Save", t => Chat.renameFolder(id, t), false, true)
             else if (a === "delete") Ui.sure("Delete " + e.name + "?", "The people in it stay.", "Delete", () => Chat.deleteFolder(id), false, true)
+        })
+    }
+    // First open, after the lock is set: what people see as your name (prefilled; Skip keeps it), then Link your phone.
+    function askFirstName() {
+        const next = () => { if (!Linked.phone.key && Linked.companions.length === 0 && Ui.main) Ui.main.showLinkPhone(true) }
+        Ui.ask("What should people call you?", "Not your real one. Change it any time in Settings › You.", Chat.username, "Continue",
+               t => { Chat.username = t; Qt.callLater(next) }, false, false)
+        if (Ui.prompt) { Ui.prompt.cancelText = "Skip"; Ui.prompt.cancelCallback = () => Qt.callLater(next) }
+    }
+    // The chats put away with Archive: open one, or bring it back to the list.
+    function openArchived() {
+        const list = Chat.chats.filter(c => c.archived)
+        if (!list.length) return
+        Ui.pickFrom("Archived", [{ header: "A new message brings a chat back.", items: list.map(c => ({ name: c.name, detail: c.unread ? "New" : "", url: c.key })) }], k => {
+            const c = list.find(x => x.key === k)
+            Ui.pickFrom(c ? c.name : "Chat", [{ header: "", items: [{ name: "Open", icon: "thread", url: "open" }, { name: "Unarchive", url: "back" }] }], a => {
+                if (a === "open") { openKey = k; picked = true; zone = "messages" }
+                else if (a === "back") { Chat.archiveChat(k, false); Ui.say((c ? c.name : "The chat") + " is back in the list.") }
+            }, () => page.openArchived())
         })
     }
     function openTrash() {
@@ -1369,6 +1406,12 @@ Rectangle {
         Chat.placeIn(k, from, to, before.concat([k]).concat(after))
         focusEntry(x => x.kind === "chat" && x.key === k && x.section === to)
     }
+    // A person let go over a group in the rail: invited to it.
+    function inviteTo(g, k, name) {
+        const info = Chat.groups.find(x => x.id === g)
+        const r = Chat.inviteToGroup(g, k)
+        Ui.say(r === "" ? "Invited " + name + " to " + (info ? info.name : "the group") + "." : r, r !== "")
+    }
     function cancelDrag() {
         dragKey = ""
         dropLine = -1
@@ -1405,6 +1448,7 @@ Rectangle {
         case "stranger": Chat.meet(e.key, e.name); openKey = e.key; picked = true; zone = "messages"; return
         case "intro": PeopleActions.answer(e); return
         case "mirror": mirror.open(e.peer || ""); return
+        case "archived": openArchived(); return
         default: openKey = e.key; picked = true; zone = "messages"
         }
     }

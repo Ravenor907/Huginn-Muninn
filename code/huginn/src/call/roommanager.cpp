@@ -234,6 +234,10 @@ QString RoomManager::join(const QString &g, const QString &ch)
     m_rung.clear();
     m_declined.clear();
     m_mySpeaking.reset();
+    // Muted or deafened in your card before joining: the room starts that way.
+    m_deaf = Settings::savedDeafened();
+    m_muted = Settings::savedMicMuted() || m_deaf;
+    m_mutedByDeaf = m_deaf && Settings::savedMutedByDeaf();
     m_clock.start();
     m_audio = new AudioIO(this);
     m_audio->pull = [this](qint16 *pcm) { mix(pcm); };

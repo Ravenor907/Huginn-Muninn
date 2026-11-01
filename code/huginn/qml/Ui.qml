@@ -25,6 +25,66 @@ QtObject {
         Settings.showList = true; Settings.showMembers = true
     }
 
+    // You: while a phone is linked and checked here, its name and status are yours on this screen and a change goes to
+    // the phone; otherwise this device's own.
+    readonly property bool phoneIsMe: Linked.me.name !== undefined
+    readonly property string myName: phoneIsMe ? Linked.me.name : Chat.username
+    readonly property string myStatus: phoneIsMe ? (Linked.me.status || "online") : Profile.myStatus
+    readonly property string myCustomStatus: phoneIsMe ? (Linked.me.custom || "") : Profile.myCustomStatus
+    function setMyName(t) {
+        if (!phoneIsMe) { Chat.username = t; return }
+        const r = Linked.setMe(t, myStatus, myCustomStatus)
+        if (r !== "") say(r, true)
+    }
+    function setMyStatus(s) {
+        if (!phoneIsMe) { Profile.setStatus(s); return }
+        const r = Linked.setMe(myName, s, myCustomStatus)
+        if (r !== "") say(r, true)
+    }
+    function setMyCustomStatus(c) {
+        if (!phoneIsMe) { Profile.setCustomStatus(c); return }
+        const r = Linked.setMe(myName, myStatus, c)
+        if (r !== "") say(r, true)
+    }
+
+    // Mute and Deafen, like Discord: they work any time. In a call or voice room they change it now; either way the
+    // choice is kept (Settings), and the next call or room starts with it. Deafen mutes too; undeafening gives the mic
+    // back only if Deafen was what muted it.
+    readonly property bool micMuted: Rooms.inRoom ? Rooms.muted : Calls.inCall ? Calls.muted : (Settings.micMuted || Settings.deafened)
+    readonly property bool deafened: Rooms.inRoom ? Rooms.deafened : Settings.deafened
+    function keepVoiceState() {
+        if (Rooms.inRoom) { Settings.deafened = Rooms.deafened; Settings.micMuted = Rooms.muted && !(Rooms.deafened && Settings.mutedByDeaf) }
+        else if (Calls.inCall) Settings.micMuted = Calls.muted && !(Settings.deafened && Settings.mutedByDeaf)
+        if (!Settings.deafened) Settings.mutedByDeaf = false
+    }
+    function toggleMic() {
+        if (Rooms.inRoom) { Rooms.toggleMute(); keepVoiceState(); return }
+        // Unmuting while deafened turns both off, like taking the headphones back off.
+        if (Settings.deafened && micMuted) { Settings.deafened = false; Settings.mutedByDeaf = false; Settings.micMuted = false }
+        else Settings.micMuted = !micMuted
+        if (Calls.inCall && Calls.muted !== Settings.micMuted) Calls.toggleMute()
+    }
+    function toggleDeaf() {
+        if (Rooms.inRoom) {
+            const wasMuted = Rooms.muted
+            Rooms.toggleDeafen()
+            if (Rooms.deafened) Settings.mutedByDeaf = !wasMuted
+            keepVoiceState()
+            return
+        }
+        if (!Settings.deafened) {
+            Settings.mutedByDeaf = !micMuted
+            Settings.deafened = true
+        } else {
+            Settings.deafened = false
+            if (Settings.mutedByDeaf) Settings.micMuted = false
+            else Settings.micMuted = true
+            Settings.mutedByDeaf = false
+        }
+        const want = Settings.micMuted || Settings.deafened
+        if (Calls.inCall && Calls.muted !== want) Calls.toggleMute()
+    }
+
     function openPage(name, args) { main.openPage(name, args || {}) }
     // Back out of a page: to the rail, or from Contacts back to Settings.
     function closePage() { main.closePage() }

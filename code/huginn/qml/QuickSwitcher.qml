@@ -22,8 +22,7 @@ Item {
     }
     property int row: 0
     readonly property var everything: {
-        // While a linked phone's chats are on show, this device's own are put away: nothing of them here.
-        if (!visible || Linked.sealed) return []
+        if (!visible) return []
         const out = []
         Chat.chats.forEach(c => out.push({ kind: "dm", key: c.key, name: c.name, detail: "Direct message", unread: !!c.unread }))
         Chat.groups.forEach(g => {
@@ -37,12 +36,15 @@ Item {
         const q = field.text.trim().toLowerCase()
         const hit = everything.filter(e => q === "" || e.name.toLowerCase().indexOf(q) >= 0 || e.detail.toLowerCase().indexOf(q) >= 0)
         hit.sort((a, b) => (b.unread ? 1 : 0) - (a.unread ? 1 : 0))
+        // Nobody by that name here: add them.
+        if (!hit.length && visible) return [{ kind: "add", name: "Add someone", detail: "Their code or link" }]
         return hit.slice(0, 12)
     }
     function go(e) {
         if (!e) return
         close()
-        if (e.kind === "dm") Ui.openPage("dms", { open: e.key })
+        if (e.kind === "add") Ui.openPage("dms", { add: true })
+        else if (e.kind === "dm") Ui.openPage("dms", { open: e.key })
         else Ui.openPage("g:" + e.g, { channel: e.ch, zone: "messages" })
     }
 

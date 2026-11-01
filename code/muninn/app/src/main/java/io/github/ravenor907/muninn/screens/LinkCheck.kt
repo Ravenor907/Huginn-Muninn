@@ -273,12 +273,10 @@ internal fun LinkedDevicesPanel(app: Muninn) {
     val ctx = LocalContext.current
     val companions by Link.companions.collectAsState()
     val phone by Link.phone.collectAsState()
-    val own by Link.ownShown.collectAsState()
     val tablet = remember { LinkUi.tablet(ctx) }
     var scanning by remember { mutableStateOf(false) }
     var pasting by remember { mutableStateOf(false) }
     var pasted by remember { mutableStateOf("") }
-    var unlocking by remember { mutableStateOf(false) }
     // A new scanner after a code that didn't work (the scanner stops at the first code it reads).
     var attempt by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
@@ -296,13 +294,10 @@ internal fun LinkedDevicesPanel(app: Muninn) {
                 MIcon("phone", Palette.accent, 20.dp)
                 Text(p.name, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f).padding(start = 12.dp))
                 MButton("Unlink", kind = Kind.Danger) {
-                    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Unlink ${p.name}?", "Its chats go from this device. This device's own chats come back.", "Unlink", danger = true) { Link.unlink(p.key) })
+                    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Unlink ${p.name}?", "Its chats go from this device.", "Unlink", danger = true) { Link.unlink(p.key) })
                 }
             }
-            if (p.ok) {
-                if (own) io.github.ravenor907.muninn.ui.NavRow("Your phone's chats", "Show them again", icon = "phone") { Link.showOwn(false) }
-                else io.github.ravenor907.muninn.ui.NavRow("This device's own chats", if (app.vault.hasPassword) "Needs your lock" else "", icon = "lock") { unlocking = true }
-            }
+
         }
     }
     if (companions.isNotEmpty()) io.github.ravenor907.muninn.ui.Framed("Linked to this phone") {
@@ -331,7 +326,6 @@ internal fun LinkedDevicesPanel(app: Muninn) {
             }
         }
     }
-    if (unlocking) OwnChatsUnlock(app) { ok -> unlocking = false; if (ok) Ui.say("This device's own chats are showing.") }
     Spacer(Modifier.height(4.dp))
 }
 

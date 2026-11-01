@@ -355,7 +355,7 @@ Rectangle {
         if (LocalSend.sending) {
             if (b === "b") {
                 if (cancelArmed) { cancelArmed = false; cancelTimer.stop(); LocalSend.cancelSend() }
-                else { cancelArmed = true; cancelTimer.restart(); Ui.say("Press B again to cancel") }
+                else { cancelArmed = true; cancelTimer.restart(); Ui.say((Ui.main && Ui.main.padInUse ? "Press B" : "Press Esc") + " again to cancel") }
                 return true
             }
             return b !== "left"

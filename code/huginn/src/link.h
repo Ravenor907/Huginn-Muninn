@@ -26,8 +26,8 @@ class Chat;
 //  - the phone: it takes a companion's code (Link a device) and mirrors its own 1:1 chats to it.
 // Room "link" is sealed like a private message; Chat hands it here (Chat::receiveExtra), and anything
 // from a device that isn't linked is answered 403.
-// While a phone is linked, this device's own chats are sealed away (sealed): the lists show the phone's
-// chats, and openOwn() with the app lock opens this device's own until the lock goes up or closeOwn().
+// While a phone is linked, its chats show in their own section beside this device's own chats, groups, folders and
+// contacts, which all stay on show; the phone's name, picture and status are "you" on this screen (me).
 class Link : public QObject
 {
     Q_OBJECT
@@ -40,8 +40,11 @@ class Link : public QObject
     // The link code being shown here (empty until newCode), and when it stops working (ms).
     Q_PROPERTY(QString code READ code NOTIFY changed)
     Q_PROPERTY(qint64 codeUntil READ codeUntil NOTIFY changed)
-    // On a companion: a checked phone is linked and this device's own chats are put away.
+    // Always false: this device's own chats are never put away while a phone is linked (kept for the pages that ask).
     Q_PROPERTY(bool sealed READ sealed NOTIFY changed)
+    // On a companion: the phone's own profile, shown here as "you" while it's linked and checked:
+    // {name, status, custom, picture (bool)}; empty when no checked phone is linked or it hasn't said yet.
+    Q_PROPERTY(QVariantMap me READ me NOTIFY changed)
 
 public:
     static const char kPrefix[];                       // "MUNINNL1:"
@@ -61,6 +64,9 @@ public:
     QString code() const { return m_code; }
     qint64 codeUntil() const { return m_tokenUntil; }
     bool sealed() const;
+    QVariantMap me() const;
+    QByteArray mePicture() const;           // the phone's picture (JPEG), empty when none
+    QString meStatus() const;               // the phone's status ("online", "away", "dnd", "invisible"), "" when none
 
     // A new link code for a phone to take (a new token each time).
     Q_INVOKABLE QString newCode();
@@ -86,6 +92,9 @@ public:
     // On a companion: this device's own chats while a phone is linked. openOwn checks the app lock (pattern or
     // password; anything when there's no lock) and shows them until the screen locks or closeOwn().
     Q_INVOKABLE bool ownChats() const;
+    // On a companion: a new name, status or custom status for the phone (the account), sent to it as "setme" and
+    // shown here at once. "" when sent, else what to tell the person.
+    Q_INVOKABLE QString setMe(const QString &name, const QString &status, const QString &custom);
     Q_INVOKABLE bool openOwn(const QString &secret);
     Q_INVOKABLE void closeOwn();
 
@@ -98,6 +107,14 @@ public:
     void prune(qint64 now);
     // Set by main.cpp: true while this device is on its usual Wi-Fi (not its own Direct connect hotspot).
     std::function<bool()> homeWifi;
+    // Set by main.cpp, on the phone's side: my profile for "me" ({n, st, cs, pic (base64 JPEG, omitted when none)}),
+    // and what a companion's "setme" changes here (name, status, custom status; an empty one stays as it is).
+    std::function<QJsonObject()> myProfile;
+    std::function<void(const QString &, const QString &, const QString &)> setMyProfile;
+    // On the phone: my profile to every checked companion, when it changed since it last went (force: anyway).
+    void sendMe(bool force = false);
+    // A "me" frame as the companion takes it: {name, status, custom, pic (JPEG bytes)}, or empty when it isn't one.
+    static QVariantMap readMe(const QJsonObject &p);
 
     // A link code's {k, p, n, i}; empty when it isn't one.
     static QJsonObject readCode(const QString &text);
@@ -202,6 +219,13 @@ private:
     qint64 m_tokenUntil = 0;
     QHash<QString, qint64> m_tokens;        // every code shown that hasn't run out: a refreshed one leaves the last one working
     bool m_ownOpen = false;
+    // The companion's side of "me" (in link.json).
+    mutable QString m_meName, m_meStatus, m_meCustom;
+    mutable QByteArray m_mePic;
+    void forgetPhone();                     // the phone unlinked or was unlinked: what came with it goes
+    // The phone's side: the last "me" sent (compact JSON), so a change goes once.
+    QByteArray m_meSent;
+    QTimer m_meSoon;
     // Ids of companions' "send" already sent (two days, on disk), so none goes out twice.
     bool firstSend(const QString &id);
     QHash<QString, qint64> m_sends;

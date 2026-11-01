@@ -879,6 +879,11 @@ void Chat::loadFolders()
         saveFolders();
 }
 
+QByteArray Chat::savedFile(const QString &name) const
+{
+    return m_ready ? m_vault->read(name) : QByteArray();
+}
+
 void Chat::saveFolders()
 {
     QJsonArray a;
@@ -2471,6 +2476,8 @@ void Chat::markRead(const QString &key)
     m_openChat = key;
     if (m_unread.remove(key))
         Q_EMIT changed();
+    if (m_markedUnread.contains(key))
+        markUnread(key, false);   // read now: marked unread no more
     if (!readReceipts())
         return;
     QStringList fresh;
@@ -2916,11 +2923,20 @@ QVariantList Chat::chats() const
         // Not a contact: marked, so a name they chose ("Mom") never looks like one of mine.
         out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), isContact(k) ? nameOf(k) : stranger(nameOf(k))}, {QStringLiteral("last"), preview},
                            {QStringLiteral("time"), last.value(QStringLiteral("time"), 0)}, {QStringLiteral("route"), route(k)},
-                           {QStringLiteral("unread"), m_unread.contains(k) || shouldAskKeep(k)}, {QStringLiteral("contact"), isContact(k)},
-                           {QStringLiteral("folders"), foldersOf(k)}};
+                           {QStringLiteral("unread"), m_unread.contains(k) || m_markedUnread.contains(k) || shouldAskKeep(k)}, {QStringLiteral("contact"), isContact(k)},
+                           {QStringLiteral("folders"), foldersOf(k)}, {QStringLiteral("pinned"), m_pinnedChats.contains(k)},
+                           {QStringLiteral("archived"), m_archived.contains(k)}};
     }
-    std::sort(out.begin(), out.end(), [](const QVariant &a, const QVariant &b) {
-        return a.toMap().value(QStringLiteral("time")).toLongLong() > b.toMap().value(QStringLiteral("time")).toLongLong();
+    // Pinned chats first, in the order they were pinned (the last one pinned on top); then the newest first.
+    const QStringList pins = m_pinnedChats;
+    std::sort(out.begin(), out.end(), [&pins](const QVariant &a, const QVariant &b) {
+        const QVariantMap x = a.toMap(), y = b.toMap();
+        const qsizetype px = pins.indexOf(x.value(QStringLiteral("key")).toString()), py = pins.indexOf(y.value(QStringLiteral("key")).toString());
+        if ((px >= 0) != (py >= 0))
+            return px >= 0;
+        if (px >= 0)
+            return px < py;
+        return x.value(QStringLiteral("time")).toLongLong() > y.value(QStringLiteral("time")).toLongLong();
     });
     return out;
 }
