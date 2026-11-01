@@ -30,10 +30,21 @@ import io.github.ravenor907.muninn.ui.Section
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 
-// Message limits (cap d1, shared/docs/protocol-0.6.md section 16): what the screens show and change.
+// Message limits (cap d1, shared/docs/protocol.md section 16): what the screens show and change.
 
-/** Set once by Chat, on a start with chats already on this phone: the chat list's "things to finish" says once that messages delete. */
-const val LIMITS_NOTE = "limitsNote"
+/** Set once the chat list has said that messages delete after 7 days ([keepNotice]). */
+const val KEEP_NOTICE = "keepNotice"
+
+/**
+ * Said once to everyone, the first time the chat list opens: messages, photos and calls delete after 7 days.
+ * "Save photos" says how to keep one.
+ */
+fun keepNotice(): io.github.ravenor907.muninn.ui.Ask = io.github.ravenor907.muninn.ui.Ask(
+    "Messages delete after 7 days", "Messages, photos and calls delete after 7 days.", "Got it", cancel = "",
+    extra = "Save photos", onExtra = {
+        Ui.sure(io.github.ravenor907.muninn.ui.Ask("Save photos", "Open a photo, then tap Save to phone. It stays in Pictures › Muninn.",
+            "Got it", cancel = "") {})
+    }) {}
 
 /** Group settings › Keep messages: the group's type and days. Only admins change it; the same for everyone in the group. */
 @Composable

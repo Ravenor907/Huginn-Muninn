@@ -10,7 +10,7 @@ import java.security.interfaces.ECPublicKey
 import java.util.Base64
 
 /**
- * Caps b1 and e1 (shared/docs/protocol-0.6.md section 23). Plain Kotlin (no Android) so it can be tested off the phone;
+ * Caps b1 and e1 (shared/docs/protocol.md section 23). Plain Kotlin (no Android) so it can be tested off the phone;
  * shared/tools/e1b1_ref.py is the reference.
  *
  *  - e1: over the relays, an envelope is wrapped for the recipient's chat key and one of its day keys ("wrap keys",

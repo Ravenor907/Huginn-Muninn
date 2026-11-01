@@ -59,6 +59,7 @@ import io.github.ravenor907.muninn.ui.ChoiceRow
 import io.github.ravenor907.muninn.ui.Corner
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Framed
+import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.MenuRow
 import io.github.ravenor907.muninn.ui.NavRow
 import io.github.ravenor907.muninn.ui.Palette
@@ -282,7 +283,7 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         rows.firstOrNull { it.first == "disconnect" }?.let { (id, label) ->
             MenuRow(tvIcon(id), label, danger = true) { done(); openTvSection(key, id); onChats() }
         }
-        block()
+        // No Block for a TV this phone looks after: Disconnect TV is how it goes.
         return
     }
     if (contact != null || app.chat.conversations.value[key].orEmpty().isNotEmpty()) {
@@ -295,6 +296,7 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
     }
     muteRow()
     MenuRow("clock", "Notifications") { go("notify") }
+    if (inGroup == null) MarkUnreadRow(app, key, done)
     MenuRow("user", "Person details") { done(); ChatNav.space = ""; openDetails(key); onChats() }
     if (inGroup == null) MoveRows(app, key)
     // From a group's People page: what its admins can do.
@@ -339,20 +341,24 @@ private fun MoveRows(app: Muninn, key: String) {
     MenuRow("download", "Move down", enabled = down != null) { down?.invoke() }
 }
 
-/** A person's notifications: whether they always come through, and marking the chat unread (or read again). */
+/** Mark unread (or Mark read), on a person's menu. */
+@Composable
+private fun MarkUnreadRow(app: Muninn, key: String, done: () -> Unit) {
+    val fl by app.chat.flags.all.collectAsState()
+    val newOnes by app.chat.unread.collectAsState()
+    if (key in fl.unread || key in newOnes) MenuRow("chat", "Mark read") { app.chat.markRead(key); done(); Ui.say("Marked read.") }
+    else MenuRow("chat", "Mark unread") {
+        app.chat.flags.markUnread(key, true); if (ChatNav.open == key) ChatNav.open = ""; done(); Ui.say("Marked unread.")
+    }
+}
+
+/** A person's notifications: whether they always come through. */
 @Composable
 private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     MenuTitle("Notifications")
     var ra by remember(key) { mutableStateOf(app.power.isRightAway(key)) }
-    val fl by app.chat.flags.all.collectAsState()
-    val newOnes by app.chat.unread.collectAsState()
-    val unread = key in fl.unread || key in newOnes
     Column(Modifier.padding(horizontal = 20.dp)) {
         ToggleRow("Always right away", "Even when saving battery", ra) { app.power.setRightAway(key, it); ra = it }
-    }
-    if (unread) MenuRow("chat", "Mark read") { app.chat.markRead(key); back(); Ui.say("Marked read.") }
-    else MenuRow("chat", "Mark unread") {
-        app.chat.flags.markUnread(key, true); if (ChatNav.open == key) ChatNav.open = ""; back(); Ui.say("Marked unread.")
     }
     MenuRow("back", "Back") { back() }
 }
@@ -467,7 +473,7 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
             Framed("This chat") {
                 ToggleRow("Pin to top", "", key in people.pinned) { People.pin(key, it) }
                 ToggleRow("Archive", "", key in flags.archived) { app.chat.flags.archive(key, it) }
-                Text("Color", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
+                Text("Chat color", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
                 ColorChoices(app, key)
             }
 
@@ -493,22 +499,24 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
     }
 }
 
-/** The bubble colors for my messages in [key]'s chat, as round swatches. */
+/** [key]'s chat color: the accent (none picked) or one of the accent colors, as round swatches. Only I see it. */
 @Composable
 private fun ColorChoices(app: Muninn, key: String) {
     val st by app.chat.flags.all.collectAsState()
-    val now = st.colors[key] ?: ""
+    val now = io.github.ravenor907.muninn.ui.Accents.chatHex(st.colors[key])
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        val choices = listOf("" to (0xFF2B2E33L to 0xFFC8CDD3L)) + io.github.ravenor907.muninn.net.ChatFlags.COLORS.toList()
-        choices.forEach { (n, c) ->
-            val on = n == now
-            val fill = if (n.isEmpty()) Palette.bubbleMine else Color(c.first)
-            val dot = if (n.isEmpty()) Palette.accent else Color(c.second)
-            Box(Modifier.size(44.dp).clip(CircleShape).background(fill)
-                .border(if (on) 3.dp else 1.dp, if (on) Palette.goldBright else Palette.line, CircleShape)
-                .clickable(role = Role.RadioButton) { app.chat.flags.color(key, n) }
-                .semantics { selected = on; contentDescription = if (n.isEmpty()) "Usual grey" else n.replaceFirstChar { it.uppercase() } },
-                contentAlignment = Alignment.Center) { Box(Modifier.size(12.dp).clip(CircleShape).background(dot)) }
+        val names = listOf("Usual accent") + io.github.ravenor907.muninn.ui.Accents.TITLES
+        (listOf("") + io.github.ravenor907.muninn.ui.Accents.CHAT).forEachIndexed { i, hex ->
+            val on = hex.equals(now, ignoreCase = true)
+            val c = if (hex.isEmpty()) Palette.accentOf(io.github.ravenor907.muninn.ui.Access.accent) else Palette.accentOf(hex)
+            Box(Modifier.size(44.dp).clip(CircleShape).background(c)
+                .border(if (on) 3.dp else 1.dp, if (on) Palette.text else Palette.line, CircleShape)
+                .clickable(role = Role.RadioButton) { app.chat.flags.color(key, hex) }
+                .semantics { selected = on; contentDescription = names[i] },
+                contentAlignment = Alignment.Center) {
+                if (on) MIcon("check", Palette.onAccentOf(c), 20.dp, weight = 2.2f)
+                else if (hex.isEmpty()) Box(Modifier.size(12.dp).clip(CircleShape).background(Palette.ground))
+            }
         }
     }
 }

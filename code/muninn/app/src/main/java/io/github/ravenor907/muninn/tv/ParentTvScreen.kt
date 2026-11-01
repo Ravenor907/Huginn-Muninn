@@ -30,6 +30,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -98,6 +100,7 @@ object ParentTvMenu {
 private val PERM_NAMES = mapOf("mic" to "Microphone", "notify" to "Notifications", "overlay" to "Show over other apps", "install" to "Install updates")
 
 private const val UPDATE_FIRST = "Update the TV first"
+private const val INSTALLS_OFF = "The TV can't install updates or apps. Turn on TV permissions, Install updates."
 
 /**
  * "Kids' TV" on a parent's phone. [section]: null shows the menu; one of [ParentTvMenu.items]' ids opens that
@@ -174,13 +177,40 @@ private fun Menu(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
 }
 
 @Composable
-private fun MenuRow(title: String, value: String, danger: Boolean = false, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = onClick).padding(vertical = 8.dp),
+private fun MenuRow(title: String, value: String, danger: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Text(title, style = Type.normal.copy(color = if (danger) Palette.danger else Palette.text), modifier = Modifier.weight(1f))
+        Text(title, style = Type.normal.copy(color = when { !enabled -> Palette.textFaint; danger -> Palette.danger; else -> Palette.text }),
+            modifier = Modifier.weight(1f))
         if (value.isNotEmpty()) Text(value, style = Type.normal.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false))
         if (!danger) MIcon("forward", Palette.textFaint, 18.dp, Modifier.padding(start = 8.dp))
+    }
+}
+
+/** A row that only says something (no chevron, nothing to press). */
+@Composable
+private fun InfoRow(title: String, value: String) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 8.dp).semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+        if (value.isNotEmpty()) Text(value, style = Type.normal.copy(color = Palette.textMuted),
+            modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false))
+    }
+}
+
+/** A switch row that is off (faded, does nothing) while the TV's app can't take it yet. */
+@Composable
+private fun TvToggle(title: String, detail: String, on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Switch) { onChange(!on) }.padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = Type.big.copy(fontSize = 16.sp, color = if (enabled) Palette.text else Palette.textFaint))
+            if (detail.isNotEmpty()) Text(detail, style = Type.small)
+        }
+        Switch(on, if (enabled) onChange else null, enabled = enabled, colors = SwitchDefaults.colors(checkedThumbColor = Palette.ground,
+            checkedTrackColor = Palette.accent, uncheckedThumbColor = Palette.textMuted, uncheckedTrackColor = Palette.raised,
+            uncheckedBorderColor = Palette.lineMuted))
     }
 }
 
@@ -196,8 +226,12 @@ private fun People(app: Muninn, t: ManagedTv) {
     var grouping by remember { mutableStateOf(false) }
     val people = TvParent.people(app, t)
     ItemRow("You", null)
-    people.drop(1).forEach { p -> ItemRow(p.n, null) { TvParent.removePerson(t.key, p.k) } }
-    t.waiting.keys.sortedBy { app.chat.nameOf(it).lowercase() }.forEach { k -> ItemRow(app.chat.nameOf(k), WAITING) { TvParent.removePerson(t.key, k) } }
+    fun remove(name: String, k: String, waiting: Boolean) = Ui.sure(Ask("Remove $name?",
+        if (waiting) "They aren't added when they accept." else "The TV can't reach them any more.", "Remove", danger = true) {
+        TvParent.removePerson(t.key, k); Ui.say("Removed")
+    })
+    people.drop(1).forEach { p -> ItemRow(p.n, null) { remove(p.n, p.k, false) } }
+    t.waiting.keys.sortedBy { app.chat.nameOf(it).lowercase() }.forEach { k -> val n = app.chat.nameOf(k); ItemRow(n, WAITING) { remove(n, k, true) } }
     AddRow("Add") { adding = true }
     MenuRow("Send TV code", "") {
         TvParent.shareText(app, t.key)?.let { text ->
@@ -228,7 +262,12 @@ private fun Parents(app: Muninn, t: ManagedTv) {
     val me = app.identity.publicKey
     ItemRow("You", null)
     t.parents.filter { it != me }.sortedBy { app.chat.nameOf(it).lowercase() }.forEach { k ->
-        ItemRow(app.chat.nameOf(k), null) { TvParent.removeParent(app, t.key, k); Ui.say("Removed") }
+        val name = app.chat.nameOf(k)
+        ItemRow(name, null) {
+            Ui.sure(Ask("Remove $name as a parent?", "They can't change the TV any more. They can still talk with the kids.", "Remove", danger = true) {
+                TvParent.removeParent(app, t.key, k); Ui.say("Removed")
+            })
+        }
     }
     AddRow("Add a parent") { adding = true }
     if (adding) {
@@ -302,7 +341,7 @@ private fun QuickMessages(t: ManagedTv) {
     }
     if (order.size < TvRules.MAX_QUICK) AddRow("Add") { editing = Quick("", "") }
     editing?.let { q ->
-        TextDialog(if (q.id.isEmpty()) "Add a message" else "Edit message", q.text, TvRules.MAX_QUICK_TEXT, onCancel = { editing = null }) { text ->
+        TextDialog(if (q.id.isEmpty()) "Add a message" else "Edit message", q.text, TvRules.QUICK_TILE, onCancel = { editing = null }) { text ->
             commit(if (q.id.isEmpty()) order + Quick(TvRules.quickId(), text) else order.map { if (it.id == q.id) it.copy(text = text) else it })
             editing = null
         }
@@ -314,24 +353,27 @@ private fun QuickMessages(t: ManagedTv) {
 private fun Sound(app: Muninn, t: ManagedTv) {
     val tvKey = t.key
     var micLevel by remember(t.mic) { mutableFloatStateOf(t.mic.toFloat()) }
-    if (!TvParent.k2(app, tvKey)) Note(UPDATE_FIRST)
-    ToggleRow("Calls", "", t.calls) { on -> TvParent.change(tvKey) { it.copy(calls = on) } }
+    // A TV without k2 can't take calls or a level, nor without k5 noise removal: those are off until it's updated.
+    val k2 = TvParent.k2(app, tvKey)
+    val k5 = TvParent.k5(app, tvKey)
+    if (!k2) Note(UPDATE_FIRST)
+    TvToggle("Calls", "", t.calls, enabled = k2) { on -> TvParent.change(tvKey) { it.copy(calls = on) } }
     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Mic level", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.weight(1f))
+        Text("Mic level", style = Type.big.copy(fontSize = 16.sp, color = if (k2) Palette.text else Palette.textFaint), modifier = Modifier.weight(1f))
         Text("${micLevel.toInt()}", style = Type.normal.copy(color = Palette.textMuted))
     }
-    Slider(micLevel, { micLevel = it }, valueRange = 0f..TvRules.MAX_MIC.toFloat(), steps = 9,
+    Slider(micLevel, { micLevel = it }, enabled = k2, valueRange = 0f..TvRules.MAX_MIC.toFloat(), steps = 9,
         onValueChangeFinished = { TvParent.setMic(tvKey, micLevel.toInt()) },
         colors = SliderDefaults.colors(thumbColor = Palette.gold, activeTrackColor = Palette.gold, inactiveTrackColor = Palette.lineMuted),
         modifier = Modifier.semantics { contentDescription = "Mic level ${micLevel.toInt()} of 100" })
-    Text("Noise removal", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 12.dp))
+    Text("Noise removal", style = Type.big.copy(fontSize = 16.sp, color = if (k5) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 12.dp))
     val levels = listOf(TvRules.NR_NONE to "None", TvRules.NR_STANDARD to "Standard", TvRules.NR_STRONG to "Strong", TvRules.NR_BOTH to "Both")
     ChoiceRow(levels.size, Modifier.padding(top = 6.dp, bottom = 8.dp), minWidth = 88.dp) { i, m ->
         val (v, w) = levels[i]
-        MButton(w, m, if (t.nr == v) Kind.Accent else Kind.Normal) { TvParent.setNoise(tvKey, v) }
+        MButton(w, m, if (t.nr == v) Kind.Accent else Kind.Normal, enabled = k5) { TvParent.setNoise(tvKey, v) }
     }
-    if (!TvParent.k5(app, tvKey)) Note(UPDATE_FIRST)
-    ToggleRow("Remote mic", "Talk to type on the TV", t.dictation) { on -> TvParent.change(tvKey) { it.copy(dictation = on) } }
+    if (!k5) Note(UPDATE_FIRST)
+    ToggleRow("Remote mic", "Say it on the TV", t.dictation) { on -> TvParent.change(tvKey) { it.copy(dictation = on) } }
 }
 
 /** The TV's name on this phone, and this parent's name on the TV. */
@@ -360,13 +402,24 @@ private fun Apps(app: Muninn, t: ManagedTv) {
             sendAppToTv(app, tvKey, files.filter { AppFiles.isApk(it.name) })
         }.start()
     }
-    MenuRow("Send an app", "") { sendingApp = true }
-    MenuRow("Update now", t.app) {
-        if (TvParent.updateTv(app, tvKey)) Ui.say("The TV is updating")
-        else Ui.say(UPDATE_FIRST, true)
+    // Each part is off while the TV's app can't take it: apps (k4), Update now (k2), Auto-update (k7).
+    val k2 = TvParent.k2(app, tvKey)
+    val k4 = TvParent.k4(app, tvKey)
+    val k7 = TvParent.k7(app, tvKey)
+    val installsOff = t.off?.contains("install") == true
+    if (!k2 || !k4 || !k7) Note(UPDATE_FIRST)
+    if (installsOff) Note(INSTALLS_OFF)
+    MenuRow("Send an app", "", enabled = k4) { sendingApp = true }
+    MenuRow("Update now", t.app, enabled = k2) {
+        when {
+            !TvParent.updateTv(app, tvKey) -> Ui.say(UPDATE_FIRST, true)
+            // The TV still looks and downloads; it installs once Install updates is on.
+            installsOff -> Ui.say(INSTALLS_OFF, true)
+            else -> Ui.say("Asked the TV to update")
+        }
     }
-    ToggleRow("Auto-update", "", t.upd) { on -> TvParent.setUpd(tvKey, on) }
-    if (!TvParent.k7(app, tvKey)) Note(UPDATE_FIRST)
+    TvRules.updateText(t.update).takeIf { it.isNotEmpty() }?.let { InfoRow("Last update", it) }
+    TvToggle("Auto-update", "", t.upd, enabled = k7) { on -> TvParent.setUpd(tvKey, on) }
     if (sendingApp) io.github.ravenor907.muninn.screens.AppPicker(
         onCancel = { sendingApp = false },
         onFile = { sendingApp = false; try { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } },
@@ -402,11 +455,11 @@ private fun Permissions(app: Muninn, t: ManagedTv) {
 /** What Muninn takes on the TV, and Clear history. */
 @Composable
 private fun Storage(app: Muninn, t: ManagedTv) {
-    MenuRow("Used", when {
+    InfoRow("Used", when {
         !TvParent.k3(app, t.key) -> UPDATE_FIRST
         t.used < 0 -> "Asking…"
         else -> sizeText(t.used)
-    }) {}
+    })
     MenuRow("Clear history", "", danger = true) {
         Ui.sure(Ask("Clear the TV's history?", "Erases every message on the TV.", "Clear", danger = true) {
             if (TvParent.clearTv(app, t.key)) Ui.say("The TV is clearing its history")
@@ -437,7 +490,11 @@ private fun Disconnect(tvKey: String, onBack: () -> Unit) {
     MButton("Disconnect TV", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Danger) {
         Ui.sure(Ask("Disconnect this TV?", "Erases the TV and unpairs it.\nAll parent phones lost? Clear Muninn's data on the TV.",
             "Disconnect", danger = true, hold = true,
-            extra = "Make it a normal TV", onExtra = { TvParent.disconnect(tvKey, free = true); onBack() }) { TvParent.disconnect(tvKey); onBack() })
+            // A second step, held like Disconnect: the TV is erased either way.
+            extra = "Make it a normal TV", onExtra = {
+                Ui.sure(Ask("Make it a normal TV?", "Erases the TV and unpairs it. Then it can be used as a normal Muninn, with a lock and Settings.",
+                    "Make it a normal TV", danger = true, hold = true) { TvParent.disconnect(tvKey, free = true); onBack() })
+            }) { TvParent.disconnect(tvKey); onBack() })
     }
 }
 
@@ -456,6 +513,7 @@ private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>) {
     if (app.net.transfer.value.active) { Ui.say("Wait for the transfer to finish.", true); return }
     val name = AppFiles.group(files) { it.name }.joinToString(", ") { it.first }
     val parts = try { files.map { TvApps.Part(AppFiles.sha256(it), it.length()) } } catch (e: Exception) { Ui.say("$name couldn't be read.", true); return }
+    if (TvParent.tvs.value[tvKey]?.off?.contains("install") == true) { Ui.say(INSTALLS_OFF, true); return }
     if (!TvParent.announceApp(app, tvKey, name, parts)) { Ui.say(UPDATE_FIRST, true); return }
     app.net.send(dev.id, files)
     Ui.say("Sending $name. Press Install on the TV.")
@@ -612,18 +670,21 @@ private fun Grip() {
 @Composable
 private fun TextDialog(title: String, start: String, max: Int, onCancel: () -> Unit, onSave: (String) -> Unit) {
     var text by remember { mutableStateOf(start) }
-    val clean = TvRules.clean(text, max)
+    // A longer text from before (a quick message from an older app) only gets shorter here, and saves once it fits.
+    val clean = TvRules.clean(text, Int.MAX_VALUE)
+    val count = clean.codePointCount(0, clean.length)
+    val fits = count in 1..max
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = Palette.panel,
         title = { Text(title, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field(text, { v -> text = if (v.codePointCount(0, v.length) <= max) v else text }, "Up to $max letters")
-                Text("${clean.codePointCount(0, clean.length)} of $max", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+                Field(text, { v -> text = TvRules.quickEdit(text, v, max) }, "Up to $max letters")
+                Text("$count of $max", style = Type.small.copy(color = if (count > max) Palette.danger else Palette.textMuted), modifier = Modifier.padding(top = 6.dp))
             }
         },
-        confirmButton = { MButton("Save", kind = Kind.Accent, enabled = clean.isNotEmpty()) { if (clean.isNotEmpty()) onSave(clean) } },
+        confirmButton = { MButton("Save", kind = Kind.Accent, enabled = fits) { if (fits) onSave(clean) } },
         dismissButton = { MButton("Cancel", onClick = onCancel) },
     )
 }

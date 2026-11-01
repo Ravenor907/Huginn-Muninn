@@ -130,9 +130,10 @@ if(ANDROID)
   target_link_options(muninn_tvvoice PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL -Wl,-z,max-page-size=16384)
 endif()
 
-# Host check (not built for Android): tv_voice_test echo-cancels a made-up room.
+# Host check (not built for Android): tv_voice_test (app/src/test/cpp) echo-cancels a made-up room.
 if(TVVOICE_HOST_TEST)
   find_package(Threads REQUIRED)
-  add_executable(tv_voice_test tv_voice_test.cc)
+  add_executable(tv_voice_test ${CMAKE_CURRENT_SOURCE_DIR}/../../../test/cpp/tv_voice_test.cc)
+  target_include_directories(tv_voice_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(tv_voice_test PRIVATE tvvoice_core Threads::Threads)
 endif()

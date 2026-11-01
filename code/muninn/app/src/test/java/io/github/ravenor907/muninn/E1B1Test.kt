@@ -18,7 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.security.KeyPair
 
-/** Caps b1 and e1 (shared/docs/protocol-0.6.md section 23) against shared/vectors/e1b1-vectors.json. */
+/** Caps b1 and e1 (shared/docs/protocol.md section 23) against shared/vectors/e1b1-vectors.json. */
 class E1B1Test {
     private val v = JSONObject(javaClass.classLoader!!.getResource("e1b1-vectors.json")!!.readText())
     private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }

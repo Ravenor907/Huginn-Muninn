@@ -1,5 +1,5 @@
 {
- "note": "caps b1 and e1, shared/docs/protocol-0.6.md section 23; written by shared/tools/e1b1_ref.py",
+ "note": "caps b1 and e1, code/shared/docs/protocol.md section 23; written by code/shared/tools/e1b1_ref.py",
  "constants": {
   "wrapUseS": 604800,
   "wrapKeepS": 3456000,

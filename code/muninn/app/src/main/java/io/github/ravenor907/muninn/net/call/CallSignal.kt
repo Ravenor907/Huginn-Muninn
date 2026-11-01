@@ -8,7 +8,7 @@ interface CallSignal {
     /**
      * Seal [json] for [contactKey] in room "call" exactly like a private message (the ratchet when the
      * contact has it, else v1) and send it on every route at once right now. Never put it in the day-long
-     * Outbox: calls resend on their own schedule (shared/docs/protocol-0.6.md 5.2).
+     * Outbox: calls resend on their own schedule (shared/docs/protocol.md 5.2).
      */
     fun send(contactKey: String, json: String)
 

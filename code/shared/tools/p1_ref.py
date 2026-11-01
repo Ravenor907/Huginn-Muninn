@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for cap p1, profile pictures and status (shared/docs/protocol-0.6.md, section 22), and the test vectors
-both apps check (shared/vectors/p1-vectors.json). Run it to write the vectors; it checks every case twice (building,
+"""Reference for cap p1, profile pictures and status (code/shared/docs/protocol.md, section 22), and the test vectors
+both apps check (code/shared/vectors/p1-vectors.json). Run it to write the vectors; it checks every case twice (building,
 then from the file).
 
  - Room "profile": {"t":"profile","v":<int>,"pic":"<base64 JPEG>","col":"#rrggbb"}, through the ratchet, once per
@@ -148,7 +148,7 @@ def build():
     for p in (ok, prog, small, wide, tall):
         assert jpeg_size(p) == Image.open(io.BytesIO(p)).size
     return {
-        "about": "shared/docs/protocol-0.6.md section 22 (cap p1). Written by shared/tools/p1_ref.py.",
+        "about": "code/shared/docs/protocol.md section 22 (cap p1). Written by code/shared/tools/p1_ref.py.",
         "limits": {"maxBytes": MAX_BYTES, "sendMaxBytes": SEND_MAX_BYTES, "side": SIDE, "qualities": QUALITIES,
                    "maxCustom": MAX_CUSTOM, "statuses": list(STATUSES), "ratePer10s": RATE_PER_10S, "palette": PALETTE},
         "pictures": {

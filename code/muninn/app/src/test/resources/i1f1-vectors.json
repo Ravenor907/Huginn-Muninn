@@ -1,5 +1,5 @@
 {
- "note": "caps i1 and f1 and linked devices, shared/docs/protocol-0.6.md sections 13 to 15; written by shared/tools/i1f1_ref.py",
+ "note": "caps i1 and f1 and linked devices, code/shared/docs/protocol.md sections 13 to 15; written by code/shared/tools/i1f1_ref.py",
  "limits": {
   "chunk": 1100,
   "window": 96,

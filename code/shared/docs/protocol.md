@@ -3,7 +3,7 @@
 This is the wire protocol both apps speak: group chats, 1:1 calls, voice rooms, the kids' TV and the rest below.
 It builds on the envelope and message ratchet of section 0 without changing them. Everything deterministic
 (canonical JSON, signatures, group and TV acceptance rules, call keys, media packets, replay window) is
-implemented in `shared/tools/proto06_ref.py`, which writes `shared/vectors/proto06-vectors.json`. When this text and the
+implemented in `code/shared/tools/proto06_ref.py`, which writes `code/shared/vectors/proto06-vectors.json`. When this text and the
 reference disagree, the reference wins.
 
 Words: MUST and MUST NOT are hard rules for interoperating. SHOULD is the expected behaviour; an app that
@@ -14,12 +14,12 @@ does otherwise still interoperates.
 - Identity: each device has one P-256 key pair, the "chat key". Its public half travels as standard base64
   of the SubjectPublicKeyInfo DER (`fromKey`, contact codes). The same key also signs (ECDSA, see 2.2).
 - Envelope, on every route:
-  `{room, fromKey, fromName, fromId, mailbox, id, cap:"r1", caps, [invite], [o], (nonce, data) | (rh, data)}`
-  (`caps` is 1.1, `o` is 0.1).
+  `{room, fromKey, fromName, fromId, mailbox, id, cap:"r1", caps, [invite], (nonce, data) | (rh, data)}`
+  (`caps` is 1.1). Unknown fields are ignored.
 - Routes: Bluetooth LE (BleFrames), local Wi-Fi `POST /api/huginn/v1/message`, internet as a Nostr kind 1059
   event whose content is the envelope sealed to the recipient's chat key with a one-off key (to someone whose caps
   include `e1`, also to one of their day keys, 23.1).
-- Pairwise sealing: the message ratchet per contact (`shared/tools/ratchet_ref.py`), or v1 (static shared key)
+- Pairwise sealing: the message ratchet per contact (`code/shared/tools/ratchet_ref.py`), or v1 (static shared key)
   where the ratchet isn't used.
 - Every message goes out on every route at once; the receiver keeps the first copy (dedupe by id) and
   answers with a sealed receipt; the sender retries the same sealed bytes (5 s, 10 s, 20 s, 60 s, then every
@@ -27,13 +27,6 @@ does otherwise still interoperates.
 
 All payloads in this document are UTF-8 JSON plaintext inside `data`, sealed exactly like a private
 message. "Send to X" always means: build an envelope for X, seal it pairwise for X, send it on all routes.
-
-### 0.1 Onion addresses (`o`, `onion`)
-
-A Tor onion address may appear as `"o"` (contact codes, group codes, envelopes) or `"onion"` (Bluetooth LE
-hellos, Wi-Fi announcements). Internet messages go straight to the Nostr relays. Apps MUST NOT send `o` or
-`onion`, and MUST accept codes, envelopes and hellos that carry them, ignoring the field. There is no caps
-token for it.
 
 ## 1. Capabilities
 
@@ -112,7 +105,7 @@ Caps are also learned these ways:
   token (`g1` for the group rooms, `c1` for `call`, `v1` for room messages in `call`, `k1` for `tvconfig`; `t1` for a `card`, `k2` for `update`
   and for a config with `calls` or `mic`; `k3` for `status`, `usage` and `clear`; `k4` for `apps`; `k5` for a config with `nr`; `k7` for a config with `upd`; `k8` for a config with `keep` and for `allow`; `m1` for rooms `rich`, `mx` and
   `live` and for `group` messages `react` and `edit`). A peer without the token answers 400 and drops it.
-- UI: the call button on a contact without `c1` says "Needs Muninn or Huginn 0.6"; inviting a contact without
+- UI: the call button on a contact without `c1` says "Needs an update"; inviting a contact without
   `g1` to a group says the same and sends nothing.
 - 1:1 text, photos, voice messages, receipts, unsend and keep work with everyone, whatever their caps.
 
@@ -366,7 +359,7 @@ Nothing about folders ever goes on the wire, and the two apps don't need to agre
 - **Relay only over the internet**, unless both people trust each other (5.8.1). Nothing is ever sent
   straight to the internet address of someone who isn't trusted: no STUN, no hole punching, no `host` or
   `srflx` candidates. Each side allocates its own address on the TURN relay
-  (Cloudflare, logins from the relay Worker, see `shared/docs/relay.md`) and sends to the other side's relayed
+  (Cloudflare, logins from the relay Worker, see `code/shared/docs/relay.md`) and sends to the other side's relayed
   address through it. So the person you call never learns your IP address, and you never learn theirs.
 - If no path works the call fails with "Can't connect".
 
@@ -522,7 +515,7 @@ socket or TLS connection (below).
 
 **Relay (internet).** On starting a call, and on an offer arriving (the callee allocates while it rings,
 so answering doesn't wait for the relay), get a TURN
-login from the relay Worker over HTTPS (`shared/docs/relay.md`) and allocate on the TURN server (RFC 8656:
+login from the relay Worker over HTTPS (`code/shared/docs/relay.md`) and allocate on the TURN server (RFC 8656:
 Allocate with the long-term credential, Refresh before it lapses, a permission or ChannelBind for the
 peer's relayed address, refreshed every 4 minutes). Try UDP first, then TURN over TLS on port 443, then
 any other `turns:` URL. The TURN server's host name is looked up with the system resolver,
@@ -1098,7 +1091,7 @@ automatic gain are not affected. Vectors: `tv.configs.cfg5` (`nr` 1) and step 8 
 
 A parent whose phone was wiped or reinstalled has a new chat key, so the TV doesn't know them. All messages are in
 room `tvconfig`, and the TV and the parents send them on every route at once, the internet included, so nobody nearby
-can stand in the way. Reference `shared/tools/p95_ref.py` (`tv`), vectors `shared/vectors/p95-vectors.json`.
+can stand in the way. Reference `code/shared/tools/p95_ref.py` (`tv`), vectors `code/shared/vectors/p95-vectors.json`.
 
 1. On the TV, holding OK on the remote for 5 seconds on "Connect a parent" shows a code: the TV's contact code (no
    invite) with `"tv": 2` and `"r"`, a token of its own (16 random bytes as hex, an hour, once). A child can't open it by
@@ -1153,6 +1146,27 @@ The TV's `status` (7.7) carries `"off":[<perm>, ...]`, the permissions from that
 when all are on). When present it MUST be an array of strings, else the status is malformed; unknown names are
 ignored. A status without it means not known. The TV also sends `status` when one of them changes. Apps that don't
 know `off` ignore it.
+
+The TV's `status` may also carry `"update":<state>`, the result of its last update since Muninn started: `needs` (a new
+Muninn is downloaded and waits for the Install updates permission, `install` above), `ready` (it waits for Install on
+the TV), `installing`, `done` (the TV runs the newest) or `failed` (it didn't go in; the TV tries again the next day).
+Absent: nothing to report. A state an app doesn't know is ignored. The TV sends `status` when it changes, and a
+parent's phone shows it with the TV's apps and updates.
+
+### 7.14 A parent taken off the TV
+
+A parent's app takes another parent off by signing a config without them (7.2). Their phone is told with
+`{"t":"removed","cfg":{...}}` in room `tvconfig`, `cfg` being a signed config for that TV that no longer lists them:
+
+- the parent's phone that made the change sends it to each parent it took off, once the TV has applied that config;
+- the TV sends it too, to every parent dropped by a config it applies, and to anyone on its list who isn't a parent
+  and asks for a parent's thing.
+
+The removed phone takes it only for a TV it looks after, from the TV itself or from one of the TV's parents it knows,
+only if `cfg` passes 7.2's checks for that TV, doesn't list this phone in `parents`, is signed by its `by` (a parent this
+phone knew, unless the TV itself sent it) and isn't older than the last config this phone saw applied. It then forgets
+the TV (its pending configs and cards too) and says "You're no longer a parent of [TV]". The removed person stays among
+the people the TV can reach.
 
 ## 8. Message types
 
@@ -1214,8 +1228,8 @@ Characters means Unicode code points. Anything over a limit is malformed and ref
 
 ## 10. Test vectors
 
-`python3 shared/tools/proto06_ref.py` writes `shared/vectors/proto06-vectors.json` and checks it twice (while building it,
-then again from the file). Keys A and B are those of `shared/vectors/chat-vectors.json`; C is the P-256 key with
+`python3 code/shared/tools/proto06_ref.py` writes `code/shared/vectors/proto06-vectors.json` and checks it twice (while building it,
+then again from the file). Keys A and B are those of `code/shared/vectors/chat-vectors.json`; C is the P-256 key with
 private value `0x33` repeated 32 times, the TV `0x44` repeated 32 times; call ephemeral keys are `0x3001`
 (offerer, A) and `0x4001` (answerer, B).
 
@@ -1233,28 +1247,28 @@ Each app's unit tests should:
   each `result` (with the named state, receiver and clock); running `presence` in order through one table
   gives each `in` list (and `changed`); `glare` gives each winner.
 
-`python3 shared/tools/i1f1_ref.py` writes `shared/vectors/i1f1-vectors.json` (sections 13 to 15): the 4 emoji and `add` ids, which
+`python3 code/shared/tools/i1f1_ref.py` writes `code/shared/vectors/i1f1-vectors.json` (sections 13 to 15): the 4 emoji and `add` ids, which
 `intro` and `file` messages are well-formed, the file key from both one-off keys, sealed packets byte for byte, acks,
 and what a `MUNINNL1:` link code carries. Muninn checks it in `I1F1VectorsTest`, Huginn in `--chat-selftest` (which
 also sends a file between two copies of FileLink on 127.0.0.1, losing some pieces on the way).
 
-`python3 shared/tools/p95_ref.py` writes `shared/vectors/p95-vectors.json` (sections 7.11, 17 and 18): the move key from the two one-off
+`python3 code/shared/tools/p95_ref.py` writes `code/shared/vectors/p95-vectors.json` (sections 7.11, 17 and 18): the move key from the two one-off
 keys and the code's secret on both sides, the 4 emoji, the hello, ready and status checks, a sealed part and the sealed
 link code, the payload layout and part counts; link ids and when a link lets someone in; `mi` in a group state; which
 Kids' TV reconnect messages are well-formed. Muninn checks it in `P95VectorsTest`, Huginn in `--chat-selftest` (the file
 next to `chat-vectors.json`).
 
-`python3 shared/tools/s1_ref.py` writes `shared/vectors/s1-vectors.json` (section 21): route proofs that check out and ones that don't,
+`python3 code/shared/tools/s1_ref.py` writes `code/shared/vectors/s1-vectors.json` (section 21): route proofs that check out and ones that don't,
 hints for three days and which match, bound fields for good and malformed envelopes, a bound v1 envelope (byte for
 byte from its nonce) with the changed copies that must not open, a bound ratchet envelope Bob opens on a new session,
 and the group state cases. Muninn checks it in `S1Test`, Huginn in `--chat-selftest`.
 
-`python3 shared/tools/e1b1_ref.py` writes `shared/vectors/e1b1-vectors.json` (section 23): the day key wrapping (both
+`python3 code/shared/tools/e1b1_ref.py` writes `code/shared/vectors/e1b1-vectors.json` (section 23): the day key wrapping (both
 ECDH keys, the key, the id, a wrapping that opens and ones that don't), the ring envelope, which ring plaintexts are
 well-formed and fresh, which receipt fields are taken, and the day key rules. Muninn checks it in `E1B1Test`, Huginn in
 `--chat-selftest` (the file next to `chat-vectors.json`).
 
-`python3 shared/tools/m1_ref.py` writes `shared/vectors/m1-vectors.json` (section 11): every `good` payload is well-formed for its
+`python3 code/shared/tools/m1_ref.py` writes `code/shared/vectors/m1-vectors.json` (section 11): every `good` payload is well-formed for its
 room and every `refuse` one is refused; running each `reactions` case in order gives `result`; each `edits` case
 gives the text, edited flag and edit time; `fresh` gives each `ok`. Muninn checks it in `RichTest`, Huginn in
 `--chat-selftest` (the file next to `chat-vectors.json`).
@@ -1262,7 +1276,7 @@ gives the text, edited flag and edit time; `fresh` gives each `ok`. Muninn check
 ## 11. Messenger features (cap `m1`)
 
 Replies, reactions, edits, typing and active status, in 1:1 chats and groups. Nothing here is new cryptography:
-every payload is UTF-8 JSON sealed exactly like a private message, so the reference (`shared/tools/m1_ref.py`) only
+every payload is UTF-8 JSON sealed exactly like a private message, so the reference (`code/shared/tools/m1_ref.py`) only
 pins down which payloads are well-formed and how reactions and edits that arrive in any order settle.
 Everything in this section goes only to someone whose caps include `m1`; to anyone else the app sends what
 an app without `m1` understands (a reply as plain text) or nothing (a reaction, an edit, typing) and says so where it matters
@@ -1361,7 +1375,7 @@ page are local: nothing about them goes on the wire, and the two apps don't need
 ## 12. Messenger additions (cap `m2`)
 
 Photo albums, video messages, polls and link previews. As in section 11 nothing here is new cryptography; the reference
-`shared/tools/m2_ref.py` writes `shared/vectors/m2-vectors.json` (every `good` payload is well-formed for its room and every `refuse` one is
+`code/shared/tools/m2_ref.py` writes `code/shared/vectors/m2-vectors.json` (every `good` payload is well-formed for its room and every `refuse` one is
 refused; running each `votes` case in order gives `result`; `fallback` gives the text; `video` gives `ok`). Muninn checks it in
 `MoreTest`, Huginn in its chat self-test (`MoreWire::selfTest`). Room `piece` in the vectors means the clear fields of a `photo` or `gphoto` piece. Text rules (code points, not
 only spaces) are those of 11.1; the m2 fields may not contain control characters other than a newline, and one-line fields
@@ -1479,35 +1493,64 @@ photo and saves it to Downloads when the person taps Save.
 
 ## 15. Linked devices, companion style (room `link`)
 
-A tablet or second phone (the companion) shows a phone's 1:1 chats and sends through it, while the phone is on and
+A tablet or computer (the companion) shows a phone's 1:1 chats and sends through it, while the phone is on and
 online. Contacts see nothing new: every message still comes from and goes to the phone. Muninn and Huginn, each as a
-companion or as the phone. Envelopes in room `link` are sealed like private messages and go on every route (LAN, Direct, Nostr); they are
-exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only a paired device gets past the
-check below.
+companion or as the phone (a Muninn phone usually; Huginn on Windows and Linux and Muninn on a tablet are usually the
+companion). Envelopes in room `link` are sealed like private messages (v1) and, except `get` and `part`, go on every
+route (LAN, Direct, Nostr); they are exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only
+a paired device gets past the check below.
 
-**Pairing.** The companion shows a link code: `MUNINNL1:` then base64url (no padding) of
+**Pairing.** The companion shows a link code as a QR code: `MUNINNL1:` then base64url (no padding) of
 `{"k": chat key, "p": Nostr mailbox, "n": device name, "i": token}`. The token is 128 random bits, good for 10 minutes and
-once. The phone takes the code, keeps the companion, and sends `{"t": "hello", "i": token, "n": its name, "p": its
+once. A companion showing its code makes a new one (a new token) a minute before the old one runs out, so the code on
+screen always works; the code can also be copied as text, for a phone without a camera. The phone takes the code (its QR
+scanner, or the text pasted), keeps the companion, and sends `{"t": "hello", "i": token, "n": its name, "p": its
 mailbox}`. The companion accepts a `hello` only with its current token, in time; from then on the phone is its phone.
 
+**Checking the pair.** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
+the person confirms "They match" on each ("No" unlinks). Until then the phone sends nothing (`chat`, `msg`, `part`) and
+takes nothing (`send`, `sync`, `get`) from that companion, and the companion shows nothing from the phone; on "They
+match" the companion sends `sync`. A pair linked without this check stays linked. While a phone's chats are mirrored
+anywhere, it says "Mirrored to [name]".
+
 **From the phone:**
-- `{"t": "chat", "peer", "n", "msgs": [{"id", "x", "me", "t"}], "d"}`: a chat's latest 25 messages (each `x` at most 600
-  characters), on pairing and when asked.
-- `{"t": "msg", "peer", "n", "m": {"id", "x", "me", "t"}, "d"}`: one message in or out (`x` at most 2000 characters).
-  `d` is the chat's message limit in days (section 16): the companion deletes older messages too.
-  Photos, voice, video and files go as words ("Photo", "File: name"); the media stays on the phone.
+- `{"t": "chat", "peer", "n", "msgs": [item, ...], "d", "pg": i, "pgs": n}`: one page of a chat's history. On "They
+  match" and on every `sync` the phone sends every message it still keeps for each 1:1 chat with a contact (within the
+  chat's limit, section 16), oldest first, in pages `pg` 0 to `pgs` - 1, each at most 100 items and at most 40 KB of JSON
+  in `msgs` (so the envelope stays under 64 KB). The companion **merges** each page into the chat by message `id` (a
+  later copy of an id replaces the earlier one): no page ever wipes what an earlier page or `msg` brought.
+- `{"t": "msg", "peer", "n", "m": item, "d"}`: one message in or out, merged the same way.
+- `{"t": "part", ...}`: a file the companion asked for (below).
 - `{"t": "unlink"}`.
 
+An item is `{"id", "x", "me", "t"}` and, for a photo, voice message, video message or file, `"f": {"h": SHA-256 of the
+file (lowercase hex), "s": bytes, "k": "photo" | "voice" | "video" | "file", "nm": file name}`. `x` is at most 2000
+characters; for media it stays the word ("Photo", "Voice message", "Video message", "File: name"). An `f` that isn't
+well-formed (or `s` over 100 MB) is ignored and the item shows as words. `d` is the chat's message limit in days
+(section 16): the companion deletes older messages, and their files, too.
+
 **From the companion:** `{"t": "send", "peer", "text", "id"}` (the phone sends `text` to its contact `peer` as its own
-message; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "unlink"}`.
+message, each `id` once; ignored when `peer` isn't a contact), `{"t": "sync"}` (all chats again), `{"t": "get", "h"}`
+(below), `{"t": "unlink"}`.
+
+**Media, on the home Wi-Fi only.** The companion asks for a file it doesn't have with `{"t": "get", "h"}`, one file at a
+time, and the phone answers with `{"t": "part", "h", "i", "n", "b": base64}`: the file in parts of 192 KB (196608 bytes,
+the last one shorter), `i` from 0 to `n` - 1, `n` = ceil(`s` / 196608), each part sent once the one before was taken
+(HTTP 200). `get` and `part` go **only** over the LAN route (the HTTPS message endpoint of a device on the same home
+Wi-Fi), never over Nostr, a relay, Bluetooth or Direct (a hotspot one of the devices made); either side drops a `get` or
+`part` that came any other way, and a Huginn on its own Direct connect hotspot neither asks nor answers. The LAN
+endpoint takes bodies up to 512 KB for these. The phone sends only files of its contacts' 1:1 chats, at most 100 MB. The
+companion takes parts only for the file it asked for and only of the expected sizes, joins them, and keeps the file only
+if its size and SHA-256 match `s` and `h`; it keeps it in its own encrypted store and shows it in the chat. Until then the
+item shows as its word with "On home Wi-Fi". A file that stops coming for a minute is asked for again later.
+
+**This device's own chats.** A companion that had its own account and chats when it links keeps them: nothing is
+erased. While a checked phone is linked they are put away: the chat list shows only the phone's chats, its own groups
+and chats are hidden, and notifications from them say nothing about who or what. Settings › Linked devices › "This
+device's own chats" opens them with the app lock (pattern or password; without a lock, at once) until the lock goes up
+again or they're put away. Unlinking brings them back as the main list.
 
 Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.
-
-**Checking the pair.** After the `hello`, both screens show the 4 emoji of the two devices' pair key (13.5) and
-the person taps "They match" on each. Until then the phone sends nothing (`chat`, `msg`) and takes nothing (`send`,
-`sync`) from that companion, and the companion shows nothing from the phone; on "They match" the companion sends `sync`.
-A pair linked without this check stays linked. While a phone's chats are mirrored anywhere, its chat list says "Mirrored
-to [name]".
 
 ## 16. Message limits (cap `d1`)
 
@@ -1515,7 +1558,7 @@ Messages don't stay forever. Every chat, 1:1 and group, has a **limit in days**:
 every device, with everything that belongs to them (photos, voice clips, videos, files, album photos, poll votes, link
 previews, cached copies), and an encrypted backup never holds anything past it. The limit is **7 days** unless a Family or
 Work group, or two people who keep each other in their Family or Work folder, choose longer, **at most 30**.
-`shared/tools/d1_ref.py` is the reference and writes `shared/vectors/d1-vectors.json`; Muninn checks it in `LimitsTest`, Huginn in
+`code/shared/tools/d1_ref.py` is the reference and writes `code/shared/vectors/d1-vectors.json`; Muninn checks it in `LimitsTest`, Huginn in
 `--chat-selftest` (the file next to `chat-vectors.json`).
 
 ### 16.1 What counts
@@ -1544,7 +1587,7 @@ A group has a **type**: Standard, Family or Work. The state (3.2) gets two optio
 
 An app without `d1` refuses a state with `kind` (3.2 "exactly these fields"). So an admin's app makes a group Family or
 Work only when the caps of every other member include `d1`, invites or adds to a Family or Work group only people whose
-caps include `d1` (others: "Needs Muninn or Huginn 0.94"), and moving back to Standard works with everyone. In a Standard
+caps include `d1` (others: "Needs an update"), and moving back to Standard works with everyone. In a Standard
 group, members without `d1` keep their messages; the group's info says so.
 
 ### 16.3 1:1 chats: `days` in the envelope
@@ -1576,7 +1619,7 @@ same join path, so an app without `j1` can join by a link too.
 Admins always may. A group state may carry `"mi": true` ("Members can invite"): then members may make links too. It is
 only ever `true`; off is left out, so a group that never turned it on keeps exactly the state an app without `j1` takes
 (vectors: `mi`). An app without `j1` refuses a state with `mi`, so an admin's app turns it on only when every other member's caps
-include `j1`, and while it is on only people whose caps include `j1` are added (others: "Needs Muninn or Huginn 0.95").
+include `j1`, and while it is on only people whose caps include `j1` are added (others: "Needs an update").
 The change is an admin's signed state like any other (3.4, `op` hint `invites`). Family and Work groups also need `d1`
 (16.2).
 
@@ -1621,7 +1664,7 @@ If the counting admin stops being an admin or leaves, its links stop working.
 
 "Move here": everything moves to a new phone, tablet or computer (any of Muninn and Huginn), straight over the home
 Wi-Fi, never the internet. Contacts don't re-add or re-verify: the identity, its mailbox and the ratchets move. The old
-device is then locked out with its keys erased. Reference `shared/tools/p95_ref.py` (`move`), vectors `shared/vectors/p95-vectors.json`.
+device is then locked out with its keys erased. Reference `code/shared/tools/p95_ref.py` (`move`), vectors `code/shared/vectors/p95-vectors.json`.
 
 ### 18.1 The code and the key
 
@@ -1714,7 +1757,7 @@ emoji check is offered. Someone met close by can be called while on the same Wi-
 ## 20. Relay envelopes: padding, sending sockets, expiry
 
 How a sealed envelope travels over the Nostr relays, so a relay learns less about who talks to whom. None of it
-changes what a receiver must understand, so there is **no cap token**: every app reads these events. `shared/tools/pad_ref.py` is the reference and writes `shared/vectors/pad-vectors.json`; Muninn checks it in
+changes what a receiver must understand, so there is **no cap token**: every app reads these events. `code/shared/tools/pad_ref.py` is the reference and writes `code/shared/vectors/pad-vectors.json`; Muninn checks it in
 `SecDataTest`, Huginn in `--nostr-selftest` (the file next to `nostr-vectors.json`).
 
 ### 20.1 Padding
@@ -1759,7 +1802,7 @@ ignore the tag. Vectors: `expiry` in `pad-vectors.json` (with `blur` and `longes
 
 ## 21. Proven routes and bound envelopes (cap `s1`)
 
-Everything here is in `shared/tools/s1_ref.py`, which writes `shared/vectors/s1-vectors.json`.
+Everything here is in `code/shared/tools/s1_ref.py`, which writes `code/shared/vectors/s1-vectors.json`.
 
 ### 21.1 Every route, always
 
@@ -1846,7 +1889,7 @@ is answered only for members of the current state.
 
 ## 22. Profile pictures and status (cap `p1`)
 
-Everything here is in `shared/tools/p1_ref.py`, which writes `shared/vectors/p1-vectors.json`. A person has a profile:
+Everything here is in `code/shared/tools/p1_ref.py`, which writes `code/shared/vectors/p1-vectors.json`. A person has a profile:
 a picture, a colour for the disc with their initial that shows when there is no picture, a status (online, away,
 do not disturb, invisible) and a custom status text. The picture and colour go to the people they are in touch with;
 the status rides on the `active` message that already says their app is open. Nothing of it goes to anyone else.
@@ -1918,7 +1961,7 @@ sent twice.
 
 ## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`)
 
-Everything here is in `shared/tools/e1b1_ref.py`, which writes `shared/vectors/e1b1-vectors.json`. `ECDH(a, B)` below is
+Everything here is in `code/shared/tools/e1b1_ref.py`, which writes `code/shared/vectors/e1b1-vectors.json`. `ECDH(a, B)` below is
 `ChatCrypto.sharedKey` (section 0: HKDF over the P-256 secret, salted with both public keys).
 
 ### 23.1 Day keys and the relay wrapping (`e1`)

@@ -32,7 +32,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * Voice rooms and group calls (shared/docs/protocol-0.6.md section 6). A room is a full mesh of 1:1 calls: one
+ * Voice rooms and group calls (shared/docs/protocol.md section 6). A room is a full mesh of 1:1 calls: one
  * [CallSession] per other person, each with its own keys, its own TURN allocation and paths, so media is
  * encrypted per recipient and nobody in the room learns anyone's IP address. This object owns the
  * microphone and the speaker for all of them: each 20 ms frame is encoded once and sealed for every peer,

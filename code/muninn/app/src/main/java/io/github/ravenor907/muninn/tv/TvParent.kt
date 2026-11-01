@@ -55,6 +55,8 @@ data class ManagedTv(
     val keep: Int = TvRules.MAX_KEEP,
     /** k8 (7.13): the TV's permissions still off, from its last status (null: not known). */
     val off: List<String>? = null,
+    /** The TV's last update state from its status (one of [TvRules.UPDATE_STATES], or "" when not known). */
+    val update: String = "",
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -78,6 +80,8 @@ object TvParent {
     private val tries = ConcurrentHashMap<String, Pair<Int, Long>>()
     /** Cards (7.6) waiting to learn whether the person's app takes one: (TV key, since). Not saved. */
     private val cards = ConcurrentHashMap<String, Pair<String, Long>>()
+    /** Per TV: parents this phone just took off, told with the next config it signs. Not saved: the TV tells them too. */
+    private val removed = ConcurrentHashMap<String, Set<String>>()
     @Volatile private var ticking = false
 
     private fun file(app: Muninn) = File(app.filesDir, FILE)
@@ -116,14 +120,11 @@ object TvParent {
      * and sends the TV its first config. True if it was a TV's code.
      */
     fun adoptIfTv(app: Muninn, codeText: String): Boolean {
-        // A TV's "Connect a parent" code (k6): ask to look after it again.
-        if (TvReconnect.askToRejoin(app, codeText)) return true
         val key = tvKeyIn(codeText) ?: return false
         if (isManaged(key) || app.contacts.get(key) == null) return true
         Ui.sure(Ask(
             "Set up this Kids' TV?",
-            "The TV opens straight to the people you choose, with no lock and no sign in, so anyone in the room can read what's on it. " +
-                "You pick who it can reach and its quick messages. It stays on until you disconnect it from this phone.",
+            "Anyone in the room can see it. You choose who it can reach.",
             "Set it up",
         ) { adopt(app, key) })
         return true
@@ -134,7 +135,7 @@ object TvParent {
         put(ManagedTv(key, quick = TvRules.DEFAULT_QUICK.map { Quick(TvRules.quickId(), it) }, parents = listOf(me),
             myName = TvRules.clean(app.identity.username, TvRules.MAX_NAME)))
         flush(key)
-        Ui.say("Setting up the TV. It shows the people you choose in a moment.")
+        Ui.say("Setting up the TV. Press Allow on the TV for the microphone.")
     }
 
     /** Changes what the TV shows; the new config goes out a moment after the last change. */
@@ -186,6 +187,9 @@ object TvParent {
         if (tv != null) for (p in newParents) try {
             Tv.bridge(app)?.sendTvRoom(p, TvRules.cardMessage(Contacts.code(tv.name, key, tv.mailbox ?: ""), signed))
         } catch (_: Exception) {}
+        // Parents just taken off: their phones get this config (which no longer lists them) and stop looking after the TV.
+        val gone = removed.remove(key).orEmpty().filter { it !in TvRules.parse(signed).parents }
+        if (gone.isNotEmpty()) { val msg = TvRules.removedMessage(signed); for (p in gone) try { Tv.bridge(app)?.sendTvRoom(p, msg) } catch (_: Exception) {} }
     }
 
     /** Another parent for the TV: someone this phone has as a contact, with a Muninn that manages TVs (k1). */
@@ -196,30 +200,13 @@ object TvParent {
         return null
     }
 
-    /** k6: another parent approved [person] (a reconnect): they look after the TV too. Nobody is taken off. */
-    fun addParentBack(tvKey: String, person: TvPerson) = change(tvKey) { t ->
-        t.copy(parents = (t.parents + person.k).distinct(), reach = (t.reach + person.k).distinct().take(TvRules.MAX_CONTACTS - 1),
-            others = t.others.filter { it.k != person.k } + person)
-    }
-
     /**
-     * k6: 24 hours went by and no parent blocked it, so this phone takes the TV over from its own signed config [cfg]: the next
-     * config lists only this phone as parent (the old parents go), with the same people, messages and settings.
+     * Takes a parent off the TV. From then on they can't change it; they stay on the list of people it can reach.
+     * This phone and the TV (once it has the new config) tell their phone, which stops looking after the TV.
      */
-    fun takeOver(app: Muninn, tvKey: String, cfg: TvConfig) {
-        val me = app.identity.publicKey
-        synchronized(lock) {
-            val t = adopted(app, ManagedTv(tvKey, myName = TvRules.clean(app.identity.username, TvRules.MAX_NAME)), cfg)
-            val old = cfg.parents.toSet() - me
-            put(t.copy(parents = listOf(me), sharedWith = emptyList(), reach = t.reach - old, others = t.others.filter { it.k !in old }))
-        }
-        change(tvKey) { it }
-        Ui.say("You look after ${app.contacts.get(tvKey)?.shown ?: "the Kids' TV"} again.")
-    }
-
-    /** Takes a parent off the TV. From then on they can't change it; they stay on the list of people it can reach. */
     fun removeParent(app: Muninn, tvKey: String, person: String) {
         if (person == app.identity.publicKey) return
+        removed.merge(tvKey, setOf(person)) { x, y -> x + y }
         change(tvKey) { t -> t.copy(parents = t.parents - person, sharedWith = t.sharedWith - person) }
     }
 
@@ -248,14 +235,14 @@ object TvParent {
     fun k2(app: Muninn, key: String): Boolean = "k2" in (app.contacts.get(key)?.caps ?: emptySet())
 
     /**
-     * Room "tvconfig" on a phone that isn't a TV: the TV's {"t":"applied","v":n[,"app"]}, or a card (7.6)
-     * from a contact who invited this person to talk with their kids' TV.
+     * Room "tvconfig" on a phone that isn't a TV: the TV's {"t":"applied","v":n[,"app"]}, its status, "removed" (this
+     * phone is no longer one of its parents), or a card (7.6) from a contact who invited this person to talk with their kids' TV.
      */
     fun handle(app: Muninn, fromKey: String, plain: String): Boolean {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
         if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"), o.optJSONObject("cfg"))
-        if (o.optString("t") == "status") return takeStatus(fromKey, o)
-        TvReconnect.onParent(app, fromKey, o)?.let { return it }
+        if (o.optString("t") == "status") return takeStatus(app, fromKey, o)
+        if (o.optString("t") == "removed") return takeRemoved(app, fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false
@@ -335,19 +322,51 @@ object TvParent {
      * later configs carry it (the last change wins). The TV's clock is never compared with this one's:
      * a level the TV marks "own" is stamped with the time it arrived here.
      */
-    private fun takeStatus(fromKey: String, o: JSONObject): Boolean {
+    private fun takeStatus(app: Muninn, fromKey: String, o: JSONObject): Boolean {
         val s = TvRules.status(o) ?: return false
         var adopt = false
+        var news: String? = null
         synchronized(lock) {
             val t = _tvs.value[fromKey] ?: return true
             if (t.disconnecting) return true
             val now = System.currentTimeMillis()
             adopt = TvRules.adoptMic(s, t.mic, t.micAt, synced = t.applied >= t.v)
+            // The TV's update moved on: said once here (installed, failed, or waiting for Install updates).
+            if (s.update != null && s.update != t.update && t.update.isNotEmpty() && s.update in listOf("needs", "done", "failed")) news = s.update
             put(t.copy(used = s.used, usedAt = now, off = s.off ?: t.off,
                 mic = if (adopt) s.mic else t.mic, micAt = if (adopt) (if (s.own) now else s.ts) else t.micAt,
-                micOnTv = if (adopt) true else t.micOnTv))
+                micOnTv = if (adopt) true else t.micOnTv, update = s.update ?: t.update))
         }
+        news?.let { Ui.say("${app.contacts.get(fromKey)?.shown ?: "Kids' TV"}: ${TvRules.updateText(it)}", it != "done") }
         if (adopt) change(fromKey) { it }
+        return true
+    }
+
+    /**
+     * The TV (or a parent of it) says this phone is no longer one of its parents, with the signed config that
+     * doesn't list it: this phone stops looking after the TV. The TV stays a contact, so the kids can still be
+     * reached if it's on the list.
+     */
+    private fun takeRemoved(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        val tvKey = o.optJSONObject("cfg")?.opt("tv") as? String ?: return false
+        val me = app.identity.publicKey
+        synchronized(lock) {
+            val t = _tvs.value[tvKey] ?: return true
+            val fromTv = fromKey == tvKey
+            if (!fromTv && fromKey !in t.parents) return false
+            // From the TV itself: its config, whoever of its parents signed it. From a parent: signed by one this phone knew,
+            // and not older than what this phone has.
+            TvRules.removedFrom(tvKey, me, if (fromTv) null else t.parents, if (fromTv) 0 else t.applied, o) ?: return false
+            _tvs.value = _tvs.value - tvKey
+            save(app)
+        }
+        flushes.remove(tvKey)?.cancel(false)
+        tries.remove(tvKey)
+        cards.keys.filter { cards[it]?.first == tvKey }.forEach { cards.remove(it) }
+        removed.remove(tvKey)
+        val tvName = app.contacts.get(tvKey)?.shown ?: "the Kids' TV"
+        Ui.say("You're no longer a parent of $tvName.")
+        try { app.notify(tvName, "You're no longer a parent of this TV", tvKey) } catch (_: Exception) {}
         return true
     }
 
@@ -362,13 +381,6 @@ object TvParent {
 
     /** The TV's app said "k7": it takes Auto-update in its config (7.12). */
     fun k7(app: Muninn, key: String): Boolean = "k7" in (app.contacts.get(key)?.caps ?: emptySet())
-
-    /**
-     * Settings calls this when this phone's own "Check for updates automatically" changes. Each TV follows
-     * its own Auto-update switch (on the TV's screen here), so nothing is sent.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun autoUpdateChanged(app: Muninn) {}
 
     /** The parent switched the TV's Auto-update (7.12). */
     fun setUpd(key: String, on: Boolean) = change(key) { it.copy(upd = on) }
@@ -572,7 +584,7 @@ object TvParent {
             .put("micAt", t.micAt).put("micOnTv", t.micOnTv).put("used", t.used).put("usedAt", t.usedAt)
             .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } })
             .put("others", JSONArray().apply { t.others.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
-            .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr).put("upd", t.upd).put("keep", t.keep)
+            .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr).put("upd", t.upd).put("keep", t.keep).put("update", t.update)
             .apply { t.off?.let { put("off", JSONArray(it)) } })
     }
 
@@ -592,7 +604,8 @@ object TvParent {
                 x.optJSONArray("others")?.let { a -> (0 until a.length()).map { a.getJSONObject(it).let { e -> TvPerson(e.getString("k"), e.getString("n"), e.getString("p")) } } } ?: emptyList(),
                 strs(x.optJSONArray("sharedWith")), x.optInt("nr", TvRules.NR_BOTH).coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH),
                 x.optBoolean("upd", autoUpdate), x.optInt("keep", TvRules.MAX_KEEP).coerceIn(TvRules.MIN_KEEP, TvRules.MAX_KEEP),
-                x.optJSONArray("off")?.let { strs(it) })
+                x.optJSONArray("off")?.let { strs(it) },
+                x.optString("update").takeIf { it in TvRules.UPDATE_STATES } ?: "")
         } catch (e: Exception) { null }
     }.toMap()
 }

@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net.call
 import java.util.TreeMap
 
 /**
- * Video and screen share between two c2 apps (shared/docs/protocol-0.6.md 5.8.5 to 5.8.7), the parts without sockets,
+ * Video and screen share between two c2 apps (shared/docs/protocol.md 5.8.5 to 5.8.7), the parts without sockets,
  * codecs or cameras, the same as Huginn's VideoWire (src/call/videowire.cpp) so unit tests cover them:
  *  - a VP8 frame cut into fragments, each the plaintext of one media packet of type 3, sealed with the call's
  *    per-direction keys like audio (so video is end-to-end encrypted too)

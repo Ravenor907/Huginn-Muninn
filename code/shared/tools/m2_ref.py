@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for cap m2 (shared/docs/protocol-0.6.md, section 12): photo albums, video messages, polls and link
-previews, and the test vectors both apps check (shared/vectors/m2-vectors.json). Run it to write the vectors; it checks
+"""Reference for cap m2 (code/shared/docs/protocol.md, section 12): photo albums, video messages, polls and link
+previews, and the test vectors both apps check (code/shared/vectors/m2-vectors.json). Run it to write the vectors; it checks
 every case twice (building, then from the file).
 
 Like m1 there is no new cryptography: polls and previews ride in the payloads of rooms "rich" and "gmsg",
@@ -259,7 +259,7 @@ def verify(v):
 
 
 def main():
-    v = {"note": "cap m2, shared/docs/protocol-0.6.md section 12; written by shared/tools/m2_ref.py",
+    v = {"note": "cap m2, code/shared/docs/protocol.md section 12; written by code/shared/tools/m2_ref.py",
          "limits": {"album": ALBUM_MAX, "videoMs": VIDEO_MAX_MS, "question": QUESTION_MAX, "option": OPTION_MAX,
                     "options": [OPTIONS_MIN, OPTIONS_MAX], "url": URL_MAX, "title": TITLE_MAX, "description": DESC_MAX,
                     "thumb": THUMB_MAX},

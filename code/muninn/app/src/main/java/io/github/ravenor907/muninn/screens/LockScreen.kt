@@ -66,7 +66,6 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         if (left > 0 && s.boot != boot) prefs.edit().putLong("lockAt", elapsed() + left).putInt("lockBoot", boot).apply()
         return left
     }
-    remember { prefs.edit().remove("lockUntil").apply() }   // the wall-clock wait key, unused
     var waitUntil by remember { mutableStateOf(elapsed() + storedLeft()) }
     var now by remember { mutableStateOf(elapsed()) }
     LaunchedEffect(waitUntil) { while (elapsed() < waitUntil) { now = elapsed(); kotlinx.coroutines.delay(500) }; now = elapsed() }
@@ -222,6 +221,29 @@ fun FirstLock(app: Muninn, done: () -> Unit) {
         }
     }
     ask?.let { AskDialog(it) }
+}
+
+/**
+ * First open, after the lock: "What should people call you?", with the random name filled in. Continue keeps what's
+ * typed (Settings › Profile changes it later); Skip keeps the random name.
+ */
+@Composable
+fun FirstName(app: Muninn, done: () -> Unit) {
+    var name by remember { mutableStateOf(app.identity.username) }
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding().imePadding()) {
+        Brand {}
+        Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+            Text("What should people call you?", style = Type.big)
+            Text("Change it any time in Settings.", style = Type.small)
+            Field(name, { name = it.take(24) }, "A name", Modifier.padding(top = 12.dp))
+            androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Skip", Modifier.weight(1f)) { app.identity.nameAsked = true; done() }
+                MButton("Continue", Modifier.weight(1f), Kind.Accent, enabled = name.isNotBlank()) {
+                    saveName(app, name); app.identity.nameAsked = true; done()
+                }
+            }
+        }
+    }
 }
 
 /** The person chose no lock: first open doesn't suggest one again. */

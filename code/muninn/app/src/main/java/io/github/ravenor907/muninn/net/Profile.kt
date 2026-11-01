@@ -21,11 +21,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
 /**
- * Cap p1 (shared/docs/protocol-0.6.md, section 22): profile pictures and status, the parts both apps must agree on.
+ * Cap p1 (shared/docs/protocol.md, section 22): profile pictures and status, the parts both apps must agree on.
  * shared/tools/p1_ref.py is the reference and writes shared/vectors/p1-vectors.json. No Android here, so all of it
  * runs in unit tests.
  *
- *  - room "profile": {t:"profile", v, pic, col}, through the ratchet, once per peer per version. A picture is a
+ *  - room "profile": {t:"profile", v, pic, col, [nm]}, through the ratchet, once per peer per version. A picture is a
  *    256x256 JPEG; a receiver takes at most 24 KB, a sender keeps it at 12 KB or less so one relay event carries it.
  *  - room "live" "active" carries "st" (online, away or dnd) and "cs" (custom status, at most 80 characters);
  *    invisible goes as not active with no "st". Rich.check knows the fields.
@@ -87,7 +87,21 @@ object ProfileWire {
         return pictureOk(b64d(pic) ?: return false)
     }
 
-    fun msg(v: Long, pic: String, col: String): String = JSONObject().put("t", "profile").put("v", v).put("pic", pic).put("col", col).toString()
+    /**
+     * [name]: my chosen name, as "nm", so a new name reaches everyone who already has me (apps that don't know
+     * "nm" ignore it, as they do any other field). Empty: left out.
+     */
+    fun msg(v: Long, pic: String, col: String, name: String = ""): String = JSONObject().put("t", "profile").put("v", v).put("pic", pic).put("col", col)
+        .apply { if (name.isNotBlank()) put("nm", name.trim().take(MAX_NAME)) }.toString()
+
+    const val MAX_NAME = 40
+
+    /** The chosen name a profile message carries ("nm"), or null when it has none or it isn't usable. */
+    fun nameOf(p: JSONObject): String? {
+        val n = (p.opt("nm") as? String)?.trim() ?: return null
+        if (n.isEmpty() || n.length > MAX_NAME || n.any { it.code < 0x20 || it.code == 0x7F }) return null
+        return n
+    }
 
     fun defaultColour(key: String): String {
         val h = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
@@ -163,8 +177,6 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
 
     // ------------------------------------------------------------------ mine
 
-    private fun myVersion() = me.v
-
     fun setStatus(s: String) {
         if (s !in ProfileWire.MY_STATUSES || s == _myStatus.value) return
         _myStatus.value = s
@@ -185,6 +197,11 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         val c = hex.trim().lowercase()
         if (!ProfileWire.colourOk(c) || c == me.col) return
         change(Entry(me.v + 1, c, me.pic))
+    }
+
+    /** My chosen name changed: a new version goes to everyone who has me, carrying it ([ProfileWire.msg]). */
+    fun nameChanged() {
+        change(Entry(me.v + 1, me.col.ifEmpty { ProfileWire.defaultColour(chat.myKey()) }, me.pic))
     }
 
     /** Crops [b] to its centre square, scales it to 256x256 and encodes it small enough to send. False if it can't be. */
@@ -235,13 +252,9 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         return ProfileWire.statusOf(chat.active.value.containsKey(key), s?.first ?: "", key in heard || contacts.get(key)?.caps?.contains(Rich.CAP) == true)
     }
 
-    fun customStatusOf(key: String): String = if (key == "me") _myCustomStatus.value else _statuses.value[key]?.second ?: ""
-
     /** The colour for [key]'s initial disc: the one they sent, else one from their key. */
     fun colourOf(key: String): String = if (key == "me") me.col.ifEmpty { ProfileWire.defaultColour(chat.myKey()) }
         else peers[key]?.col?.ifEmpty { null } ?: ProfileWire.defaultColour(key)
-
-    fun pictureVersion(key: String): Int = _pictures.value[key] ?: 0
 
     /** The picture of [key] ("me" for mine), decoded once and kept, or null when there is none. */
     fun picture(key: String): Bitmap? {
@@ -274,6 +287,8 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         synchronized(lock) {
             val cur = peers[fromKey]
             if (cur != null && !ProfileWire.takes(cur.v, v)) return true
+            // A new chosen name: the contact's name here follows (a nickname set on this phone still shows first).
+            ProfileWire.nameOf(p)?.let { n -> contacts.get(fromKey)?.let { c -> if (c.name != n) contacts.set(c.copy(name = n)) } }
             val e = Entry(v, p.getString("col").lowercase(), bytes)
             peers[fromKey] = e
             bitmaps.remove(fromKey)
@@ -297,19 +312,6 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         publishPictures()
     }
 
-    /** Everything here goes (Erase everything also deletes the files). */
-    fun clearAll() {
-        synchronized(lock) {
-            peers.clear(); sent.clear(); bitmaps.evictAll()
-            me = Entry(0, "", ByteArray(0))
-            dir.deleteRecursively()
-        }
-        heard.clear()
-        _statuses.value = emptyMap()
-        _myStatus.value = "online"; _myCustomStatus.value = ""; _myColour.value = ""
-        publishPictures()
-    }
-
     // ------------------------------------------------------------------ sending
 
     private fun reconcileSoon() {
@@ -327,7 +329,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         if (Move.locked) return
         val mine = me
         if (mine.v == 0L) return
-        val plain = ProfileWire.msg(mine.v, if (mine.pic.isEmpty()) "" else java.util.Base64.getEncoder().encodeToString(mine.pic), mine.col)
+        val plain = ProfileWire.msg(mine.v, if (mine.pic.isEmpty()) "" else java.util.Base64.getEncoder().encodeToString(mine.pic), mine.col, chat.chosenName())
         val blocked = chat.blocked.value
         var changed = false
         for (c in contacts.all.value) {

@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
-/** shared/vectors/d1-vectors.json (cap d1: message limits, shared/docs/protocol-0.6.md section 16). */
+/** shared/vectors/d1-vectors.json (cap d1: message limits, shared/docs/protocol.md section 16). */
 class LimitsTest {
     private val v = JSONObject(javaClass.classLoader!!.getResource("d1-vectors.json")!!.readText())
 

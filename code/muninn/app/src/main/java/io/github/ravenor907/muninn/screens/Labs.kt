@@ -142,7 +142,7 @@ internal fun LabsSection(app: Muninn) {
             if (i == 0) MButton("Stable", m, if (!pre) Kind.Accent else Kind.Normal) { Labs.setPreRelease(app, false) }
             else MButton("Pre-release", m, if (pre) Kind.Accent else Kind.Normal) { Labs.setPreRelease(app, true) }
         }
-        Text(if (pre) "Pre-release builds install automatically." else "Only stable releases install.", style = Type.small)
+        Text(if (pre) "Updates include pre-release builds." else "Updates are stable releases only.", style = Type.small)
         Spacer(Modifier.height(6.dp))
         MenuRow("undo", "Go back to stable") { Labs.goBack(app) }
         MenuRow("info", "Report a bug") { Labs.report(context) }
@@ -168,7 +168,7 @@ internal fun LabsReportScreen(app: Muninn) {
             }
             Field(text, { if (it.length <= LabsWire.MAX_TEXT) text = it }, "What happened?", Modifier.heightIn(min = 120.dp), single = false)
             Text("${text.length} / ${LabsWire.MAX_TEXT}", style = Type.small)
-            Text("Goes encrypted to ${LabsWire.NAME}.", style = Type.small)
+            Text("Sent encrypted to ${LabsWire.NAME}, with the app version, Android version and phone model.", style = Type.small)
         }
         MButton(if (sending) "Sending…" else "Send", Modifier.fillMaxWidth().padding(16.dp), Kind.Accent, enabled = !sending && text.isNotBlank()) {
             sending = true

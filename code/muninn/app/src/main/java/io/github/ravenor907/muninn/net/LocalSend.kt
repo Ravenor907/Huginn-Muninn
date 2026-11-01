@@ -488,7 +488,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
             return
         }
         // Chat envelopes are at most 64 KB (protocol 9); other requests a little JSON. Read as it arrives, never all at once up front.
-        val most = if (r.path == "/api/huginn/v1/message") MAX_CHAT_BODY else MAX_BODY
+        // A linked device's photo and file pieces are bigger: Chat refuses anything that big in another room.
+        val most = if (r.path == "/api/huginn/v1/message") MAX_LINK_BODY else MAX_BODY
         if (length < 0 || length > most) { reply(out, 413); return }
         val body = java.io.ByteArrayOutputStream(minOf(length, 64L * 1024).toInt()).also { b ->
             val buf = ByteArray(16 * 1024)
@@ -781,19 +782,6 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
     }
 
-    // Close-by (Bluetooth / Wi-Fi Direct) transfers report here, so every screen shows them the same way.
-    fun closeStatus(active: Boolean, sending: Boolean, status: String, total: Long) {
-        _transfer.value = if (active) Transfer(true, sending, status, 0, total) else Transfer()
-        NearbyService.hold(context, active)
-    }
-    fun closeProgress(done: Long, total: Long) { _transfer.update { it.copy(done = done, total = total) }; NearbyService.progress() }
-    fun closeItem(name: String, ok: Boolean, from: String = "") {
-        val what = if (ok) "saved to ${Received.place(context)}" else "didn't arrive"
-        history.add(0, Item(name, if (from.isEmpty()) what.replaceFirstChar { it.uppercase() } else "From $from · $what", if (ok) 1f else 0f, !ok))
-        while (history.size > 30) history.removeAt(history.size - 1)
-        _items.value = history.toList()
-    }
-
     /** Files that went out, for the Recent list. */
     fun logSent(names: List<String>, to: String) {
         names.forEach { history.add(0, Item(it, "To $to · sent", 1f, false, sent = true)) }
@@ -851,6 +839,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         const val API = "/api/localsend/v2"
         /** A chat envelope (64 KB, protocol 9) with room to spare; and any other request's JSON (a long file list). */
         const val MAX_CHAT_BODY = 96 * 1024L
+        /** A 192 KB piece of a photo or file for a linked device (room "link"), base64 and sealed. */
+        const val MAX_LINK_BODY = 512 * 1024L
         const val MAX_BODY = 2 * 1024 * 1024L
         const val MAX_CONNECTIONS = 32
         const val PROMPTS = 3

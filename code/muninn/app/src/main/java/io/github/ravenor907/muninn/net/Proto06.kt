@@ -9,7 +9,7 @@ import java.security.SecureRandom
 import java.security.Signature
 
 /**
- * The deterministic parts of the 0.6 protocol that groups need (shared/docs/protocol-0.6.md, sections 1 to 3),
+ * The deterministic parts of the 0.6 protocol that groups need (shared/docs/protocol.md, sections 1 to 3),
  * matching shared/tools/proto06_ref.py byte for byte; shared/vectors/proto06-vectors.json checks it.
  * No Android here, so all of it runs in unit tests.
  */

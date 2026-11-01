@@ -1,0 +1,12 @@
+{
+  "name": "huginn-relay",
+  "private": true,
+  "type": "module",
+  "description": "The relay Worker. CI installs wrangler from package-lock.json with npm ci and deploys this folder.",
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.156.0"
+  }
+}

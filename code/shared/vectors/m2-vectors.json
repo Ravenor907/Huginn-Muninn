@@ -1,5 +1,5 @@
 {
- "note": "cap m2, shared/docs/protocol-0.6.md section 12; written by shared/tools/m2_ref.py",
+ "note": "cap m2, code/shared/docs/protocol.md section 12; written by code/shared/tools/m2_ref.py",
  "limits": {
   "album": 10,
   "videoMs": 60000,

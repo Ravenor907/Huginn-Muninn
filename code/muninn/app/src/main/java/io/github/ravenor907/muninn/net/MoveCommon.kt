@@ -6,7 +6,7 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Moving between Muninn and Huginn (cap x1, shared/docs/protocol-0.6.md 18.4): the two keep their files differently, so the
+ * Moving between Muninn and Huginn (cap x1, shared/docs/protocol.md 18.4): the two keep their files differently, so the
  * move carries one shared form, "@move.json". Between two Muninns the whole backup goes instead (everything, settings too).
  *
  *   {"v":1, "me":{"name","pub","priv","nostr"}, "contacts":[contact as Muninn keeps it], "ratchets":{key: ratchet},
@@ -64,7 +64,7 @@ object MoveCommon {
         ChatCrypto.privateFrom(me.getString("priv"))   // a real key, or nothing happens
         val out = ArrayList<Pair<String, ByteArray>>()
         fun add(name: String, text: String) { out += name to text.toByteArray() }
-        add("secrets.json", JSONObject().put("chatPriv", me.getString("priv")).put("nostrSecret", me.getString("nostr")).toString())
+        add("secrets.json", JSONObject().put("chatPriv", me.getString("priv")).put("chatPub", me.getString("pub")).put("nostrSecret", me.getString("nostr")).toString())
         val contacts = o.optJSONArray("contacts") ?: JSONArray()
         add("contacts.json", JSONArray().apply { for (i in 0 until contacts.length()) put(ChatWire.contactToJson(ChatWire.contactFromJson(contacts.getJSONObject(i)))) }.toString())
         o.optJSONObject("ratchets")?.let { r -> r.keys().forEach { k ->
@@ -90,9 +90,8 @@ object MoveCommon {
         }
         // Settings stay this device's, with the identity and name of the one that moved here.
         val prefs = JSONObject(Backup.prefsJson(a))
-        prefs.put("chatPub", JSONObject().put("t", "s").put("v", me.getString("pub")))
+        prefs.remove("chatPub")
         prefs.put("username", JSONObject().put("t", "s").put("v", me.optString("name").take(24).ifBlank { a.identity.username }))
-        prefs.remove("trusted")
         add(Backup.PREFS_ENTRY, prefs.toString())
         return out
     }

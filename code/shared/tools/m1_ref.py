@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Reference for the messenger features of cap m1 (shared/docs/protocol-0.6.md, section 11): replies, reactions,
+"""Reference for the messenger features of cap m1 (code/shared/docs/protocol.md, section 11): replies, reactions,
 edits, typing and active status, in 1:1 chats and groups, and the test vectors both apps check
-(shared/vectors/m1-vectors.json). Run it to write the vectors; it checks every case twice (building, then from the file).
+(code/shared/vectors/m1-vectors.json). Run it to write the vectors; it checks every case twice (building, then from the file).
 
 Nothing here is new cryptography: every payload is UTF-8 JSON sealed exactly like a private message
 (room "live" always with v1, the others through the ratchet when the contact has it). What both apps must
@@ -198,7 +198,7 @@ def verify(v):
 
 
 def main():
-    v = {"note": "cap m1, shared/docs/protocol-0.6.md section 11; written by shared/tools/m1_ref.py",
+    v = {"note": "cap m1, code/shared/docs/protocol.md section 11; written by code/shared/tools/m1_ref.py",
          "limits": {"text": MAX_TEXT, "emoji": MAX_EMOJI, "id": MAX_ID, "liveWindowMs": LIVE_WINDOW_MS},
          "good": GOOD, "refuse": REFUSE, "reactions": REACTIONS, "edits": EDITS, "fresh": FRESH}
     verify(v)

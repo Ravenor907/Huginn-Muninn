@@ -1,4 +1,4 @@
-# Opus for calls (shared/docs/protocol-0.6.md 5.5). The libopus source is fetched and checked by Gradle
+# Opus for calls (shared/docs/protocol.md 5.5). The libopus source is fetched and checked by Gradle
 # (task fetchOpus in app/build.gradle.kts, pinned version and SHA-256) and passed in as OPUS_SRC.
 cmake_minimum_required(VERSION 3.18)
 project(muninn_native C CXX)

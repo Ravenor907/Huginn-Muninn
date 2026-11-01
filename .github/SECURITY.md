@@ -14,12 +14,12 @@ reporting is the one way in.
 ## What's in scope
 
 - Huginn (Windows and Linux) and Muninn (Android and Google TV), the latest release.
-- Their encryption and the wire protocol ([shared/docs/protocol-0.6.md](shared/docs/protocol-0.6.md)): reading, changing
+- Their encryption and the wire protocol ([code/shared/docs/protocol.md](../code/shared/docs/protocol.md)): reading, changing
   or faking messages, calls, files or contacts you shouldn't be able to.
 - Anything that leaks data the [Privacy](README.md#privacy) section says stays private.
 - The updaters: getting either app to install something that isn't a signed release
-  ([shared/docs/releases.md](shared/docs/releases.md)).
-- The relay Worker in `shared/relay-worker/` and the add page in `site/`.
+  ([code/shared/docs/releases.md](../code/shared/docs/releases.md)).
+- The relay Worker in `code/shared/relay-worker/` and the add page in `code/shared/site/add/`.
 
 Out of scope: problems in Nostr relays, Cloudflare, GitHub, Android or Windows themselves; someone who
 already controls your unlocked device; and denial of service by flooding.

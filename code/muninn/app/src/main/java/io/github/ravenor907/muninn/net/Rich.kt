@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net
 import org.json.JSONObject
 
 /**
- * Cap m1 (shared/docs/protocol-0.6.md, section 11): replies, reactions, edits, typing and active status, the
+ * Cap m1 (shared/docs/protocol.md, section 11): replies, reactions, edits, typing and active status, the
  * parts both apps must agree on. shared/tools/m1_ref.py is the reference and writes shared/vectors/m1-vectors.json.
  *
  *  - room "rich":  a 1:1 message with a reply, {text, re}. Handled like "private" in every other way.

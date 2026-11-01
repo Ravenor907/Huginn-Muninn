@@ -33,6 +33,8 @@ import kotlinx.coroutines.launch
 class CallActivity : ComponentActivity() {
     /** The phone's own lock screen is up: looked at again on every return, focus change and every second while shown. */
     private var keyguard by mutableStateOf(false)
+    /** Kids' TV: the microphone is off, so the call screen says "Ask a parent" instead of Android's prompt. */
+    private var tvAskParent by mutableStateOf(false)
     private var pending: (() -> Unit)? = null
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         val p = pending; pending = null
@@ -81,7 +83,7 @@ class CallActivity : ComponentActivity() {
             val previews = (application as? Muninn)?.identity?.showPreview ?: false
             MuninnTheme {
                 // Kids' TV: the remote-friendly call screen.
-                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { answer(false) }, onClose = { close() })
+                if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { answer(false) }, onClose = { close() }, askParent = tvAskParent)
                 else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
                 }, onAnswer = { answer(false) }, hideName = panic || (!previews && keyguard),
@@ -128,6 +130,12 @@ class CallActivity : ComponentActivity() {
 
     private fun withMic(f: () -> Unit) {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) f()
+        else if (io.github.ravenor907.muninn.tv.TvMic.active) {
+            // Kids' TV: the microphone is asked for when a parent pairs the TV (or from their phone), never by a child's
+            // press. A ring stays up with "Ask a parent" (Not now still declines); a call out doesn't start.
+            tvAskParent = true
+            if (CallManager.call.value == null) finish()
+        }
         else { pending = f; askMic.launch(Manifest.permission.RECORD_AUDIO) }
     }
 

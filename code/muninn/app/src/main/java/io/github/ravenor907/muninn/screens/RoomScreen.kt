@@ -108,7 +108,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             Spacer(Modifier.height(6.dp))
             Text(status(r), style = Type.normal.copy(color = Palette.textMuted))
             if (r.note.isNotEmpty()) Text(r.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
-            // Someone shares their screen (shared/docs/protocol-0.6.md 5.8.7): it shows here, encrypted to this phone like the sound.
+            // Someone shares their screen (shared/docs/protocol.md 5.8.7): it shows here, encrypted to this phone like the sound.
             screen?.let { sc ->
                 Spacer(Modifier.height(16.dp))
                 Text(if (hideNames) "A screen is shared" else "${sc.name} is sharing their screen", style = Type.small.copy(color = Palette.text))

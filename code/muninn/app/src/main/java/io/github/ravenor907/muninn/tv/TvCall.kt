@@ -50,11 +50,12 @@ import kotlinx.coroutines.launch
 
 /**
  * A call on the Kids' TV, made for the remote: one big focused button (Answer when it rings, Hang up
- * during the call), Back declines a ring. A big muted icon shows while the call is muted. The microphone
+ * during the call), Back declines a ring. [askParent]: Answer was pressed with the microphone off, so it says "Ask a parent". A big muted icon shows while the call is muted. The microphone
  * level and noise removal are set from a parent's phone. Shown by CallActivity in kids' mode.
  */
 @Composable
-fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, onClose: () -> Unit) {
+fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, onClose: () -> Unit,
+                 askParent: Boolean = false) {
     val c by CallManager.call.collectAsState()
     val context = LocalContext.current
     val mic = remember { TvAudio.hasMic(context) }
@@ -75,6 +76,8 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
             Text(status(call), style = tvText(26.sp, Palette.textSoft), modifier = Modifier.padding(top = 8.dp))
             if (call.phase != Phase.ENDED) when {
                 !mic -> TvProblemLine("mic", TvWords.NO_MIC)
+                // The microphone is off on this TV: only a parent can turn it on (from their phone).
+                askParent -> TvProblemLine(TvWords.icon(TvWords.ASK_PARENT), TvWords.ASK_PARENT)
                 call.muted -> Row(Modifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                     MIcon("mute", Palette.danger, 72.dp)
                     Text("Muted", style = tvText(30.sp, Palette.danger, FontWeight.SemiBold), modifier = Modifier.padding(start = 14.dp))

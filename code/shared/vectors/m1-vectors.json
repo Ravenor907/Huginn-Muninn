@@ -1,5 +1,5 @@
 {
- "note": "cap m1, shared/docs/protocol-0.6.md section 11; written by shared/tools/m1_ref.py",
+ "note": "cap m1, code/shared/docs/protocol.md section 11; written by code/shared/tools/m1_ref.py",
  "limits": {
   "text": 2000,
   "emoji": 16,

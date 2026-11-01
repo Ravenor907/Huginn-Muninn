@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.security.PrivateKey
 
 /**
- * The deterministic parts of voice rooms and group calls (shared/docs/protocol-0.6.md section 6), free of Android
+ * The deterministic parts of voice rooms and group calls (shared/docs/protocol.md section 6), free of Android
  * so unit tests check them against shared/vectors/proto06-vectors.json, as Huginn's call self-test does:
  *  - room messages {"t","call":"-","g","ch","ts","sig"}, signed with the chat key (domain
  *    "huginn-muninn vroom v1"), and the receiver's checks in the spec's order (6.2)

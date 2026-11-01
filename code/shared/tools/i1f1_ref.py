@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for caps i1 and f1 and linked devices (shared/docs/protocol-0.6.md, sections 13, 14 and 15), and the test
-vectors both apps check (shared/vectors/i1f1-vectors.json). Run it to write the vectors; it checks every case twice
+"""Reference for caps i1 and f1 and linked devices (code/shared/docs/protocol.md, sections 13, 14 and 15), and the test
+vectors both apps check (code/shared/vectors/i1f1-vectors.json). Run it to write the vectors; it checks every case twice
 (building, then from the file).
 
  - i1: what an intro, yes or add looks like, the id of a group-member request, and the 4 emoji for a pair.
@@ -215,7 +215,7 @@ def build():
                       {"code": "Link this: " + code + " (10 minutes)", "read": read_link(code)}],
              "bad": ["MUNINNL1:", "MUNINNL1:!!!", link_code("nope", "", "x", "y"), "MUNINN1:" + code[len(LINK_PREFIX):]]}
 
-    return {"note": "caps i1 and f1 and linked devices, shared/docs/protocol-0.6.md sections 13 to 15; written by shared/tools/i1f1_ref.py",
+    return {"note": "caps i1 and f1 and linked devices, code/shared/docs/protocol.md sections 13 to 15; written by code/shared/tools/i1f1_ref.py",
             "limits": {"chunk": CHUNK, "window": WINDOW, "maxBytes": MAX_BYTES},
             "pair": {"aPriv": b64(a_der), "aPub": ka, "bPub": kb, "sharedHex": pair.hex()},
             "emoji": emoji, "groupId": groups,

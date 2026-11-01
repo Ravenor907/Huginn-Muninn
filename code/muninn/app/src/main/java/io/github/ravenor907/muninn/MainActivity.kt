@@ -107,31 +107,26 @@ class MainActivity : ComponentActivity() {
     private var netStarted = false
 
     private val closePermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) { app.close.start { app.chat.hello() }; app.ble.start(); return@registerForActivityResult }
+        if (granted.values.all { it }) { app.ble.start(); return@registerForActivityResult }
         // Android stops showing the prompt after it's been refused (twice on Android 11 and up). Then the
-        // only way to allow it is Muninn's app settings, so the message on Chat says to tap for that.
+        // only way to allow it is Muninn's app settings, so the row on Chats says to tap for that.
         val refused = granted.filterValues { !it }.keys
         closeBlocked = refused.isNotEmpty() && refused.none { shouldShowRequestPermissionRationale(it) }
-        if (closeBlocked) app.close.blocked() else app.close.denied()
+        app.ble.start()   // says what's missing (Ble.error), for the row on Chats
     }
     private var closeBlocked = false
-    private val autoAsked = mutableSetOf<String>()
 
-    private fun closePerms(): List<String> = when {
-        Build.VERSION.SDK_INT >= 33 -> listOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.NEARBY_WIFI_DEVICES)
-        Build.VERSION.SDK_INT >= 31 -> listOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
-        else -> listOf(Manifest.permission.ACCESS_FINE_LOCATION)
-    } + app.close.missing.value
+    /** Close by is Muninn's own Bluetooth LE, advertising only: Nearby devices on Android 12 and up, nothing before. */
+    private fun closePerms(): List<String> =
+        if (Build.VERSION.SDK_INT >= 31) io.github.ravenor907.muninn.net.Ble.PERMISSIONS.toList() else emptyList()
 
     private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
     /** Starts close-by chat, asking for whatever permission it still needs. Also what tapping the Chat message does. */
     fun askClose() {
-        val need = closePerms().distinct().filterNot { granted(it) }
+        val need = closePerms().filterNot { granted(it) }
         when {
-            need.isEmpty() -> { app.close.start { app.chat.hello() }; app.ble.start() }
+            need.isEmpty() -> app.ble.start()
             closeBlocked -> startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             else -> closePermission.launch(need.toTypedArray())
         }
@@ -269,9 +264,7 @@ class MainActivity : ComponentActivity() {
         netStarted = true
         app.listen()
         io.github.ravenor907.muninn.net.MessageService.start(this)
-        // Android 12 and older only allow looking for nearby phones with Location: never asked for at setup,
-        // only once the person taps "find phones close by" (Nearby on Chats).
-        if (Build.VERSION.SDK_INT >= 33 || closePerms().distinct().all { granted(it) }) askClose() else app.close.offer()
+        askClose()
     }
 
     /** "Block screenshots": also hides Muninn's screen in recent apps. */
@@ -341,9 +334,8 @@ class MainActivity : ComponentActivity() {
         if (autoUpdate) app.updater.checkOnOpen()
         if (app.ready.value) app.net.announce()
         // Back from Muninn's app settings with the permission now allowed: start close-by chat.
-        if (netStarted && !app.close.running && app.close.error.value != null && closePerms().all { granted(it) }) {
+        if (netStarted && app.ready.value && app.ble.error.value == io.github.ravenor907.muninn.net.Ble.PERMISSION_TEXT && closePerms().all { granted(it) }) {
             closeBlocked = false
-            app.close.start { app.chat.hello() }
             app.ble.start()
         }
     }
@@ -395,20 +387,31 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(panic) { if (panic) toList() }
         // Moving to another device (cap x1): locked while it moves, then "Moved to [name]".
         if (io.github.ravenor907.muninn.screens.MoveCover(app)) return
-        if (!ready || uiLocked || panic) { LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }; return }
+        if (!ready || uiLocked || panic) {
+            // Locked again: a linked tablet's own chats are sealed away again too.
+            LaunchedEffect(Unit) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
+            LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }
+            return
+        }
         // A lock is suggested on first open, before anything else (Skip goes without one).
         var locked by remember { mutableStateOf(lockChosen(app) || ciSkip) }
-        if (!locked) { FirstLock(app) { locked = true }; return }
+        // Then, on that same first open, the name others see.
+        var naming by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+        // Last, on a tablet with nothing linked: "Link your phone" (once; Settings › Linked devices has it after).
+        val offerLink: () -> Unit = { if (io.github.ravenor907.muninn.screens.LinkUi.offerFirst(app)) io.github.ravenor907.muninn.screens.LinkUi.companionOpen = true }
+        if (!locked) { FirstLock(app) { locked = true; naming = !app.identity.nameAsked; if (!naming) offerLink() }; return }
+        if (naming) { io.github.ravenor907.muninn.screens.FirstName(app) { naming = false; offerLink() }; return }
+        if (io.github.ravenor907.muninn.screens.LinkUi.companionOpen) {
+            io.github.ravenor907.muninn.screens.LinkYourPhone(app) { io.github.ravenor907.muninn.screens.LinkUi.companionOpen = false }
+            return
+        }
         val request by app.net.request.collectAsState()
-        val offer by app.closeFiles.pendingOffer.collectAsState()
         val apps by io.github.ravenor907.muninn.update.ApkInstall.offers.collectAsState()
         val ask by Ui.ask.collectAsState()
         val toast by Ui.toast.collectAsState()
         LaunchedEffect(Unit) {
             launch { app.net.messages.collect { (ok, msg) -> Ui.say(msg, !ok) } }
             launch { app.chat.notices.collect { Ui.say(it) } }
-            // Nearby Connections named a permission the usual set didn't cover (location on some phones): ask once.
-            launch { app.close.missing.collect { m -> if (m.isNotEmpty() && autoAsked.addAll(m)) askClose() } }
             launch { app.net.pinNeeded.collect { Ui.say("That device asks for a PIN. Turn off its PIN setting in LocalSend to send from Muninn.", true) } }
         }
         LaunchedEffect(toast) { if (toast != null) { delay(4500); Ui.toast.value = null } }
@@ -452,16 +455,6 @@ class MainActivity : ComponentActivity() {
                 text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
                 confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.net.accept() } } },
                 dismissButton = { MButton("Decline") { app.net.decline() } },
-            )
-        }
-        offer?.let { r ->
-            AlertDialog(
-                onDismissRequest = { app.closeFiles.decline() },
-                containerColor = Palette.panel,
-                title = { Text("${r.from} wants to send ${if (r.count == 1) "a file" else "${r.count} files"}", style = Type.big) },
-                text = { Text("${r.names} (${LocalSend.size(r.size)}), from close by. They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
-                confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.closeFiles.accept() } } },
-                dismissButton = { MButton("Decline") { app.closeFiles.decline() } },
             )
         }
         // An app that came to this TV (ApkInstall): asked about here first, then Android asks too.

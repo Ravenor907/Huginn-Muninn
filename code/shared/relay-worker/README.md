@@ -7,14 +7,16 @@ Files:
 
 - `worker.js`: the Worker, and the `RelayLimits` object that keeps the daily counts.
 - `wrangler.toml`: the Worker's name, the `LIMITS` binding and the storage setup, for `wrangler deploy`.
-- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `20 tests passed`.
+- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `21 tests passed`.
+- `package.json` and `package-lock.json`: the exact wrangler version the deploy installs (`npm ci`).
 
 ## How it gets to Cloudflare
 
 Each release (a push to main that changes `code/VERSION`) deploys this folder to the Worker `huginn-relay`
-(`https://huginn-relay.ravenor907.workers.dev`), after every check has passed. Test builds never touch it.
-The deploy keeps the Worker's secrets. Without the two GitHub secrets below, the release still goes out
-and only shows a warning that the Worker was not deployed.
+(`https://huginn-relay.ravenor907.workers.dev`), in its own job after the release is out. Test builds and betas
+never touch it. The deploy job can only read the repository, installs wrangler from `package-lock.json` and keeps the
+Worker's secrets. Without the two GitHub secrets below, or if the deploy fails, the release still stands and the
+run shows a warning.
 
 ## Setup steps
 
@@ -46,46 +48,59 @@ dash.cloudflare.com and from GitHub. If a button has a slightly different name, 
 
 ### D. Make the deploy token
 
+It may only edit Workers on your one account, nothing else.
+
 15. Click the person icon at the top right, then **My Profile**.
-16. Click **API Tokens**.
-17. Click **Create Token**.
-18. Next to **Edit Cloudflare Workers**, click **Use template**. (It includes **Workers Scripts: Edit**.)
-19. Under **Account Resources**, pick your account.
-20. Click **Continue to summary**, then **Create Token**.
-21. Copy the token into your note. This is your `CLOUDFLARE_API_TOKEN`. It is shown only once.
+16. Click **API Tokens**, then **Create Token**.
+17. Next to **Create Custom Token**, click **Get started**.
+18. Name it `huginn-relay deploy`.
+19. Under **Permissions**, pick **Account**, **Workers Scripts**, **Edit**. Add no other rows.
+20. Under **Account Resources**, pick **Include** and your account.
+21. Click **Continue to summary**, then **Create Token**.
+22. Copy the token into your note. This is your `CLOUDFLARE_API_TOKEN`. It is shown only once.
 
 ### E. Add the two GitHub secrets
 
-22. Open the repository on github.com and click **Settings**.
-23. Click **Secrets and variables**, then **Actions**.
-24. Click **New repository secret**. Name `CLOUDFLARE_API_TOKEN`, paste its value, click **Add secret**.
-25. Click **New repository secret** again. Name `CLOUDFLARE_ACCOUNT_ID`, paste its value, click **Add secret**.
-26. The next release deploys the Worker.
+23. Open the repository on github.com and click **Settings**.
+24. Click **Secrets and variables**, then **Actions**.
+25. Click **New repository secret**. Name `CLOUDFLARE_API_TOKEN`, paste its value, click **Add secret**.
+26. Click **New repository secret** again. Name `CLOUDFLARE_ACCOUNT_ID`, paste its value, click **Add secret**.
+27. The next release deploys the Worker.
 
 ### F. Add the three Worker secrets
 
 Do this once the Worker exists (after the first release with the GitHub secrets).
 
-27. In Cloudflare, click **Workers & Pages**, then `huginn-relay`.
-28. Click **Settings**.
-29. Find **Variables and Secrets** and click **Add**.
-30. Set **Type** to **Secret**, name `TURN_KEY_ID`, paste its value from your note.
-31. Add a Secret named `TURN_KEY_API_TOKEN` with its value.
-32. Add one more Secret named `APP_SECRET` with its value.
-33. Click **Deploy**.
+28. In Cloudflare, click **Workers & Pages**, then `huginn-relay`.
+29. Click **Settings**.
+30. Find **Variables and Secrets** and click **Add**.
+31. Set **Type** to **Secret**, name `TURN_KEY_ID`, paste its value from your note.
+32. Add a Secret named `TURN_KEY_API_TOKEN` with its value.
+33. Add one more Secret named `APP_SECRET` with its value.
+34. Click **Deploy**.
 
 ### G. Check it works
 
-34. Open `https://huginn-relay.ravenor907.workers.dev/health` in a browser.
-35. You should see `{"ok":true}`.
-36. The Worker address and `APP_SECRET` go into the apps' constants files (see `shared/docs/relay.md`).
+35. Open `https://huginn-relay.ravenor907.workers.dev/health` in a browser.
+36. You should see `{"ok":true}`.
+37. The Worker address and `APP_SECRET` go into the apps' constants files (see `code/shared/docs/relay.md`).
+
+### H. Turn on the usage alert (required)
+
+TURN data is billed per GB relayed. This alert is how you hear about unexpected traffic.
+
+38. In Cloudflare, click **Notifications** (left sidebar or account menu).
+39. Click **Add**.
+40. Pick **Usage Based Billing**.
+41. Pick **Realtime** (TURN) as the product, and a limit you are happy to pay each month.
+42. Add your email, then click **Save**.
 
 ## Good to know
 
 - Limits: each app install gets at most 30 logins a day, each internet address at most 60 a day (a home
   shares one address, so this is a few installs' worth), and everyone together at most 3000 a day.
-  An IPv6 address counts by its first half (its /64), which is one home or one phone, so one home can't
-  get around the cap by changing the rest. The day resets at midnight UTC. When a limit is hit the Worker
+  An IPv6 address counts by its /48, the most one home or phone line is usually given, so one customer can't
+  get around the cap by moving between their own addresses. The day resets at midnight UTC. When a limit is hit the Worker
   answers 429.
 - The counts live in one small storage object at Cloudflare (`RelayLimits`, bound as `LIMITS`). Each login
   is checked and counted in one step inside it, so logins at the same moment can't go over a limit.
@@ -99,8 +114,8 @@ Do this once the Worker exists (after the first release with the GitHub secrets)
   requests and 100,000 rows written a day. The 3000 a day cap uses at most 3000 requests of each kind and
   about 18,000 rows, so 500 users fit with room to spare.
 - Each login lasts 30 minutes. The apps ask for a fresh one for a call when less than 5 minutes are left.
-- TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage.
-- Optional: in **Notifications** (left sidebar or account menu), add a usage or billing alert, so you hear
-  about unexpected TURN traffic.
-- To deploy by hand from this folder: `npx wrangler@4.156.0 deploy` (needs Node 22 or newer and a
+- A request body over 1 KB is refused (413) before it is read.
+- TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage; step H's alert
+  emails you when usage passes the limit you chose.
+- To deploy by hand from this folder: `npm ci`, then `npx wrangler deploy` (needs Node 22 or newer and a
   Cloudflare login).

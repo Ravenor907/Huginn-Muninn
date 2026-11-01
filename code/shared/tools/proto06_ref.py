@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for the deterministic parts of the Huginn/Muninn 0.6 protocol (shared/docs/protocol-0.6.md),
-and the test vectors both apps are checked against (shared/vectors/proto06-vectors.json). Run it to
+"""Reference for the deterministic parts of the Huginn/Muninn protocol (code/shared/docs/protocol.md),
+and the test vectors both apps are checked against (code/shared/vectors/proto06-vectors.json). Run it to
 regenerate the vectors; it checks every round trip and every expected rejection as it goes.
 
 Covers:
@@ -11,7 +11,7 @@ Covers:
   - call: offer/answer signatures, key derivation, epoch keys, media packet seal/open, replay window
   - kids' TV: config and disconnect, signature and acceptance
 
-Same conventions as shared/tools/ratchet_ref.py: P-256, public keys as base64 SubjectPublicKeyInfo DER,
+Same conventions as code/shared/tools/ratchet_ref.py: P-256, public keys as base64 SubjectPublicKeyInfo DER,
 HKDF-SHA256, AES-256-GCM. Signatures in the vectors use RFC 6979 (deterministic) so this script
 always writes the same file; the apps may sign with random k and only have to verify.
 """
@@ -24,7 +24,7 @@ from cryptography.exceptions import InvalidSignature, InvalidTag
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ratchet_ref import b64, pub_der, load_pub, priv_from_int, hkdf, shared_key  # noqa: E402
 
-# ------------------------------------------------------------------ limits (shared/docs/protocol-0.6.md, "Size limits")
+# ------------------------------------------------------------------ limits (code/shared/docs/protocol.md, "Size limits")
 
 MAX_MEMBERS = 50
 MAX_CHANNELS = 20
@@ -204,7 +204,7 @@ def seal_packet(root, direction, tag, ptype, seq, ts, payload):
     if len(pkt) > MAX_PACKET: raise ValueError("packet too big")
     return pkt
 
-# ---- call extras (cap c2, shared/docs/protocol-0.6.md 5.8)
+# ---- call extras (cap c2, code/shared/docs/protocol.md 5.8)
 VIDEO_HEADER = 6
 VIDEO_MAX_FRAGMENT = MAX_PACKET - HEADER_LEN - 16 - VIDEO_HEADER   # 1166
 
@@ -639,7 +639,7 @@ def main():
     }
 
     vectors = {
-        "about": "Huginn/Muninn 0.6 test vectors (shared/docs/protocol-0.6.md), made by shared/tools/proto06_ref.py. Static keys A and B are "
+        "about": "Huginn/Muninn test vectors (code/shared/docs/protocol.md), made by code/shared/tools/proto06_ref.py. Static keys A and B are "
                  "those of chat-vectors.json; C is the P-256 key with private value 0x33 repeated 32 times, TV 0x44 repeated "
                  "32 times. Call ephemeral keys: offerer (A) 0x3001, answerer (B) 0x4001. Signatures here are RFC 6979 "
                  "(deterministic) so the file never changes; apps may sign with random k and must only verify. 'signed' is "

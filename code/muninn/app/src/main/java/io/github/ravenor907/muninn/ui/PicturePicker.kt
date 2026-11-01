@@ -123,16 +123,16 @@ fun PicturePicker(onDone: () -> Unit) {
                 }
                 Line("Take a photo", "With Muninn's camera", icon = "video") { camera = true }
                 Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {
-                    Text("Use my initial and a colour", style = Type.normal.copy(color = Palette.text))
+                    Text("Use my initial and a color", style = Type.normal.copy(color = Palette.text))
                     // Wraps onto a second line when six don't fit; each is a full 48dp touch target.
                     FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Palette.MY_COLOURS.forEach { hex ->
+                        Palette.MY_COLORS.forEach { hex ->
                             val on = !hasPicture && myColour.equals(hex, ignoreCase = true)
                             val c = Palette.parse(hex) ?: Palette.goldTint
                             Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(c)
                                 .border(if (on) 3.dp else 1.dp, if (on) Palette.goldBright else Palette.line, CircleShape)
                                 .clickable(role = Role.RadioButton) { app.profile.setMyColour(hex); if (hasPicture) app.profile.clearMyPicture(); onDone() }
-                                .semantics { selected = on; contentDescription = "${colourName(hex)} with your initial" },
+                                .semantics { selected = on; contentDescription = "${Palette.myColorName(hex)} with your initial" },
                                 contentAlignment = Alignment.Center) {
                                 // Sized to the disc, so the initial stays inside it at any font size.
                                 val letter = with(androidx.compose.ui.platform.LocalDensity.current) { 18.dp.toSp() }
@@ -149,10 +149,6 @@ fun PicturePicker(onDone: () -> Unit) {
             }
         }
     }
-}
-
-private fun colourName(hex: String) = when (hex.uppercase()) {
-    "#C9A964" -> "Gold"; "#3D5A80" -> "Blue"; "#7A4E3A" -> "Copper"; "#4E7A4E" -> "Green"; "#6B4E8A" -> "Heather"; else -> "Grey"
 }
 
 /**

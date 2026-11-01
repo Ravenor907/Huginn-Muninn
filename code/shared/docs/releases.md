@@ -29,7 +29,8 @@ The project signs every release file with its own Ed25519 key. No outside compan
   <the file's SHA-256, lowercase hex>
   ```
 
-  The release job signs both and checks both against `release-key.pem` before publishing.
+  The release job signs both with `code/shared/tools/sign-release.sh` and checks both against `release-key.pem`
+  before publishing. If any of the three downloads is missing, it fails and nothing is published.
 
 Huginn (Windows and Linux) and Muninn install an update only when all are true:
 
@@ -41,8 +42,8 @@ Huginn (Windows and Linux) and Muninn install an update only when all are true:
 
 Otherwise they say so and install nothing. Because the version is signed, an older release file can't be posted
 again under a newer tag to take anyone back to it. Copies that check only the `.sig` keep updating, since every
-release still carries it. `shared/tools/release_sig_ref.py` is the reference and writes
-`shared/vectors/release-sig-vectors.json` (`versioned` and `newer`); Muninn checks it in `ReleaseSigTest`, Huginn in
+release still carries it. `code/shared/tools/release_sig_ref.py` is the reference and writes
+`code/shared/vectors/release-sig-vectors.json` (`versioned` and `newer`); Muninn checks it in `ReleaseSigTest`, Huginn in
 `--release-sig-selftest`.
 
 ## Pre-releases
@@ -51,13 +52,13 @@ Stable releases are versions like `0.98` (`code/VERSION`). Every push to the `be
 labelled `<next> beta <n>`, for example `0.99 beta 12`: `<next>` is `code/BETA` and `<n>` the CI run number.
 
 - **Order.** The number first; for the same number a stable release is newer than any of its betas, and betas
-  compare by `<n>`: 0.98 < 0.99 beta 3 < 0.99 beta 7 < 0.99. A test build (`0.3 Test 1`) sorts like a beta.
+  compare by `<n>`: 0.98 < 0.99 beta 3 < 0.99 beta 7 < 0.99.
   `release_sig_ref.py` (`order`) is the reference; the `newer` vectors include betas.
 - **One pre-release.** The beta job replaces one GitHub pre-release with the fixed tag `beta` on every push. It holds
   `Huginn.flatpak`, `Huginn-Windows.zip` and `Muninn.apk`, each with `.sig` and `.vsig`, and `version.txt`: the
   label, with no newline at the end. Each `.vsig` signs the text above with the label as its version line
-  (`0.99 beta 12`). The beta job signs with the same key and the same checks as the release job, and never deploys
-  the relay. The pre-release is never marked latest.
+  (`0.99 beta 12`). The beta job signs with the same script, key and checks as the release job, needs the same three
+  downloads and the Muninn release keystore, and never deploys the relay. The pre-release is never marked latest.
 - **The channel.** In Labs mode, Settings has an update channel: Stable or Pre-release. On Stable an app never looks
   at the `beta` tag. On Pre-release it also reads
   `https://github.com/Ravenor907/Huginn-Muninn/releases/download/beta/version.txt` and installs whichever of the

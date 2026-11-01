@@ -52,7 +52,6 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.AppFiles
-import io.github.ravenor907.muninn.net.Close
 import io.github.ravenor907.muninn.net.LocalSend
 import io.github.ravenor907.muninn.net.Received
 import io.github.ravenor907.muninn.ui.Bar
@@ -127,7 +126,6 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
     val scanning by app.net.scanning.collectAsState()
     val error by app.net.error.collectAsState()
     val direct by app.direct.state.collectAsState()
-    val closePeers by app.close.list.collectAsState()
     var showDirect by remember { mutableStateOf(false) }
     var copying by remember { mutableStateOf(false) }
     var pickingApp by remember { mutableStateOf(false) }
@@ -156,9 +154,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
     }
     fun pick() { try { picker.launch(arrayOf("*/*")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } }
 
-    val targets = closePeers.filter { it.connected }.map { p: Close.Peer ->
-        Target("close-" + p.endpoint, p.name, "phone", "Close by") { files -> app.closeFiles.send(p, files) }
-    } + devices.map { d ->
+    val targets = devices.map { d ->
         val icon = when (d.type) { "mobile" -> "phone"; "server", "headless" -> "server"; else -> "network" }
         Target(d.id, d.alias, icon, d.app?.replaceFirstChar { it.uppercase() } ?: "LocalSend") { files -> app.net.send(d.id, files) }
     }
@@ -199,7 +195,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
                 Text("${LocalSend.size(transfer.done)} of ${LocalSend.size(transfer.total)}", style = Type.small, modifier = Modifier.padding(top = 6.dp))
                 if (transfer.sending) MButton("Stop sending", Modifier.padding(top = 8.dp)) { app.net.cancelSend() }
             }
-            Label("Close by") {
+            Label("Nearby") {
                 Text(if (scanning) "Looking…" else "Look again", style = noteStyle.copy(color = if (scanning) Palette.textFaint else Palette.gold),
                     modifier = Modifier.clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = Role.Button, enabled = !scanning) { app.net.refresh() }
                         .padding(horizontal = 8.dp, vertical = 10.dp))

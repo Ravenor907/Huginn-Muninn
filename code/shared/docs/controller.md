@@ -46,7 +46,7 @@ the power button (lock or close). LB steps through them. Calls show in their cha
 | Page | A | X or LT | Y |
 |---|---|---|---|
 | Chats list | Open (a folder: fold or unfold) | The person's or folder's menu | |
-| A chat | Write (Yes on a Keep in touch question) | A picked message's options, otherwise the person's menu | Hold to talk |
+| A chat | Write (Yes on a Keep in touch question) | A picked message's options, otherwise the person's menu | Hold to record |
 | Typing a message | Send | The box's options (emoji, pictures, a file) | Keyboard |
 | A group's channels | Open or join | The group's menu | |
 | A group's members | The member's menu | The member's menu | |
@@ -54,9 +54,21 @@ the power button (lock or close). LB steps through them. Calls show in their cha
 | Files | Send files, or send to the highlighted device | Look again, Direct connect, Clear | Look again |
 | Settings | Open, or change the highlighted row | | |
 
+While Y is held in a chat the voice message records, and the legend says "Let go: send" and "B: cancel": letting go
+of Y sends it, B throws it away. Up from the first message in a chat reaches its header: Left and Right pick Call,
+Video (when they can take video) or the menu, A presses it, Down or B goes back to the messages.
+
+A phone's chats on this device (Settings › Linked devices): Up and Down pick a chat, A writes through the phone, Right
+goes into its messages (Up and Down pick one, A plays a voice message or saves a photo, video or file), X asks the phone
+for its chats again, B goes back.
+
 In Settings › About, A on the raven ten times turns Labs mode on or off. Labs adds Report a bug (also in the Chats
 list's menu): the D-pad moves between Include screenshot, the text and Send, A uses the highlighted one, B closes.
 Labs reports (on the Labs computer, in the same menu): Up and Down pick a report, A replies, X deletes, B closes.
+
+Link your phone (first open, and Settings › Linked devices › Link my phone) shows a QR code for Muninn to scan, then
+the 4 emoji to compare, then Linked: the D-pad moves between the buttons, A presses the highlighted one, and B goes
+back (Skip on first open, Later while the emoji wait, Done once linked).
 
 The pattern lock works with the D-pad: move to a dot, A starts there, move on through the dots, A again when done. B starts over.
 While setting a lock, LB switches between Pattern and Password.

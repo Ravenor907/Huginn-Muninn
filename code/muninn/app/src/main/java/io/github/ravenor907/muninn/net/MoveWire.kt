@@ -15,7 +15,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Moving to another device (cap x1, shared/docs/protocol-0.6.md section 18), the parts with no Android in them, so the tests
+ * Moving to another device (cap x1, shared/docs/protocol.md section 18), the parts with no Android in them, so the tests
  * check them against shared/tools/p95_ref.py. Huginn's move.cpp is the same.
  *
  * The new device shows a code: MUNINNM1:<base64url of {"v":1, "a":[its "ip:port" on the home Wi-Fi], "e": a one-off

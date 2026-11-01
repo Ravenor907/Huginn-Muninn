@@ -152,8 +152,6 @@ object CallManager {
      */
     fun trusted(k: String) = when { k in trustOn -> true; k in trustOff -> false; else -> inFamily(k) }
 
-    /** "On (Family folder)", "On" or "Off", for the contact menu. */
-    fun trustText(k: String) = when { k in trustOn -> "On"; k in trustOff -> "Off"; inFamily(k) -> "On (Family folder)"; else -> "Off" }
 
     fun setTrusted(k: String, on: Boolean) {
         trustOn.remove(k); trustOff.remove(k)
@@ -421,6 +419,8 @@ object CallManager {
     private fun addLog(l: Log) {
         _history.value = (listOf(l) + _history.value.filterNot { it.id == l.id }).take(MAX_HISTORY)
         app?.let { save(it) }
+        // A missed call: its chat moves up (the list sorts by it) and stays unread until opened.
+        if (!l.outgoing && l.result == "missed") try { app?.chat?.flags?.markUnread(l.peerKey, true) } catch (_: Exception) {}
     }
 
     private fun save(a: Muninn) {

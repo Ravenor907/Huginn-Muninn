@@ -9,7 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Labs: pre-release ordering (shared/docs/releases.md) and the report's "lb" field (protocol-0.6.md, "Labs"). */
+/** Labs: pre-release ordering (shared/docs/releases.md) and the report's "lb" field (protocol.md, "Labs"). */
 class LabsTest {
     @Test
     fun betasSortBetweenReleases() {
@@ -80,5 +80,25 @@ class LabsTest {
         assertEquals("Huginn Muninn Labs", LabsWire.NAME)
         assertEquals(64, LabsWire.MAILBOX.length)
         assertTrue(LabsWire.KEY.startsWith("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE"))
+    }
+
+    @Test
+    fun reportCarriesNoDeviceId() {
+        val lb = LabsWire.info("muninn", "1.0", "Android 15", "Pixel 9")
+        val o = LabsWire.envelope("private", "KEY", "Raven 1234", "m".repeat(64), "id1", lb)
+        assertEquals(setOf("room", "fromKey", "fromName", "mailbox", "id", LabsWire.FIELD), o.keys().asSequence().toSet())
+        assertFalse(o.has("fromId"))
+        assertEquals(setOf("app", "v", "os", "model"), o.getJSONObject(LabsWire.FIELD).keys().asSequence().toSet())
+    }
+
+    @Test
+    fun labsMayReplyFor30DaysAfterTheLastReport() {
+        val day = 86_400_000L
+        val sent = 1_000_000_000_000L
+        assertFalse(LabsWire.replyOpen(0L, sent))
+        assertTrue(LabsWire.replyOpen(sent, sent))
+        assertTrue(LabsWire.replyOpen(sent, sent + 30 * day - 1))
+        assertFalse(LabsWire.replyOpen(sent, sent + 30 * day))
+        assertFalse(LabsWire.replyOpen(sent, sent - 1))
     }
 }

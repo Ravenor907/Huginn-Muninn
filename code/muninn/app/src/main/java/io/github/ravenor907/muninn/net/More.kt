@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Cap m2 (shared/docs/protocol-0.6.md, section 12): photo albums, video messages, polls and link previews, the parts
+ * Cap m2 (shared/docs/protocol.md, section 12): photo albums, video messages, polls and link previews, the parts
  * both apps must agree on. shared/tools/m2_ref.py is the reference and writes shared/vectors/m2-vectors.json.
  *
  *  - Albums: a photo piece's clear fields "al" (album id), "ai" (its place), "an" (how many). Anyone may get them;

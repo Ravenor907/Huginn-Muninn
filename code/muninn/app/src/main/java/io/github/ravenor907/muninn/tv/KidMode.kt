@@ -45,7 +45,7 @@ object KidMode {
         mode?.let { return it == "kids" }
         if (!isTv(app)) return false
         if (app.vault.hasPassword) return decide(app, "normal")
-        // No password but not open: the vault's key store key is gone. TvRoot starts the TV over.
+        // No password but not open: the vault's data key file is gone. TvRoot starts the TV over.
         if (!app.ready.value) return true
         return decide(app, if (app.contacts.all.value.isEmpty()) "kids" else "normal")
     }
@@ -83,9 +83,9 @@ data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? 
                     val nrLocal: Int? = null)
 
 /**
- * The TV side of protocol 0.6 section 7: pairing, taking configs, the people it may talk to, and
- * disconnect. Everything is kept in the vault, whose key on a TV is wrapped only by Android's key store:
- * no password, so the TV opens straight to the kids' screen and never asks anyone to sign in.
+ * The TV side of shared/docs/protocol.md section 7: pairing, taking configs, the people it may talk to, and
+ * disconnect. Everything is kept in the vault in open mode (its data key in Muninn's own private files, no
+ * password), so the TV opens straight to the kids' screen and never asks anyone to sign in.
  */
 object KidTv {
     private const val FILE = "tv-kids.json"
@@ -109,6 +109,7 @@ object KidTv {
         val nr = if (o.has("nrLocal")) o.optInt("nrLocal").coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH) else null
         _state.value = KidState(parents, cfg, local, o.optLong("micAt"), nr)
         if (KidMode.on(app)) tune(_state.value)
+        setupAsk.value = parents.isNotEmpty() && prefs(app).getBoolean(SETUP_ASK, false)
     }
 
     /** The microphone level and noise removal (the TV's own, else the parent's) take effect on this TV. */
@@ -124,6 +125,21 @@ object KidTv {
      */
     val allowAsk = MutableStateFlow<String?>(null)
 
+    /**
+     * A parent just paired this TV: the kids' screen asks for the microphone and notifications at once, while
+     * the parent is still at the TV, so a child never meets Android's prompt. Kept until asked (a restart asks then).
+     */
+    val setupAsk = MutableStateFlow(false)
+    private const val SETUP_ASK = "setupAsk"
+
+    /** The setup prompts came up: not asked again. */
+    fun setupAsked(context: Context) {
+        setupAsk.value = false
+        prefs(context).edit().putBoolean(SETUP_ASK, false).apply()
+    }
+
+    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences("muninn-tv", Context.MODE_PRIVATE)
+
     private fun save(app: Muninn, s: KidState) {
         val o = JSONObject().put("parents", JSONArray(s.parents))
         s.cfg?.let { o.put("cfg", it.raw) }
@@ -134,6 +150,9 @@ object KidTv {
 
     /** The TV's permissions changed (one was turned on or off): its parents' phones are told, with the status. */
     fun permsChanged(app: Muninn) { if (_state.value.cfg != null) statusSoon(app) }
+
+    /** The TV's update moved on (waiting, installing, done, failed): its parents' phones are told, with the status. */
+    fun updateChanged(app: Muninn) { if (_state.value.cfg != null) statusSoon(app) }
 
     private val statusTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-status").apply { isDaemon = true } }
     @Volatile private var statusDue: java.util.concurrent.ScheduledFuture<*>? = null
@@ -150,7 +169,7 @@ object KidTv {
         val b = Tv.bridge(app) ?: return
         val ts = if (s.micLocal != null) s.micAt else cfg.ts
         val off = TvUpdate.needs(app).map { it.id }.filter { it in TvRules.PERMS }
-        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null, off = off)
+        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null, off = off, update = TvUpdate.state.value.code)
         for (k in to ?: s.parents) if ("k3" in (app.contacts.get(k)?.caps ?: emptySet())) try { b.sendTvRoom(k, msg) } catch (_: Exception) {}
     }
 
@@ -186,17 +205,15 @@ object KidTv {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
         val me = app.identity.publicKey
         val s = _state.value
-        // k6: a parent reconnecting after a wipe (TvReconnect).
-        if (s.parents.isNotEmpty()) TvReconnect.onTv(app, fromKey, mailbox, o, s.parents, s.cfg?.raw)?.let { return it }
         when (o.optString("t")) {
             "config" -> {
                 val new = o.optJSONObject("cfg") ?: return false
-                val parents = if (s.parents.isEmpty()) {
+                // A parent taken off the TV whose phone still sends its config: told again that they were removed.
+                if (s.parents.isNotEmpty() && fromKey !in s.parents && new.optString("by") !in s.parents) { tellRemoved(app, fromKey); return false }
+                val pairing = s.parents.isEmpty()
+                val parents = if (pairing) {
                     // Pairing: only from the one who scanned a code this TV showed in the last hour, signing for themselves.
                     if (!inviteOk || new.opt("by") != fromKey) return false
-                    listOf(fromKey)
-                } else if (TvReconnect.orphanFrom(fromKey) && new.opt("by") == fromKey) {
-                    // k6: 24 hours and no parent blocked it; the one who scanned "Connect a parent" signs for themselves.
                     listOf(fromKey)
                 } else s.parents
                 val (ok, _) = TvRules.accept(me, parents, s.cfg?.raw, new)
@@ -210,7 +227,11 @@ object KidTv {
                 }
                 val cfg = try { TvRules.parse(new) } catch (e: Exception) { return false }
                 KidMode.markPaired(app)
+                // Parents this config takes off: their phones stop looking after the TV (sent while they're still contacts).
+                if (!pairing) for (k in TvRules.dropped(s.parents, cfg.parents)) send(app, k, TvRules.removedMessage(cfg.raw))
                 apply(app, cfg, fromKey, mailbox)
+                // Just paired: the microphone and notifications are asked for now, while the parent is at the TV.
+                if (pairing) { prefs(app).edit().putBoolean(SETUP_ASK, true).apply(); setupAsk.value = true }
                 // k8 (7.13): how long messages stay on the TV, as the parent set it.
                 cfg.keep?.let { d ->
                     val ms = TvRules.keepMs(d)
@@ -231,7 +252,6 @@ object KidTv {
                     if (!cfg.calls || !approved(c.peerKey)) io.github.ravenor907.muninn.net.call.CallManager.hangup()
                 }
                 answer(app, cfg.parents, cfg.v, cfg.raw)
-                TvReconnect.configured(cfg.parents)
                 statusSoon(app)
                 true
             }
@@ -245,6 +265,7 @@ object KidTv {
             }
             "usage" -> {
                 // k3 (7.7): a parent's phone asks how much room Muninn takes and which level is in use.
+                if (s.cfg != null && fromKey !in s.parents) { tellRemoved(app, fromKey); return false }
                 if (s.cfg == null || fromKey !in s.parents) return false
                 TvStorage.later { sendStatus(app, listOf(fromKey)) }
                 true
@@ -298,7 +319,7 @@ object KidTv {
         }
         for (p in cfg.contacts) upsert(app, p.k, p.n, p.p.takeIf { it.length == 64 })
         for (k in cfg.parents) if (cfg.contacts.none { it.k == k })
-            upsert(app, k, app.contacts.get(k)?.name ?: "Parent", if (k == fromKey) mailbox else TvReconnect.mailboxFor(k))
+            upsert(app, k, app.contacts.get(k)?.name ?: "Parent", if (k == fromKey) mailbox else null)
     }
 
     private fun upsert(app: Muninn, key: String, name: String, mailbox: String?) {
@@ -306,6 +327,18 @@ object KidTv {
         if (c == null) app.contacts.put(Contact(key, name, mailbox, verified = true))
         else app.contacts.set(c.copy(name = name, mailbox = mailbox ?: c.mailbox, nickname = null))
     }
+
+    /**
+     * Someone on the TV's list who isn't a parent (any more) asked for a parent's thing: the TV's config, which
+     * doesn't list them, so their phone stops looking after the TV. Never to anyone off the list.
+     */
+    private fun tellRemoved(app: Muninn, to: String) {
+        val cur = _state.value.cfg ?: return
+        if (to in cur.parents || cur.contacts.none { it.k == to }) return
+        send(app, to, TvRules.removedMessage(cur.raw))
+    }
+
+    private fun send(app: Muninn, to: String, msg: String) { try { Tv.bridge(app)?.sendTvRoom(to, msg) } catch (_: Exception) {} }
 
     /** "applied" to [to], with the TV's signed config [cfg] so every parent's phone sees what the TV runs. */
     private fun answer(app: Muninn, to: List<String>, v: Long, cfg: JSONObject? = null) {
@@ -325,12 +358,11 @@ object KidTv {
     }
 
     /**
-     * Disconnect: erase the chats, caches, contacts, config, parent keys and anyone waiting to look after the
-     * TV, then back to the pairing screen.
+     * Disconnect: erase the chats, caches, contacts, config and parent keys, then back to the pairing screen.
      */
     private fun wipe(app: Muninn) = synchronized(lock) {
         TvStorage.clear(app)   // every message and the caches (a downloaded update stays)
-        TvReconnect.clear(app)
+        setupAsked(app)
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()
         TvApps.clear()
@@ -338,7 +370,7 @@ object KidTv {
         tune(KidState())
     }
 
-    /** The vault can't be opened (its key store key is gone): nothing on it is readable, so start the TV over. */
+    /** The vault can't be opened (its data key file is gone): nothing on it is readable, so start the TV over. */
     fun startOver(app: Muninn) {
         app.vault.eraseAll()
         android.os.Process.killProcess(android.os.Process.myPid())
@@ -374,7 +406,6 @@ object Tv : TvHandler {
         TvUpdate.start(app)
         TvStorage.start(app)
         KidTv.askParents(app)
-        TvReconnect.load(app)
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null

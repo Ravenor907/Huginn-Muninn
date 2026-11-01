@@ -57,7 +57,9 @@ object ApkInstall {
     private fun install(c: Context, name: String, parts: List<File>) {
         if (!canInstall(c)) {
             parts.forEach { it.delete() }
-            Ui.say("$name couldn't be installed: Muninn isn't allowed to install apps on this TV. A parent can allow it under For a parent.", true)
+            // Only an app a parent sent gets here (a Kids' TV): the kids read the short words; the parent's phone shows
+            // Install updates as off under TV permissions.
+            Ui.say(io.github.ravenor907.muninn.tv.TvWords.ASK_PARENT, true)
             return
         }
         Thread {

@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net
 import java.io.ByteArrayOutputStream
 
 /**
- * Video messages (cap m2, shared/docs/protocol-0.6.md 12.2): an MP4 of at most a minute, small enough to go through the
+ * Video messages (cap m2, shared/docs/protocol.md 12.2): an MP4 of at most a minute, small enough to go through the
  * relays like a photo (see [Photos.INTERNET_PIECES]). Recorded at a low size and bitrate for that.
  */
 object Videos {

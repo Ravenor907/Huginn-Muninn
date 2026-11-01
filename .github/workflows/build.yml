@@ -18,14 +18,18 @@ concurrency:
 jobs:
   rules:
     # House rules, checked on every build: anything here failing stops the build and the release.
+    # It also reads code/VERSION and code/BETA once; every other job takes them from its outputs.
     name: House rules
     runs-on: ubuntu-latest
     outputs:
       release: ${{ steps.plan.outputs.release }}
       beta: ${{ steps.plan.outputs.beta }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      label: ${{ steps.plan.outputs.label }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - name: No outside services, no pairing, no attribution, no em dashes
+      - name: No outside services, no pairing, no em dashes
         shell: bash
         run: |
           fail=0
@@ -36,33 +40,50 @@ jobs:
           }
           check "Google Play services or Firebase" -E 'com\.google\.android\.gms|com\.google\.firebase|play-services'
           check "Bluetooth pairing or bonding" -E 'createBond|setPairingConfirmation|ACTION_PAIRING_REQUEST|createRfcommSocket|listenUsingRfcomm|requestPairing|PairingRequest'
-          check "AI attribution" -i -E 'co-authored-by|anthropic|claude|chatgpt|copilot'
           check "Em dash" -F "$(printf '\342\200\224')"
-          if [ -e code/shared/docs/HANDOFF.md ]; then echo "::error title=House rule broken::code/shared/docs/HANDOFF.md is back"; fail=1; fi
           # Both apps must test against the same vectors.
           for f in code/shared/vectors/*.json; do
             m=code/muninn/app/src/test/resources/$(basename "$f")
             if [ -f "$m" ] && ! cmp -s "$f" "$m"; then echo "::error title=Test vectors differ::$(basename "$f"): Muninn's copy isn't the same as code/shared/vectors"; fail=1; fi
           done
           exit $fail
-      - name: Does this push make a release?
-        id: plan
+      - name: Attribution
+        shell: bash
         run: |
+          # The pattern is stored encoded so this file doesn't trip its own check.
+          pattern=$(printf '%s' 'Y28tYXV0aG9yZWQtYnl8YW50aHJvcGljfGNsYXVkZXxjaGF0Z3B0fGNvcGlsb3Q=' | base64 -d)
+          hits=$(git grep -n -I -i -E "$pattern" -- . | head -n 20 || true)
+          if [ -n "$hits" ]; then echo "::error title=House rule broken::Attribution"; echo "$hits"; exit 1; fi
+      - name: Version, and does this push make a release?
+        id: plan
+        shell: bash
+        run: |
+          # VERSION holds one dot only: 0.3, 0.31, 1.0. Changing it on main makes a release.
           v=$(head -n1 code/VERSION | tr -d '\r')
+          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 1.0, not \"$v\""; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$v" > /dev/null; then
             echo "release=1" >> "$GITHUB_OUTPUT"; echo "::notice title=Release::This push releases $v"
           else
             echo "release=0" >> "$GITHUB_OUTPUT"; echo "::notice title=Test build::No release ($v is already out, or this isn't main)"
           fi
-          # The beta branch: every push replaces the "beta" pre-release (only the Pre-release channel, in Labs, installs it).
+          # The beta branch: every push replaces the "beta" pre-release, labelled "<BETA> beta <run number>"
+          # (code/shared/docs/releases.md). Only the Pre-release channel, in Labs, installs it.
           if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/beta ]; then
-            echo "beta=1" >> "$GITHUB_OUTPUT"; echo "::notice title=Beta::This push replaces the beta pre-release"
+            b=$(head -n1 code/BETA | tr -d '\r')
+            echo "$b" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::BETA must look like 0.99, not \"$b\""; exit 1; }
+            echo "beta=1" >> "$GITHUB_OUTPUT"
+            echo "label=$b beta ${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Beta::This push replaces the beta pre-release ($b beta ${{ github.run_number }})"
           else
             echo "beta=0" >> "$GITHUB_OUTPUT"
+            echo "label=" >> "$GITHUB_OUTPUT"
           fi
 
   flatpak:
     name: Flatpak
+    needs: rules
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.10
@@ -73,19 +94,19 @@ jobs:
         run: code/shared/tools/get-fonts.sh
       - name: Version
         shell: bash
+        env:
+          VERSION: ${{ needs.rules.outputs.version }}
+          LABEL: ${{ needs.rules.outputs.label }}
         run: |
-          # VERSION holds one dot only: 0.3, 0.31, 0.4. Changing it on main makes a release.
-          v=$(head -n1 code/VERSION | tr -d '\r')
-          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
-          tag="v$v"
+          # From the rules job, which reads code/VERSION and code/BETA.
+          v=$VERSION
           echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
-          echo "HUGINN_TAG=$tag" >> "$GITHUB_ENV"
+          echo "HUGINN_TAG=v$v" >> "$GITHUB_ENV"
           sed -i "s|-DHUGINN_VERSION=0.1|-DHUGINN_VERSION=$v|" code/huginn/packaging/io.github.ravenor907.Huginn.json
+          grep -q "HUGINN_VERSION=$v\"" code/huginn/packaging/io.github.ravenor907.Huginn.json || { echo "::error::The version didn't go into the Flatpak manifest"; exit 1; }
           # The beta branch: a pre-release labelled "<BETA> beta <run number>" (code/shared/docs/releases.md).
-          if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/beta ]; then
-            b=$(head -n1 code/BETA | tr -d '\r')
-            echo "$b" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::BETA must look like 0.99, not \"$b\""; exit 1; }
-            label="$b beta ${{ github.run_number }}"
+          if [ -n "$LABEL" ]; then
+            label=$LABEL
             sed -i "s|\"-DHUGINN_VERSION=$v\"|\"-DHUGINN_VERSION=$v\", \"-DHUGINN_VERSION_LABEL=$label\"|" code/huginn/packaging/io.github.ravenor907.Huginn.json
             grep -q "HUGINN_VERSION_LABEL=$label" code/huginn/packaging/io.github.ravenor907.Huginn.json || { echo "::error::The beta label didn't go into the Flatpak manifest"; exit 1; }
             echo "::notice title=Beta::Huginn.flatpak is $label"
@@ -126,7 +147,7 @@ jobs:
       - name: Screenshot tour (fails on any broken screen)
         shell: bash
         run: |
-          mkdir -p tour /tmp/tourhome
+          mkdir -p tour
           set +e
           flatpak install --user -y --noninteractive Huginn.flatpak > tour/install.txt 2>&1 || cat tour/install.txt
           timeout 240 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --env=QT_QUICK_BACKEND=software \
@@ -167,13 +188,6 @@ jobs:
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/code/shared/vectors:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/code/shared/vectors/proto06-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/code/shared/vectors:ro" io.github.ravenor907.Huginn --release-sig-selftest "$PWD/code/shared/vectors/release-sig-vectors.json"
           exit $bad
-      - name: Draw the project banner (both ravens)
-        if: always()
-        shell: bash
-        run: |
-          pip install --quiet pillow || exit 0
-          mkdir -p tour
-          python3 code/shared/tools/make-banner.py tour/banner.png || true
       # Screenshots and logs stay with the run, as artifacts.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -213,8 +227,8 @@ jobs:
           cp code/huginn/fonts/NotoSansRunic-Regular.ttf $d/noto_sans_runic.ttf
       - name: Release signing key
         # The private key lives only in the repository's secrets. Pull requests from forks and local
-        # builds have none and sign with the test key; a push to main without it fails here instead of releasing
-        # an APK anyone could forge an update for.
+        # builds have none and sign with the test key; a push to main or beta without it fails here instead of
+        # publishing an APK anyone could forge an update for.
         env:
           KEYSTORE_BASE64: ${{ secrets.MUNINN_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.MUNINN_KEYSTORE_PASSWORD }}
@@ -232,7 +246,7 @@ jobs:
               exit 1
             fi
             echo "MUNINN_KEYSTORE=$RUNNER_TEMP/muninn-release.p12" >> "$GITHUB_ENV"
-          elif [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/main ]; then
+          elif [ "${{ github.event_name }}" = push ] && { [ "${{ github.ref }}" = refs/heads/main ] || [ "${{ github.ref }}" = refs/heads/beta ]; }; then
             echo "::error title=Release key missing::Add the secrets MUNINN_KEYSTORE_BASE64 and MUNINN_KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)."
             exit 1
           else
@@ -257,12 +271,12 @@ jobs:
           done
       - name: Beta label
         if: needs.rules.outputs.beta == '1'
+        env:
+          LABEL: ${{ needs.rules.outputs.label }}
         run: |
           # The beta branch: versionName is "<BETA> beta <run number>", versionCode stays code/VERSION's (releases.md).
-          b=$(head -n1 code/BETA | tr -d '\r')
-          echo "$b" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::BETA must look like 0.99, not \"$b\""; exit 1; }
-          echo "BETA_LABEL=$b beta ${{ github.run_number }}" >> "$GITHUB_ENV"
-          echo "::notice title=Beta::Muninn.apk is $b beta ${{ github.run_number }}"
+          echo "BETA_LABEL=$LABEL" >> "$GITHUB_ENV"
+          echo "::notice title=Beta::Muninn.apk is $LABEL"
       - name: Unit tests and APKs
         working-directory: code/muninn
         env:
@@ -294,6 +308,7 @@ jobs:
         run: |
           cp code/muninn/app/build/outputs/apk/release/app-release.apk Muninn.apk
           # Signed with the release key when CI has it: the certificate must be the one in code/muninn/signing.
+          # A push to main or beta always has it (the "Release signing key" step stops the build otherwise).
           if [ -n "$MUNINN_KEYSTORE" ]; then
             want=$(tr -d ' \n' < code/muninn/signing/release-cert-sha256.txt)
             apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
@@ -395,6 +410,7 @@ jobs:
     name: Windows (portable zip)
     # Huginn-Windows.zip: unzip anywhere and run Huginn.exe, nothing to install.
     # Required: a release only goes out when this passes.
+    needs: rules
     runs-on: windows-latest
     defaults:
       run:
@@ -407,18 +423,13 @@ jobs:
       - name: Fonts
         run: code/shared/tools/get-fonts.sh
       - name: Version
+        env:
+          VERSION: ${{ needs.rules.outputs.version }}
+          LABEL: ${{ needs.rules.outputs.label }}
         run: |
-          v=$(head -n1 code/VERSION | tr -d '\r')
-          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::VERSION must look like 0.3 or 0.31, not \"$v\""; exit 1; }
-          echo "HUGINN_VERSION=$v" >> "$GITHUB_ENV"
-          # The beta branch: a pre-release labelled "<BETA> beta <run number>"; empty for everything else (a stable build).
-          if [ "${{ github.event_name }}" = push ] && [ "${{ github.ref }}" = refs/heads/beta ]; then
-            b=$(head -n1 code/BETA | tr -d '\r')
-            echo "$b" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::BETA must look like 0.99, not \"$b\""; exit 1; }
-            echo "HUGINN_VERSION_LABEL=$b beta ${{ github.run_number }}" >> "$GITHUB_ENV"
-          else
-            echo "HUGINN_VERSION_LABEL=" >> "$GITHUB_ENV"
-          fi
+          # From the rules job. The label is "<BETA> beta <run number>" on the beta branch, empty for a stable build.
+          echo "HUGINN_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "HUGINN_VERSION_LABEL=$LABEL" >> "$GITHUB_ENV"
           # Windows file names ignore case, so MSVC would take this file for the C++ <version> header.
           rm code/VERSION
       - name: Qt 6.10 (same modules as the Flatpak)
@@ -475,7 +486,7 @@ jobs:
       - name: Build Huginn.exe (CMake, MSVC)
         shell: pwsh
         run: |
-          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja --version 1.12.1 -y --no-progress }
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT -replace '\\','/'
           $qt = $env:QT_ROOT_DIR -replace '\\','/'
           cmake -S code/huginn -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DCMAKE_POLICY_DEFAULT_CMP0141=NEW "-DHUGINN_VERSION=$env:HUGINN_VERSION" "-DHUGINN_VERSION_LABEL=$env:HUGINN_VERSION_LABEL" -DHUGINN_WINDOWS_PORTABLE=ON `
@@ -520,6 +531,26 @@ jobs:
           # Nothing that is only for developers or debuggers: symbols, import libraries, QML type info.
           find "$d" -type f \( -iname '*.pdb' -o -iname '*.ilk' -o -iname '*.lib' -o -iname '*.exp' -o -iname '*.qmltypes' \
             -o -iname '*.prl' -o -iname '*.cmake' -o -iname '*.debug' \) -print -delete
+          # License texts for the libraries in lib/: Qt (LGPL-3.0) and the FFmpeg DLLs Qt Multimedia brings (LGPL-2.1),
+          # from code/shared/licenses so they are always there, plus every license Qt and vcpkg installed on this runner.
+          l="$d/lib/licenses"
+          mkdir -p "$l/vcpkg" "$l/qt"
+          cp code/shared/licenses/Qt-LGPL-3.0.txt code/shared/licenses/FFmpeg-LGPL-2.1.txt "$l/"
+          vroot="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/installed/x64-windows/share"
+          for c in "$vroot"/*/copyright; do
+            [ -f "$c" ] || continue
+            cp "$c" "$l/vcpkg/$(basename "$(dirname "$c")").txt"
+          done
+          qroot="$(cygpath -u "$QT_ROOT_DIR")"
+          for q in "$qroot" "$qroot/.." "$qroot/../.."; do
+            for f in "$q"/LICENSE* "$q"/Licenses/* "$q"/LICENSES/*; do
+              if [ -f "$f" ]; then cp "$f" "$l/qt/"; fi
+            done
+          done
+          [ -n "$(ls -A "$l/vcpkg")" ] || { echo "::error title=Licenses::No vcpkg license files under $vroot"; exit 1; }
+          if ls "$d"/lib/av*.dll "$d"/lib/sw*.dll > /dev/null 2>&1; then echo "FFmpeg DLLs: $(cd "$d/lib" && ls av*.dll sw*.dll 2>/dev/null | tr '\n' ' ')"; fi
+          rmdir "$l/qt" 2>/dev/null || true
+          echo "Licenses in lib/licenses: $(find "$l" -type f | wc -l) files"
           # Huginn.exe at the top is the app itself. Its manifest names lib\ as a private assembly, and this
           # lists the DLLs in it, so Windows loads them from lib\ (code/huginn/packaging/windows/huginn.manifest.in).
           {
@@ -675,6 +706,25 @@ jobs:
       - name: Relay Worker tests
         run: node code/shared/relay-worker/test.mjs
 
+  banner:
+    name: Project banner
+    # Draws code/shared/docs/banner.png from the ravens and the fonts, as the "banner" artifact. Not needed to release.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Draw the banner (both ravens)
+        run: |
+          code/shared/tools/get-fonts.sh
+          python3 -m venv "$RUNNER_TEMP/banner"
+          "$RUNNER_TEMP/banner/bin/pip" install --quiet pillow==12.3.0
+          mkdir -p banner
+          "$RUNNER_TEMP/banner/bin/python" code/shared/tools/make-banner.py banner/banner.png
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: banner
+          path: banner/banner.png
+
   site:
     name: Add page (GitHub Pages)
     # The page a contact QR opens. Needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
@@ -692,13 +742,14 @@ jobs:
         with:
           path: code/shared/site
       - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e  # v4.0.5
+
   release:
-    # One release for both apps, one version number (VERSION). Changing VERSION on main makes it,
+    # One release for both apps, one version number (code/VERSION). Changing VERSION on main makes it,
     # and only after every check above passed.
     name: Release
     # The Flatpak, Muninn and the Windows zip must all pass.
     needs: [rules, flatpak, muninn, muninn-screens, windows, relay]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: needs.rules.outputs.release == '1'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -707,78 +758,21 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-      - name: Version
-        id: v
-        run: |
-          v=$(head -n1 code/VERSION | tr -d '\r')
-          tag="v$v"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
-            echo "new=0" >> "$GITHUB_OUTPUT"
-          else
-            echo "new=1" >> "$GITHUB_OUTPUT"
-          fi
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        if: steps.v.outputs.new == '1'
         with:
           name: Huginn.flatpak
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        if: steps.v.outputs.new == '1'
         with:
           name: muninn-apk
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
-        if: steps.v.outputs.new == '1'
         with:
           name: Huginn-Windows.zip
-      - name: SHA-256 of every download (GitHub shows the same digest beside each file)
-        if: steps.v.outputs.new == '1'
-        run: sha256sum Huginn-Windows.zip Huginn.flatpak Muninn.apk || true
       - name: Sign every download with the project's release key (each app refuses an update without it)
-        if: steps.v.outputs.new == '1'
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          VERSION: ${{ steps.v.outputs.version }}
-        run: |
-          # <file>.sig is the Ed25519 signature of the file's raw bytes, and <file>.vsig the signature of its version, name
-          # and SHA-256 (code/shared/docs/releases.md). Never ship unsigned: Huginn and Muninn refuse an update without them.
-          if [ -z "$RELEASE_SIGNING_KEY" ]; then
-            echo "::error title=Release signing key missing::Add the secret RELEASE_SIGNING_KEY (Settings > Secrets and variables > Actions), then re-run this job. Nothing was released."
-            exit 1
-          fi
-          k="$RUNNER_TEMP/release-key.pem"
-          printf '%s\n' "$RELEASE_SIGNING_KEY" | tr -d '\r' > "$k"
-          if ! openssl pkey -in "$k" -pubout -outform DER > "$RUNNER_TEMP/release-pub.der" 2>/dev/null; then
-            rm -f "$k"
-            echo "::error title=Release signing key unreadable::RELEASE_SIGNING_KEY isn't a whole Ed25519 private key (PEM). Paste it again, BEGIN and END lines included."
-            exit 1
-          fi
-          # It must be the private half of the key both apps carry (code/shared/docs/release-key.pem).
-          if ! openssl pkey -pubin -in code/shared/docs/release-key.pem -outform DER | cmp -s - "$RUNNER_TEMP/release-pub.der"; then
-            rm -f "$k"
-            echo "::error title=Wrong release signing key::RELEASE_SIGNING_KEY doesn't match code/shared/docs/release-key.pem, so the apps would refuse this release."
-            exit 1
-          fi
-          case "$VERSION" in
-            [0-9]*.[0-9]*) ;;
-            *) rm -f "$k"; echo "::error title=Version::code/VERSION ($VERSION) isn't a version like 0.97"; exit 1 ;;
-          esac
-          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
-            [ -f "$f" ] || continue
-            openssl pkeyutl -sign -inkey "$k" -rawin -in "$f" -out "$f.sig"
-            openssl pkeyutl -verify -pubin -inkey code/shared/docs/release-key.pem -rawin -in "$f" -sigfile "$f.sig" \
-              || { rm -f "$k"; echo "::error title=Signing failed::$f.sig doesn't check out"; exit 1; }
-            # The version, the file's name and its SHA-256, one per line with no newline at the end.
-            m="$RUNNER_TEMP/$f.vmsg"
-            printf 'huginn-muninn release v1\n%s\n%s\n%s' "$VERSION" "$f" "$(sha256sum < "$f" | cut -d' ' -f1)" > "$m"
-            openssl pkeyutl -sign -inkey "$k" -rawin -in "$m" -out "$f.vsig"
-            openssl pkeyutl -verify -pubin -inkey code/shared/docs/release-key.pem -rawin -in "$m" -sigfile "$f.vsig" \
-              || { rm -f "$k"; echo "::error title=Signing failed::$f.vsig doesn't check out"; exit 1; }
-            [ "$(stat -c %s "$f.vsig")" = 64 ] || { rm -f "$k"; echo "::error title=Signing failed::$f.vsig isn't 64 bytes"; exit 1; }
-          done
-          rm -f "$k"
+        # Fails, and nothing is released, if any of the three downloads is missing or the key is missing or wrong.
+        run: bash code/shared/tools/sign-release.sh "${{ needs.rules.outputs.version }}" code/shared/docs/release-key.pem
       - name: Build attestations (gh attestation verify, see code/shared/docs/releases.md)
-        if: steps.v.outputs.new == '1'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
         with:
           subject-path: |
@@ -786,11 +780,10 @@ jobs:
             Huginn.flatpak
             Muninn.apk
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
-        if: steps.v.outputs.new == '1'
         with:
-          tag_name: ${{ steps.v.outputs.tag }}
+          tag_name: ${{ needs.rules.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Huginn and Muninn ${{ steps.v.outputs.version }}
+          name: Huginn and Muninn ${{ needs.rules.outputs.version }}
           files: |
             Huginn.flatpak
             Huginn.flatpak.sig
@@ -801,7 +794,7 @@ jobs:
             Muninn.apk
             Muninn.apk.sig
             Muninn.apk.vsig
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           prerelease: false
           make_latest: true
           generate_release_notes: false
@@ -811,10 +804,25 @@ jobs:
             **Muninn** (Android phone): Muninn.apk. Installed copies download it when they open; tap Install when Android asks.
             Every file is signed with the project's release key (the .sig beside it, and the .vsig for its version) and has a GitHub build attestation. How to check them by hand: https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md
             Privacy and security: https://github.com/Ravenor907/Huginn-Muninn#security
-      - name: Deploy the relay Worker (code/shared/relay-worker, releases only)
-        if: steps.v.outputs.new == '1'
-        # The apps work with the relay already running, so a failed deploy warns and doesn't hold back the release.
-        continue-on-error: true
+
+  relay-deploy:
+    # Deploys code/shared/relay-worker to the Worker huginn-relay after a release went out. The apps work with the
+    # relay already running, so a failed deploy shows as a warning and never holds back or undoes the release.
+    name: Deploy the relay Worker
+    needs: [rules, release]
+    if: needs.rules.outputs.release == '1'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "22"
+      - name: Deploy (wrangler from package-lock.json)
         working-directory: code/shared/relay-worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -825,19 +833,26 @@ jobs:
             echo "::warning title=Relay Worker not deployed::Add the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (Settings > Secrets and variables > Actions) to deploy it with each release. See code/shared/relay-worker/README.md."
             exit 0
           fi
-          # Wrangler needs Node 22 or newer; an older runner Node gets Node 22 from npm for this step only.
-          node22=""
-          [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ] || node22="-p node@22"
-          npx --yes $node22 -p wrangler@4.156.0 -- wrangler deploy
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            # package.json pins wrangler to one exact version.
+            npm install --no-audit --no-fund --no-save
+          fi
+          npx --no-install wrangler deploy
           code=$(curl -s -o /dev/null -w '%{http_code}' https://huginn-relay.ravenor907.workers.dev/health || true)
-          echo "::notice title=Relay Worker::Deployed; /health answered $code"
+          if [ "$code" = 200 ]; then
+            echo "::notice title=Relay Worker::Deployed; /health answered 200"
+          else
+            echo "::warning title=Relay Worker::Deployed, but /health answered ${code:-nothing}"
+          fi
 
   beta:
     # The beta branch's downloads as one pre-release named "beta", replaced on every push to beta, signed like a release
     # (code/shared/docs/releases.md). Only apps on the Pre-release channel (Labs) look at it. Never deploys the relay.
     name: Beta pre-release
     needs: [rules, flatpak, muninn, muninn-screens, windows, relay]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/beta'
+    if: needs.rules.outputs.beta == '1'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -852,61 +867,20 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: Huginn-Windows.zip
-      - name: Label
-        id: v
-        run: |
-          b=$(head -n1 code/BETA | tr -d '\r')
-          echo "$b" | grep -Eq '^[0-9]+\.[0-9]+$' || { echo "::error::BETA must look like 0.99, not \"$b\""; exit 1; }
-          echo "label=$b beta ${{ github.run_number }}" >> "$GITHUB_OUTPUT"
       - name: Sign every download with the project's release key (as the release job does)
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-          LABEL: ${{ steps.v.outputs.label }}
+          LABEL: ${{ needs.rules.outputs.label }}
         run: |
-          # <file>.sig is the Ed25519 signature of the file's raw bytes, and <file>.vsig the signature of its label, name
-          # and SHA-256. Apps refuse a pre-release without them, as they refuse a release.
-          ls -l Huginn.flatpak Huginn-Windows.zip Muninn.apk
-          if [ -z "$RELEASE_SIGNING_KEY" ]; then
-            echo "::error title=Release signing key missing::Add the secret RELEASE_SIGNING_KEY (Settings > Secrets and variables > Actions), then re-run this job. Nothing was published."
-            exit 1
-          fi
-          k="$RUNNER_TEMP/release-key.pem"
-          printf '%s\n' "$RELEASE_SIGNING_KEY" | tr -d '\r' > "$k"
-          if ! openssl pkey -in "$k" -pubout -outform DER > "$RUNNER_TEMP/release-pub.der" 2>/dev/null; then
-            rm -f "$k"
-            echo "::error title=Release signing key unreadable::RELEASE_SIGNING_KEY isn't a whole Ed25519 private key (PEM). Paste it again, BEGIN and END lines included."
-            exit 1
-          fi
-          if ! openssl pkey -pubin -in code/shared/docs/release-key.pem -outform DER | cmp -s - "$RUNNER_TEMP/release-pub.der"; then
-            rm -f "$k"
-            echo "::error title=Wrong release signing key::RELEASE_SIGNING_KEY doesn't match code/shared/docs/release-key.pem, so the apps would refuse this pre-release."
-            exit 1
-          fi
-          case "$LABEL" in
-            [0-9]*.[0-9]*" beta "[0-9]*) ;;
-            *) rm -f "$k"; echo "::error title=Label::\"$LABEL\" isn't a label like 0.99 beta 12"; exit 1 ;;
-          esac
-          for f in Huginn-Windows.zip Huginn.flatpak Muninn.apk; do
-            openssl pkeyutl -sign -inkey "$k" -rawin -in "$f" -out "$f.sig"
-            openssl pkeyutl -verify -pubin -inkey code/shared/docs/release-key.pem -rawin -in "$f" -sigfile "$f.sig" \
-              || { rm -f "$k"; echo "::error title=Signing failed::$f.sig doesn't check out"; exit 1; }
-            # The label, the file's name and its SHA-256, one per line with no newline at the end.
-            m="$RUNNER_TEMP/$f.vmsg"
-            printf 'huginn-muninn release v1\n%s\n%s\n%s' "$LABEL" "$f" "$(sha256sum < "$f" | cut -d' ' -f1)" > "$m"
-            openssl pkeyutl -sign -inkey "$k" -rawin -in "$m" -out "$f.vsig"
-            openssl pkeyutl -verify -pubin -inkey code/shared/docs/release-key.pem -rawin -in "$m" -sigfile "$f.vsig" \
-              || { rm -f "$k"; echo "::error title=Signing failed::$f.vsig doesn't check out"; exit 1; }
-            [ "$(stat -c %s "$f.vsig")" = 64 ] || { rm -f "$k"; echo "::error title=Signing failed::$f.vsig isn't 64 bytes"; exit 1; }
-          done
-          rm -f "$k"
+          # Fails, and nothing is published, if any of the three downloads is missing or the key is missing or wrong.
+          bash code/shared/tools/sign-release.sh "$LABEL" code/shared/docs/release-key.pem
           # The label, with no newline at the end: what apps on the Pre-release channel read first.
           printf '%s' "$LABEL" > version.txt
-          sha256sum Huginn-Windows.zip Huginn.flatpak Muninn.apk
       - name: Replace the beta pre-release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          LABEL: ${{ steps.v.outputs.label }}
+          LABEL: ${{ needs.rules.outputs.label }}
         run: |
           gh release delete beta --cleanup-tag --yes || true
           gh release create beta \

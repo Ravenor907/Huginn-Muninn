@@ -8,7 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Video fragments, reassembly with NACK and keyframe requests, reports and rate (shared/docs/protocol-0.6.md 5.8), as Huginn's VideoWire::selfTest. */
+/** Video fragments, reassembly with NACK and keyframe requests, reports and rate (shared/docs/protocol.md 5.8), as Huginn's VideoWire::selfTest. */
 class VideoWireTest {
     private fun bytes(n: Int, seed: Int) = ByteArray(n) { ((it * 31 + seed * 7) and 0xFF).toByte() }
 

@@ -33,6 +33,7 @@ object Icons {
         "search" to "M11 4a7 7 0 1 0 0.01 0 M20 20l-3.5-3.5",
         "copy" to "M8 8h11v11H8z M5 16V5h11",
         "delete" to "M5 7h14 M9 7V4h6v3 M7 7l1 13h8l1-13",
+        "more" to "M4 11h2v2h-2z M11 11h2v2h-2z M18 11h2v2h-2z",
         "info" to "M12 3l9 9-9 9-9-9z M12 10v6 M12 7v1",
         "check" to "M5 12l5 5 9-10",
         "back" to "M15 5l-7 7 7 7",

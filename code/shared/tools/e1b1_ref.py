@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for caps b1 and e1 (shared/docs/protocol-0.6.md, section 23), and the test vectors both apps check
-(shared/vectors/e1b1-vectors.json). Run it to write the vectors; it checks every case twice (building, then from
+"""Reference for caps b1 and e1 (code/shared/docs/protocol.md, section 23), and the test vectors both apps check
+(code/shared/vectors/e1b1-vectors.json). Run it to write the vectors; it checks every case twice (building, then from
 the file).
 
  - e1: the relay wrapping sealed to the recipient's chat key and to one of its day keys ("wrap keys"), so a stolen
@@ -244,7 +244,7 @@ def build():
     rot = [{"newest": None if d is None else now - d, "now": now, "new": rotate_due(None if d is None else now - d, now)}
            for d in (None, 0, DAY - 1, DAY, -DAY - 1)]
 
-    return {"note": "caps b1 and e1, shared/docs/protocol-0.6.md section 23; written by shared/tools/e1b1_ref.py",
+    return {"note": "caps b1 and e1, code/shared/docs/protocol.md section 23; written by code/shared/tools/e1b1_ref.py",
             "constants": {"wrapUseS": WRAP_USE_S, "wrapKeepS": WRAP_KEEP_S, "wrapNewS": WRAP_NEW_S, "wrapAheadS": WRAP_AHEAD_S,
                           "ringOldMs": RING_OLD_MS, "ringAheadMs": RING_AHEAD_MS},
             "wrap": wrap, "ring": ringv, "ringPlain": {"good": good, "refuse": refuse}, "ringFresh": fresh,

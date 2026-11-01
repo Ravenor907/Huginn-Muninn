@@ -29,9 +29,10 @@ import java.util.concurrent.TimeUnit
 object TvUpdate {
     /**
      * What the TV screen shows: a confirm waiting for OK on the remote. [needsParent]: a new Muninn waits
-     * until a parent asks the TV, from their phone, to allow installs.
+     * until a parent asks the TV, from their phone, to allow installs. [code]: the same for the parents' phones
+     * (one of [TvRules.UPDATE_STATES], null when nothing happened since Muninn started), sent in the TV's status.
      */
-    data class State(val confirm: Intent? = null, val needsParent: Boolean = false, val status: String = "")
+    data class State(val confirm: Intent? = null, val needsParent: Boolean = false, val status: String = "", val code: String? = null)
     val state = MutableStateFlow(State())
     private val timer = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-update").apply { isDaemon = true } }
     @Volatile private var started = false
@@ -44,6 +45,15 @@ object TvUpdate {
     fun start(app: Muninn) {
         if (started) return
         started = true
+        // Muninn came back up as a newer version: the update went in, and the parents' phones hear so.
+        try {
+            val now = app.updater.current
+            val before = prefs(app).getString("runs", "") ?: ""
+            if (before != now) {
+                prefs(app).edit().putString("runs", now).apply()
+                if (before.isNotEmpty()) post(app, State(status = "Muninn is up to date", code = "done"))
+            }
+        } catch (_: Exception) {}
         app.updater.installer = { apk -> install(app, apk); true }
         // Once a day, and only while it's plugged in (a TV always is; a tablet in kids' mode waits for its charger).
         timer.scheduleWithFixedDelay({
@@ -67,7 +77,7 @@ object TvUpdate {
 
     /** Installs [apk] with a session; without the "install unknown apps" permission it waits for a parent. */
     fun install(c: Context, apk: File) {
-        if (!canInstall(c)) { waiting = apk; state.value = State(needsParent = true, status = "Ask a parent"); return }
+        if (!canInstall(c)) { waiting = apk; post(c, State(needsParent = true, status = TvWords.ASK_PARENT, code = "needs")); return }
         waiting = null
         Thread {
             try {
@@ -89,9 +99,9 @@ object TvUpdate {
                     val done = PendingIntent.getBroadcast(c, id, Intent(c, TvInstallResult::class.java).setAction(ACTION).setPackage(c.packageName), flags)
                     s.commit(done.intentSender)
                 }
-                state.value = State(status = "Installing the new Muninn…")
+                post(c, State(status = "Installing the new Muninn…", code = "installing"))
             } catch (e: Exception) {
-                state.value = State(status = "The update couldn't be installed. It tries again tomorrow.")
+                post(c, State(status = "The update couldn't be installed. It tries again tomorrow.", code = "failed"))
             }
         }.start()
     }
@@ -108,13 +118,20 @@ object TvUpdate {
                 @Suppress("DEPRECATION") val confirm = (if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                     else i.getParcelableExtra(Intent.EXTRA_INTENT)) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                state.value = State(confirm = confirm, status = "A new Muninn is ready")
+                post(c, State(confirm = confirm, status = "A new Muninn is ready", code = "ready"))
                 // On screen now: Android's Install box comes straight up. Otherwise the TV screen offers it.
                 try { if ((c.applicationContext as? Muninn)?.visible == true) c.startActivity(confirm) } catch (_: Exception) {}
             }
-            PackageInstaller.STATUS_SUCCESS -> state.value = State(status = "Muninn is up to date")
-            else -> state.value = State(status = "The update didn't go in. It tries again tomorrow.")
+            PackageInstaller.STATUS_SUCCESS -> post(c, State(status = "Muninn is up to date", code = "done"))
+            else -> post(c, State(status = "The update didn't go in. It tries again tomorrow.", code = "failed"))
         }
+    }
+
+    /** A new state; the parents' phones get it in the TV's status when it changed. */
+    private fun post(c: Context, st: State) {
+        val was = state.value.code
+        state.value = st
+        if (st.code != was) (c.applicationContext as? Muninn)?.let { try { KidTv.updateChanged(it) } catch (_: Exception) {} }
     }
 
     /** The remote's OK on "Install the update": Android's own Install box. */

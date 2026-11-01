@@ -18,8 +18,8 @@
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- Finding nearby devices: LocalSend's multicast discovery. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <!-- Direct connect and close by: Android 13+ asks for nearby devices, never for location. Android 12 and older
-         only let an app look for nearby devices with Location, which Muninn asks for the first time it's used,
+    <!-- Direct connect: Android 13+ asks for nearby devices, never for location. Android 12 and older only let an
+         app start its own hotspot with Location, which Muninn asks for the first time Direct connect is used,
          never at setup. Muninn never reads where the phone is. -->
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" tools:targetApi="33" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
@@ -29,7 +29,6 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" tools:targetApi="31" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <!-- Tap phones together to add each other: one phone hands its code to the other over NFC (net/Tap). -->
     <uses-permission android:name="android.permission.NFC" />

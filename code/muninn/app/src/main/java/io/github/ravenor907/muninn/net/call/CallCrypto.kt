@@ -14,7 +14,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * The deterministic parts of 1:1 calls (shared/docs/protocol-0.6.md, 5.2 to 5.4), matching shared/tools/proto06_ref.py
+ * The deterministic parts of 1:1 calls (shared/docs/protocol.md, 5.2 to 5.4), matching shared/tools/proto06_ref.py
  * byte for byte: signed offer and answer, call keys per direction and epoch, media packets and the
  * replay window. No Android here, so all of it runs in unit tests (shared/vectors/proto06-vectors.json, "call").
  */
@@ -30,7 +30,7 @@ object CallCrypto {
     const val AUDIO = 0
     const val PING = 1
     const val PONG = 2
-    // 3 to 6 only between two c2 apps (shared/docs/protocol-0.6.md 5.8). An app without c2 refuses them as "type".
+    // 3 to 6 only between two c2 apps (shared/docs/protocol.md 5.8). An app without c2 refuses them as "type".
     const val VIDEO = 3
     const val REPORT = 4
     const val KEY_REQUEST = 5

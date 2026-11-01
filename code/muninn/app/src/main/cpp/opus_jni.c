@@ -36,7 +36,7 @@ Java_io_github_ravenor907_muninn_net_call_Opus_encode(JNIEnv *env, jclass cls, j
     return n;
 }
 
-// Between two c2 apps (shared/docs/protocol-0.6.md 5.8.4): the bitrate and the loss the other side reports.
+// Between two c2 apps (shared/docs/protocol.md 5.8.4): the bitrate and the loss the other side reports.
 EXPORT JNIEXPORT void JNICALL
 Java_io_github_ravenor907_muninn_net_call_Opus_encoderTune(JNIEnv *env, jclass cls, jlong h, jint bitrate, jint loss) {
     OpusEncoder *e = (OpusEncoder *)(intptr_t)h;

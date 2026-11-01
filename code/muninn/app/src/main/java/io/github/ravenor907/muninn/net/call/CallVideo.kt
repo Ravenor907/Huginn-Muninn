@@ -26,7 +26,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * VP8 with MediaCodec (shared/docs/protocol-0.6.md 5.8.5): Android has a VP8 encoder and decoder on every phone (the
+ * VP8 with MediaCodec (shared/docs/protocol.md 5.8.5): Android has a VP8 encoder and decoder on every phone (the
  * software ones, c2.android.vp8.*, when there is no hardware one), and Huginn uses libvpx: the same bitstream.
  */
 object Vp8 {

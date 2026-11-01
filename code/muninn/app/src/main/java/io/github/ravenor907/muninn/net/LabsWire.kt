@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net
 import org.json.JSONObject
 
 /**
- * Labs bug reports (shared/docs/protocol-0.6.md, "Labs"). A report is a private message to the Labs contact, sealed v1
+ * Labs bug reports (shared/docs/protocol.md, "Labs"). A report is a private message to the Labs contact, sealed v1
  * to its chat key and sent to its mailbox over the internet, with "lb" in the envelope: the app, its version label,
  * the system and the device model. Nothing else about the phone. A screenshot goes as photo pieces (room "photo")
  * with the same "lb"; the report's "lb" names it in "s".
@@ -44,6 +44,19 @@ object LabsWire {
 
     /** The text of a report: trimmed, at most [MAX_TEXT] characters (Proto06.chars, as the rest of chat counts them). */
     fun textOk(text: String): Boolean = text.isNotBlank() && Proto06.chars(text) <= MAX_TEXT
+
+    /**
+     * A report's clear fields: the room, the reply route (chat key and mailbox), the name, the id and "lb".
+     * Nothing else about the device (no device id, no caps list). The seal adds "cap" and the sealed text.
+     */
+    fun envelope(room: String, fromKey: String, fromName: String, mailbox: String, msgId: String, lb: JSONObject): JSONObject =
+        JSONObject().put("room", room).put("fromKey", fromKey).put("fromName", fromName).put("mailbox", mailbox).put("id", msgId).put(FIELD, lb)
+
+    /** How long after the last report sent from here a message from the Labs key is taken (as a request). */
+    const val REPLY_MS = 30 * DAY
+
+    /** A message from the Labs key may come in: a report went from here within [REPLY_MS] of [now]. */
+    fun replyOpen(reportedAt: Long, now: Long): Boolean = reportedAt > 0 && now - reportedAt in 0 until REPLY_MS
 
     /** "0.99 beta 12 · Android 15 · Samsung SM-S938U". */
     fun summary(o: JSONObject): String = listOf(o.optString("v"), o.optString("os"), o.optString("model")).filter { it.isNotBlank() }.joinToString(" · ")

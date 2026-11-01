@@ -62,7 +62,7 @@ fun BackupPanel(app: Muninn) {
         busy = true; progress = 0f; bad = false; status = "Locking the backup with your password…"
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                // Nothing past a chat's message limit goes into the backup (shared/docs/protocol-0.6.md section 16).
+                // Nothing past a chat's message limit goes into the backup (shared/docs/protocol.md section 16).
                 try { app.chat.prune(); Result.success(Backup.create(ctx, app.vault, uri, pw) { progress = it }) }
                 catch (e: Throwable) {
                     try { android.provider.DocumentsContract.deleteDocument(ctx.contentResolver, uri) } catch (_: Exception) {}

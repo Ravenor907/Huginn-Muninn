@@ -3,6 +3,11 @@ package io.github.ravenor907.muninn.screens
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.selected
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -69,7 +74,7 @@ private class Page(val id: String, val title: String, val parent: String = "")
 /** Everything under More, in the order shown. */
 private val MORE = listOf(
     Page("calls", "Calls", "more"),
-    Page("nearby", "Close by", "more"),
+    Page("nearby", "Nearby", "more"),
     Page("link", "Linked devices", "more"),
     Page("backup", "Backup", "more"),
     Page("tv", "Kids' TV", "more"),
@@ -136,7 +141,7 @@ private fun ShortList(app: Muninn) {
         NavRow("Look", icon = "smile") { SettingsNav.folder = "look" }
         NavRow("Lock and privacy", icon = "lock") { SettingsNav.folder = "lock" }
         NavRow("Battery", BatteryChoice.of(app)?.title ?: "Your own mix", icon = "clock") { SettingsNav.folder = "battery" }
-        NavRow("More", icon = "gear") { SettingsNav.folder = "more" }
+        NavRow("More", icon = "more") { SettingsNav.folder = "more" }
     }
     if (Labs.on(app)) LabsSection(app)
 }
@@ -178,15 +183,14 @@ private fun posName(p: String) = when (p) { "top" -> "Top"; "middle" -> "Middle"
 private enum class BatteryChoice(val title: String, val help: String) {
     FASTEST("Fastest", "Arrives in seconds. Uses the most."),
     BALANCED("Balanced", "Arrives in seconds. Saves battery."),
-    EXTREME("Extreme saver", "No notifications. Saves most.");
+    EXTREME("Extreme saver", "Only while Muninn is open. No notifications.");
 
     fun apply(app: Muninn) {
         val p = app.power
         when (this) {
-            FASTEST -> { p.check = Check.LIVE; p.saver = false; p.lowBatterySave = false; p.adaptive = false; p.dataSaver = false; p.extreme = false }
-            BALANCED -> { p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true; p.dataSaver = true; p.extreme = false }
-            EXTREME -> { p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true; p.dataSaver = true; p.extreme = true
-                p.closeBy = false; app.identity.linkPreviews = false }
+            FASTEST -> { p.leaveExtreme(); p.check = Check.LIVE; p.saver = false; p.lowBatterySave = false; p.adaptive = false; p.dataSaver = false }
+            BALANCED -> { p.leaveExtreme(); p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true; p.dataSaver = true }
+            EXTREME -> { p.check = Check.LIVE; p.saver = true; p.lowBatterySave = true; p.adaptive = true; p.dataSaver = true; p.enterExtreme() }
         }
         p.refresh()
     }
@@ -205,12 +209,28 @@ private enum class BatteryChoice(val title: String, val help: String) {
     }
 }
 
+/** Extreme saver is on: said at the top of Battery and Notifications (and the chat list), with a way out. */
+@Composable
+internal fun ExtremeBanner(button: String = "Turn off", onOff: () -> Unit) {
+    Panel(Modifier.padding(top = 10.dp)) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            MIcon("clock", Palette.danger, 20.dp)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text("Extreme saver is on", style = Type.normal.copy(color = Palette.text))
+                Text("Messages come only while Muninn is open. No notifications.", style = Type.small)
+            }
+            MButton(button) { onOff() }
+        }
+    }
+}
+
 @Composable
 private fun NotifyPage(app: Muninn) {
     val id = app.identity
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var preview by remember { mutableStateOf(id.showPreview) }
-    if (app.power.extreme) Framed { Text("Extreme saver: no notifications.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(vertical = 10.dp)) }
+    var extreme by remember { mutableStateOf(app.power.extreme) }
+    if (extreme) ExtremeBanner { BatteryChoice.BALANCED.apply(app); extreme = false }
     // Android 14 and newer: without "Full-screen notifications" an incoming call is only a notification.
     var fullOff by remember { mutableStateOf(fullScreenOff(ctx)) }
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { fullOff = fullScreenOff(ctx) }
@@ -235,6 +255,41 @@ private fun NotifyPage(app: Muninn) {
     Framed("Quiet hours") { QuietHours(app) }
 }
 
+/**
+ * Settings › Look › Accent: gold (the default), iron, copper, jade, fjord, heather, ember, or any color as "#RRGGBB".
+ * The look darkens it on Light and makes it white in high contrast.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun AccentChoices(app: Muninn) {
+    val names = io.github.ravenor907.muninn.ui.Accents.NAMES
+    val titles = io.github.ravenor907.muninn.ui.Accents.TITLES
+    var custom by remember { mutableStateOf(if (io.github.ravenor907.muninn.ui.Accents.valid(Access.accent)) Access.accent else "") }
+    fun pick(v: String) { Access.accent = io.github.ravenor907.muninn.ui.Accents.choice(v); app.identity.accent = Access.accent }
+    androidx.compose.foundation.layout.FlowRow(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        names.forEachIndexed { i, n ->
+            val on = Access.accent == n
+            val c = Palette.accentOf(n)
+            Column(Modifier.clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { pick(n) }
+                .semantics(mergeDescendants = true) { selected = on; contentDescription = titles[i] }.padding(4.dp),
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                Box(Modifier.size(44.dp).clip(androidx.compose.foundation.shape.CircleShape).background(c)
+                    .border(if (on) 3.dp else 1.dp, if (on) Palette.text else Palette.line, androidx.compose.foundation.shape.CircleShape),
+                    contentAlignment = androidx.compose.ui.Alignment.Center) { if (on) MIcon("check", Palette.onAccentOf(c), 22.dp, weight = 2.2f) }
+                Text(titles[i], style = Type.small.copy(color = if (on) Palette.text else Palette.textMuted), modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        val ok = io.github.ravenor907.muninn.ui.Accents.valid(custom)
+        Box(Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape)
+            .background(if (ok) Palette.accentOf(custom.trim()) else Palette.raised).border(1.dp, Palette.line, androidx.compose.foundation.shape.CircleShape))
+        Field(custom, { custom = it.take(7) }, "Any color, like #4F8FDE", Modifier.weight(1f).padding(horizontal = 10.dp))
+        MButton("Use", kind = if (ok && Access.accent == custom.trim().uppercase()) Kind.Accent else Kind.Normal, enabled = ok) { pick(custom) }
+    }
+}
+
 @Composable
 private fun LookPage(app: Muninn) {
     val id = app.identity
@@ -255,6 +310,7 @@ private fun LookPage(app: Muninn) {
         }
         if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL) io.github.ravenor907.muninn.ui.SeasonControls { saveSeason() }
     }
+    Framed("Accent") { AccentChoices(app) }
     Framed("Size of everything") {
         val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
         ChoiceRow(sizes.size, Modifier.padding(vertical = 8.dp)) { i, m ->
@@ -382,10 +438,13 @@ private fun BatteryPage(app: Muninn) {
     var data by remember { mutableStateOf(app.power.dataSaver) }
     fun reread() { choice = BatteryChoice.of(app); check = app.power.check; saver = app.power.saver; low = app.power.lowBatterySave
         adaptive = app.power.adaptive; data = app.power.dataSaver }
+    // Any change by hand ends Extreme saver (and brings back what it turned off).
+    fun byHand() { app.power.leaveExtreme(); choice = BatteryChoice.of(app) }
     val stay = check == Check.LIVE
     var free by remember { mutableStateOf(io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)) }
     // Only while this page is on screen.
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { free = io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx) }
+    if (choice == BatteryChoice.EXTREME) ExtremeBanner { BatteryChoice.BALANCED.apply(app); reread() }
     Framed("Battery") {
         ChoiceRow(BatteryChoice.entries.size, Modifier.padding(top = 8.dp), minWidth = 96.dp) { i, m ->
             val c = BatteryChoice.entries[i]
@@ -400,21 +459,23 @@ private fun BatteryPage(app: Muninn) {
     }
     Framed("Check for messages") {
         ChoiceRow(Check.entries.size, Modifier.padding(top = 8.dp), minWidth = 140.dp, max = 2) { i, m ->
-            val c = Check.entries[i]; MButton(c.title, m, if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c; choice = BatteryChoice.of(app) }
+            val c = Check.entries[i]; MButton(c.title, m, if (check == c) Kind.Accent else Kind.Normal) { check = c; app.power.check = c; byHand() }
         }
-        Help(when (check) {
+        Help(when {
+            choice == BatteryChoice.EXTREME -> "Only while Muninn is open."
+            else -> when (check) {
             Check.LIVE -> "Arrives in seconds"
             Check.QUARTER -> "Within 15 minutes. Calls missed."
             Check.HOUR -> "Within an hour. Calls missed."
             Check.OPEN -> "Only while Muninn is open."
-        })
+        } })
         Spacer(Modifier.height(8.dp))
     }
     Framed("Saving") {
-        if (stay) ToggleRow("Save when the screen is off", "Saves battery", saver) { saver = it; app.power.saver = it; choice = BatteryChoice.of(app) }
-        ToggleRow("Save more on low battery", "Below 30%", low) { low = it; app.power.lowBatterySave = it; choice = BatteryChoice.of(app) }
-        ToggleRow("Check less when quiet", "After 3 quiet hours", adaptive) { adaptive = it; app.power.adaptive = it; choice = BatteryChoice.of(app) }
-        ToggleRow("Data saver", "Big files wait for Wi-Fi", data) { data = it; app.power.dataSaver = it; choice = BatteryChoice.of(app) }
+        if (stay) ToggleRow("Save when the screen is off", "Saves battery", saver) { saver = it; app.power.saver = it; byHand() }
+        ToggleRow("Save more on low battery", "Below 30%", low) { low = it; app.power.lowBatterySave = it; byHand() }
+        ToggleRow("Check less when quiet", "After 3 quiet hours", adaptive) { adaptive = it; app.power.adaptive = it; byHand() }
+        ToggleRow("Data saver", "Big files wait for Wi-Fi", data) { data = it; app.power.dataSaver = it; byHand() }
         if (stay && Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
@@ -430,7 +491,11 @@ private fun BatteryPage(app: Muninn) {
 private fun CallsPage() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     var noise by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.noiseRemoval(ctx)) }
+    var internet by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.internetCalls(ctx)) }
     Framed {
+        ToggleRow("Internet calls", "Off: only close by and on the same Wi-Fi", internet) {
+            internet = it; io.github.ravenor907.muninn.net.call.CallManager.setInternetCalls(ctx, it)
+        }
         ToggleRow("Noise removal", "Takes out background noise", noise) {
             noise = it; io.github.ravenor907.muninn.net.call.CallManager.setNoiseRemoval(ctx, it)
         }
@@ -447,7 +512,7 @@ private fun NearbyPage(app: Muninn) {
     var closeBy by remember { mutableStateOf(app.power.closeBy) }
     Framed {
         ToggleRow("Visible to people nearby", "Off: only contacts can reach you", visible) {
-            visible = it; id.visibleNearby = it; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
+            visible = it; id.visibleNearby = it; app.net.announce(); app.ble.hiddenChanged()
         }
         if (visible) ToggleRow("Nearby room", "A chat for everyone close by", nearby) {
             nearby = it; id.nearbyChat = it; app.net.announce()
@@ -487,7 +552,7 @@ private fun AboutPage(app: Muninn) {
             if (up.ready) app.updater.download() else app.updater.check()
         }
         ToggleRow("Check automatically", "Your Kids' TV follows this", auto) {
-            auto = it; app.identity.autoUpdate = it; io.github.ravenor907.muninn.tv.TvParent.autoUpdateChanged(app)
+            auto = it; app.identity.autoUpdate = it
         }
     }
     Framed("About") {
@@ -497,6 +562,24 @@ private fun AboutPage(app: Muninn) {
 
 @Composable
 private fun ErasePage(app: Muninn) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var erased by remember { mutableStateOf(false) }
+    if (erased) {
+        // "Erased", then Muninn starts again as new.
+        androidx.compose.runtime.LaunchedEffect(Unit) {
+            withContext(Dispatchers.IO) { try { app.vault.eraseAll() } catch (_: Exception) {} }
+            kotlinx.coroutines.delay(1500)
+            restartApp(ctx)
+        }
+        Framed {
+            Row(Modifier.padding(vertical = 14.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                MIcon("check", Palette.accent, 22.dp)
+                Text("Erased", style = Type.big, modifier = Modifier.padding(start = 12.dp))
+            }
+            Text("Muninn starts again.", style = Type.small, modifier = Modifier.padding(bottom = 12.dp))
+        }
+        return
+    }
     Framed {
         io.github.ravenor907.muninn.ui.MenuRow("delete", "Delete all messages", danger = true) {
             Ui.sure(Ask("Delete all messages?", "Contacts stay. This can't be undone.", "Hold to delete", danger = true, hold = true) {
@@ -505,7 +588,7 @@ private fun ErasePage(app: Muninn) {
         }
         io.github.ravenor907.muninn.ui.MenuRow("close", "Erase everything", danger = true) {
             Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings. This can't be undone.",
-                "Hold to erase", danger = true, hold = true) { app.vault.eraseAll(); android.os.Process.killProcess(android.os.Process.myPid()) })
+                "Hold to erase", danger = true, hold = true) { erased = true })
         }
     }
 }
@@ -637,77 +720,19 @@ private fun FolderHeader(title: String, onBack: () -> Unit) {
 }
 
 /**
- * Linked devices, companion style: a tablet or second phone shows this phone's chats and sends through it while this
- * phone is online. Contacts see nothing new. One device shows a code, the other takes it.
+ * Linked devices, companion style: a tablet or computer shows this phone's chats and sends through it while this
+ * phone is online. Contacts see nothing new. The tablet shows a QR, the phone scans it. Moving to another device below.
  */
 @Composable
 private fun LinkedDevices(app: Muninn) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val companions by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
-    val phone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
-    var code by remember { mutableStateOf<String?>(null) }
-    var pasted by remember { mutableStateOf("") }
-    Help("Show these chats on another device.")
-    phone?.let { p ->
-        Section("This device mirrors")
-        Panel {
-            Text(p.name, style = Type.big)
-            MButton("Unlink", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
-                Ui.sure(Ask("Unlink ${p.name}?", "This device stops showing its chats.", "Unlink", danger = true) { io.github.ravenor907.muninn.net.Link.unlink(p.key) })
-            }
-        }
-    }
-    if (companions.isNotEmpty()) {
-        Section("Linked to this phone")
-        Panel {
-            companions.forEach { d ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(d.name, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-                    MButton("Unlink", kind = Kind.Danger) {
-                        Ui.sure(Ask("Unlink ${d.name}?", "Its copy of your chats is removed.", "Unlink", danger = true) { io.github.ravenor907.muninn.net.Link.unlink(d.key) })
-                    }
-                }
-            }
-        }
-    }
-    // Use on both (linked devices, below), or Move here (cap x1).
+    LinkedDevicesPanel(app)
+    // Move here (cap x1).
     MoveSection(app)
-    Section("Link a device to this phone")
-    Panel {
-        Text("Scan the other device's link code.", style = Type.small)
-        var scanning by remember { mutableStateOf(false) }
-        if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp).height(260.dp)) { c ->
-            scanning = false
-            val err = io.github.ravenor907.muninn.net.Link.link(c)
-            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Now check the 4 emoji on both screens.", err != null)
-        }
-        MButton(if (scanning) "Stop scanning" else "Scan the code", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "qr") { scanning = !scanning }
-        io.github.ravenor907.muninn.ui.Field(pasted, { pasted = it }, "Paste the link code", Modifier.padding(top = 8.dp), single = false)
-        MButton("Link", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = pasted.isNotBlank()) {
-            val err = io.github.ravenor907.muninn.net.Link.link(pasted)
-            io.github.ravenor907.muninn.ui.Ui.say(err ?: "Now check the 4 emoji on both screens.", err != null)
-            if (err == null) pasted = ""
-        }
-    }
-    if (phone == null) {
-        Section("Use this device as a companion")
-        Panel {
-            Text("Scan with your phone. Works 10 minutes.", style = Type.small)
-            val c = code
-            if (c == null) MButton("Show the link code", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { code = io.github.ravenor907.muninn.net.Link.myLinkCode() }
-            else {
-                androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().padding(vertical = 10.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                    io.github.ravenor907.muninn.screens.Qr(c, 220.dp)
-                }
-                MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
-                    io.github.ravenor907.muninn.ui.Clip.copy(ctx, "Muninn link code", c)
-                    io.github.ravenor907.muninn.ui.Ui.say("Code copied. Paste it on your phone.")
-                }
-                MButton("Share", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "send") {
-                    ctx.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(android.content.Intent.EXTRA_TEXT, c), "Send the link code to your phone"))
-                }
-            }
-        }
-    }
+}
+
+/** Muninn opens again from the start, in a fresh process (after Erase everything). */
+private fun restartApp(ctx: android.content.Context) {
+    val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.component
+    if (launch != null) try { ctx.startActivity(android.content.Intent.makeRestartActivityTask(launch)) } catch (_: Exception) {}
+    Runtime.getRuntime().exit(0)
 }

@@ -1,8 +1,6 @@
 package io.github.ravenor907.muninn.net.call
 
 import java.io.ByteArrayOutputStream
-import java.net.Inet4Address
-import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -210,8 +208,6 @@ object Stun {
     val UDP_TRANSPORT = byteArrayOf(17, 0, 0, 0)
     fun channelNumber(ch: Int) = byteArrayOf((ch shr 8).toByte(), ch.toByte(), 0, 0)
 
-    fun isV4(a: InetAddress) = a is Inet4Address
-    fun isV6(a: InetAddress) = a is Inet6Address
 
     // ------------------------------------------------------------------ ChannelData (RFC 8656, 12.4)
 

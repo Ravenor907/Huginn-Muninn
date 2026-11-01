@@ -371,8 +371,6 @@ class CallMedia(
     fun freeFresh(now: Long = System.currentTimeMillis()) =
         paths.any { (it.kind == CallLogic.Kind.WIFI || it.kind == CallLogic.Kind.DIRECT) && it.lastPong > 0 && now - it.lastPong < CallLogic.FRESH_MS }
 
-    /** Live paths the UI shows: true while the direct path carries the call. */
-    fun directLive(): Boolean { val now = System.currentTimeMillis(); return paths.any { it.kind == CallLogic.Kind.DIRECT && it.live(now) } }
 
     /**
      * Seals with the next seq and sends on [only], or on every live path (every known one while none is live). The relay
@@ -447,7 +445,6 @@ class CallMedia(
     private var videoCount = 0
 
     fun peerSending(stream: Int) = peerSending[stream and 1]
-    fun videoSending(stream: Int) = sending[stream and 1]
 
     /**
      * The size, frame rate and bitrate cap for [stream] right now: 480p over the relay, up to 720p on a free path,

@@ -1,7 +1,7 @@
 package io.github.ravenor907.muninn.net
 
 /**
- * Relay envelopes are padded to a few fixed sizes (shared/docs/protocol-0.6.md section 20), so a relay can't tell a
+ * Relay envelopes are padded to a few fixed sizes (shared/docs/protocol.md section 20), so a relay can't tell a
  * short "ok" from a long message, or a reaction from a photo piece, by its size. The padding is a field
  * "z" of zeros in the outer wrapping, outside the seal; apps that don't pad ignore fields they don't know.
  */

@@ -15,7 +15,7 @@ object Backup {
     const val PREFS_ENTRY = "@prefs.json"
     private const val PREFS = "muninn"
     /** Settings that belong to this phone, not to the person: never copied over. */
-    private val phoneOnly = setOf("fingerprint", "lockFails", "lockUntil", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
+    private val phoneOnly = setOf("fingerprint", "lockFails", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
         RESTORED_AT, RESTORE_ANNOUNCE)
     /** When a backup was last restored here (ms): for 7 days a relay envelope for a day key not here yet waits (see Chat). */
     const val RESTORED_AT = "restoredAt"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Reference for the Huginn/Muninn message ratchet (forward secrecy), and the test vectors both apps
-are checked against (shared/vectors/ratchet-vectors.json). Run it to regenerate the vectors.
+are checked against (code/shared/vectors/ratchet-vectors.json). Run it to regenerate the vectors.
 
 Spec:
   Keys: P-256. Public keys travel as base64 SubjectPublicKeyInfo DER, like the chat keys.

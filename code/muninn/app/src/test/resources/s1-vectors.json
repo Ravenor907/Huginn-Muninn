@@ -1,5 +1,5 @@
 {
- "note": "cap s1, shared/docs/protocol-0.6.md section 21; written by shared/tools/s1_ref.py",
+ "note": "cap s1, code/shared/docs/protocol.md section 21; written by code/shared/tools/s1_ref.py",
  "keys": {
   "A": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
   "B": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",

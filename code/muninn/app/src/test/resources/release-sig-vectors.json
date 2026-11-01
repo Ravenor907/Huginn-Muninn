@@ -1,5 +1,5 @@
 {
- "note": "Ed25519 release signatures (RFC 8032), shared/docs/releases.md; written by shared/tools/release_sig_ref.py",
+ "note": "Ed25519 release signatures (RFC 8032), code/shared/docs/releases.md; written by code/shared/tools/release_sig_ref.py",
  "cases": [
   {
    "name": "RFC 8032 test 1",
@@ -206,11 +206,6 @@
    "install": false
   },
   {
-   "tag": "0.96",
-   "current": "0.96 Test 2",
-   "install": true
-  },
-  {
    "tag": "1.0",
    "current": "0.99",
    "install": true
@@ -274,11 +269,6 @@
    "tag": "1.0 beta 1",
    "current": "0.99",
    "install": true
-  },
-  {
-   "tag": "0.99 beta 1",
-   "current": "0.99 Test 2",
-   "install": false
   }
  ]
 }

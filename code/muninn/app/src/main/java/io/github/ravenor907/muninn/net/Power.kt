@@ -128,6 +128,23 @@ class Power(private val app: Muninn) {
             if (!v) main.post { caughtUpAt = 0L; catchUp(opened = true) }
         }
 
+    /** Extreme saver on (Battery › Extreme saver): what it turns off is kept, so [leaveExtreme] turns it back on. */
+    fun enterExtreme() {
+        if (extreme) return
+        prefs.edit().putString("extremeBefore", PowerLogic.extremeSnapshot(closeBy, app.identity.linkPreviews)).apply()
+        closeBy = false
+        app.identity.linkPreviews = false
+        extreme = true
+    }
+
+    /** Extreme saver off (another choice, or any change by hand on the Battery page): what it turned off comes back. */
+    fun leaveExtreme() {
+        if (!extreme) return
+        extreme = false
+        PowerLogic.extremeRestore(prefs.getString("extremeBefore", null))?.let { (c, p) -> closeBy = c; app.identity.linkPreviews = p }
+        prefs.edit().remove("extremeBefore").apply()
+    }
+
     /** Extreme battery saver is in charge right now (a Kids' TV always listens and rings): [PowerLogic.manual]. */
     fun manual(): Boolean = PowerLogic.manual(PowerLogic.Inputs(extreme = extreme,
         kidsTv = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }))
@@ -516,7 +533,6 @@ class Power(private val app: Muninn) {
     private fun radios(p: PowerLogic.Plan) {
         if (!app.ready.value) return
         try { app.ble.power(p.radio) } catch (_: Exception) {}
-        try { app.close.power(p.radio) } catch (_: Exception) {}
         try { app.net.discovery(p.wifi) } catch (_: Exception) {}
     }
 }

@@ -61,12 +61,20 @@ internal enum class Status(val key: String, val title: String, val hint: String)
     }
 }
 
-/** The colours a person can pick for the initial-and-colour fallback, as hex. */
-private val COLOURS = listOf("#C9A964", "#3D6A9E", "#8C5A4A", "#4C8A5A", "#7A4F9E", "#8A8A8A")
+/**
+ * A new chosen name: saved, said to the Wi-Fi and Bluetooth, and sent with my profile to everyone who already has me
+ * (cap p1), so their copy of my name follows.
+ */
+internal fun saveName(app: Muninn, name: String) {
+    val id = app.identity
+    if (name.isBlank() || name.trim() == id.username) return
+    id.username = name
+    if (!app.ready.value) return
+    app.net.announce(); app.ble.hiddenChanged()
+    try { app.profile.nameChanged() } catch (_: Exception) {}
+}
 
-private fun colourOf(hex: String): Color = try { Color(android.graphics.Color.parseColor(hex)) } catch (_: Exception) { Palette.goldTint }
-
-/** The colour of a status's square and dot. */
+/** The color of a status's square and dot. */
 private fun statusColour(s: Status): Color = when (s) {
     Status.ONLINE -> Palette.online
     Status.AWAY -> if (Access.colorBlind) Palette.gold else Palette.away
@@ -108,19 +116,17 @@ fun ProfileScreen(app: Muninn) {
     if (pictures["me"] != null) MButton("Remove picture", Modifier.fillMaxWidth().padding(top = 6.dp), Kind.Danger) {
         profile.clearMyPicture(); Ui.say("Picture removed.")
     }
-    Text("Only your contacts see it.",
-        style = Type.small, modifier = Modifier.padding(top = 4.dp))
     if (picking) PicturePickerSheet(app) { picking = false }
 
-    Text("Colour of your initial", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
+    Text("Color of your initial", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
     // Wraps onto a second line when six don't fit (a small phone at a large size); each is a full 48dp touch target.
     FlowRow(Modifier.padding(top = 8.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        COLOURS.forEachIndexed { i, hex ->
+        Palette.MY_COLORS.forEach { hex ->
             val on = colour.equals(hex, true)
-            Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(colourOf(hex))
+            Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(Palette.parse(hex) ?: Palette.goldTint)
                 .border(if (on) 3.dp else 0.dp, if (on) Palette.text else Color.Transparent, CircleShape)
                 .selectable(selected = on, role = Role.RadioButton) { profile.setMyColour(hex) }
-                .semantics { contentDescription = "Colour ${i + 1} of ${COLOURS.size}" + if (on) ", chosen" else "" },
+                .semantics { contentDescription = Palette.myColorName(hex) + if (on) ", chosen" else "" },
                 contentAlignment = Alignment.Center) {
                 if (on) MIcon("check", Palette.text, 20.dp)
             }
@@ -132,7 +138,7 @@ fun ProfileScreen(app: Muninn) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Field(name, { name = it.take(24) }, "A name", Modifier.weight(1f))
         MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = name.isNotBlank() && name.trim() != id.username) {
-            id.username = name; app.net.announce(); app.close.readvertise(); Ui.say("You're “${id.username}” now.")
+            saveName(app, name); Ui.say("You're “${id.username}” now.")
         }
     }
     Text("Any name you like.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
@@ -167,7 +173,7 @@ fun ProfileScreen(app: Muninn) {
 
     Section("More")
     ProfileRow("My code", "For someone to scan") { SettingsNav.goChat = "code" }
-    ProfileRow("Link a computer", "Tablet or second phone") { SettingsNav.folder = "link" }
+    ProfileRow("Linked devices", "Tablet or second phone") { SettingsNav.folder = "link" }
     Spacer(Modifier.height(8.dp))
 }
 

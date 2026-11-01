@@ -110,8 +110,7 @@ private class Todo(val id: String, val title: String, val detail: String, val bu
 private const val FINISH_HIDDEN = "finishHidden"
 
 /**
- * "1 thing to finish" on the chat list: the permissions Muninn still needs, close-by chat, the note that messages
- * delete, and where this phone's chats are mirrored, as one row that opens a small sheet. The row can be put away;
+ * "1 thing to finish" on the chat list: the permissions Muninn still needs, close-by chat, and where this phone's chats are mirrored, as one row that opens a small sheet. The row can be put away;
  * it comes back when something new is added. Never on a Kids' TV (a parent sets that up from the TV's own checklist).
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -132,14 +131,17 @@ fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modif
         if (!ok && m != null && System.currentTimeMillis() - askedAt < 500) openAppSettings(ctx, m.id == "notify")
         tick++
     }
-    val closeError by app.close.error.collectAsState()
+    val closeError by app.ble.error.collectAsState()
     val companions by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
     val mirrored = companions.filter { it.ok }
-    var limits by remember { mutableStateOf(prefs.getBoolean(LIMITS_NOTE, false)) }
+    // Said once, the first time the chat list opens (new phones and upgraded ones alike).
+    LaunchedEffect(Unit) {
+        if (!prefs.getBoolean(KEEP_NOTICE, false)) { prefs.edit().putBoolean(KEEP_NOTICE, true).remove("limitsNote").apply(); io.github.ravenor907.muninn.ui.Ui.sure(keepNotice()) }
+    }
     var hidden by remember { mutableStateOf(prefs.getStringSet(FINISH_HIDDEN, null).orEmpty()) }
     var open by remember { mutableStateOf(false) }
     val todos = buildList {
-        if (closeError != null) add(Todo("close", "Chat close by", "Works without the internet.", "Allow") { onAllowNearby() })
+        if (closeError == io.github.ravenor907.muninn.net.Ble.PERMISSION_TEXT) add(Todo("close", "Chat close by", "Works without the internet.", "Allow") { onAllowNearby() })
         list.forEach { m ->
             add(Todo(m.id, m.title, m.detail, "Allow") {
                 when {
@@ -152,9 +154,6 @@ fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modif
         }
         if (mirrored.isNotEmpty()) add(Todo("mirror:" + mirrored.joinToString(",") { it.name }, "Mirrored to " + mirrored.joinToString(", ") { it.name },
             "They can send as you.", "Open") { open = false; SettingsNav.goSettings = "link" })
-        if (limits) add(Todo("limits", "Messages delete after 7 days.", "", "Got it") {
-            limits = false; prefs.edit().putBoolean(LIMITS_NOTE, false).apply()
-        })
     }
     val shown = todos.filter { it.id !in hidden }
     if (shown.isEmpty()) return

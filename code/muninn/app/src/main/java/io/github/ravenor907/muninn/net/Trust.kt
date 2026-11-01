@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net
 import org.json.JSONObject
 
 /**
- * Cap i1 (shared/docs/protocol-0.6.md, section 13): becoming contacts through someone you already trust.
+ * Cap i1 (shared/docs/protocol.md, section 13): becoming contacts through someone you already trust.
  *
  *  - Room "intro" t "intro" {id, k, n, p}: a contact introduces me to [k] (their name and mailbox). Nothing happens
  *    until I say yes.

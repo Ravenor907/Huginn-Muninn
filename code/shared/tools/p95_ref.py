@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for caps x1, j1 and k6 (shared/docs/protocol-0.6.md, sections 7.11, 17 and 18), and the test vectors both
-apps check (shared/vectors/p95-vectors.json). Run it to write the vectors; it checks every case twice (building, then from the file).
+"""Reference for caps x1, j1 and k6 (code/shared/docs/protocol.md, sections 7.11, 17 and 18), and the test vectors both
+apps check (code/shared/vectors/p95-vectors.json). Run it to write the vectors; it checks every case twice (building, then from the file).
 
  - x1 (18): moving to another device. The key from the two one-off keys and the secret in the QR, the 4 emoji, the hello
    and status checks, a sealed part, the sealed link code, and the payload's layout.
@@ -169,7 +169,7 @@ def build():
     nonce = b"\x09" * 12
     n = parts(len(blob))
     return {
-        "about": "shared/docs/protocol-0.6.md 7.11, 17 and 18. Written by shared/tools/p95_ref.py.",
+        "about": "code/shared/docs/protocol.md 7.11, 17 and 18. Written by code/shared/tools/p95_ref.py.",
         "move": {
             "newScalar": "5001", "oldScalar": "6001", "newPub": b64(new_pub), "oldPub": b64(old_pub),
             "newPriv": b64(new_priv.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())),

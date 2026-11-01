@@ -20,7 +20,7 @@ import org.junit.Test
 import java.net.InetAddress
 import java.security.KeyPair
 
-/** shared/vectors/s1-vectors.json (cap s1: proven routes and sealed clear fields, shared/docs/protocol-0.6.md section 21). */
+/** shared/vectors/s1-vectors.json (cap s1: proven routes and sealed clear fields, shared/docs/protocol.md section 21). */
 class S1Test {
     private val v = JSONObject(javaClass.classLoader!!.getResource("s1-vectors.json")!!.readText())
     private val chat = JSONObject(javaClass.classLoader!!.getResource("chat-vectors.json")!!.readText())

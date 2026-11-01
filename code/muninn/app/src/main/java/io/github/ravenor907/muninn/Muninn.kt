@@ -9,8 +9,6 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import io.github.ravenor907.muninn.net.Chat
-import io.github.ravenor907.muninn.net.Close
-import io.github.ravenor907.muninn.net.CloseFiles
 import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.net.Direct
 import io.github.ravenor907.muninn.net.Identity
@@ -34,9 +32,7 @@ class Muninn : Application() {
     lateinit var identity: Identity
     lateinit var nostr: Nostr
     lateinit var net: LocalSend
-    lateinit var close: Close
     lateinit var ble: io.github.ravenor907.muninn.net.Ble
-    lateinit var closeFiles: CloseFiles
     lateinit var contacts: Contacts
     lateinit var chat: Chat
     /** Your status, custom status, picture and colour, and your contacts' (see net/Profile). */
@@ -62,6 +58,7 @@ class Muninn : Application() {
             season = io.github.ravenor907.muninn.ui.Seasons.choice(identity.season)
             seasonGround = io.github.ravenor907.muninn.ui.Seasons.ground(identity.seasonGround)
             seasonAnim = io.github.ravenor907.muninn.ui.Seasons.anim(identity.seasonAnim)
+            accent = identity.accent
         }
         io.github.ravenor907.muninn.ui.PrivateKeyboard.on = identity.privateKeyboard
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }
@@ -123,19 +120,17 @@ class Muninn : Application() {
         if (ready.value) return
         net = LocalSend(this, identity)
         net.mailbox = nostr.publicKey
-        close = Close(this, identity)
         ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
         // Hidden from people nearby: Bluetooth is silent too (section 21.3).
         ble.hidden = { !identity.visibleNearby }
         contacts = Contacts(this, vault)
-        chat = Chat(this, net, close, ble, nostr, contacts, vault)
+        chat = Chat(this, net, ble, nostr, contacts, vault)
         chat.ringKey = nostr.ring
         profile = io.github.ravenor907.muninn.net.Profile(this, vault, contacts, chat)
         chat.profile = profile
         io.github.ravenor907.muninn.tv.Tv.install(this)
         io.github.ravenor907.muninn.net.call.CallManager.init(this, chat)
         io.github.ravenor907.muninn.net.call.RoomManager.init(this)
-        closeFiles = CloseFiles(this, close, net)
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) ->
             power.activity()   // Check less when it's quiet starts over
@@ -258,7 +253,6 @@ class Muninn : Application() {
     /** The refresh button on Nearby: look again for phones close by, Huginn over Bluetooth, and devices on the Wi-Fi. */
     fun refreshNearby() {
         if (!ready.value) return
-        close.lookAgain()
         ble.start()
         net.refresh()
     }

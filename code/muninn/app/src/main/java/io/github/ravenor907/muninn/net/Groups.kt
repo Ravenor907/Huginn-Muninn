@@ -12,7 +12,7 @@ import org.json.JSONObject
 import java.security.KeyPair
 
 /**
- * Group chats (shared/docs/protocol-0.6.md, section 3). No group key: every group message is sealed to each
+ * Group chats (shared/docs/protocol.md, section 3). No group key: every group message is sealed to each
  * member over that member's own pairwise session, by [Host.send]. The group itself is a signed
  * snapshot ([State]); every change is a whole new state with a higher version, signed by an admin.
  *
@@ -40,7 +40,7 @@ class Groups(
         /** Something arrived in group [g] (for a notification). */
         fun arrived(g: String, title: String, text: String)
         fun deleteBlob(id: String)
-        /** Their app said "m1": reactions and edits go to them (shared/docs/protocol-0.6.md, section 11). */
+        /** Their app said "m1": reactions and edits go to them (shared/docs/protocol.md, section 11). */
         fun hasM1(k: String): Boolean = false
         /** Their app said "m2": votes and video messages go to them (section 12). */
         fun hasM2(k: String): Boolean = false
@@ -315,8 +315,6 @@ class Groups(
         out(admin, "group", JSONObject().put("t", "join").put("g", g).put("id", id).put("inv", inv)
             .put("n", clean(host.myName, Proto06.MAX_NAME)).put("p", mailbox(host.myMailbox)).toString(), id, g)
     }
-
-    fun isJoining(g: String) = synchronized(lock) { joining.containsKey(g) }
 
     /** Leaves (the owner hands the group over first). The group stays here, read-only. */
     fun leave(g: String): String? = act {

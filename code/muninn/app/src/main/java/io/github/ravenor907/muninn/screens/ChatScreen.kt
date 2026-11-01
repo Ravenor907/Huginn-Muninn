@@ -233,6 +233,14 @@ private fun preview(m: Chat.Msg) = when {
     else -> m.text.replace('\n', ' ')
 }
 
+/** A call as the chat list's preview. */
+private fun callPreview(l: io.github.ravenor907.muninn.net.call.CallManager.Log) = when {
+    !l.outgoing && l.result == "missed" -> "Missed call"
+    l.result == "answered" -> "Call · ${l.seconds / 60}:${"%02d".format(l.seconds % 60)}"
+    l.outgoing -> "Call, no answer"
+    else -> "Call"
+}
+
 /** Unread messages: theirs since my last message (at least 1 once the chat is marked unread). */
 private fun unreadCount(msgs: List<Chat.Msg>): Int {
     var n = 0
@@ -296,10 +304,10 @@ fun ChatMain(app: Muninn) {
             "requests" -> RequestsScreen(app) { ChatNav.open = "" }
             "archived" -> ArchivedScreen(app)
             "tap" -> TapScreen(app) { ChatNav.open = "" }
-            "mirror" -> MirrorList { ChatNav.open = "" }
+            "mirror" -> MirrorList()
             "labsreport" -> LabsReportScreen(app)
             Chat.LABS_PAGE -> LabsReportsScreen(app)
-            else -> if (open.startsWith("mirror/")) androidx.compose.runtime.key(open) { MirrorChatScreen(open.removePrefix("mirror/")) { ChatNav.open = "mirror" } }
+            else -> if (open.startsWith("mirror/")) androidx.compose.runtime.key(open) { MirrorChatScreen(open.removePrefix("mirror/")) { ChatNav.open = "" } }
                 else androidx.compose.runtime.key(open) { Conversation(app, open) }
         }
     }
@@ -458,11 +466,15 @@ private fun PersonRow(name: String, preview: String, time: String, unread: Int, 
 
 @Composable
 private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
+    // A tablet linked to a phone: the phone's chats are the list; this device's own are sealed away until opened
+    // from Settings › Linked devices (after the lock).
+    val mirrorPhone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
+    val ownShown by io.github.ravenor907.muninn.net.Link.ownShown.collectAsState()
+    if (mirrorPhone?.ok == true && !ownShown) { MirrorList(inline = true); return }
     val contacts by app.chat.contacts.all.collectAsState()
     val convos by app.chat.conversations.collectAsState()
     val requests by app.chat.requests.collectAsState()
     val unread by app.chat.unread.collectAsState()
-    val close by app.close.list.collectAsState()
     val wifi by app.net.devices.collectAsState()
     val met by app.chat.met.collectAsState()
     val blocked by app.chat.blocked.collectAsState()
@@ -485,13 +497,15 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val activeMap by app.chat.active.collectAsState()
     // Everyone reachable right now: close by first, then the same Wi-Fi. (key, name, route)
     val around = buildList {
-        close.filter { it.connected && it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.name, "close")) }
         wifi.filter { it.chatKey != null }.forEach { add(Triple(it.chatKey!!, it.chatName ?: it.alias, "wifi")) }
     }.distinctBy { it.first }
     // Close-by people already chatting with (not contacts yet) sit with the chats.
     val strangers = around.filter { !app.chat.isContact(it.first) && convos[it.first].isNullOrEmpty() && it.first !in blocked }
+    // Calls count too: a missed call moves its chat up and shows as its preview.
+    val calls by io.github.ravenor907.muninn.net.call.CallManager.history.collectAsState()
+    val lastCall = remember(calls) { calls.groupBy { it.peerKey }.mapValues { (_, l) -> l.maxByOrNull { it.at }!! } }
     fun lastTime(r: ChatRow): Long = if (r.group != null) gmsgs[r.group]?.lastOrNull()?.time ?: groups[r.group]?.state?.ts ?: 0L
-        else convos[r.key]?.lastOrNull()?.time ?: 0L
+        else maxOf(convos[r.key]?.lastOrNull()?.time ?: 0L, lastCall[r.key]?.at ?: 0L)
     // Contacts (never group peers), anyone else there's a conversation with, and groups, newest first.
     val everyRow = (contacts.filter { !it.groupOnly }.map { ChatRow(it.chatKey, it.shown, it.name) } +
         // Not a contact: marked, so a name they chose ("Mom") never looks like one of mine.
@@ -593,7 +607,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         } else {
             val msgs = convos[c.key].orEmpty()
             val last = msgs.lastOrNull()
-            PersonRow(c.name, last?.let { preview(it) } ?: routeText(app.chat.route(c.key)), last?.let { when_(it.time) } ?: "",
+            val call = lastCall[c.key]?.takeIf { it.at > (last?.time ?: 0L) }
+            PersonRow(c.name, call?.let { callPreview(it) } ?: last?.let { preview(it) } ?: routeText(app.chat.route(c.key)),
+                call?.let { when_(it.at) } ?: last?.let { when_(it.time) } ?: "",
                 if (c.key in unread) unreadCount(msgs) else if (c.key in flagState.unread) 1 else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.key, c.name, 48.dp, active = c.key in activeMap) },
                 muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
                 onLong = { ChatNav.menuGroup = ""; ChatNav.hold = c.key }, modifier = rowMod, onDrag = onDrag, onDrop = onDrop) { ChatNav.open = c.key }
@@ -611,12 +627,15 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }
                 // Permissions still missing, the message limits note and mirrored chats: one row, one sheet.
                 FinishRow(app, onAllowNearby, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+                if (app.power.extreme) Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
+                    ExtremeBanner("Battery") { SettingsNav.goSettings = "battery" }
+                }
             }
-            // A companion (linked devices): the phone's chats, on their own page.
-            linkedPhone?.let { ph -> item(key = "mirror") {
-                PersonRow("${ph.name}'s chats", "From your phone", "", 0, false, {
+            // A linked tablet showing its own chats for now: one row back to the phone's.
+            linkedPhone?.takeIf { it.ok }?.let { ph -> item(key = "mirror") {
+                PersonRow("${ph.name}'s chats", "Back to your phone's chats", "", 0, false, {
                     Box(Modifier.size(48.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
-                        MIcon("phone", Palette.goldBright, 22.dp) } }) { ChatNav.open = "mirror" }
+                        MIcon("phone", Palette.goldBright, 22.dp) } }) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
             } }
             // With folders, the chats in none of them sit under their own label (also where a dragged chat lands).
             if (folders.isNotEmpty() && sectioned) item(key = "h") {
@@ -826,7 +845,7 @@ private fun NearbyRoom(app: Muninn) {
                 val hidden = !app.identity.visibleNearby
                 Text(if (hidden) "You're hidden from people nearby." else "Nearby chat is off.", style = Type.normal)
                 MButton(if (hidden) "Be visible to people nearby" else "Turn on Nearby chat", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
-                    app.identity.visibleNearby = true; app.identity.nearbyChat = true; on = true; app.net.announce(); app.close.readvertise(); app.ble.hiddenChanged()
+                    app.identity.visibleNearby = true; app.identity.nearbyChat = true; on = true; app.net.announce(); app.ble.hiddenChanged()
                 }
             }
             return@Column
@@ -868,7 +887,7 @@ private fun Conversation(app: Muninn, key: String) {
     val list = rememberLazyListState()
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.markRead(key); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     // Redraw as they come into or go out of range (route, and when to ask "Keep in touch?").
-    @Suppress("UNUSED_VARIABLE") val closeNow by app.close.list.collectAsState()
+    @Suppress("UNUSED_VARIABLE") val closeNow by app.ble.peers.collectAsState()
     @Suppress("UNUSED_VARIABLE") val wifiNow by app.net.devices.collectAsState()
     val route = app.chat.route(key)
     val verified = app.chat.isVerified(key)
@@ -994,7 +1013,7 @@ private fun Conversation(app: Muninn, key: String) {
                     if (callable) io.github.ravenor907.muninn.screens.CallActivity.call(context, key)
                     else Ui.say("$name needs an update for calls.")
                 }
-                // Video calls: both apps must speak c2 (shared/docs/protocol-0.6.md 5.8.5).
+                // Video calls: both apps must speak c2 (shared/docs/protocol.md 5.8.5).
                 if (callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key))
                     IconAction("video", "Video call $name", Palette.text) { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) }
             }
@@ -1167,7 +1186,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     }
     Row(Modifier.fillMaxWidth().padding(start = if (onPhoto != null) 6.dp else 12.dp, end = 10.dp, top = 8.dp, bottom = 12.dp),
         verticalAlignment = Alignment.Bottom) {
-        if (onPhoto != null) { IconAction("image", "Send a picture", Palette.textMuted, size = 24.dp) { onPhoto() }; Spacer(Modifier.width(4.dp)) }
+        if (onPhoto != null) { IconAction("plus", "Attach", Palette.textMuted, size = 24.dp) { onPhoto() }; Spacer(Modifier.width(4.dp)) }
         val shape = io.github.ravenor907.muninn.ui.LookShapes.composer
         Row(Modifier.weight(1f).heightIn(min = 44.dp).clip(shape).background(Palette.field).hcBorder(shape).padding(start = 16.dp, end = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -1274,12 +1293,19 @@ private fun AddSomeone(app: Muninn) {
             when {
                 text.isBlank() && mode.isEmpty() -> {
                     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                        QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 340.dp))) { scanned -> text = Contacts.unlink(scanned) }
+                        QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 340.dp))) { scanned ->
+                            // A tablet's or computer's link code (Link your phone): linked here, the emoji come up next.
+                            if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) LinkUi.take(scanned)?.let { Ui.say(it, true) } ?: run { ChatNav.open = "" }
+                            else text = Contacts.unlink(scanned)
+                        }
                     }
                     Text("Point at their code.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
                 }
                 text.isBlank() -> Field(text, { text = it }, "Paste a code or link", Modifier.padding(vertical = 12.dp), single = false)
                 invite != null -> Panel(Modifier.padding(top = 12.dp)) { JoinCard(app, invite) { text = ""; if (!invite.expired) ChatNav.open = "" } }
+                io.github.ravenor907.muninn.net.Link.isCode(text) -> MButton("Link this device", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "link") {
+                    LinkUi.take(text)?.let { Ui.say(it, true) } ?: run { text = ""; ChatNav.open = "" }
+                }
                 found == null -> {
                     Field(text, { text = it }, "Paste a code or link", Modifier.padding(vertical = 10.dp), single = false)
                     Text("That isn't a Muninn code.", style = Type.small.copy(color = Palette.danger))
@@ -1326,11 +1352,19 @@ private fun AddSomeone(app: Muninn) {
  * and that number in a circle), -1 otherwise. [onReply]: swipe right to reply. [highlight]: a search match
  * or an @mention of me.
  */
-/** The bubble color picked for [key]'s chat, or Unspecified for the usual grey. */
+/**
+ * [key]'s chat color (Person details › Chat color): while its chat is open, the accent follows it, and my bubbles
+ * take a tint of it. Unspecified (the usual bubbles) when the chat has none.
+ */
 @Composable
 internal fun mineTint(app: Muninn, key: String): Color {
     val st by app.chat.flags.all.collectAsState()
-    return st.colors[key]?.let { io.github.ravenor907.muninn.net.ChatFlags.COLORS[it] }?.let { Color(it.first) } ?: Color.Unspecified
+    val hex = io.github.ravenor907.muninn.ui.Accents.chatHex(st.colors[key])
+    androidx.compose.runtime.DisposableEffect(hex) {
+        io.github.ravenor907.muninn.ui.Access.chatAccent = hex
+        onDispose { if (io.github.ravenor907.muninn.ui.Access.chatAccent == hex) io.github.ravenor907.muninn.ui.Access.chatAccent = "" }
+    }
+    return if (hex.isEmpty()) Color.Unspecified else Palette.tintOf(Palette.accentOf(hex))
 }
 
 /** My bubbles' color in the chat on screen (Unspecified: the usual). Set per chat with Chat color. */
@@ -2243,7 +2277,7 @@ private fun GroupSettings(app: Muninn, g: String) {
             }
             if (admin || s.channels.size > 1) io.github.ravenor907.muninn.ui.Framed("Channels") {
                 s.channels.forEach { c ->
-                    Line(if (c.t == "voice") c.n else "# ${c.n}", if (c.t == "voice") "Voice room" else "", icon = if (c.t == "voice") "audio" else "chat") { if (admin) channel = c }
+                    Line(if (c.t == "voice") c.n else "# ${c.n}", if (c.t == "voice") "Voice room" else "", icon = if (c.t == "voice") "audio" else "chat", enabled = admin) { channel = c }
                 }
                 if (admin && s.channels.size < Proto06.MAX_CHANNELS) MButton("Add a channel", Modifier.fillMaxWidth().padding(vertical = 8.dp), icon = "plus") { addingChannel = true }
             }
@@ -2405,31 +2439,42 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
     )
 }
 
-/** On a companion (linked devices): the phone's chats. */
+/**
+ * On a linked tablet: the phone's chats, newest first. [inline]: it's the chat list itself (no back arrow); else a page
+ * of its own.
+ */
 @Composable
-private fun MirrorList(back: () -> Unit) {
-    BackHandler { back() }
+private fun MirrorList(inline: Boolean = false) {
+    if (!inline) BackHandler { ChatNav.open = "" }
     val chats by io.github.ravenor907.muninn.net.Link.mirror.collectAsState()
+    val phone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
     val list = chats.values.sortedByDescending { c -> c.msgs.lastOrNull()?.time ?: 0L }
+    LaunchedEffect(Unit) { io.github.ravenor907.muninn.net.Link.fetchMissing() }
     Column(Modifier.fillMaxSize()) {
-        PageBar("Your phone's chats") { back() }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("While your phone is online.", style = Type.small, modifier = Modifier.weight(1f))
+        if (!inline) PageBar("Your phone's chats") { ChatNav.open = "" }
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 2.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            MIcon("phone", Palette.accent, 20.dp)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(phone?.name ?: "Your phone", style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("While your phone is online", style = Type.small)
+            }
             IconAction("refresh", "Ask the phone again", Palette.textMuted, size = 20.dp) {
                 io.github.ravenor907.muninn.net.Link.askSync(); Ui.say("Asking your phone…")
             }
         }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
         LazyColumn(Modifier.weight(1f)) {
-            if (list.isEmpty()) item { Text("Nothing yet. Is your phone online?", style = Type.normal, modifier = Modifier.padding(16.dp)) }
+            if (list.isEmpty()) item { Text("Your chats are coming over.", style = Type.normal, modifier = Modifier.padding(16.dp)) }
             items(list, key = { it.peer }) { c ->
-                PersonRow(c.name, c.msgs.lastOrNull()?.let { (if (it.mine) "You: " else "") + it.text } ?: "", "", 0, false, {
+                val last = c.msgs.lastOrNull()
+                PersonRow(c.name, last?.let { (if (it.mine) "You: " else "") + it.text.replace('\n', ' ') } ?: "", last?.let { when_(it.time) } ?: "", 0, false, {
                     io.github.ravenor907.muninn.ui.Avatar(c.peer, c.name, 48.dp) }) { ChatNav.open = "mirror/" + c.peer }
             }
         }
     }
 }
 
-/** On a companion: one of the phone's chats. Text only; photos and the rest show as words and stay on the phone. */
+/** On a linked tablet: one of the phone's chats. Photos show once they came over on the home Wi-Fi. */
 @Composable
 private fun MirrorChatScreen(peer: String, back: () -> Unit) {
     BackHandler { back() }
@@ -2439,14 +2484,17 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
     val state = rememberLazyListState()
     val msgs = c?.msgs.orEmpty()
     LaunchedEffect(msgs.size) { if (msgs.isNotEmpty()) state.scrollToItem(msgs.size - 1) }
+    LaunchedEffect(peer) { io.github.ravenor907.muninn.net.Link.fetchMissing() }
     Column(Modifier.fillMaxSize()) {
         PageBar(c?.name ?: "Chat", "Back to your phone's chats") { back() }
         LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), state = state) {
             items(msgs, key = { it.id }) { m ->
                 Box(Modifier.fillMaxWidth().padding(vertical = 3.dp), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
-                    Text(m.text, style = Type.normal.copy(color = Palette.text),
-                        modifier = Modifier.widthIn(max = 520.dp).clip(io.github.ravenor907.muninn.ui.Corner)
-                            .background(if (m.mine) Palette.goldTint else Palette.focusFill).padding(horizontal = 12.dp, vertical = 8.dp))
+                    Box(Modifier.widthIn(max = 520.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+                        .background(if (m.mine) Palette.goldTint else Palette.field).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        if (m.f != null) MirrorMedia(m, m.mine)
+                        else Text(m.text, style = Type.normal.copy(color = Palette.text))
+                    }
                 }
             }
         }

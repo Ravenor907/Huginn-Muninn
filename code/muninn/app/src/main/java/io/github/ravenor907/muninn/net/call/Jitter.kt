@@ -14,7 +14,7 @@ sealed class Play {
 }
 
 /**
- * Plays a call's audio in order at a steady pace (shared/docs/protocol-0.6.md 5.5), the same algorithm as Huginn's
+ * Plays a call's audio in order at a steady pace (shared/docs/protocol.md 5.5), the same algorithm as Huginn's
  * JitterBuffer (src/call/jitterbuffer.cpp), so both apps sound the same. Packets come in with the sender's
  * ts (ms since its first packet, 20 ms per frame); [next] is called once per 20 ms by the player.
  *

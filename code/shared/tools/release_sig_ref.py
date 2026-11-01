@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Reference for the project release key (shared/docs/releases.md): Ed25519 signatures (RFC 8032) over the raw bytes
-of each release file, and the test vectors both apps check (shared/vectors/release-sig-vectors.json). Run it to write the
+"""Reference for the project release key (code/shared/docs/releases.md): Ed25519 signatures (RFC 8032) over the raw bytes
+of each release file, and the test vectors both apps check (code/shared/vectors/release-sig-vectors.json). Run it to write the
 vectors; it checks every case twice (building, then from the file).
 
 The vectors hold the RFC's own test cases 1 to 3, one signature from a throwaway key over a longer file, and
@@ -193,9 +193,9 @@ def version_message(version, name, sha_hex):
 def order(v):
     """Where a version sorts. Versions have one dot and read as decimals (0.3 < 0.31 < 0.4 < 1.0). A pre-release
     "<version> beta <n>" sits below that version and above every version before it; betas of one version sort by n.
-    A test build ("0.3 Test 1") sorts like a beta. Anything else sorts below everything."""
+    Anything else sorts below everything."""
     import re
-    m = re.match(r"^(\d+)\.(\d+)(?: (?:beta|Test) (\d+))?$", v)
+    m = re.match(r"^(\d+)\.(\d+)(?: beta (\d+))?$", v)
     if not m:
         return (-1, 0, 0)
     num = int(m.group(1)) * 1000000 + int((m.group(2) + "000000")[:6])
@@ -231,11 +231,11 @@ def versioned():
 
 
 def newer_cases():
-    pairs = [("0.97", "0.96"), ("0.96", "0.96"), ("0.9", "0.96"), ("0.96", "0.96 Test 2"), ("1.0", "0.99"),
+    pairs = [("0.97", "0.96"), ("0.96", "0.96"), ("0.9", "0.96"), ("1.0", "0.99"),
              ("0.31", "0.3"), ("0.3", "0.31"), ("0.4", "0.39"),
              ("0.99 beta 3", "0.98"), ("0.99 beta 7", "0.99 beta 3"), ("0.99 beta 3", "0.99 beta 7"),
              ("0.99 beta 7", "0.99 beta 7"), ("0.99 beta 10", "0.99 beta 9"), ("0.99", "0.99 beta 7"),
-             ("0.99 beta 12", "0.99"), ("0.98", "0.99 beta 3"), ("1.0 beta 1", "0.99"), ("0.99 beta 1", "0.99 Test 2")]
+             ("0.99 beta 12", "0.99"), ("0.98", "0.99 beta 3"), ("1.0 beta 1", "0.99")]
     return [{"tag": t, "current": c, "install": order(t) > order(c)} for t, c in pairs]
 
 
@@ -259,7 +259,7 @@ def check(v):
 
 
 def main():
-    v = {"note": "Ed25519 release signatures (RFC 8032), shared/docs/releases.md; written by shared/tools/release_sig_ref.py",
+    v = {"note": "Ed25519 release signatures (RFC 8032), code/shared/docs/releases.md; written by code/shared/tools/release_sig_ref.py",
          "cases": cases(), "domain": DOMAIN, "versioned": versioned(), "newer": newer_cases()}
     check(v)
     here = os.path.dirname(os.path.abspath(__file__))

@@ -7,7 +7,7 @@ import org.json.JSONObject
  * phone. The choices themselves live on the contact (Contact.noCalls, noFiles, hideActive), in the encrypted contacts.
  */
 object Permissions {
-    /** What a group member's app speaks at least (shared/docs/protocol-0.6.md 3.7). */
+    /** What a group member's app speaks at least (shared/docs/protocol.md 3.7). */
     val GROUP_CAPS = setOf("r1", "g1", "c1")
 
     /** Tokens that bring others with them (1.1): c2 and v1 mean c1, m2 means m1. */

@@ -16,7 +16,7 @@ import java.security.PrivateKey
 import java.security.interfaces.ECPrivateKey
 import java.security.spec.ECPrivateKeySpec
 
-/** The call part of shared/vectors/proto06-vectors.json (shared/docs/protocol-0.6.md 5.2 to 5.4), which Huginn checks too. */
+/** The call part of shared/vectors/proto06-vectors.json (shared/docs/protocol.md 5.2 to 5.4), which Huginn checks too. */
 class CallTest {
     private val v = JSONObject(javaClass.classLoader!!.getResource("proto06-vectors.json")!!.readText())
     private val call = v.getJSONObject("call")

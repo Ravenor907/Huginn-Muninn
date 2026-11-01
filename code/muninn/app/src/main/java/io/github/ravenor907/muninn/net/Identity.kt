@@ -7,7 +7,10 @@ import java.security.KeyPair
 import java.util.UUID
 import kotlin.random.Random
 
-/** Who this phone is to other devices, and the person's choices. Kept in SharedPreferences. */
+/**
+ * Who this phone is to other devices, and the person's choices. Choices are kept in SharedPreferences; keys, the
+ * blocked list and the chat key are kept in the encrypted vault (secrets.json).
+ */
 class Identity(context: Context, private val vault: Vault) {
     private val secrets = java.io.File(context.filesDir, "secrets.json")
     private val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
@@ -60,21 +63,24 @@ class Identity(context: Context, private val vault: Vault) {
     var preRelease: Boolean
         get() = prefs.getBoolean("preRelease", false)
         set(v) = prefs.edit().putBoolean("preRelease", v).apply()
-    /** A Labs report went from here: a reply from the Labs contact comes as a request, like any first message. */
-    var labsReported: Boolean
-        get() = prefs.getBoolean("labsReported", false)
-        set(v) = prefs.edit().putBoolean("labsReported", v).apply()
-    /** Google Nearby (Close) on top of Muninn's own Bluetooth and Wi-Fi. Off for everyone until turned on: it needs Google Play services. */
-    var useGoogleNearby: Boolean
-        get() = prefs.getBoolean("googleNearby", false)
-        set(v) = prefs.edit().putBoolean("googleNearby", v).apply()
+    /**
+     * When the last Labs report went from here (ms, 0: never). For 30 days after it a reply from the Labs contact
+     * comes as a request, like any first message ([LabsWire.replyOpen]).
+     */
+    var labsReportedAt: Long
+        get() = prefs.getLong("labsReportedAt", 0L)
+        set(v) = prefs.edit().putLong("labsReportedAt", v).remove("labsReported").apply()
     var keepNearbyHistory: Boolean
         get() = prefs.getBoolean("keepNearby", false)
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
 
+    /** What the vault keeps in secrets.json (empty when there's nothing yet). */
+    private fun sealed(): org.json.JSONObject = vault.read(secrets)?.let { try { org.json.JSONObject(it) } catch (_: Exception) { null } } ?: org.json.JSONObject()
+
     /** Secret keys, kept only in the encrypted vault (one found in the plain settings is moved there). */
+    @Synchronized
     private fun secret(name: String, make: () -> String): String {
-        val o = vault.read(secrets)?.let { org.json.JSONObject(it) } ?: org.json.JSONObject()
+        val o = sealed()
         o.optString(name).ifEmpty { null }?.let { return it }
         val v = prefs.getString(name, null) ?: make()
         o.put(name, v)
@@ -83,14 +89,14 @@ class Identity(context: Context, private val vault: Vault) {
         return v
     }
 
-    /** This device's chat key pair, made once. */
+    /** This device's chat key pair, made once. Both halves are in the vault (a public half in the plain settings moves there). */
     val keys: KeyPair by lazy {
-        var pub = prefs.getString("chatPub", null)
+        var pub: String? = null
         val priv = secret("chatPriv") {
             ChatCrypto.newKeyPair().let { kp -> pub = ChatCrypto.b64(kp.public.encoded); ChatCrypto.b64(kp.private.encoded) }
         }
-        prefs.edit().putString("chatPub", pub).apply()
-        KeyPair(ChatCrypto.publicFrom(pub!!), ChatCrypto.privateFrom(priv))
+        val p = secret("chatPub") { pub ?: prefs.getString("chatPub", null) ?: throw IllegalStateException("no chat key") }
+        KeyPair(ChatCrypto.publicFrom(p), ChatCrypto.privateFrom(priv))
     }
 
     /** The Nostr secret (internet inbox). */
@@ -126,10 +132,18 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("reduceMotion", false)
         set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
 
-    /** The look: "dark", "black" (true black, also from the "trueBlack" switch), "light" or "seasonal" ("autumn" opens as "seasonal"). Any other saved value opens as "dark". */
+    /** The look: "dark", "black" (true black), "light" or "seasonal" ("autumn" opens as "seasonal"). Any other saved value opens as "dark". */
     var look: String
-        get() = prefs.getString("look", null) ?: if (prefs.getBoolean("trueBlack", false)) "black" else "dark"
+        get() = prefs.getString("look", null) ?: "dark"
         set(v) = prefs.edit().putString("look", v).apply()
+    /** The accent (Settings › Look): "gold" and the other names in [io.github.ravenor907.muninn.ui.Accents], or any "#RRGGBB". */
+    var accent: String
+        get() = io.github.ravenor907.muninn.ui.Accents.choice(prefs.getString("accent", null))
+        set(v) = prefs.edit().putString("accent", io.github.ravenor907.muninn.ui.Accents.choice(v)).apply()
+    /** First open: the "What should people call you?" step is done (or was skipped). */
+    var nameAsked: Boolean
+        get() = prefs.getBoolean("nameAsked", false)
+        set(v) = prefs.edit().putBoolean("nameAsked", v).apply()
     /** Seasonal's season: "auto" (by the date) or a season's key, like "snow". */
     var season: String
         get() = prefs.getString("season", null) ?: "auto"
@@ -188,18 +202,36 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putLong("lockAfter", v).apply()
     val publicKey: String get() = ChatCrypto.b64(keys.public.encoded)
 
-    // Devices trusted once both people saw the same code, stored in plain settings as key -> name.
-    // Chat moves them into contacts once, then they're dropped from here.
-    fun trusted(): Map<String, String> = prefs.getStringSet("trusted", emptySet())!!.mapNotNull {
-        val i = it.indexOf('|'); if (i < 0) null else it.substring(0, i) to it.substring(i + 1)
-    }.toMap()
+    /** The blocked list, in memory once read (it's asked about on every message). */
+    @Volatile private var mutedNow: Set<String>? = null
 
-    fun dropTrusted() { prefs.edit().remove("trusted").apply() }
+    /**
+     * Blocked chat keys, kept in the vault. A list from the plain settings (older versions) moves there once.
+     * While the vault is locked, the plain list (if any) is all there is.
+     */
+    fun muted(): Set<String> {
+        mutedNow?.let { return it }
+        synchronized(this) {
+            mutedNow?.let { return it }
+            val plain = prefs.getStringSet("muted", null)?.toSet()
+            if (vault.locked.value) return plain.orEmpty()
+            val o = sealed()
+            val a = o.optJSONArray("muted")
+            val s = if (a != null) (0 until a.length()).map { a.getString(it) }.toSet() + plain.orEmpty() else plain.orEmpty()
+            if (plain != null) try {
+                vault.write(secrets, o.put("muted", org.json.JSONArray(s.toList())).toString())
+                prefs.edit().remove("muted").apply()
+            } catch (_: Exception) { return s }
+            mutedNow = s
+            return s
+        }
+    }
 
-    fun muted(): Set<String> = prefs.getStringSet("muted", emptySet())!!
+    @Synchronized
     fun setMuted(key: String, on: Boolean) {
         val s = muted().toMutableSet(); if (on) s.add(key) else s.remove(key)
-        prefs.edit().putStringSet("muted", s).apply()
+        try { vault.write(secrets, sealed().put("muted", org.json.JSONArray(s.toList())).toString()); mutedNow = s }
+        catch (_: Exception) {}
     }
 
     companion object {

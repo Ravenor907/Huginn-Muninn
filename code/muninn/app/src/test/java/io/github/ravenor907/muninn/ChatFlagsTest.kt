@@ -68,4 +68,18 @@ class ChatFlagsTest {
         f.color("k", "")
         assertTrue(f.all.value.colors.isEmpty())
     }
+
+    @Test
+    fun chatColorIsAnAccentHex() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.color("k", "#6FAE8C")
+        f.color("j", "#12345")
+        assertEquals(mapOf("k" to "#6FAE8C"), ChatFlags({ stored }, { stored = it }).all.value.colors)
+        // A bubble color saved by name before shows as its nearest accent.
+        assertEquals("#6FAE8C", io.github.ravenor907.muninn.ui.Accents.chatHex("green"))
+        assertEquals("#6E9CC8", io.github.ravenor907.muninn.ui.Accents.chatHex("#6e9cc8"))
+        assertEquals("", io.github.ravenor907.muninn.ui.Accents.chatHex("neon"))
+        assertEquals("", io.github.ravenor907.muninn.ui.Accents.chatHex(null))
+    }
 }

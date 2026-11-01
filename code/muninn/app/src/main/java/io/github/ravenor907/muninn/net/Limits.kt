@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net
 import org.json.JSONObject
 
 /**
- * Message limits (cap d1, shared/docs/protocol-0.6.md section 16), matching shared/tools/d1_ref.py; shared/vectors/d1-vectors.json checks it.
+ * Message limits (cap d1, shared/docs/protocol.md section 16), matching shared/tools/d1_ref.py; shared/vectors/d1-vectors.json checks it.
  * Every chat deletes messages older than its limit: 7 days, or up to 30 for a Family or Work group, and for two people
  * who keep each other in their Family or Work folder (the shorter of their two choices wins). No Android in here.
  */

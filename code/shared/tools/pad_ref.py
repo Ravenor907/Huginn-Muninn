@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Reference for relay envelope padding (shared/docs/protocol-0.6.md section 20).
+"""Reference for relay envelope padding (code/shared/docs/protocol.md section 20).
 
 The outer wrapping {"e":..,"n":..,"d":..} gets a field "z" of zeros so that its base64 (the Nostr event's
 content) is exactly one of a few sizes: 1024, 4096, 16384, 32768 characters, then steps of 16384.
 The NIP-40 expiration tag (section 20.3) comes from the blurred created_at, plus the blur, plus the longest message
 limit, rounded up to the next whole day, so it shows neither the sending time nor the chat's limit.
-Writes shared/vectors/pad-vectors.json and the Android test copy.
+Writes code/shared/vectors/pad-vectors.json and the Android test copy.
 """
 import base64
 import json

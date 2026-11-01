@@ -1,9 +1,9 @@
 # Relay credentials (app side)
 
-Over the internet, calls go through Cloudflare TURN relays (shared/docs/protocol-0.6.md 5.1 and 5.6). The one
+Over the internet, calls go through Cloudflare TURN relays (code/shared/docs/protocol.md 5.1 and 5.6). The one
 exception is two people who trust each other (5.8.1, the Family folder or the "Direct calls" switch): their
 apps also try a direct path, which costs the relay nothing (5.8.2). The apps never hold the Cloudflare TURN
-token. They ask the relay Worker (`shared/relay-worker/worker.js`) for a short-lived TURN login instead, and get
+token. They ask the relay Worker (`code/shared/relay-worker/worker.js`) for a short-lived TURN login instead, and get
 TURN URLs from it, never STUN URLs.
 
 ## STUN (trusted contacts only)
@@ -84,6 +84,7 @@ Errors are JSON `{"error": "<code>"}`:
 | Status | `error` | App behaviour |
 | --- | --- | --- |
 | 400 | `bad_request` | Bug in the app. Don't retry. |
+| 413 | `too_large` | Body over 1 KB (refused before it is read). Bug in the app. Don't retry. |
 | 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. Don't retry this call. |
 | 429 | `id_limit`, `ip_limit`, `global_limit` | Daily cap reached (per install, per internet address, or for everyone). No relay until the next UTC day. |
 | 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
@@ -95,19 +96,19 @@ call fails with "Can't connect".
 ## Daily limits (Worker side)
 
 - Caps per UTC day: 30 logins per install (`id`), 60 per internet address, 3000 for everyone.
-  An IPv6 address counts by its /64.
+  An IPv6 address counts by its /48.
 - The Worker counts in one SQLite-backed Durable Object (`RelayLimits`, binding `LIMITS`). One login is
   checked and counted in a single step inside it, so requests at the same moment can't pass a cap.
   Each login writes 3 rows: everyone, the install's `id`, the address key.
 - The address key is HMAC-SHA256 (key: the Worker secret `TURN_KEY_API_TOKEN`) of `"ip:" + day + ":" + address`
-  (or its /64), cut to 16 bytes. Addresses themselves are never stored or logged.
+  (or its /48), cut to 16 bytes. Addresses themselves are never stored or logged.
 - Rows from earlier days are deleted when the first request of a new day arrives.
 - If the binding is missing or the object fails, the Worker answers 503 `limits_unavailable` and hands out
   nothing.
 - Free plan budget per login: 1 Worker request, 1 Durable Object request, 3 rows written (later 3 or fewer
   rows deleted). At the 3000 cap that is 3000 requests of each kind and about 18,000 rows a day, against
   free allowances of 100,000 each.
-- The release job deploys the Worker with `wrangler.toml` (`shared/relay-worker/README.md`); test builds don't.
+- After each release, the relay-deploy job deploys the Worker with `wrangler.toml` (`code/shared/relay-worker/README.md`); test builds and betas don't.
 
 ## Caching
 

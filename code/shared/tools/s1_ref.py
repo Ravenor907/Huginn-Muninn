@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference for cap s1 (shared/docs/protocol-0.6.md, section 21): proven routes and sealed clear fields.
+"""Reference for cap s1 (code/shared/docs/protocol.md, section 21): proven routes and sealed clear fields.
 
   - Route proofs: a device signs, with its chat key, the TLS certificate it answers Wi-Fi requests with (Wi-Fi), or a
     one-off number the other side picked (Bluetooth LE and Nearby). A route is only taken as a contact's when its proof
@@ -10,7 +10,7 @@
     (v1 and the ratchet), so none of them can be changed or the envelope sent to someone else.
   - Group states: a new state may be at most 1000 versions ahead; at the same version a state signed by its owner wins.
 
-Writes shared/vectors/s1-vectors.json and the Android test copy; every case is checked twice (building, then from the file).
+Writes code/shared/vectors/s1-vectors.json and the Android test copy; every case is checked twice (building, then from the file).
 """
 import base64, hashlib, hmac, json, os, sys
 
@@ -271,7 +271,7 @@ def build():
             for a, b in [("v6admin", "v6owner"), ("v6owner", "v6admin"), ("v5", "v6admin")]]
     expect([w["wins"] for w in wins] == ["b", "a", "b"], "owner wins a tie")
 
-    return {"note": "cap s1, shared/docs/protocol-0.6.md section 21; written by shared/tools/s1_ref.py",
+    return {"note": "cap s1, code/shared/docs/protocol.md section 21; written by code/shared/tools/s1_ref.py",
             "keys": {"A": kA, "B": kB, "C": kC},
             "route": {"fingerprint": fpA, "nonce": nA, "signed": signed, "checks": routes},
             "hint": {"now": now, "days": hints, "match": match},

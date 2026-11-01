@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
@@ -42,6 +43,79 @@ object Access {
     var seasonGround by androidx.compose.runtime.mutableStateOf("")
     /** Seasonal's falling leaves or snow: [Seasons.OFF] or on ([Seasons.FULL]). */
     var seasonAnim by androidx.compose.runtime.mutableStateOf(Seasons.FULL)
+    /** The accent: one of [Accents.NAMES] or any "#RRGGBB" (Settings › Look). */
+    var accent by androidx.compose.runtime.mutableStateOf(Accents.DEFAULT)
+    /** The open chat's own color ("#RRGGBB", Person details › Chat color), "" for none: the accent follows it there. */
+    var chatAccent by androidx.compose.runtime.mutableStateOf("")
+}
+
+/**
+ * The accent colors, the same as Huginn's: seven named ones, or any "#RRGGBB". Autumn's gold and copper are
+ * warmer, Snow's gold paler. On Light the accent is darkened (by 1.7, as Huginn does), so it reads on parchment;
+ * high contrast makes it white. The fills behind accented things are worked out from it with Huginn's formulas.
+ * Colors here are ARGB numbers, so they can be checked without a screen.
+ */
+object Accents {
+    const val DEFAULT = "gold"
+    val NAMES = listOf("gold", "iron", "copper", "jade", "fjord", "heather", "ember")
+    val TITLES = listOf("Gold", "Iron", "Copper", "Jade", "Fjord", "Heather", "Ember")
+    /** A chat's own color: the accents as "#RRGGBB" (Huginn's chat swatches). */
+    val CHAT = listOf("#C2A25E", "#A9B4BE", "#B07A5A", "#6FAE8C", "#6E9CC8", "#A58BC6", "#CF6F54")
+
+    /** What a chat's saved color is as "#RRGGBB" (a bubble color saved by name before maps to its nearest accent), or "". */
+    fun chatHex(v: String?): String = when (v) {
+        null, "" -> ""
+        "gold" -> "#C2A25E"; "green" -> "#6FAE8C"; "blue" -> "#6E9CC8"; "red" -> "#CF6F54"; "purple" -> "#A58BC6"; "teal" -> "#6FAE8C"
+        else -> if (valid(v)) v.trim().uppercase() else ""
+    }
+
+    /** A "#RRGGBB" color. */
+    fun valid(v: String?): Boolean = v != null && Regex("^#[0-9A-Fa-f]{6}$").matches(v.trim())
+
+    /** A saved accent: a name, a valid "#RRGGBB", else gold. */
+    fun choice(v: String?): String = when {
+        v != null && v in NAMES -> v
+        valid(v) -> v!!.trim().uppercase()
+        else -> DEFAULT
+    }
+
+    /** The accent [key] as ARGB, before the look changes it. */
+    fun base(key: String?, autumn: Boolean = false, snow: Boolean = false): Long = when (choice(key)) {
+        "gold" -> if (snow) 0xFFE3C27A else if (autumn) 0xFFE9B56A else 0xFFC2A25E
+        "iron" -> 0xFFA9B4BE
+        "copper" -> if (autumn) 0xFFD9853B else 0xFFB07A5A
+        "jade" -> 0xFF6FAE8C
+        "fjord" -> 0xFF6E9CC8
+        "heather" -> 0xFFA58BC6
+        "ember" -> 0xFFCF6F54
+        else -> 0xFF000000L or choice(key).substring(1).toLong(16)
+    }
+
+    private fun ch(c: Long, shift: Int) = ((c shr shift) and 0xFF).toFloat() / 255f
+    private fun argb(r: Float, g: Float, b: Float): Long {
+        fun q(v: Float) = (v.coerceIn(0f, 1f) * 255f + 0.5f).toLong()
+        return 0xFF000000L or (q(r) shl 16) or (q(g) shl 8) or q(b)
+    }
+    private fun map(c: Long, f: (Float, Int) -> Float) = argb(f(ch(c, 16), 0), f(ch(c, 8), 1), f(ch(c, 0), 2))
+
+    /** On Light: darker by 1.7 (Huginn's Qt.darker), so it reads on parchment. */
+    fun darker(c: Long): Long = map(c) { v, _ -> v / 1.7f }
+    /** The fill behind an accented choice or button (Huginn's accentFill). */
+    fun fill(c: Long, light: Boolean): Long =
+        if (light) map(c) { v, i -> v * 0.18f + floatArrayOf(0.8f, 0.78f, 0.72f)[i] } else map(c) { v, i -> v * 0.25f + floatArrayOf(0.06f, 0.06f, 0.06f)[i] }
+    /** The fill behind a focused or hovered thing (Huginn's focusFill). */
+    fun focus(c: Long, light: Boolean): Long =
+        if (light) map(c) { v, i -> v * 0.1f + floatArrayOf(0.86f, 0.84f, 0.79f)[i] } else map(c) { v, i -> v * 0.12f + floatArrayOf(0.11f, 0.11f, 0.1f)[i] }
+    /** A softer tint of it: my avatar circle, my bubbles in a chat with its own color, highlighted things. */
+    fun tint(c: Long, light: Boolean): Long =
+        if (light) fill(c, true) else map(c) { v, _ -> v * 0.22f + 0.05f }
+    /** A brighter shade, for text and icons on its tint (darker on Light). */
+    fun bright(c: Long, light: Boolean): Long = if (light) map(c) { v, _ -> v * 0.85f } else map(c) { v, _ -> v + (1f - v) * 0.25f }
+    /** Relative brightness, 0 to 1. */
+    fun luminance(c: Long): Float {
+        fun lin(v: Float) = if (v <= 0.03928f) v / 12.92f else Math.pow(((v + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+        return 0.2126f * lin(ch(c, 16)) + 0.7152f * lin(ch(c, 8)) + 0.0722f * lin(ch(c, 0))
+    }
 }
 
 /**
@@ -192,11 +266,33 @@ object Palette {
         else pick(0xFF6E6A62, 0xFF6E6A62, 0xFF746C5F, 0xFF9A7F5E, 0xFFC8C8C8, 0xFF8299B5)
     /** Text that is brighter than the usual text: names in a list. */
     val textBright get() = pick(0xFFF2F0EA, 0xFFF2F0EA, 0xFF14120E, 0xFFF3E2C7, 0xFFFFFFFF, 0xFFF4F8FD)
-    val accent get() = pick(0xFFC8CDD3, 0xFFC8CDD3, 0xFF4F5862, 0xFFD9853B, 0xFFFFFFFF, 0xFF9CCBF0)
-    val accentFill get() = pick(0xFF2A2D31, 0xFF2A2D31, 0xFFDCD6C9, 0xFF3D2615, 0xFF333333, 0xFF1C3350)
+    /** The accent picked on the Look page ([Accents]), or white in high contrast. */
+    val accent: Color get() = accentOf(Access.chatAccent)
+    val accentFill: Color get() = fillOf(accent)
     /** Text and icons drawn on a solid accent. */
-    val onAccent get() = pick(0xFF101112, 0xFF101112, 0xFFF3EFE6, 0xFF2A1608, 0xFF000000, 0xFF0A1424)
-    val focusFill get() = pick(0xFF222427, 0xFF1A1B1D, 0xFFE7E1D4, 0xFF33221A, 0xFF2A2A2A, 0xFF1B2B45, 0.09f)
+    val onAccent: Color get() = onAccentOf(accent)
+    val focusFill: Color get() = if (hc) Color(0xFF2A2A2A) else Color(Accents.focus(argb(accent), light))
+
+    /** The accent [key] (a name or "#RRGGBB") as this look shows it; "" or nothing valid is the app's own accent. */
+    fun accentOf(key: String?): Color {
+        if (hc) return Color(0xFFFFFFFF)
+        val k = if (key.isNullOrEmpty()) Access.accent else key
+        val c = Accents.base(k, autumn, snow)
+        return Color(if (light) Accents.darker(c) else c)
+    }
+    /** The fill behind something in [c] (a selected choice, a button). */
+    fun fillOf(c: Color): Color = if (hc) Color(0xFF333333) else Color(Accents.fill(argb(c), light))
+    /** A soft tint of [c] (my bubbles in a chat with its own color, my avatar, highlights). */
+    fun tintOf(c: Color): Color = if (hc) Color(0xFF333333) else Color(Accents.tint(argb(c), light))
+    /** A brighter shade of [c], for text and icons on its tint. */
+    fun brightOf(c: Color): Color = if (hc) Color(0xFFFFFFFF) else Color(Accents.bright(argb(c), light))
+    /** Text and icons on a solid [c]: dark on a light accent, light on a dark one (a dark picked color, or Light's). */
+    fun onAccentOf(c: Color): Color = when {
+        hc -> Color(0xFF000000)
+        Accents.luminance(argb(c)) > 0.2f -> if (snow) Color(0xFF0A1424) else if (autumn) Color(0xFF2A1608) else Color(0xFF101112)
+        else -> Color(0xFFF3EFE6)
+    }
+    private fun argb(c: Color): Long = c.toArgb().toLong() and 0xFFFFFFFFL
     /** Section headings. */
     val section get() = pick(0xFFC8CDD3, 0xFFC8CDD3, 0xFF4F5862, 0xFFB08A5E, 0xFFFFFFFF, 0xFF8FB0D4)
     // Color-blind friendly: amber instead of rose, so warnings never depend on telling red from green.
@@ -207,13 +303,14 @@ object Palette {
     val dangerFill get() = if (Access.colorBlind) (if (light) Color(0xFFF6EBD4) else Color(0xFF221B0E))
         else if (light) Color(0xFFF5E2DD) else Color(0xFF1E1716)
 
-    // Chat ("Quiet" look): gold marks the few things you act on (new chat, play, record, unread).
-    val gold get() = pick(0xFFC2A25E, 0xFFC2A25E, 0xFF7A6128, 0xFFE9B56A, 0xFFFFD27A, 0xFFE3C27A)
-    val goldBright get() = pick(0xFFE0C27F, 0xFFE0C27F, 0xFF6B5216, 0xFFF3C77E, 0xFFFFE2A0, 0xFFF0D597)
-    /** Text and icons drawn on gold. */
-    val onGold get() = pick(0xFF101112, 0xFF101112, 0xFFF3EFE6, 0xFF2A1608, 0xFF000000, 0xFF1A1408)
-    /** My own avatar circle (my initial in goldBright on it), and the soft gold tint behind highlighted things. */
-    val goldTint get() = pick(0xFF3A3220, 0xFF3A3220, 0xFFEADDBB, 0xFF4A3421, 0xFF3D3214, 0xFF3A3626)
+    // Chat ("Quiet" look): the accent marks the few things you act on (new chat, play, record, unread). These
+    // were gold before the accent could be picked; they follow it now.
+    val gold: Color get() = accent
+    val goldBright: Color get() = brightOf(accent)
+    /** Text and icons drawn on [gold]. */
+    val onGold: Color get() = onAccent
+    /** My own avatar circle (my initial in goldBright on it), and the soft accent tint behind highlighted things. */
+    val goldTint: Color get() = tintOf(accent)
     /** The Nearby room's avatar circle. */
     val coolTint get() = pick(0xFF23272C, 0xFF23272C, 0xFFD6DDEB, 0xFF3A2D24, 0xFF333333, 0xFF22385A, 0.12f)
     /** Search box, message box and their bubbles. */
@@ -255,9 +352,13 @@ object Palette {
     private val LIGHT_TONES = listOf(0xFFD5E4D3L to 0xFF2E5A33L, 0xFFD6DDEBL to 0xFF2F4A78L, 0xFFEED5CFL to 0xFF86392AL, 0xFFE2D6EAL to 0xFF5D3D78L, 0xFFD0E5E7L to 0xFF235A60L)
     private val AUTUMN_TONES = listOf(0xFF3D5A80L to 0xFFF3E2C7L, 0xFF7A4E3AL to 0xFFF3E2C7L, 0xFF6F5A2AL to 0xFFF3E2C7L, 0xFF4E6B5AL to 0xFFF3E2C7L, 0xFF5A4A72L to 0xFFF3E2C7L)
     private val SNOW_TONES = listOf(0xFF3D5A80L to 0xFFF4F8FDL, 0xFF6A4E6EL to 0xFFF4F8FDL, 0xFF3E6560L to 0xFFF4F8FDL, 0xFF5A5470L to 0xFFF4F8FDL, 0xFF6E5A44L to 0xFFF4F8FDL)
-    /** The six colours a person can pick for their own initial disc (sent with their profile). */
-    val MY_COLOURS = listOf("#C9A964", "#3D5A80", "#7A4E3A", "#4E7A4E", "#6B4E8A", "#8A8A8A")
-    /** A colour someone picked ("#RRGGBB"), or null when it isn't one. */
+    /** The six colors a person can pick for their own initial disc (sent with their profile): the one list for it. */
+    val MY_COLORS = listOf("#C9A964", "#3D5A80", "#7A4E3A", "#4E7A4E", "#6B4E8A", "#8A8A8A")
+    /** What TalkBack calls one of [MY_COLORS]. */
+    fun myColorName(hex: String) = when (hex.uppercase()) {
+        "#C9A964" -> "Gold"; "#3D5A80" -> "Blue"; "#7A4E3A" -> "Copper"; "#4E7A4E" -> "Green"; "#6B4E8A" -> "Heather"; else -> "Grey"
+    }
+    /** A color someone picked ("#RRGGBB"), or null when it isn't one. */
     fun parse(hex: String?): Color? {
         val h = hex?.trim() ?: return null
         if (!Regex("^#[0-9A-Fa-f]{6}$").matches(h)) return null

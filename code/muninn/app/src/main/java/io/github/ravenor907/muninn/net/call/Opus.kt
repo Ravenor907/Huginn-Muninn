@@ -2,7 +2,7 @@ package io.github.ravenor907.muninn.net.call
 
 /**
  * libopus, bundled (src/main/cpp): Android's own Opus encoder only exists from Android 10, and Muninn
- * runs from Android 8. Settings from shared/docs/protocol-0.6.md 5.5: VOIP, mono, 16 kHz, 16 kbps VBR, 20 ms,
+ * runs from Android 8. Settings from shared/docs/protocol.md 5.5: VOIP, mono, 16 kHz, 16 kbps VBR, 20 ms,
  * in-band FEC for 10% loss, DTX, complexity 5.
  */
 object Opus {

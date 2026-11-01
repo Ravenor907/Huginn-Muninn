@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Draws shared/docs/banner.png: Huginn's gold raven and Muninn's silver one facing each other.
-Needs the fonts from shared/tools/get-fonts.sh (CI fetches them). Usage: make-banner.py OUT.png"""
+"""Draws code/shared/docs/banner.png: Huginn's gold raven and Muninn's silver one facing each other.
+Needs the fonts from code/shared/tools/get-fonts.sh (CI fetches them). Usage: make-banner.py OUT.png"""
+import os
 import sys
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
@@ -8,6 +9,8 @@ W, H = 1600, 600
 BG = (14, 15, 17)
 GOLD_HI, GOLD_LO = (236, 204, 132), (184, 146, 72)
 SILV_HI, SILV_LO = (240, 243, 247), (176, 183, 192)
+# Paths are from the code/ folder, wherever this is run from.
+CODE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 
 # Background: dark, with a soft warm-to-cool glow behind the words so they stand out.
 c = Image.new("RGB", (W, H), BG)
@@ -16,13 +19,13 @@ gd = ImageDraw.Draw(glow)
 gd.ellipse([W / 2 - 520, 40, W / 2 + 520, H - 40], fill=(34, 33, 31))
 c = Image.blend(c, glow.filter(ImageFilter.GaussianBlur(120)), 1.0)
 
-gold = Image.open("huginn/qml/assets/raven-gold.png").convert("RGBA").resize((330, 330), Image.LANCZOS)
-silver = ImageOps.mirror(Image.open("site/raven.png").convert("RGBA").resize((330, 330), Image.LANCZOS))  # faces left, toward the middle
+gold = Image.open(os.path.join(CODE, "huginn/qml/assets/raven-gold.png")).convert("RGBA").resize((330, 330), Image.LANCZOS)
+silver = ImageOps.mirror(Image.open(os.path.join(CODE, "shared/site/raven.png")).convert("RGBA").resize((330, 330), Image.LANCZOS))  # faces left, toward the middle
 c.paste(gold, (110, 125), gold)
 c.paste(silver, (W - 110 - 330, 125), silver)
 
 def font(name, size, weight=None):
-    f = ImageFont.truetype("huginn/fonts/" + name, size)
+    f = ImageFont.truetype(os.path.join(CODE, "huginn/fonts", name), size)
     if weight:
         try:
             f.set_variation_by_axes([weight])
@@ -70,4 +73,4 @@ d.line([(560, 418), (1040, 418)], fill=(70, 66, 58), width=2)
 draw(430, "ᚺᚢᚷᛁᚾᚾ · ᛗᚢᚾᛁᚾᚾ", runes, (150, 144, 132), (150, 144, 132), 8, shadow=False)
 draw(482, "Private messages, calls and file sharing", tag, (238, 234, 226), (214, 208, 196))
 draw(534, "Windows, Linux, Android and Google TV", sub, (186, 180, 168), (186, 180, 168))
-c.save(sys.argv[1] if len(sys.argv) > 1 else "shared/docs/banner.png", optimize=True)
+c.save(sys.argv[1] if len(sys.argv) > 1 else os.path.join(CODE, "shared/docs/banner.png"), optimize=True)

@@ -11,7 +11,7 @@ import java.io.File
 import java.net.Inet4Address
 
 /**
- * Moving to another device ("Move here", cap x1, shared/docs/protocol-0.6.md section 18). The new device shows a code
+ * Moving to another device ("Move here", cap x1, shared/docs/protocol.md section 18). The new device shows a code
  * ([showCode]); the old one takes it inside its Move screen ([take]), both show the same 4 emoji, the old one says go
  * ([go]) and is locked from then on: it sends everything (identity, contacts, groups, history) straight over the home
  * Wi-Fi in sealed parts, and once the new device says it has it all and took it, the old one erases its keys and shows

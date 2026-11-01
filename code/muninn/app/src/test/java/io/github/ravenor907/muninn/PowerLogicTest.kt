@@ -491,4 +491,12 @@ class PowerLogicTest {
         assertEquals(60L, PowerLogic.jobMinutes(phoneAway.copy(quiet = Check.OPEN)))
         assertEquals(0L, PowerLogic.jobMinutes(phoneAway.copy(check = Check.OPEN)))
     }
+
+    @Test
+    fun leavingExtremeSaverRestoresWhatItTurnedOff() {
+        for (c in listOf(true, false)) for (p in listOf(true, false))
+            assertEquals(c to p, PowerLogic.extremeRestore(PowerLogic.extremeSnapshot(c, p)))
+        assertNull(PowerLogic.extremeRestore(null))
+        assertNull(PowerLogic.extremeRestore("x"))
+    }
 }

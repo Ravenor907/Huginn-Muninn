@@ -1,5 +1,5 @@
 {
- "about": "shared/docs/protocol-0.6.md 7.11, 17 and 18. Written by shared/tools/p95_ref.py.",
+ "about": "code/shared/docs/protocol.md 7.11, 17 and 18. Written by code/shared/tools/p95_ref.py.",
  "move": {
   "newScalar": "5001",
   "oldScalar": "6001",

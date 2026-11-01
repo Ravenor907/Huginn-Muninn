@@ -104,4 +104,18 @@ class P1Test {
         val d = c.getJSONArray("default")
         for (i in 0 until d.length()) d.getJSONArray(i).let { x -> assertEquals(x.getString(0), x.getString(1), ProfileWire.defaultColour(x.getString(0))) }
     }
+
+    @Test
+    fun aNewNameGoesWithTheProfile() {
+        val with = JSONObject(ProfileWire.msg(2, "", "#c9a964", "  Astrid  "))
+        assertTrue(ProfileWire.ok(with))
+        assertEquals("Astrid", ProfileWire.nameOf(with))
+        // No name: the message is exactly what it was before names went with it.
+        assertEquals(JSONObject().put("t", "profile").put("v", 2).put("pic", "").put("col", "#c9a964").toString(), ProfileWire.msg(2, "", "#c9a964"))
+        assertNull(ProfileWire.nameOf(JSONObject(ProfileWire.msg(2, "", "#c9a964"))))
+        assertNull(ProfileWire.nameOf(JSONObject().put("nm", "   ")))
+        assertNull(ProfileWire.nameOf(JSONObject().put("nm", "a".repeat(41))))
+        assertNull(ProfileWire.nameOf(JSONObject().put("nm", "bad\u0001name")))
+        assertNull(ProfileWire.nameOf(JSONObject().put("nm", 5)))
+    }
 }

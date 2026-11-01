@@ -337,7 +337,7 @@ class Trash(private val read: () -> String?, private val write: (String) -> Unit
  */
 class ChatFlags(private val read: () -> String?, private val write: (String) -> Unit) {
     data class State(val muted: Map<String, Long> = emptyMap(), val archived: Set<String> = emptySet(), val unread: Set<String> = emptySet(),
-                     /** A color for my bubbles in that chat ([COLORS] names; none is the usual grey). */
+                     /** The chat's own color: "#RRGGBB" (Chat color), or a [COLORS] name saved before; none is the accent. */
                      val colors: Map<String, String> = emptyMap(),
                      /** Pinned to the top of the chat list, in the order shown there. */
                      val pinned: List<String> = emptyList())
@@ -352,7 +352,7 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         val c = o.optJSONObject("colors")
         val p = o.optJSONArray("pinned")
         State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"),
-            c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { it in COLORS }.orEmpty(),
+            c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { colorOk(it) }.orEmpty(),
             if (p == null) emptyList() else (0 until p.length()).map { p.getString(it) }.distinct())
     } catch (e: Exception) { State() }
 
@@ -386,9 +386,9 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     /** The chat was opened. */
     fun read(key: String) = markUnread(key, false)
 
-    /** My bubbles' color in [key]'s chat: one of [COLORS], or "" for the usual. Only I see it. */
+    /** [key]'s chat color: "#RRGGBB" (or one of [COLORS]), or "" for the accent. Only I see it. */
     @Synchronized
-    fun color(key: String, name: String) = set(_all.value.let { it.copy(colors = if (name in COLORS) it.colors + (key to name) else it.colors - key) })
+    fun color(key: String, name: String) = set(_all.value.let { it.copy(colors = if (colorOk(name)) it.colors + (key to name.trim()) else it.colors - key) })
 
     /** Pins [key] to the top of the chat list (newest pin first), or unpins it. */
     @Synchronized
@@ -419,7 +419,10 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     companion object {
         const val FOREVER = Long.MAX_VALUE
         const val HOUR = 3_600_000L
-        /** Bubble colors to pick from: name to (bubble, dot shown in the picker), as ARGB. */
+        /** A chat color that can be kept: "#RRGGBB" or one of [COLORS]. */
+        fun colorOk(v: String): Boolean = v in COLORS || Regex("^#[0-9A-Fa-f]{6}$").matches(v.trim())
+
+        /** Bubble colors saved by name before Chat color took the accents (still read). */
         val COLORS = linkedMapOf(
             "gold" to (0xFF3A3220L to 0xFFE0C27FL), "green" to (0xFF2C3A2CL to 0xFFB6D6B6L), "blue" to (0xFF2D3340L to 0xFFB9C6E0L),
             "red" to (0xFF3A2724L to 0xFFE6A596L), "purple" to (0xFF33293AL to 0xFFD2BCE0L), "teal" to (0xFF24363AL to 0xFFAED4D8L))

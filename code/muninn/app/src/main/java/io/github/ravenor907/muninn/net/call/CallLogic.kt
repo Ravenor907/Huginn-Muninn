@@ -9,10 +9,10 @@ import kotlin.math.sqrt
 
 /**
  * The parts of calling that don't need Android, so unit tests cover them: the signaling messages of room
- * "call" (shared/docs/protocol-0.6.md 5.2), the speaking indicator and path liveness (5.6). The jitter buffer is [Jitter].
+ * "call" (shared/docs/protocol.md 5.2), the speaking indicator and path liveness (5.6). The jitter buffer is [Jitter].
  *
  * Internet calls: audio goes only through the TURN relay, unless both people trust each other
- * (shared/docs/protocol-0.6.md 5.8.1: the Family folder or the "Direct calls" switch). So for anyone else an offer or
+ * (shared/docs/protocol.md 5.8.1: the Family folder or the "Direct calls" switch). So for anyone else an offer or
  * answer carries only `relay` candidates (the relay's address, never this phone's), and their `srflx`/`host`
  * candidates are never used: nothing is sent straight to their internet address. Two devices on the same
  * Wi-Fi also send to each other directly: the call socket's port goes out twice, as a `lan` candidate and as

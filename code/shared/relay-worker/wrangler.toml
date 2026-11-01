@@ -1,5 +1,5 @@
 # The relay Worker: https://huginn-relay.ravenor907.workers.dev
-# Deployed by the release job in .github/workflows/build.yml (npx wrangler deploy, run in this folder).
+# Deployed after each release by the relay-deploy job in .github/workflows/build.yml (npm ci, then wrangler deploy, in this folder).
 name = "huginn-relay"
 main = "worker.js"
 compatibility_date = "2025-10-01"

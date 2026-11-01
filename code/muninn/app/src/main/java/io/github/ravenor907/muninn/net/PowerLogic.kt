@@ -95,6 +95,13 @@ object PowerLogic {
     /** Extreme battery saver is in charge: nothing runs in the background (a Kids' TV always listens). */
     fun manual(i: Inputs): Boolean = i.extreme && !i.kidsTv
 
+    /** What Extreme saver turns off (looking close by in the background, link previews), kept to turn back on after. */
+    fun extremeSnapshot(closeBy: Boolean, previews: Boolean): String = (if (closeBy) "c" else "") + (if (previews) "p" else "")
+
+    /** Leaving Extreme saver: (close by in the background, link previews) as they were before it, or null when unknown. */
+    fun extremeRestore(snapshot: String?): Pair<Boolean, Boolean>? =
+        if (snapshot == null || snapshot.any { it != 'c' && it != 'p' }) null else ('c' in snapshot) to ('p' in snapshot)
+
     /** Check less when it's quiet: how drowsy Muninn is now (0 awake, 1 after [DROWSY_MS], 2 after twice that). */
     fun drowsy(i: Inputs): Int = when {
         !i.adaptive || i.plugged || i.kidsTv -> 0

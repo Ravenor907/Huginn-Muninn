@@ -8,6 +8,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -196,9 +197,14 @@ fun MButton(text: String, modifier: Modifier = Modifier, kind: Kind = Kind.Norma
         Kind.Danger -> Triple(Palette.dangerFill, Palette.dangerLine, Palette.danger)
         Kind.Normal -> Triple(Palette.raised, Palette.lineMuted, Palette.text)
     }
+    // A remote, D-pad or controller: the focused button shows a heavier accent outline.
+    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focused by source.collectIsFocusedAsState()
     Row(
-        modifier.heightIn(min = 48.dp).clip(Corner).background(bg).border(1.dp, line, Corner)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp),
+        modifier.heightIn(min = 48.dp).clip(Corner).background(if (focused) Palette.focusFill else bg)
+            .border(if (focused) 2.dp else 1.dp, if (focused) Palette.accent else line, Corner)
+            .clickable(interactionSource = source, indication = androidx.compose.foundation.LocalIndication.current, enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) { MIcon(icon, if (enabled) fg else Palette.textFaint, 20.dp); Spacer(Modifier.width(8.dp)) }
@@ -266,11 +272,13 @@ fun Bar(fraction: Float, modifier: Modifier = Modifier, color: Color = Palette.a
 }
 
 @Composable
-fun Line(title: String, detail: String = "", icon: String? = null, trailing: String = "", selected: Boolean = false, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
+fun Line(title: String, detail: String = "", icon: String? = null, trailing: String = "", selected: Boolean = false, onLong: (() -> Unit)? = null,
+         /** False: shown only, nothing to tap. */
+         enabled: Boolean = true, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clip(Corner).background(if (selected) Palette.accentFill else Color.Transparent)
             .border(if (selected) 1.dp else 0.dp, if (selected) Palette.accent else Color.Transparent, Corner)
-            .then(if (onLong != null) Modifier.pointerInput(onLong, onClick) { detectTapsAndLong(onClick, onLong) } else Modifier.clickable(onClick = onClick))
+            .then(if (!enabled) Modifier else if (onLong != null) Modifier.pointerInput(onLong, onClick) { detectTapsAndLong(onClick, onLong) } else Modifier.clickable(onClick = onClick))
             .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -292,6 +300,7 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTa
 /** One question at a time, app-wide. hold: the confirm button has to be held for 2 seconds. */
 data class Ask(
     val title: String, val message: String, val confirm: String, val danger: Boolean = false, val hold: Boolean = false,
+    /** "": no cancel button (a notice with one answer). */
     val cancel: String = "Cancel", val onCancel: () -> Unit = {},
     /** An optional second action, shown beside the main one. */
     val extra: String? = null, val onExtra: () -> Unit = {}, val onConfirm: () -> Unit,
@@ -319,7 +328,7 @@ fun AskDialog(a: Ask) {
         },
         dismissButton = {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                MButton(a.cancel) { Ui.ask.value = null; a.onCancel() }
+                if (a.cancel.isNotEmpty()) MButton(a.cancel) { Ui.ask.value = null; a.onCancel() }
                 a.extra?.let { MButton(it) { Ui.ask.value = null; a.onExtra() } }
             }
         },

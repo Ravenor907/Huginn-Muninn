@@ -23,7 +23,7 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Files over the internet, straight from one phone to the other (cap f1, shared/docs/protocol-0.6.md section 14). Never
+ * Files over the internet, straight from one phone to the other (cap f1, shared/docs/protocol.md section 14). Never
  * through Cloudflare's call relay: both phones learn their own internet address from a STUN server, swap it in a sealed
  * `file` message, and punch through their routers by sending to each other at once, as the Direct path of calls does
  * (5.8.2). Only between two people who trust each other with their addresses ("Direct calls" on, as for Family).

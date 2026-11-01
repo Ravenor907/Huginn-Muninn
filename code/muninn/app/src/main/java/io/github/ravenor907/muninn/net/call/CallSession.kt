@@ -10,7 +10,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
- * One 1:1 call from start to end (shared/docs/protocol-0.6.md 5.2 timing, 5.6 "no path"). Every method runs on
+ * One 1:1 call from start to end (shared/docs/protocol.md 5.2 timing, 5.6 "no path"). Every method runs on
  * [CallManager]'s single call thread ([exec]), so the state needs no locks; slow work (the relay login,
  * the TURN allocation) runs on [work] and hops back.
  */
@@ -36,8 +36,6 @@ class CallSession(
         fun trusted(peerKey: String): Boolean = false
         /** This phone can send and show VP8 video (5.8.5). */
         fun videoCodec(): Boolean = false
-        /** A STUN server other than the ones in [Stun.SERVERS] ("host:port"), for tests. */
-        fun stunServer(): String? = null
         fun newMedia(s: CallSession): CallMedia
         fun changed(s: CallSession)
         fun ended(s: CallSession)
@@ -284,8 +282,7 @@ class CallSession(
         if (!shareDirect()) return
         val m = media ?: return
         work.execute {
-            val stun = host.stunServer()
-            val mapped = if (stun != null) m.probeStun(listOf(stun.substringBeforeLast(':') to stun.substringAfterLast(':').toInt()), host::resolve) else m.probeStun(resolve = host::resolve)
+            val mapped = m.probeStun(resolve = host::resolve)
             val port = m.lanPort
             val list = ArrayList<CallLogic.Direct>()
             if (mapped != null) list += CallLogic.Direct("srflx", mapped)

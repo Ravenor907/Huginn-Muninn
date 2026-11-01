@@ -6,7 +6,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.io.File
-import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
@@ -19,12 +18,9 @@ import javax.crypto.spec.SecretKeySpec
  * Everything Muninn keeps (chats, contacts, keys) is encrypted on the phone with one random data
  * key (AES-256-GCM). That data key is itself locked:
  *  - without a lock (Kids' TV, or before one is set), there's no secret to lock it with: it sits in
- *    Muninn's own private files (no_backup), which other apps can't read. A vault wrapped by Android's
- *    hardware key store is unwrapped and stored this way on its next open.
+ *    Muninn's own private files (no_backup), which other apps can't read.
  *  - with a password set, by the password alone (scrypt, N = 2^16, r = 8, p = 1, made in Muninn itself):
  *    without the password nothing is readable, not even by Muninn. Nothing outside the app guards it.
- *    PBKDF2 locks, and locks also wrapped with the hardware key, open too and are stored with scrypt alone
- *    on that unlock.
  */
 class Vault(private val context: Context) {
     private val keyFile = File(context.filesDir, "vault.key")
@@ -50,13 +46,6 @@ class Vault(private val context: Context) {
             val k = try { openKeyFile.readBytes() } catch (_: Exception) { null }
             if (k == null || k.size != 32) return false
             dataKey = k
-        } else if (o.optString("mode") == "keystore") {
-            // Wrapped by the hardware key store: unwrapped once, stored as an open vault, and the store's key
-            // deleted. If it can't be unwrapped, nothing is changed (the caller says so).
-            val ks = oldSystemKey() ?: return false
-            val k = Crypto.open(ks, Crypto.b64d(o.getString("wrapped"))) ?: return false
-            try { store(k, null); dropSystemKey() } catch (_: Exception) {}
-            dataKey = k
         } else {
             return false
         }
@@ -68,23 +57,26 @@ class Vault(private val context: Context) {
     fun unlock(password: String): Boolean {
         val o = read() ?: return openDefault()
         if (o.optString("mode") != "password") return openDefault()
+        if (o.optString("kdf") != "scrypt") return false
         val salt = Crypto.b64d(o.getString("salt"))
-        val scrypt = o.optString("kdf") == "scrypt"
-        val kek = if (scrypt) Crypto.scrypt(password.toByteArray(), salt, o.optInt("N", SCRYPT_N), o.optInt("r", SCRYPT_R), o.optInt("p", SCRYPT_P))
-            else Crypto.derive(password, salt, o.optInt("rounds", ROUNDS))
+        val kek = Crypto.scrypt(password.toByteArray(), salt, o.optInt("N", SCRYPT_N), o.optInt("r", SCRYPT_R), o.optInt("p", SCRYPT_P))
         val wasClosed = dataKey == null
-        // "hw": 1: the lock is also wrapped with the hardware key.
-        val hw = o.optInt("hw", 0) == 1
-        val wrapped = Crypto.b64d(o.getString("wrapped"))
-        val inner = if (hw) oldSystemKey()?.let { Crypto.open(it, wrapped) } ?: return false else wrapped
-        val k = Crypto.open(kek, inner) ?: return false
+        val k = Crypto.open(kek, Crypto.b64d(o.getString("wrapped"))) ?: return false
         dataKey = k
-        // A PBKDF2 lock, or one with the hardware key around it: store it again with scrypt alone, since the key is known.
-        if (!scrypt || hw) try { store(k, password, o.optString("kind") == "pattern"); if (hw) dropSystemKey() } catch (_: Exception) {}
         weak = !LockRules.strong(password)
         if (wasClosed) applyRestore()   // only on a fresh open, before chats load
         _locked.value = false
         return true
+    }
+
+    /** [password] is the lock's (a password, or a pattern's secret), without changing anything. True when there's no lock. */
+    fun check(password: String): Boolean {
+        val o = read() ?: return true
+        if (o.optString("mode") != "password") return true
+        if (o.optString("kdf") != "scrypt") return false
+        val salt = Crypto.b64d(o.getString("salt"))
+        val kek = Crypto.scrypt(password.toByteArray(), salt, o.optInt("N", SCRYPT_N), o.optInt("r", SCRYPT_R), o.optInt("p", SCRYPT_P))
+        return Crypto.open(kek, Crypto.b64d(o.getString("wrapped")))?.also { it.fill(0) } != null
     }
 
     /** The lock just opened is shorter than new locks may be. Only known after an unlock. */
@@ -243,18 +235,8 @@ class Vault(private val context: Context) {
         for (name in listOf("androidx.work.workdb", "androidx.work.workdb-wal", "androidx.work.workdb-shm")) context.getDatabasePath(name).delete()
         context.getDatabasePath("androidx.work.workdb").parentFile?.listFiles()?.forEach { if (it.name.startsWith("androidx.work")) it.delete() }
         context.noBackupFilesDir.listFiles()?.forEach { it.deleteRecursively() }
-        dropSystemKey()   // any hardware key store key
         dataKey?.fill(0)
         dataKey = null
-    }
-
-    /** The hardware key store's key, only to open a vault it wrapped. Never made anew. */
-    private fun oldSystemKey(): SecretKey? = try {
-        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(ALIAS, null) as? SecretKey
-    } catch (_: Exception) { null }
-
-    private fun dropSystemKey() {
-        try { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) } catch (_: Exception) {}
     }
 
     /** The math, separate so it can be tested off the phone. */
@@ -360,8 +342,6 @@ class Vault(private val context: Context) {
     }
 
     companion object {
-        private const val ALIAS = "muninn-vault"
-        private const val ROUNDS = 310_000   // PBKDF2 locks
         /** scrypt for new locks: 64 MiB and about a second on a low-end phone (2^17 would be 128 MiB and about twice as long). */
         const val SCRYPT_N = 1 shl 16
         const val SCRYPT_R = 8

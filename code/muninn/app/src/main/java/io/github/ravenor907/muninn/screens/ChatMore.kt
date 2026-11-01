@@ -73,7 +73,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Cap m2 on screen (shared/docs/protocol-0.6.md, section 12): polls, link previews, video messages and albums, and the
+ * Cap m2 on screen (shared/docs/protocol.md, section 12): polls, link previews, video messages and albums, and the
  * "+" menu in the message box that makes them.
  */
 

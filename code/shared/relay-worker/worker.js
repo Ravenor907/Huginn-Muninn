@@ -34,11 +34,30 @@ async function verifySig(secret, id, t, sig) {
   return crypto.subtle.verify("HMAC", key, hexToBytes(sig), enc.encode(id + "." + t));
 }
 
+// A body over MAX_BODY bytes is refused: by its Content-Length before anything is read, and otherwise
+// (no length given) as soon as the bytes read pass it. Returns TOO_LARGE, null (not a JSON object) or the object.
+const TOO_LARGE = Symbol("too_large");
+
 async function readBody(request) {
-  const text = await request.text();
-  if (text.length > MAX_BODY) return null;
+  const len = request.headers.get("content-length");
+  if (len !== null && !(/^\d{1,7}$/.test(len.trim()) && Number(len.trim()) <= MAX_BODY)) return TOO_LARGE;
+  const bytes = new Uint8Array(MAX_BODY);
+  let size = 0;
+  if (request.body) {
+    const reader = request.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (size + value.length > MAX_BODY) {
+        await reader.cancel().catch(() => {});
+        return TOO_LARGE;
+      }
+      bytes.set(value, size);
+      size += value.length;
+    }
+  }
   try {
-    const body = JSON.parse(text);
+    const body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, size)));
     return body && typeof body === "object" ? body : null;
   } catch {
     return null;
@@ -47,7 +66,8 @@ async function readBody(request) {
 
 // The address is never stored or logged. The count is kept under an HMAC of the address group and the day,
 // keyed with a secret only the Worker has (TURN_KEY_API_TOKEN), so the stored key can't be reversed by trying
-// every address. IPv6 addresses count by their /64 (one home or one device), so one /64 can't dodge the cap.
+// every address. IPv6 addresses count by their /48 (the most a home or a phone line is usually given), so one
+// customer can't dodge the cap by moving around their own addresses.
 export function addressGroup(raw) {
   const ip = String(raw || "unknown").trim().toLowerCase().split("%")[0];
   if (!ip.includes(":")) return ip;
@@ -71,7 +91,7 @@ export function addressGroup(raw) {
   if (n.slice(0, 5).every((x) => x === 0) && n[5] === 0xffff) {
     return [n[6] >> 8, n[6] & 255, n[7] >> 8, n[7] & 255].join(".");
   }
-  return n.slice(0, 4).map((x) => x.toString(16)).join(":") + "::/64";
+  return n.slice(0, 3).map((x) => x.toString(16)).join(":") + "::/48";
 }
 
 async function ipKey(secret, ip, day) {
@@ -152,6 +172,7 @@ async function handleTurn(request, env, nowSec) {
   }
 
   const body = await readBody(request);
+  if (body === TOO_LARGE) return json(413, { error: "too_large" });
   if (!body) return json(400, { error: "bad_request" });
   const { id, t, sig } = body;
   if (typeof id !== "string" || !HEX64.test(id)) return json(400, { error: "bad_request" });

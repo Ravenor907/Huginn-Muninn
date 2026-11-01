@@ -137,7 +137,38 @@ await test("malformed bodies are 400", async () => {
   assert.equal((await call(env(), "not json")).status, 400);
   assert.equal((await call(env(), { id: "xyz", t: NOW, sig: sign("xyz", NOW) })).status, 400);
   assert.equal((await call(env(), { id: ID, t: String(NOW), sig: sign(ID, NOW) })).status, 400);
-  assert.equal((await call(env(), "x".repeat(2000))).status, 400);
+});
+
+await test("bodies over 1 KB are 413", async () => {
+  upstreamCalls.length = 0;
+  // No Content-Length: refused once the bytes read pass 1 KB.
+  assert.equal((await call(env(), "x".repeat(2000))).status, 413);
+  const big = JSON.stringify({ id: ID, t: NOW, sig: sign(ID, NOW), pad: "x".repeat(1100) });
+  assert.equal((await call(env(), big)).status, 413);
+  // A Content-Length over 1 KB is refused before the body is read at all.
+  const r = new Request("https://relay.example.workers.dev/turn", {
+    method: "POST",
+    headers: { "CF-Connecting-IP": "203.0.113.7", "content-length": "5000" },
+    body: JSON.stringify({ id: ID, t: NOW, sig: sign(ID, NOW) }),
+  });
+  const res = await handle(r, env(), NOW);
+  assert.equal(res.status, 413);
+  assert.equal(r.bodyUsed, false);
+  for (const bad of ["abc", "-1", "1e9"]) {
+    const rb = new Request("https://relay.example.workers.dev/turn", {
+      method: "POST", headers: { "content-length": bad }, body: "{}",
+    });
+    assert.equal((await handle(rb, env(), NOW)).status, 413);
+  }
+  // Exactly 1 KB is still read.
+  const ok = JSON.stringify({ id: ID, t: NOW, sig: sign(ID, NOW) });
+  const padded = ok.slice(0, -1) + ',"p":"' + "x".repeat(1024 - ok.length - 7) + '"}';
+  assert.equal(new TextEncoder().encode(padded).length, 1024);
+  const rok = new Request("https://relay.example.workers.dev/turn", {
+    method: "POST", headers: { "CF-Connecting-IP": "203.0.113.7", "content-length": "1024" }, body: padded,
+  });
+  assert.equal((await handle(rok, env(), NOW)).status, 200);
+  assert.equal(upstreamCalls.length, 1);
 });
 
 await test("per id cap of 30 per day", async () => {
@@ -197,28 +228,29 @@ await test("address keys are keyed with the Worker secret, not a plain hash", as
   assert.notEqual(lim2.keys().find((k) => k.includes("|i:")).split("|i:")[1], stored);
 });
 
-await test("IPv6 addresses group by /64", async () => {
-  assert.equal(addressGroup("2001:DB8:0:0:1:2:3:4"), "2001:db8:0:0::/64");
-  assert.equal(addressGroup("2001:db8::1"), "2001:db8:0:0::/64");
-  assert.equal(addressGroup("2001:db8:1:2::"), "2001:db8:1:2::/64");
-  assert.equal(addressGroup("fe80::1%eth0"), "fe80:0:0:0::/64");
+await test("IPv6 addresses group by /48", async () => {
+  assert.equal(addressGroup("2001:DB8:0:0:1:2:3:4"), "2001:db8:0::/48");
+  assert.equal(addressGroup("2001:db8::1"), "2001:db8:0::/48");
+  assert.equal(addressGroup("2001:db8:1:2::"), "2001:db8:1::/48");
+  assert.equal(addressGroup("fe80::1%eth0"), "fe80:0:0::/48");
   assert.equal(addressGroup("::ffff:203.0.113.7"), "203.0.113.7");
   assert.equal(addressGroup("203.0.113.7"), "203.0.113.7");
-  assert.notEqual(addressGroup("2001:db8:1:2::1"), addressGroup("2001:db8:1:3::1"));
+  assert.equal(addressGroup("2001:db8:1:2::1"), addressGroup("2001:db8:1:ffff::1"));
+  assert.notEqual(addressGroup("2001:db8:1:2::1"), addressGroup("2001:db8:2:2::1"));
 });
 
-await test("one IPv6 /64 shares one address cap", async () => {
+await test("one IPv6 /48 shares one address cap, across its /64s", async () => {
   const e = env();
   for (let i = 0; i < 60; i++) {
     const id = i.toString(16).padStart(64, "7");
-    const ip = "2001:db8:1:2:" + (i + 1).toString(16) + "::" + (i * 7 + 1).toString(16);
+    const ip = "2001:db8:1:" + (i + 1).toString(16) + "::" + (i * 7 + 1).toString(16);
     assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip })).status, 200);
   }
   const id = "8".repeat(64);
-  const r = await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: "2001:db8:1:2:ffff:ffff:ffff:ffff" });
+  const r = await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: "2001:db8:1:ffff:ffff:ffff:ffff:ffff" });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "ip_limit");
-  assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: "2001:db8:1:3::1" })).status, 200);
+  assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: "2001:db8:2::1" })).status, 200);
 });
 
 await test("requests at the same moment can't go over a cap", async () => {

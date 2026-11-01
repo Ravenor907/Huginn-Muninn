@@ -43,7 +43,7 @@ import io.github.ravenor907.muninn.ui.Ui
  * invite" switch). With it false, every call here uses the one-hour group code (Groups.code, revokeCodes and joinByCode).
  */
 object GroupLinks {
-    /** True when the links are used (cap j1, shared/docs/protocol-0.6.md section 17). */
+    /** True when the links are used (cap j1, shared/docs/protocol.md section 17). */
     const val ready = true
 
     /** One link: who made it, how often it was used and may be, and when it stops working (0: never). */

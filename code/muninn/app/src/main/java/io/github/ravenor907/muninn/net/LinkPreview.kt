@@ -8,7 +8,7 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Link previews (cap m2, shared/docs/protocol-0.6.md 12.4): made on the sending phone only, never on the receiving one,
+ * Link previews (cap m2, shared/docs/protocol.md 12.4): made on the sending phone only, never on the receiving one,
  * so no website learns who got a link or when it was read. The page's title, description and picture come from its
  * Open Graph tags (or its <title>); the picture is shrunk to a small JPEG with nothing but pixels.
  */

@@ -12,7 +12,7 @@ import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 
 /**
- * Canonical JSON (protocol 0.6, section 2.1) and signed objects (2.2), for the kids' TV.
+ * Canonical JSON (shared/docs/protocol.md, section 2.1) and signed objects (2.2), for the kids' TV.
  * Kept free of Android so the unit tests run it against shared/vectors/proto06-vectors.json.
  *
  * Objects: members sorted by key (ASCII), no spaces. Arrays keep their order. Strings: raw UTF-8 with
@@ -143,7 +143,7 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      /** k8: only for a TV whose app said "k8". */ val keep: Int? = null)
 
 /**
- * The kids' TV rules (protocol 0.6, section 7): what a well-formed config is, when a TV takes a new
+ * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
  * config or a disconnect, and how a parent's app builds them. Matches check_tvconfig, accept_tvconfig and
  * accept_disconnect in shared/tools/proto06_ref.py, reasons included.
  */
@@ -152,6 +152,8 @@ object TvRules {
     const val DISCONNECT = "huginn-muninn tvdisconnect v1"
     const val MAX_QUICK = 24
     const val MAX_QUICK_TEXT = 80
+    /** The most a parent can type for a quick message: what a tile on the TV shows whole. Configs still take up to [MAX_QUICK_TEXT]. */
+    const val QUICK_TILE = 30
     const val MAX_CONTACTS = 50
     const val MAX_NAME = 40
     const val MAX_BYTES = 16 * 1024
@@ -325,9 +327,12 @@ object TvRules {
      * (TV clock). [own]: the level was set on the TV itself ("own":true), so a parent's phone takes it
      * without comparing clocks.
      */
-    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false, off: List<String>? = null): String =
+    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false, off: List<String>? = null, update: String? = null): String =
         JSONObject().put("t", "status").put("mic", mic.coerceIn(0, MAX_MIC)).put("used", used.coerceIn(0L, MAX_INT)).put("ts", ts.coerceIn(0L, MAX_INT))
-            .apply { if (own) put("own", true); off?.let { put("off", JSONArray(it.filter { p -> p in PERMS }.distinct())) } }.toString()
+            .apply {
+                if (own) put("own", true); off?.let { put("off", JSONArray(it.filter { p -> p in PERMS }.distinct())) }
+                update?.takeIf { it in UPDATE_STATES }?.let { put("update", it) }
+            }.toString()
     /** Parent to TV: "send me your status". */
     fun usageMessage(): String = JSONObject().put("t", "usage").toString()
     /** Parent to TV: erase the messages, photos, voice messages and caches (pairing and contacts stay). */
@@ -337,7 +342,7 @@ object TvRules {
      * A TV's status (7.7). [own]: the level was set on the TV (absent: false). [off]: k8 (7.13), the
      * permissions still off on the TV (null: the TV didn't say).
      */
-    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false, val off: List<String>? = null)
+    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false, val off: List<String>? = null, val update: String? = null)
 
     /** A TV's status, or null if it isn't well-formed (7.7). "own", when present, must be a boolean. */
     fun status(o: JSONObject): Status? {
@@ -351,7 +356,67 @@ object TvRules {
             val a = o.get("off") as? JSONArray ?: return null
             (0 until a.length()).map { a.get(it) as? String ?: return null }.filter { it in PERMS }.distinct()
         } else null
-        return Status(m.toInt(), u, t, own, off)
+        // The TV's last update ("update"): an app that doesn't know a state ignores it.
+        val update = (o.opt("update") as? String)?.takeIf { it in UPDATE_STATES }
+        return Status(m.toInt(), u, t, own, off, update)
+    }
+
+    // ---- the TV's own updates, in its status: what a parent's phone shows under Apps and updates
+    /**
+     * "needs": a new Muninn is downloaded and waits for Install updates; "ready": it waits for Install on the TV;
+     * "installing"; "done": the TV runs the newest; "failed": it didn't go in (the TV tries again the next day).
+     */
+    val UPDATE_STATES = listOf("needs", "ready", "installing", "done", "failed")
+
+    /** What a parent's phone says for the TV's update [state] ("" when there's nothing to say). */
+    fun updateText(state: String?): String = when (state) {
+        "needs" -> "Waiting for Install updates. Turn it on in TV permissions."
+        "ready" -> "Waiting for Install on the TV"
+        "installing" -> "Installing"
+        "done" -> "Up to date"
+        "failed" -> "The update didn't install. The TV tries again tomorrow."
+        else -> ""
+    }
+
+    // ---- a parent taken off the TV: their phone stops looking after it
+    /**
+     * The TV (or the parent who did it) hands a removed parent the signed config that no longer lists them,
+     * so their phone stops managing the TV. Apps that don't know "removed" ignore it.
+     */
+    fun removedMessage(cfg: JSONObject): String = JSONObject().put("t", "removed").put("cfg", cfg).toString()
+
+    /**
+     * The config in a "removed" [o], read only if it is a well-formed config for [tvKey], doesn't list [me] as a
+     * parent, is signed by one of its parents (one this phone knew, [known], unless null: the TV itself sent it) and
+     * isn't older than [minV]. Null otherwise.
+     */
+    fun removedFrom(tvKey: String, me: String, known: Collection<String>?, minV: Long, o: JSONObject): TvConfig? {
+        if (o.optString("t") != "removed") return null
+        val c = o.optJSONObject("cfg") ?: return null
+        try { check(c) } catch (e: IllegalArgumentException) { return null }
+        if (c.opt("tv") != tvKey) return null
+        val cfg = try { parse(c) } catch (e: Exception) { return null }
+        if (me in cfg.parents || (known != null && cfg.by !in known) || cfg.v < minV) return null
+        if (!Canon.verify(cfg.by, CONFIG, c)) return null
+        return cfg
+    }
+
+    /** Parents in [old] that [new] no longer lists: their phones are told. */
+    fun dropped(old: Collection<String>, new: Collection<String>): List<String> = old.filter { it !in new }.distinct()
+
+    /**
+     * The TV's permissions to ask for as soon as a parent pairs it, while they're at the TV: the microphone (when
+     * it has one) and notifications (Android 13 and newer), only those still off.
+     */
+    fun setupAsks(hasMic: Boolean, micOn: Boolean, notifyPrompt: Boolean, notifyOn: Boolean): List<String> = buildList {
+        if (hasMic && !micOn) add("mic")
+        if (notifyPrompt && !notifyOn) add("notify")
+    }
+
+    /** What a parent may type for a quick message: anything up to [QUICK_TILE], and an older, longer one only shorter. */
+    fun quickEdit(old: String, new: String, max: Int = QUICK_TILE): String {
+        val n = new.codePointCount(0, new.length)
+        return if (n <= max || n < old.codePointCount(0, old.length)) new else old
     }
 
     /**
@@ -387,7 +452,7 @@ object TvRules {
 
     /**
      * The big buttons in a conversation, left to right: Call (when a parent allows calls), Voice message
-     * and Talk to type (when the TV has a microphone, and a parent turned the remote mic on).
+     * and Say it (when the TV has a microphone, and a parent turned the remote mic on).
      */
     fun talkButtons(calls: Boolean, mic: Boolean, dictate: Boolean): List<String> = buildList {
         if (calls) add("call")

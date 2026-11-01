@@ -34,7 +34,12 @@ One identity across all of them. Link devices, or move everything to a new one.
 - Keys are made on your device. Nothing to sign up for.
 - Messages expire on their own: 7 days, up to 30 in Family and Work chats.
 - Relays carry sealed messages they can't read.
-- What leaves your device: sealed messages to public Nostr relays. Calls through a Cloudflare relay, or straight between trusted contacts, encrypted either way. One STUN lookup to find a direct path for files. Update checks to GitHub (can be turned off).
+- What leaves your device:
+  - Sealed messages to public Nostr relays.
+  - Calls through a Cloudflare relay, or straight between trusted contacts, encrypted either way.
+  - STUN lookups (Cloudflare's STUN server) to find a direct path: one for each file sent straight, and a few in each call with a trusted contact.
+  - Update checks to GitHub (can be turned off).
+  - Labs bug reports, only when a tester sends one: sealed to the project's key alone, with the app version, system and device model, and nothing else about the device.
 
 ## Install
 
@@ -46,7 +51,7 @@ Linux:
 cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak && flatpak install --user -y Huginn.flatpak
 ```
 
-Every release is signed. Both apps refuse an update that doesn't match. Check a download yourself: [shared/docs/releases.md](../code/shared/docs/releases.md).
+Every release is signed. Both apps refuse an update that doesn't match. Check a download yourself: [releases.md](../code/shared/docs/releases.md).
 
 ## Security
 
@@ -56,7 +61,7 @@ Found a problem? Report it privately: [SECURITY.md](SECURITY.md).
 
 Huginn: CMake, Qt 6.10, vcpkg (Windows) or `flatpak-builder` with `code/huginn/packaging/io.github.ravenor907.Huginn.json` (Linux).  
 Muninn: Gradle, from `code/muninn/`.  
-Protocol: [shared/docs/protocol-0.6.md](../code/shared/docs/protocol-0.6.md).
+Protocol: [protocol.md](../code/shared/docs/protocol.md).
 
 GPL-3.0. Fonts: Cinzel, Barlow and Noto Sans Runic (SIL Open Font License).
 

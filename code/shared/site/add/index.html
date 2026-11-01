@@ -79,7 +79,8 @@
 </main>
 <script>
   // The code is after the "#", which browsers never send to the server: only this page sees it.
-  var code = decodeURIComponent((location.hash || "").slice(1));
+  var code = "";
+  try { code = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { code = ""; }  // a broken % escape: no code
   // A group invite link (MUNINNG1:) opens the app the same way. (A move code never does: it is only taken in the app.)
   var group = code.indexOf("MUNINNG1:") === 0;
   if (code.indexOf("MUNINN1:") !== 0 && !group) {
@@ -91,7 +92,7 @@
     var body = group ? code : code.slice("MUNINN1:".length);
     var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
     document.getElementById("open").href = /Android/i.test(navigator.userAgent)
-      ? "intent://add/" + body + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
+      ? "intent://add/" + encodeURIComponent(body) + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
       : "muninn://add/" + body;
     document.getElementById("copy").onclick = function () {
       var b = this;

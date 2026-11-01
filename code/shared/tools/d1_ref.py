@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Reference for cap d1 (shared/docs/protocol-0.6.md, section 16): message limits. Messages older than a chat's limit are
+"""Reference for cap d1 (code/shared/docs/protocol.md, section 16): message limits. Messages older than a chat's limit are
 deleted on every device; the limit is 7 days unless a Family or Work group, or two people who keep each other in their
-Family or Work folder, choose longer (up to 30). Writes shared/vectors/d1-vectors.json, which both apps check; every case is
+Family or Work folder, choose longer (up to 30). Writes code/shared/vectors/d1-vectors.json, which both apps check; every case is
 checked twice (building, then from the file).
 
 Nothing here is new cryptography. A group's type and limit ride in its signed state (two optional fields, checked by
-shared/tools/proto06_ref.py check_state); each person's 1:1 limit rides in the clear part of their envelopes ("days").
+code/shared/tools/proto06_ref.py check_state); each person's 1:1 limit rides in the clear part of their envelopes ("days").
 """
 import base64, json, os, sys
 
@@ -97,7 +97,7 @@ def build():
     now = 1762000000000
     times = [now, now - DAY, now - 7 * DAY, now - 7 * DAY - 1, now - 14 * DAY, now - 30 * DAY, now - 30 * DAY - 1]
     sweep = [{"now": now, "days": d, "times": times, "kept": kept(times, d, now)} for d in (7, 14, 30)]
-    return {"note": "cap d1, shared/docs/protocol-0.6.md section 16; written by shared/tools/d1_ref.py",
+    return {"note": "cap d1, code/shared/docs/protocol.md section 16; written by code/shared/tools/d1_ref.py",
             "limits": {"default": DEFAULT, "longest": LONGEST, "kinds": list(KINDS), "dayMs": DAY},
             "keys": {"A": kA, "B": kB}, "states": states, "refuse": {k: s for k, s in bad.items()}, "accept": accept,
             "envelope": envelope, "mine": mine, "pair": pair, "sweep": sweep}

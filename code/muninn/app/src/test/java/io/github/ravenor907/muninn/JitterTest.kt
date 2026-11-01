@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The jitter buffer (shared/docs/protocol-0.6.md 5.5) on a simulated network: the same runs, random numbers and
+ * The jitter buffer (shared/docs/protocol.md 5.5) on a simulated network: the same runs, random numbers and
  * expectations as Huginn's JitterBuffer::selfTest, so both apps' buffers behave alike.
  */
 class JitterTest {

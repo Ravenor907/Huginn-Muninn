@@ -1,5 +1,5 @@
 {
- "note": "cap d1, shared/docs/protocol-0.6.md section 16; written by shared/tools/d1_ref.py",
+ "note": "cap d1, code/shared/docs/protocol.md section 16; written by code/shared/tools/d1_ref.py",
  "limits": {
   "default": 7,
   "longest": 30,

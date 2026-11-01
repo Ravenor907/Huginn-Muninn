@@ -1,5 +1,5 @@
 {
- "about": "shared/docs/protocol-0.6.md section 22 (cap p1). Written by shared/tools/p1_ref.py.",
+ "about": "code/shared/docs/protocol.md section 22 (cap p1). Written by code/shared/tools/p1_ref.py.",
  "limits": {
   "maxBytes": 24576,
   "sendMaxBytes": 12288,
