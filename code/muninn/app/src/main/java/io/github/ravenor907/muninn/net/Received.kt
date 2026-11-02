@@ -17,7 +17,8 @@ import java.io.IOException
 import java.io.OutputStream
 
 /**
- * Where received files go: the phone's Downloads folder. Android 10 and newer save through MediaStore,
+ * Where received files go: the phone's Downloads folder (Download/Muninn/<chat>), or a folder picked in Settings ›
+ * Save files to (Android's folder picker; <folder>/<chat> there). Android 10 and newer save through MediaStore,
  * so Muninn needs no storage permission. Android 8 and 9 write into the folder with the storage
  * permission, or into Muninn's own Downloads folder if it was refused.
  */
@@ -32,10 +33,12 @@ object Received {
         val uri: Uri?,
         /** Where it's written, when that's a plain file (not MediaStore). */
         val file: File?,
+        /** [uri] is a document in the picked folder (not MediaStore). */
+        private val doc: Boolean = false,
     ) {
         fun finish() {
             try { out.close() } catch (_: Exception) {}
-            if (uri != null && Build.VERSION.SDK_INT >= 29) {
+            if (uri != null && !doc && Build.VERSION.SDK_INT >= 29) {
                 val v = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                 try { context.contentResolver.update(uri, v, null, null) } catch (_: Exception) {}
             }
@@ -43,7 +46,9 @@ object Received {
 
         fun discard() {
             try { out.close() } catch (_: Exception) {}
-            if (uri != null) try { context.contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            if (uri != null) try {
+                if (doc) android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri) else context.contentResolver.delete(uri, null, null)
+            } catch (_: Exception) {}
             file?.delete()
         }
     }
@@ -107,9 +112,85 @@ object Received {
         return t
     }
 
+    // ------------------------------------------------------------------ Save files to (a picked folder)
+
+    private const val PREF = "saveFolder"
+    /** The picked folder's name for the screen ("" while files go to Download/Muninn). */
+    @Volatile private var rootName = ""
+
+    /** The folder picked in Settings › Save files to, while Muninn may still write there; else null (Download/Muninn). */
+    fun chosenTree(context: Context): Uri? {
+        val s = context.getSharedPreferences("muninn", Context.MODE_PRIVATE).getString(PREF, null)?.takeIf { it.isNotEmpty() } ?: return null
+        val u = Uri.parse(s)
+        return if (context.contentResolver.persistedUriPermissions.any { it.uri == u && it.isWritePermission }) u else null
+    }
+
+    /** Saves the folder Android's picker returned (null: back to Download/Muninn) and keeps the right to write there. */
+    fun choose(context: Context, tree: Uri?) {
+        val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
+        val old = prefs.getString(PREF, null)?.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
+        if (old != null && old != tree) try {
+            context.contentResolver.releasePersistableUriPermission(old, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        } catch (_: Exception) {}
+        if (tree != null) try {
+            context.contentResolver.takePersistableUriPermission(tree, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        } catch (_: Exception) {}
+        prefs.edit().putString(PREF, tree?.toString() ?: "").apply()
+        load(context)
+    }
+
+    /** Reads the picked folder's name (at start and after choosing). */
+    fun load(context: Context) {
+        val tree = chosenTree(context)
+        rootName = if (tree == null) "" else try {
+            val doc = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+            context.contentResolver.query(doc, arrayOf(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null } ?: "Your folder"
+        } catch (_: Exception) { "Your folder" }
+    }
+
+    /** Where a chat's files go, in words: "Download/Muninn/Sam", or "<picked folder>/Sam". [folder]: Sharing.folderFor's. */
+    fun shown(folder: String): String = rootName.let { r -> if (r.isEmpty()) "Download/$folder" else "$r/${folder.substringAfter('/')}" }
+
+    /** Settings: the picked folder's name, or Download/Muninn. */
+    fun shownRoot(): String = rootName.ifEmpty { "Download/Muninn" }
+
+    /** A document named [name] in [parent] (a folder), made when it isn't there. */
+    private fun child(context: Context, tree: Uri, parent: Uri, name: String, dir: Boolean, mime: String): Uri? {
+        val r = context.contentResolver
+        if (dir) try {
+            val kids = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, android.provider.DocumentsContract.getDocumentId(parent))
+            r.query(kids, arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)?.use { c ->
+                while (c.moveToNext()) if (c.getString(1) == name && c.getString(2) == android.provider.DocumentsContract.Document.MIME_TYPE_DIR)
+                    return android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0))
+            }
+        } catch (_: Exception) {}
+        return try { android.provider.DocumentsContract.createDocument(r, parent, mime, name) } catch (_: Exception) { null }
+    }
+
+    /** Into the picked folder: <folder>/<chat name>/<sender's folders>/<name>. Null when that didn't work (Downloads then). */
+    private fun createInTree(context: Context, tree: Uri, folders: List<String>, name: String): Target? {
+        var parent = try {
+            android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+        } catch (_: Exception) { return null }
+        for (f in folders) parent = child(context, tree, parent, f, true, android.provider.DocumentsContract.Document.MIME_TYPE_DIR) ?: return null
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        val uri = child(context, tree, parent, name, false, mime) ?: return null
+        val out = try { context.contentResolver.openOutputStream(uri) } catch (_: Exception) { null }
+        if (out == null) { try { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri) } catch (_: Exception) {}; return null }
+        // The folder's app renames a clash itself ("a (1).jpg"): show the name it really got.
+        val given = try {
+            context.contentResolver.query(uri, arrayOf(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        } catch (_: Exception) { null }
+        return Target(given ?: name, out, context, uri, null, doc = true)
+    }
+
     /**
      * Starts saving a file. [path] is the name the sender gave; folders in it ("Photos/a.jpg") are kept
-     * under Downloads, and nothing in it can climb out of Downloads.
+     * under Downloads (or the picked folder), and nothing in it can climb out of there.
      */
     fun create(context: Context, path: String, under: String = ""): Target {
         val parts = path.split('/', '\\').map { it.trim() }.filter { it.isNotEmpty() && it != "." && it != ".." }.ifEmpty { listOf("from-phone") }
@@ -117,6 +198,8 @@ object Received {
         val name = parts.last()
         // Cap f2: a chat's files go in Download/Muninn/<chat name> ([under], already made safe by Sharing.folderFor).
         val folders = under.split('/').filter { it.isNotEmpty() }.map { Sharing.safeName(it, "Chat") } + parts.dropLast(1)
+        // A picked folder: <folder>/<chat name>/..., without the "Muninn" level.
+        chosenTree(context)?.let { tree -> createInTree(context, tree, folders.drop(if (under.isNotEmpty()) 1 else 0), name)?.let { return it } }
         if (Build.VERSION.SDK_INT >= 29) {
             val resolver = context.contentResolver
             val ext = name.substringAfterLast('.', "").lowercase()

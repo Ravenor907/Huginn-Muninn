@@ -43,6 +43,9 @@ shot add-someone --es chat add
 # Groups: a group conversation (channel chips, sender names) and its settings (members, channels, folders).
 shot group --ez group true
 shot group-settings --ez group true --ez gsettings true
+# Voice: the join sheet (mic and sound choice), and a room with a shared screen (made up: no sound, nothing sent).
+shot room-join --ez roomjoin true
+shot room --ez room true
 # Press and hold: the person and chat sheet (here on the group).
 shot hold-sheet --ez group true --ez hold true
 shot lock --es screen lock
@@ -71,6 +74,7 @@ shot tablet-chats --es screen chat
 shot tablet-conversation --es chat demo
 # The rail's group button, the channel column (TEXT, VOICE) and the group in the main column.
 shot tablet-group --ez group true
+shot tablet-room --ez room true
 shot tablet-files --es screen files
 shot tablet-settings --es screen settings
 adb shell wm size reset

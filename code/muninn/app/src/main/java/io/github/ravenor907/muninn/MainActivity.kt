@@ -190,6 +190,8 @@ class MainActivity : ComponentActivity() {
         if (ciSkip) intent?.getStringExtra("folder")?.let { SettingsNav.folder = it }   // CI: a Settings page
         if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: a person's three-dot menu
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
+        if (ciSkip && intent?.getBooleanExtra("room", false) == true && app.ready.value) ciRoom(false)   // CI: the voice room screen
+        if (ciSkip && intent?.getBooleanExtra("roomjoin", false) == true && app.ready.value) ciRoom(true)   // CI: the join sheet
         if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs
             Thread { android.util.Log.i("Muninn", "TvVoice self-check: " + io.github.ravenor907.muninn.tv.TvVoice.selfCheck()) }.start()
         if (savedInstanceState == null) { openChat(intent); openAdd(intent) }
@@ -259,6 +261,20 @@ class MainActivity : ComponentActivity() {
         tab = "chat"
         ChatNav.open = io.github.ravenor907.muninn.net.Folders.groupKey(g) + if (intent?.getBooleanExtra("gsettings", false) == true) "/settings" else ""
         intentChose = true
+    }
+
+    /**
+     * Test builds only: [join] the join sheet for the CI group's voice room, else a made-up room with a shared screen
+     * (no sound, nothing sent). The chat list shows behind it with the In voice bar.
+     */
+    private fun ciRoom(join: Boolean) {
+        val gs = app.chat.groups
+        val g = gs.all.value.values.firstOrNull { it.state.name == "The Family" }?.g ?: run { ciGroup(); gs.all.value.values.firstOrNull { it.state.name == "The Family" }?.g } ?: return
+        val st = gs.group(g)?.state ?: return
+        val voice = st.channels.firstOrNull { it.t == "voice" } ?: return
+        if (join) { app.identity.roomAsk = true; io.github.ravenor907.muninn.screens.RoomActivity.join(this, g, voice.id); return }
+        io.github.ravenor907.muninn.net.call.RoomManager.demo(voice.n, st.name)
+        io.github.ravenor907.muninn.screens.RoomActivity.show(this)
     }
 
     /** Wi-Fi, close-by (Bluetooth) and internet: started once the vault is open. */
@@ -566,6 +582,8 @@ class MainActivity : ComponentActivity() {
             } }
             if (Access.reduceMotion) { if (!full) header() } else androidx.compose.animation.AnimatedVisibility(!full) { header() }
             if (!full) UpdateBanner()
+            // In a voice room: a thin "In voice" bar on every screen (the room's own group chat shows its panel instead).
+            io.github.ravenor907.muninn.screens.InVoiceChip(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), hideIn = if (full) ChatNav.open else "")
             // A file on its way shows over every screen (Files has its own panel; an open chat shows its own cards).
             if (tab != "files") io.github.ravenor907.muninn.screens.TransferStrip(app, skipPeer = if (full) ChatNav.open else "") { show("files") }
             Box(Modifier.weight(1f)) {
@@ -714,7 +732,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth()) { ChannelColumn(app, space.g) }
                             } else {
-                                ColumnHeader("Chats")
+                                ColumnHeader("Chats") { io.github.ravenor907.muninn.screens.InVoiceChip(Modifier.widthIn(max = 220.dp)) }
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) { ChatColumn(app) { askClose() } }
                             }
                         }

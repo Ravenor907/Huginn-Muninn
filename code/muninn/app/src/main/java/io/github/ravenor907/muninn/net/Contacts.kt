@@ -449,8 +449,8 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
     @Synchronized
     fun setNotify(key: String, mode: String) = set(_all.value.let { it.copy(notify = if (mode in MODES) it.notify + (key to mode) else it.notify - key) })
 
-    /** How [key] notifies now: its own choice, else [ONE] with Reduce notifications on, else [EVERY]. */
-    fun notifyMode(key: String, reduce: Boolean): String = modeFor(_all.value.notify[key], reduce, key.startsWith("g:"))
+    /** How [key] notifies now: its own choice, else [MENTIONS] for a [big] group, else [ONE] with Reduce notifications on, else [EVERY]. */
+    fun notifyMode(key: String, reduce: Boolean, big: Boolean = false): String = modeFor(_all.value.notify[key], reduce, key.startsWith("g:"), big)
 
     /** Chats that notified since they were last opened ([ONE] makes no more until then). */
     private val notified = HashSet<String>()
@@ -459,8 +459,8 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
      * Whether a message that got past [arrived] notifies: [ONE] once per chat until it's opened ([read]), [MENTIONS]
      * only for an @mention or a reply to me ([toMe]). Calls aren't messages: they ring as before.
      */
-    fun alert(key: String, reduce: Boolean, toMe: Boolean): Boolean {
-        val mode = notifyMode(key, reduce)
+    fun alert(key: String, reduce: Boolean, toMe: Boolean, big: Boolean = false): Boolean {
+        val mode = notifyMode(key, reduce, big)
         if (mode == MENTIONS) return toMe
         if (mode != ONE) return true
         return synchronized(notified) { notified.add(key) }
@@ -488,10 +488,17 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         const val MENTIONS = "mentions"
         val MODES = setOf(EVERY, ONE, MENTIONS)
 
-        /** [own]: the chat's choice, if any. [MENTIONS] is for groups only (a person's chat then notifies for every message). */
-        fun modeFor(own: String?, reduce: Boolean, group: Boolean): String = when {
+        /** A group with more people than this starts on [MENTIONS] until its own choice is made. */
+        const val BIG_GROUP = 10
+
+        /**
+         * [own]: the chat's choice, if any. [MENTIONS] is for groups only (a person's chat then notifies for every
+         * message), and what a [big] group (over [BIG_GROUP] people) does until its own choice.
+         */
+        fun modeFor(own: String?, reduce: Boolean, group: Boolean, big: Boolean = false): String = when {
             own == MENTIONS && !group -> EVERY
             own != null && own in MODES -> own
+            group && big -> MENTIONS
             reduce -> ONE
             else -> EVERY
         }

@@ -61,7 +61,7 @@ import kotlinx.coroutines.delay
  */
 @OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = false) {
+fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = false, pip: Boolean = false, onAllowMic: () -> Unit = {}) {
     // Cap g2: someone pressed and held (or tapped): Mute for me, Volume, and for admins Timeout and Ban.
     val roomCtx = androidx.compose.ui.platform.LocalContext.current
     val app = roomCtx.applicationContext as? io.github.ravenor907.muninn.Muninn
@@ -69,6 +69,14 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
     val room by RoomManager.room.collectAsState()
     val ring by RoomManager.ring.collectAsState()
     val screen by RoomManager.screen.collectAsState()
+    // A shared screen or a camera picture showing: the phone's screen stays on.
+    val pics by io.github.ravenor907.muninn.net.call.RoomVideo.state.collectAsState()
+    KeepScreenOn(room != null && (screen != null || pics.cameraOn || pics.pics.values.any { it.on }))
+    // Tap the shared screen: full screen and landscape. Picture-in-picture: just the picture.
+    var full by remember { mutableStateOf(false) }
+    LaunchedEffect(screen == null) { if (screen == null) full = false }
+    val r0 = room
+    if (r0 != null && (pip || (full && screen != null))) { SharedScreenFull(r0, screen, hideNames, pip) { full = false }; return }
     Column(Modifier.fillMaxSize().background(Palette.ground).systemBarsPadding().padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -113,6 +121,21 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             Spacer(Modifier.height(6.dp))
             Text(status(r), style = Type.normal.copy(color = Palette.textMuted))
             if (r.note.isNotEmpty()) Text(r.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+            // A phone call has the sound: the room is paused, mic and sound, until it ends.
+            if (r.held.isNotEmpty()) Text("${r.held}. The room is paused and others see you muted.", style = Type.small.copy(color = Palette.danger),
+                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+            if (r.deafened) Text("Deafened: you hear nobody and your mic is off", style = Type.small.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
+            if (r.listenOnly) {
+                Text("Listening only. Muninn can't use the microphone.", style = Type.small.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
+                MButton("Allow the microphone to talk", Modifier.padding(top = 6.dp), icon = "mic") { onAllowMic() }
+            }
+            if (r.stillHere) {
+                Text("Still here? You're the only one in this room.", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+                Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MButton("I'm here", kind = Kind.Accent) { RoomManager.stay() }
+                    MButton("Leave", kind = Kind.Danger) { RoomManager.leave() }
+                }
+            }
             // Someone shares their screen (shared/docs/protocol.md 5.8.7): it shows here, encrypted to this phone like the sound.
             screen?.let { sc ->
                 Spacer(Modifier.height(16.dp))
@@ -120,9 +143,14 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 Spacer(Modifier.height(8.dp))
                 val turned = sc.rotation % 180 != 0
                 val ratio = if (sc.width > 0 && sc.height > 0) (if (turned) sc.height.toFloat() / sc.width else sc.width.toFloat() / sc.height) else 16f / 9f
-                VideoPicture({ RoomManager.screenSurface(it) }, sc.width, sc.height, sc.rotation,
-                    Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f)).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field),
-                    if (hideNames) "Shared screen" else "${sc.name}'s screen")
+                Box(Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f))) {
+                    VideoPicture({ RoomManager.screenSurface(it) }, sc.width, sc.height, sc.rotation,
+                        Modifier.fillMaxSize().clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field),
+                        if (hideNames) "Shared screen" else "${sc.name}'s screen")
+                    // Over the picture (its own view doesn't take touches): tap for full screen.
+                    Box(Modifier.matchParentSize().combinedClickable(onClickLabel = "Full screen") { full = true })
+                }
+                Text("Tap it for full screen", style = Type.small.copy(fontSize = 12.sp), modifier = Modifier.padding(top = 4.dp))
             }
             // Group video (up to 4 people, peer to peer only): everyone with a camera on, and my own picture.
             val vid by io.github.ravenor907.muninn.net.call.RoomVideo.state.collectAsState()
@@ -167,8 +195,12 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 }
             }
             Spacer(Modifier.height(20.dp))
+            if (!hideNames && r.people.size > 1) Text("Tap someone for their volume or to mute their voice for you", style = Type.small.copy(fontSize = 13.sp),
+                textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 8.dp))
             Text("Up to ${RoomLogic.MAX_PEOPLE} people. Sound goes over the internet through Muninn's server, so nobody here sees anyone's internet address.",
                 style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
+            Text("Voice rooms use more battery than chat. With the screen off, Muninn keeps only what the sound needs.",
+                style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
         }
         val who = modFor
         if (who != null && app != null) PersonModDialog(app, r.g, who.key, who.name,
@@ -176,7 +208,9 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
         // Wraps onto a second line when the four buttons don't fit (a small phone, large text or a long Bluetooth name).
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton(if (r.muted) "Unmute mic" else "Mute mic", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { RoomManager.setMuted(!r.muted) }
+            if (!r.listenOnly) MButton(if (r.muted) "Unmute mic" else "Mute mic", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { RoomManager.setMuted(!r.muted) }
+            // Deafen: nobody heard here, mic off; others see you muted.
+            MButton(if (r.deafened) "Undeafen" else "Deafen", kind = if (r.deafened) Kind.Accent else Kind.Normal, icon = if (r.deafened) "mute" else "sound") { RoomManager.setDeafened(!r.deafened) }
             // Where the sound goes: the phone, its speaker, headphones or a Bluetooth device.
             val out by AudioRoute.current.collectAsState()
             var picking by remember { mutableStateOf(false) }

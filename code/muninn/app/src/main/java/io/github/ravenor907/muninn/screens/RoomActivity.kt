@@ -1,19 +1,26 @@
 package io.github.ravenor907.muninn.screens
 
 import android.Manifest
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.util.Rational
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.call.AudioRoute
 import io.github.ravenor907.muninn.net.call.RoomManager
 import io.github.ravenor907.muninn.ui.MuninnTheme
 import io.github.ravenor907.muninn.ui.Panic
@@ -22,28 +29,47 @@ import kotlinx.coroutines.launch
 
 /**
  * A voice room or group call, full screen (also over the lock screen for a group call's ring). Joining,
- * calling a group and answering a ring come through here so the microphone can be asked for first.
+ * calling a group and answering a ring come through here so the microphone can be asked for first; without it
+ * a room is joined listening only. Tapping a voice room shows the join sheet first (unless "Don't ask again").
+ * A shared screen keeps the phone's screen on and goes to picture-in-picture when the person leaves the room screen.
  */
 class RoomActivity : ComponentActivity() {
-    private var pending: (() -> Unit)? = null
+    private var pending: ((Boolean) -> Unit)? = null
     private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         val p = pending; pending = null
-        if (ok) p?.invoke() else {
-            Toast.makeText(this, "Voice rooms need the microphone. Allow it in Android's settings for Muninn.", Toast.LENGTH_LONG).show()
-            if (RoomManager.ring.value != null) RoomManager.declineRing()
-            finish()
+        p?.invoke(ok)
+    }
+    /** Listening only, "Allow the microphone to talk": asked again, or Android's settings once it won't ask. */
+    private val askMicToTalk = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) RoomManager.micAllowed() else {
+            Toast.makeText(this, "Allow the microphone for Muninn in Android's settings.", Toast.LENGTH_LONG).show()
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
+            } catch (_: Exception) {}
         }
     }
+    /** The join sheet is up for this (group, room). */
+    private var asking by mutableStateOf<Pair<String, String>?>(null)
+    private var pip by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) }
         else @Suppress("DEPRECATION") window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
-        val hide = { Panic.locked.value || (!((application as? Muninn)?.identity?.showPreview ?: false) &&
+        val app = application as? Muninn
+        // In Recents now: "Hide Muninn's screen" covers this window too.
+        if (app?.identity?.secureScreen == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(app?.identity?.showPreview == true)
+        val hide = { Panic.locked.value || (!(app?.identity?.showPreview ?: false) &&
             getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) }
         setContent {
             MuninnTheme {
-                RoomScreen(onBack = { finish() }, onJoinRing = { withMic { say(RoomManager.answerRing()) } }, hideNames = hide())
+                val a = asking
+                if (a != null && app != null) RoomJoinSheet(app, a.first, a.second, onCancel = { asking = null; finish() }) { muted, output ->
+                    asking = null
+                    joinNow(a.first, a.second, muted, output)
+                } else RoomScreen(onBack = { finish() }, onJoinRing = { withMic { mic -> say(RoomManager.answerRing(listen = !mic)) } }, hideNames = hide(),
+                    pip = pip, onAllowMic = { askMicToTalk.launch(Manifest.permission.RECORD_AUDIO) })
             }
         }
         // Gone once there's no room and no ring any more.
@@ -57,29 +83,69 @@ class RoomActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
 
+    // Watching: the shared screen comes only while the room screen shows (picture-in-picture counts) with the screen on.
+    override fun onStart() { super.onStart(); RoomManager.setWatching(true) }
+    override fun onStop() { RoomManager.setWatching(false); super.onStop() }
+
+    /** Home or another app while a screen is shared: the picture goes on in a small window. */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        val sc = RoomManager.screen.value ?: return
+        if (RoomManager.room.value == null || asking != null) return
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        val turned = sc.rotation % 180 != 0
+        val w = if (turned) sc.height else sc.width
+        val h = if (turned) sc.width else sc.height
+        // Android takes ratios between 1:2.39 and 2.39:1.
+        val ratio = if (w > 0 && h > 0) Rational(w, h).let { r -> if (r.toFloat() > 2.39f) Rational(239, 100) else if (r.toFloat() < 1 / 2.39f) Rational(100, 239) else r } else Rational(16, 9)
+        try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(ratio).build()) } catch (_: Exception) {}
+    }
+
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        pip = isInPictureInPictureMode
+    }
+
     private fun say(why: String?) { if (why != null) Toast.makeText(this, why, Toast.LENGTH_LONG).show() }
+
+    private fun joinNow(g: String, ch: String, muted: Boolean, output: String) {
+        withMic { mic ->
+            if (!mic) say("Listening only. Allow the microphone to talk.")
+            RoomManager.join(g, ch, muted, output, listen = !mic)?.let { say(it); if (RoomManager.room.value == null) finish() }
+        }
+    }
 
     private fun handle(i: Intent?) {
         when (i?.action) {
-            ANSWER -> withMic { say(RoomManager.answerRing()) }
+            ANSWER -> withMic { mic -> say(RoomManager.answerRing(listen = !mic)) }
             JOIN -> {
                 val g = i.getStringExtra(GROUP) ?: return finish()
                 val ch = i.getStringExtra(ROOM) ?: return finish()
                 i.action = SHOW   // a rotation or a return must not join again
-                withMic { RoomManager.join(g, ch)?.let { say(it); if (RoomManager.room.value == null) finish() } }
+                val id = (application as? Muninn)?.identity
+                val already = RoomManager.room.value?.let { it.g == g && it.ch == ch } == true
+                when {
+                    already -> {}
+                    id != null && id.roomAsk -> asking = g to ch
+                    else -> joinNow(g, ch, id?.roomMuted ?: false, AudioRoute.AUTOMATIC)
+                }
             }
             CALL -> {
                 val g = i.getStringExtra(GROUP) ?: return finish()
                 val keys = i.getStringArrayExtra(KEYS)?.toList() ?: emptyList()
                 i.action = SHOW
-                withMic { RoomManager.callGroup(g, keys)?.let { say(it); if (RoomManager.room.value == null) finish() } }
+                withMic { mic ->
+                    if (!mic) { say("Calling a group needs the microphone. Allow it in Android's settings for Muninn."); finish() }
+                    else RoomManager.callGroup(g, keys)?.let { say(it); if (RoomManager.room.value == null) finish() }
+                }
             }
-            else -> if (RoomManager.room.value == null && RoomManager.ring.value == null) finish()
+            else -> if (RoomManager.room.value == null && RoomManager.ring.value == null && asking == null) finish()
         }
     }
 
-    private fun withMic(f: () -> Unit) {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) f()
+    /** [f] gets whether the microphone is allowed (asked first when it isn't yet). */
+    private fun withMic(f: (Boolean) -> Unit) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) f(true)
         else { pending = f; askMic.launch(Manifest.permission.RECORD_AUDIO) }
     }
 
@@ -93,7 +159,7 @@ class RoomActivity : ComponentActivity() {
         private const val KEYS = "keys"
 
         private fun open(c: Context, i: Intent) = c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
-        /** Joins a voice room (or a group call going on) of [g]. */
+        /** Joins a voice room (or a group call going on) of [g]: the join sheet first, unless turned off. */
         fun join(c: Context, g: String, ch: String) = open(c, Intent(c, RoomActivity::class.java).setAction(JOIN).putExtra(GROUP, g).putExtra(ROOM, ch))
         /** Rings [keys] of [g] (everyone who can join, when empty) into a new group call. */
         fun call(c: Context, g: String, keys: List<String>) = open(c, Intent(c, RoomActivity::class.java).setAction(CALL).putExtra(GROUP, g).putExtra(KEYS, keys.toTypedArray()))

@@ -73,4 +73,14 @@ class RichTest {
         assertFalse(Rich.mentions("mail@Raven.com", "Raven"))
         assertFalse(Rich.mentions("no mention", "Raven"))
     }
+
+    @Test
+    fun mentionsByNicknameAndEveryoneFromAnAdmin() {
+        assertTrue(Rich.mentionsMe("hey @tay", "Taylor B", "tay, T", fromAdmin = false))
+        assertTrue(Rich.mentionsMe("@T come on", "Taylor B", "tay, T", fromAdmin = false))
+        assertFalse(Rich.mentionsMe("@Tom here", "Taylor B", "tay, T", fromAdmin = false))
+        assertFalse(Rich.mentionsMe("hi", "Taylor B", "", fromAdmin = false))
+        assertTrue(Rich.mentionsMe("@everyone game night", "Taylor B", "", fromAdmin = true))
+        assertFalse(Rich.mentionsMe("@everyone game night", "Taylor B", "", fromAdmin = false))
+    }
 }

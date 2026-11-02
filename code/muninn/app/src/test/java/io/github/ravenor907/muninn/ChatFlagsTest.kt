@@ -119,6 +119,10 @@ class ChatFlagsTest {
         // Only groups have it: a person's chat set that way notifies as usual.
         assertEquals(ChatFlags.EVERY, ChatFlags.modeFor(ChatFlags.MENTIONS, reduce = false, group = false))
         assertEquals(ChatFlags.ONE, ChatFlags.modeFor(null, reduce = true, group = true))
+        // A group of more than 10: mentions and replies until its own choice; a person's chat is never "big".
+        assertEquals(ChatFlags.MENTIONS, ChatFlags.modeFor(null, reduce = false, group = true, big = true))
+        assertEquals(ChatFlags.EVERY, ChatFlags.modeFor(ChatFlags.EVERY, reduce = false, group = true, big = true))
+        assertEquals(ChatFlags.EVERY, ChatFlags.modeFor(null, reduce = false, group = false, big = true))
         assertEquals(ChatFlags.EVERY, ChatFlags.modeFor("nonsense", reduce = false, group = true))
     }
 

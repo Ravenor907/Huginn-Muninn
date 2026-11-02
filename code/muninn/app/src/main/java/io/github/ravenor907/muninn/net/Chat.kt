@@ -2568,6 +2568,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     private inner class GroupHost : Groups.Host {
         override val myName get() = id.username
+        override val mentionNames get() = id.mentionNames
         override val myMailbox get() = nostr.publicKey
         override val readReceipts get() = id.readReceipts
         override fun send(o: Groups.Out) { wakeRetry(); bg { sendGroupOut(o) } }
@@ -2707,6 +2708,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** Leaves the group or, once out of it, deletes it here; its folder entries go too. */
     fun deleteGroup(g: String): Boolean = groups.delete(g).also { if (it) folders.forget(Folders.groupKey(g)) }
+
+    /** Leave in one step: its history goes now; the leave still reaches everyone (Groups.leaveAndDelete). Null when done. */
+    fun leaveAndDeleteGroup(g: String): String? = groups.leaveAndDelete(g).also { if (it == null) { folders.forget(Folders.groupKey(g)); flags.forget(Folders.groupKey(g)) } }
 
     /** Seals one group envelope (or a photo's pieces) for its member and sends it on every route. */
     private fun sendGroupOut(o: Groups.Out) {

@@ -460,10 +460,10 @@ object RoomManager {
     }
 
     /** Join the group call that's ringing. Null when joining, otherwise what to tell the person. */
-    fun answerRing(): String? {
+    fun answerRing(listen: Boolean = false): String? {
         val r = _ring.value ?: return null
         stopRing()
-        return join(r.g, r.ch)
+        return join(r.g, r.ch, listen = listen)
     }
 
     fun declineRing() {

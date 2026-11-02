@@ -410,7 +410,8 @@ private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     MenuTitle("Notifications")
     val flags by app.chat.flags.all.collectAsState()
     val group = key.startsWith("g:")
-    val mode = ChatFlags.modeFor(flags.notify[key], app.identity.reduceNotifications, group)
+    val big = group && (app.chat.groups.group(key.removePrefix("g:"))?.state?.members?.size ?: 0) > ChatFlags.BIG_GROUP
+    val mode = ChatFlags.modeFor(flags.notify[key], app.identity.reduceNotifications, group, big)
     fun pick(m: String) { app.chat.flags.setNotify(key, m) }
     MenuRow("chat", "Every message", value = if (mode == ChatFlags.EVERY) "On" else "") { pick(ChatFlags.EVERY) }
     MenuRow("clock", "One until I open it", value = if (mode == ChatFlags.ONE) "On" else "") { pick(ChatFlags.ONE) }
@@ -461,8 +462,20 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, on
     if (!grp.readOnly) MenuRow("close", "Leave", danger = true) {
         done()
         if (s.owner == me && s.members.size > 1) Ui.say("You own ${s.name}. Make someone else owner first.", true)
-        else Ui.sure(Ask("Leave ${s.name}?", "You stop getting its messages.", "Leave", danger = true,
-            onConfirm = { app.chat.groups.leave(g)?.let { Ui.say(it, true) } ?: Ui.say("You left ${s.name}.") }))
+        // One step: leave and delete it (no read-only copy left behind), or keep its history as the second choice.
+        // Its voice room is left at once too.
+        else Ui.sure(Ask("Leave ${s.name}?", "You stop getting its messages, and it's deleted from this phone.", "Leave", danger = true,
+            extra = "Leave, keep history", onExtra = {
+                if (io.github.ravenor907.muninn.net.call.RoomManager.room.value?.g == g) io.github.ravenor907.muninn.net.call.RoomManager.leave()
+                app.chat.groups.leave(g)?.let { Ui.say(it, true) } ?: Ui.say("You left ${s.name}.")
+            },
+            onConfirm = {
+                if (io.github.ravenor907.muninn.net.call.RoomManager.room.value?.g == g) io.github.ravenor907.muninn.net.call.RoomManager.leave()
+                // Its history goes now; the leave keeps going until everyone has it.
+                val err = app.chat.leaveAndDeleteGroup(g)
+                if (err != null) Ui.say(err, true)
+                else { ChatNav.open = ""; ChatNav.space = ""; Ui.say("You left ${s.name}.") }
+            }))
     } else MenuRow("delete", "Delete", danger = true) {
         done()
         Ui.sure(Ask("Delete ${s.name}?", "This can't be undone.", "Delete", danger = true,

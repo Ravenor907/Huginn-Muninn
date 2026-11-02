@@ -147,6 +147,14 @@ object Rich {
     /** The first [n] code points of [s] (never half a surrogate pair). */
     fun cut(s: String, n: Int): String = if (cp(s) <= n) s else s.substring(0, s.offsetByCodePoints(0, n))
 
+    /**
+     * A group message for me: "@" and my name or one of my [nicknames] (comma separated), or "@everyone" from an
+     * admin ([fromAdmin]; anyone else's @everyone is just text).
+     */
+    fun mentionsMe(text: String, me: String, nicknames: String, fromAdmin: Boolean): Boolean =
+        mentions(text, me) || nicknames.split(',').any { mentions(text, it) } || (fromAdmin && mentions(text, EVERYONE))
+    const val EVERYONE = "everyone"
+
     /** @mentions: does [text] name [me] as "@name" (any case), followed by the end or a non-letter? */
     fun mentions(text: String, me: String): Boolean {
         val n = me.trim()

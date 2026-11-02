@@ -75,6 +75,7 @@ private class Page(val id: String, val title: String, val parent: String = "")
 private val MORE = listOf(
     Page("calls", "Calls", "more"),
     Page("nearby", "Nearby", "more"),
+    Page("files", "Files", "more"),
     Page("backup", "Backup", "more"),
     Page("tv", "Kids' TV", "more"),
     Page("access", "Accessibility", "more"),
@@ -110,7 +111,8 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             "lock" -> LockPage(app, onSecure)
             "more" -> MorePage()
             "battery" -> BatteryPage(app)
-            "calls" -> CallsPage()
+            "calls" -> CallsPage(app)
+            "files" -> FilesPage()
             "nearby" -> NearbyPage(app)
             "link" -> LinkedDevices(app)
             "backup" -> BackupPanel(app)
@@ -252,13 +254,21 @@ private fun NotifyPage(app: Muninn) {
         ToggleRow("Show the message", "Off: just “New message”", preview) { preview = it; id.showPreview = it }
         var reduce by remember { mutableStateOf(id.reduceNotifications) }
         ToggleRow("Reduce notifications", "One per chat until you open it", reduce) { reduce = it; id.reduceNotifications = it }
+        // Mentions: "@" and my name, or one of these nicknames, in a group.
+        var nick by remember { mutableStateOf(id.mentionNames) }
+        Text("Also mention me as", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 10.dp))
+        Row(Modifier.padding(vertical = 6.dp)) {
+            Field(nick, { nick = it.take(80) }, "Nicknames, like tay, T", Modifier.weight(1f))
+            MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = nick.trim() != id.mentionNames) { id.mentionNames = nick; nick = id.mentionNames; Ui.say("Saved.") }
+        }
+        Help("Groups with more than 10 people notify only for mentions and replies, unless you pick otherwise in the group.")
         PageRow("Sound and vibration", "") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, Muninn.MESSAGES))
             } catch (_: Exception) {}
         }
-        if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "Muninn keeps listening") {
+        if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the waiting notification", "Messages still arrive") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, io.github.ravenor907.muninn.net.MessageService.CHANNEL))
@@ -494,7 +504,7 @@ private fun BatteryPage(app: Muninn) {
         ToggleRow("Save more on low battery", "Below 30%", low) { low = it; app.power.lowBatterySave = it; byHand() }
         ToggleRow("Check less when quiet", "After 3 quiet hours", adaptive) { adaptive = it; app.power.adaptive = it; byHand() }
         ToggleRow("Data saver", "Big files wait for Wi-Fi", data) { data = it; app.power.dataSaver = it; byHand() }
-        if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the Listening notification", "Muninn keeps listening") {
+        if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the waiting notification", "Messages still arrive") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, io.github.ravenor907.muninn.net.MessageService.CHANNEL))
@@ -505,9 +515,33 @@ private fun BatteryPage(app: Muninn) {
     Framed("Today") { BatteryReport(app) }
 }
 
+/** More › Files: where received files are saved (Android's folder picker; Download/Muninn by default). */
 @Composable
-private fun CallsPage() {
+private fun FilesPage() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    var where by remember { mutableStateOf(io.github.ravenor907.muninn.net.Received.shownRoot()) }
+    var picked by remember { mutableStateOf(io.github.ravenor907.muninn.net.Received.chosenTree(ctx) != null) }
+    val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            io.github.ravenor907.muninn.net.Received.choose(ctx, uri)
+            where = io.github.ravenor907.muninn.net.Received.shownRoot(); picked = io.github.ravenor907.muninn.net.Received.chosenTree(ctx) != null
+        }
+    }
+    Framed {
+        PageRow("Save files to", where) { try { pick.launch(null) } catch (_: Exception) { Ui.say("This phone has no folder picker.", true) } }
+        if (picked) PageRow("Use Download/Muninn again", "") {
+            io.github.ravenor907.muninn.net.Received.choose(ctx, null)
+            where = io.github.ravenor907.muninn.net.Received.shownRoot(); picked = false
+        }
+        Help("Each chat gets its own folder inside it.")
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun CallsPage(app: Muninn) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var ask by remember { mutableStateOf(app.identity.roomAsk) }
     var noise by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.noiseRemoval(ctx)) }
     var internet by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.internetCalls(ctx)) }
     Framed {
@@ -517,6 +551,9 @@ private fun CallsPage() {
         ToggleRow("Noise removal", "Takes out background noise", noise) {
             noise = it; io.github.ravenor907.muninn.net.call.CallManager.setNoiseRemoval(ctx, it)
         }
+        ToggleRow("Ask before joining a voice room", "Mic on or off, and where the sound goes", ask) { ask = it; app.identity.roomAsk = it }
+        Help("Voice rooms use more battery than chat. With the screen off, Muninn keeps only what the sound needs.")
+        Spacer(Modifier.height(8.dp))
     }
 }
 

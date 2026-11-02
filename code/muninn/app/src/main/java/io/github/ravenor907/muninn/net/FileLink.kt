@@ -568,14 +568,14 @@ object FileLink {
                         val day = h.resumes(from)
                         put(Progress(id, from, inc.name, inc.size, false, "asking",
                             note = if (day) "Wants to send you this. Waits a day for your answer" else "Wants to send you this. Accept or decline", group = g,
-                            folder = "Download/$folder", route = routeShown))
+                            folder = Received.shown(folder), route = routeShown))
                         val text = "${h.nameOf(from)} wants to send you ${inc.name} (${FileText.size(inc.size)}). Accept or decline it in the chat or Transfers."
                         h.notice(text)
                         h.offered(if (g.isEmpty()) from else "g:$g", from, text)
                         expireAsk(id, if (day) LONG_ANSWER_MS else ASK_ANSWER_MS)
                     }
                     else -> put(Progress(id, from, inc.name, inc.size, false, "waiting", note = "On mobile data: tap to download", group = g,
-                        folder = "Download/$folder", route = routeShown))
+                        folder = Received.shown(folder), route = routeShown))
                 }
             }
             "accept" -> {
@@ -850,9 +850,9 @@ object FileLink {
             val chat = if (inc.group.isEmpty()) h.nameOf(inc.peer) else h.groupName(inc.group)
             val folder = Sharing.folderFor("Muninn", chat)
             val saved = h.saveIn(inc.name, tmp, folder) ?: run { fail(id, "Not enough space to save ${inc.name}."); return }
-            put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = "Download/$folder"))
+            put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = Received.shown(folder)))
             h.logFile(if (inc.group.isEmpty()) inc.peer else "g:${inc.group}", saved.name, inc.size, saved.uri, false)
-            h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in Download/$folder")
+            h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in ${Received.shown(folder)}")
         } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally { ins.remove(id); sock.close(); if (!keep) tmp.delete(); ended(id) }
     }
 

@@ -177,9 +177,11 @@ internal fun PersonModDialog(app: Muninn, g: String, key: String, name: String, 
                     }
                     return@Column
                 }
-                MenuRow(if (p.muted) "sound" else "mute", if (p.muted) "Unmute for me" else "Mute for me") {
+                // In a room this mutes their voice only; folding their messages is its own choice below.
+                MenuRow(if (p.muted) "sound" else "mute", if (p.muted) "Unmute their voice" else "Mute their voice for me") {
                     app.chat.sound.setMuted(key, !p.muted)
-                    say(if (p.muted) "$name isn't muted for you." else "$name is muted for you.", false)
+                    if (!p.muted) app.chat.sound.setHides(key, false)
+                    say(if (p.muted) "You hear $name again." else "$name's voice is muted for you. Their messages still show.", false)
                 }
                 if (p.muted) MenuRow("hide", "Fold their messages", value = if (!p.show) "On" else "Off") { app.chat.sound.setHides(key, p.show) }
                 MenuRow("audio", "Volume (just for you)", value = "${p.volume}%") { page = "volume" }

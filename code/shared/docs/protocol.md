@@ -51,6 +51,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `g1` | group chats (section 3) |
 | `c1` | 1:1 calls (section 5) |
 | `c2` | call extras (5.8): the direct path between trusted contacts, receiver reports and the higher Opus bitrate, video calls and screen share. Implies `c1`. |
+| `c3` | screen share only to people watching (5.8.7): a sharer with `c3` sends no screen frames to a peer whose reports set flag bit 2. Implies `c2`. Said by a sharer (Huginn, once it does this); Muninn sets the bit only for a peer that says `c3`. |
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `v2` | room heartbeats (6.8): `vjoin` every 10 s while in a room, and presence that ends 60 s after the last one. Muninn and Huginn. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
@@ -684,7 +685,8 @@ Each side sends a **report** every second, from the first authentic packet on:
 ```
 offset size
 0      1    loss: percent of the packets due since the last report that didn't arrive (0 to 100)
-1      1    flags: bit 0 my camera is on (sending video), bit 1 I'm sharing my screen; others 0
+1      1    flags: bit 0 my camera is on (sending video), bit 1 I'm sharing my screen, bit 2 I'm not watching
+            your screen share (cap c3, 5.8.7, only to a peer that says c3); others 0
 2      2    jitter: my jitter buffer's delay in ms
 4      2    kbps of media I received since the last report (all paths, copies not counted)
 6      2    my round trip in ms, 0 when unknown
@@ -765,6 +767,13 @@ encrypted per recipient, nothing to rekey when someone leaves. The sharer encode
 fragments to everyone; a keyframe request from anyone makes the next frame a keyframe for all. The size and
 bitrate are the lowest any peer allows (the relay profile as soon as one peer is on the relay). A peer
 without `c2` keeps hearing the room and simply doesn't see the screen.
+
+**Watching (cap `c3`).** A viewer that isn't watching (its room screen is in the background or its display is off)
+sets report flag bit 2 (5.8.4), in the next report and at once when it changes, but only toward a sharer whose caps
+include `c3`. A sharer with `c3` sends that peer no screen frames (stream 1) while the bit is set, keeps its sound,
+and leaves the size and bitrate to the peers that watch. When the bit clears the viewer asks for a keyframe (type 5)
+and the sharer sends it the next frames, starting with that keyframe. A viewer whose sharer lacks `c3` gets the frames
+anyway and drops them without decoding. Muninn sets the bit; Huginn ignores it until it says `c3`.
 
 What is shared is chosen first, on the sharer's device only (nothing changes on the wire): **an app window** (a list of
 open windows with live pictures; only that window is captured, even when another window is in front) or **a full

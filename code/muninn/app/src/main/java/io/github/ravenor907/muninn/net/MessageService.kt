@@ -34,10 +34,10 @@ class MessageService : Service() {
         ensureChannel(this)
         val open = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
         val n = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(R.drawable.ic_notify).setContentTitle("Muninn")
-            .setContentText("Listening for messages · Tap to hide this").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
+            .setContentText("Waiting for new messages · Tap to hide this").setOngoing(true).setSilent(true).setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET).setShowWhen(false).setCategory(NotificationCompat.CATEGORY_SERVICE)
             // A tap (or Hide) opens Android's page for this one channel, where it's turned off (as Settings › Notifications ›
-            // Hide the Listening notification). Muninn keeps listening either way.
+            // Hide the waiting notification). Messages arrive either way.
             .setContentIntent(hideIntent(this@MessageService) ?: open)
             .apply { hideIntent(this@MessageService)?.let { addAction(0, "Hide", it) } }
             .build()
@@ -72,13 +72,13 @@ class MessageService : Service() {
             try { ContextCompat.startForegroundService(context, Intent(context, MessageService::class.java)) } catch (_: Exception) {}
         }
 
-        /** The quiet "Listening for messages" channel, made before anything posts to it (this service, the inbox check). */
+        /** The quiet "Waiting for new messages" channel, made before anything posts to it (this service, the inbox check). */
         fun ensureChannel(context: Context) {
             if (Build.VERSION.SDK_INT < 26) return
             val nm = context.getSystemService(NotificationManager::class.java) ?: return
             // The "listening" channel shows on the lock screen and channels can't be changed, so it is replaced.
             nm.deleteNotificationChannel("listening")
-            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Listening for messages", NotificationManager.IMPORTANCE_MIN).apply {
+            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Waiting for new messages", NotificationManager.IMPORTANCE_MIN).apply {
                 description = "Keeps Muninn connected so messages arrive right away. Turn this one off to hide it; Muninn keeps listening and message notifications still come."
                 setShowBadge(false)
                 lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET

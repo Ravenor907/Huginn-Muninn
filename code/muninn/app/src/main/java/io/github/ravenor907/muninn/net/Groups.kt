@@ -26,6 +26,8 @@ class Groups(
 ) {
     interface Host {
         val myName: String
+        /** Nicknames that count as an @mention of me too (Settings › Notifications), comma separated. */
+        val mentionNames: String get() = ""
         val myMailbox: String
         val readReceipts: Boolean
         /** Seal [o] for [o].to and send it on every route. One envelope id, one sealing: retries send the same bytes. */
@@ -78,7 +80,10 @@ class Groups(
         val gif: Boolean = false,
     )
 
-    /** [gone]: "" while I'm in it, "left" or "removed" after (then it's read-only). */
+    /**
+     * [gone]: "" while I'm in it, "left" or "removed" after (then it's read-only). [LEAVING]: left and deleted here; only
+     * the record stays, hidden, until the leave reaches everyone (or its retries give up), then it goes too.
+     */
     data class Group(val state: State, val history: List<State> = emptyList(), val gone: String = "") {
         val readOnly get() = gone.isNotEmpty()
         val g get() = state.g
@@ -455,6 +460,36 @@ class Groups(
         s.members.map { it.k }.filter { it != me }.forEach { out(it, "group", plain, id, g) }
         groups[g] = grp.copy(gone = "left")
         null
+    }
+
+    /**
+     * Leave and delete in one step: leaves, and its messages, photos and the rest go now, and it's hidden. The leave
+     * itself keeps going until each member has it (or its retries give up): only that, and the group record it's
+     * routed by, stay until then ([purgeLeft]).
+     */
+    fun leaveAndDelete(g: String): String? = act {
+        val grp = groups[g] ?: return@act null
+        val s = grp.state
+        if (s.owner == me && s.members.size > 1 && !grp.readOnly) return@act "You own ${s.name}. Hand it over to someone first (Group settings › Members)."
+        if (!grp.readOnly) {
+            val id = Proto06.newLogicalId()
+            val plain = JSONObject().put("t", "leave").put("g", g).put("id", id).toString()
+            s.members.map { it.k }.filter { it != me }.forEach { out(it, "group", plain, id, g) }
+        }
+        groups[g] = grp.copy(gone = LEAVING)
+        chats.remove(g)?.forEach { if (it.photo.isNotEmpty()) host.deleteBlob(it.photo) }
+        // Everything else on its way to this group stops; the leave goes on.
+        outs.removeAll { o -> (o.g == g && !isLeave(o)).also { x -> if (x) { host.drop(o.env); tries.remove(o.env) } } }
+        queue.removeAll { o -> o.g == g && !isLeave(o) }
+        unread.remove(g); last.remove(g); held.remove(g); mods.remove(g)
+        null
+    }
+
+    private fun isLeave(o: Out): Boolean = o.room == "group" && (try { JSONObject(o.plain).optString("t") } catch (e: Exception) { "" }) == "leave"
+
+    /** Left-and-deleted groups whose leave reached everyone (or gave up): their record goes now. */
+    private fun purgeLeft() {
+        groups.entries.removeIf { (g, gr) -> gr.gone == LEAVING && outs.none { it.g == g } && queue.none { it.g == g } }
     }
 
     /** Removes the group and its messages from this phone (only once I'm out of it, or alone in it). */
@@ -1032,6 +1067,7 @@ class Groups(
         val gone = when {
             !s.has(me) -> grp.gone.ifEmpty { "removed" }
             grp.gone == "left" && !rejoin -> "left"
+            grp.gone == LEAVING && !rejoin -> LEAVING
             else -> ""
         }
         if (rejoin) joining.remove(s.g)
@@ -1109,7 +1145,9 @@ class Groups(
         addMsg(GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re"),
             poll = if (m2) More.pollOf(p) else null, preview = if (m2) More.previewOf(p) else null))
         unread.add(g)
-        host.arrived(g, if (Rich.mentions(text, host.myName)) "$name mentioned you in ${s.name}" else "$name in ${s.name}", text)
+        // My name, a nickname of mine, or @everyone from an admin; the title names the channel too.
+        val where = s.name + (s.channel(chId)?.n?.let { " #$it" } ?: "")
+        host.arrived(g, if (Rich.mentionsMe(text, host.myName, host.mentionNames, s.isAdmin(from))) "$name mentioned you in $where" else "$name in $where", text)
         receipt(from, g, listOf(id), "delivered")
         return 200
     }
@@ -1248,7 +1286,7 @@ class Groups(
                 o.copy(tries = n + 1, net = net)
             }
         }
-        if (outs.size != before) save()
+        if (outs.size != before) { purgeLeft(); save(); publish() }
         list
     }
 
@@ -1268,6 +1306,7 @@ class Groups(
             r = f()
             send = queue.toList(); queue.clear()
             prune()
+            purgeLeft()
             save(); publish()
         }
         send.forEach { try { host.send(it) } catch (_: Exception) {} }
@@ -1321,7 +1360,7 @@ class Groups(
     }
 
     private fun publish() {
-        _groups.value = LinkedHashMap(groups)
+        _groups.value = LinkedHashMap(groups.filterValues { it.gone != LEAVING })
         _chats.value = HashMap(chats)
         _invites.value = invites.toList()
         _links.value = groups.keys.associateWith { g -> linkLists[g].orEmpty().filter { (it.x == 0L || it.x > now()) && (it.max == 0 || it.uses < it.max) } }
@@ -1448,6 +1487,8 @@ class Groups(
         const val FILE = "groups.json"
         const val CHATS = "gchats.json"
         const val OUTS = "gouts.json"
+        /** [Group.gone] after Leave (one step): hidden, kept only to deliver the leave. */
+        const val LEAVING = "leaving"
         const val DAY = 86_400_000L
         /** 5 s, 10 s, 20 s, 1 min, then every 5 min, like private messages (until relays hold it, see NetLogic). */
         val RETRY = NetLogic.RETRY

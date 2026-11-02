@@ -290,6 +290,43 @@ class GroupsTest {
     }
 
     @Test
+    fun leaveAndDeleteKeepsDeliveringTheLeave() {
+        val g = family()
+        c.online = false
+        assertTrue(b.groups.sendText(g, Proto06.MAIN, "bye all")); pump()
+        assertEquals(1, b.groups.waiting(c.key).size)   // C is away: the message waits
+        assertNull(b.groups.leaveAndDelete(g)); pump()
+        // Gone from B's screens at once, history and all.
+        assertFalse(g in b.groups.all.value)
+        assertNull(b.groups.messages.value[g])
+        assertFalse(a.state(g).has(b.key))
+        // Only the leave is still on its way to C, with the group record it's routed by.
+        val left = b.groups.waiting(c.key)
+        assertEquals(listOf("leave"), left.map { JSONObject(it.plain).optString("t") })
+        assertNotNull(b.groups.group(g))
+        // C comes back: the retry gets there, C confirms it, and the record goes.
+        clock += 6_000
+        val again = b.groups.due()
+        assertEquals(left.map { it.env }, again.map { it.env })
+        c.online = true
+        again.forEach { b.send(it) }; pump()
+        assertTrue(b.groups.waiting().isEmpty())
+        assertNull(b.groups.group(g))
+    }
+
+    @Test
+    fun leaveAndDeleteGivesUpAfterADay() {
+        val g = family()
+        c.online = false
+        assertNull(b.groups.leaveAndDelete(g)); pump()
+        assertNotNull(b.groups.group(g))
+        clock += Groups.DAY + 1
+        b.groups.due()
+        assertTrue(b.groups.waiting().isEmpty())
+        assertNull(b.groups.group(g))
+    }
+
+    @Test
     fun unsendPhotosAndRetries() {
         val g = family()
         assertTrue(a.groups.sendBlob(g, Proto06.MAIN, "p1", 0)); pump()

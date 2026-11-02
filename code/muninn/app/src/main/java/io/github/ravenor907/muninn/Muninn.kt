@@ -153,6 +153,7 @@ class Muninn : Application() {
         io.github.ravenor907.muninn.tv.Tv.install(this)
         io.github.ravenor907.muninn.net.call.CallManager.init(this, chat)
         io.github.ravenor907.muninn.net.call.RoomManager.init(this)
+        io.github.ravenor907.muninn.net.Received.load(this)   // Settings › Files › Save files to
         // A notification for every message, unless that very chat is on screen: then just a buzz.
         scope.launch { chat.arrivals.collect { (name, text, key) ->
             power.activity()   // Check less when it's quiet starts over
@@ -164,7 +165,9 @@ class Muninn : Application() {
             if (chat.flags.hidden(key) && !chat.isContact(key)) return@collect
             if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { coalesce.drop(key); buzz(); return@collect }
             // Reduce notifications: one per chat until it's opened; a group can also be set to mentions and replies only.
-            if (!chat.flags.alert(key, identity.reduceNotifications, toMe(key, name))) return@collect
+            // A group of more than 10 starts on mentions and replies only, until it's set otherwise.
+            val big = key.startsWith("g:") && (try { chat.groups.group(key.removePrefix("g:"))?.state?.members?.size } catch (_: Exception) { null } ?: 0) > io.github.ravenor907.muninn.net.ChatFlags.BIG_GROUP
+            if (!chat.flags.alert(key, identity.reduceNotifications, toMe(key, name), big)) return@collect
             // Extreme battery saver: no notifications; the chat list shows what's new.
             if (power.extreme) return@collect
             // Quiet hours kept open for the "Always right away" list: everyone else's messages wait quietly.
@@ -337,8 +340,10 @@ class Muninn : Application() {
         val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
         val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).apply { if (!putAway) putExtra("chat", key) }
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        // Previews off: a group still says which group and channel ("Gaming · #memes"), never who or what.
+        val where = if (!preview && !putAway && !io.github.ravenor907.muninn.ui.Panic.locked.value) groupWhere(key) else null
         val n = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle(if (preview) name else "Muninn").setContentText(if (preview) text else "New message")
+            .setContentTitle(if (preview) name else where ?: "Muninn").setContentText(if (preview) text else "New message")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(key == "inbox")
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
@@ -349,6 +354,17 @@ class Muninn : Application() {
             if (io.github.ravenor907.muninn.tv.KidMode.on(this))
                 io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
+    }
+
+    /** A group chat's name and the channel its newest message is in, or null for anything else. */
+    private fun groupWhere(key: String): String? {
+        if (!key.startsWith("g:")) return null
+        return try {
+            val g = key.removePrefix("g:")
+            val s = chat.groups.group(g)?.state ?: return null
+            val ch = chat.groups.messages.value[g]?.lastOrNull { !it.mine }?.ch
+            s.name + (ch?.let { s.channel(it)?.n }?.let { " · #$it" } ?: "")
+        } catch (_: Exception) { null }
     }
 
     /** Never: a linked tablet's own chats stay on show beside its phone's (protocol.md section 15). */
@@ -367,10 +383,22 @@ class Muninn : Application() {
         return io.github.ravenor907.muninn.ui.AppLock.canReply(ready.value, io.github.ravenor907.muninn.ui.Panic.locked.value, kids, lockDue)
     }
 
-    /** Reply from the notification (a contact's chat or a group), only when [canReply]. */
+    /** Reply is held back only by the app lock (not panic, not a Kids' TV, not still starting). */
+    private fun lockDueOnly(): Boolean {
+        val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { true }
+        return ready.value && !io.github.ravenor907.muninn.ui.Panic.locked.value && !kids
+    }
+
+    /** Reply from the notification (a contact's chat or a group), when [canReply]; else Unlock to reply. */
     private fun replyAction(key: String): NotificationCompat.Action? {
-        if (!canReply()) return null
         if (!key.startsWith("g:") && !chat.isContact(key)) return null
+        // The app lock is due: Unlock to reply opens Muninn's lock, then the chat.
+        if (!canReply()) {
+            if (!lockDueOnly()) return null
+            val open = PendingIntent.getActivity(this, key.hashCode() + 1, Intent(this, MainActivity::class.java).putExtra("chat", key)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            return NotificationCompat.Action.Builder(R.drawable.ic_notify, "Unlock to reply", open).setShowsUserInterface(true).build()
+        }
         val input = androidx.core.app.RemoteInput.Builder(io.github.ravenor907.muninn.net.ReplyReceiver.TEXT).setLabel("Reply").build()
         val intent = Intent(this, io.github.ravenor907.muninn.net.ReplyReceiver::class.java)
             .setAction(io.github.ravenor907.muninn.net.ReplyReceiver.ACTION).putExtra(io.github.ravenor907.muninn.net.ReplyReceiver.KEY, key)
