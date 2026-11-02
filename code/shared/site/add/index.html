@@ -97,7 +97,12 @@
   } else {
     document.getElementById("code").textContent = code;
     var body = group ? code : code.slice("MUNINN1:".length);
-    var android = /Android/i.test(navigator.userAgent);
+    // Android, also when a tablet's browser asks for the desktop site (then it says "Linux x86_64" and no "Android", but
+    // it has a touch screen, which a Linux computer seldom does).
+    var ua = navigator.userAgent || "";
+    var uad = navigator.userAgentData && navigator.userAgentData.platform || "";
+    var android = /Android/i.test(ua) || /Android/i.test(uad)
+      || (/Linux/i.test(ua) && !/CrOS/i.test(ua) && (navigator.maxTouchPoints || 0) > 1 && matchMedia("(pointer: coarse)").matches);
     var $ = function (id) { return document.getElementById(id); };
     if (group) {
       // The invite's own fields (base64url JSON after "MUNINNG1:"): the group's name and when it stops working.
@@ -121,8 +126,10 @@
     if (!android) {
       // A computer or handheld: a Huginn page. No button or panel that only works on Android, and the code to paste right
       // under the downloads.
+      // The Android download stays, after Huginn's: someone setting up a phone or tablet from here still finds it.
       $("open").classList.add("hidden");
-      $("android").classList.add("hidden");
+      $("android").querySelector("h2").textContent = "Setting up an Android phone or tablet?";
+      $("android").querySelector("p").textContent = "Get Muninn on it: download it there, or download it here and copy it over.";
       document.title = group ? "Join on Huginn" : "Add on Huginn";
       $("brand").textContent = "HUGINN";
       $("runes").textContent = "ᚺᚢᚷᛁᚾᚾ";
@@ -130,6 +137,7 @@
       if (!group) $("title").textContent = "Someone shared their code";
       $("found").parentNode.insertBefore($("desktop"), $("android"));
       $("desktop").parentNode.insertBefore($("manual"), $("desktop").nextSibling);
+      $("manual").parentNode.insertBefore($("android"), $("manual").nextSibling);
       $("manual").querySelector("h2").textContent = "The code to paste";
     }
     var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
