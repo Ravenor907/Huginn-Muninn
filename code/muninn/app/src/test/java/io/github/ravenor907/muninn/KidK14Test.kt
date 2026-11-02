@@ -173,7 +173,7 @@ class KidK14Test {
         // A group's text that starts with the sender's name doesn't say it twice.
         assertEquals("Sam: hi, 9:00 AM", KidK14.bubbleLabel("Sam", false, "Sam: hi", 0, 0, false, false, false, null, "9:00 AM"))
         for (l in listOf(KidK14.HELD_LINE, KidK14.WAIT_LINE, KidK14.waitingText("Leo", "Ava")))
-            assertFalse(l, l.contains('—') || l.contains('–'))
+            assertFalse(l, l.contains('\u2014') || l.contains('\u2013'))
     }
 
     @Test fun aQuickMessageShowsItsPicture() {
