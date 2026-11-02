@@ -405,8 +405,9 @@ class Muninn : Application() {
         val putAway = ownChatsPutAway()
         // Panic-locked: never a name or text on the notification.
         val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
-        // "Name only": who it's from, never what they said.
-        val nameOnly = !preview && identity.showSender && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
+        // "Name only": who it's from, never what they said. A Kids' Device always says who wrote (it has no Settings).
+        val kids = try { io.github.ravenor907.muninn.tv.KidMode.saved(this) } catch (_: Exception) { false }
+        val nameOnly = !preview && (identity.showSender || kids) && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
         // A group's: the channel the newest message is in, so the tap opens there (not the last one looked at).
         val ch = if (key.startsWith("g:")) try { chat.groups.messages.value[key.removePrefix("g:")]?.lastOrNull { !it.mine }?.ch.orEmpty() } catch (_: Exception) { "" } else ""
         val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).apply { if (!putAway) { putExtra("chat", key); putExtra("ch", ch) } }
@@ -420,11 +421,30 @@ class Muninn : Application() {
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
             .apply { if (!putAway) replyAction(key)?.let { addAction(it) } }.build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
-        // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps".
+        // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps". Only on a TV: on
+        // a tablet or phone the notification is enough, and nothing takes the focus from the app in use.
         if (!visible) try {
-            if (io.github.ravenor907.muninn.tv.KidMode.on(this))
+            if (io.github.ravenor907.muninn.tv.KidMode.on(this) && io.github.ravenor907.muninn.tv.KidMode.isTv(this))
                 io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview || nameOnly) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
+    }
+
+    /**
+     * A notice about a Kids' Device this phone looks after (an update that failed, an unlock ask, a device gone quiet):
+     * not message content, so it always says what it is (never while panic-locked). Tapping it opens [open] in the chat
+     * column ("tvset/page/<key>": that device's page).
+     */
+    fun notice(title: String, text: String, open: String, id: String = open) {
+        if (try { power.manual() } catch (_: Exception) { false }) return
+        val locked = io.github.ravenor907.muninn.ui.Panic.locked.value
+        val tap = PendingIntent.getActivity(this, id.hashCode(), Intent(this, MainActivity::class.java).apply { if (!locked) putExtra("chat", open) }
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(if (locked) "Muninn" else title).setContentText(if (locked) "Something needs you" else text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(if (locked) "Something needs you" else text))
+            .setPriority(NotificationCompat.PRIORITY_HIGH).setVibrate(BUZZ)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(tap).build()
+        try { NotificationManagerCompat.from(this).notify(id.hashCode(), n) } catch (_: SecurityException) {}
     }
 
     /** A group chat's name and the channel its newest message is in, or null for anything else. */

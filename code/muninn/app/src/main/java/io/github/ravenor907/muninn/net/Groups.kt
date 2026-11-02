@@ -36,6 +36,8 @@ class Groups(
         fun drop(env: String)
         /** A real contact (not a group peer). */
         fun isContact(k: String): Boolean
+        /** Someone whose invite (or who puts me straight into a group) is taken: a real contact; on a Kids' Device, only one of its parents. */
+        fun mayInvite(k: String): Boolean = isContact(k)
         /** A member who isn't a contact becomes a group peer, so they can be reached (3.7). */
         fun peer(k: String, name: String, mailbox: String)
         fun notice(text: String)
@@ -843,7 +845,7 @@ class Groups(
         val grp = groups[g]
         val inGroup = grp != null && (grp.state.has(from) || grp.history.any { it.has(from) })
         val allowed = when (t) {
-            "invite" -> host.isContact(from)
+            "invite" -> host.mayInvite(from)
             "join" -> liveToken(p.optString("inv"), g) != null || liveLink(p.optString("inv"), g) != null
             // Cap j1: links (17.2).
             "link", "linkoff" -> grp != null && !grp.readOnly && grp.state.has(from)
@@ -851,7 +853,7 @@ class Groups(
             "decline" -> host.isContact(from) || inGroup
             "state", "states" -> inGroup || joining[g] == from || asked.containsKey("$g|$from") ||
                 // Cap m1: a contact put me straight in (op "add"), no invite to accept.
-                (t == "state" && grp == null && p.optString("op") == "add" && host.isContact(from))
+                (t == "state" && grp == null && p.optString("op") == "add" && host.mayInvite(from))
             "leave", "unsend" -> inGroup
             // Only someone in it now gets its states (a removed member doesn't keep learning who's in it).
             "sync" -> grp != null && grp.state.has(from)
@@ -1126,7 +1128,7 @@ class Groups(
     private fun takeState(from: String, s: State, op: String = "") {
         val grp = groups[s.g]
         if (grp == null) {
-            val added = op == "add" && s.by == from && host.isContact(from) && joining[s.g] == null
+            val added = op == "add" && s.by == from && host.mayInvite(from) && joining[s.g] == null
             if ((joining[s.g] != s.by && !added) || !s.has(me) || !Proto06.accept(null, s).first) return
             joining.remove(s.g)
             invites.removeAll { it.g == s.g }

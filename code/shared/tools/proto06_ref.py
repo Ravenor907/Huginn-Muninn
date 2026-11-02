@@ -15,7 +15,7 @@ Same conventions as code/shared/tools/ratchet_ref.py: P-256, public keys as base
 HKDF-SHA256, AES-256-GCM. Signatures in the vectors use RFC 6979 (deterministic) so this script
 always writes the same file; the apps may sign with random k and only have to verify.
 """
-import base64, hashlib, hmac, json, os, struct, sys
+import base64, hashlib, hmac, json, os, re, struct, sys
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -341,7 +341,7 @@ def check_quiet(q):
 
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin: only sent to a device whose app said so
+    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh: only sent to a device whose app said so
     if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
     if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
     if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")
@@ -352,7 +352,14 @@ def check_tvconfig(c):
     if "quiet" in c: check_quiet(c["quiet"])
     if "pin" in c:
         p = c["pin"]
-        if not isinstance(p, dict) or set(p) != {"salt", "h"} or not is_hex(p["salt"], 32) or not is_hex(p["h"], 64): raise ValueError("pin")
+        if not isinstance(p, dict) or set(p) not in ({"salt", "h"}, {"salt", "h", "r"}) or not is_hex(p["salt"], 32) or not is_hex(p["h"], 64): raise ValueError("pin")
+        # "r": the PBKDF2 rounds, 100000 to 1000000 (absent: 20000, a PIN set before "r").
+        if "r" in p and (not isinstance(p["r"], int) or isinstance(p["r"], bool) or not 100000 <= p["r"] <= 1000000): raise ValueError("pin")
+    if "hav" in c and not isinstance(c["hav"], bool): raise ValueError("hav")
+    if "havw" in c and c["havw"] not in ("b", "y"): raise ValueError("havw")
+    if "havh" in c and (not is_hex(c["havh"], 64) or c.get("havw") != "y"): raise ValueError("havh")
+    # k11: the IANA time zone quiet times follow.
+    if "tz" in c and (not isinstance(c["tz"], str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_+\-/]{0,63}", c["tz"]) or "//" in c["tz"] or c["tz"].endswith("/")): raise ValueError("tz")
     if not isinstance(c["v"], int) or c["v"] < 1: raise ValueError("version")
     if c["parents"] != sorted(set(c["parents"])) or not c["parents"] or c["by"] not in c["parents"]: raise ValueError("parents")
     if not isinstance(c["dictation"], bool): raise ValueError("dictation")

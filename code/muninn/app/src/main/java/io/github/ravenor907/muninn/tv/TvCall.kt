@@ -160,7 +160,8 @@ object TvRing {
     /** Called from the call ringer: true when this is a Kids' TV and the TV rang (or stopped) itself. */
     @Synchronized
     fun instead(c: Context, on: Boolean): Boolean {
-        if (!TvMic.active) return false
+        // Only a TV: a Kids' tablet or phone rings like any phone, on the ringtone stream, silent or vibrate as it's set.
+        if (!TvMic.active || !KidMode.isTv(c)) return false
         if (on) start(c) else stop(c)
         return true
     }

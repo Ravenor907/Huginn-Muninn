@@ -137,6 +137,10 @@ data class TvConfig(
     val keep: Int? = null,
     /** k11 (7.18): the chatting level (absent: everything), the quiet times and the parent PIN (absent: none). */
     val chat: Int = KidRules.EVERYTHING, val quiet: List<QuietTime> = emptyList(), val pin: KidPin? = null,
+    /** k12 (7.18): Daily Hávamál on (absent: off), its wording (absent: Bellows) and the parent's translation's hash. */
+    val hav: Boolean = false, val havw: String = Havamal.BELLOWS, val havh: String? = null,
+    /** k11 (7.18): the time zone quiet times follow, an IANA id (absent: ""; the device's own zone then). */
+    val tz: String = "",
 )
 
 /** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
@@ -144,7 +148,11 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      /** k7: only for a TV whose app said "k7". */ val upd: Boolean? = null,
                      /** k8: only for a TV whose app said "k8". */ val keep: Int? = null,
                      /** k11: only for a device whose app said "k11" (null: left out). */
-                     val chat: Int? = null, val quiet: List<QuietTime>? = null, val pin: KidPin? = null)
+                     val chat: Int? = null, val quiet: List<QuietTime>? = null, val pin: KidPin? = null,
+                     /** k12: only for a device whose app said "k12" (null: left out). [havh]: only with the wording [Havamal.MINE]. */
+                     val hav: Boolean? = null, val havw: String? = null, val havh: String? = null,
+                     /** k11: the time zone quiet times follow (null or empty: left out). */
+                     val tz: String? = null)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -177,11 +185,12 @@ object TvRules {
     const val QUICK_SHOWN = 4
     /** The recording screen takes OK only after this long, so the press that started it can't send it. */
     const val ARM_MS = 2_000L
-    val DEFAULT_QUICK = listOf("I need you", "Please come here", "I'm hungry", "I love you")
+    /** Each with an emoji first, so a child who can't read yet can tell the tiles apart. */
+    val DEFAULT_QUICK = listOf("\uD83D\uDE4B I need you", "\uD83D\uDC4B Please come here", "\uD83C\uDF4E I'm hungry", "\u2764\uFE0F I love you")
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin")
+    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz")
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -198,6 +207,10 @@ object TvRules {
         if (c.has("chat")) { val l = c.get("chat"); require(Canon.isInt(l) && (l as Number).toLong() in KidRules.QUICK_ONLY.toLong()..KidRules.EVERYTHING.toLong()) { "chat" } }
         if (c.has("quiet")) KidRules.quietIn(c.get("quiet"))
         if (c.has("pin")) KidRules.pinIn(c.get("pin"))
+        // k12 (7.18): Daily Hávamál, its wording and the parent's translation.
+        Havamal.check(c)
+        // k11 (7.18): the time zone quiet times follow.
+        if (c.has("tz")) KidRules.tzIn(c.get("tz"))
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -275,6 +288,10 @@ object TvRules {
             if (c.has("chat")) c.getInt("chat") else KidRules.EVERYTHING,
             if (c.has("quiet")) KidRules.quietIn(c.get("quiet")) else emptyList(),
             if (c.has("pin")) KidRules.pinIn(c.get("pin")) else null,
+            c.optBoolean("hav", false),
+            if (c.optString("havw") == Havamal.MINE) Havamal.MINE else Havamal.BELLOWS,
+            if (c.has("havh")) c.getString("havh") else null,
+            tz = if (c.has("tz")) KidRules.tzIn(c.get("tz")) else "",
         )
     }
 
@@ -289,7 +306,12 @@ object TvRules {
         extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) }; it.upd?.let { u -> o.put("upd", u) }; it.keep?.let { d -> o.put("keep", d.coerceIn(MIN_KEEP, MAX_KEEP)) }
             it.chat?.let { l -> o.put("chat", l.coerceIn(KidRules.QUICK_ONLY, KidRules.EVERYTHING)) }
             it.quiet?.takeIf { q -> q.isNotEmpty() }?.let { q -> o.put("quiet", KidRules.quietJson(q)) }
-            it.pin?.let { p -> o.put("pin", KidRules.pinJson(p)) } }
+            it.pin?.let { p -> o.put("pin", KidRules.pinJson(p)) }
+            it.hav?.let { h -> o.put("hav", h) }
+            it.havw?.let { w -> o.put("havw", if (w == Havamal.MINE && it.havh != null) Havamal.MINE else Havamal.BELLOWS) }
+            if (it.havw == Havamal.MINE) it.havh?.let { h -> o.put("havh", h) }
+            // k11: the time zone, only with the other k11 fields (a valid IANA id).
+            if (it.chat != null) it.tz?.takeIf { z -> z.isNotEmpty() && runCatching { KidRules.tzIn(z) }.isSuccess }?.let { z -> o.put("tz", z) } }
         return Canon.sign(priv, CONFIG, o)
     }
 
@@ -312,10 +334,12 @@ object TvRules {
      * change, a restored backup) catches up. Apps that don't read it ignore it.
      */
     /** [dev]: k11 (7.18), what kind of device it is ("tv", "tablet" or "phone"). */
-    fun appliedMessage(v: Long, app: String? = null, cfg: JSONObject? = null, dev: String? = null): String =
+    /** [havh]: k12 (7.18), the hash of the parent's translation the device holds, if any. */
+    fun appliedMessage(v: Long, app: String? = null, cfg: JSONObject? = null, dev: String? = null, havh: String? = null): String =
         JSONObject().put("t", "applied").put("v", v).apply {
             if (!app.isNullOrEmpty()) put("app", app); cfg?.let { put("cfg", it) }
             dev?.takeIf { it in KidRules.DEVICES }?.let { put("dev", it) }
+            havh?.takeIf { Regex("[0-9a-f]{64}").matches(it) }?.let { put("havh", it) }
         }.toString()
     /** k2: a parent asks the TV to look for a new Muninn now and install it. */
     fun updateMessage(): String = JSONObject().put("t", "update").toString()
@@ -399,14 +423,20 @@ object TvRules {
     // ---- a parent taken off the TV: their phone stops looking after it
     /**
      * The TV (or the parent who did it) hands a removed parent the signed config that no longer lists them,
-     * so their phone stops managing the TV. Apps that don't know "removed" ignore it.
+     * so their phone stops managing the TV. Apps that don't know "removed" ignore it. The PIN hash never goes to
+     * anyone but the device's parents: it is taken out first ([withoutPin]).
      */
-    fun removedMessage(cfg: JSONObject): String = JSONObject().put("t", "removed").put("cfg", cfg).toString()
+    fun removedMessage(cfg: JSONObject): String = JSONObject().put("t", "removed").put("cfg", withoutPin(cfg)).toString()
+
+    /** [cfg] without its "pin" (the parent PIN's hash), for anyone who isn't one of the device's parents. */
+    fun withoutPin(cfg: JSONObject): JSONObject = if (!cfg.has("pin")) cfg else JSONObject(cfg.toString()).apply { remove("pin") }
 
     /**
      * The config in a "removed" [o], read only if it is a well-formed config for [tvKey], doesn't list [me] as a
      * parent, is signed by one of its parents (one this phone knew, [known], unless null: the TV itself sent it) and
-     * isn't older than [minV]. Null otherwise.
+     * isn't older than [minV]. Null otherwise. A k11 config may come with its "pin" taken out, so its signature can't
+     * hold: it is then taken on the word of whoever sent it, the device itself or a parent this phone knew (the
+     * caller checks the sender).
      */
     fun removedFrom(tvKey: String, me: String, known: Collection<String>?, minV: Long, o: JSONObject): TvConfig? {
         if (o.optString("t") != "removed") return null
@@ -415,7 +445,7 @@ object TvRules {
         if (c.opt("tv") != tvKey) return null
         val cfg = try { parse(c) } catch (e: Exception) { return null }
         if (me in cfg.parents || (known != null && cfg.by !in known) || cfg.v < minV) return null
-        if (!Canon.verify(cfg.by, CONFIG, c)) return null
+        if (!Canon.verify(cfg.by, CONFIG, c) && !(c.has("chat") && !c.has("pin"))) return null
         return cfg
     }
 

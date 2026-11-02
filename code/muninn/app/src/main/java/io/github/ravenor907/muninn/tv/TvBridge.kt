@@ -22,8 +22,9 @@ interface TvBridge {
 interface TvHandler {
     /**
      * Called for every envelope right after the blocked check, before it's opened. False: refuse it
-     * (403). A TV in kids' mode takes only its config, and private messages, photos, voice, receipts
-     * and unsend only from the people its config lists; never Nearby, Keep in touch, groups or calls.
+     * (403). A device in kids' mode takes only its config, private messages, photos, voice, receipts, unsend
+     * and calls only from the people its config lists, and group rooms only for groups a parent put it in; never
+     * Nearby or Keep in touch.
      */
     fun allow(fromKey: String, room: String): Boolean
 
@@ -33,4 +34,7 @@ interface TvHandler {
      * device's codes. True if it was taken (200), false to refuse it (403).
      */
     fun onTvRoom(fromKey: String, mailbox: String?, plain: String, inviteOk: Boolean): Boolean
+
+    /** A group invite, or being put straight into a group (cap m1): a Kids' Device takes it only from one of its parents. */
+    fun groupInviteOk(fromKey: String): Boolean = true
 }

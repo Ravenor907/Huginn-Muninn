@@ -14,8 +14,20 @@ import javax.crypto.spec.SecretKeySpec
  */
 data class QuietTime(val n: String, val d: Int, val s: Int, val e: Int)
 
-/** The parent PIN as a Kids' Device keeps it: [salt] (16 bytes, hex) and [h], PBKDF2-HMAC-SHA256 of the PIN (hex). */
-data class KidPin(val salt: String, val h: String)
+/**
+ * The parent PIN as a Kids' Device keeps it: [salt] (16 bytes, hex) and [h], PBKDF2-HMAC-SHA256 of the PIN (hex) with [r]
+ * rounds. A PIN set before "r" existed has 20000 rounds; every PIN set now has [KidRules.PIN_ROUNDS].
+ */
+data class KidPin(val salt: String, val h: String, val r: Int = KidRules.OLD_ROUNDS)
+
+/** A trusted time [wall] (ms since 1970: a parent's signed config, or a relay's clock) and the device's elapsedRealtime [at] when it came. */
+data class TimeAnchor(val wall: Long, val at: Long)
+
+/** Wrong PIN tries in a row on the device and when the last one was ([at], elapsedRealtime). */
+data class PinTries(val fails: Int = 0, val at: Long = 0)
+
+/** What typing the PIN did: [ok]; [checked] false when it wasn't looked at (a wait, or too few digits); [wait] ms before the next try. */
+data class PinTry(val ok: Boolean, val checked: Boolean, val wait: Long)
 
 /**
  * The Kids' Device rules of cap k11 (7.18): the chatting level, quiet times, the parent PIN, unlocking from a parent's
@@ -40,9 +52,22 @@ object KidRules {
 
     const val PIN_MIN = 4
     const val PIN_MAX = 8
-    const val PIN_ROUNDS = 20_000
+    /** PBKDF2 rounds for every PIN set now ("r" in the config), and for one set before "r" existed. */
+    const val PIN_ROUNDS = 100_000
+    const val OLD_ROUNDS = 20_000
+    const val MAX_ROUNDS = 1_000_000
+    /** The PIN length the parent's page suggests. */
+    const val PIN_GOOD = 6
     /** Wrong PINs before the device makes the next try wait. */
     const val FREE_TRIES = 5
+    /** Wrong tries are forgotten an hour after the last one. */
+    const val FAIL_RESET_MS = 60 * 60_000L
+    /** Someone at the device can ask a parent's phone once a minute. */
+    const val ASK_GAP_MS = 60_000L
+    /** A parent's phone tells its person when it hasn't heard from a device for this long. */
+    const val SILENT_MS = 36 * 3_600_000L
+    /** A trusted time from before this (2024-01-01) is a mistake, never an anchor. */
+    const val MIN_WALL = 1_704_067_200_000L
 
     /** How long a parent PIN or a parent's phone opens the device's parent settings, and how long an ask waits. */
     const val UNLOCK_MS = 10 * 60_000L
@@ -119,8 +144,55 @@ object KidRules {
     /** "School hours" or "Bedtime". */
     fun quietName(n: String): String = if (n == SCHOOL) "School hours" else "Bedtime"
 
-    /** "08:30". */
-    fun clock(minute: Int): String = "%02d:%02d".format(minute / 60 % 24, minute % 60)
+    /** "08:30", or with [h24] false "8:30 AM" (the clock the parent's phone or the device uses). */
+    fun clock(minute: Int, h24: Boolean = true): String {
+        val h = minute / 60 % 24
+        val m = minute % 60
+        return if (h24) "%02d:%02d".format(h, m) else "%d:%02d %s".format((h + 11) % 12 + 1, m, if (h < 12) "AM" else "PM")
+    }
+
+    // ---- trusted time: quiet times never follow the device's own clock or time zone alone
+
+    private val TZ = Regex("[A-Za-z][A-Za-z0-9_+\\-/]{0,63}")
+
+    /** Reads a config's "tz", an IANA time zone id ("America/Los_Angeles"). Throws IllegalArgumentException("tz") if it isn't one. */
+    fun tzIn(v: Any?): String {
+        val s = v as? String ?: throw IllegalArgumentException("tz")
+        require(TZ.matches(s) && !s.contains("//") && !s.endsWith("/")) { "tz" }
+        return s
+    }
+
+    /** The zone [tz] names, or null when it's empty or this device doesn't know it. */
+    fun zoneOf(tz: String): java.util.TimeZone? =
+        if (tz.isEmpty() || !TZ.matches(tz)) null else java.util.TimeZone.getTimeZone(tz).takeIf { it.id == tz }
+
+    /** The time now by [a] (null: no trusted time yet), at the device's elapsedRealtime [elapsed]. */
+    fun trustedNow(a: TimeAnchor?, elapsed: Long): Long? = a?.let { it.wall + (elapsed - it.at) }
+
+    /**
+     * The anchor after a trusted time [wall] came at elapsedRealtime [elapsed]: the later reading wins, so an older config
+     * resent later never moves the time back. Nothing before [MIN_WALL] is taken.
+     */
+    fun anchor(cur: TimeAnchor?, wall: Long, elapsed: Long): TimeAnchor? {
+        if (wall < MIN_WALL) return cur
+        val now = trustedNow(cur, elapsed)
+        return if (now == null || wall > now) TimeAnchor(wall, elapsed) else cur
+    }
+
+    /** The quiet time on at [epochMs] in zone [tz] (empty or unknown: [fallback], the device's own), or null. */
+    fun quietAt(list: List<QuietTime>, epochMs: Long, tz: String, fallback: java.util.TimeZone): QuietTime? {
+        if (list.isEmpty()) return null
+        val c = java.util.Calendar.getInstance(zoneOf(tz) ?: fallback).apply { timeInMillis = epochMs }
+        // Calendar counts from Sunday (1); the quiet days count from Monday (0).
+        return quietNow(list, (c.get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7, c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE))
+    }
+
+    /**
+     * The quiet time on now on a device: by the trusted time ([anchor] and [elapsed]) in the parent's zone [tz]. Only when
+     * no trusted time has come since the device started ([anchor] null) does its own clock [deviceNow] stand in.
+     */
+    fun quietOnDevice(list: List<QuietTime>, tz: String, anchor: TimeAnchor?, elapsed: Long, deviceNow: Long, deviceZone: java.util.TimeZone): QuietTime? =
+        quietAt(list, trustedNow(anchor, elapsed) ?: deviceNow, tz, deviceZone)
 
     /** "Every day", "Weekdays", "Weekends", or the days: "Mon, Wed, Fri". */
     fun daysText(d: Int): String = when (d and ALL_DAYS) {
@@ -141,21 +213,21 @@ object KidRules {
     /** 4 to 8 digits. */
     fun pinValid(pin: String): Boolean = pin.length in PIN_MIN..PIN_MAX && pin.all { it in '0'..'9' }
 
-    /** A new PIN as the parent's phone puts it in a config: a fresh salt and the PIN's hash. */
+    /** A new PIN as the parent's phone puts it in a config: a fresh salt and the PIN's hash, [PIN_ROUNDS] rounds. */
     fun newPin(pin: String): KidPin {
         require(pinValid(pin)) { "pin" }
         val salt = ByteArray(16).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
-        return KidPin(salt, pinHash(pin, salt))
+        return KidPin(salt, pinHash(pin, salt, PIN_ROUNDS), PIN_ROUNDS)
     }
 
-    /** PBKDF2-HMAC-SHA256 of [pin] with [saltHex], [PIN_ROUNDS] rounds, 32 bytes, lowercase hex. */
-    fun pinHash(pin: String, saltHex: String): String =
-        pbkdf2(pin.toByteArray(Charsets.UTF_8), hex(saltHex), PIN_ROUNDS).joinToString("") { "%02x".format(it) }
+    /** PBKDF2-HMAC-SHA256 of [pin] with [saltHex], [rounds] rounds, 32 bytes, lowercase hex. */
+    fun pinHash(pin: String, saltHex: String, rounds: Int = OLD_ROUNDS): String =
+        pbkdf2(pin.toByteArray(Charsets.UTF_8), hex(saltHex), rounds).joinToString("") { "%02x".format(it) }
 
     /** True when [pin] is the one [p] was made from. */
     fun pinOk(pin: String, p: KidPin?): Boolean {
-        if (p == null || !pinValid(pin)) return false
-        return MessageDigest.isEqual(pinHash(pin, p.salt).toByteArray(), p.h.toByteArray())
+        if (p == null || !pinValid(pin) || p.r !in OLD_ROUNDS..MAX_ROUNDS) return false
+        return MessageDigest.isEqual(pinHash(pin, p.salt, p.r).toByteArray(), p.h.toByteArray())
     }
 
     /** How long the next try must wait after [fails] wrong PINs in a row: none for the first 5, then 30 s, doubling, at most 15 min. */
@@ -164,44 +236,123 @@ object KidRules {
         return minOf(30_000L shl minOf(fails - FREE_TRIES, 5), 15 * 60_000L)
     }
 
+    /** Wrong tries that still count at [now] (elapsedRealtime): none once an hour went by since the last one. */
+    fun failsNow(t: PinTries, now: Long): Int = if (t.fails <= 0 || now - t.at >= FAIL_RESET_MS) 0 else t.fails
+
+    /** How long before the next try at [now] (ms, 0: now). A time before the last try (a restart) waits the whole wait. */
+    fun waitLeft(t: PinTries, now: Long): Long {
+        val f = failsNow(t, now)
+        if (f == 0) return 0
+        return (waitMs(f) - (now - t.at).coerceAtLeast(0)).coerceAtLeast(0)
+    }
+
+    /**
+     * The PIN [pin] typed at [now] (elapsedRealtime) against [p], after the tries [t]. During a wait it isn't looked at;
+     * fewer than [PIN_MIN] digits never count as a try. Returns what happened and the tries from then on.
+     */
+    fun tryPin(pin: String, p: KidPin?, t: PinTries, now: Long): Pair<PinTry, PinTries> {
+        val wait = waitLeft(t, now)
+        if (wait > 0) return PinTry(false, false, wait) to t
+        if (pin.length < PIN_MIN) return PinTry(false, false, 0) to t
+        if (pinOk(pin, p)) return PinTry(true, true, 0) to PinTries()
+        val fails = failsNow(t, now) + 1
+        return PinTry(false, true, waitMs(fails)) to PinTries(fails, now)
+    }
+
+    /** "Wait 30 seconds, then try again." or "Wait 2 minutes, then try again." */
+    fun waitText(ms: Long): String {
+        val s = ((ms + 999) / 1000).coerceAtLeast(1)
+        if (s < 60) return "Wait $s ${if (s == 1L) "second" else "seconds"}, then try again."
+        val m = (s + 59) / 60
+        return "Wait $m ${if (m == 1L) "minute" else "minutes"}, then try again."
+    }
+
+    /** What the device's PIN screen says after [r]. */
+    fun pinText(r: PinTry): String = when {
+        r.ok -> ""
+        !r.checked && r.wait > 0 -> waitText(r.wait)
+        !r.checked -> "Type at least $PIN_MIN digits"
+        r.wait > 0 -> "Wrong PIN. ${waitText(r.wait)}"
+        else -> "Wrong PIN"
+    }
+
+    /** Someone at the device may ask a parent's phone again (elapsedRealtime; [last] 0: never asked). */
+    fun askAgainOk(last: Long, now: Long): Boolean = last <= 0L || now - last !in 0L until ASK_GAP_MS
+
     /** Reads a config's "pin". Throws IllegalArgumentException("pin") if it isn't well-formed. */
     fun pinIn(v: Any?): KidPin {
         val o = v as? JSONObject ?: throw IllegalArgumentException("pin")
-        require(Canon.keys(o) == setOf("salt", "h")) { "pin" }
+        val ks = Canon.keys(o)
+        require(ks == setOf("salt", "h") || ks == setOf("salt", "h", "r")) { "pin" }
         val salt = o.get("salt") as? String
         val h = o.get("h") as? String
         require(salt != null && HEX32.matches(salt) && h != null && HEX64.matches(h)) { "pin" }
-        return KidPin(salt!!, h!!)
+        // "r": the rounds, from PIN_ROUNDS up (absent: a PIN set before, 20000 rounds).
+        val r = if (o.has("r")) o.get("r").let { n -> require(Canon.isInt(n) && (n as Number).toLong() in PIN_ROUNDS.toLong()..MAX_ROUNDS.toLong()) { "pin" }; (n as Number).toInt() } else OLD_ROUNDS
+        return KidPin(salt!!, h!!, r)
     }
 
-    fun pinJson(p: KidPin): JSONObject = JSONObject().put("salt", p.salt).put("h", p.h)
+    fun pinJson(p: KidPin): JSONObject = JSONObject().put("salt", p.salt).put("h", p.h).apply { if (p.r != OLD_ROUNDS) put("r", p.r) }
 
     // ---- configs from an older parent app (no k11 fields)
 
-    /** True when config [c] carries any k11 field: it then sets the chatting level, quiet times and PIN, all three. */
-    fun hasK11(c: JSONObject): Boolean = c.has("chat") || c.has("quiet") || c.has("pin")
+    /** True when config [c] carries any k11 field: it then sets the chatting level, quiet times, time zone and PIN, all four. */
+    fun hasK11(c: JSONObject): Boolean = c.has("chat") || c.has("quiet") || c.has("pin") || c.has("tz")
+
+    /**
+     * An older parent app's config only adds: its people and parents, with the names it gives them, plus everyone [cur]
+     * has that it doesn't list. Such an app may never have seen the newest list, so taking anyone off needs a parent app
+     * with k11 (7.18). At most [TvRules.MAX_CONTACTS] people.
+     */
+    fun addOnly(new: TvConfig, cur: TvConfig): TvConfig {
+        val people = (new.contacts + cur.contacts.filter { c -> new.contacts.none { it.k == c.k } }).sortedBy { it.k }.take(TvRules.MAX_CONTACTS)
+        return new.copy(contacts = people, parents = (new.parents + cur.parents).distinct().sorted())
+    }
 
     /**
      * The config a device runs: [new] as it came, or, when it has no k11 field (an older parent app sent it), [new] with
-     * the device's current chatting level, quiet times and PIN from [cur] kept.
+     * the device's current chatting level, quiet times, time zone and PIN from [cur] kept, and nobody taken off ([addOnly]).
+     * k12 the same way, field by field: no "hav" keeps Daily Hávamál on or off as it was; no "havw" keeps the wording and
+     * the translation's hash.
      */
-    fun keepK11(new: TvConfig, cur: TvConfig?): TvConfig =
-        if (cur == null || hasK11(new.raw)) new else new.copy(chat = cur.chat, quiet = cur.quiet, pin = cur.pin)
+    fun keepK11(new: TvConfig, cur: TvConfig?): TvConfig {
+        if (cur == null) return new
+        var c = if (hasK11(new.raw)) new else addOnly(new, cur).copy(chat = cur.chat, quiet = cur.quiet, pin = cur.pin, tz = cur.tz)
+        if (!Havamal.hasOn(new.raw)) c = c.copy(hav = cur.hav)
+        if (!Havamal.hasWording(new.raw)) c = c.copy(havw = cur.havw, havh = cur.havh)
+        return c
+    }
 
-    /** The k11 values a device keeps beside its signed config, so a restart keeps what [keepK11] kept. */
+    /** True when the device must keep values beside config [c] (it lacks a k11 or k12 field), so a restart keeps them. */
+    fun needsKept(c: JSONObject): Boolean = !hasK11(c) || !Havamal.hasOn(c) || !Havamal.hasWording(c)
+
+    /** The k11 and k12 values a device keeps beside its signed config, so a restart keeps what [keepK11] kept. */
     fun keptJson(c: TvConfig): JSONObject =
-        JSONObject().put("chat", c.chat).put("quiet", quietJson(c.quiet)).apply { c.pin?.let { put("pin", pinJson(it)) } }
+        Havamal.keptInto(JSONObject().put("chat", c.chat).put("quiet", quietJson(c.quiet)).apply { c.pin?.let { put("pin", pinJson(it)) } }
+            // The people and parents an older parent app's config didn't take off ([addOnly]), and the time zone.
+            .put("tz", c.tz).put("parents", JSONArray(c.parents))
+            .put("contacts", JSONArray().apply { c.contacts.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } }), c)
 
-    /** [cfg] read back at start, with the values [keptJson] saved when its own config has no k11 field. */
+    /** [cfg] read back at start, with the values [keptJson] saved for the fields its own config lacks. */
     fun keptIn(cfg: TvConfig, saved: JSONObject?): TvConfig {
-        if (saved == null || hasK11(cfg.raw)) return cfg
-        return try {
+        if (saved == null) return cfg
+        val c = if (hasK11(cfg.raw)) cfg else try {
             val l = saved.opt("chat")
             val chat = if (Canon.isInt(l)) (l as Number).toInt().coerceIn(QUICK_ONLY, EVERYTHING) else EVERYTHING
             val quiet = if (saved.has("quiet")) quietIn(saved.get("quiet")) else emptyList()
             val pin = if (saved.has("pin")) pinIn(saved.get("pin")) else null
-            cfg.copy(chat = chat, quiet = quiet, pin = pin)
-        } catch (e: IllegalArgumentException) { cfg }
+            val tz = saved.optString("tz").takeIf { it.isNotEmpty() }?.let { tzIn(it) } ?: ""
+            // The people and parents kept from before an older parent app's config (it only adds).
+            val ps = saved.optJSONArray("contacts")
+            val people = if (ps == null) emptyList() else (0 until ps.length()).map { i ->
+                val x = ps.getJSONObject(i)
+                TvPerson(x.getString("k"), Canon.text(x.getString("n"), TvRules.MAX_NAME), x.getString("p"))
+            }
+            val pa = saved.optJSONArray("parents")
+            val parents = if (pa == null) emptyList() else (0 until pa.length()).map { pa.getString(it) }
+            addOnly(cfg, cfg.copy(contacts = people, parents = parents)).copy(chat = chat, quiet = quiet, pin = pin, tz = tz)
+        } catch (e: Exception) { cfg }
+        return try { Havamal.keptFrom(c, saved) } catch (e: Exception) { c }
     }
 
     /** PBKDF2 (RFC 8018) with HMAC-SHA256, one 32-byte block. */
@@ -240,7 +391,7 @@ object KidRules {
 
     /** The device takes an "unlock" only from a current parent, for the ask it has open, within [ASK_MS]. */
     fun unlockOk(fromKey: String, parents: Collection<String>, asked: String?, askedAt: Long, id: String, now: Long): Boolean =
-        fromKey in parents && asked != null && id == asked && now - askedAt in 0..ASK_MS
+        fromKey in parents && asked != null && id == asked && now - askedAt in 0L..ASK_MS
 
     /** Device to parents: it left kids' mode (someone with the PIN or a parent's phone said so). */
     fun leftMessage(): String = JSONObject().put("t", "left").toString()
@@ -257,6 +408,43 @@ object KidRules {
         PHONE -> "phone"
         else -> if (k11) "device" else "TV"
     }
+
+    // ---- groups and other Kids' Devices
+
+    /** A group invite (or being put straight into a group) on a Kids' Device: only from one of its parents. */
+    fun groupInviteOk(from: String, parents: Collection<String>): Boolean = from in parents
+
+    /**
+     * Rooms "group", "gmsg", "gphoto" and "greceipt" on a Kids' Device: from its parents, or from someone in a group a
+     * parent put it in ([inMyGroup]). During a quiet time only the parents get through (receipts always).
+     */
+    fun groupRoomOk(from: String, room: String, parents: Collection<String>, inMyGroup: Boolean, quiet: QuietTime?): Boolean {
+        if (from !in parents && !inMyGroup) return false
+        return room == "greceipt" || passes(from, parents, quiet)
+    }
+
+    val GROUP_ROOMS = setOf("group", "gmsg", "gphoto", "greceipt")
+
+    /**
+     * Whom a parent may put on a device's "Who it can talk to": any real contact but the device itself and this phone,
+     * other Kids' Devices included (this family's or another's).
+     */
+    fun canAdd(key: String, tvKey: String, me: String, groupOnly: Boolean, reach: Collection<String>): Boolean =
+        !groupOnly && key != tvKey && key != me && key !in reach
+
+    /** A group picker shows a Kids' Device only to one of its parents ([mine]). */
+    fun groupPickOk(isKidDevice: Boolean, mine: Boolean): Boolean = !isKidDevice || mine
+
+    /** "Last seen just now", "Last seen 4:12 PM" (today), "Last seen Tue 4:12 PM", or "Not heard from yet". */
+    fun lastSeen(at: Long, now: Long, time: (Long) -> String, day: (Long) -> String): String = when {
+        at <= 0L -> "Not heard from yet"
+        now - at < 2 * 60_000L -> "Last seen just now"
+        now - at < 20 * 3_600_000L -> "Last seen ${time(at)}"
+        else -> "Last seen ${day(at)}"
+    }
+
+    /** A device not heard from for [SILENT_MS]: its parents are told once ([told]: when they last were, 0: never). */
+    fun silentNotice(seen: Long, told: Long, now: Long): Boolean = seen > 0L && now - seen >= SILENT_MS && told < seen
 }
 
 /**

@@ -281,7 +281,7 @@ private fun TvPairing(app: Muninn) {
         Row(Modifier.padding(top = 22.dp), verticalAlignment = Alignment.CenterVertically) {
             MIcon("phone", Palette.goldBright, if (tv) 36.dp else 28.dp)
             Spacer(Modifier.width(14.dp))
-            Text("Parent: scan with phone camera", style = tvTitle(if (tv) 30.sp else 20.sp), textAlign = TextAlign.Center)
+            Text("Parent: in Muninn on your phone, tap +, then Pair a Kids' Device", style = tvTitle(if (tv) 30.sp else 20.sp), textAlign = TextAlign.Center)
         }
         // A tablet or phone has no remote to hold Back on: a small button, until a parent pairs it.
         if (!tv && !KidMode.paired(app)) Text("Not a child's device? Use Muninn normally", style = tvText(16.sp, Palette.textMuted),
@@ -297,7 +297,9 @@ private fun TvPairing(app: Muninn) {
 @Composable
 private fun TvKids(app: Muninn, cfg: TvConfig) {
     val open = TvNav.open
-    val person = cfg.contacts.firstOrNull { it.k == open }
+    val groupsAll by app.chat.groups.all.collectAsState()
+    // A person on the list, or a group a parent put this device in.
+    val person = cfg.contacts.firstOrNull { it.k == open } ?: KidChats.groups(app, groupsAll, null).firstOrNull { it.k == open }
     val context = LocalContext.current
     // What's still off on the TV, checked every few seconds (a parent's request may have opened Android's settings):
     // an update waiting for "install" goes in once it's allowed, and a change is reported to the parents' phones.
@@ -317,6 +319,8 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     val shown = person?.takeIf { KidRules.passes(it.k, cfg.parents, quiet) }
     if (person != null && shown == null) LaunchedEffect(person.k) { TvNav.home() }
     var parent by remember { mutableStateOf(false) }
+    // k12: Daily Hávamál turned off: Earlier verses starts over the next time it comes on.
+    LaunchedEffect(cfg.hav) { if (!cfg.hav) HavDevice.forgetStart(context) }
     // Someone a parent just took off the list: back to the people who are still on it.
     if (!tv) KidTouch(app, cfg, shown, quiet) { parent = true }
     else if (shown == null) TvHome(app, cfg, TvNav.last, quiet, onParent = { parent = true }) { TvNav.show(it) }
@@ -336,7 +340,13 @@ private fun TvAllow(app: Muninn) {
     val activity = remember(context) { context.findActivity() }
     val asked by KidTv.allowAsk.collectAsState()
     val perm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { KidTv.permsChanged(app) }
-    val several = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { KidTv.permsChanged(app) }
+    // A tablet or phone in Doze can hold messages and calls back for minutes: at pairing, with the parent there, Android
+    // is asked to let Muninn run (a TV doesn't sleep that way).
+    fun askBattery() {
+        if (!KidMode.isTv(context) && !io.github.ravenor907.muninn.net.MessageService.unrestricted(context))
+            io.github.ravenor907.muninn.net.MessageService.askUnrestricted(context)
+    }
+    val several = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { KidTv.permsChanged(app); askBattery() }
     fun line(text: String) = try { android.widget.Toast.makeText(context.applicationContext, text, android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
     fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
     // Just paired: the microphone and notifications are asked for at once, while the parent is still at the TV.
@@ -349,7 +359,7 @@ private fun TvAllow(app: Muninn) {
             notifyPrompt, notifyPrompt && granted(Manifest.permission.POST_NOTIFICATIONS))
         KidTv.setupAsked(context)
         val perms = asks.mapNotNull { TvUpdate.permission(it) }
-        if (perms.isEmpty()) return@LaunchedEffect
+        if (perms.isEmpty()) { askBattery(); return@LaunchedEffect }
         perms.forEach { TvUpdate.markAsked(context, it) }
         Ui.say(SETUP_LINE)
         try { several.launch(perms.toTypedArray()) } catch (_: Exception) {}
@@ -361,8 +371,10 @@ private fun TvAllow(app: Muninn) {
         val p = TvUpdate.permission(id)
         when {
             p != null && ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED -> KidTv.permsChanged(app)
+            // Android's page for Muninn also has Clear storage and Uninstall: it opens only while a parent has the settings open.
             p != null && TvUpdate.settingsOnly(context, activity, p) ->
-                if (TvUpdate.openAppPage(context)) line(TvUpdate.line(id, settingsPage = true)) else Ui.say(TvWords.ASK_PARENT, true)
+                if (!KidTv.unlocked()) Ui.say(ALLOW_LOCKED, true)
+                else if (TvUpdate.openAppPage(context)) line(TvUpdate.line(id, settingsPage = true)) else Ui.say(TvWords.ASK_PARENT, true)
             p != null -> { Ui.say(TvUpdate.line(id, settingsPage = false)); TvUpdate.markAsked(context, p); perm.launch(p) }
             // Notifications need no prompt before Android 13.
             id == "notify" -> KidTv.permsChanged(app)
@@ -370,6 +382,9 @@ private fun TvAllow(app: Muninn) {
         }
     }
 }
+
+/** A permission Android only turns on from its page for Muninn, while the parent settings are closed. */
+private const val ALLOW_LOCKED = "A parent can turn it on: For a parent, then Android settings for Muninn"
 
 /** The one line the TV shows while Android asks for its permissions right after pairing. */
 private const val SETUP_LINE = "Parent: press Allow so the kids can talk"
@@ -423,7 +438,11 @@ internal fun unreadCount(list: List<Chat.Msg>, unread: Boolean): Int {
 private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, quiet: QuietTime?, onParent: () -> Unit, onOpen: (String) -> Unit) {
     val convs by app.chat.conversations.collectAsState()
     val unread by app.chat.unread.collectAsState()
-    val people = remember(cfg, quiet) { kidPeople(cfg, quiet) }
+    val groupsAll by app.chat.groups.all.collectAsState()
+    val gmsgs by app.chat.groups.messages.collectAsState()
+    val unreadGroups by app.chat.groups.unreadGroups.collectAsState()
+    // The people, then the groups a parent put the device in (none during a quiet time).
+    val people = remember(cfg, quiet, groupsAll) { kidPeople(cfg, quiet) + KidChats.groups(app, groupsAll, quiet) }
     // Back here does nothing: a kid can't back out into anything else.
     BackHandler(enabled = true) {}
     val focusAt = people.indexOfFirst { it.k == focusKey }.coerceAtLeast(0)
@@ -435,6 +454,8 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, quiet: QuietTim
             MIcon(TvWords.icon(TvWords.ASK_PARENT), Palette.goldBright, 72.dp)
             Text(TvWords.ASK_PARENT, style = tvTitle(34.sp), modifier = Modifier.padding(top = 16.dp))
         }
+        // "For a parent" stays in reach with nobody on the list.
+        Box(Modifier.fillMaxSize()) { ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 20.dp, end = 36.dp), onClick = onParent) }
         return
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -446,8 +467,10 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, quiet: QuietTim
             verticalAlignment = Alignment.CenterVertically,
             contentPadding = PaddingValues(horizontal = 48.dp, vertical = 24.dp)) {
             itemsIndexed(people, key = { _, p -> p.k }) { i, p ->
-                Tile(p, unreadCount(convs[p.k].orEmpty(), p.k in unread), if (i == focusAt) first else null) { onOpen(p.k) }
+                Tile(p, KidChats.unread(p.k, KidChats.msgs(p.k, convs, gmsgs), unread, unreadGroups), if (i == focusAt) first else null) { onOpen(p.k) }
             }
+            // k12 (7.18): Daily Hávamál, when a parent turned it on: today's verse as the last tile.
+            if (cfg.hav) item(key = "havamal") { HavTile(cfg) }
         }
     }
     LaunchedEffect(people) {
@@ -515,9 +538,14 @@ private sealed interface Overlay {
 private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) {
     val context = LocalContext.current
     val convs by app.chat.conversations.collectAsState()
-    val msgs = convs[p.k].orEmpty().filter { it.unsent.isEmpty() }
+    val gmsgs by app.chat.groups.messages.collectAsState()
+    // A person's messages, or a group's (someone else's text says who wrote it).
+    val msgs = KidChats.msgs(p.k, convs, gmsgs)
     val playing by Voice.playing.collectAsState()
     var overlay by remember { mutableStateOf<Overlay?>(null) }
+    /** A video playing full screen, or a poll open (their message ids). */
+    var video by remember { mutableStateOf<String?>(null) }
+    var poll by remember { mutableStateOf<String?>(null) }
     val speech = remember { TvSpeech(context) }
     val openedAt = remember { System.currentTimeMillis() }
     val mic = remember { TvAudio.hasMic(context) }
@@ -538,7 +566,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
         overlay = Overlay.Sending
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             val r = TvRecorder.finish()
-            if (r != null) { app.chat.sendVoice(p.k, r.first, r.second); overlay = null; Ui.say("Sent") }
+            if (r != null) { KidChats.sendVoice(app, p.k, r.first, r.second); overlay = null; Ui.say("Sent") }
             else overlay = Overlay.Problem(TvWords.TOO_SHORT)
         }
     }
@@ -558,9 +586,9 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             Voice.stopPlaying()
         }
     }
-    LaunchedEffect(msgs.size) { app.chat.markRead(p.k) }
+    LaunchedEffect(msgs.size) { KidChats.markRead(app, p.k) }
     // Whether their app takes calls isn't known until it says so: ask once (shared/docs/protocol.md 1.2).
-    LaunchedEffect(p.k) { app.chat.probeCaps(p.k) }
+    LaunchedEffect(p.k) { if (!KidChats.isGroup(p.k)) app.chat.probeCaps(p.k) }
     // A voice message that arrives while this screen is open plays out loud by itself.
     val newest = msgs.lastOrNull()
     LaunchedEffect(newest?.id) {
@@ -602,9 +630,11 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
         }
     }
 
-    val buttons = TvRules.talkButtons(cfg.calls, voice, dictate)
+    // No calls in a group.
+    val calls = cfg.calls && !KidChats.isGroup(p.k)
+    val buttons = TvRules.talkButtons(calls, voice, dictate)
     val quick = cfg.quick.take(TvRules.QUICK_SHOWN)
-    val firstId: String? = TvRules.firstTalkFocus(cfg.calls, voice, dictate, quick.map { it.id })
+    val firstId: String? = TvRules.firstTalkFocus(calls, voice, dictate, quick.map { it.id })
     val focusManager = LocalFocusManager.current
     val first = remember { FocusRequester() }
     fun req(id: String) = if (id == firstId) first else null
@@ -616,7 +646,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             // The last messages sit at the bottom; when they're taller than the room left, they scroll and the newest shows.
             Box(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.BottomStart) {
                 Column(Modifier.verticalScroll(rememberScrollState(), reverseScrolling = true), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    msgs.takeLast(3).forEach { TalkBubble(app, it, playing, onText = { reading = it.id }) { viewing = it.id } }
+                    msgs.takeLast(3).forEach { TalkBubble(app, it, playing, onText = { reading = it.id }, onVideo = { video = it.id }, onPoll = { poll = it.id }) { viewing = it.id } }
                 }
             }
         }
@@ -632,7 +662,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                 quick.forEach { q ->
                     QuickTile(if (sent == q.id) "Sent" else q.text, sent == q.id, req(q.id), Modifier.weight(1f)) {
                         // While it says Sent, more presses do nothing: one message per press-and-wait.
-                        if (sent != q.id) { app.chat.sendPrivate(p.k, q.text); sent = q.id }
+                        if (sent != q.id) { KidChats.sendText(app, p.k, q.text); sent = q.id }
                     }
                 }
                 repeat(TvRules.QUICK_SHOWN - quick.size) { Spacer(Modifier.weight(1f)) }
@@ -646,8 +676,13 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     }
 
     viewing?.let { id ->
-        val photos = msgs.filter { it.photo.isNotEmpty() && it.voice == 0 }
+        val photos = msgs.filter { KidChats.isPhoto(it) }
         TvPhoto(app, photos, id, onMove = { viewing = it }) { viewing = null }
+    }
+    video?.let { id -> msgs.firstOrNull { it.id == id }?.let { m -> KidVideo(app, m) { video = null } } ?: LaunchedEffect(id) { video = null } }
+    poll?.let { id ->
+        msgs.firstOrNull { it.id == id }?.let { m -> KidPoll(m, KidRules.canSend(cfg.chat, "text"), tv = true, onVote = { i -> KidChats.vote(app, p.k, m.id, i) }) { poll = null } }
+            ?: LaunchedEffect(id) { poll = null }
     }
     reading?.let { id ->
         val m = msgs.firstOrNull { it.id == id }
@@ -668,7 +703,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                     Text("“${o.text}”", style = tvText(32.sp, weight = FontWeight.SemiBold), textAlign = TextAlign.Center)
                     // The remote starts on Again, so a stray OK never sends words that came out wrong.
                     DialogButtons(listOf(
-                        "Send" to { app.chat.sendPrivate(p.k, o.text); overlay = null; Ui.say("Sent") },
+                        "Send" to { KidChats.sendText(app, p.k, o.text); overlay = null; Ui.say("Sent") },
                         "Again" to { listen() },
                     ), focus = 1)
                 }
@@ -749,7 +784,8 @@ private fun QuickTile(text: String, done: Boolean, requester: FocusRequester?, m
 }
 
 @Composable
-internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onPhoto: () -> Unit) {
+internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onVideo: () -> Unit = {}, onPoll: () -> Unit = {},
+                        speak: (() -> Unit)? = null, onPhoto: () -> Unit) {
     val shape = if (m.mine) RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp) else RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp)
     val bg = if (m.mine) Palette.bubbleMine else TheirBubble
     Box(Modifier.fillMaxWidth(), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
@@ -769,6 +805,13 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                     Text(Voice.length(m.voice), style = tvText(20.sp, Palette.textSoft))
                 }
             }
+            // A video message: a play tile; OK or a tap plays it full screen.
+            m.video > 0 && m.photo.isNotEmpty() -> KidTile(if (m.mine) "Video" else "Video, ${Voice.length(m.video)}", "video", shape, bg, onVideo,
+                "Video, ${Voice.length(m.video)}. Press to play it.")
+            // A file: the kids can't open files here.
+            m.file.isNotEmpty() -> KidTile("Ask a parent to open this", "file", shape, bg, null, "A file. Ask a parent to open this.")
+            // A poll: its question; OK or a tap shows the choices.
+            m.poll != null -> KidTile(m.poll.q.ifBlank { "Poll" }, "chat", shape, bg, onPoll, "Poll: ${m.poll.q}. Press to see the choices.")
             // Cap a1: a GIF moves right in the conversation (still with Less motion); OK shows it big.
             m.photo.isNotEmpty() && m.gif -> {
                 var focused by remember { mutableStateOf(false) }
@@ -788,19 +831,38 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                 else MIcon("image", Palette.textMuted, 40.dp, Modifier.clip(shape).background(bg).padding(10.dp))
             }
             else -> {
-                // A message longer than the bubble shows: the remote can land on it, and OK shows it whole.
+                // A message longer than the bubble shows: the remote can land on it, and OK shows it whole. On a touch
+                // screen ([speak]) a tap on their message also reads it out loud.
                 var cut by remember(m.id) { mutableStateOf(false) }
                 var focused by remember { mutableStateOf(false) }
+                val tap = cut || (speak != null && !m.mine)
                 Text(m.text, style = tvText(20.sp), maxLines = 3, overflow = TextOverflow.Ellipsis,
                     onTextLayout = { if (it.hasVisualOverflow) cut = true },
-                    modifier = Modifier.then(if (cut) Modifier.onFocusChanged { focused = it.isFocused }
-                        .semantics { contentDescription = "${m.text}. Press OK to read it all." } else Modifier)
+                    modifier = Modifier.then(if (tap) Modifier.onFocusChanged { focused = it.isFocused }
+                        .semantics { contentDescription = if (cut) "${m.text}. Press OK to read it all." else m.text } else Modifier)
                         .clip(shape).background(bg)
-                        .then(if (cut && focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
-                        .then(if (cut) Modifier.clickable(role = Role.Button, onClick = onText) else Modifier)
+                        .then(if (tap && focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+                        .then(if (tap) Modifier.clickable(role = Role.Button) { if (!m.mine) speak?.invoke(); if (cut) onText() } else Modifier)
                         .padding(horizontal = 13.dp, vertical = 9.dp))
             }
         }
+    }
+}
+
+/** A bubble that is an icon and a few words: a video, a file or a poll. [onClick] null: nothing to press. */
+@Composable
+private fun KidTile(text: String, icon: String, shape: androidx.compose.ui.graphics.Shape, bg: Color, onClick: (() -> Unit)?, spoken: String) {
+    var focused by remember { mutableStateOf(false) }
+    Row(Modifier.widthIn(max = 260.dp).onFocusChanged { focused = it.isFocused }.clip(shape).background(bg)
+        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+        .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+        .semantics(mergeDescendants = true) { contentDescription = spoken }
+        .padding(start = 7.dp, end = 13.dp, top = 7.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).clip(CircleShape).background(if (onClick != null) Palette.gold else Palette.panelLow), contentAlignment = Alignment.Center) {
+            MIcon(if (icon == "video") "play" else icon, if (onClick != null) Palette.onGold else Palette.textMuted, 18.dp, filled = icon == "video")
+        }
+        Spacer(Modifier.width(9.dp))
+        Text(text, style = tvText(20.sp, Palette.textSoft), maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 

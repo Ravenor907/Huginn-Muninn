@@ -2615,6 +2615,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun send(o: Groups.Out) { wakeRetry(); bg { sendGroupOut(o) } }
         override fun drop(env: String) = outbox.drop(env)
         override fun isContact(k: String) = this@Chat.isContact(k)
+        // A Kids' Device takes a group only from one of its parents.
+        override fun mayInvite(k: String) = this@Chat.isContact(k) && tvHandler?.groupInviteOk(k) != false
         override fun peer(k: String, name: String, mailbox: String) {
             contacts.peer(k, name, mailbox)
             // A contact in a group's state runs an app with groups and calls (3.7): what it speaks is known from that too.

@@ -96,7 +96,11 @@ internal fun KidTouch(app: Muninn, cfg: TvConfig, person: TvPerson?, quiet: Quie
 private fun TouchHome(app: Muninn, cfg: TvConfig, quiet: QuietTime?, onParent: () -> Unit, onOpen: (String) -> Unit) {
     val convs by app.chat.conversations.collectAsState()
     val unread by app.chat.unread.collectAsState()
-    val people = kidPeople(cfg, quiet)
+    val groupsAll by app.chat.groups.all.collectAsState()
+    val gmsgs by app.chat.groups.messages.collectAsState()
+    val unreadGroups by app.chat.groups.unreadGroups.collectAsState()
+    // The people, then the groups a parent put the device in (none during a quiet time).
+    val people = kidPeople(cfg, quiet) + KidChats.groups(app, groupsAll, quiet)
     // Back here does nothing: a kid can't back out into anything else.
     BackHandler(enabled = true) {}
     Column(Modifier.fillMaxSize()) {
@@ -115,8 +119,10 @@ private fun TouchHome(app: Muninn, cfg: TvConfig, quiet: QuietTime?, onParent: (
         }
         LazyVerticalGrid(GridCells.Adaptive(150.dp), Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            items(people, key = { it.k }) { p -> TouchTile(p, unreadCount(convs[p.k].orEmpty(), p.k in unread)) { onOpen(p.k) } }
+            items(people, key = { it.k }) { p -> TouchTile(p, KidChats.unread(p.k, KidChats.msgs(p.k, convs, gmsgs), unread, unreadGroups)) { onOpen(p.k) } }
         }
+        // k12 (7.18): Daily Hávamál, when a parent turned it on: today's verse below the people.
+        if (cfg.hav) HavCard(cfg, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp))
     }
 }
 
@@ -147,9 +153,16 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val convs by app.chat.conversations.collectAsState()
-    val msgs = convs[p.k].orEmpty().filter { it.unsent.isEmpty() }
+    val gmsgs by app.chat.groups.messages.collectAsState()
+    // A person's messages, or a group's (someone else's text says who wrote it).
+    val msgs = KidChats.msgs(p.k, convs, gmsgs)
+    val group = KidChats.isGroup(p.k)
     val playing by Voice.playing.collectAsState()
     var viewing by remember { mutableStateOf<String?>(null) }
+    /** A video playing full screen, or a poll open (their message ids). */
+    var video by remember { mutableStateOf<String?>(null) }
+    var poll by remember { mutableStateOf<String?>(null) }
+    val openedAt = remember { System.currentTimeMillis() }
     var reading by remember { mutableStateOf<String?>(null) }
     var text by remember(p.k) { mutableStateOf("") }
     var recording by remember { mutableStateOf(false) }
@@ -170,7 +183,7 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
             val r = TvRecorder.finish()
             sending = false
             recording = false
-            if (r != null) { app.chat.sendVoice(p.k, r.first, r.second); Ui.say("Sent") } else Ui.say(TvWords.TOO_SHORT, true)
+            if (r != null) { KidChats.sendVoice(app, p.k, r.first, r.second); Ui.say("Sent") } else Ui.say(TvWords.TOO_SHORT, true)
         }
     }
     fun cancelRecording() { if (sending) return; if (TvRecorder.recording.value) TvRecorder.cancel(); recording = false }
@@ -193,7 +206,7 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
         if (uri != null) scope.launch {
             val jpeg = withContext(Dispatchers.IO) { Photos.prepare(context, uri, false) }
             if (jpeg == null) Ui.say("That photo can't be sent", true)
-            else { withContext(Dispatchers.IO) { app.chat.sendPhoto(p.k, jpeg) }; Ui.say("Sent") }
+            else { withContext(Dispatchers.IO) { KidChats.sendPhoto(app, p.k, jpeg) }; Ui.say("Sent") }
         }
     }
 
@@ -205,11 +218,18 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
             TvRecorder.onLimit = null
             if (TvRecorder.recording.value) TvRecorder.cancel()
             Voice.stopPlaying()
+            KidSpeak.stop()
         }
     }
-    LaunchedEffect(msgs.size) { app.chat.markRead(p.k) }
+    LaunchedEffect(msgs.size) { KidChats.markRead(app, p.k) }
     // Whether their app takes calls isn't known until it says so: ask once (shared/docs/protocol.md 1.2).
-    LaunchedEffect(p.k) { app.chat.probeCaps(p.k) }
+    LaunchedEffect(p.k) { if (!group) app.chat.probeCaps(p.k) }
+    // A voice message that arrives while this screen is open plays out loud by itself, as on a TV.
+    val newest = msgs.lastOrNull()
+    LaunchedEffect(newest?.id) {
+        if (newest != null && !newest.mine && newest.voice > 0 && newest.time >= openedAt && !recording)
+            app.chat.photo(newest.photo)?.let { Voice.play(newest.id, it) }
+    }
     LaunchedEffect(playing) { while (playing.isNotEmpty()) { Voice.tick(); delay(200) } }
     LaunchedEffect(sent) { if (sent.isNotEmpty()) { delay(2000); sent = "" } }
     BackHandler { onBack() }
@@ -219,7 +239,7 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
             IconAction("back", "Back") { onBack() }
             io.github.ravenor907.muninn.ui.Avatar(p.k, p.n, 44.dp)
             Text(p.n, style = tvTitle(22.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 10.dp))
-            if (cfg.calls) Row(Modifier.clip(RoundedCornerShape(24.dp)).background(Palette.gold).clickable(role = Role.Button) { call() }
+            if (cfg.calls && !group) Row(Modifier.clip(RoundedCornerShape(24.dp)).background(Palette.gold).clickable(role = Role.Button) { call() }
                 .padding(horizontal = 18.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 MIcon("call", Palette.onGold, 24.dp)
                 Text("Call", style = tvText(20.sp, Palette.onGold, FontWeight.Bold), modifier = Modifier.padding(start = 8.dp))
@@ -228,7 +248,11 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
         // The newest at the bottom.
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(msgs.takeLast(60).asReversed()) { m -> TalkBubble(app, m, playing, onText = { reading = m.id }) { viewing = m.id } }
+            // A tap on their message reads it out loud, for a child who can't read yet.
+            items(msgs.takeLast(60).asReversed()) { m ->
+                TalkBubble(app, m, playing, onText = { reading = m.id }, onVideo = { video = m.id }, onPoll = { poll = m.id },
+                    speak = { KidSpeak.say(context, m.text) }) { viewing = m.id }
+            }
         }
         // Quick messages: one tap sends, and it says Sent for a moment.
         if (cfg.quick.isNotEmpty()) Column(Modifier.fillMaxWidth().heightIn(max = if (typing) 168.dp else 300.dp).verticalScroll(rememberScrollState())
@@ -237,7 +261,7 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     row.forEach { q ->
                         TouchQuick(if (sent == q.id) "Sent" else q.text, sent == q.id, Modifier.weight(1f)) {
-                            if (sent != q.id) { app.chat.sendPrivate(p.k, q.text); sent = q.id }
+                            if (sent != q.id) { KidChats.sendText(app, p.k, q.text); sent = q.id }
                         }
                     }
                     if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -253,15 +277,20 @@ private fun TouchTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Uni
                 Field(text, { text = it }, "Type a message", Modifier.weight(1f).padding(horizontal = 8.dp), single = false)
                 RoundButton("send", "Send", enabled = text.isNotBlank()) {
                     val t = TvRules.clean(text, 2000)
-                    if (t.isNotEmpty()) { app.chat.sendPrivate(p.k, t); text = "" }
+                    if (t.isNotEmpty()) { KidChats.sendText(app, p.k, t); text = "" }
                 }
             }
         }
     }
 
     viewing?.let { id ->
-        val list = msgs.filter { it.photo.isNotEmpty() && it.voice == 0 }
+        val list = msgs.filter { KidChats.isPhoto(it) }
         TvPhoto(app, list, id, onMove = { viewing = it }) { viewing = null }
+    }
+    video?.let { id -> msgs.firstOrNull { it.id == id }?.let { m -> KidVideo(app, m) { video = null } } ?: LaunchedEffect(id) { video = null } }
+    poll?.let { id ->
+        msgs.firstOrNull { it.id == id }?.let { m -> KidPoll(m, typing, tv = false, onVote = { i -> KidChats.vote(app, p.k, m.id, i) }) { poll = null } }
+            ?: LaunchedEffect(id) { poll = null }
     }
     reading?.let { id ->
         val m = msgs.firstOrNull { it.id == id }

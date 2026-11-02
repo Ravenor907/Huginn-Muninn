@@ -500,6 +500,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             // Only reset the back-off once it has stayed up a minute (a relay that accepts and drops at once).
             timer.schedule({ if (sockets[url] === webSocket && live[url] == true) { retries.remove(url); streak.set(0) } }, 60, java.util.concurrent.TimeUnit.SECONDS)
             val now = android.os.SystemClock.elapsedRealtime()
+            // A Kids' Device's quiet times follow a trusted time: here the relay's own clock (its answer's Date).
+            try { response.headers.getDate("Date")?.let { io.github.ravenor907.muninn.tv.KidTv.heardTime(it.time) } } catch (_: Exception) {}
             connectMs[url] = now - (openedAt[url] ?: now)
             heardAt[url] = now
             live[url] = true

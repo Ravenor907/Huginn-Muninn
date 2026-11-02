@@ -349,7 +349,7 @@ private fun WelcomePage(app: Muninn) {
                     when {
                         !Setup.writes.live -> Ui.say("In practice, nothing changes.")
                         io.github.ravenor907.muninn.tv.KidMode.makeKids(app) -> Setup.finish(false)
-                        else -> Ui.say("Only a new Muninn with no lock and no contacts can become a Kids' Device.", true)
+                        else -> Ui.say("Only a new Muninn with no lock and no contacts can become a Kids' Device. To start fresh on this device: Android's Settings, Apps, Muninn, Storage, Clear storage (it erases Muninn here), or reinstall Muninn.", true)
                     }
                 })
             }

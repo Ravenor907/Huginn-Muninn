@@ -87,6 +87,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `n2` | richer nudges and the nudge key (section 23.3): `nk` and `np` in receipts to contacts and group peers; a nudge to someone whose caps include `n2` also says who sent it, the group's name and what kind of message came, sealed to their nudge key, to their nudge mailbox, so group members can nudge too. The nudge key never rings. Muninn and Huginn. |
 | `u1` | a kids' TV updates by itself and reports it (7.17): `upnow` from a parent, `upstate` from the TV. Muninn only. |
 | `k11` | Kids' Device on any Android device (7.18): config fields `chat`, `quiet` and `pin`, `dev` in `applied`, and `unlockask`, `unlock`, `left`. Muninn only. |
+| `k12` | Daily Hávamál on a Kids' Device (7.18): config fields `hav`, `havw` and `havh`, `havh` in `applied`, and `havtext`. Muninn only. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -978,7 +979,7 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 ```
 
 Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd`, the k8 field `keep`
-and the k11 fields `chat`, `quiet` and `pin` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
+and the k11 fields `chat`, `quiet` and `pin` and the k12 fields `hav`, `havw` and `havh` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1317,33 +1318,67 @@ scans it) and from then on everything in section 7 applies to it. Only its scree
 D-pad. A device whose app says `k11` adds what it is to every `applied`: `"dev":"tv"`, `"tablet"` or `"phone"` (apps that
 don't know it ignore it; a device that says nothing is a TV).
 
-**Config fields.** A device whose app says `k11` takes three more optional config fields. A parent's app puts them in only
-for such a device (always `chat`; `quiet` and `pin` when set), next to the k2 fields; a device without `k11` would refuse
-the config as malformed, so a parent's app shows "Update this device first" on those rows instead.
+**Config fields.** A device whose app says `k11` takes four more optional config fields. A parent's app puts them in only
+for such a device (always `chat` and `tz`; `quiet` and `pin` when set), next to the k2 fields; a device without `k11` would
+refuse the config as malformed, so a parent's app shows "Update this device first" on those rows instead. A new device
+starts at `chat` 1, in the time zone of the phone that set it up.
 
 | field | value | absent means | what the device does |
 |---|---|---|---|
 | `chat` | integer 1 or 2 | 2 | 1: the kids can send quick messages only. 2: quick messages, typing (Say it on a TV), photos and voice messages. Calls follow `calls` (7.5) |
 | `quiet` | array of at most 2 objects, exactly `n`, `d`, `s`, `e` | no quiet times | `n`: `"school"` or `"bed"`, each at most once. `d`: integer 1 to 127, the days it starts on (bit 0 Monday to bit 6 Sunday). `s`, `e`: integers 0 to 1439, minutes after midnight, `s != e`; `e < s` runs past midnight into the next day. During one, by the device's own clock, only the parents get through (below) |
-| `pin` | object, exactly `salt` (32 lowercase hex: 16 bytes) and `h` (64 lowercase hex) | no PIN | the parent PIN: `h` = PBKDF2-HMAC-SHA256(PIN as UTF-8, salt, 20000 rounds, 32 bytes). The PIN is 4 to 8 digits; only its hash travels and is kept |
+| `pin` | object, exactly `salt` (32 lowercase hex: 16 bytes) and `h` (64 lowercase hex), and `r` (integer 100000 to 1000000) | no PIN | the parent PIN: `h` = PBKDF2-HMAC-SHA256(PIN as UTF-8, salt, `r` rounds, 32 bytes). Without `r`: 20000 rounds, a PIN set before `r`; every PIN set now has `r` 100000, so an old hash is replaced the next time a parent sets the PIN. The PIN is 4 to 8 digits (the parent's page suggests 6 or more); only its hash travels and is kept |
+| `tz` | string, an IANA time zone id (`"America/Los_Angeles"`): a letter, then letters, digits, `_`, `+`, `-` and `/`, at most 64 characters | the device's own zone | the zone quiet times follow. A device that doesn't know the id uses its own zone |
 
 Anything else (`chat` 0 or 3, a repeated `n`, `s == e`, upper-case hex, an extra field) makes the config malformed.
 
-**Older parent apps.** A config with none of `chat`, `quiet` and `pin` comes from a parent's app without `k11`: the device
-takes the rest of it and keeps its current chatting level, quiet times and PIN (it keeps them beside the signed config, so a
-restart keeps them too). A config that carries any of the three sets all three, "absent means" as above, so a parent's app
-with `k11` can still turn quiet times or the PIN off.
+**Older parent apps.** A config with none of `chat`, `quiet`, `pin` and `tz` comes from a parent's app without `k11`: the
+device takes the rest of it and keeps its current chatting level, quiet times, time zone and PIN. Such an app may not have
+seen the newest list of people (it can't read a config with k11 fields), so its config only adds: the device takes its
+people and parents, with the names it gives them, and keeps everyone it already had that the config doesn't list. Taking a
+person or a parent off needs a config from a parent's app with `k11`. The device keeps all of this beside the signed config,
+so a restart keeps it too. A config that carries any of the four sets all four, "absent means" as above, so a parent's app
+with `k11` can still turn quiet times or the PIN off. When a parent's phone with `k11` sees, in the device's `applied`, a
+newer config from such an older app, it keeps its own list too and sends the whole config again, so the device and every
+parent's phone agree. Its page shows "Name's phone needs an update to manage this device" for a parent whose app lacks
+`k11`.
+
+**Names.** Each person has one name on the device, the same for every parent: the `n` in the config's `contacts`. A
+parent's app sets it on the device's page; until then it is the name the person gave themselves, never a nickname the
+parent's phone keeps for them. A parent's app takes the names from the device's config when it takes that config.
 
 **Enforced on the device.** The level decides which buttons the kids' screens show; nothing else on the device sends.
-During a quiet time the device refuses (403) every envelope in rooms `private`, `photo`, `rich`, `mx`, `live`, `unsend` and
-`call` from anyone but its parents (receipts, `tvconfig` and a call already under way still pass). The sender's app keeps
-the message and resends it as usual (a day, until delivered), so it arrives after the quiet time ends; nothing rings or
-shows on the device meanwhile. Its home screen shows only the parents then. The kids can't add anyone: the device takes
-contacts only from configs (7.2), and its screens have no scan, add or code.
+During a quiet time the device refuses (403) every envelope in rooms `private`, `photo`, `rich`, `mx`, `live`, `unsend`,
+`call`, `group`, `gmsg` and `gphoto` from anyone but its parents (receipts, `tvconfig` and a call already under way still
+pass). The sender's app keeps the message and resends it as usual (a day, until delivered), so it arrives after the quiet
+time ends; nothing rings or shows on the device meanwhile. Its home screen shows only the parents then. The kids can't add
+anyone: the device takes contacts only from configs (7.2), and its screens have no scan, add or code. A card (7.6) sent to
+a Kids' Device is taken and changes nothing.
 
-**Locked in.** Kids' mode stays on. On the device, "For a parent" opens only with the parent PIN or a parent's yes; it
-then stays open for 10 minutes and offers Android's settings page for Muninn and Leave kids' mode. Five wrong PINs in a
-row make the next try wait 30 seconds, doubling each time, at most 15 minutes. Messages in room `tvconfig`:
+**Trusted time.** Quiet times never follow the device's clock or time zone alone. They are worked out in `tz` at a trusted
+time: the latest of a parent's config `ts` (taken when the device accepts that config) and a relay's clock (the `Date` of
+its answer when a connection opens), plus the device's uptime since (Android's elapsedRealtime). A later reading replaces an
+earlier one; an earlier one (an old config resent late) changes nothing. Changing the device's clock or zone has no effect.
+The trusted time is kept while the device stays on; after the device restarts, until a trusted time comes again, its own
+clock stands in.
+
+**Other Kids' Devices and groups.** A parent can put another Kids' Device (their own, or another family's) on "Who it can
+talk to"; it then talks with this one once each is on the other's list (a parent who looks after both does both in one
+step). A Kids' Device takes a group invite, or being put straight into a group (op `"add"`, cap m1), only from one of its
+parents, and takes it without asking; any other invite is declined. It takes rooms `group`, `gmsg`, `gphoto` and
+`greceipt` only from its parents and from people in a group it is in. Its screens show those groups as tiles (not during a
+quiet time). A parent's app shows a Kids' Device in its group pickers only to that device's parents.
+
+**Locked in.** Kids' mode stays on inside Muninn. On the device, "For a parent" opens only with the parent PIN or a parent's
+yes; it then stays open for 10 minutes and offers Android's settings page for Muninn and Leave kids' mode; closing it locks
+it again at once. Five wrong PINs in a row make the next try wait 30 seconds, doubling each time, at most 15 minutes; wrong
+tries are forgotten after a right PIN and an hour after the last one. During a wait the PIN isn't checked at all, and fewer
+than 4 digits is no try. The waits, the 10 minutes and an ask's 10 minutes all count by the device's uptime, never its clock
+(a restart of the device starts a wait over). Someone at the device can ask the parents' phones once a minute. On a tablet
+or phone this doesn't stop Home, other apps or Android's own Settings (Clear storage, Uninstall): apps say so and suggest
+Android's App pinning or Family Link. A device whose data was cleared can't tell anyone (its keys are gone); every 6 hours
+a device sends its status (7.7) to its parents, whose phones show when it was last heard from and tell their person once
+when it hasn't been heard from for 36 hours. Messages in room `tvconfig`:
 
 | t | from | fields |
 |---|---|---|
@@ -1351,11 +1386,48 @@ row make the next try wait 30 seconds, doubling each time, at most 15 minutes. M
 | `unlock` | a parent | `id` of that ask. The device takes it only from a current parent, for the ask it has open, within 10 minutes of asking; it then opens "For a parent" for 10 minutes |
 | `left` | the device, to every parent | none (exactly `{"t":"left"}`): someone with the PIN or a parent's yes left kids' mode. The device then erases itself as a disconnect does (7.3) and runs as an ordinary Muninn. A parent's phone takes it only from a device it looks after, and stops looking after it (the contact stays) |
 
-Exactly these fields; anything else is malformed and ignored. A parent's app asks its person (and shows a notification)
-before it sends `unlock`. Apps suggest Android's App pinning on tablets and phones but never turn it on.
+Exactly these fields; anything else is malformed and ignored. A parent's app asks its person before it sends `unlock`: a
+notification that names the ask, and a card on the device's page (a dialog only when no other dialog is open). After 10
+minutes the ask has run out there too, and the app says so instead of sending `unlock`. Apps suggest Android's App pinning on
+tablets and phones but never turn it on.
 
-The PIN hash is in the config, which every parent and the device hold (7.4 still holds for the rest). Updates from anywhere
-(7.17) work on every kind of Kids' Device.
+The PIN hash never leaves the device except to its parents. It is in the config, which every parent and the device hold
+(7.4 still holds for the rest); every `removed` (to a parent taken off, or to someone on the list who isn't a parent) carries
+the config with `pin` taken out. That config's signature can't hold then, so a phone takes a `removed` whose config has
+`chat` and no `pin` on the word of its sender: the device itself, or a parent it knew. Updates from anywhere (7.17) work on
+every kind of Kids' Device; a device without `u1` but with `k2` is asked with the k2 `update`.
+
+**Daily Hávamál (`k12`).** One verse of the Hávamál a day on the kids' home (a card below the people on a tablet or phone,
+a tile after them on a TV), the same verse all day by the device's local date, cycling through the app's list (Henry
+Adams Bellows' translation, 1923, public domain), with a line for children on what it means, Read aloud (the device's
+text-to-speech, when it has one) and the verses shown before (at most 30, since it came on). A device whose app says
+`k12` takes three more optional config fields. A parent's app puts `hav` and `havw` in only for such a device (always,
+next to the k11 fields); a device without `k12` would refuse the config as malformed, so the parent's page shows "Update
+this device first" on that row instead.
+
+| field | value | absent means | what the device does |
+|---|---|---|---|
+| `hav` | true or false | the device keeps its current value (off on a new device) | true: Daily Hávamál shows on the kids' home |
+| `havw` | `"b"` or `"y"` | the device keeps its current wording and `havh` | `"b"`: Bellows. `"y"`: the parent's own translation named by `havh`, for the stanzas it has (Bellows for the rest) |
+| `havh` | 64 lowercase hex, only with `havw` `"y"` | none | SHA-256 of the translation's text (UTF-8) as it travels in `havtext`. A device that doesn't hold that text shows Bellows |
+
+`havh` without `havw` `"y"`, any other `havw`, or `hav` that isn't a boolean makes the config malformed. Unlike the k11
+fields, each of `hav` and `havw` is kept on its own when absent (the device keeps them beside the signed config, like the
+k11 values), so a parent's app without `k12` changes neither.
+
+"Your translation" is imported on a parent's phone, from a plain-text file with stanza numbers ("1", "1.", "St. 1"):
+only the stanzas whose numbers are on the app's list are kept. It stays in that phone's vault (Erase everything erases
+it), is never part of the app, and goes only to that parent's own Kids' Devices, in room `tvconfig`:
+
+| t | from | fields |
+|---|---|---|
+| `havtext` | a parent, to a device whose config names it (`havh`) and whose last `applied` doesn't say it holds it | `h`: its `havh`. `i`: 0-based part. `of`: parts, 1 to 40. `d`: at most 8000 characters of the text, a JSON object `{"1":"stanza text",...}` (keys stanza numbers 1 to 999, at most 200, each text at most 1500 characters) |
+
+Exactly these fields; anything else is malformed and ignored. The device takes parts only from a current parent, puts
+them together (a part for another `h` drops the last one's), and keeps the text once every part is in and its SHA-256
+is `h`. It keeps one translation, replacing any other, and erases it on a disconnect or when it leaves kids' mode. Its
+every `applied` then carries `"havh"`: the hash it holds (apps that don't know it ignore it). A parent's phone sends the
+parts again, at most once a minute, while the device's `applied` says otherwise.
 
 ## 8. Message types
 
@@ -1379,6 +1451,7 @@ The PIN hash is in the config, which every parent and the device hold (7.4 still
 | `tvconfig` | `files` `filelist` `filedel` `filemove` | 7.16 | yes | no | Seen | k10 |
 | `tvconfig` | `upnow` `upstate` | 7.17 | yes | no | Seen | u1 |
 | `tvconfig` | `unlockask` `unlock` `left` | 7.18 | yes | no | Seen | k11 |
+| `tvconfig` | `havtext` | 7.18 | yes | no | Seen | k12 |
 | `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |

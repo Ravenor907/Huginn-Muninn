@@ -2229,7 +2229,9 @@ private fun NewGroup(app: Muninn) {
     var chosen by remember { mutableStateOf(ChatNav.groupWith) }
     LaunchedEffect(Unit) { ChatNav.groupWith = emptySet() }
     val contacts by app.chat.contacts.all.collectAsState()
-    val people = contacts.filter { !it.groupOnly && !app.chat.trash.has(it.chatKey) }.sortedBy { it.shown.lowercase() }
+    // A Kids' Device shows only to one of its parents (it takes groups only from them).
+    val people = contacts.filter { !it.groupOnly && !app.chat.trash.has(it.chatKey) && io.github.ravenor907.muninn.tv.TvParent.groupPickOk(it.chatKey) }
+        .sortedBy { it.shown.lowercase() }
     Column(Modifier.fillMaxSize().imePadding()) {
         PageBar("New group")
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
@@ -3013,7 +3015,9 @@ private fun GroupAdd(app: Muninn, g: String) {
     if (grp == null) { NoGroup(); return }
     val s = grp.state
     val admin = s.isAdmin(app.identity.publicKey) && !grp.readOnly
-    val people = contacts.filter { !it.groupOnly && !s.has(it.chatKey) && !app.chat.trash.has(it.chatKey) }.sortedBy { it.shown.lowercase() }
+    // A Kids' Device shows only to one of its parents (it takes groups only from them).
+    val people = contacts.filter { !it.groupOnly && !s.has(it.chatKey) && !app.chat.trash.has(it.chatKey) && io.github.ravenor907.muninn.tv.TvParent.groupPickOk(it.chatKey) }
+        .sortedBy { it.shown.lowercase() }
     // Whose app can join: ask the ones not known yet (their answers update this list).
     LaunchedEffect(Unit) { people.forEach { app.chat.probeCaps(it.chatKey) } }
     var sent by remember { mutableStateOf(setOf<String>()) }

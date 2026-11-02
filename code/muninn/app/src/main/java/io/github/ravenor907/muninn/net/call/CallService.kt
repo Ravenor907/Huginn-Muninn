@@ -146,7 +146,8 @@ object Ringer {
 
     /** The name, unless notifications show "Nothing" or Muninn is panic-locked. */
     private fun shown(c: Context, name: String): String? {
-        val preview = try { (c.applicationContext as Muninn).identity.showNames } catch (e: Exception) { false }
+        // A Kids' Device always shows who calls (it has no Settings, and the kids need to know).
+        val preview = try { (c.applicationContext as Muninn).identity.showNames || io.github.ravenor907.muninn.tv.KidMode.saved(c) } catch (e: Exception) { false }
         return if (preview && !Panic.locked.value) name else null
     }
 

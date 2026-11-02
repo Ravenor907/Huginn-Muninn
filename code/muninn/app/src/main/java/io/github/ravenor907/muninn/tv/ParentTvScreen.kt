@@ -73,6 +73,9 @@ import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.ToggleRow
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The one Kids' Device page on a parent's phone, one per device (TV, tablet or phone), reached from Settings and from the
@@ -90,6 +93,7 @@ object ParentTvMenu {
         "quick" to "Quick messages",
         "quiet" to "Quiet times",
         "lock" to "Parent PIN",
+        "havamal" to "Daily Hávamál",
         "apps" to "Apps",
         "updates" to "Updates",
         "more" to "More",
@@ -112,9 +116,28 @@ object ParentTvMenu {
 fun tvUpdateLine(app: Muninn, t: ManagedTv): String =
     TvUpd.line(t.app, t.upd1, TvUpd.behind(t.app, app.updater.current, app.updater.state.value.latest), TvRules.updateText(t.update))
 
-/** Update now on the phone (u1): asks the TV, or says it needs one update on the TV first. */
+/**
+ * Update now on the phone: u1 asks the device and shows each step; an older device (k2) can still be asked to look for an
+ * update itself; one older still needs the steps on the device ([updateSteps]).
+ */
 fun askTvUpdate(app: Muninn, t: ManagedTv) {
-    if (TvParent.updateNow(app, t.key)) Ui.say("Asked it to update") else Ui.say(TvUpd.NEEDS_FIRST, true)
+    when {
+        TvParent.updateNow(app, t.key) -> Ui.say("Asked it to update. It starts once the device is on and online.")
+        TvParent.updateTv(app, t.key) -> Ui.say("Asked it to look for an update. It installs once the device is on and online.")
+        else -> Ui.say(TvUpd.NEEDS_FIRST, true)
+    }
+}
+
+/** Update now can reach the device (u1, or the older k2 "update"). */
+fun canAskUpdate(app: Muninn, t: ManagedTv): Boolean = TvParent.u1(app, t.key) || TvParent.k2(app, t.key)
+
+/** What a parent does on a device that is behind, exactly, for its kind. After that one update, Update now works from here. */
+fun updateSteps(app: Muninn, t: ManagedTv): String {
+    val tv = t.dev == KidRules.TV || t.dev.isEmpty()
+    val press = if (tv) "press OK on the remote" else "tap Update"
+    val first = if (TvParent.u1(app, t.key)) "" else if (TvParent.k2(app, t.key)) "Update now asks it to look for an update. " else ""
+    return first + "On the ${if (tv) "TV" else "device"}: open Muninn and leave it on screen. When it shows \"Ask a grown-up\", $press, then Install when Android asks. " +
+        "If Install updates is off, turn it on there first (Android asks once). After that one update, Update now works from here."
 }
 
 /** "TV", "Tablet", "Phone" (or "Device" while not known): what the page says this Kids' Device is. */
@@ -124,6 +147,32 @@ fun kidDeviceKind(app: Muninn, t: ManagedTv): String = KidRules.deviceName(t.dev
 private val PERM_NAMES = mapOf("mic" to "Microphone", "notify" to "Notifications", "overlay" to "Show over other apps", "install" to "Install updates")
 
 private const val UPDATE_FIRST = TvUpd.NEEDS_FIRST
+
+/** What kids' mode does and doesn't do on a tablet or phone, and how to lock it in fully. */
+private const val FULL_LOCK = "Kids' mode keeps the kids in Muninn's own screens. On a tablet or phone they can still press Home, open " +
+    "other apps, or clear Muninn's data in Android's Settings. For a full lock, also turn on App pinning on the device (Settings, " +
+    "Security, App pinning, with \"Ask for PIN before unpinning\" on), then pin Muninn from the recent apps screen; or use Google " +
+    "Family Link. If Muninn on it is cleared or removed, this page shows when it was last seen, and your phone tells you once " +
+    "it hasn't heard from it for a day and a half."
+
+/** An ask from the device to open its parent settings: Unlock or Not now, until it runs out (10 minutes, as on the device). */
+@Composable
+private fun UnlockCard(app: Muninn, t: ManagedTv, tvName: String) {
+    val asks by TvParent.unlockAsks.collectAsState()
+    val now by androidx.compose.runtime.produceState(System.currentTimeMillis()) { while (true) { kotlinx.coroutines.delay(15_000); value = System.currentTimeMillis() } }
+    if (asks[t.key] == null) return
+    val a = TvParent.unlockAsk(t.key, now)
+    if (a == null) { LaunchedEffect(t.key) { TvParent.answerUnlock(app, t.key, false) }; return }
+    val at = android.text.format.DateFormat.getTimeFormat(LocalContext.current).format(java.util.Date(a.at))
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(Corner).border(1.dp, Palette.gold, Corner).padding(14.dp)) {
+        Text("Unlock $tvName?", style = Type.big.copy(fontSize = 17.sp))
+        Text("Asked at $at. " + TvParent.unlockText(tvName), style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MButton("Unlock", kind = Kind.Accent) { TvParent.answerUnlock(app, t.key, true) }
+            MButton("Not now") { TvParent.answerUnlock(app, t.key, false) }
+        }
+    }
+}
 private const val INSTALLS_OFF = "The device can't install apps. Turn on Install updates in Updates."
 
 /**
@@ -156,23 +205,30 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
             Column(Modifier.weight(1f)) {
                 Text(ParentTvMenu.label(open) ?: tvName, style = Type.big, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (t.upToDate) Palette.online else Palette.textFaint))
+                    // The kind of device (TV, tablet, phone), when it was last heard from (green within a day), and whether
+                    // a change is still on its way to it.
+                    val ctx = LocalContext.current
+                    val now by androidx.compose.runtime.produceState(System.currentTimeMillis()) { while (true) { kotlinx.coroutines.delay(30_000); value = System.currentTimeMillis() } }
+                    val recent = t.seenAt > 0 && now - t.seenAt < 86_400_000L
+                    val clock = { ms: Long -> android.text.format.DateFormat.getTimeFormat(ctx).format(java.util.Date(ms)) }
+                    val seen = KidRules.lastSeen(t.seenAt, now, clock) { ms -> android.text.format.DateFormat.getMediumDateFormat(ctx).format(java.util.Date(ms)) + " " + clock(ms) }
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (recent) Palette.online else Palette.textFaint))
                     Spacer(Modifier.width(6.dp))
-                    // The kind of device (TV, tablet, phone), then whether it has the latest settings.
-                    Text(kidDeviceKind(app, t) + " · " + (if (t.upToDate) "Connected" else "Offline; will update"),
-                        style = Type.small.copy(fontSize = 13.sp, color = if (t.upToDate) Palette.online else Palette.textMuted))
+                    Text(kidDeviceKind(app, t) + " · " + seen + (if (t.upToDate) "" else " · Changes waiting to go"),
+                        style = Type.small.copy(fontSize = 13.sp, color = if (recent) Palette.online else Palette.textMuted), maxLines = 2)
                 }
             }
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
             when (open) {
-                null -> { UpdateHeader(app, t); Menu(app, t) { stack = stack + it } }
+                null -> { UnlockCard(app, t, tvName); UpdateHeader(app, t); Menu(app, t) { stack = stack + it }; if (t.dev == KidRules.TABLET || t.dev == KidRules.PHONE) Note(FULL_LOCK) }
                 "people" -> People(app, t)
                 "parents" -> Parents(app, t)
                 "chatting" -> Chatting(app, t)
                 "quiet" -> Quiet(app, t)
                 "lock" -> Lock(app, t)
+                "havamal" -> DailyHavamal(app, t)
                 "quick" -> QuickMessages(t)
                 "sound" -> Sound(app, t)
                 "names" -> Names(app, t, tvName)
@@ -201,9 +257,11 @@ private fun Menu(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
             "quick" -> "${t.quick.size}"
             "sound" -> if (t.calls) "Calls on" else "Calls off"
             // k11: an older device can't take these yet.
-            "chatting" -> if (!k11) UPDATE_FIRST else if (t.chat <= KidRules.QUICK_ONLY) "Quick messages only" else "Everything"
+            "chatting" -> if (!k11) UPDATE_FIRST else KidRules.levelName(t.chat)
             "quiet" -> if (!k11) UPDATE_FIRST else if (t.quiet.isEmpty()) "Off" else t.quiet.joinToString(", ") { KidRules.quietName(it.n) }
             "lock" -> if (!k11) UPDATE_FIRST else if (t.pin == null) "Not set" else "Set"
+            // k12: an older device can't show it yet.
+            "havamal" -> if (!TvParent.k12(app, t.key)) UPDATE_FIRST else if (t.hav) "On" else "Off"
             "apps" -> asks.let { TvAppAsks.of(app, t.key).count { !it.answered } }.let { n -> if (n > 0) "$n waiting for you" else "" }
             "updates" -> if (t.upd) "Auto-update on" else "Auto-update off"
             else -> ""
@@ -218,9 +276,9 @@ private fun UpdateHeader(app: Muninn, t: ManagedTv) {
     val can = TvParent.u1(app, t.key)
     Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(tvUpdateLine(app, t), style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-        MButton("Update now", Modifier.padding(start = 12.dp), Kind.Accent, enabled = can) { askTvUpdate(app, t) }
+        MButton("Update now", Modifier.padding(start = 12.dp), Kind.Accent, enabled = canAskUpdate(app, t)) { askTvUpdate(app, t) }
     }
-    if (!can) Note(TvUpd.NEEDS_FIRST)
+    if (!can) Note(updateSteps(app, t))
     Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(Palette.hairline))
 }
 
@@ -237,8 +295,8 @@ private fun Updates(app: Muninn, t: ManagedTv) {
         if (st.s == TvUpd.DOWNLOADING) io.github.ravenor907.muninn.ui.Bar((st.p ?: 0) / 100f, Modifier.padding(top = 6.dp), Palette.gold)
         Text(TvUpd.lastCheck(st.at, now), style = Type.small, modifier = Modifier.padding(top = 4.dp))
     }
-    MButton("Update now", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent, enabled = can) { askTvUpdate(app, t) }
-    if (!can) Note(TvUpd.NEEDS_FIRST)
+    MButton("Update now", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent, enabled = canAskUpdate(app, t)) { askTvUpdate(app, t) }
+    if (!can) Note(updateSteps(app, t))
     // The TV installs updates by itself only while this is on.
     val installOff = t.off?.contains("install")
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -322,13 +380,22 @@ private fun People(app: Muninn, t: ManagedTv) {
     var adding by remember { mutableStateOf(false) }
     var grouping by remember { mutableStateOf(false) }
     val people = TvParent.people(app, t)
-    Note("Only these people can message or call it. The kids can't add anyone: you add and remove people here.")
-    ItemRow("You", null)
+    var naming by remember { mutableStateOf("") }
+    Note("Only these people can message or call it. The kids can't add anyone: you add and remove people here. " +
+        "Tap a name to change how it shows on the device; every parent sees the same names.")
+    ItemRow("You: ${people.first().n}", null, onClick = { naming = people.first().k })
     fun remove(name: String, k: String, waiting: Boolean) = Ui.sure(Ask("Remove $name?",
         if (waiting) "They aren't added when they accept." else "It can't reach them any more.", "Remove", danger = true) {
         TvParent.removePerson(t.key, k); Ui.say("Removed")
     })
-    people.drop(1).forEach { p -> ItemRow(p.n, null) { remove(p.n, p.k, false) } }
+    // A parent stays on the list (the kids could not answer them otherwise): no minus for them.
+    people.drop(1).forEach { p ->
+        val parent = p.k in t.parents
+        ItemRow(p.n, if (parent) "Parent" else if (TvParent.isKidDevice(p.k)) "Kids' Device" else null, onClick = { naming = p.k },
+            onRemove = if (parent) null else ({ remove(p.n, p.k, false) }))
+    }
+    if (naming.isNotEmpty()) TextDialog("Name on the device", people.firstOrNull { it.k == naming }?.n ?: "", TvRules.MAX_NAME,
+        onCancel = { naming = "" }) { name -> TvParent.setName(t.key, naming, name); naming = ""; Ui.say("Saved") }
     t.waiting.keys.sortedBy { app.chat.nameOf(it).lowercase() }.forEach { k -> val n = app.chat.nameOf(k); ItemRow(n, WAITING) { remove(n, k, true) } }
     AddRow("Add") { adding = true }
     MenuRow("Send its code", "") {
@@ -336,20 +403,34 @@ private fun People(app: Muninn, t: ManagedTv) {
             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "Send its code"))
         }
     }
-    MenuRow("Family group", "") { grouping = true }
+    Note("Another family's Kids' Device can go on the list too. It can talk with this one once its own parents add this device on their side (send them its code).")
+    MenuRow("Group chat", "") { grouping = true }
 
     if (adding) {
         // People this phone asked who haven't accepted yet: invited by themselves once they accept.
         val pending = remember(met, contacts) { TvParent.notYetConnected(app).filter { it.first != t.key && it.first !in t.waiting }.sortedBy { it.second.lowercase() } }
-        val choices = contacts.filter { !it.groupOnly && it.chatKey != t.key && it.chatKey != app.identity.publicKey && !TvParent.isManaged(it.chatKey) && it.chatKey !in t.reach }
+        // Other Kids' Devices too: this family's (each goes on the other's list) or another family's.
+        val choices = contacts.filter { KidRules.canAdd(it.chatKey, t.key, app.identity.publicKey, it.groupOnly, t.reach) }
             .sortedBy { it.shown.lowercase() }
-        InviteDialog(choices.map { it.chatKey to it.shown }, pending, title = "Add", onCancel = { adding = false }) { k ->
+        InviteDialog(choices.map { it.chatKey to it.shown }, pending, title = "Add", onCancel = { adding = false },
+            onNew = {
+                // Someone not in Muninn's contacts yet: they're added from the chat list's + first, then picked here.
+                adding = false
+                io.github.ravenor907.muninn.screens.ChatNav.open = "add"
+                io.github.ravenor907.muninn.screens.SettingsNav.goTab = "chat"
+            }) { k ->
             adding = false
-            if (pending.any { it.first == k }) { TvParent.inviteLater(t.key, listOf(k)); Ui.say("Added when they accept") }
-            else { TvParent.invite(app, t.key, listOf(k)); Ui.say("Added") }
+            when {
+                pending.any { it.first == k } -> { TvParent.inviteLater(t.key, listOf(k)); Ui.say("Added when they accept") }
+                TvParent.isManaged(k) -> { TvParent.addBothWays(app, t.key, k); Ui.say("Added. The two devices can talk with each other now.") }
+                TvParent.isKidDevice(k) -> { TvParent.invite(app, t.key, listOf(k)); Ui.say("Added. Once its parents add this device on their side, they can talk.") }
+                else -> { TvParent.invite(app, t.key, listOf(k)); Ui.say("Added") }
+            }
         }
     }
-    if (grouping) FamilyGroupDialog(app, people.drop(1).map { it.k to it.n }, emptySet(), onClose = { grouping = false })
+    // The device itself first, ticked: it joins a group only when one of its parents adds it.
+    if (grouping) FamilyGroupDialog(app, listOf(t.key to (contacts.firstOrNull { it.chatKey == t.key }?.shown ?: "Kids' Device")) + people.drop(1).map { it.k to it.n },
+        setOf(t.key), onClose = { grouping = false })
 }
 
 /** The parents of the device: a minus on each other parent, and Add a parent. */
@@ -359,10 +440,17 @@ private fun Parents(app: Muninn, t: ManagedTv) {
     var adding by remember { mutableStateOf(false) }
     val me = app.identity.publicKey
     ItemRow("You", null)
-    t.parents.filter { it != me }.sortedBy { app.chat.nameOf(it).lowercase() }.forEach { k ->
+    val others = t.parents.filter { it != me }
+    // What each co-parent's app takes, so the page can say who needs an update.
+    LaunchedEffect(others) { others.forEach { app.chat.probeCaps(it) } }
+    others.sortedBy { app.chat.nameOf(it).lowercase() }.forEach { k ->
         val name = app.chat.nameOf(k)
-        ItemRow(name, null) {
-            Ui.sure(Ask("Remove $name as a parent?", "They can't change its settings any more. They can still talk with the kids.", "Remove", danger = true) {
+        val caps = contacts.firstOrNull { it.chatKey == k }?.caps.orEmpty()
+        // An older app (no k11) can't read this device's settings: its changes only add people, never take anyone off.
+        val old = caps.isNotEmpty() && KidRules.CAP !in caps
+        ItemRow(name, if (old) "$name's phone needs an update to manage this device" else null) {
+            Ui.sure(Ask("Remove $name as a parent?", "They can't change its settings any more. They stay on its list, so they can still talk with the kids. Their phone is told.",
+                "Remove", danger = true, hold = true) {
                 TvParent.removeParent(app, t.key, k); Ui.say("Removed")
             })
         }
@@ -396,6 +484,8 @@ private fun QuickMessages(t: ManagedTv) {
         commit(order.toMutableList().apply { add(j, removeAt(i)) })
     }
     Text("A TV shows the first ${TvRules.QUICK_SHOWN}; a tablet or phone shows them all.", style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(vertical = 8.dp))
+    // A child who can't read yet tells the tiles apart by a picture.
+    Note("Start each with an emoji, like \uD83C\uDF4E or \u2764\uFE0F, so a child who can't read yet can tell them apart.")
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         order.forEach { q ->
             key(q.id) {
@@ -464,6 +554,8 @@ private fun Sound(app: Muninn, t: ManagedTv) {
         onValueChangeFinished = { TvParent.setMic(tvKey, micLevel.toInt()) },
         colors = SliderDefaults.colors(thumbColor = Palette.gold, activeTrackColor = Palette.gold, inactiveTrackColor = Palette.lineMuted),
         modifier = Modifier.semantics { contentDescription = "Mic level ${micLevel.toInt()} of 100" })
+    // Noise removal and the remote's mic are a TV's (an older device that says nothing is a TV).
+    if (t.dev != KidRules.TV && t.dev.isNotEmpty()) return
     Text("Noise removal", style = Type.big.copy(fontSize = 16.sp, color = if (k5) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 12.dp))
     val levels = listOf(TvRules.NR_NONE to "None", TvRules.NR_STANDARD to "Standard", TvRules.NR_STRONG to "Strong", TvRules.NR_BOTH to "Both")
     ChoiceRow(levels.size, Modifier.padding(top = 6.dp, bottom = 8.dp), minWidth = 88.dp) { i, m ->
@@ -483,7 +575,7 @@ private fun Names(app: Muninn, t: ManagedTv, tvName: String) {
     when (naming) {
         "tv" -> TextDialog("Device name", tvName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name -> app.chat.rename(t.key, name); naming = "" }
         "me" -> TextDialog("Your name on it", t.myName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name ->
-            TvParent.change(t.key) { it.copy(myName = name) }; naming = ""
+            TvParent.setName(t.key, app.identity.publicKey, name); naming = ""
         }
     }
 }
@@ -651,7 +743,9 @@ private fun Chatting(app: Muninn, t: ManagedTv) {
     val k11 = TvParent.k11(app, t.key)
     if (!k11) Note(UPDATE_FIRST)
     for (level in listOf(KidRules.QUICK_ONLY, KidRules.EVERYTHING)) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = k11, role = Role.RadioButton) { TvParent.setChat(t.key, level) },
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = k11, role = Role.RadioButton) {
+            if (t.chat != level) { TvParent.setChat(t.key, level); Ui.say("Saved. It changes on the device once it's online.") }
+        },
             verticalAlignment = Alignment.CenterVertically) {
             Text(KidRules.levelName(level), style = Type.normal.copy(color = if (k11) Palette.text else Palette.textFaint), modifier = Modifier.weight(1f))
             if (t.chat == level) MIcon("check", if (k11) Palette.goldBright else Palette.textFaint, 22.dp)
@@ -665,15 +759,21 @@ private fun Chatting(app: Muninn, t: ManagedTv) {
 private fun Quiet(app: Muninn, t: ManagedTv) {
     val k11 = TvParent.k11(app, t.key)
     if (!k11) Note(UPDATE_FIRST)
-    Note("During these times only parents' messages and calls get through. Everyone else's wait and arrive when it ends. The device's own clock decides.")
+    Note("During these times only parents' messages and calls get through. Everyone else's wait and arrive when it ends. " +
+        "They follow this time zone and the time from your phone and the internet, so changing the clock or zone on the device changes nothing.")
+    var zoning by remember { mutableStateOf(false) }
+    MenuRow("Time zone", t.tz.ifEmpty { java.util.TimeZone.getDefault().id }, enabled = k11) { zoning = true }
     for (n in KidRules.QUIET_NAMES) QuietPart(t, n, k11)
+    if (zoning) ZoneDialog(t.tz.ifEmpty { java.util.TimeZone.getDefault().id }, onCancel = { zoning = false }) { z -> zoning = false; TvParent.setTz(t.key, z) }
 }
 
 @Composable
 private fun QuietPart(t: ManagedTv, n: String, enabled: Boolean) {
     val context = LocalContext.current
     val q = t.quiet.firstOrNull { it.n == n }
-    TvToggle(KidRules.quietName(n), q?.let { "${KidRules.daysText(it.d)}, ${KidRules.clock(it.s)} to ${KidRules.clock(it.e)}" } ?: "Off", q != null, enabled) { on ->
+    // This phone's own 12 or 24 hour clock.
+    val h24 = android.text.format.DateFormat.is24HourFormat(context)
+    TvToggle(KidRules.quietName(n), q?.let { "${KidRules.daysText(it.d)}, ${KidRules.clock(it.s, h24)} to ${KidRules.clock(it.e, h24)}" } ?: "Off", q != null, enabled) { on ->
         TvParent.setQuiet(t.key, n, if (on) KidRules.quietDefault(n) else null)
     }
     if (q == null) return
@@ -682,7 +782,7 @@ private fun QuietPart(t: ManagedTv, n: String, enabled: Boolean) {
         val on = q.d and (1 shl i) != 0
         MButton(KidRules.DAY_NAMES[i], m, if (on) Kind.Accent else Kind.Normal, enabled = enabled) {
             val d = q.d xor (1 shl i)
-            if (d != 0) TvParent.setQuiet(t.key, n, q.copy(d = d))
+            if (d != 0) TvParent.setQuiet(t.key, n, q.copy(d = d)) else Ui.say("One day at least stays on. To turn it off, use the switch above.")
         }
     }
     fun pick(start: Boolean) {
@@ -696,8 +796,8 @@ private fun QuietPart(t: ManagedTv, n: String, enabled: Boolean) {
         } catch (_: Exception) {}
     }
     Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        MButton("From ${KidRules.clock(q.s)}", Modifier.weight(1f), enabled = enabled) { pick(true) }
-        MButton("To ${KidRules.clock(q.e)}", Modifier.weight(1f), enabled = enabled) { pick(false) }
+        MButton("From ${KidRules.clock(q.s, h24)}", Modifier.weight(1f), enabled = enabled) { pick(true) }
+        MButton("To ${KidRules.clock(q.e, h24)}", Modifier.weight(1f), enabled = enabled) { pick(false) }
     }
 }
 
@@ -710,18 +810,79 @@ private fun Lock(app: Muninn, t: ManagedTv) {
     val k11 = TvParent.k11(app, t.key)
     var setting by remember { mutableStateOf(false) }
     if (!k11) Note(UPDATE_FIRST)
-    Note("Kids' mode stays on. Leaving it, or opening Android's settings for Muninn on the device, needs this PIN or a yes from a parent's phone.")
+    Note("On the device, \"For a parent\" opens only with this PIN or a yes from a parent's phone. Inside Muninn, leaving kids' mode and " +
+        "Muninn's way into Android's settings need it. It doesn't stop the Home button, other apps or Android's own Settings on a tablet or phone.")
     MenuRow(if (t.pin == null) "Set a PIN" else "Change PIN", if (t.pin == null) "Not set" else "Set", enabled = k11) { setting = true }
     if (t.pin != null) MenuRow("Remove PIN", "", danger = true, enabled = k11) {
         Ui.sure(Ask("Remove the PIN?", "Then only a parent's phone can open the parent settings on the device.", "Remove", danger = true) {
             TvParent.setPin(t.key, null); Ui.say("PIN removed")
         })
     }
-    Note("To keep the kids in Muninn, you can also turn on App pinning on a tablet or phone: in Android's Settings, Security, App pinning. Then pin Muninn from the recent apps screen.")
+    Note(FULL_LOCK)
     if (setting) PinDialog(onCancel = { setting = false }) { pin ->
         setting = false
         // The hash is slow on purpose: made off the main thread.
         Thread { try { TvParent.setPin(t.key, KidRules.newPin(pin)); Ui.say("PIN set") } catch (_: Exception) {} }.start()
+    }
+}
+
+/**
+ * Daily Hávamál (k12): one verse a day on the kids' home, with what it means. The wording is Bellows' translation (1923),
+ * or the parent's own: a plain-text file with stanza numbers, kept in this phone's vault and sent only to this parent's
+ * own Kids' Devices.
+ */
+@Composable
+private fun DailyHavamal(app: Muninn, t: ManagedTv) {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val k12 = TvParent.k12(app, t.key)
+    val mine by HavParent.mine.collectAsState()
+    var importing by remember { mutableStateOf(false) }
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null && !importing) {
+            importing = true
+            scope.launch {
+                val line = withContext(Dispatchers.IO) { HavParent.importFile(app, uri) }
+                importing = false
+                Ui.say(line, !line.startsWith("Imported"))
+            }
+        }
+    }
+    if (!k12) Note(UPDATE_FIRST)
+    TvToggle("Daily Hávamál", "One verse a day on the kids' home, with what it means for a child. It can read it aloud.", t.hav, enabled = k12) { on ->
+        TvParent.setHav(t.key, on)
+    }
+    Text("Wording", style = Type.big.copy(fontSize = 16.sp, color = if (k12) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 14.dp, bottom = 4.dp))
+    val (wording, hash) = TvParent.havWording(t)
+    val others = wording == Havamal.MINE && hash != mine?.text?.h
+    val choices = buildList {
+        add(Havamal.BELLOWS to Havamal.BELLOWS_NAME)
+        if (mine != null) add(Havamal.MINE to Havamal.MINE_NAME)
+    }
+    for ((w, name) in choices) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = k12, role = Role.RadioButton) { TvParent.setHavWording(t.key, w) },
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(name, style = Type.normal.copy(color = if (k12) Palette.text else Palette.textFaint), modifier = Modifier.weight(1f))
+            if (wording == w && !others) MIcon("check", if (k12) Palette.goldBright else Palette.textFaint, 22.dp)
+        }
+    }
+    if (others) Note("Another parent's translation is in use on this device.")
+    Note("The kids see \"What it means\" under the verse either way.")
+    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Palette.hairline))
+    Text(Havamal.MINE_NAME, style = Type.big.copy(fontSize = 16.sp, color = Palette.text))
+    Note("A plain-text file (.txt) with stanza numbers, like \"1.\" or \"St. 1\". Only the stanzas on the list are kept. It stays on this phone and goes only to your own Kids' Devices.")
+    val m = mine
+    if (m == null) {
+        MButton(if (importing) "Importing…" else "Import a translation", Modifier.fillMaxWidth().padding(vertical = 6.dp), enabled = !importing) {
+            try { pick.launch(arrayOf("text/plain")) } catch (_: Exception) { Ui.say("Can't open files here", true) }
+        }
+    } else {
+        InfoRow(Havamal.matchedLine(m.matched, m.of), "")
+        MButton(if (importing) "Importing…" else "Import another", Modifier.fillMaxWidth().padding(vertical = 6.dp), enabled = !importing) {
+            try { pick.launch(arrayOf("text/plain")) } catch (_: Exception) { Ui.say("Can't open files here", true) }
+        }
+        HoldToConfirm("Hold to remove", "Hold for 5 seconds to remove your translation", { HavParent.remove(app); Ui.say("Removed") },
+            Modifier.fillMaxWidth().padding(top = 8.dp))
     }
 }
 
@@ -739,6 +900,7 @@ private fun PinDialog(onCancel: () -> Unit, onSave: (String) -> Unit) {
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Field(a, { v -> a = v.filter { it in '0'..'9' }.take(KidRules.PIN_MAX) }, "${KidRules.PIN_MIN} to ${KidRules.PIN_MAX} digits", keyboard = digits, secret = true)
+                Text("${KidRules.PIN_GOOD} digits or more is much harder to guess.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
                 Field(b, { v -> b = v.filter { it in '0'..'9' }.take(KidRules.PIN_MAX) }, "The same again", Modifier.padding(top = 8.dp), keyboard = digits, secret = true)
                 if (b.length >= a.length && b.isNotEmpty() && a != b) Text("They don't match.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             }
@@ -773,16 +935,20 @@ private fun sendAppToTv(app: Muninn, tvKey: String, files: List<java.io.File>, p
 /** Pick one contact; [waiting]: people who haven't accepted this phone yet. */
 @Composable
 private fun InviteDialog(choices: List<Pair<String, String>>, waiting: List<Pair<String, String>>, title: String,
-                         onCancel: () -> Unit, onPick: (String) -> Unit) {
+                         onCancel: () -> Unit, onNew: (() -> Unit)? = null, onPick: (String) -> Unit) {
     AlertDialog(
         onDismissRequest = onCancel,
         containerColor = Palette.panel,
         title = { Text(title, style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (choices.isEmpty() && waiting.isEmpty()) Text("Add them as a contact first.", style = Type.small)
+                if (choices.isEmpty() && waiting.isEmpty()) Text("Nobody to add yet. Add them as a contact first.", style = Type.small)
                 choices.forEach { (k, name) -> PersonRow(name, null) { onPick(k) } }
                 waiting.forEach { (k, name) -> PersonRow(name, WAITING) { onPick(k) } }
+                if (onNew != null) {
+                    Text("Not here? They show you their code in Muninn (+, My code) and you scan it, then add them here.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                    MButton("Add a contact", Modifier.fillMaxWidth().padding(top = 6.dp), icon = "plus") { onNew() }
+                }
             }
         },
         confirmButton = {},
@@ -806,8 +972,9 @@ private fun PersonRow(name: String, note: String?, onClick: () -> Unit) {
 
 /** A person (or parent) on a list; [onRemove] adds the minus that takes them off. */
 @Composable
-private fun ItemRow(name: String, note: String?, onRemove: (() -> Unit)? = null) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ItemRow(name: String, note: String?, onClick: (() -> Unit)? = null, onRemove: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier),
+        verticalAlignment = Alignment.CenterVertically) {
         MIcon("user", Palette.textMuted, 20.dp)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
@@ -866,9 +1033,11 @@ private fun FamilyGroupDialog(app: Muninn, people: List<Pair<String, String>>, s
     AlertDialog(
         onDismissRequest = onClose,
         containerColor = Palette.panel,
-        title = { Text("Family group", style = Type.big) },
+        title = { Text("Group chat", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Makes a group chat with the people you tick, or adds them to one you run. Leave the device ticked so the kids are in it: " +
+                    "it joins a group only when one of its parents adds it.", style = Type.small, modifier = Modifier.padding(bottom = 8.dp))
                 Text("Who", style = Type.small)
                 if (people.isEmpty()) Text("Add someone first.", style = Type.small)
                 people.forEach { (k, name) ->
@@ -916,6 +1085,28 @@ private fun Grip() {
             }
         }
     }
+}
+
+/** Pick the time zone a device's quiet times follow: type part of a city's name. */
+@Composable
+private fun ZoneDialog(start: String, onCancel: () -> Unit, onPick: (String) -> Unit) {
+    var q by remember { mutableStateOf("") }
+    val all = remember { java.util.TimeZone.getAvailableIDs().filter { it.contains('/') && !it.startsWith("Etc/") && !it.startsWith("SystemV/") }.sorted() }
+    val shown = remember(q) { val w = q.trim().replace(' ', '_'); (if (w.isEmpty()) all else all.filter { it.contains(w, ignoreCase = true) }).take(60) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = Palette.panel,
+        title = { Text("Time zone", style = Type.big) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Now: ${start.replace('_', ' ')}", style = Type.small)
+                Field(q, { q = it }, "Type a city, like London", Modifier.padding(top = 8.dp))
+                shown.forEach { z -> MenuRow(z.replace('_', ' '), "") { onPick(z) } }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { MButton("Cancel", onClick = onCancel) },
+    )
 }
 
 @Composable

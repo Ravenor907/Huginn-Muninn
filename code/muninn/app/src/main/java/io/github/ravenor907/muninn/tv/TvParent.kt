@@ -62,6 +62,20 @@ data class ManagedTv(
     /** k11 (7.18): the chatting level, quiet times and parent PIN; whether the last config carried them; the device kind. */
     val chat: Int = KidRules.EVERYTHING, val quiet: List<QuietTime> = emptyList(), val pin: KidPin? = null,
     val k11Sent: Boolean = false, val dev: String = "",
+    /**
+     * k12 (7.18): Daily Hávamál on, the wording picked ([Havamal.BELLOWS] or [Havamal.MINE]), the translation hash the
+     * device's config names (another parent's, when they picked theirs), and the one the device last said it holds.
+     */
+    val hav: Boolean = false, val havw: String = Havamal.BELLOWS, val havx: String = "", val havHeld: String = "",
+    /**
+     * k11: each person's name on the device (chat key to name), the same for every parent: set on the device page,
+     * taken from the device's config, else the name the person gave themselves (never a nickname on this phone).
+     */
+    val names: Map<String, String> = emptyMap(),
+    /** k11: the time zone its quiet times follow ("": this phone's). */
+    val tz: String = "",
+    /** When this phone last heard from the device (this phone's clock), and when it last said the device went quiet. */
+    val seenAt: Long = 0, val silentTold: Long = 0,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -87,6 +101,8 @@ object TvParent {
     private val cards = ConcurrentHashMap<String, Pair<String, Long>>()
     /** Per TV: parents this phone just took off, told with the next config it signs. Not saved: the TV tells them too. */
     private val removed = ConcurrentHashMap<String, Set<String>>()
+    /** k12: per device, when this phone last sent it its translation. Not saved. */
+    private val havSent = ConcurrentHashMap<String, Long>()
     @Volatile private var ticking = false
 
     private fun file(app: Muninn) = File(app.filesDir, FILE)
@@ -96,6 +112,8 @@ object TvParent {
         synchronized(lock) {
             _tvs.value = try { app.vault.read(file(app))?.let { fromJson(JSONObject(it), app.identity.autoUpdate) } } catch (e: Exception) { null } ?: emptyMap()
         }
+        HavParent.load(app)
+        loadKids(app)
         if (_tvs.value.isNotEmpty()) ticking()
     }
 
@@ -126,6 +144,7 @@ object TvParent {
      */
     fun adoptIfTv(app: Muninn, codeText: String): Boolean {
         val key = tvKeyIn(codeText) ?: return false
+        markKid(app, key)
         if (isManaged(key) || app.contacts.get(key) == null) return true
         Ui.sure(Ask(
             "Set up this Kids' Device?",
@@ -137,11 +156,42 @@ object TvParent {
 
     private fun adopt(app: Muninn, key: String) {
         val me = app.identity.publicKey
+        // A new device starts at Quick messages only, in this phone's time zone; the parent opens more from its page.
         put(ManagedTv(key, quick = TvRules.DEFAULT_QUICK.map { Quick(TvRules.quickId(), it) }, parents = listOf(me),
-            myName = TvRules.clean(app.identity.username, TvRules.MAX_NAME)))
+            myName = TvRules.clean(app.identity.username, TvRules.MAX_NAME), chat = KidRules.QUICK_ONLY,
+            tz = java.util.TimeZone.getDefault().id, seenAt = System.currentTimeMillis()))
         flush(key)
         Ui.say("Setting it up. Press Allow on the Kids' Device for the microphone.")
+        // Straight to the device's page: who it can talk to, chatting, quiet times and the PIN are all there.
+        try { io.github.ravenor907.muninn.screens.openTvSection(key, io.github.ravenor907.muninn.screens.TV_PAGE) } catch (_: Exception) {}
     }
+
+    // ---- Kids' Devices this phone knows of (its own, and others' it was handed a card for or scanned)
+
+    private const val KIDS_FILE = "tv-known.json"
+    private val kidKeys = MutableStateFlow<Set<String>>(emptySet())
+    @Volatile private var kidsLoaded = false
+
+    private fun loadKids(app: Muninn) {
+        if (kidsLoaded) return
+        kidsLoaded = true
+        kidKeys.value = try {
+            app.vault.read(File(app.filesDir, KIDS_FILE))?.let { JSONArray(it) }?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
+        } catch (_: Exception) { null } ?: emptySet()
+    }
+
+    private fun markKid(app: Muninn, key: String) {
+        loadKids(app)
+        if (key in kidKeys.value) return
+        kidKeys.value = kidKeys.value + key
+        try { app.vault.write(File(app.filesDir, KIDS_FILE), JSONArray(kidKeys.value.toList()).toString()) } catch (_: Exception) {}
+    }
+
+    /** A Kids' Device: one this phone looks after, or another family's it knows from a card or its code. */
+    fun isKidDevice(key: String): Boolean = key in _tvs.value || key in kidKeys.value
+
+    /** Group pickers on this phone: a Kids' Device shows only to one of its parents (7.18). */
+    fun groupPickOk(key: String): Boolean = KidRules.groupPickOk(isKidDevice(key), isManaged(key))
 
     /** Changes what the TV shows; the new config goes out a moment after the last change. */
     fun change(key: String, f: (ManagedTv) -> ManagedTv) {
@@ -156,12 +206,33 @@ object TvParent {
 
     /** People the TV may reach: this phone first, then the chosen contacts (still in Contacts). */
     fun people(app: Muninn, t: ManagedTv): List<TvPerson> {
-        val me = TvPerson(app.identity.publicKey, TvRules.clean(t.myName, TvRules.MAX_NAME).ifEmpty { "Parent" }, app.nostr.publicKey)
-        val others = t.reach.filter { it != t.key && it != me.k }.mapNotNull { k ->
-            app.contacts.get(k)?.let { TvPerson(k, TvRules.clean(it.shown, TvRules.MAX_NAME).ifEmpty { "Someone" }, it.mailbox ?: "") }
-                ?: t.others.firstOrNull { it.k == k }
+        val myKey = app.identity.publicKey
+        val me = TvPerson(myKey, TvRules.clean(t.names[myKey] ?: t.myName, TvRules.MAX_NAME).ifEmpty { "Parent" }, app.nostr.publicKey)
+        // Every parent stays on the list, so the kids can always answer them.
+        val others = (t.reach + t.parents).distinct().filter { it != t.key && it != me.k }.mapNotNull { k ->
+            val known = t.others.firstOrNull { it.k == k }
+            val c = app.contacts.get(k)
+            if (c == null && known == null) return@mapNotNull null
+            TvPerson(k, nameOn(t, k, c?.name, known?.n), c?.mailbox ?: known?.p ?: "")
         }
         return (listOf(me) + others).take(TvRules.MAX_CONTACTS)
+    }
+
+    /**
+     * [k]'s name on the device: the one a parent set on the device page, else the device's config's ([fromConfig]), else
+     * the name they gave themselves ([own]). Never this phone's private nickname for them.
+     */
+    private fun nameOn(t: ManagedTv, k: String, own: String?, fromConfig: String?): String =
+        TvRules.clean(t.names[k] ?: fromConfig ?: own ?: "", TvRules.MAX_NAME).ifEmpty { "Someone" }
+
+    /** The name [k] has on the device now (for the device page). */
+    fun nameOnDevice(app: Muninn, t: ManagedTv, k: String): String = people(app, t).firstOrNull { it.k == k }?.n ?: app.chat.nameOf(k)
+
+    /** A parent set [k]'s name on the device: the same on every parent's page once the config goes out. */
+    fun setName(key: String, k: String, name: String) {
+        val n = TvRules.clean(name, TvRules.MAX_NAME)
+        if (n.isEmpty()) return
+        change(key) { t -> t.copy(names = t.names + (k to n), myName = if (k == app?.identity?.publicKey) n else t.myName) }
     }
 
     private fun flush(key: String) {
@@ -176,9 +247,14 @@ object TvParent {
             val v = maxOf(t.v, t.applied) + 1
             val quick = t.quick.filter { it.text.isNotBlank() }.take(TvRules.MAX_QUICK)
             val k11 = k11(app, key)
+            val k12 = k12(app, key)
+            val (havw, havh) = havWording(t)
             val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null,
                 if (k7(app, key)) t.upd else null, if (k8(app, key)) t.keep else null,
-                if (k11) t.chat else null, if (k11) t.quiet else null, if (k11) t.pin else null) else null
+                if (k11) t.chat else null, if (k11) t.quiet else null, if (k11) t.pin else null,
+                if (k12) t.hav else null, if (k12) havw else null, if (k12) havh else null,
+                // k11: the time zone quiet times follow (this phone's until a parent picks another).
+                tz = if (k11) t.tz.ifEmpty { java.util.TimeZone.getDefault().id } else null) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -189,6 +265,8 @@ object TvParent {
             signed = cfg
         }
         send(app, key, listOf(plain))
+        // k12: the device is to show this phone's own translation and doesn't hold it yet: it goes along.
+        sendHavText(app, key, force = true)
         // A parent just added: their app gets the TV (a card) and this config, so it manages the TV too.
         val tv = app.contacts.get(key)
         if (tv != null) for (p in newParents) try {
@@ -247,6 +325,8 @@ object TvParent {
      */
     fun handle(app: Muninn, fromKey: String, plain: String): Boolean {
         val o = try { JSONObject(plain) } catch (e: Exception) { return false }
+        // Anything the device itself sends: it was heard from now ("Last seen" on its page).
+        seen(fromKey)
         if (o.optString("t") == "card") return takeCard(app, fromKey, o.optString("code"), o.optJSONObject("cfg"))
         if (o.optString("t") == "status") return takeStatus(app, fromKey, o)
         if (o.optString("t") == "removed") return takeRemoved(app, fromKey, o)
@@ -267,6 +347,7 @@ object TvParent {
         val runs = TvRules.shared(fromKey, me, o.optJSONObject("cfg"))
         var resend = false
         var lostTo: String? = null
+        var news: String? = null
         synchronized(lock) {
             val t = _tvs.value[fromKey]
             if (t == null) {
@@ -278,13 +359,36 @@ object TvParent {
             val version = Canon.runCatching { text(o.opt("app"), 16) }.getOrNull() ?: t.app
             // k11: what kind of device it is (an older Kids' TV says nothing).
             val dev = KidRules.deviceIn(o).ifEmpty { t.dev }
+            // k12: the translation the device holds ("" for none), kept on whatever this phone takes below.
+            val held = (o.opt("havh") as? String)?.takeIf { Regex("[0-9a-f]{64}").matches(it) } ?: ""
             when {
                 // The TV runs something newer than this phone sent (or another parent's at the same version): their
                 // change, or this phone's own from before a backup was restored. This phone takes it, so it shows
                 // what's really on the TV.
                 runs != null && runs.v > t.applied && (runs.v > t.pendingV || (runs.v == t.pendingV && runs.by != me)) -> {
                     if (t.pending.isNotEmpty() && runs.by != me) lostTo = app.chat.nameOf(runs.by)
-                    put(adopted(app, t, runs).copy(app = version, dev = dev))
+                    var next = adopted(app, t, runs).copy(app = version, dev = dev)
+                    if (!KidRules.hasK11(runs.raw) && k11(app, fromKey)) {
+                        // A co-parent's older app (no k11 field) may not have seen the newest list: the device took
+                        // nobody off (7.18), and neither does this phone. Names stay as they were here, and the whole
+                        // config goes out again, so the device and every parent's phone agree.
+                        val before = people(app, t).associate { it.k to it.n }
+                        next = next.copy(reach = (next.reach + t.reach).distinct().take(TvRules.MAX_CONTACTS - 1),
+                            others = next.others + t.others.filter { x -> next.others.none { it.k == x.k } },
+                            parents = (next.parents + t.parents).distinct(), names = next.names + before)
+                        resend = true
+                    } else if (runs.by != me && t.applied > 0) {
+                        // A co-parent's change that the others should hear about.
+                        val who = app.chat.nameOf(runs.by)
+                        val tvName = app.contacts.get(fromKey)?.shown ?: "the Kids' Device"
+                        val off = t.parents.filter { it !in runs.parents && it != me }
+                        news = when {
+                            runs.pin != t.pin -> if (runs.pin == null) "$who removed the parent PIN on $tvName." else "$who changed the parent PIN on $tvName."
+                            off.isNotEmpty() -> "$who took ${off.joinToString(", ") { app.chat.nameOf(it) }} off as a parent of $tvName."
+                            else -> null
+                        }
+                    }
+                    put(next)
                     tries.remove(fromKey)
                 }
                 // The TV lost its settings (it says version 0): send it everything again.
@@ -302,11 +406,19 @@ object TvParent {
                         || (k7(app, fromKey) && !t.upd) || (k8(app, fromKey) && t.keep != TvRules.MAX_KEEP))
                     // The device just showed it speaks k11: its chatting level, quiet times and PIN go out.
                     if (done && !t.k11Sent && k11(app, fromKey) && (t.chat != KidRules.EVERYTHING || t.quiet.isNotEmpty() || t.pin != null)) resend = true
+                    // The device just showed it speaks k12: Daily Hávamál as the parent set it goes out.
+                    if (done && runs != null && !Havamal.hasOn(runs.raw) && k12(app, fromKey) && (t.hav || t.havw == Havamal.MINE)) resend = true
                 }
             }
+            _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
         }
         lostTo?.let { Ui.say("$it changed the Kids' Device just before you, so your last change didn't go through. Make it again.", true) }
+        news?.let { n ->
+            Ui.say(n)
+            try { app.notice(app.contacts.get(fromKey)?.shown ?: "Kids' Device", n, pageOf(fromKey), "change$fromKey") } catch (_: Exception) {}
+        }
         if (resend) change(fromKey) { it }
+        else sendHavText(app, fromKey, force = false)
         return true
     }
 
@@ -322,9 +434,22 @@ object TvParent {
             // An older parent app's config has no k11 field: the device kept its level, quiet times and PIN (7.18), so does this phone.
             chat = if (KidRules.hasK11(cfg.raw)) cfg.chat else t.chat, quiet = if (KidRules.hasK11(cfg.raw)) cfg.quiet else t.quiet,
             pin = if (KidRules.hasK11(cfg.raw)) cfg.pin else t.pin, k11Sent = cfg.raw.has("chat"),
+            // k12: an older parent app's config leaves Daily Hávamál as it was; a translation named is kept by its hash.
+            hav = if (Havamal.hasOn(cfg.raw)) cfg.hav else t.hav,
+            havw = if (Havamal.hasWording(cfg.raw)) cfg.havw else t.havw,
+            havx = if (Havamal.hasWording(cfg.raw)) cfg.havh ?: "" else t.havx,
             myName = cfg.contacts.firstOrNull { it.k == me }?.n ?: t.myName,
             sharedWith = (t.sharedWith + cfg.parents.filter { it != me }).distinct(),
+            // k11: everyone's name on the device as its config has them (the same for every parent), and its time zone.
+            names = cfg.contacts.associate { it.k to it.n }, tz = if (KidRules.hasK11(cfg.raw)) cfg.tz else t.tz,
         )
+    }
+
+    /** Anything from a device this phone looks after: when it was last heard from (saved at most every half minute). */
+    private fun seen(fromKey: String) = synchronized(lock) {
+        val t = _tvs.value[fromKey] ?: return@synchronized
+        val now = System.currentTimeMillis()
+        if (!t.disconnecting && now - t.seenAt > 30_000) put(t.copy(seenAt = now))
     }
 
     /** This phone became one of the TV's parents ([by] added it, or the TV said so): it manages the TV from now on. */
@@ -334,7 +459,7 @@ object TvParent {
         val tvName = app.contacts.get(tvKey)?.shown ?: "the Kids' Device"
         val who = app.chat.nameOf(by ?: cfg.by)
         if (cfg.by != me) {
-            Ui.say("$who made you a parent of $tvName. You can change what it shows from its chat.")
+            Ui.say("$who made you a parent of $tvName. You can change what it shows from its page.")
             try { app.notify(who, "Made you a parent of $tvName", tvKey) } catch (_: Exception) {}
         }
     }
@@ -360,7 +485,12 @@ object TvParent {
                 mic = if (adopt) s.mic else t.mic, micAt = if (adopt) (if (s.own) now else s.ts) else t.micAt,
                 micOnTv = if (adopt) true else t.micOnTv, update = s.update ?: t.update))
         }
-        news?.let { Ui.say("${app.contacts.get(fromKey)?.shown ?: "Kids' Device"}: ${TvRules.updateText(it)}", it != "done") }
+        news?.let {
+            val name = app.contacts.get(fromKey)?.shown ?: "Kids' Device"
+            Ui.say("$name: ${TvRules.updateText(it)}", it != "done")
+            // Not only while Muninn is open: a notification, so a parent away from home hears it too.
+            if (it != "done") try { app.notice(name, TvRules.updateText(it), pageOf(fromKey), "update$fromKey") } catch (_: Exception) {}
+        }
         if (adopt) change(fromKey) { it }
         return true
     }
@@ -426,6 +556,8 @@ object TvParent {
 
     /** Takes [person] off the people the TV can reach (or stops waiting for them). They stay a parent if they are one. */
     fun removePerson(key: String, person: String) {
+        // A parent stays on the list (the kids could not answer them otherwise): take them off as a parent first.
+        if (_tvs.value[key]?.parents?.contains(person) == true) return
         dropWaiting(key, listOf(person))
         if (_tvs.value[key]?.reach?.contains(person) == true)
             change(key) { t -> t.copy(reach = t.reach - person, others = t.others.filter { it.k != person }) }
@@ -500,6 +632,8 @@ object TvParent {
     private fun takeCard(app: Muninn, fromKey: String, code: String, cfg: JSONObject?): Boolean {
         if (app.contacts.get(fromKey) == null) return false
         val tv = Contacts.parse(code) ?: return false
+        // A card only ever carries a Kids' Device: group pickers here leave it out unless this phone looks after it.
+        markKid(app, tv.chatKey)
         if (tv.chatKey == app.identity.publicKey) return true
         // A parent made this phone a parent too: the config they signed lists it (and them) as parents.
         val shared = TvRules.shared(tv.chatKey, app.identity.publicKey, cfg)?.takeIf { it.by == fromKey }
@@ -526,7 +660,8 @@ object TvParent {
         if (add.isEmpty()) return
         change(tvKey) { t -> t.copy(reach = (t.reach + add).distinct().take(TvRules.MAX_CONTACTS - 1)) }
         val now = System.currentTimeMillis()
-        add.forEach { k -> app.chat.probeCaps(k); cards[k] = tvKey to now; sendCard(app, k, false) }
+        // A Kids' Device gets no card: it takes people only from its own parents' configs (this phone's, or theirs).
+        add.filter { !isKidDevice(it) }.forEach { k -> app.chat.probeCaps(k); cards[k] = tvKey to now; sendCard(app, k, false) }
         if (add.isNotEmpty()) ticking()
     }
 
@@ -587,7 +722,12 @@ object TvParent {
             if ((st.s == TvUpd.FAILED || st.s == TvUpd.TAP) && (was?.s != st.s || was?.why != st.why)) news = TvUpd.text(st)
             put(t.copy(upd1 = st, upd1At = System.currentTimeMillis(), app = st.app))
         }
-        news?.let { Ui.say("${app.contacts.get(fromKey)?.shown ?: "Kids' Device"}: $it", true) }
+        news?.let {
+            val name = app.contacts.get(fromKey)?.shown ?: "Kids' Device"
+            Ui.say("$name: $it", true)
+            // Not only while Muninn is open: a notification, so a parent away from home hears it too.
+            try { app.notice(name, it, pageOf(fromKey), "update$fromKey") } catch (_: Exception) {}
+        }
         return true
     }
 
@@ -607,19 +747,56 @@ object TvParent {
     /** The parent PIN (made with [KidRules.newPin], off the main thread), or none. */
     fun setPin(key: String, p: KidPin?) = change(key) { it.copy(pin = p) }
 
-    /** The device's ask to open its parent settings: this phone's person says yes or not, here and in a notification. */
+    /** The time zone the device's quiet times follow (an IANA id this phone knows). */
+    fun setTz(key: String, tz: String) { if (KidRules.zoneOf(tz) != null) change(key) { it.copy(tz = tz) } }
+
+    /** Kids' Devices this phone looks after, other than [key]: put on each other's lists in one step. */
+    fun addBothWays(app: Muninn, key: String, other: String) {
+        invite(app, key, listOf(other))
+        if (isManaged(other)) invite(app, other, listOf(key))
+    }
+
+    /** An ask from a device to open its parent settings: its id, and when it came (this phone's clock). */
+    data class UnlockAsk(val id: String, val at: Long)
+
+    /** The asks waiting for this phone's person, one per device (a newer one from the same device replaces it). */
+    val unlockAsks = MutableStateFlow<Map<String, UnlockAsk>>(emptyMap())
+
+    /** The device page that [key]'s notices open. */
+    fun pageOf(key: String) = "tvset/page/$key"
+
+    /**
+     * The device's ask to open its parent settings: a card on the device's page, a notification that opens that page, and
+     * a dialog only when no other dialog is open (it never replaces one). An ask runs out after 10 minutes, as on the device.
+     */
     private fun takeUnlockAsk(app: Muninn, fromKey: String, o: JSONObject): Boolean {
         val id = KidRules.idIn(o, "unlockask") ?: return false
         val t = _tvs.value[fromKey] ?: return false
         if (t.disconnecting) return true
         val name = app.contacts.get(fromKey)?.shown ?: "Kids' Device"
-        Ui.sure(Ask("Unlock $name?", "Someone at $name asks to open its parent settings for 10 minutes. With them open, they can leave kids' mode or change Android's settings for Muninn.",
-            "Unlock") {
-            send(app, fromKey, listOf(KidRules.unlockMessage(id)))
-            Ui.say("Unlocked for 10 minutes")
+        unlockAsks.value = unlockAsks.value + (fromKey to UnlockAsk(id, System.currentTimeMillis()))
+        if (Ui.ask.value == null) Ui.sure(Ask("Unlock $name?", unlockText(name), "Unlock", cancel = "Not now", onCancel = { answerUnlock(app, fromKey, false) }) {
+            answerUnlock(app, fromKey, true)
         })
-        try { app.notify(name, "Asks to open its parent settings", fromKey) } catch (_: Exception) {}
+        try { app.notice("Unlock $name?", "Someone at $name asks to open its parent settings. Tap to answer.", pageOf(fromKey), "unlock$fromKey") } catch (_: Exception) {}
         return true
+    }
+
+    fun unlockText(name: String) =
+        "Someone at $name asks to open its parent settings for 10 minutes. With them open, they can leave kids' mode or change Android's settings for Muninn."
+
+    /** The ask from [key] still waiting (not run out), or null. */
+    fun unlockAsk(key: String, now: Long = System.currentTimeMillis()): UnlockAsk? =
+        unlockAsks.value[key]?.takeIf { now - it.at in 0L..KidRules.ASK_MS }
+
+    /** This phone's person said yes ([yes]) or not now to [key]'s ask. One that ran out says so instead of pretending. */
+    fun answerUnlock(app: Muninn, key: String, yes: Boolean) {
+        val a = unlockAsk(key)
+        unlockAsks.value = unlockAsks.value - key
+        if (!yes) return
+        if (a == null) { Ui.say("That ask ran out. Ask again on the device.", true); return }
+        send(app, key, listOf(KidRules.unlockMessage(a.id)))
+        Ui.say("Sent. Its parent settings open for 10 minutes once it gets this.")
     }
 
     /** The device left kids' mode (with the PIN, or a parent's yes): this phone stops looking after it. It stays a contact. */
@@ -635,10 +812,63 @@ object TvParent {
         removed.remove(fromKey)
         cards.keys.filter { cards[it]?.first == fromKey }.forEach { cards.remove(it) }
         TvFiles.forget(fromKey)
+        unlockAsks.value = unlockAsks.value - fromKey
         val name = app.contacts.get(fromKey)?.shown ?: "The Kids' Device"
         Ui.say("$name left kids' mode")
-        try { app.notify(name, "Left kids' mode", fromKey) } catch (_: Exception) {}
+        try { app.notice("$name left kids' mode", "Someone with the parent PIN or a parent's yes left kids' mode. It's a normal Muninn now.", fromKey, "left$fromKey") } catch (_: Exception) {}
         return true
+    }
+
+    // ---- k12 (7.18): Daily Hávamál, and this phone's own translation for it
+
+    /** The device's app said "k12". */
+    fun k12(app: Muninn, key: String): Boolean = Havamal.CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The parent switched Daily Hávamál on or off. */
+    fun setHav(key: String, on: Boolean) = change(key) { it.copy(hav = on) }
+
+    /** The parent picked the wording: Bellows, or their own translation (only once they imported one). */
+    fun setHavWording(key: String, w: String) {
+        val mine = HavParent.mine.value
+        if (w == Havamal.MINE) { if (mine != null) change(key) { it.copy(havw = Havamal.MINE, havx = mine.text.h) } }
+        else change(key) { it.copy(havw = Havamal.BELLOWS, havx = "") }
+    }
+
+    /**
+     * The wording and translation hash a config carries for [t]: this phone's own translation when the parent picked it;
+     * another parent's (still named in the device's config) when this phone has none; else Bellows.
+     */
+    fun havWording(t: ManagedTv): Pair<String, String?> {
+        if (t.havw != Havamal.MINE) return Havamal.BELLOWS to null
+        val mine = HavParent.mine.value?.text?.h
+        if (mine != null && (t.havx.isEmpty() || t.havx == mine)) return Havamal.MINE to mine
+        if (t.havx.isNotEmpty()) return Havamal.MINE to t.havx
+        return Havamal.BELLOWS to null
+    }
+
+    /**
+     * This phone's translation to [key], in parts, only when the device's config names it and the device doesn't hold it
+     * yet. [force] false: at most once a minute (an "applied" that still says otherwise). Only to a device this phone looks after.
+     */
+    private fun sendHavText(app: Muninn, key: String, force: Boolean) {
+        val t = _tvs.value[key] ?: return
+        if (t.disconnecting || !k12(app, key)) return
+        val mine = HavParent.mine.value?.text ?: return
+        if (havWording(t).second != mine.h || t.havHeld == mine.h) return
+        val now = System.currentTimeMillis()
+        if (!force && now - (havSent[key] ?: 0L) < 60_000) return
+        havSent[key] = now
+        send(app, key, Havamal.partMessages(mine.json))
+    }
+
+    /** This phone's translation was imported or removed: devices using it get the new one, or go back to Bellows. */
+    fun havTextChanged() {
+        val mine = HavParent.mine.value?.text?.h
+        val using = synchronized(lock) { _tvs.value.values.filter { it.havw == Havamal.MINE && !it.disconnecting }.map { it.key } }
+        for (k in using) {
+            if (mine == null) change(k) { it.copy(havw = Havamal.BELLOWS, havx = "") }
+            else change(k) { it.copy(havx = mine) }
+        }
     }
 
     /** Shares the TV's contact code, so someone the parent added can add the TV on their side. */
@@ -651,6 +881,16 @@ object TvParent {
     private fun tick() {
         val app = app ?: return
         val now = System.currentTimeMillis()
+        // A device not heard from for a day and a half: its parents are told once (it may be off, or Muninn on it cleared).
+        for (t in _tvs.value.values) if (!t.disconnecting && KidRules.silentNotice(t.seenAt, t.silentTold, now)) {
+            synchronized(lock) { _tvs.value[t.key]?.let { put(it.copy(silentTold = now)) } }
+            val name = app.contacts.get(t.key)?.shown ?: "Your Kids' Device"
+            val since = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(t.seenAt))
+            try {
+                app.notice("Not heard from $name", "Nothing from it since $since. It may be off or offline, or Muninn on it may have been cleared, reset or removed.",
+                    pageOf(t.key), "silent${t.key}")
+            } catch (_: Exception) {}
+        }
         for ((person, w) in cards.entries.toList()) sendCard(app, person, now - w.second > 60_000)
         // Someone picked before they accepted: now a contact, so the invite goes through (or, after 30 days, it's let go).
         for (t in _tvs.value.values) for ((k, since) in t.waiting) {
@@ -711,6 +951,9 @@ object TvParent {
             .apply { t.off?.let { put("off", JSONArray(it)) } }
             .apply { t.upd1?.let { put("upd1", JSONObject(TvUpd.stateMessage(it))).put("upd1At", t.upd1At) } }
             .put("chat", t.chat).put("quiet", KidRules.quietJson(t.quiet)).put("k11Sent", t.k11Sent).put("dev", t.dev)
+            .put("hav", t.hav).put("havw", t.havw).put("havx", t.havx).put("havHeld", t.havHeld)
+            .put("names", JSONObject().apply { t.names.forEach { (k, n) -> put(k, n) } }).put("tz", t.tz)
+            .put("seenAt", t.seenAt).put("silentTold", t.silentTold)
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -736,7 +979,11 @@ object TvParent {
                 chat = x.optInt("chat", KidRules.EVERYTHING).coerceIn(KidRules.QUICK_ONLY, KidRules.EVERYTHING),
                 quiet = x.optJSONArray("quiet")?.let { a -> try { KidRules.quietIn(a) } catch (_: Exception) { null } } ?: emptyList(),
                 pin = x.optJSONObject("pin")?.let { p -> try { KidRules.pinIn(p) } catch (_: Exception) { null } },
-                k11Sent = x.optBoolean("k11Sent"), dev = x.optString("dev").takeIf { it in KidRules.DEVICES } ?: "")
+                k11Sent = x.optBoolean("k11Sent"), dev = x.optString("dev").takeIf { it in KidRules.DEVICES } ?: "",
+                hav = x.optBoolean("hav"), havw = if (x.optString("havw") == Havamal.MINE) Havamal.MINE else Havamal.BELLOWS,
+                havx = x.optString("havx"), havHeld = x.optString("havHeld"),
+                names = x.optJSONObject("names")?.let { n -> n.keys().asSequence().associateWith { n.optString(it) }.filterValues { it.isNotBlank() } } ?: emptyMap(),
+                tz = x.optString("tz"), seenAt = x.optLong("seenAt"), silentTold = x.optLong("silentTold"))
         } catch (e: Exception) { null }
     }.toMap()
 }

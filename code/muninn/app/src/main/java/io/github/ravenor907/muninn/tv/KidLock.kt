@@ -73,9 +73,12 @@ internal fun KidDialog(tv: Boolean, onBack: () -> Unit, content: @Composable () 
 @Composable
 internal fun KidParentArea(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Unit) {
     val until by KidTv.unlockedUntil.collectAsState()
-    val now by produceState(System.currentTimeMillis()) { while (true) { value = System.currentTimeMillis(); delay(1000) } }
-    KidDialog(tv, onClose) {
-        if (until > now) KidUnlocked(app, tv, until, onClose) else KidLocked(app, cfg, tv, onClose)
+    // The device's uptime, as the unlock itself counts: moving the clock changes nothing.
+    val now by produceState(KidTv.elapsed()) { while (true) { value = KidTv.elapsed(); delay(1000) } }
+    // Closing it, any way, locks it again at once: a parent who looked and handed the device back leaves nothing open.
+    val close = { KidTv.lockAgain(); onClose() }
+    KidDialog(tv, close) {
+        if (until > now) KidUnlocked(app, tv, until - now, close) else KidLocked(app, cfg, tv, close)
     }
 }
 
@@ -86,45 +89,62 @@ private fun KidLocked(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Un
     var pin by remember { mutableStateOf("") }
     var line by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
+    // A wait after wrong PINs: counted down here, and the keypad takes nothing until it's over.
+    val wait by produceState(KidTv.pinWait(context), checking) { while (true) { value = KidTv.pinWait(context); delay(1000) } }
+    // The wait is over: its words go.
+    LaunchedEffect(wait <= 0) { if (wait <= 0 && line.contains("Wait")) line = "" }
     MIcon("lock", Palette.goldBright, if (tv) 64.dp else 48.dp)
     Text("For a parent", style = tvTitle(if (tv) 32.sp else 24.sp), modifier = Modifier.padding(top = 10.dp))
     fun ok() {
-        if (checking || pin.isEmpty()) return
+        if (checking) return
+        // Fewer than 4 digits is no try at all: nothing is checked or counted.
+        if (pin.length < KidRules.PIN_MIN) { line = KidRules.pinText(PinTry(false, false, 0)); return }
         checking = true
         val typed = pin
         scope.launch {
             val r = withContext(Dispatchers.Default) { KidTv.tryPin(context, typed) }
             checking = false
             pin = ""
-            line = when {
-                r == 0L -> ""
-                r < 0L -> "Wrong PIN"
-                else -> "Wrong PIN. Try again in ${(r + 999) / 1000} seconds."
-            }
+            line = KidRules.pinText(r)
         }
     }
     if (cfg.pin != null) {
         // The digits typed so far, as dots.
         Text(if (pin.isEmpty()) "Type the parent PIN" else "● ".repeat(pin.length).trim(), style = tvText(if (tv) 28.sp else 22.sp, Palette.textSoft),
             modifier = Modifier.padding(top = 12.dp).semantics { contentDescription = "${pin.length} digits typed" })
-        Keypad(tv, onDigit = { d -> if (pin.length < KidRules.PIN_MAX) pin += d; line = "" }, onDelete = { pin = pin.dropLast(1) }, onOk = { ok() })
+        if (wait > 0) Text(KidRules.waitText(wait), style = tvText(if (tv) 24.sp else 18.sp, Palette.textSoft), textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 10.dp))
+        Keypad(tv, onDigit = { d -> if (wait <= 0 && pin.length < KidRules.PIN_MAX) pin += d; line = "" }, onDelete = { pin = pin.dropLast(1) },
+            onOk = { if (wait > 0) line = "" else ok() })
     } else Text("No parent PIN is set. A parent's phone can open this.", style = tvText(if (tv) 24.sp else 18.sp, Palette.textSoft),
         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
-    if (line.isNotEmpty()) Text(line, style = tvText(if (tv) 24.sp else 18.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+    // While a wait counts down above, the line says only what happened ("Wrong PIN"), not the wait a second time.
+    val shown = when { wait <= 0 -> line; line.startsWith("Wrong PIN") -> "Wrong PIN"; else -> "" }
+    if (shown.isNotEmpty()) Text(shown, style = tvText(if (tv) 24.sp else 18.sp, Palette.danger),
+        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+    var asked by remember { mutableStateOf("") }
+    if (asked.isNotEmpty()) Text(asked, style = tvText(if (tv) 22.sp else 17.sp, Palette.textSoft), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
     Box(Modifier.padding(top = 16.dp)) {
         BigButton("Ask a parent's phone", icon = "phone") {
-            line = if (KidTv.askUnlock(app)) "Asked. A parent can say yes on their phone." else "A parent's phone needs an update first"
+            val at = { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(KidTv.lastAskWall)) }
+            asked = when (KidTv.askUnlock(app)) {
+                KidTv.Asked.SENT -> "Asked at ${at()}. A parent can say yes on their phone."
+                KidTv.Asked.TOO_SOON -> "Asked at ${at()}. You can ask again in a minute."
+                KidTv.Asked.CHECKING -> "Checking the parents' phones. Try again in a moment."
+                KidTv.Asked.NEEDS_UPDATE -> "A parent's phone needs an update first"
+            }
         }
     }
     Box(Modifier.padding(top = 10.dp)) { BigButton("Close") { onClose() } }
 }
 
 @Composable
-private fun KidUnlocked(app: Muninn, tv: Boolean, until: Long, onClose: () -> Unit) {
+private fun KidUnlocked(app: Muninn, tv: Boolean, left: Long, onClose: () -> Unit) {
     val context = LocalContext.current
     MIcon("lock", Palette.online, if (tv) 64.dp else 48.dp)
     Text("Parent settings", style = tvTitle(if (tv) 32.sp else 24.sp), modifier = Modifier.padding(top = 10.dp))
-    val at = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(until))
+    // [left]: how long it stays open, by the device's uptime; shown as a time on this device's clock.
+    val at = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(System.currentTimeMillis() + left))
     Text("Open until $at. Everything else is set on a parent's phone, on this device's page.", style = tvText(if (tv) 22.sp else 16.sp, Palette.textSoft),
         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
     Box(Modifier.padding(top = 16.dp)) {
@@ -190,7 +210,9 @@ internal fun QuietLine(q: QuietTime, tv: Boolean, modifier: Modifier = Modifier)
     Row(modifier.clip(RoundedCornerShape(14.dp)).background(Palette.raised).padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         MIcon("clock", Palette.goldBright, if (tv) 30.dp else 22.dp)
-        Text("${KidRules.quietName(q.n)} until ${KidRules.clock(q.e)}. Only parents now.", style = tvText(if (tv) 24.sp else 17.sp),
+        // The device's own 12 or 24 hour setting.
+        val h24 = android.text.format.DateFormat.is24HourFormat(LocalContext.current)
+        Text("${KidRules.quietName(q.n)} until ${KidRules.clock(q.e, h24)}. Only parents now.", style = tvText(if (tv) 24.sp else 17.sp),
             modifier = Modifier.padding(start = 10.dp))
     }
 }

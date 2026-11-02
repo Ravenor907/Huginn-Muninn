@@ -943,7 +943,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
                     }
                     204 -> done(true, "${dev.alias} already has these files.")
                     401 -> { done(null, ""); pinNeeded.tryEmit(deviceId to (pin != null)) }
-                    403 -> done(false, "${dev.alias} turned the files down.")
+                    // A Kids' Device takes no files over the Wi-Fi (only apps its parents send): say that, not that someone said no.
+                    403 -> done(false, if (dev.chatKey?.let { io.github.ravenor907.muninn.tv.TvParent.isKidDevice(it) } == true)
+                        "Kids' Devices take photos, videos, voice messages and small files sent in a chat, not files over the Wi-Fi."
+                        else "${dev.alias} turned the files down.")
                     409 -> done(false, "${dev.alias} is busy with another transfer. Try again in a moment.")
                     429 -> done(false, "${dev.alias} asked to wait a bit before sending again.")
                     else -> done(false, "${dev.alias} couldn't take the files (error $code).")
