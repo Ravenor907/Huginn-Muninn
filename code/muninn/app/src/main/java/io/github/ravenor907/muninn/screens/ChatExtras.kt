@@ -85,7 +85,7 @@ object Emoji {
 
 /** Pick any emoji, for a reaction or to put in the message being written. */
 @Composable
-internal fun EmojiPicker(title: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun EmojiPicker(title: String, onPick: (String) -> Unit, onGif: (() -> Unit)? = null, onDismiss: () -> Unit) {
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Palette.panel,
@@ -99,12 +99,13 @@ internal fun EmojiPicker(title: String, onPick: (String) -> Unit, onDismiss: () 
             }
         },
         confirmButton = { MButton("Close") { onDismiss() } },
+        dismissButton = if (onGif != null) ({ MButton("GIF") { onGif() } }) else null,
     )
 }
 
 /**
  * One thing the message sheet can do. [folder] "" puts it in the main list, a name puts it in that sub-sheet
- * ("Message"); [info] is a line of facts, not a button; [danger] ones go at the bottom in red.
+ * ("Info"); [info] is a line of facts, not a button; [danger] ones go at the bottom in red.
  */
 internal data class SheetAction(val label: String, val icon: String, val danger: Boolean = false, val folder: String = "",
                                 val info: Boolean = false, val run: () -> Unit = {})
@@ -150,7 +151,7 @@ private fun SheetHeader(title: String, onBack: () -> Unit) {
 
 /**
  * Hold a message: the quick reactions and + for any emoji (tap the one you gave to take it back), the main
- * actions as large rows, then folders ("Message ›", "Read by ›") that open their own page, and the red ones last.
+ * actions as large rows, then folders ("Info ›", "Read by ›") that open their own page, and the red ones last.
  * [readBy] draws the "Read by" page (groups, my messages only).
  */
 @Composable

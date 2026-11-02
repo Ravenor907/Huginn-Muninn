@@ -371,8 +371,8 @@ Item {
                     Line { text: (panel.opened.v || 0) < 3 ? "An older backup. Encrypted with its password." : "Encrypted with its password."; color: Theme.textMuted }
                     Line {
                         text: (panel.opened.contacts === undefined || panel.opened.contacts < 0)
-                              ? "Your identity, contacts, chats, groups, folders and settings: " + panel.count(panel.opened.items || 0, "item") + "."
-                              : "Your identity, " + panel.count(panel.opened.contacts, "contact") + ", " + panel.count(panel.opened.chats, "chat") + ", "
+                              ? "Your account (who you are to your contacts), contacts, chats, groups, folders and settings: " + panel.count(panel.opened.items || 0, "item") + "."
+                              : "Your account, " + panel.count(panel.opened.contacts, "contact") + ", " + panel.count(panel.opened.chats, "chat") + ", "
                                 + panel.count(panel.opened.groups, "group") + ", " + panel.count(panel.opened.folders, "folder") + ", settings."
                     }
                     Line {

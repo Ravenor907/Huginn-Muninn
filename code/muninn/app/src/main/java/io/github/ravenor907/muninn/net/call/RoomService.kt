@@ -96,7 +96,7 @@ object RoomRinger {
     const val LEFT_ID = 0x4354
 
     private fun shown(c: Context, text: String): String? {
-        val preview = try { (c.applicationContext as Muninn).identity.showPreview } catch (e: Exception) { false }
+        val preview = try { (c.applicationContext as Muninn).identity.showNames } catch (e: Exception) { false }
         return if (preview && !Panic.locked.value) text else null
     }
 

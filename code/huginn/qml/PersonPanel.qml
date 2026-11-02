@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // The bigger sub-pages of a contact's menu (PeopleActions.contactMenu): "edit" (nickname, note,
-// chat color) and "can" (what they can do: the four switches, Direct calls and Message days).
+// chat color) and "can" (what they can do: the four switches, Direct calls and How long messages stay).
 // One framed section of rows. The D-pad moves, A changes, Left and Right pick a color, B goes back
 // to the menu.
 //
@@ -45,7 +45,7 @@ Item {
         { id: "files", label: "Send me files", toggle: true },
         { id: "active", label: "See when I'm active", toggle: true },
         { id: "direct", label: "Direct calls and files (shares your address)", toggle: true },
-        { id: "days", label: "Message days", value: tour ? "7 days" : (revision, Chat.chats, Chat.chatDays(key)) + " days" }
+        { id: "days", label: "How long messages stay", value: tour ? "7 days" : (revision, Chat.chats, Chat.chatDays(key)) + " days" }
     ] : [
         { id: "nick", label: "Nickname", value: nick !== "" ? nick : "None" },
         { id: "note", label: "Note", value: note !== "" ? note : "None" },

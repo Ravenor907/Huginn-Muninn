@@ -58,11 +58,11 @@ object SetupFlow {
     class Stop(val spot: String, val text: String, val missing: String = text)
 
     val TOUR = listOf(
-        Stop("plus", "Tap + to start a chat, make a group or add someone."),
+        Stop("plus", "Tap + to message someone, add someone or make a group."),
         Stop("menu", "The ⋮ next to search has more for your chat list."),
         Stop("row", "Press and hold a chat for its options.", "Once you have chats, press and hold one for its options."),
-        Stop("settings", "The valknut opens Settings."),
-        Stop("files", "Files sends photos and files to devices nearby."),
+        Stop("settings", "This symbol, top right, opens Settings."),
+        Stop("files", "Share nearby sends files to phones close by. Chats have + for photos."),
     )
 
     /** Everything first setup can change. */

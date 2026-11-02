@@ -80,7 +80,7 @@ class CallActivity : ComponentActivity() {
             // The name hides the moment Muninn is panic-locked or the phone locks, and shows again once both are over.
             val panic by Panic.locked.collectAsState()
             io.github.ravenor907.muninn.ui.EveryWhileShown(1000) { keyguard = isLocked() }
-            val previews = (application as? Muninn)?.identity?.showPreview ?: false
+            val previews = (application as? Muninn)?.identity?.showNames ?: false
             MuninnTheme {
                 // Kids' TV: the remote-friendly call screen.
                 if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { answer(false) }, onClose = { close() }, askParent = tvAskParent)

@@ -1861,7 +1861,7 @@ What each type means (the same in both apps; Huginn `Limits::typeRules`, Muninn 
 
 | | Folk | Family |
 |---|---|---|
-| One line | Friends and acquaintances. Easy to join, light to keep. | Your closest, most trusted people. Invite only, checked in person, kept longer. |
+| One line | Friends and everyday groups. Anyone can invite, by a link or a code. Kept 7 days. | Your closest people. Admins add each person by QR or a code, no links. Kept up to 30 days. |
 | Who adds people | Anyone in the group, by a link or a code: made with `"mi": true` (17.1) | Only admins, face to face (the code's QR) or by a code they hand over; no links (17.1) |
 | Checking | | Each member's safety code (13.5) is matched once; the member list marks them Checked and the group asks to check the rest |
 | Messages | 7 days | Up to 30 days (an admin picks 7 to 30) |

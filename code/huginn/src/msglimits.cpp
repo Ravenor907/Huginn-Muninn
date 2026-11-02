@@ -72,8 +72,8 @@ QString Limits::typeName(const QString &type) { return type == QLatin1String(kFa
 
 QString Limits::typeLine(const QString &type)
 {
-    return type == QLatin1String(kFamily) ? QStringLiteral("Your closest, most trusted people. Invite only, checked in person, kept longer.")
-                                          : QStringLiteral("Friends. Anyone can invite. Messages are kept 7 days.");
+    return type == QLatin1String(kFamily) ? QStringLiteral("Your closest people. Admins add each person by QR or a code, no links. Kept up to 30 days.")
+                                          : QStringLiteral("Friends and everyday groups. Anyone can invite, by a link or a code. Kept 7 days.");
 }
 
 QStringList Limits::typeRules(const QString &type)

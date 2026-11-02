@@ -161,7 +161,7 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
         scope.launch {
             withContext(Dispatchers.Default) { app.vault.setPassword(secret, pattern) }
             saving = false
-            Ui.say(if (pattern) "Pattern set. Don't forget it: it can't be recovered." else "Password set. Don't lose it: it can't be recovered.")
+            Ui.say(if (pattern) "Pattern set. Nobody can reset it, so a backup is a good idea." else "Password set. Nobody can reset it, so a backup is a good idea.")
             onDone()
         }
     }

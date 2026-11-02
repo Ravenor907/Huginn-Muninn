@@ -338,13 +338,15 @@ class Muninn : Application() {
         net.refresh()
     }
 
-    /** Privacy first: unless the person allows previews, a notification says only "New message". */
+    /** Privacy first: unless the person allows names or messages (Settings › Notifications), a notification says only "New message". */
     fun notify(name: String?, text: String?, key: String, quiet: Boolean = false) {
         // A linked tablet's own chats are put away while its phone's chats show: nothing about who or what, and
         // tapping it doesn't open the chat.
         val putAway = ownChatsPutAway()
         // Panic-locked: never a name or text on the notification.
         val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
+        // "Name only": who it's from, never what they said.
+        val nameOnly = !preview && identity.showSender && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
         // A group's: the channel the newest message is in, so the tap opens there (not the last one looked at).
         val ch = if (key.startsWith("g:")) try { chat.groups.messages.value[key.removePrefix("g:")]?.lastOrNull { !it.mine }?.ch.orEmpty() } catch (_: Exception) { "" } else ""
         val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).apply { if (!putAway) { putExtra("chat", key); putExtra("ch", ch) } }
@@ -352,7 +354,7 @@ class Muninn : Application() {
         // Previews off: a group still says which group and channel ("Gaming · #memes"), never who or what.
         val where = if (!preview && !putAway && !io.github.ravenor907.muninn.ui.Panic.locked.value) groupWhere(key) else null
         val n = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle(if (preview) name else where ?: "Muninn").setContentText(if (preview) text else "New message")
+            .setContentTitle(if (preview || nameOnly) name else where ?: "Muninn").setContentText(if (preview) text else "New message")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(key == "inbox")
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
@@ -361,7 +363,7 @@ class Muninn : Application() {
         // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps".
         if (!visible) try {
             if (io.github.ravenor907.muninn.tv.KidMode.on(this))
-                io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
+                io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview || nameOnly) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
     }
 

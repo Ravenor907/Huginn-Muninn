@@ -126,7 +126,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     }
 }
 
-/** The short list: Kids' TV when there is one, then seven rows that open a page each. */
+/** The short list: Kids' TV when there is one, then eight rows that open a page each (Backup is also under More). */
 @Composable
 private fun ShortList(app: Muninn) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
@@ -138,10 +138,11 @@ private fun ShortList(app: Muninn) {
     }
     io.github.ravenor907.muninn.ui.Framed {
         MeRow(app)
-        NavRow("Notifications", icon = "info") { SettingsNav.folder = "notify" }
-        NavRow("Look", icon = "smile") { SettingsNav.folder = "look" }
+        NavRow("Notifications", icon = "bell") { SettingsNav.folder = "notify" }
+        NavRow("Look", icon = "palette") { SettingsNav.folder = "look" }
         NavRow("Lock and privacy", icon = "lock") { SettingsNav.folder = "lock" }
-        NavRow("Battery", BatteryChoice.of(app)?.title ?: "Your own mix", icon = "clock") { SettingsNav.folder = "battery" }
+        NavRow("Battery", BatteryChoice.of(app)?.title ?: "Your own mix", icon = "battery") { SettingsNav.folder = "battery" }
+        NavRow("Backup", "Keep your chats and contacts on a new phone", icon = "download") { SettingsNav.folder = "backup" }
         NavRow("Linked devices", "Scan to link a computer or tablet", icon = "qr") { SettingsNav.folder = "link" }
         NavRow("More", icon = "more") { SettingsNav.folder = "more" }
     }
@@ -176,6 +177,48 @@ private fun MeRow(app: Muninn) {
 /** A row that opens a page: its name, what it's set to, and an arrow. */
 @Composable
 private fun PageRow(title: String, value: String, onClick: () -> Unit) = NavRow(title, value, onClick = onClick)
+
+/** A row for something that's off and should be on: in red, with what it costs, and a tap to fix it. */
+@Composable
+private fun WarnRow(title: String, value: String, onClick: () -> Unit) {
+    androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+        .padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        MIcon("info", Palette.danger, 20.dp)
+        Spacer(Modifier.size(14.dp))
+        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(title, style = Type.normal.copy(color = Palette.danger))
+            Text(value, style = Type.small)
+        }
+        MIcon("forward", Palette.textMuted, 18.dp)
+    }
+}
+
+/**
+ * "What notifications show": Name and message, Name only or Nothing, one line each on what it means. The same choice
+ * on first setup's Allow page and in Settings › Notifications. A ringing call shows the name with either of the first two.
+ */
+@Composable
+internal fun NotifyShowsChoice(now: io.github.ravenor907.muninn.net.Identity.Shows, onPick: (io.github.ravenor907.muninn.net.Identity.Shows) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Text("What notifications show", style = Type.big.copy(fontSize = 16.sp))
+        io.github.ravenor907.muninn.net.Identity.Shows.entries.forEach { o ->
+            val on = o == now
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+                .border(1.dp, if (on) Palette.accent else Palette.line, io.github.ravenor907.muninn.ui.Corner)
+                .background(if (on) Palette.accentFill else androidx.compose.ui.graphics.Color.Transparent)
+                .clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { onPick(o) }
+                .semantics(mergeDescendants = true) { selected = on }
+                .padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(o.title, style = Type.normal.copy(color = Palette.text))
+                    Text(o.help, style = Type.small)
+                }
+                if (on) MIcon("check", Palette.accent, 18.dp, weight = 2.2f)
+            }
+        }
+        Text("On a locked phone a call says “Incoming call”, with the name unless you pick Nothing.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+    }
+}
 
 /** One short help line under something that isn't obvious. */
 @Composable
@@ -236,12 +279,15 @@ internal fun ExtremeBanner(button: String = "Turn off", onOff: () -> Unit) {
 private fun NotifyPage(app: Muninn) {
     val id = app.identity
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    var preview by remember { mutableStateOf(id.showPreview) }
+    var shows by remember { mutableStateOf(id.notifyShows) }
     var extreme by remember { mutableStateOf(app.power.extreme) }
     if (extreme) ExtremeBanner { BatteryChoice.BALANCED.apply(app); extreme = false }
     // Android 14 and newer: without "Full-screen notifications" an incoming call is only a notification.
     var fullOff by remember { mutableStateOf(fullScreenOff(ctx)) }
-    io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { fullOff = fullScreenOff(ctx) }
+    // Without unrestricted battery use, Android pauses Muninn in the background: messages and calls come late.
+    fun isBatteryOff() = id.stayConnected && !io.github.ravenor907.muninn.net.MessageService.unrestricted(ctx)
+    var batteryOff by remember { mutableStateOf(isBatteryOff()) }
+    io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { fullOff = fullScreenOff(ctx); batteryOff = isBatteryOff() }
     Framed {
         val on = androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
         PageRow("Notifications", if (on) "On" else "Off") {
@@ -250,8 +296,11 @@ private fun NotifyPage(app: Muninn) {
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
             } catch (_: Exception) {}
         }
-        if (fullOff) PageRow("Full-screen calls", "Off. Tap to turn on") { openFullScreenSetting(ctx) }
-        ToggleRow("Show the message", "Off: just “New message”", preview) { preview = it; id.showPreview = it }
+        if (batteryOff) WarnRow("Run in the background", "Off: messages and calls can come late. Tap to allow") {
+            io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx)
+        }
+        if (fullOff) WarnRow("Full-screen calls", "Off: calls won't show on the lock screen. Tap to allow") { openFullScreenSetting(ctx) }
+        NotifyShowsChoice(shows) { shows = it; id.notifyShows = it }
         var reduce by remember { mutableStateOf(id.reduceNotifications) }
         ToggleRow("Reduce notifications", "One per chat until you open it", reduce) { reduce = it; id.reduceNotifications = it }
         // Mentions: "@" and my name, or one of these nicknames, in a group.
@@ -713,7 +762,13 @@ private fun BatteryReport(app: Muninn) {
     var r by remember { mutableStateOf(app.power.report()) }
     io.github.ravenor907.muninn.ui.EveryWhileShown(30_000) { r = app.power.report() }
     fun time(ms: Long): String { val m = ms / 60_000; return if (m < 60) "$m min" else "${m / 60} h ${m % 60} min" }
+    var details by remember { mutableStateOf(false) }
     Column(Modifier.padding(vertical = 8.dp)) {
+        // One plain line first; the counts are behind Details for anyone who wants them.
+        Text("Today Muninn used about ${"%.1f".format(java.util.Locale.US, r.costPercent)}% battery.", style = Type.normal.copy(color = Palette.text))
+        Text(if (details) "Hide details" else "Details", style = Type.small.copy(color = Palette.accent),
+            modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) { details = !details }.padding(vertical = 8.dp))
+        if (!details) return@Column
         Text("On screen or charging: ${time(r.openMs)}", style = Type.small, modifier = Modifier.padding(top = 4.dp))
         Text("Fully connected: ${time(r.connectedMs)}", style = Type.small)
         Text("Light connection: ${time(r.savingMs)}", style = Type.small)
@@ -722,7 +777,6 @@ private fun BatteryReport(app: Muninn) {
         Text("Reconnects: ${r.reconnects}", style = Type.small)
         Text("Server checks: ${r.serverPings}", style = Type.small)
         Text("Background checks: ${r.checks}", style = Type.small)
-        Text("Cost: about ${"%.1f".format(java.util.Locale.US, r.costPercent)}% battery", style = Type.small)
         r.dataBytes?.let { Text("Data used: ${io.github.ravenor907.muninn.net.LocalSend.size(it)}", style = Type.small) }
     }
 }

@@ -1080,7 +1080,7 @@ class Groups(
         val grp = groups[g] ?: return@act null to "That group isn't here any more."
         val s = grp.state
         if (grp.readOnly) return@act null to "You're not in ${s.name} any more."
-        if (!Limits.linksAllowed(s)) return@act null to "Family groups have no links. Admins add people with a code."
+        if (!Limits.linksAllowed(s)) return@act null to "Family groups have no links, so nobody can pass one on. Admins add people by QR in person or by sending a code."
         if (!s.isAdmin(me) && !Limits.membersMayInvite(s)) return@act null to "Only admins can make invite links in ${s.name}."
         if (ttlMs < 0 || maxUses !in 0..Proto06.MAX_LINK_USES) return@act null to "Pick how long and how many people."
         val counter = if (s.isAdmin(me)) me else s.owner

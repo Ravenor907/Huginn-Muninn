@@ -53,7 +53,7 @@ private class SaveInDownload : ActivityResultContracts.CreateDocument("applicati
 }
 
 /** What every backup holds, said before saving and before restoring. */
-private const val INSIDE = "Your identity, contacts, chats, groups, folders and settings."
+private const val INSIDE = "Your account (who you are to your contacts), contacts, chats, groups, folders and settings."
 
 /** Settings › Backup: Back up (one encrypted file you save where you like) and Restore from a backup. */
 @Composable
@@ -144,8 +144,8 @@ fun BackupFlow(app: Muninn, onClose: () -> Unit) {
             Field(pw2, { pw2 = it; error = "" }, "Type it again", Modifier.padding(top = 8.dp), secret = true,
                 keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
             if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
-            Text("No one can reset it. Write it down. Lose it, lose the backup.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
-            Text("Next you pick where to save. Download is a good place.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
+            Text("No one can reset this password, so write it down somewhere safe. Without it the backup can't be opened.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
+            Text("Next you pick where to save. Save it off this phone (Google Drive, or email it to yourself), so losing the phone doesn't lose it.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
             MButton(if (busy) "Saving…" else "Choose where to save", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
                 enabled = !busy && BackupFormat.strength(pw1) > 0 && pw1 == pw2) { saveTo.launch(Backup.fileName()) }
             MButton("Back", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { step = "what" }
@@ -261,7 +261,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, onCancel: () -> Unit, re
                 Text("Made ${Backup.madeOn(s.created)}${if (s.device.isNotEmpty()) " on ${s.device}" else ""} in $from", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
                 if (o.header.v < 3) Text("An older backup. Encrypted with its password.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
                 if (s.contacts != null) {
-                    Text("Your identity", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
+                    Text("Your account (who you are to your contacts)", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
                     Text(listOf(count(s.contacts, "contact"), count(s.chats ?: 0, "chat"), count(s.groups ?: 0, "group"), count(s.folders ?: 0, "folder"))
                         .joinToString(", ") + ", settings", style = Type.normal)
                 } else Text("$INSIDE ${count(s.items, "item")} in all.", style = Type.normal, modifier = Modifier.padding(top = 6.dp))

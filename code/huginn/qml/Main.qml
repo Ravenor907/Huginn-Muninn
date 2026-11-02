@@ -1595,7 +1595,7 @@ Window {
             { page: "dms", ctx: "settings", file: "75-menu-settings" },
             { page: "dms", ctx: "field", file: "76-menu-text" },
             { page: "dms", ctx: "space", small: true, file: "77-menu-empty-list" },
-            // A group's one Call button, its popup open: Call everyone, Call some people and Join voice for each room.
+            // A group's one Call button, its popup open: Call everyone, Call some people and Drop-in call for each room.
             { page: "g:tour-crew", zone: "messages", ctx: "call", file: "78-menu-call" },
             // Settings › Backup: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
             { page: "settings", section: "backup", backup: "what", file: "80-backup" },

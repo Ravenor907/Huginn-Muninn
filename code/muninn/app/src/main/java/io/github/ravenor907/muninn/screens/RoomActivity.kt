@@ -68,7 +68,7 @@ class RoomActivity : ComponentActivity() {
         // In Recents now: "Hide Muninn's screen" covers this window too.
         if (app?.identity?.secureScreen == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else if (Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(app?.identity?.showPreview == true)
-        val hide = { Panic.locked.value || (!(app?.identity?.showPreview ?: false) &&
+        val hide = { Panic.locked.value || (!(app?.identity?.showNames ?: false) &&
             getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) }
         setContent {
             MuninnTheme {

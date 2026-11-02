@@ -246,6 +246,6 @@ class ChatWireTest {
         // Re-adding the same code doesn't quietly verify it: only Check code does.
         val again = ChatWire.merge(after, Contact(newKey, "Bob", "d".repeat(64), true))
         assertFalse(again.verified); assertTrue(again.keyChanged)
-        assertEquals("Dad's security key changed. Check the code with them before trusting new messages.", ChatWire.keyChangedText(after.shown))
+        assertEquals("Dad has a new phone or reinstalled Muninn. Compare 4 emoji with them to be sure it's really Dad.", ChatWire.keyChangedText(after.shown))
     }
 }

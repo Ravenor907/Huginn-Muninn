@@ -143,10 +143,56 @@ private val ROLES = Folders.DEFAULTS
 
 /** What a role changes, in a few words. */
 internal fun roleWords(role: String?): String = when (role) {
-    "Family" -> "Family: messages kept up to 30 days"
-    "Work" -> "Work: messages kept up to 30 days"
-    "Folk" -> "Folk: messages kept for 7 days"
-    else -> "None: messages kept for 7 days"
+    "Family" -> "Family: you can keep messages up to 30 days"
+    "Work" -> "Work: you can keep messages up to 30 days"
+    "Folk" -> "Folk: messages stay 7 days"
+    else -> "None: messages stay 7 days"
+}
+
+/**
+ * How long a 1:1 chat keeps messages, in plain words, and how to keep them longer: the same in Person details and
+ * the chat's "Keep longer". The rule stays: only someone in your Family or Work folder can be kept longer (7, 14 or
+ * 30 days), and both phones keep the shorter of the two choices. [folders] is read so it redraws when a role changes.
+ */
+@Composable
+internal fun KeepChoices(app: Muninn, key: String, name: String, folders: List<Folders.Folder>) {
+    val inRole = ROLES.firstOrNull { r -> folders.any { it.name.equals(r, true) && key in it.keys } }
+    val roles = ROLES + "None"
+    Text("Who is $name to you?", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 8.dp))
+    ChoiceRow(roles.size, Modifier.padding(top = 6.dp), minWidth = 72.dp, gap = 8.dp) { i, m ->
+        val r = roles[i]
+        DetailChip(r, if (r == "None") inRole == null else inRole == r, m) { setRole(app, key, if (r == "None") null else r) }
+    }
+    Text(roleWords(inRole), style = Type.small, modifier = Modifier.padding(top = 6.dp))
+    if (app.chat.contacts.contact(key) == null) return
+    val days = app.chat.chatDays(key)
+    if (app.chat.isClose(key)) {
+        val mine = app.chat.myDays(key)
+        Text("Keep messages for", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+        ChoiceRow(Limits.CHOICES.size, Modifier.padding(top = 6.dp), gap = 8.dp) { i, m ->
+            val d = Limits.CHOICES[i]
+            DetailChip("$d days", mine == d, m) { app.chat.setKeep(key, d) }
+        }
+        Text(if (days < mine) "$name keeps $days days, so this chat does too. Ask $name to pick $mine days for you as well."
+            else "Both phones keep $days days.", style = Type.small, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+    } else Text("Messages with $name delete after $days days. To keep them longer, pick Family or Work above, then choose 14 or 30 days. " +
+        "Only people in those two get longer, so other chats can't pile up and leak. $name picks too, and the shorter time wins.",
+        style = Type.small, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+}
+
+/** "Keep longer", from the top of a 1:1 chat: [KeepChoices] in a small window. */
+@Composable
+internal fun KeepLongerDialog(app: Muninn, key: String, name: String, onDismiss: () -> Unit) {
+    val folders by app.chat.folders.all.collectAsState()
+    app.chat.contacts.all.collectAsState().value   // redraws when their days or mine change
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.panel,
+        shape = Corner,
+        title = { Text("How long messages stay", style = Type.big) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { KeepChoices(app, key, name, folders) } },
+        confirmButton = { io.github.ravenor907.muninn.ui.MButton("Done") { onDismiss() } },
+    )
 }
 
 /** Puts [key] in the [role] folder (making it if it was deleted) and takes it out of the other two. Null: none. */
@@ -590,32 +636,17 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 Field(note, { note = it.take(500) }, "Note, only you see it", Modifier.padding(vertical = 8.dp), single = false)
             }
 
-            Framed("Role") {
-                val inRole = ROLES.firstOrNull { r -> folders.any { it.name.equals(r, true) && key in it.keys } }
-                val roles = ROLES + "None"
-                ChoiceRow(roles.size, Modifier.padding(top = 8.dp), minWidth = 72.dp, gap = 8.dp) { i, m ->
-                    val r = roles[i]
-                    DetailChip(r, if (r == "None") inRole == null else inRole == r, m) { setRole(app, key, if (r == "None") null else r) }
-                }
-                Text(roleWords(inRole), style = Type.small, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+            // Who they are to you (Family, Work, Folk) decides how long messages stay, so it's said that way.
+            Framed("How long messages stay") {
+                KeepChoices(app, key, name, folders)
                 val others = folders.filter { f -> ROLES.none { it.equals(f.name, true) } }
-                if (others.isNotEmpty()) FlowRow(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    others.forEach { f -> val on = key in f.keys; DetailChip(f.name, on) { app.chat.folders.put(f.id, key, !on) } }
-                }
-            }
-
-            if (contact != null) Framed("Keep messages") {
-                val days = app.chat.chatDays(key)
-                if (app.chat.isClose(key)) {
-                    val mine = app.chat.myDays(key)
-                    ChoiceRow(Limits.CHOICES.size, Modifier.padding(top = 8.dp), gap = 8.dp) { i, m ->
-                        val d = Limits.CHOICES[i]
-                        DetailChip("$d days", mine == d, m) { app.chat.setKeep(key, d) }
+                if (others.isNotEmpty()) {
+                    Text("Your other folders", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 4.dp))
+                    FlowRow(Modifier.padding(top = 6.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        others.forEach { f -> val on = key in f.keys; DetailChip(f.name, on) { app.chat.folders.put(f.id, key, !on) } }
                     }
-                    Text(if (days < mine) "$name keeps $days days. Shorter wins." else "Both phones keep $days days.", style = Type.small,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
-                } else Text("$days days. Family or Work: up to 30.", style = Type.normal, modifier = Modifier.padding(vertical = 10.dp))
+                }
             }
 
             Framed("This chat") {
@@ -633,7 +664,9 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
             }
 
             Framed("Safety") {
-                NavRow("Check emoji code", if (app.chat.isVerified(key)) "Checked" else "Not checked yet", icon = "shield") { checkEmoji(app, key, name) }
+                NavRow("Compare emoji", if (app.chat.isVerified(key)) "Checked" else "Not checked yet", icon = "shield") { checkEmoji(app, key, name) }
+                // How messages reach them right now (moved here from the chat's top bar).
+                Text("Reaching $name by: ${routeShort(app.chat.route(key))}", style = Type.small, modifier = Modifier.padding(vertical = 6.dp))
                 if (contact != null) {
                     var fast by remember(key) { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.trusted(key)) }
                     ToggleRow("Direct calls and files", "Faster, and big files go straight. They see your address", fast) {

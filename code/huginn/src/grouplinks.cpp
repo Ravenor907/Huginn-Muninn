@@ -189,7 +189,7 @@ QVariantMap Chat::createGroupLink(const QString &g, qint64 ttlMs, int maxUses)
     const QJsonObject s = it->state;
     const QString me = myKey();
     if (!Limits::linksAllowed(s))
-        return fail(QStringLiteral("Family groups have no links. Admins add people with a code."));
+        return fail(QStringLiteral("Family groups have no links, so nobody can pass one on. Admins add people by QR in person or by sending a code."));
     if (!GroupWire::isAdmin(s, me) && !Limits::membersMayInvite(s))
         return fail(QStringLiteral("Only admins can make invite links in %1.").arg(groupName(g)));
     if (ttlMs < 0 || maxUses < 0 || maxUses > GroupWire::kMaxLinkUses)

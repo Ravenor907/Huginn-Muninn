@@ -233,7 +233,7 @@ Rectangle {
     function showLimitsNote() {
         if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
         Chat.dismissLimitsNote()
-        Ui.sure("Messages disappear", "After 7 days, on every device. Family and Work can keep them up to 30 days.", "Got it", () => {})
+        Ui.sure("Messages disappear", "After 7 days, on every device, so old chats can't leak. To keep a chat longer, put the person in Family or Work (Folders and role) and pick up to 30 days. Family groups can keep up to 30 days too.", "Got it", () => {})
     }
     Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }

@@ -116,5 +116,12 @@ fun GroupKindPicker(kind: String, onKind: (String) -> Unit) {
             }
         }
     }
+    // Family picked: say up front how people join (in person, by QR or a code), and offer Folk for anyone who wants a link.
+    if (picked == Limits.FAMILY) Panel(Modifier.padding(top = 8.dp)) {
+        Text("How people join a Family group", style = Type.normal.copy(color = Palette.text))
+        Text("You add each person yourself: they scan your QR code when you're together, or you send them a code. " +
+            "There are no invite links, so nobody can pass one on. Relatives far away? Send them a code.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        MButton("Want a link? Use Folk instead", Modifier.fillMaxWidth().padding(top = 8.dp)) { onKind(Limits.FOLK) }
+    }
     TypeRulesLink()
 }

@@ -118,7 +118,7 @@ Rectangle {
         add("voice", voice.length ? "VOICE" : "Voice rooms: talk here", voice)
         return out
     }
-    // The header's Call button: Call everyone (and Call some people) when there's anyone to ring, then Join voice for each
+    // The header's Call button: Call everyone (and Call some people) when there's anyone to ring, then Drop-in call for each
     // voice room and group call going on. Nothing applies: no button.
     readonly property var callChoices: {
         if (locked || !exists || readOnly) return []
@@ -130,7 +130,7 @@ Rectangle {
         const rooms = channels.filter(c => c.type === "voice").map(c => ({ id: c.id, name: c.name }))
         const calls = isTour ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
         calls.forEach(c => rooms.push({ id: c.ch, name: "Group call" }))
-        rooms.forEach(r => out.push({ name: rooms.length === 1 ? "Join voice" : "Join voice · " + r.name, icon: "speaker", url: "join:" + r.id, room: r }))
+        rooms.forEach(r => out.push({ name: rooms.length === 1 ? "Drop-in call (no ringing)" : "Drop-in call · " + r.name, icon: "speaker", url: "join:" + r.id, room: r }))
         return out
     }
     function callMenu() {
@@ -492,7 +492,7 @@ Rectangle {
             glyph: page.locked || !page.exists ? "" : "#"
             title: page.locked || !page.exists ? "" : page.channel.name
             subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only" : (page.info.name || "")
-            // One Call button, like a person's: Call everyone and Join voice (whichever apply) in its popup.
+            // One Call button, like a person's: Call everyone and Drop-in call (whichever apply) in its popup.
             HButton {
                 id: groupCallBtn
                 anchors.verticalCenter: parent.verticalCenter
@@ -1267,7 +1267,7 @@ Rectangle {
         items.push({ name: "About and rules", icon: "info", detail: about !== "" ? about.replace(/\n+/g, " · ") : admin ? "Add a description or rules" : "None", url: "about" })
         items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers + " people", url: "people" })
         items.push({ name: "Type", icon: "people", detail: l.typeName, url: "type" })
-        items.push({ name: "Message days", icon: "moon", detail: l.days + " days", url: "days" })
+        items.push({ name: "How long messages stay", icon: "moon", detail: l.days + " days", url: "days" })
         if (admin && l.links && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
         // Cap f2: who can send files and the size limit (admins change them).
         items.push({ name: "Files", icon: "file", detail: isTour ? "Everyone can send files" : (Chat.groupFiles(gid).line || ""), url: "files" })
@@ -1393,9 +1393,9 @@ Rectangle {
     }
     function pickGroupLimit(back) {
         const g = gid, l = Chat.groupLimit(g)
-        if (readOnly || !info.amAdmin || l.type !== "family") { Ui.say(limitDetail() + (l.type === "family" ? "." : ". Family groups keep up to 30.")); return }
+        if (readOnly || !info.amAdmin || l.type !== "family") { Ui.say(limitDetail() + (l.type === "family" ? ". Ask an admin if you'd like longer." : ". Folk groups always keep 7 days. For up to 30, make a Family group: people join it in person or by a code, not a link.")); return }
         const items = l.choices.map(d => ({ name: d + " days", check: l.days === d, url: String(d) }))
-        Ui.pickFrom("Message days", [{ header: l.older.length ? "Some apps keep all until updated" : "", items: items }], a => {
+        Ui.pickFrom("How long messages stay", [{ header: l.older.length ? "Some apps keep all until updated" : "", items: items }], a => {
             tell(Chat.setGroupLimit(g, "family", Number(a)), a + " days.")
         }, back)
     }

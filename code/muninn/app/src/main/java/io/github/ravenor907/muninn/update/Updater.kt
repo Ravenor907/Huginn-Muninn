@@ -87,7 +87,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                 if (newer && installAfter && !wait) download()
             } catch (e: Exception) {
                 lastCheck = 0L   // try again next time Muninn opens
-                _state.value = State("Couldn't reach GitHub. Check the connection.")
+                _state.value = State("Couldn't check for updates. Check your internet.")
             }
         }
     }
@@ -111,7 +111,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                 _state.value = State("Muninn $best is ready to install", best, false, true)
                 download(back = true)
             } catch (e: Exception) {
-                _state.value = State("Couldn't reach GitHub. Check the connection.")
+                _state.value = State("Couldn't check for updates. Check your internet.")
             }
         }
     }

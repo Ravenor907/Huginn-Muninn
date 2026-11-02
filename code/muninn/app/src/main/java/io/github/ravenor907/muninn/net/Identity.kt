@@ -240,10 +240,28 @@ class Identity(context: Context, private val vault: Vault) {
     var linkPreviews: Boolean
         get() = prefs.getBoolean("linkPreviews", false)
         set(v) = prefs.edit().putBoolean("linkPreviews", v).apply()
-    /** Notifications say only "New message" unless this is on. */
+    /** Notifications say only "New message" unless this is on ("Name and message"). */
     var showPreview: Boolean
         get() = prefs.getBoolean("showPreview", false)
         set(v) = prefs.edit().putBoolean("showPreview", v).apply()
+    /** "Name only": notifications and calls say who, never what. Off with [showPreview] off: "Nothing". First setup picks Name only on new installs. */
+    var showSender: Boolean
+        get() = prefs.getBoolean("showSender", false)
+        set(v) = prefs.edit().putBoolean("showSender", v).apply()
+    /** "What notifications show" was set (first setup starts new installs on Name only, or Settings); unset, phones from before keep Nothing. */
+    val notifyChosen: Boolean get() = prefs.contains("showSender")
+    /** Notifications and a ringing call may say who it is ("Name only" or "Name and message"). */
+    val showNames: Boolean get() = showPreview || showSender
+    /** What notifications show: [Shows.NOTHING], [Shows.NAME] (new installs) or [Shows.ALL]. */
+    var notifyShows: Shows
+        get() = if (showPreview) Shows.ALL else if (showSender) Shows.NAME else Shows.NOTHING
+        set(v) { prefs.edit().putBoolean("showPreview", v == Shows.ALL).putBoolean("showSender", v == Shows.NAME).apply() }
+    /** The three choices for what a notification shows, with the words for each. */
+    enum class Shows(val title: String, val help: String) {
+        ALL("Name and message", "Anyone who sees your screen can read it."),
+        NAME("Name only", "Shows who it's from, not what they said."),
+        NOTHING("Nothing", "Just “New message”, until you open Muninn."),
+    }
     /** Blocks screenshots and hides Muninn's screen in recent apps. */
     var secureScreen: Boolean
         get() = prefs.getBoolean("secureScreen", false)

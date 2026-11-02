@@ -209,8 +209,64 @@ private fun routeText(r: String) = when (r) {
     "internet" -> "Over the internet"
     else -> "Not reachable right now"
 }
-/** The few words for a conversation's top bar. */
-private fun routeShort(r: String) = when (r) {
+/**
+ * Once, after the first contact is added: a backup keeps them on a new phone (without one, everyone has to add you
+ * again). Back up opens Settings › Backup; either button puts it away for good. Never on a Kids' TV.
+ */
+@Composable
+private fun BackupNudge(first: String?, modifier: Modifier) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("muninn", Context.MODE_PRIVATE) }
+    var seen by remember { mutableStateOf(prefs.getBoolean("backupNudged", false)) }
+    val kids = remember { (context.applicationContext as? Muninn)?.let { io.github.ravenor907.muninn.tv.KidMode.on(it) } ?: false }
+    if (seen || first == null || kids) return
+    fun done() { seen = true; prefs.edit().putBoolean("backupNudged", true).apply() }
+    Panel(modifier) {
+        Text("Back up so a new phone keeps $first and your chats.", style = Type.normal.copy(color = Palette.text))
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MButton("Back up", Modifier.weight(1f), Kind.Accent) { done(); SettingsNav.goSettings = "backup" }
+            MButton("Not now", Modifier.weight(1f)) { done() }
+        }
+    }
+}
+
+/** Under a picked photo: a small "High quality" switch (remembered for next time), then Cancel and a big Send. */
+@Composable
+private fun PhotoSendRow(enabled: Boolean, onCancel: () -> Unit, onSend: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("muninn", Context.MODE_PRIVATE) }
+    var hd by remember { mutableStateOf(prefs.getBoolean("photoHd", false)) }
+    Row(Modifier.padding(top = 6.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+        .clickable(role = Role.Checkbox) { hd = !hd; prefs.edit().putBoolean("photoHd", hd).apply() }
+        .semantics { stateDescription = if (hd) "On" else "Off" }.padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(20.dp).clip(io.github.ravenor907.muninn.ui.Corner).border(1.5.dp, if (hd) Palette.accent else Palette.line, io.github.ravenor907.muninn.ui.Corner)
+            .background(if (hd) Palette.accentFill else Color.Transparent), contentAlignment = Alignment.Center) {
+            if (hd) MIcon("check", Palette.accent, 14.dp, weight = 2.4f)
+        }
+        Text("High quality (bigger file)", style = Type.small.copy(color = Palette.text), modifier = Modifier.padding(start = 8.dp))
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MButton("Cancel", Modifier.weight(1f), enabled = enabled) { onCancel() }
+        MButton("Send", Modifier.weight(2f), Kind.Accent, enabled = enabled) { onSend(hd) }
+    }
+}
+
+/** "Messages delete after 7 days · Keep longer": a quiet line under a chat's top bar; the tap explains the choices. */
+@Composable
+private fun KeepLine(days: Int, onTap: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Keep longer") { onTap() }
+        .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        MIcon("clock", Palette.textMuted, 14.dp)
+        Spacer(Modifier.width(6.dp))
+        Text("Messages delete after $days days", style = tinyStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Text(if (days >= io.github.ravenor907.muninn.net.Limits.LONGEST) " · Change" else " · Keep longer",
+            style = tinyStyle.copy(color = Palette.accent, fontWeight = FontWeight.SemiBold), maxLines = 1)
+    }
+}
+
+/** How messages travel to someone right now, in a few words (Person details). */
+internal fun routeShort(r: String) = when (r) {
     "close" -> "Bluetooth"
     "wifi" -> "Same Wi-Fi"
     "internet" -> "Internet"
@@ -556,7 +612,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         c.alt.contains(q, ignoreCase = true) || lastText(c)?.contains(q, ignoreCase = true) == true
     }
     val roomPreview = if (app.identity.nearbyRoom) "${around.size} around you" else "Off"
-    val showRoom = visible && (q.isEmpty() || "Nearby room".contains(q, ignoreCase = true) || roomPreview.contains(q, ignoreCase = true))
+    // The Nearby room shows once someone with Muninn is actually around (or it has messages), not as a chat nobody made.
+    val showRoom = visible && (around.isNotEmpty() || room.isNotEmpty()) &&
+        (q.isEmpty() || "Nearby room".contains(q, ignoreCase = true) || roomPreview.contains(q, ignoreCase = true))
     val nearbyKeys = nearbyRows.map { it.key }.toSet()
     // Folders are sections that fold away (like Discord categories), with the chats in no folder above them.
     // A chat in several folders shows under each. Newest first, except what was moved by hand.
@@ -640,7 +698,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             val msgs = convos[c.key].orEmpty()
             val last = msgs.lastOrNull()
             val call = lastCall[c.key]?.takeIf { it.at > (last?.time ?: 0L) }
-            PersonRow(c.name, call?.let { callPreview(it) } ?: last?.let { preview(it) } ?: routeText(app.chat.route(c.key)),
+            PersonRow(c.name, call?.let { callPreview(it) } ?: last?.let { preview(it) }
+                    ?: if (app.chat.isContact(c.key)) "Say hi to ${c.name}" else routeText(app.chat.route(c.key)),
                 call?.let { when_(it.at) } ?: last?.let { when_(it.time) } ?: "",
                 if (c.key in unread) unreadCount(msgs) else if (c.key in flagState.unread) 1 else 0, app.chat.shouldAskKeep(c.key), { Avatar(c.key, c.name, 48.dp, active = c.key in activeMap) },
                 muted = (flagState.muted[c.key] ?: 0L) > System.currentTimeMillis(),
@@ -679,8 +738,21 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                         if (ChatNav.asks > 0) Box(Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(10.dp).clip(CircleShape).background(Palette.accent))
                     }
                 }
+                // Something waiting (a group invite, someone wanting to chat, an introduction): one row at the top, so it's never missed.
+                val firstAsk = ginvites.firstOrNull()?.let { "${app.chat.contacts.get(it.from)?.shown ?: it.fromName} invited you to ${it.name}" }
+                    ?: requests.firstOrNull()?.let { "${it.name} wants to chat" }
+                val waitingAsks = requests.size + ginvites.size + intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
+                if (waitingAsks > 0) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+                    .background(Palette.goldTint).clickable(role = Role.Button) { ChatNav.open = "requests" }.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    MIcon("people", Palette.goldBright, 20.dp)
+                    Text((firstAsk ?: "Someone wants to be in touch") + if (waitingAsks > 1) " (+${waitingAsks - 1} more)" else "",
+                        style = Type.normal.copy(color = Palette.text), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+                    Text("See", style = Type.normal.copy(color = Palette.goldBright, fontWeight = FontWeight.SemiBold))
+                }
                 // Permissions still missing, the message limits note and mirrored chats: one row, one sheet.
                 FinishRow(app, onAllowNearby, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+                BackupNudge(contacts.firstOrNull { !it.groupOnly }?.shown, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
                 mirroredTo.filter { it.ok }.takeIf { it.isNotEmpty() }?.let { on ->
                     // Tap: Settings › Linked devices.
                     Text("Mirrored to ${on.joinToString(", ") { it.name }} ›", style = Type.small,
@@ -1054,11 +1126,15 @@ private fun Conversation(app: Muninn, key: String) {
     val matches = if (!searching || query.isBlank()) emptyList()
         else msgs.indices.filter { msgs[it].unsent.isEmpty() && msgs[it].text.contains(query.trim(), ignoreCase = true) }.reversed()
     LaunchedEffect(matchAt, matches.size, query) { matches.getOrNull(matchAt)?.let { list.animateScrollToItem(it) } }
+    // Like any messenger: typing, Active now, or how long messages stay. How messages travel is in Person details.
+    val keepDays = app.chat.chatDays(key)
     val status = when {
         typingNow -> "typing…"
-        activeNow -> "Active now · ${routeShort(route)}"
-        else -> "Encrypted · ${routeShort(route)}"
+        activeNow -> "Active now · $keepDays days"
+        else -> "Messages stay $keepDays days"
     }
+    var keeping by remember { mutableStateOf(false) }
+    if (keeping) KeepLongerDialog(app, key, name) { keeping = false }
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(key, name, 40.dp, active = activeNow) }, actions = {
@@ -1076,10 +1152,12 @@ private fun Conversation(app: Muninn, key: String) {
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
+        // How long messages stay, with one tap to keep them longer (a contact's chat; someone just met keeps 7 days).
+        if (c != null && !searching) KeepLine(keepDays) { keeping = true }
         // Their security key changed: say so until the code has been checked.
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
-            MButton("Check emoji code") { checkEmoji(app, key, name) }
+            MButton("Compare emoji") { checkEmoji(app, key, name) }
         }
         if (c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
             Text(if (m.theySaid) "$name wants to keep in touch" else "Keep in touch with $name?", style = Type.big)
@@ -1148,14 +1226,8 @@ private fun Conversation(app: Muninn, key: String) {
                         Text("Location and camera details are removed.", style = Type.small)
                     }
                 }
-                // Three a line; fewer at a large text size, so "High quality" isn't squeezed.
-                io.github.ravenor907.muninn.ui.ChoiceRow(3, Modifier.padding(top = 8.dp), minWidth = 88.dp, gap = 8.dp) { n, m ->
-                    when (n) {
-                        0 -> MButton("Cancel", m, enabled = !preparing) { picked = null }
-                        1 -> MButton("High quality", m, enabled = !preparing) { sendPhoto(uri, true) }
-                        else -> MButton("Send", m, Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
-                    }
-                }
+                // Send is the big button; High quality is a small switch that remembers the last choice.
+                PhotoSendRow(!preparing, onCancel = { picked = null }) { hd -> sendPhoto(uri, hd) }
             }
         }
         GifShare.pending?.let { u -> LaunchedEffect(u) { GifShare.pending = null; gifs = gifs + PendingGif(u, shared = true) } }
@@ -1205,13 +1277,13 @@ private fun Conversation(app: Muninn, key: String) {
                 Ui.say("Copied.")
             })
             if (s.mine && s.unsent.isEmpty() && !s.failed && s.photo.isEmpty() && s.text.isNotEmpty())
-                add(SheetAction("Edit", "edit", folder = "Message") {
+                add(SheetAction("Edit", "edit") {
                     if (!app.chat.hasM1(key)) Ui.say("$name needs an update for edits.", true)
                     else { replyTo = null; editing = s; text = s.text }
                 })
-            add(SheetAction((if (s.mine) "Sent " else "Received ") + clock(s.time), "clock", folder = "Message", info = true))
+            add(SheetAction((if (s.mine) "Sent " else "Received ") + clock(s.time), "clock", folder = "Info", info = true))
             if (s.mine && s.unsent.isEmpty() && !s.failed) io.github.ravenor907.muninn.net.Ticks.private(s.state, name).takeIf { it.isNotEmpty() }
-                ?.let { add(SheetAction(it, "check", folder = "Message", info = true)) }
+                ?.let { add(SheetAction(it, "check", folder = "Info", info = true)) }
             when {
                 // Mine, and it got out: take it back from both phones, or just remove it here.
                 s.mine && s.unsent.isEmpty() && !s.failed -> add(SheetAction("Unsend", "undo", danger = true) {
@@ -1240,6 +1312,7 @@ private class VoiceHooks(val allowed: () -> Boolean, val ask: () -> Unit, val se
 @Composable
 private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, voice: VoiceHooks? = null,
                      banner: (@Composable () -> Unit)? = null, onImage: ((Uri) -> Unit)? = null, onSend: () -> Unit) {
+    val onImageSet = onImage != null
     val context = LocalContext.current
     // The box keeps its own text (so the keyboard can put pictures in); [text] stays the one that counts. A change
     // from outside (sent and cleared, an emoji, a message to edit) is put in the box; typing goes back out.
@@ -1265,7 +1338,12 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
         }
     }
     var emoji by remember { mutableStateOf(false) }
-    if (emoji) EmojiPicker("Emoji", { e -> onText((text + e).take(Chat.MAX)) }) { emoji = false }
+    // GIFs come in from the keyboard (Gboard's GIF key) or the photo picker: the emoji window's GIF button says how.
+    if (emoji) EmojiPicker("Emoji", { e -> onText((text + e).take(Chat.MAX)) }, onGif = if (onImageSet && onPhoto != null) ({
+        emoji = false
+        Ui.sure(io.github.ravenor907.muninn.ui.Ask("Send a GIF", "Tap your keyboard's GIF key (on Gboard: the smiley key, then GIF), " +
+            "or pick a GIF from your photos with + › Photos.", "Open +", onConfirm = { onPhoto() }))
+    }) else null) { emoji = false }
     banner?.invoke()
     val recording by Voice.recording.collectAsState()
     var dragged by remember { mutableStateOf(0f) }
@@ -1368,6 +1446,26 @@ private fun MyCode(app: Muninn) {
 }
 
 /**
+ * A code that ran out (codes last a short time, so a lost one can't be used to reach you): who to ask, and one tap
+ * that opens Android's share sheet with a ready message to send them by any app.
+ */
+@Composable
+internal fun CodeEnded(name: String) {
+    val context = LocalContext.current
+    val who = name.ifBlank { "them" }
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        Text("That code from $who has run out. Codes only last a short time, so a lost one can't be used to reach you.", style = Type.normal)
+        MButton("Ask $who for a new code", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "send") {
+            try {
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(Intent.EXTRA_TEXT, "Hi${if (name.isBlank()) "" else " $name"}, your Muninn code ran out before I could use it. Could you send me a new one?"),
+                    "Ask for a new code"))
+            } catch (_: Exception) {}
+        }
+    }
+}
+
+/**
  * + › Add someone: the camera first. Point it at their code (or a group's invite) and it's read at once.
  * Underneath: my code, pasting a code or link, a new group, and tapping phones (with NFC).
  */
@@ -1389,8 +1487,19 @@ private fun AddSomeone(app: Muninn) {
         PageBar(if (mode == "join") "Join a group" else "Add someone")
         // Scrolls, so everything stays reachable with larger size and text settings or the keyboard up.
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+            // Like a messenger's compose button: someone already added comes first, then joining, then the camera.
+            val people = app.chat.contacts.all.collectAsState().value.filter { !it.groupOnly }
+            if (text.isBlank() && mode.isEmpty() && people.isNotEmpty())
+                MButton("Message a contact", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "chat") { mode = "pick" }
+            if (mode == "pick") {
+                people.sortedBy { it.shown.lowercase() }.forEach { p ->
+                    io.github.ravenor907.muninn.ui.NavRow(p.shown) { ChatNav.open = p.chatKey }
+                }
+                Spacer(Modifier.height(24.dp))
+                return@Column
+            }
             // Joining from a copied invite ("choose + then Join a group"): the button is at the top, above the camera.
-            if (text.isBlank() && mode.isEmpty()) MButton("Join a group", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "people") { mode = "join" }
+            if (text.isBlank() && mode.isEmpty()) MButton("Join a group", Modifier.fillMaxWidth().padding(top = 12.dp), if (people.isEmpty()) Kind.Accent else Kind.Normal, icon = "people") { mode = "join" }
             when {
                 text.isBlank() && mode.isEmpty() -> {
                     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
@@ -1412,15 +1521,14 @@ private fun AddSomeone(app: Muninn) {
                     Field(text, { text = it }, "Paste a code or link", Modifier.padding(vertical = 10.dp), single = false)
                     Text("That isn't a Muninn code.", style = Type.small.copy(color = Palette.danger))
                 }
-                Contacts.expires(text) in 1 until System.currentTimeMillis() -> Text("That code has ended. Ask for a new one.",
-                    style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 12.dp))
+                Contacts.expires(text) in 1 until System.currentTimeMillis() -> CodeEnded(found.name)
                 found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 12.dp))
                 else -> Panel(Modifier.padding(top = 12.dp)) {
                     Text("Found: ${found.name}", style = Type.big)
                     // Someone already here with a different key: adding this is a key change, so say it first.
                     val replaces = app.chat.keyChangeFor(found)
                     replaces?.let { old ->
-                        Text("New security key for ${old.shown}. Check emoji after.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+                        Text("New security key for ${old.shown}. Compare emoji after.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
                     }
                     Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         MButton("Not now", Modifier.weight(1f)) { text = "" }
@@ -1769,9 +1877,15 @@ private fun CallButton(label: String, choices: List<CallChoice>, unavailable: St
     // CI: the screenshot of the open popup.
     LaunchedEffect(ChatNav.callPick, choices.size) { if (ChatNav.callPick && choices.isNotEmpty()) { ChatNav.callPick = false; open = true } }
     Box {
-        IconAction("call", label, if (choices.isEmpty()) Palette.textSoft else Palette.text) {
-            if (choices.isEmpty()) { if (unavailable.isNotEmpty()) Ui.say(unavailable) } else open = true
-        }
+        val tint = if (choices.isEmpty()) Palette.textSoft else Palette.text
+        val tap: () -> Unit = { if (choices.isEmpty()) { if (unavailable.isNotEmpty()) Ui.say(unavailable) } else open = true }
+        // Video calls offered: a phone and a camera side by side, so video is easy to find.
+        if (choices.any { it.icon == "video" }) Row(Modifier.heightIn(min = 48.dp).clip(CircleShape).clickable(role = Role.Button) { tap() }
+            .semantics { contentDescription = "$label: voice or video" }.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            MIcon("call", tint, 21.dp)
+            Spacer(Modifier.width(8.dp))
+            MIcon("video", tint, 21.dp)
+        } else IconAction("call", label, tint) { tap() }
         DropdownMenu(expanded = open && choices.isNotEmpty(), onDismissRequest = { open = false }) {
             choices.forEach { c ->
                 DropdownMenuItem(text = { Text(c.text, style = Type.normal.copy(color = Palette.text), maxLines = 1) },
@@ -2052,6 +2166,33 @@ private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> 
     }
 }
 
+/**
+ * "Keep longer" in a group: how long its messages stay, and why. A Folk group always keeps 7 days; a Family group's
+ * admins pick 7 to 30 (in Group settings). The rules stay as they are; this only says them plainly.
+ */
+@Composable
+private fun GroupKeepDialog(s: Proto06.State, admin: Boolean, onSettings: () -> Unit, onDismiss: () -> Unit) {
+    val days = io.github.ravenor907.muninn.net.Limits.groupDays(s)
+    val family = io.github.ravenor907.muninn.net.Limits.groupType(s) == io.github.ravenor907.muninn.net.Limits.FAMILY
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.panel,
+        shape = io.github.ravenor907.muninn.ui.Corner,
+        title = { Text("How long messages stay", style = Type.big) },
+        text = {
+            Text(if (family) "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. In a Family group the admins " +
+                    "choose 7, 14 or 30 days in Group settings." + (if (admin) "" else " Ask an admin if you'd like longer.")
+                else "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. This is a Folk group, and Folk groups " +
+                    "always keep 7 days. To keep up to 30 days, make a Family group instead: people join it in person or by a code, not a link.",
+                style = Type.normal)
+        },
+        confirmButton = {
+            if (family && admin) MButton("Group settings", kind = Kind.Accent) { onSettings() } else MButton("OK") { onDismiss() }
+        },
+        dismissButton = if (family && admin) ({ MButton("Close") { onDismiss() } }) else null,
+    )
+}
+
 /** [ChannelDialog] for a new voice room (an admin's tap on "Voice rooms: talk here"). */
 private val NEW_VOICE = Proto06.Channel("", "", "voice")
 
@@ -2247,7 +2388,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
-            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted · ${io.github.ravenor907.muninn.net.Limits.groupDays(s)} days", "shield", Palette.online,
+            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
             { GroupAvatar(s.name, otherMembers, 40.dp) }, actions = {
                 // One Call button, like a person's; Mute is in the menu.
                 if (!grp.readOnly) {
@@ -2258,11 +2399,11 @@ private fun GroupConversation(app: Muninn, g: String) {
                         // Rings every member, so it asks first. To just talk, there are voice rooms.
                         if (s.members.size > 1) add(CallChoice("call", "Call everyone") {
                             val n = s.members.size - 1
-                            Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To just talk, join a voice room.", "Ring everyone",
+                            Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To talk without ringing anyone, use Drop-in call.", "Ring everyone",
                                 extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
                                 onConfirm = { RoomActivity.call(context, g, emptyList()) }))
                         })
-                        rooms.forEach { (id, n) -> add(CallChoice("audio", if (rooms.size == 1) "Join voice" else "Join voice · $n") { RoomActivity.join(context, g, id) }) }
+                        rooms.forEach { (id, n) -> add(CallChoice("audio", if (rooms.size == 1) "Drop-in call (no ringing)" else "Drop-in call · $n") { RoomActivity.join(context, g, id) }) }
                     }
                     if (choices.isNotEmpty()) CallButton("Call ${s.name}", choices)
                 }
@@ -2274,7 +2415,14 @@ private fun GroupConversation(app: Muninn, g: String) {
         RoomManager.presence.collectAsState().value
         val calls = RoomManager.groupCalls(g)
         val admin = !grp.readOnly && s.isAdmin(me)
-        if (!ChatNav.wide) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
+        // Only #general and one voice room (every new group): no chips, so it reads like one chat. They show once a
+        // second channel is added (Group settings › Channels); the voice room stays in the Call button as Drop-in call.
+        val manyChannels = s.channels.count { it.t == "text" } > 1 || s.channels.count { it.t == "voice" } > 1 || calls.isNotEmpty()
+        if (!ChatNav.wide && manyChannels) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
+        // How long messages stay, with one tap to see how to keep them longer.
+        var keepInfo by remember { mutableStateOf(false) }
+        if (!grp.readOnly && !searching) KeepLine(io.github.ravenor907.muninn.net.Limits.groupDays(s)) { keepInfo = true }
+        if (keepInfo) GroupKeepDialog(s, admin, onSettings = { keepInfo = false; ChatNav.open = "$key/settings" }) { keepInfo = false }
         // Cap g3: the group's about text (description and rules), at the top of its first channel. It never expires.
         // Paragraphs show one a line; a tap folds it to one line (kept for this run), for small screens.
         if (s.about.isNotEmpty() && ch == Proto06.MAIN) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = {
@@ -2337,14 +2485,8 @@ private fun GroupConversation(app: Muninn, g: String) {
                         Text("Location and camera details are removed.", style = Type.small)
                     }
                 }
-                // Three a line; fewer at a large text size, so "High quality" isn't squeezed.
-                io.github.ravenor907.muninn.ui.ChoiceRow(3, Modifier.padding(top = 8.dp), minWidth = 88.dp, gap = 8.dp) { n, m ->
-                    when (n) {
-                        0 -> MButton("Cancel", m, enabled = !preparing) { picked = null }
-                        1 -> MButton("High quality", m, enabled = !preparing) { sendPhoto(uri, true) }
-                        else -> MButton("Send", m, Kind.Accent, enabled = !preparing) { sendPhoto(uri, false) }
-                    }
-                }
+                // Send is the big button; High quality is a small switch that remembers the last choice.
+                PhotoSendRow(!preparing, onCancel = { picked = null }) { hd -> sendPhoto(uri, hd) }
             }
         }
         if (!grp.readOnly) GifShare.pending?.let { u -> LaunchedEffect(u) { GifShare.pending = null; gifs = gifs + PendingGif(u, shared = true) } }
@@ -2406,16 +2548,16 @@ private fun GroupConversation(app: Muninn, g: String) {
                 Ui.say("Copied.")
             })
             if (!grp.readOnly && gm.mine && gm.unsent.isEmpty() && gm.photo.isEmpty() && gm.text.isNotEmpty())
-                add(SheetAction("Edit", "edit", folder = "Message") { replyTo = null; editing = gm; text = gm.text })
-            add(SheetAction((if (gm.mine) "Sent " else "Received ") + clock(gm.time), "clock", folder = "Message", info = true))
+                add(SheetAction("Edit", "edit") { replyTo = null; editing = gm; text = gm.text })
+            add(SheetAction((if (gm.mine) "Sent " else "Received ") + clock(gm.time), "clock", folder = "Info", info = true))
             // Who reacted with what: everyone in the group sees reactions.
             val shown = io.github.ravenor907.muninn.net.Rich.shown(gm.reactions)
             if (shown.isNotEmpty()) add(SheetAction(shown.entries.joinToString(", ") { (k, e) ->
-                "$e " + (if (k == me) "You" else s.member(k)?.let { memberName(app, it) } ?: "Someone") }, "smile", folder = "Message", info = true))
-            if (gm.mine) add(SheetAction(Groups.status(gm).ifEmpty { "Sent" }, "check", folder = "Message", info = true))
+                "$e " + (if (k == me) "You" else s.member(k)?.let { memberName(app, it) } ?: "Someone") }, "smile", folder = "Info", info = true))
+            if (gm.mine) add(SheetAction(Groups.status(gm).ifEmpty { "Sent" }, "check", folder = "Info", info = true))
             // Per member: whose phones have it and whose it's still waiting for.
             if (gm.mine && gm.unsent.isEmpty()) io.github.ravenor907.muninn.net.Ticks.groupLines(gm.to, gm.delivered) { k ->
-                s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check", folder = "Message", info = true)) }
+                s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check", folder = "Info", info = true)) }
             if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly) add(SheetAction("Unsend", "undo", danger = true) {
                 Ui.sure(Ask("Unsend this message?",
                     "Removes it from everyone's phone.",
@@ -2440,7 +2582,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             }
             // Cap g3: Report to admins, through the group (an admin's older app gets a private message, when a contact).
             if (!gm.mine && gm.unsent.isEmpty() && gm.from.isNotEmpty() && !grp.readOnly && s.admins.any { it != me && it != gm.from })
-                add(SheetAction("Report to admins", "info", folder = "Message") {
+                add(SheetAction("Report to admins", "info", folder = "Info") {
                     Ui.sure(Ask("Report this message?", "Only the group's admins see it, and that it came from you.", "Report", onConfirm = {
                         val n = app.chat.groups.report(g, gm.id) { k, line -> app.chat.sendPrivate(k, line) }
                         if (n == 0) Ui.say("No admin can get it yet. They may need an update.", true)
@@ -2602,7 +2744,7 @@ private fun GroupPeople(app: Muninn, g: String) {
         PageBar("People · ${s.members.size}", "Back to ${s.name}") { ChatNav.open = Folders.groupKey(g) }
         LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
             item {
-                if (unchecked > 0) Text("Check each one's safety code in person: $unchecked to check. Tap someone, then Check emoji code.",
+                if (unchecked > 0) Text("Check each one's safety code in person: $unchecked to check. Tap someone, then Compare emoji.",
                     style = Type.small, modifier = Modifier.padding(vertical = 8.dp))
                 io.github.ravenor907.muninn.ui.Framed {
                     s.members.sortedWith(compareBy({ it.k != s.owner }, { !s.isAdmin(it.k) }, { memberName(app, it).lowercase() })).forEach { m ->

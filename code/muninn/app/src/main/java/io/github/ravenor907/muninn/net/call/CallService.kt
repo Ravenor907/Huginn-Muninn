@@ -144,9 +144,9 @@ object Ringer {
         })
     }
 
-    /** The name, unless previews are off or Muninn is panic-locked. */
+    /** The name, unless notifications show "Nothing" or Muninn is panic-locked. */
     private fun shown(c: Context, name: String): String? {
-        val preview = try { (c.applicationContext as Muninn).identity.showPreview } catch (e: Exception) { false }
+        val preview = try { (c.applicationContext as Muninn).identity.showNames } catch (e: Exception) { false }
         return if (preview && !Panic.locked.value) name else null
     }
 
@@ -161,9 +161,10 @@ object Ringer {
     fun ring(c: Context, callId: String, name: String, key: String) {
         channels(c)
         val who = if (name.isEmpty()) null else shown(c, name)
-        val person = Person.Builder().setName(who ?: "Muninn call").setImportant(true).build()
+        // "Incoming call", with the name when Settings › Notifications shows names (never while panic-locked).
+        val person = Person.Builder().setName(who ?: "Incoming call").setImportant(true).build()
         val n = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle(who ?: "Muninn").setContentText("Incoming call")
+            .setContentTitle(who ?: "Incoming call").setContentText(if (who != null) "Incoming call" else "Muninn")
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setOngoing(true).setAutoCancel(false)
             .setContentIntent(screen(c, CallActivity.SHOW))

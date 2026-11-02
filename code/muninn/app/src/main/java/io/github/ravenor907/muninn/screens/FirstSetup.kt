@@ -130,12 +130,16 @@ object Setup {
 
     private fun begin(app: Muninn, practice: Boolean) {
         val w = SetupFlow.Writes(practice, RealStore(app))
-        val facts = SetupFlow.Facts(practice, lockChosen(app), app.identity.nameAsked, allowItems(app).any { !it.allowed(app) },
+        val facts = SetupFlow.Facts(practice, lockChosen(app), app.identity.nameAsked, allowItems(app).any { !it.allowed(app) } || !app.identity.notifyChosen,
             if (practice) LinkUi.tablet(app) else LinkUi.offerFirst(app))
         w.markStarted()
         // The 7-day note is on the last page now, so the chat list doesn't say it again.
         w.noticeSeen()
         writes = w
+        hasLock = app.vault.hasPassword
+        // A new install starts on "Name only": who wrote, never what (the Allow page shows it picked). Phones that
+        // already chose keep their choice, and practice saves nothing.
+        if (!practice && !app.identity.notifyChosen) app.identity.notifyShows = io.github.ravenor907.muninn.net.Identity.Shows.NAME
         run = SetupFlow.Run(practice, SetupFlow.steps(facts))
         tick++
     }
@@ -154,6 +158,9 @@ object Setup {
         ended = Ended(r.practice, startChat)
         tick++
     }
+
+    /** A lock was set during (or before) this run: the Done page then suggests a backup. */
+    var hasLock by mutableStateOf(false)
 
     /** True while the tour is on the main screen (spots are measured only then). */
     val touring: Boolean get() { tick; return run?.step == Step.TOUR }
@@ -181,16 +188,26 @@ object Setup {
     }
 }
 
-/** One thing on the Allow page: Android's permissions for it and the one reason Muninn needs it. */
-private class AllowItem(val title: String, val reason: String, val perms: List<String>) {
-    fun allowed(c: Context) = perms.all { ContextCompat.checkSelfPermission(c, it) == PackageManager.PERMISSION_GRANTED }
+/**
+ * One thing on the Allow page: Android's permissions for it and the one reason Muninn needs it. [check] and [open]
+ * are for the two that are Android settings pages rather than permission questions (background running, full-screen calls).
+ */
+private class AllowItem(val title: String, val reason: String, val perms: List<String>,
+                        val check: ((Context) -> Boolean)? = null, val open: ((Context) -> Unit)? = null) {
+    fun allowed(c: Context) = check?.invoke(c) ?: perms.all { ContextCompat.checkSelfPermission(c, it) == PackageManager.PERMISSION_GRANTED }
 }
 
 /** What the Allow page asks for, leaving out what this device has no hardware for or Android doesn't ask about. */
 private fun allowItems(c: Context): List<AllowItem> {
     val pm = c.packageManager
+    val stay = try { (c.applicationContext as Muninn).identity.stayConnected } catch (_: Exception) { true }
     return buildList {
         if (Build.VERSION.SDK_INT >= 33) add(AllowItem("Notifications", "So you see new messages and calls.", listOf(Manifest.permission.POST_NOTIFICATIONS)))
+        // Without these two, Android pauses Muninn in the background: messages come late and calls don't ring.
+        if (stay) add(AllowItem("Run in the background", "So messages and calls arrive like texts.", emptyList(),
+            check = { io.github.ravenor907.muninn.net.MessageService.unrestricted(it) }, open = { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(it) }))
+        if (Build.VERSION.SDK_INT >= 34) add(AllowItem("Full-screen calls", "So a call rings on your lock screen.", emptyList(),
+            check = { !fullScreenOff(it) }, open = { openFullScreenSetting(it) }))
         if (pm.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)) add(AllowItem("Microphone", "For calls and voice messages.", listOf(Manifest.permission.RECORD_AUDIO)))
         if (pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) add(AllowItem("Camera", "For video calls and scanning codes.", listOf(Manifest.permission.CAMERA)))
         if (Build.VERSION.SDK_INT >= 31) add(AllowItem("Nearby devices", "To chat close by without the internet.", io.github.ravenor907.muninn.net.Ble.PERMISSIONS.toList()))
@@ -344,8 +361,12 @@ private fun LockPage(app: Muninn) {
             "You can set one any time in Settings › Lock and privacy.", "Skip") { w.skipLock(); Setup.next() })
     }, next = if (w.live) null else "Next", nextOn = drawn.isNotEmpty(), scroll = false) {
         Title("Protect Muninn")
-        Text("Opens with your pattern or password. It can't be recovered, so pick one you'll remember.", style = Type.small)
-        if (w.live) LockSetup(app, onCancel = null, fill = true) { Setup.next() }
+        // Kind, not scary: when it locks, that nobody can reset it (the owner's choice, so it stays), and what helps.
+        Text("Muninn opens with a pattern or password you choose. It locks itself after ${io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER / 60_000} minutes away; " +
+            "you can change that in Settings › Lock and privacy.", style = Type.small)
+        Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a backup after setup " +
+            "(Settings › More › Backup) to be safe.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        if (w.live) LockSetup(app, onCancel = null, fill = true) { Setup.hasLock = true; Setup.next() }
         else {
             Text(drawn.ifEmpty { "Draw a pattern: connect at least 6 dots." }, style = Type.normal, modifier = Modifier.padding(top = 12.dp))
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -355,19 +376,21 @@ private fun LockPage(app: Muninn) {
     }
 }
 
-/** "What should people call you?", with the name Muninn picked filled in, and an optional picture. */
+/** "What should people call you?", empty until they type (Skip keeps the made-up name), and an optional picture. */
 @Composable
 private fun NamePage(app: Muninn) {
     val w = Setup.writes
-    var name by remember { mutableStateOf(app.identity.username) }
+    // Empty at first, so a made-up "Raven 4821" isn't sent to their first contact by a quick Next.
+    var name by remember { mutableStateOf(if (w.live && app.identity.nameAsked) app.identity.username else "") }
     var picking by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
     Page(skip = "Skip", onSkip = { w.nameAsked(); Setup.next() }, nextOn = name.isNotBlank(), onNext = {
         w.saveName(name.trim()); w.nameAsked(); Setup.next()
     }) {
         Title("What should people call you?")
-        Text("Change it any time in Settings.", style = Type.small)
-        Field(name, { name = it.take(24) }, "A name", Modifier.padding(top = 12.dp))
+        Text("This is the name your contacts see. Change it any time in Settings.", style = Type.small)
+        Field(name, { name = it.take(24) }, "Your first name", Modifier.padding(top = 12.dp))
+        Text("Skip keeps a made-up name: ${app.identity.username}.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
         Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Avatar("me", name.ifBlank { app.identity.username }, 64.dp)
             MButton("Add a picture", Modifier.padding(start = 14.dp), icon = "image") {
@@ -395,11 +418,13 @@ private fun AllowPage(app: Muninn) {
     // Android's own screens change these behind our back: look again every little while.
     var look by remember { mutableIntStateOf(0) }
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { look++ }
+    // What notifications show: "Name only" on a new install, until they pick another. Practice keeps it here only.
+    var shows by remember { mutableStateOf(app.identity.notifyShows) }
     Page(skip = "Skip") {
         Title("Allow a few things")
         Text("Muninn only asks for what it uses.", style = Type.small)
         tick; look
-        items.forEach { item ->
+        items.forEachIndexed { i, item ->
             val ok = w.live && item.allowed(ctx)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -411,10 +436,15 @@ private fun AllowPage(app: Muninn) {
                     Text("Allowed", style = Type.small.copy(color = Palette.accent), modifier = Modifier.padding(start = 4.dp))
                 }
                 else MButton("Allow", Modifier.padding(start = 8.dp), Kind.Accent) {
-                    if (w.live) ask.launch(item.perms.toTypedArray()) else note = "Practice: Android would ask here. Nothing changes."
+                    if (!w.live) note = "Practice: Android would ask here. Nothing changes."
+                    else { val open = item.open; if (open != null) open(ctx) else ask.launch(item.perms.toTypedArray()) }
                 }
             }
+            // Right under Notifications: what they show.
+            if (i == 0 && item.title == "Notifications") NotifyShowsChoice(shows) { shows = it; if (w.live) app.identity.notifyShows = it }
         }
+        if (items.none { it.title == "Notifications" }) NotifyShowsChoice(shows) { shows = it; if (w.live) app.identity.notifyShows = it }
+        Line("Muninn keeps a quiet notification so it can listen for messages. You can hide it; messages still arrive.")
         if (note.isNotEmpty()) Line(note)
     }
 }
@@ -428,7 +458,13 @@ private fun PeoplePage(app: Muninn) {
     var scanning by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
     // A group's invite scanned or pasted here, or opened from a link during setup: the same Join card as + › Add someone.
-    var invite by remember { mutableStateOf(if (w.live) GroupLinks.parse(app, ChatNav.incoming) else null) }
+    // Read again when a link is opened while this page is up.
+    val incoming = ChatNav.incoming
+    var invite by remember(incoming) { mutableStateOf(if (w.live) GroupLinks.parse(app, incoming) else null) }
+    // Someone's contact link or code opened during setup (Taylor's "Tap to add me"): shown here to add at once.
+    var person by remember(incoming) {
+        mutableStateOf(if (w.live && GroupLinks.parse(app, incoming) == null) Contacts.unlink(incoming).takeIf { Contacts.parse(it) != null } else null)
+    }
     var pasted by remember { mutableStateOf("") }
     Page(skip = "Later", next = "Done") {
         Title("Add people")
@@ -438,7 +474,7 @@ private fun PeoplePage(app: Muninn) {
             when {
                 scanning -> QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 320.dp))) { scanned ->
                     invite = GroupLinks.parse(app, Contacts.unlink(scanned)).takeIf { !io.github.ravenor907.muninn.net.Link.isCode(scanned) }
-                    note = if (invite != null) "" else added(app, scanned)
+                    note = if (invite != null) "" else if (ended(scanned)) { person = Contacts.unlink(scanned); "" } else added(app, scanned)
                     scanning = false
                 }
                 w.live -> Qr(Contacts.link(code), side)
@@ -459,6 +495,19 @@ private fun PeoplePage(app: Muninn) {
                 else { scanning = !scanning; note = "" }
             }
         }
+        person?.let { link -> Contacts.parse(link)?.let { found -> Panel(Modifier.padding(top = 12.dp)) {
+            when {
+                Contacts.expires(link) in 1 until System.currentTimeMillis() -> CodeEnded(found.name)
+                found.chatKey == app.identity.publicKey -> Text("That's your own code.", style = Type.normal)
+                else -> {
+                    Text("Found: ${found.name}", style = Type.big)
+                    Text("From the link you opened.", style = Type.small)
+                    MButton("Add ${found.name}", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
+                        note = added(app, link); person = null; ChatNav.incoming = ""
+                    }
+                }
+            }
+        } } }
         invite?.let { p -> Panel(Modifier.padding(top = 12.dp)) {
             Text("You're invited to ${p.name.ifBlank { "a group" }}", style = Type.normal.copy(color = Palette.text))
             JoinCard(app, p) { invite = null; ChatNav.incoming = "" }
@@ -468,11 +517,19 @@ private fun PeoplePage(app: Muninn) {
         if (pasted.isNotBlank()) MButton("Add", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
             if (!w.live) { note = "Practice: their code would add them here."; pasted = ""; return@MButton }
             val p = GroupLinks.parse(app, Contacts.unlink(pasted.trim()))
-            if (p != null && !io.github.ravenor907.muninn.net.Link.isCode(pasted)) { invite = p; note = "" } else note = added(app, pasted.trim())
+            if (p != null && !io.github.ravenor907.muninn.net.Link.isCode(pasted)) { invite = p; note = "" }
+            else if (ended(pasted.trim())) { person = Contacts.unlink(pasted.trim()); note = "" }
+            else note = added(app, pasted.trim())
             pasted = ""
         }
         if (note.isNotEmpty()) Line(note, Palette.text)
     }
+}
+
+/** A contact code or link that has run out (shown with "Ask them for a new code"). */
+private fun ended(scanned: String): Boolean {
+    val text = Contacts.unlink(scanned)
+    return Contacts.parse(text) != null && Contacts.expires(text) in 1 until System.currentTimeMillis()
 }
 
 /** A code scanned on the Add people page: added (said back), or why not. */
@@ -480,7 +537,7 @@ private fun added(app: Muninn, scanned: String): String {
     val text = Contacts.unlink(scanned)
     if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) return "That's a link code. Use Settings › Linked devices."
     val found = Contacts.parse(text) ?: return "That isn't a Muninn code."
-    if (Contacts.expires(text) in 1 until System.currentTimeMillis()) return "That code has ended. Ask for a new one."
+    if (Contacts.expires(text) in 1 until System.currentTimeMillis()) return "That code from ${found.name.ifBlank { "them" }} has run out. Ask them for a new one."
     if (found.chatKey == app.identity.publicKey) return "That's your own code."
     app.chat.addContact(found)
     // A one-time code: say hi at once, which adds me on their phone too.
@@ -508,7 +565,9 @@ private fun DonePage() {
             Box(Modifier.size(72.dp).clip(CircleShape).background(Palette.accentFill).border(2.dp, Palette.accent, CircleShape),
                 contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
             Text("You're set.", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
-            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. Groups can choose to keep them longer.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. To keep a chat longer, tap “Keep longer” at the top of it.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › More › Backup. If you ever forget your lock, a backup brings your chats back.",
+                style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             if (practice) Text("Practice ends here and goes back to Labs.", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
     }

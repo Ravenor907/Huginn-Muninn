@@ -108,10 +108,13 @@ private fun openAppSettings(ctx: Context, notifications: Boolean) {
 private class Todo(val id: String, val title: String, val detail: String, val button: String, val run: () -> Unit)
 
 private const val FINISH_HIDDEN = "finishHidden"
+/** Until when the row's X put it away (ms): a week, never for good. Settings › Notifications still lists what's off. */
+private const val FINISH_SNOOZED = "finishSnoozed"
+private const val WEEK = 7L * 86_400_000L
 
 /**
- * "1 thing to finish" on the chat list: the permissions Muninn still needs, and close-by chat, as one row that opens a small sheet. The row can be put away;
- * it comes back when something new is added. Never on a Kids' TV (a parent sets that up from the TV's own checklist).
+ * "1 thing to finish" on the chat list: the permissions Muninn still needs, and close-by chat, as one row that opens a small sheet. The row can be
+ * snoozed for a week; it comes back after that, or sooner when something new is added. Never on a Kids' TV (a parent sets that up from the TV's own checklist).
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -136,7 +139,8 @@ fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modif
     LaunchedEffect(Unit) {
         if (!prefs.getBoolean(KEEP_NOTICE, false)) { prefs.edit().putBoolean(KEEP_NOTICE, true).remove("limitsNote").apply(); io.github.ravenor907.muninn.ui.Ui.sure(keepNotice()) }
     }
-    var hidden by remember { mutableStateOf(prefs.getStringSet(FINISH_HIDDEN, null).orEmpty()) }
+    // Snoozed: only what was showing then stays away, and only for a week.
+    var hidden by remember { mutableStateOf(if (prefs.getLong(FINISH_SNOOZED, 0L) > System.currentTimeMillis()) prefs.getStringSet(FINISH_HIDDEN, null).orEmpty() else emptySet()) }
     var open by remember { mutableStateOf(false) }
     val todos = buildList {
         if (closeError == io.github.ravenor907.muninn.net.Ble.PERMISSION_TEXT) add(Todo("close", "Chat close by", "Works without the internet.", "Allow") { onAllowNearby() })
@@ -161,9 +165,10 @@ fun FinishRow(app: Muninn, onAllowNearby: () -> Unit, modifier: Modifier = Modif
         }
         Text(if (shown.size == 1) "1 thing to finish" else "${shown.size} things to finish", style = Type.normal.copy(color = Palette.text),
             modifier = Modifier.weight(1f).padding(start = 12.dp))
-        IconAction("close", "Hide", Palette.textMuted, size = 18.dp) {
+        IconAction("close", "Remind me in a week", Palette.textMuted, size = 18.dp) {
             hidden = hidden + shown.map { it.id }
-            prefs.edit().putStringSet(FINISH_HIDDEN, hidden).apply()
+            prefs.edit().putStringSet(FINISH_HIDDEN, hidden).putLong(FINISH_SNOOZED, System.currentTimeMillis() + WEEK).apply()
+            io.github.ravenor907.muninn.ui.Ui.say("Hidden for a week.")
         }
     }
     if (open) {

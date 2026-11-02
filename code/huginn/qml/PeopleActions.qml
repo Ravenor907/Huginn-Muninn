@@ -196,9 +196,9 @@ QtObject {
     // How long messages stay with them: only for someone in Family or Work (the shorter side counts).
     function daysMenu(k, back) {
         const l = Chat.limitInfo(k)
-        if (!l.close) { Ui.say(l.days + " days. Family or Work can choose."); return }
+        if (!l.close) { Ui.note("How long messages stay", "Messages with them delete after " + l.days + " days, so old chats can't leak. To keep them longer, put them in Family or Work (Folders and role), then pick 14 or 30 days. Only people in those two get longer. They pick too, and the shorter time wins."); return }
         const note = l.older ? "Their app keeps all until updated" : l.d1 ? "They keep " + l.theirs + ". Shorter counts" : ""
-        Ui.pickFrom("Message days", [{ header: note, items: l.choices.map(d => ({ name: d + " days", url: String(d), check: d === l.mine })) }],
+        Ui.pickFrom("How long messages stay", [{ header: note, items: l.choices.map(d => ({ name: d + " days", url: String(d), check: d === l.mine })) }],
                     d => { Chat.setKeep(k, Number(d)); if (back) Qt.callLater(back) }, back)
     }
 

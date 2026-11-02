@@ -133,7 +133,9 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
     Box(Modifier.fillMaxSize().background(Palette.ground)) {
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally) {
-        TopBar(onBack)
+        // The ways the call travels: behind a tap on the encrypted line, so the screen says only who and how long.
+        var ways by remember { mutableStateOf(false) }
+        TopBar(onBack) { ways = !ways }
         if (c == null) {
             Spacer(Modifier.weight(1f))
             Text("No call right now", style = Type.big)
@@ -150,11 +152,11 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
             Spacer(Modifier.height(6.dp))
             Text(status(c), style = Type.normal.copy(fontSize = 17.sp, color = Palette.textMuted), textAlign = TextAlign.Center)
             if (c.peerMuted && c.phase == Phase.LIVE) Text("$name is muted", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-            if (c.phase != Phase.INCOMING && c.phase != Phase.ENDED) {
+            if (ways && c.phase != Phase.INCOMING && c.phase != Phase.ENDED) {
                 Spacer(Modifier.height(24.dp))
                 Paths(c)
                 Spacer(Modifier.height(10.dp))
-                Text("Muninn keeps every way open, so walking away doesn't drop the call", style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
+                Text("It uses every way it can, so the call keeps going if you walk away.", style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
             }
             if (c.note.isNotEmpty() && c.phase != Phase.ENDED) Text(c.note, style = Type.small.copy(color = Palette.danger), textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 10.dp))
@@ -164,13 +166,14 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
     }
 }
 
-/** Back to the chat, and the "End-to-end encrypted" line. */
+/** Back to the chat, and the "End-to-end encrypted" line ([onShield]: a tap shows how the call travels). */
 @Composable
-private fun TopBar(onBack: () -> Unit) {
+private fun TopBar(onBack: () -> Unit, onShield: (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onBack).semantics { contentDescription = "Back to chat" },
             contentAlignment = Alignment.Center) { Glyph(CallIcons.down, Palette.text, 24.dp) }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).heightIn(min = 48.dp).then(if (onShield != null) Modifier.clickable(onClickLabel = "How the call connects") { onShield() } else Modifier),
+            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Glyph(CallIcons.shield, CallColors.encrypted, 14.dp, 2f)
             Spacer(Modifier.width(6.dp))
             Text("End-to-end encrypted", style = Type.small.copy(fontSize = 13.sp, color = CallColors.encrypted))

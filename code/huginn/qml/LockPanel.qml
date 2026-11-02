@@ -130,8 +130,8 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.lead !== "" ? panel.lead + "\n" : "") + (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : panel.mode === "setup" ? (panel.usePattern ? "Keeps your chats private on this computer. Connect at least 6 dots. It can't be recovered, so pick one you'll remember."
-                                                                : "Keeps your chats private on this computer. It can't be recovered, so pick one you'll remember. A few words make a good password.")
+                  : panel.mode === "setup" ? (panel.usePattern ? "Keeps your chats private on this computer. Connect at least 6 dots. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Backup)."
+                                                                : "Keeps your chats private on this computer. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Backup). A few words make a good password.")
                   : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }

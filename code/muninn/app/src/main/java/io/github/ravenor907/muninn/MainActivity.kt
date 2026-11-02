@@ -408,7 +408,7 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun title(t: String) = when (t) { "files" -> "Files"; "contacts" -> "Contacts"; "settings" -> "Settings"; else -> "Muninn" }
+    private fun title(t: String) = when (t) { "files" -> "Share nearby"; "contacts" -> "Contacts"; "settings" -> "Settings"; else -> "Muninn" }
 
     private fun toggleSettings() {
         if (tab == "settings") tab = beforeSettings else show("settings")
@@ -633,7 +633,7 @@ class MainActivity : ComponentActivity() {
         Column(Modifier.fillMaxWidth().bar(Palette.groundDeep, top = true)) {
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
             Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 10.dp)) {
-                listOf("chat" to ("chat" to "Chats"), "files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
+                listOf("chat" to ("chat" to "Chats"), "files" to ("folder" to "Share nearby"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
                     val tint = if (on) Palette.goldBright else Palette.textMuted
                     Column(Modifier.weight(1f).then(if (id == "files") Modifier.tourSpot("files") else Modifier).heightIn(min = 48.dp).clickable(role = Role.Tab) { if (id == "chat" && tab == "chat") toList() else show(id) }
@@ -703,7 +703,7 @@ class MainActivity : ComponentActivity() {
                 // Groups can be many: the top part scrolls, the tabs below stay put.
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)) { RailSpaces() }
-                listOf("files" to ("folder" to "Files"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
+                listOf("files" to ("folder" to "Share nearby"), "contacts" to ("people" to "Contacts")).forEach { (id, v) ->
                     val on = tab == id
                     Box(if (id == "files") Modifier.tourSpot("files") else Modifier) {
                         RailButton(v.second, on, round = true, fill = if (on) Palette.field else androidx.compose.ui.graphics.Color.Transparent,

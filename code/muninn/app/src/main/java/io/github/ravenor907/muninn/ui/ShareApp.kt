@@ -26,15 +26,24 @@ object ShareApp {
         return out
     }
 
-    /** Copies (off the main thread) and opens the share sheet. */
+    /** What the other person does with the file, said before sharing and sent with it (where the app takes text too). */
+    const val STEPS = "To install it:\n1. Open the file.\n2. If asked, allow installs from that app (Files or Quick Share).\n" +
+        "3. If Play Protect warns, tap More details, then Install anyway."
+
+    /** The install steps first (to read out or screenshot), then Share copies the app and opens the share sheet. */
     fun share(context: Context) {
+        Ui.sure(Ask("Share Muninn", "Android warns about apps from outside the Play Store. Tell them:\n\n$STEPS", "Share") { send(context) })
+    }
+
+    /** Copies (off the main thread) and opens the share sheet. */
+    private fun send(context: Context) {
         Ui.say("Getting Muninn ready to share…")
         Thread {
             val intent = try {
                 val apk = copy(context)
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
                 Intent.createChooser(Intent(Intent.ACTION_SEND).setType(MIME).putExtra(Intent.EXTRA_STREAM, uri)
-                    .putExtra(Intent.EXTRA_TITLE, "Muninn.apk").also { it.clipData = ClipData.newRawUri("Muninn.apk", uri) }
+                    .putExtra(Intent.EXTRA_TITLE, "Muninn.apk").putExtra(Intent.EXTRA_TEXT, "Muninn, a private messenger. $STEPS").also { it.clipData = ClipData.newRawUri("Muninn.apk", uri) }
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share Muninn")
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (e: Exception) { null }

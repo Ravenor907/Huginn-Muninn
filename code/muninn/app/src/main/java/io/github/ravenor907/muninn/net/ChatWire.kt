@@ -167,7 +167,7 @@ object ChatWire {
     fun afterKeyChange(old: Contact, c: Contact) = Contact(c.chatKey, c.name.ifBlank { old.name }, c.mailbox, verified = false,
         invite = c.invite, ratchet = false, nickname = old.nickname, keyChanged = true)
 
-    fun keyChangedText(name: String) = "$name's security key changed. Check the code with them before trusting new messages."
+    fun keyChangedText(name: String) = "$name has a new phone or reinstalled Muninn. Compare 4 emoji with them to be sure it's really $name."
 
     /** Nickname from the Rename box: empty means their own name. */
     fun nickname(text: String): String? = text.trim().take(40).ifEmpty { null }
