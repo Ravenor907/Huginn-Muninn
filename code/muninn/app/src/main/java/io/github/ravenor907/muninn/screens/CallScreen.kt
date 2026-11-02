@@ -260,7 +260,10 @@ private fun VideoCall(c: CallManager.Ui, video: CallVideo.State, showRemote: Boo
             else Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                 Avatar(if (name == c.name) c.peerKey else "", name, c.peerSpeaking && c.phase == Phase.LIVE)
             }
-            if (showSelf) SelfView(Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp).size(width = 96.dp, height = 128.dp))
+            // Sideways the camera's picture is sideways too: a wide self view, not a slit.
+            val wideSelf = androidx.compose.ui.platform.LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp }
+            if (showSelf) SelfView(Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp)
+                .size(width = if (wideSelf) 128.dp else 96.dp, height = if (wideSelf) 96.dp else 128.dp))
         }
     }
     val strip: @Composable () -> Unit = {

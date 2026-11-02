@@ -14,9 +14,11 @@ QtObject {
     // Short, like Muninn's: Find, Media and files, Mute and Details first; then Notifications, Mark unread
     // and Add to group; everything else under More (contactMore).
     function has(fn) { return typeof Chat[fn] === "function" }
+    // Locked (Main.lockedOut): no one's menu opens and nothing is sent.
+    function locked() { return !!Ui.main && Ui.main.lockedOut === true }
     function contactMenu(k, n, ctx) {
         const c = ctx || {}
-        if (!k) return
+        if (!k || locked()) return
         const name = c.tour ? n : (Chat.nameOf(k) || n)
         const contact = !!c.tour || Chat.isContact(k)
         const top = []
@@ -176,7 +178,7 @@ QtObject {
     // ctx: { hasChat, removed (called before Hide, Block or Delete chat) }.
     function nearbyMenu(k, n, ctx) {
         const c = ctx || {}
-        if (!k) return
+        if (!k || locked()) return
         const items = [{ name: "Message", icon: "thread", url: "message" },
                        { name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: Chat.isMuted(k) ? "bell" : "belloff", url: "mute" },
                        { name: "Hide", icon: "close", url: "hide" },
@@ -211,7 +213,7 @@ QtObject {
     // moved besides dragging it.
     function personMenu(k, n, ctx) {
         const c = ctx || {}
-        if (!k) return
+        if (!k || locked()) return
         const name = c.tour ? n : (Chat.nameOf(k) || n)
         const contact = !!c.tour || (!c.near && Chat.isContact(k))
         const blocked = !c.tour && Chat.isBlocked(k)
@@ -295,7 +297,7 @@ QtObject {
     // Notifications, Mark as read, Channels, Group settings, More (the group's own menu), Leave. ctx: { tour }.
     function groupRowMenu(g, n, ctx) {
         const c = ctx || {}
-        if (!g) return
+        if (!g || locked()) return
         const k = "g:" + g
         const info = c.tour ? { amAdmin: true } : Chat.groupInfo(g)
         const row = c.tour ? {} : (Chat.groups.find(x => x.id === g) || {})
@@ -364,7 +366,7 @@ QtObject {
     // who: { key, name, me, contact }; ctx: { group (its id, "" outside one), host (GroupPage), member (their entry there), tour }.
     function memberMenu(who, ctx) {
         const c = ctx || {}
-        if (!who || !who.key) return
+        if (!who || !who.key || locked()) return
         const me = !!who.me, g = c.group || ""
         if (!me && c.member && c.host && typeof c.host.memberMenu === "function") { c.host.memberMenu(c.member); return }
         const name = who.name || (c.tour ? "" : Chat.nameOf(who.key)) || "Someone"
@@ -538,7 +540,7 @@ QtObject {
     }
     // Send to someone: files picked first (Files), then who gets them: people, groups, and LocalSend devices nearby.
     function sendPicker(urls) {
-        if (!urls.length) return
+        if (!urls.length || locked()) return
         const people = Chat.people.filter(c => c.contact && !c.blocked).map(c => ({ name: c.name, icon: "person", url: "p:" + c.key }))
         const groups = Chat.groups.filter(g => !g.readOnly).map(g => ({ name: g.name, icon: "people", url: "g:" + g.id }))
         const nearby = LocalSend.devices.filter(d => !d.chatKey).map(d => ({ name: "Nearby: LocalSend · " + d.alias, icon: "network", url: "l:" + d.id }))

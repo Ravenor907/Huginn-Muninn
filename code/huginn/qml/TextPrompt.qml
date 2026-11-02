@@ -26,6 +26,8 @@ Item {
     property string moreText: ""
     property bool moreOpen: false
     readonly property bool cards: choices.some(c => !!c.detail)
+    // Set after opening (Ui.askAppend): the most characters the answer may hold, 0 for no limit.
+    property int limit: 0
     signal accepted(string text)
     signal cancelled()
 
@@ -63,6 +65,7 @@ Item {
         moreLabel = ""
         moreText = ""
         moreOpen = false
+        limit = 0
         draftKey = t + "|" + (ctx || "") + "|" + (initial || "")
         const draft = isPassword ? "" : (drafts[draftKey] || "")
         field.text = draft || initial || ""
@@ -73,9 +76,17 @@ Item {
         field.select(0, dot > 0 && !isPassword ? dot : field.text.length)
         System.showSteamKeyboard()
     }
+    // A draft carried on (Ui.askAppend): the cursor after it, nothing selected.
+    function cursorToEnd() {
+        const f = multiLine ? area : field
+        f.deselect()
+        f.cursorPosition = f.text.length
+    }
     function accept() {
         const t = raw && !multiLine ? typed : typed.trim()
         if (!raw && t.length === 0) return
+        // Too long to send: say so and keep it here, never cut.
+        if (limit > 0 && Ui.textLength(t) > limit) { Ui.say(Ui.tooLongText(Ui.textLength(t)), true); return }
         if (drafts[draftKey] !== undefined) { const d = Object.assign({}, drafts); delete d[draftKey]; drafts = d }
         visible = false
         System.hideSteamKeyboard()
@@ -339,7 +350,7 @@ Item {
     readonly property bool canPaste: visible && (multiLine ? area.canPaste : field.canPaste)
     readonly property bool ltTalks: TalkKey.padButton === "lt" && Settings.pushToTalk && Rooms.inRoom
     readonly property string moreKey: !canPaste ? "x" : ltTalks ? "down" : "lt"
-    readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }, { key: "y", label: "Keyboard" }].concat(
+    readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }].concat(System.keyboardAvailable() ? [{ key: "y", label: "Keyboard" }] : [],
         canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: moreKey, label: moreLabel }] : [])
     function handleButton(b) {
         switch (b) {

@@ -51,11 +51,20 @@ Q_SIGNALS:
     void captured(const QByteArray &pcm);
     void error(const QString &text);
     void outputsChanged();
+    // A device change the call followed by itself ("Microphone: USB headset"), for a toast.
+    void deviceNotice(const QString &text);
 
 private:
     bool startInput();
+    void stopInput();
     bool startOutput();
     void stopOutput();
+    // The microphone and speaker it would open now (Settings' pick while it's plugged in, else the default).
+    static QAudioDevice inputWanted();
+    QAudioDevice outputWanted() const;
+    // Microphones or speakers came or went, or the open microphone stopped by itself: follow them while running.
+    void followInputs();
+    void followOutputs();
     void onInput();
     void pump();
     static QAudioFormat wanted();
@@ -74,6 +83,9 @@ private:
     QByteArray m_pending;          // converted output bytes the sink had no room for yet
     QTimer m_pump;
     QString m_outputId;
+    QAudioDevice m_inDev, m_outDev;   // what's open now
+    QByteArray m_lastMic;             // the microphone opened last (a toast only when it changes)
+    qint64 m_inRestartAt = 0;         // the last time a stopped microphone was opened again (at most once a second)
     bool m_running = false;
     TvVoice *m_voice = nullptr;    // the echo canceller, while running (null without it in the build)
     std::vector<qint16> m_clean;   // a processed microphone frame

@@ -15,6 +15,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -146,7 +147,9 @@ fun TvRoot(app: Muninn) {
     }) {
         // The Seasonal look's leaves or snow fall behind everything (nothing is drawn in the other looks).
         io.github.ravenor907.muninn.ui.SeasonFall()
-        if (!ready) TvStarting(app)
+        // A release that kept crashing as it started: only the updater runs, looking for a fixed one (SafeStart).
+        if (SafeStart.active) TvNote(SAFE_TITLE, SAFE_LINE)
+        else if (!ready) TvStarting(app)
         else {
             val st by KidTv.state.collectAsState()
             val wiping by KidTv.wiping.collectAsState()
@@ -167,6 +170,9 @@ fun TvRoot(app: Muninn) {
         ask?.let { AskDialog(it) }
     }
 }
+
+private const val SAFE_TITLE = "Muninn is waiting for a fix"
+private const val SAFE_LINE = "It looks for a new version every hour. A parent can also install Muninn again."
 
 @Composable
 private fun TvStarting(app: Muninn) {
@@ -196,7 +202,7 @@ private fun TvNote(title: String, detail: String = "") {
 @Composable
 private fun TvFileBanner(b: io.github.ravenor907.muninn.net.TransferView.Banner, modifier: Modifier) {
     val shape = RoundedCornerShape(14.dp)
-    Column(modifier.padding(24.dp).widthIn(max = 460.dp).clip(shape).background(if (b.ok) Palette.raised else Palette.dangerFill)
+    Column(modifier.padding(horizontal = 48.dp, vertical = 27.dp).widthIn(max = 460.dp).clip(shape).background(if (b.ok) Palette.raised else Palette.dangerFill)
         .border(2.dp, if (b.ok) Palette.goldBright else Palette.danger, shape).padding(horizontal = 22.dp, vertical = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             MIcon(when { !b.ok -> "info"; !b.running -> "check"; b.line.startsWith("Sending") -> "upload"; else -> "download" },
@@ -215,7 +221,7 @@ private fun TvToast(modifier: Modifier) {
     val toast by Ui.toast.collectAsState()
     LaunchedEffect(toast) { if (toast != null) { delay(4500); Ui.toast.value = null } }
     toast?.let { (text, bad) ->
-        Row(modifier.padding(24.dp).clip(RoundedCornerShape(13.dp)).background(if (bad) Palette.dangerFill else Palette.raised).padding(horizontal = 24.dp, vertical = 16.dp),
+        Row(modifier.padding(horizontal = 48.dp, vertical = 27.dp).clip(RoundedCornerShape(13.dp)).background(if (bad) Palette.dangerFill else Palette.raised).padding(horizontal = 24.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically) {
             val icon = when { text == "Sent" && !bad -> "check"; text in TvWords.ALL -> TvWords.icon(text); else -> "info" }
             MIcon(icon, if (bad) Palette.danger else Palette.goldBright, 30.dp)
@@ -239,14 +245,25 @@ private const val PAIR_RETRY_MS = 3_000L
 @Composable
 private fun TvPairing(app: Muninn) {
     var code by remember { mutableStateOf(try { KidTv.pairingCode(app) } catch (e: Exception) { "" }) }
+    /** When the code was made, by the clock (a device asleep overnight doesn't count uptime, the invite's hour does). */
+    var madeAt by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val tv = KidMode.isTv(LocalContext.current)
-    // The invite in the code lasts an hour: show a fresh one before it runs out. A code that couldn't be made is tried
-    // again within seconds.
+    fun remake() { try { code = KidTv.pairingCode(app); madeAt = System.currentTimeMillis() } catch (_: Exception) {} }
+    // The invite in the code lasts an hour: a fresh one well before it runs out, looked at every minute and on every return
+    // to the screen (after the TV slept). A code that couldn't be made is tried again within seconds.
     LaunchedEffect(Unit) {
         while (true) {
-            delay(if (code.isEmpty()) PAIR_RETRY_MS else 50 * 60_000L)
-            try { code = KidTv.pairingCode(app) } catch (_: Exception) {}
+            delay(if (code.isEmpty()) PAIR_RETRY_MS else 60_000L)
+            if (code.isEmpty() || KidRules.codeStale(madeAt, System.currentTimeMillis())) remake()
         }
+    }
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME && (code.isEmpty() || KidRules.codeStale(madeAt, System.currentTimeMillis()))) remake()
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
     }
     // When Back went down (0: up; -1: the hold already counted, until it comes up).
     var backDown by remember { mutableLongStateOf(0L) }
@@ -261,7 +278,10 @@ private fun TvPairing(app: Muninn) {
     }
     BackHandler {}
     Raven(Modifier)
-    Column(Modifier.fillMaxSize().focusRequester(root)
+    // Centred when it fits; on a phone held sideways at a large size it scrolls, so "Use Muninn normally" stays in reach.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val fullH = maxHeight
+    Column(Modifier.fillMaxWidth().focusRequester(root)
         .onPreviewKeyEvent { e ->
             if (e.key != Key.Back) return@onPreviewKeyEvent false
             when (e.type) {
@@ -274,7 +294,7 @@ private fun TvPairing(app: Muninn) {
                 else -> true
             }
         }
-        .focusable().padding(32.dp),
+        .focusable().verticalScroll(rememberScrollState()).heightIn(min = fullH).padding(32.dp),
         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         if (code.isNotEmpty()) Qr(Contacts.link(code), if (tv) 380.dp else 260.dp)
         else Text("Making the code…", style = tvText(26.sp, Palette.textMuted))
@@ -288,6 +308,7 @@ private fun TvPairing(app: Muninn) {
             modifier = Modifier.padding(top = 28.dp).clickable(role = Role.Button) {
                 Ui.sure(Ask("Use Muninn normally?", "This device gets a lock and Settings.", "Use normally") { KidMode.useNormally(app) })
             }.padding(12.dp))
+    }
     }
     LaunchedEffect(Unit) { delay(80); try { root.requestFocus() } catch (_: Exception) {} }
 }
@@ -333,6 +354,28 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     if (parent) KidParentArea(app, cfg, tv) { parent = false }
     TvAllow(app)
     TvUpdatePrompt(tv)
+    KidCallBar(tv)
+}
+
+/**
+ * A call ringing or on while the kids' screens show (the call screen went behind, or came up over nothing): one big
+ * button back to it, where Answer or Hang up is. On a TV it stays until the call is answered or over; on a tablet or
+ * phone Back puts it away for this call.
+ */
+@Composable
+private fun KidCallBar(tv: Boolean) {
+    val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
+    val c = call
+    var hidden by remember { mutableStateOf("") }
+    if (c == null || !KidCallBack.live(c.phase) || hidden == c.callId) return
+    val context = LocalContext.current
+    val ringing = c.phase == io.github.ravenor907.muninn.net.call.CallSession.Phase.INCOMING
+    TvDialog(onBack = { if (tv) io.github.ravenor907.muninn.screens.CallActivity.show(context) else hidden = c.callId }) {
+        MIcon("call", Palette.goldBright, 72.dp)
+        Text(if (ringing) "${c.name} is calling" else "On a call with ${c.name}", style = tvTitle(if (tv) 34.sp else 24.sp),
+            textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+        DialogButtons(listOf((if (ringing) "Go to the call" else "Back to the call") to { io.github.ravenor907.muninn.screens.CallActivity.show(context) }))
+    }
 }
 
 /**
@@ -460,12 +503,12 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, quiet: QuietTim
             Text(TvWords.ASK_PARENT, style = tvTitle(34.sp), modifier = Modifier.padding(top = 16.dp))
         }
         // "For a parent" stays in reach with nobody on the list.
-        Box(Modifier.fillMaxSize()) { ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 20.dp, end = 36.dp), onClick = onParent) }
+        Box(Modifier.fillMaxSize()) { ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 27.dp, end = 48.dp), onClick = onParent) }
         return
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Raven(Modifier.align(Alignment.TopStart))
-        ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 20.dp, end = 36.dp), onClick = onParent)
+        ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 27.dp, end = 48.dp), onClick = onParent)
         if (quiet != null) QuietLine(quiet, tv = true, modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp))
         LazyRow(Modifier.fillMaxWidth(), state = list,
             horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),
@@ -559,6 +602,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     val dictate = cfg.dictation && canDictate && KidRules.canSend(cfg.chat, "say")
     val voice = mic && KidRules.canSend(cfg.chat, "voice")
     var sent by remember { mutableStateOf("") }
+    var sentAt by remember { mutableLongStateOf(0L) }
     /** A photo shown full screen (its message id); Back goes back to the conversation. */
     var viewing by remember { mutableStateOf<String?>(null) }
     /** A long message shown whole (its message id); Back or OK goes back to the conversation. */
@@ -591,17 +635,44 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             Voice.stopPlaying()
         }
     }
-    LaunchedEffect(msgs.size) { KidChats.markRead(app, p.k) }
+    // Muninn on screen: Home, the TV going off or a show in front pause this conversation (nothing plays, nothing is marked
+    // read, and a recording or Say it in progress is dropped, never sent).
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    var shown by remember { mutableStateOf(owner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) }
+    DisposableEffect(owner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            when (e) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> shown = true
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> shown = false
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> { cancel(); Voice.stopPlaying() }
+                else -> {}
+            }
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
+    }
+    // A call coming in (or going out) drops a recording in progress: the call has the microphone.
+    val callNow by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
+    LaunchedEffect(callNow != null) { if (callNow != null) cancel() }
+    // Seen only while on screen: back on screen, what came meanwhile is marked read.
+    LaunchedEffect(msgs.size, shown) { if (shown) KidChats.markRead(app, p.k) }
     // Whether their app takes calls isn't known until it says so: ask once (shared/docs/protocol.md 1.2).
     LaunchedEffect(p.k) { if (!KidChats.isGroup(p.k)) app.chat.probeCaps(p.k) }
-    // A voice message that arrives while this screen is open plays out loud by itself.
+    // A voice message that arrives while this screen is on screen plays out loud by itself (one that came while Muninn was
+    // away plays when it's back).
     val newest = msgs.lastOrNull()
-    LaunchedEffect(newest?.id) {
-        if (newest != null && !newest.mine && newest.voice > 0 && newest.time >= openedAt && overlay == null)
+    LaunchedEffect(newest?.id, shown) {
+        if (shown && newest != null && !newest.mine && newest.voice > 0 && newest.time >= openedAt && overlay == null && callNow == null)
             app.chat.photo(newest.photo)?.let { Voice.play(newest.id, it) }
     }
     LaunchedEffect(playing) { while (playing.isNotEmpty()) { Voice.tick(); delay(200) } }
-    LaunchedEffect(sent) { if (sent.isNotEmpty()) { delay(2000); sent = "" } }
+    // "Sending…" until the relay took it ("Sent"), then a moment more; one that can't go yet keeps saying so a while.
+    val sentState = if (sent.isEmpty()) "" else {
+        val q = cfg.quick.firstOrNull { it.id == sent }
+        val m = q?.let { x -> msgs.lastOrNull { it.mine && it.text == x.text && it.time >= sentAt - 2_000L } }
+        if (m == null) "Sending" else KidK14.sendState(true, m.state, m.failed, p.k in cfg.wait).ifEmpty { "Sending" }
+    }
+    LaunchedEffect(sent, sentState) { if (sent.isNotEmpty()) { delay(if (sentState == "Sent") 2000 else 8000); sent = "" } }
     BackHandler { onBack() }
 
     // The microphone is asked for when a parent pairs the TV (or from their phone), never by a child's press:
@@ -644,15 +715,21 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     val first = remember { FocusRequester() }
     fun req(id: String) = if (id == firstId) first else null
 
-    Row(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 32.dp), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+    // The remote's search or mic button: a voice message (or Say it, by the parent's level), never the system's search.
+    Row(Modifier.fillMaxSize().onPreviewKeyEvent { e ->
+        if (!KidRules.isMicKey(e.nativeKeyEvent.keyCode)) return@onPreviewKeyEvent false
+        if (e.type == KeyEventType.KeyUp && overlay == null) { if (voice) record() else if (dictate) listen() }
+        true
+    }.padding(horizontal = 48.dp, vertical = 32.dp), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
         Column(Modifier.width(260.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
             Reachable(app, p)
             Text(p.n, style = tvTitle(34.sp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
             // The last messages sit at the bottom; when they're taller than the room left, they scroll and the newest shows.
             Box(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.BottomStart) {
                 Column(Modifier.verticalScroll(rememberScrollState(), reverseScrolling = true), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    // The kid's own messages say how they're doing (Sending, Sent, Waiting), as on a tablet or phone.
                     msgs.takeLast(3).forEach { TalkBubble(app, it, playing, onText = { reading = it.id }, onVideo = { video = it.id }, onPoll = { poll = it.id },
-                        who = if (KidChats.isGroup(p.k)) "" else p.n) { viewing = it.id } }
+                        who = if (KidChats.isGroup(p.k)) "" else p.n, status = KidK14.sendState(it.mine, it.state, it.failed, p.k in cfg.wait)) { viewing = it.id } }
                 }
             }
         }
@@ -666,9 +743,11 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             }
             if (quick.isNotEmpty()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 quick.forEach { q ->
-                    QuickTile(if (sent == q.id) "Sent" else q.text, sent == q.id, req(q.id), Modifier.weight(1f)) {
-                        // While it says Sent, more presses do nothing: one message per press-and-wait.
-                        if (sent != q.id) { KidChats.sendText(app, p.k, q.text); sent = q.id }
+                    // "Sending…" on the press, "Sent" only once the relay took it, "Waiting" while it can't go yet.
+                    val label = if (sent == q.id) KidK14.tileWord(sentState) else q.text
+                    QuickTile(label, sent == q.id && sentState == "Sent", req(q.id), Modifier.weight(1f)) {
+                        // While it says how it's doing, more presses do nothing: one message per press-and-wait.
+                        if (sent != q.id) { KidChats.sendText(app, p.k, q.text); sent = q.id; sentAt = System.currentTimeMillis() }
                     }
                 }
                 repeat(TvRules.QUICK_SHOWN - quick.size) { Spacer(Modifier.weight(1f)) }
@@ -863,7 +942,8 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                         .padding(horizontal = 13.dp, vertical = 9.dp))
             }
         }
-        if (status.isNotEmpty()) Text(status, style = tvText(14.sp, if (status == "Waiting") Palette.textSoft else Palette.textMuted),
+        // 20 sp on a TV (nothing a child reads there is smaller); 14 sp on a touch screen.
+        if (status.isNotEmpty()) Text(status, style = tvText(if (touch) 14.sp else 20.sp, if (status == "Waiting") Palette.textSoft else Palette.textMuted),
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
     }
 }

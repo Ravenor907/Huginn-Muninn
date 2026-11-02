@@ -35,6 +35,17 @@ Item {
     signal attach()
 
     function focusField() { field.forceActiveFocus() }
+    // Into the box to write. Where the on-screen keyboard would cover it (game mode), the message is written in the
+    // prompt at the top instead, carrying on what's typed, and its Send sends from here.
+    function writeHere() {
+        field.forceActiveFocus()
+        if (System.keyboardCovers()) writeAbove()
+    }
+    function writeAbove() {
+        Ui.askMessage(box.placeholder !== "" ? box.placeholder : "Message", "", field.text, "Send", t => { box.setText(t); box.enter() })
+    }
+    // Characters typed (shown from 1,800; more than 2,000 don't send).
+    readonly property int typedCount: field.length < Ui.messageMax - 200 ? field.length : Ui.textLength(field.text.trim())
     readonly property bool hasFocus: field.activeFocus
     readonly property bool emojiShown: picker.visible
     // The controller or its pointer is in use: the focus shows as thick as everywhere else.
@@ -96,6 +107,9 @@ Item {
     function submit() {
         const t = field.text.trim()
         if (t.length === 0) return
+        // Too long to send: it stays in the box, never cut.
+        const n = Ui.textLength(t)
+        if (n > Ui.messageMax) { Ui.say(Ui.tooLongText(n), true); return }
         box.send(t)
         field.text = ""
         box.typing(false)
@@ -208,8 +222,13 @@ Item {
                     onTextChanged: if (!box.settingText && !box.editing) box.typing(text.trim().length > 0)
                     // Game Mode has no keyboard of its own: Steam's comes up (it does nothing elsewhere). Not when the focus
                     // only came back because Huginn's window did, or a menu closed: the person didn't ask to type then.
-                    onActiveFocusChanged: if (activeFocus && focusReason !== Qt.ActiveWindowFocusReason && focusReason !== Qt.PopupFocusReason)
-                        System.showSteamKeyboard()
+                    // Where that keyboard would cover the box, it never opens blind over it: a tap writes in the prompt
+                    // at the top (writeAbove), and the pages do the same for the controller (writeHere).
+                    onActiveFocusChanged: {
+                        if (!activeFocus || focusReason === Qt.ActiveWindowFocusReason || focusReason === Qt.PopupFocusReason) return
+                        if (!System.keyboardCovers()) System.showSteamKeyboard()
+                        else if (focusReason === Qt.MouseFocusReason) Qt.callLater(box.writeAbove)
+                    }
                     Keys.onPressed: event => {
                         if (event.key === Qt.Key_Escape && box.micHeld) {
                             box.micUp(false)
@@ -296,6 +315,18 @@ Item {
                     onCanceled: box.micUp(false)
                 }
             }
+        }
+        // Near the limit: how many characters, so a long one is split before it's sent.
+        Text {
+            visible: box.typedCount >= Ui.messageMax - 200
+            width: parent.width
+            horizontalAlignment: Text.AlignRight
+            textFormat: Text.PlainText
+            text: box.typedCount > Ui.messageMax
+                  ? String(box.typedCount).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " of 2,000 characters: too long to send"
+                  : String(box.typedCount).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + " of 2,000 characters"
+            color: box.typedCount > Ui.messageMax ? Theme.danger : Theme.textMuted
+            font.family: Theme.body; font.pixelSize: Theme.fs(13)
         }
     }
 

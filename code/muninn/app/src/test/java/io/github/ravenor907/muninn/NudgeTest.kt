@@ -138,13 +138,16 @@ class NudgeTest {
             val nudge = NudgeWire.content(ring.publicKey, 42L)
             assertEquals(1024, nudge.length)
             assertNull(ring.open(nudge))
-            assertEquals(Nudge(42L), NudgeWire.ringMailbox(true, nudge, ring))
-            assertNull(NudgeWire.ringMailbox(false, nudge, ring))
+            assertEquals(Nudge(42L), NudgeWire.ringMailbox(true, nudge, ring, 100L))
+            assertNull(NudgeWire.ringMailbox(false, nudge, ring, 100L))
+            // Round 14: a nudge more than 2 days old (a replay) is dropped.
+            assertNull(NudgeWire.ringMailbox(true, nudge, ring, 42L + NudgeWire.MAX_AGE_MS + 1))
+            assertEquals(Nudge(42L), NudgeWire.ringMailbox(true, nudge, ring, 42L + NudgeWire.MAX_AGE_MS))
             val rang = RingWire.ringContent(ring.publicKey, "AAECAwQFBgcICQoLDA0ODw", 42L)
             assertNull(ring.nudge(rang))
-            assertNull(NudgeWire.ringMailbox(true, rang, ring))
-            assertNull(NudgeWire.ringMailbox(true, NudgeWire.content(RingKey(other).publicKey, 42L), ring))
-            assertNull(NudgeWire.ringMailbox(true, "junk", ring))
+            assertNull(NudgeWire.ringMailbox(true, rang, ring, 100L))
+            assertNull(NudgeWire.ringMailbox(true, NudgeWire.content(RingKey(other).publicKey, 42L), ring, 100L))
+            assertNull(NudgeWire.ringMailbox(true, "junk", ring, 100L))
         } finally { f.delete(); other.delete() }
     }
 
@@ -155,9 +158,11 @@ class NudgeTest {
             val key = NudgeKey(f)
             val rang = RingWire.ringContent(key.publicKey, "AAECAwQFBgcICQoLDA0ODw", 42L)
             assertNull(key.nudge(rang))
-            assertNull(NudgeWire.nudgeMailbox(true, rang, key))
-            assertNull(NudgeWire.nudgeMailbox(false, NudgeWire.richContent(key.publicKey, 1L, "A", "", "msg"), key))
-            assertEquals("A", NudgeWire.nudgeMailbox(true, NudgeWire.richContent(key.publicKey, 1L, "A", "", "msg"), key)!!.from)
+            assertNull(NudgeWire.nudgeMailbox(true, rang, key, 100L))
+            assertNull(NudgeWire.nudgeMailbox(false, NudgeWire.richContent(key.publicKey, 1L, "A", "", "msg"), key, 100L))
+            // Round 14: the nudge key may be any group peer's, so its nudge names nobody, only the group.
+            assertEquals(Nudge(1L, "", "G", "msg", known = false), NudgeWire.nudgeMailbox(true, NudgeWire.richContent(key.publicKey, 1L, "Mom", "G", "msg"), key, 100L))
+            assertNull(NudgeWire.nudgeMailbox(true, NudgeWire.richContent(key.publicKey, 1L, "A", "", "msg"), key, 1L + NudgeWire.MAX_AGE_MS + 1))
             // NudgeKey has no way to open a ring, and the app hands its mailbox's events only to the nudge path.
             assertFalse(NudgeKey::class.java.declaredMethods.any { it.name == "open" })
             val app = source("Muninn.kt")
@@ -171,10 +176,12 @@ class NudgeTest {
         } finally { f.delete() }
     }
 
-    /** n2 goes to the nudge key (contacts and group peers); n1 only to a contact's ring key; nothing without a key. */
+    /** Contacts get nudges on the ring key (n2 form when they say n2), group-only peers on the nudge key; nothing without a key. */
     @Test fun routes() {
         val k = PeerKeys.Keys(rk = "R", rp = "r".repeat(64), nk = "N", np = "n".repeat(64))
-        assertEquals(NudgeWire.Route("N", "n".repeat(64), true), NudgeWire.route(setOf("b1", "n1", "n2"), false, k))
+        assertEquals(NudgeWire.Route("R", "r".repeat(64), true), NudgeWire.route(setOf("b1", "n1", "n2"), false, k))
+        // A contact whose ring key hasn't come yet: the nudge key.
+        assertEquals(NudgeWire.Route("N", "n".repeat(64), true), NudgeWire.route(setOf("b1", "n1", "n2"), false, PeerKeys.Keys(nk = "N", np = "n".repeat(64))))
         assertEquals(NudgeWire.Route("N", "n".repeat(64), true), NudgeWire.route(setOf("g1", "n2"), true, k))
         assertEquals(NudgeWire.Route("R", "r".repeat(64), false), NudgeWire.route(setOf("b1", "n1"), false, k))
         assertNull(NudgeWire.route(setOf("b1", "n1"), true, k))   // a group peer never had the ring key
@@ -256,7 +263,9 @@ class NudgeTest {
      */
     @Test fun inboxEventsNeverNotifyWhileLocked() {
         val app = source("Muninn.kt")
-        assertFalse(app.contains("nostr.onLocked ="))
+        // Round 14: the only inbox notice while locked is the one "New activity" for senders known to be unable to nudge.
+        val hook = app.substringAfter("nostr.onLocked =", "").substringBefore("\n")
+        assertTrue(hook.isEmpty() || hook.contains("lockedActivity"))
         assertFalse(app.contains("lockedNotice"))
         assertFalse(app.contains("Unlock to get new messages"))
         assertFalse(source("Ring.kt").contains("class LegacyPeers"))
@@ -267,6 +276,58 @@ class NudgeTest {
                 """{"ids":[],"s":"delivered"}""".toByteArray()).toString()).toByteArray())
             assertNull(NudgeWire.ringMailbox(true, receipt, ring))
         } finally { f.delete() }
+    }
+
+    /**
+     * Round 14: a nudge that opened with the nudge key (any group peer) never names a person, only the group; at most
+     * 3 such notifications, then one naming nothing; at most one alert per 2 minutes for all of them. A contact's
+     * nudge (ring key) is as before.
+     */
+    @Test fun lockedLimitForNudgesNamingNobody() {
+        val lim = NudgeWire.LockedLimit()
+        val mom = NudgeWire.anonymous(Nudge(1L, "Mom", "", "msg"))
+        assertEquals("", mom.from)
+        assertEquals("Muninn", NudgeWire.title(Show.NAME, mom))
+        val g = NudgeWire.anonymous(Nudge(1L, "Mom", "Gaming", "msg"))
+        assertEquals("Gaming", NudgeWire.title(Show.MESSAGE, g))
+        val t0 = 1_000_000L
+        val a = lim.take(Show.NAME, g, t0)
+        assertTrue(a.alert)
+        assertEquals("?\nGaming", a.key)
+        // A different claimed name in the same group: the same notification, and no second buzz.
+        val b = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(2L, "Mom2", "Gaming", "msg")), t0 + 1_000)
+        assertEquals(a.key, b.key)
+        assertFalse(b.alert)
+        assertFalse(lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G2", "msg")), t0 + 2_000).alert)
+        lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G3", "msg")), t0 + 3_000)
+        // A fourth group name folds into one naming nothing.
+        val d = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G4", "msg")), t0 + 4_000)
+        assertEquals("", d.n.chat)
+        assertEquals("Muninn", NudgeWire.title(Show.NAME, d.n))
+        val e = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G5", "msg")), t0 + 5_000)
+        assertEquals(d.key, e.key)
+        // Two minutes on, one may buzz again.
+        assertTrue(lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G6", "msg")), t0 + NudgeWire.LockedLimit.ALERT_EVERY_MS).alert)
+        // A contact's nudge (ring key) still names them and alerts.
+        val c = lim.take(Show.NAME, Nudge(4L, "Ann", "", "msg"), t0 + 6_000)
+        assertTrue(c.alert)
+        assertEquals("Ann", NudgeWire.title(Show.NAME, c.n))
+        lim.clear()
+        assertTrue(lim.take(Show.NAME, g, t0 + 7_000).alert)
+    }
+
+    /** Round 14: senders known to be unable to nudge (caps without n1 or n2; a group peer without n2) turn on "New activity". */
+    @Test fun cantNudge() {
+        assertTrue(NudgeWire.cantNudge(setOf("r1", "g1", "c1", "b1"), false))   // 1.30 to 1.32
+        assertFalse(NudgeWire.cantNudge(setOf("r1", "b1", "n1"), false))
+        assertFalse(NudgeWire.cantNudge(setOf("r1", "n2"), false))
+        assertTrue(NudgeWire.cantNudge(setOf("r1", "g1", "n1"), true))         // a group peer needs n2
+        assertFalse(NudgeWire.cantNudge(setOf("r1", "g1", "n2"), true))
+        assertFalse(NudgeWire.cantNudge(emptySet(), false))                      // unknown caps don't count
+        val app = source("Muninn.kt")
+        assertTrue(app.contains("nostr.onLocked = { lockedActivity() }"))
+        val body = app.substringAfter("fun lockedActivity() {").substringBefore("\n    }\n")
+        assertTrue(body.contains("LOCKED_FALLBACK") && body.contains("lockedAlerted") && body.contains("\"New activity\""))
     }
 
     private fun source(name: String): String {

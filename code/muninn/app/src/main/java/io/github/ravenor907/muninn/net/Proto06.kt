@@ -120,6 +120,19 @@ object Proto06 {
     const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
 
+    /**
+     * Round 14 (1.1): tokens the caps this app said last time ([before]) had that it doesn't say now ([now]): it went back
+     * to an older release (Labs "Go back to stable"), so every contact is probed again.
+     */
+    fun capsDropped(before: String, now: String): Boolean = (caps(before) - caps(now)).isNotEmpty()
+
+    /**
+     * Round 14 (1.1): a contact's caps after an empty receipt (a caps probe or its answer), which is made now: what its
+     * envelope says ([said], when it has "caps" at all: [present]) replaces [known]. Anything else keeps [known].
+     */
+    fun replacedCaps(known: Set<String>, said: Set<String>, present: Boolean): Set<String> =
+        if (present && said.isNotEmpty()) said else known
+
     // ------------------------------------------------------------------ group state (3.2, 3.3)
 
     data class Member(val k: String, val n: String, val p: String)

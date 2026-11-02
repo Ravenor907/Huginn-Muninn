@@ -70,6 +70,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val askedAt = ConcurrentHashMap<String, Long>()
     /** Per relay: when it last finished sending what it held (EOSE, seconds), so a new connection asks only for what's newer. */
     private val eoseAt = ConcurrentHashMap<String, Long>()
+    /** Round 14: each relay's clock less this device's (s), from the Date of its last connection. */
+    private val relayOffsetS = ConcurrentHashMap<String, Long>()
     /** Relays whose inbox request finished at least once on the socket open now. */
     private val subscribed = ConcurrentHashMap<String, Boolean>()
     /**
@@ -501,7 +503,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             timer.schedule({ if (sockets[url] === webSocket && live[url] == true) { retries.remove(url); streak.set(0) } }, 60, java.util.concurrent.TimeUnit.SECONDS)
             val now = android.os.SystemClock.elapsedRealtime()
             // A Kids' Device's quiet times follow a trusted time: here the relay's own clock (its answer's Date).
-            try { response.headers.getDate("Date")?.let { io.github.ravenor907.muninn.tv.KidTv.heardTime(it.time) } } catch (_: Exception) {}
+            try { response.headers.getDate("Date")?.let { d ->
+                io.github.ravenor907.muninn.tv.KidTv.heardTime(d.time)
+                // Round 14: this relay's clock against ours, so its EOSE cursor is kept in its own time.
+                relayOffsetS[url] = d.time / 1000 - System.currentTimeMillis() / 1000
+            } } catch (_: Exception) {}
             connectMs[url] = now - (openedAt[url] ?: now)
             heardAt[url] = now
             live[url] = true
@@ -546,7 +552,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     // next time ask only for what's newer. Not while something had to stay on the relays (locked, with the
                     // locked store full): it must come again after unlocking. Nor while older pages are still coming.
                     if (sockets[url] === webSocket && NetLogic.cursorMoves(url, subscribed[url] == true, refused, paging.paging(url))) {
-                        eoseAt[url] = System.currentTimeMillis() / 1000
+                        eoseAt[url] = NetLogic.cursor(System.currentTimeMillis() / 1000, relayOffsetS[url])
                         saveSoon()
                     }
                 }

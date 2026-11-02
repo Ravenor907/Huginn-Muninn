@@ -15,6 +15,10 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
+#ifdef Q_OS_LINUX
+#include <QDBusConnection>
+#include <QDBusMessage>
+#endif
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -792,11 +796,22 @@ void FileLink::discardKept()
     Q_EMIT changed();
 }
 
+namespace
+{
+// In the Flatpak a file outside the folders Huginn may see (dropped from the Desktop, a USB stick) isn't there for it.
+QString unreadable(const QString &path)
+{
+    if (QFile::exists(QStringLiteral("/.flatpak-info")) && !QFileInfo::exists(path))
+        return QStringLiteral("Huginn can't see that folder. Use Send a file to pick it.");
+    return QStringLiteral("That file can't be read.");
+}
+}
+
 QString FileLink::send(const QString &peer, const QString &path, const QString &group)
 {
     const QFileInfo fi(path);
     if (!fi.isFile() || !fi.isReadable())
-        return QStringLiteral("That file can't be read.");
+        return unreadable(path);
     if (fi.size() < 1)
         return QStringLiteral("That file is empty.");
     if (fi.size() > kMaxBytes)
@@ -892,6 +907,9 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
 
 QString FileLink::sendTo(const QString &where, const QVariantList &urls)
 {
+    // Nothing is sent from behind the lock.
+    if (m_chat && m_chat->m_vault && m_chat->m_vault->screenLocked())
+        return QStringLiteral("Unlock Huginn first.");
     QStringList paths;
     for (const QVariant &v : urls) {
         const QUrl u = v.toUrl();
@@ -917,7 +935,7 @@ QString FileLink::sendTo(const QString &where, const QVariantList &urls)
     for (const QString &p : std::as_const(paths)) {
         const QFileInfo fi(p);
         if (!fi.isFile())
-            return QStringLiteral("That file can't be read.");
+            return unreadable(p);
         if (groupRefusal) {
             if (const QString w = groupRefusal(g, me, fi.size()); !w.isEmpty())
                 return w;
@@ -1047,7 +1065,9 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         // Cap f2 (27.1): close by on the same Wi-Fi it can come straight without trust (no internet address swapped).
         const Stun::Address lan = lanTarget(lanOf(from), cands);
         const QString g = jstr(p, "g");
-        const QString name = jstr(p, "name");
+        // The sender's name made safe at once (no hidden direction marks that turn "gpj.scr" into "rcs.jpg", no ":"
+        // streams or device names), so what is shown and saved is what the file really is.
+        const QString name = Sharing::safeName(jstr(p, "name"), QStringLiteral("file"));
         const qint64 size = qint64(p.value(QStringLiteral("size")).toDouble());
         auto refuse = [&](const QString &why, const QString &shown) {
             signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}, {QStringLiteral("why"), why}});
@@ -1516,13 +1536,16 @@ void FileLink::receivedAll(Xfer *x)
         x->name = QFileInfo(final).fileName();
         x->path = final;
         x->note.clear();
+        Sharing::markFromInternet(final);   // Windows warns before a program from someone else runs
         Q_EMIT notice(QStringLiteral("File from %1: %2 · Saved in %3").arg(who(x->peer), x->name, shownFolder(x->folder)));
         finish(x);
     });
 }
 
-QString FileLink::freeName(const QString &folder, const QString &name) const
+QString FileLink::freeName(const QString &folder, const QString &given) const
 {
+    // Every name saved here is made safe first (one from anywhere: an offer, a relay's file, a phone's).
+    const QString name = Sharing::safeName(given, QStringLiteral("file"));
     const QDir dir(folder);
     if (!dir.exists(name) && !dir.exists(name + QStringLiteral(".part")))
         return name;
@@ -1778,10 +1801,12 @@ QString FileLink::saveBytes(const QByteArray &bytes, const QString &name, const 
     QDir().mkpath(dir);
     const QString path = QDir(dir).filePath(freeName(dir, name));
     QFile f(path);
-    if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size()) {
+    if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.flush()) {
         f.remove();
         return {};
     }
+    f.close();
+    Sharing::markFromInternet(path);
     if (!peer.isEmpty())
         logFile(peer, QFileInfo(path).fileName(), bytes.size(), path, false);
     return path;
@@ -1823,7 +1848,47 @@ void FileLink::retry(const QString &id)
         Q_EMIT notice(why);
 }
 
-bool FileLink::openFile(const QString &path) const
+bool FileLink::openFile(const QString &path)
+{
+    if (!QFileInfo(path).isFile())
+        return false;
+    // A program, or a name made to look like something else: asked first (Main.qml), never opened by one click.
+    const QString warn = Sharing::openWarning(QFileInfo(path).fileName());
+    if (!warn.isEmpty()) {
+        Q_EMIT askOpen(path, warn);
+        return true;
+    }
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+}
+
+QVariantList FileLink::portalUrls(const QString &key) const
+{
+    QVariantList out;
+#ifdef Q_OS_LINUX
+    // A drop from a file manager outside the sandbox: the document portal hands over the files themselves (as paths
+    // Huginn can read), whatever folder they're in.
+    QString k = key;
+    while (k.endsWith(QChar(0)))
+        k.chop(1);
+    k = k.trimmed();
+    if (k.isEmpty() || k.size() > 256)
+        return out;
+    QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Documents"), QStringLiteral("/org/freedesktop/portal/documents"),
+                                                    QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("RetrieveFiles"));
+    m.setArguments({k, QVariantMap()});
+    const QDBusMessage r = QDBusConnection::sessionBus().call(m, QDBus::Block, 5000);
+    if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
+        return out;
+    for (const QString &p : r.arguments().constFirst().toStringList())
+        if (!p.isEmpty())
+            out << QUrl::fromLocalFile(p);
+#else
+    Q_UNUSED(key);
+#endif
+    return out;
+}
+
+bool FileLink::openAnyway(const QString &path) const
 {
     return QFileInfo(path).isFile() && QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }

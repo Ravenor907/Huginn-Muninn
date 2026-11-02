@@ -3,7 +3,10 @@
 
 #include "callcrypto.h"
 #include "relayconfig.h"
+#include "../settings.h"
 
+#include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -17,6 +20,8 @@
 #include <QTimeZone>
 #include <QUdpSocket>
 #include <QUrl>
+#include <QSettings>
+#include <thread>
 
 namespace
 {
@@ -92,13 +97,97 @@ Stun::Address CallNet::fromHost(const QHostAddress &h, quint16 port)
 
 RelayCredentials::RelayCredentials(QObject *parent) : QObject(parent) {}
 
-QByteArray RelayCredentials::body(const QByteArray &identityKey, qint64 t, const QByteArray &secret)
+QByteArray RelayCredentials::body(const QByteArray &identityKey, qint64 t, const QByteArray &secret, const QString &tok)
 {
     const QByteArray id = CallCrypto::sha256(identityKey).toHex();
     const QByteArray sig = CallCrypto::hmacSha256(secret, id + "." + QByteArray::number(t)).toHex();
-    return QJsonDocument(QJsonObject{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("t"), t},
-                                     {QStringLiteral("sig"), QString::fromLatin1(sig)}})
-        .toJson(QJsonDocument::Compact);
+    QJsonObject o{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("t"), t}, {QStringLiteral("sig"), QString::fromLatin1(sig)}};
+    if (!tok.isEmpty())
+        o.insert(QStringLiteral("tok"), tok);
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+QByteArray RelayCredentials::regBody(const QByteArray &identityKey, qint64 t, const QByteArray &secret, qint64 pow)
+{
+    QJsonObject o = QJsonDocument::fromJson(body(identityKey, t, secret)).object();
+    o.insert(QStringLiteral("pow"), pow);
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+namespace
+{
+bool zeroBits(const QByteArray &d, int bits)
+{
+    int left = bits;
+    for (int i = 0; i < d.size() && left > 0; ++i) {
+        const int v = quint8(d[i]);
+        if (left >= 8) {
+            if (v != 0)
+                return false;
+            left -= 8;
+        } else {
+            return (v >> (8 - left)) == 0;
+        }
+    }
+    return left <= 0;
+}
+}
+
+bool RelayCredentials::powOk(const QByteArray &idHex, qint64 t, qint64 pow, int bits)
+{
+    if (pow < 0)
+        return false;
+    return zeroBits(CallCrypto::sha256("huginn-relay pow v1:" + idHex + ":" + QByteArray::number(t) + ":" + QByteArray::number(pow)), bits);
+}
+
+qint64 RelayCredentials::solvePow(const QByteArray &idHex, qint64 t, int bits, qint64 maxTries)
+{
+    const QByteArray head = "huginn-relay pow v1:" + idHex + ":" + QByteArray::number(t) + ":";
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    for (qint64 n = 0; n < maxTries; ++n) {
+        h.reset();
+        h.addData(head);
+        h.addData(QByteArray::number(n));
+        if (zeroBits(h.result(), bits))
+            return n;
+    }
+    return -1;
+}
+
+QString RelayCredentials::tokenFor(const QString &kept, const QString &idHex, qint64 nowS)
+{
+    const QStringList p = kept.split(QLatin1Char('|'));
+    if (p.size() != 3 || p[0] != idHex || p[1].isEmpty())
+        return QString();
+    bool ok = false;
+    const qint64 exp = p[2].toLongLong(&ok);
+    return ok && exp - nowS > kTokenSpareS ? p[1] : QString();
+}
+
+QString RelayCredentials::tokenOf(const QJsonObject &o, const QString &idHex)
+{
+    const QString tok = o.value(QStringLiteral("tok")).toString();
+    const qint64 exp = qint64(o.value(QStringLiteral("exp")).toDouble());
+    if (tok.isEmpty() || tok.contains(QLatin1Char('|')) || exp <= 0)
+        return QString();
+    return idHex + QLatin1Char('|') + tok + QLatin1Char('|') + QString::number(exp);
+}
+
+qint64 RelayCredentials::staleNow(const QJsonObject &o)
+{
+    if (o.value(QStringLiteral("error")).toString() != QLatin1String("stale") || !o.value(QStringLiteral("now")).isDouble())
+        return -1;
+    return qint64(o.value(QStringLiteral("now")).toDouble());
+}
+
+QString RelayCredentials::idHex() const
+{
+    return QString::fromLatin1(CallCrypto::sha256(m_identity).toHex());
+}
+
+qint64 RelayCredentials::workerNow() const
+{
+    return nowMs() / 1000 + m_offsetS;
 }
 
 void RelayCredentials::get(const QByteArray &identityKey, std::function<void(const TurnLogin &, const QString &)> done)
@@ -126,15 +215,88 @@ void RelayCredentials::get(const QByteArray &identityKey, std::function<void(con
 void RelayCredentials::fetch()
 {
     m_busy = true;
+    m_retries = 0;
+    // The install token lives in Huginn's settings, outside the vault: it only spends this install's own logins.
+    const QString tok = tokenFor(Settings::store().value(QStringLiteral("relay/token")).toString(), idHex(), workerNow());
+    if (tok.isEmpty() && nowMs() >= m_regNotBefore)
+        registerThen();
+    else
+        postTurn(tok);
+}
+
+void RelayCredentials::registerThen()
+{
+    // The proof of work takes a moment: on a thread of its own, then back here.
+    const QByteArray id = idHex().toLatin1();
+    const qint64 t = workerNow();
+    QPointer<RelayCredentials> self(this);
+    std::thread([self, id, t] {
+        const qint64 pow = solvePow(id, t);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [self, t, pow] {
+            if (!self)
+                return;
+            if (pow < 0) {
+                self->m_regNotBefore = nowMs() + 3600000;
+                self->postTurn(QString());
+                return;
+            }
+            QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/register")));
+            req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+            req.setTransferTimeout(10000);
+            QNetworkReply *r = self->m_net.post(req, regBody(self->m_identity, t, QByteArray(RelayConfig::kAppSecret), pow));
+            connect(r, &QNetworkReply::finished, self, [self, r] {
+                r->deleteLater();
+                const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const QString kept = status == 200 ? tokenOf(QJsonDocument::fromJson(r->readAll()).object(), self->idHex()) : QString();
+                if (kept.isEmpty()) {
+                    // An older Worker (404), a full day or no answer: this login goes without a token.
+                    if (status == 429) {
+                        const QDateTime tomorrow(QDateTime::currentDateTimeUtc().date().addDays(1), QTime(0, 0), QTimeZone::UTC);
+                        self->m_regNotBefore = tomorrow.toMSecsSinceEpoch();
+                    } else {
+                        self->m_regNotBefore = nowMs() + 3600000;
+                    }
+                } else {
+                    QSettings st = Settings::store();
+                    st.setValue(QStringLiteral("relay/token"), kept);
+                }
+                self->postTurn(tokenFor(kept, self->idHex(), self->workerNow()));
+            });
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void RelayCredentials::postTurn(const QString &tok)
+{
     QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/turn")));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(10000);   // a captive or hostile network: give up soon, the call retries once
-    const qint64 t = nowMs() / 1000;
-    QNetworkReply *r = m_net.post(req, body(m_identity, t, QByteArray(RelayConfig::kAppSecret)));
-    connect(r, &QNetworkReply::finished, this, [this, r] {
+    QNetworkReply *r = m_net.post(req, body(m_identity, workerNow(), QByteArray(RelayConfig::kAppSecret), tok));
+    connect(r, &QNetworkReply::finished, this, [this, r, tok] {
         r->deleteLater();
         const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonObject o = QJsonDocument::fromJson(r->readAll()).object();
+        if (status == 401 && m_retries < 2) {
+            ++m_retries;
+            // The clock is off: once more, corrected by the Worker's own time.
+            const qint64 now = staleNow(o);
+            if (now >= 0) {
+                m_offsetS = now - nowMs() / 1000;
+                postTurn(tok);
+                return;
+            }
+            // The token was refused (run out, or the Worker's secret changed): dropped and registered again once.
+            const QString err = o.value(QStringLiteral("error")).toString();
+            if (!tok.isEmpty() && (err == QLatin1String("bad_token") || err == QLatin1String("token_expired"))) {
+                QSettings st = Settings::store();
+                st.remove(QStringLiteral("relay/token"));
+                if (nowMs() >= m_regNotBefore)
+                    registerThen();
+                else
+                    postTurn(QString());
+                return;
+            }
+        }
         if (status == 200) {
             TurnLogin l;
             const QJsonValue urls = o.value(QStringLiteral("urls"));
@@ -148,6 +310,12 @@ void RelayCredentials::fetch()
             l.credential = o.value(QStringLiteral("credential")).toString();
             l.expiresMs = nowMs() + qint64(o.value(QStringLiteral("ttl")).toDouble()) * 1000;
             if (l.valid()) {
+                // A login renews the token.
+                const QString kept = tokenOf(o, idHex());
+                if (!kept.isEmpty()) {
+                    QSettings st = Settings::store();
+                    st.setValue(QStringLiteral("relay/token"), kept);
+                }
                 m_cache = l;
                 finish(l, QString());
                 return;

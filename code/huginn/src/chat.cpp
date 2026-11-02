@@ -109,8 +109,27 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     m_net->silent = [this] { return !visibleNearby(); };
     // Nothing is readable until the vault is open: start then.
     connect(m_vault, &Vault::opened, this, &Chat::start);
+    // A save the saving thread gave up on after its retries: marked to be saved again (from memory), and said.
+    connect(m_vault, &Vault::saveLost, this, [this](const QString &name) {
+        if (!m_ready)
+            return;
+        if (name == QLatin1String("chats.json") || name == QLatin1String("nearby.json")) {
+            m_chatsDirty = true;
+            saveDidntGo(name, [this] { if (m_chatsDirty) save(); });
+        } else if (name == QLatin1String("gchats.json")) {
+            m_gchatsDirty = true;
+            saveDidntGo(name, [this] { if (m_gchatsDirty) saveGroupChats(); });
+        } else {
+            saveDidntGo(name, [] {});
+        }
+    });
     // Erase everything: the ratchet state and kept envelopes go with the vault's files.
-    connect(m_vault, &Vault::changed, this, [this] {
+    connect(m_vault, &Vault::changed, this, [this, wasLocked = m_vault->screenLocked()]() mutable {
+        // Locked or unlocked: the people lists (empty while locked) are asked for again.
+        if (m_vault->screenLocked() != wasLocked) {
+            wasLocked = m_vault->screenLocked();
+            Q_EMIT changed();
+        }
         if (!m_vault->exists()) {
             m_chatsDirty = false;   // nothing waiting to be saved goes back after an erase
             m_gchatsDirty = false;
@@ -179,6 +198,15 @@ void Chat::start()
     m_startTries = 0;
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
     m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
+    // The public half is kept in settings only: a settings file that lost it (an upgrade that stopped partway) gets it
+    // back from the private half, never a chat run with an empty key.
+    if (m_pub.isEmpty() && !m_priv.isEmpty()) {
+        m_pub = ChatCrypto::publicFromPrivate(m_priv);
+        if (!m_pub.isEmpty()) {
+            m_settings.setValue(QStringLiteral("chat/pub"), m_pub.toBase64());
+            qWarning("chat: the public key was missing from settings; worked out again from the private key");
+        }
+    }
     // Caps b1 and e1: my day keys and what contacts announced, read from the vault now it's open.
     m_wrapKeys = std::make_unique<WrapKeys>([this] { return m_vault->read(QStringLiteral("wrapkeys.json")); },
                                             [this](const QByteArray &b) { m_vault->write(QStringLiteral("wrapkeys.json"), b); });
@@ -291,6 +319,21 @@ void Chat::start()
     m_prune.start();
     m_ready = true;
     m_net->announce();
+    // Round 14 (1.1): this app says fewer caps than it did last time (Labs "Go back to stable"): every contact is
+    // asked again (a caps probe), and its answer and our probe's own caps put both sides right.
+    {
+        const QString last = m_settings.value(QStringLiteral("caps/last")).toString();
+        if (ChatWire::capsDropped(last, QLatin1String(ChatWire::kCaps))) {
+            const QJsonObject r{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}, {QStringLiteral("q"), QStringLiteral("caps")}};
+            for (const QString &k : m_contacts.keys())
+                if (!isBlocked(k)) {
+                    m_probed.insert(k, now());
+                    deliver(k, envelope(QStringLiteral("receipt"), k, compact(r), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(k));
+                }
+        }
+        if (last != QLatin1String(ChatWire::kCaps))
+            m_settings.setValue(QStringLiteral("caps/last"), QLatin1String(ChatWire::kCaps));
+    }
     // Restored from a backup: its day keys may be older than what contacts hold, so a new one goes at once to every
     // contact whose app says e1 (an empty receipt with "wk" and "wt").
     if (m_settings.value(QStringLiteral("restore/announce")).toBool()) {
@@ -815,24 +858,28 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
 
 bool Chat::canGroup(const QString &key) const { return isGroupPeer(key) || m_caps.value(key).contains(QStringLiteral("g1")); }
 
-void Chat::noteCaps(const QString &key, bool present, const QStringList &caps)
+void Chat::noteCaps(const QString &key, bool present, const QStringList &caps, bool replace)
 {
     // From authentic envelopes only, and only for people kept here. An envelope without "caps"
-    // (an app without caps) teaches nothing; tokens are never taken away (a key change starts over:
-    // forgetRatchet).
+    // (an app without caps) teaches nothing; tokens are never taken away by an ordinary envelope (it may be an old
+    // copy sent again; a key change starts over: forgetRatchet). Round 14: an empty receipt's caps replace them
+    // (replace), so an app gone back to an older release stops being sent what it dropped.
     if (!present || (!isContact(key) && !m_met.contains(key) && !isGroupPeer(key)))
         return;
+    replace = replace && !caps.isEmpty();
     const bool known = m_caps.contains(key);
-    QStringList have = m_caps.value(key);
+    QStringList have = replace ? QStringList() : m_caps.value(key);
     bool grew = false;
     for (const QString &c : caps)
         if (!have.contains(c)) {
             have << c;
             grew = true;
         }
+    const QStringList before = m_caps.value(key);
+    if (replace)
+        grew = QSet<QString>(have.cbegin(), have.cend()) != QSet<QString>(before.cbegin(), before.cend());
     if (known && !grew)
         return;
-    const QStringList before = m_caps.value(key);
     m_caps.insert(key, have);
     saveRatchet(key);
     noteChanged();
@@ -896,14 +943,16 @@ void Chat::nudge(const QString &key, const QString &room, const QByteArray &plai
         return;
     const RingWire::Announce k = m_peerKeys->get(key);
     const bool rich = hasCap(key, QLatin1String(RingWire::kRichNudgeCap));
-    // n2: their nudge key and nudge mailbox (a contact or group peer), else a contact's ring key and ring mailbox.
+    // A contact: their ring key and ring mailbox (the n2 form when they say n2), so their device knows the nudge came
+    // from a contact and may show my name (round 14: what opens with the nudge key names nobody). A group-only peer,
+    // or a contact whose ring key hasn't come yet: their nudge key and nudge mailbox (n2 only).
     QString pub, box;
-    if (rich && !k.nk.isEmpty() && !k.np.isEmpty()) {
-        pub = k.nk;
-        box = k.np;
-    } else if (isContact(key) && (rich || hasCap(key, QLatin1String(RingWire::kNudgeCap))) && !k.rk.isEmpty() && !k.rp.isEmpty()) {
+    if (isContact(key) && (rich || hasCap(key, QLatin1String(RingWire::kNudgeCap))) && !k.rk.isEmpty() && !k.rp.isEmpty()) {
         pub = k.rk;
         box = k.rp;
+    } else if (rich && !k.nk.isEmpty() && !k.np.isEmpty()) {
+        pub = k.nk;
+        box = k.np;
     } else {
         return;
     }
@@ -1053,7 +1102,12 @@ bool Chat::keySelfTest()
     const bool ok = mayMakeKeys(Vault::ReadMissing, false, false) && mayMakeKeys(Vault::ReadOk, true, false) && !mayMakeKeys(Vault::ReadFailed, false, false)
         && !mayMakeKeys(Vault::ReadOk, false, false) && !mayMakeKeys(Vault::ReadOk, true, true) && !mayMakeKeys(Vault::ReadFailed, true, false);
     std::printf("chat keys are never made over unreadable ones: %s\n", ok ? "ok" : "FAILED");
-    return ok;
+    // A settings file that lost the public half (an upgrade that stopped partway): worked out again from the private one.
+    const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
+    const bool again = !kp.publicDer.isEmpty() && ChatCrypto::publicFromPrivate(kp.privateDer) == kp.publicDer
+        && ChatCrypto::publicFromPrivate(QByteArray("not a key")).isEmpty();
+    std::printf("a lost public chat key is worked out from the private one: %s\n", again ? "ok" : "FAILED");
+    return ok && again;
 }
 
 QVariantList Chat::folders() const
@@ -1325,6 +1379,19 @@ void Chat::declineRequest(const QString &key)
 
 bool Chat::isBlocked(const QString &key) const { return blockedKeys().contains(key); }
 
+bool Chat::someoneCantNudge() const
+{
+    const QStringList blocked = blockedKeys();
+    for (auto it = m_caps.cbegin(); it != m_caps.cend(); ++it) {
+        const QString &k = it.key();
+        if (blocked.contains(k) || !(isContact(k) || isGroupPeer(k)))
+            continue;
+        if (RingWire::cantNudge(it.value(), !isContact(k)))
+            return true;
+    }
+    return false;
+}
+
 void Chat::block(const QString &key, bool on)
 {
     const bool was = isBlocked(key);
@@ -1364,6 +1431,9 @@ void Chat::block(const QString &key, bool on)
 
 void Chat::removeContact(const QString &key)
 {
+    // Nothing behind the lock is changed from the screen.
+    if (m_vault->screenLocked())
+        return;
     if (key.isEmpty() || m_trash.contains(key) || (!isContact(key) && !m_met.contains(key) && m_private.value(key).isEmpty()))
         return;
     // Everything stays as it was (conversation, folders, the ratchet), so restore() brings it all back.
@@ -1395,6 +1465,8 @@ void Chat::removeContact(const QString &key)
 QVariantList Chat::trash() const
 {
     QVariantList out;
+    if (m_vault->screenLocked())
+        return out;   // behind the lock
     for (auto it = m_trash.cbegin(); it != m_trash.cend(); ++it) {
         const qint64 at = it.value().value(QStringLiteral("trashed")).toLongLong();
         const QString nick = str(it.value(), "nick");
@@ -1509,6 +1581,7 @@ int Chat::receive(const QByteArray &body, const QString &via, const QString &fro
     const FromNetwork net(this);
     m_pendingPeer.reset();
     m_openedFrom.clear();
+    m_openedReplaceCaps = false;
     const QJsonObject o = QJsonDocument::fromJson(body).object();
     // The Nearby room: at most 10 messages in 10 seconds from one address or link, whatever keys they use.
     if (!from.isEmpty() && o.value(QStringLiteral("room")).toString() == QLatin1String("nearby") && !roomRate(from))
@@ -1518,7 +1591,7 @@ int Chat::receive(const QByteArray &body, const QString &via, const QString &fro
     m_pendingPeer.reset();
     if (code == 200 && !m_openedFrom.isEmpty()) {
         noteCapable(m_openedFrom, m_openedCap);
-        noteCaps(m_openedFrom, m_openedHasCaps, m_openedCaps);
+        noteCaps(m_openedFrom, m_openedHasCaps, m_openedCaps, m_openedReplaceCaps);
         noteDays(m_openedFrom, m_openedDays);
         noteS1(m_openedFrom, m_openedCaps.contains(QLatin1String(Proof::kCap)), m_openedBound);
     }
@@ -1951,6 +2024,9 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
             return 400;
         commitPeer();
         m_seen.add(fromKey, sentId, now());
+        // Round 14 (1.1): an empty receipt (a caps probe or its answer) is made now: its caps replace what was known.
+        if (a.isEmpty())
+            m_openedReplaceCaps = true;
         // A caps probe: answer with an empty receipt, whose envelope carries our caps.
         // Caps b1 and e1: their ring key and newest day key, from a contact or group peer.
         if (m_peerKeys && (isContact(fromKey) || isGroupPeer(fromKey)))
@@ -3065,7 +3141,7 @@ void Chat::deleteMessage(const QString &key, const QString &id)
 
 void Chat::deleteChat(const QString &key)
 {
-    if (key.isEmpty() || key.startsWith(QLatin1String("g:")))
+    if (key.isEmpty() || key.startsWith(QLatin1String("g:")) || m_vault->screenLocked())
         return;
     // Every message of the chat goes, with its photos and voice; late copies stay gone (the deleted list).
     QStringList ids;
@@ -3153,7 +3229,8 @@ void Chat::saveMet()
     QJsonObject o;
     for (auto it = m_met.begin(); it != m_met.end(); ++it)
         o.insert(it.key(), QJsonObject::fromVariantMap(it.value()));
-    m_vault->write(QStringLiteral("met.json"), QJsonDocument(o).toJson(QJsonDocument::Compact));
+    if (!m_vault->write(QStringLiteral("met.json"), QJsonDocument(o).toJson(QJsonDocument::Compact)) && m_ready)
+        saveDidntGo(QStringLiteral("met.json"), [this] { saveMet(); });
 }
 
 void Chat::saveContacts()
@@ -3170,7 +3247,8 @@ void Chat::saveContacts()
         a << QJsonObject::fromVariantMap(c);
     for (const QVariantMap &c : std::as_const(m_trash))
         a << QJsonObject::fromVariantMap(c);   // marked "trashed"
-    m_vault->write(QStringLiteral("contacts.json"), QJsonDocument(a).toJson(QJsonDocument::Compact));
+    if (!m_vault->write(QStringLiteral("contacts.json"), QJsonDocument(a).toJson(QJsonDocument::Compact)) && m_ready)
+        saveDidntGo(QStringLiteral("contacts.json"), [this] { saveContacts(); });
 }
 
 void Chat::load()
@@ -3373,6 +3451,9 @@ QVariantList Chat::around() const
 
 QVariantList Chat::people() const
 {
+    // Behind the lock: nobody is listed (every page but the lock is closed too; this is the second wall).
+    if (m_vault->screenLocked())
+        return {};
     Busy::Scope busy("chat lists");
     // Contacts: in touch, met close by, and blocked.
     QVariantList out;

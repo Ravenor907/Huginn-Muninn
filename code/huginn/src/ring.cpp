@@ -276,7 +276,56 @@ bool RingWire::openNudgeContent(const QString &content, const ChatCrypto::KeyPai
     return ok && nudgeRead(p, n);
 }
 
-QString RingWire::nudgeGroupKey(int mode, const Nudge &n) { return mode <= 0 ? QString() : n.from + QLatin1Char('\n') + n.chat; }
+QString RingWire::nudgeGroupKey(int mode, const Nudge &n)
+{
+    if (mode <= 0)
+        return QString();
+    // One naming nobody (the nudge key): per group, never mixed with a contact's.
+    return (n.known ? n.from : QStringLiteral("?")) + QLatin1Char('\n') + n.chat;
+}
+
+RingWire::Nudge RingWire::anonymous(const Nudge &n)
+{
+    Nudge a = n;
+    a.from.clear();
+    a.known = false;
+    return a;
+}
+
+bool RingWire::cantNudge(const QStringList &caps, bool groupOnly)
+{
+    if (caps.isEmpty())
+        return false;
+    if (groupOnly)
+        return !caps.contains(QLatin1String(kRichNudgeCap));
+    return !caps.contains(QLatin1String(kNudgeCap)) && !caps.contains(QLatin1String(kRichNudgeCap));
+}
+
+LockedNudgeLimit::Take LockedNudgeLimit::take(int mode, const RingWire::Nudge &n, qint64 nowMs)
+{
+    Take t;
+    t.n = n;
+    t.key = RingWire::nudgeGroupKey(mode, n);
+    if (n.known)
+        return t;
+    if (!m_keys.contains(t.key)) {
+        if (m_keys.size() >= kMaxKeys) {
+            t.n.chat.clear();
+            t.key = RingWire::nudgeGroupKey(mode, t.n);
+        }
+        m_keys.insert(t.key);
+    }
+    t.alert = nowMs - m_lastAlert >= kAlertEveryMs;
+    if (t.alert)
+        m_lastAlert = nowMs;
+    return t;
+}
+
+void LockedNudgeLimit::clear()
+{
+    m_keys.clear();
+    m_lastAlert = -kAlertEveryMs;
+}
 
 QString RingWire::nudgeTitle(int mode, const Nudge &n)
 {
@@ -829,6 +878,30 @@ bool RingWire::selfTest(const QString &vectorsPath)
                                                && nudgeText(2, QStringLiteral("photo"), 1) == QLatin1String("Photo") && nudgeText(0, QStringLiteral("photo"), 1) == QLatin1String("New message")
                                                && nudgeText(1, QStringLiteral("msg"), 3) == QLatin1String("3 new messages")
                                                && nudgeGroupKey(0, ann) == nudgeGroupKey(0, Nudge{}) && nudgeGroupKey(1, ann) != nudgeGroupKey(1, Nudge{}));
+        // Round 14: a nudge from the nudge key names only the group; at most 3 such notifications, one sound per 2 minutes.
+        {
+            const Nudge mom = anonymous(Nudge{1, QStringLiteral("Mom"), QString(), QStringLiteral("msg")});
+            const Nudge g = anonymous(Nudge{1, QStringLiteral("Mom"), QStringLiteral("Gaming"), QStringLiteral("msg")});
+            LockedNudgeLimit lim;
+            const qint64 t0 = 1000000;
+            const LockedNudgeLimit::Take a = lim.take(1, g, t0);
+            const LockedNudgeLimit::Take b = lim.take(1, anonymous(Nudge{2, QStringLiteral("Mom2"), QStringLiteral("Gaming"), QStringLiteral("msg")}), t0 + 1000);
+            lim.take(1, anonymous(Nudge{3, QStringLiteral("x"), QStringLiteral("G2"), QStringLiteral("msg")}), t0 + 2000);
+            lim.take(1, anonymous(Nudge{3, QStringLiteral("x"), QStringLiteral("G3"), QStringLiteral("msg")}), t0 + 3000);
+            const LockedNudgeLimit::Take d = lim.take(1, anonymous(Nudge{3, QStringLiteral("x"), QStringLiteral("G4"), QStringLiteral("msg")}), t0 + 4000);
+            const LockedNudgeLimit::Take e = lim.take(1, anonymous(Nudge{3, QStringLiteral("x"), QStringLiteral("G5"), QStringLiteral("msg")}), t0 + 5000);
+            const LockedNudgeLimit::Take later = lim.take(1, anonymous(Nudge{3, QStringLiteral("x"), QStringLiteral("G6"), QStringLiteral("msg")}), t0 + LockedNudgeLimit::kAlertEveryMs);
+            const LockedNudgeLimit::Take c = lim.take(1, Nudge{4, QStringLiteral("Ann"), QString(), QStringLiteral("msg")}, t0 + 6000);
+            check("nudges from the nudge key name nobody, folded and rate limited",
+                  mom.from.isEmpty() && !mom.known && nudgeTitle(1, mom) == QLatin1String("Huginn") && nudgeTitle(2, g) == QLatin1String("Gaming")
+                      && a.alert && !b.alert && a.key == b.key && a.key == QStringLiteral("?\nGaming") && d.n.chat.isEmpty() && d.key == e.key
+                      && later.alert && c.alert && nudgeTitle(1, c.n) == QLatin1String("Ann"));
+            check("old nudges are dropped", nudgeFresh(Nudge{1000}, 1000 + kNudgeMaxAgeMs) && !nudgeFresh(Nudge{1000}, 1001 + kNudgeMaxAgeMs));
+            check("senders known to be unable to nudge",
+                  cantNudge({QStringLiteral("r1"), QStringLiteral("b1")}, false) && !cantNudge({QStringLiteral("r1"), QStringLiteral("n1")}, false)
+                      && cantNudge({QStringLiteral("g1"), QStringLiteral("n1")}, true) && !cantNudge({QStringLiteral("g1"), QStringLiteral("n2")}, true)
+                      && !cantNudge(QStringList(), false));
+        }
         check("nudge only for real messages",
               nudgeCounts(QStringLiteral("private"), {}) && nudgeCounts(QStringLiteral("rich"), {}) && nudgeCounts(QStringLiteral("photo"), {})
                   && nudgeCounts(QStringLiteral("gmsg"), {}) && nudgeCounts(QStringLiteral("gphoto"), {})

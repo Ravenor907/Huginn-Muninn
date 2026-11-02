@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,11 +33,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -56,12 +59,18 @@ import kotlinx.coroutines.withContext
  * the screen's width. Back closes it.
  */
 @Composable
-internal fun KidDialog(tv: Boolean, onBack: () -> Unit, content: @Composable () -> Unit) {
+internal fun KidDialog(tv: Boolean, onBack: () -> Unit, compact: Boolean = false, content: @Composable () -> Unit) {
     if (tv) { TvDialog(onBack, content); return }
+    // [compact]: the text no bigger than 1.5 times and slimmer edges, so a keypad fits at the largest sizes.
     Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(16.dp).clip(RoundedCornerShape(20.dp)).background(Palette.panel)
-            .verticalScroll(rememberScrollState()).padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally) { content() }
+        Column(Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(if (compact) 8.dp else 16.dp).clip(RoundedCornerShape(20.dp)).background(Palette.panel)
+            .verticalScroll(rememberScrollState()).padding(if (compact) 12.dp else 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            if (compact) {
+                val d = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(d.density, minOf(d.fontScale, KidRules.PAD_FONT_MAX))) { content() }
+            } else content()
+        }
     }
 }
 
@@ -77,7 +86,7 @@ internal fun KidParentArea(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () 
     val now by produceState(KidTv.elapsed()) { while (true) { value = KidTv.elapsed(); delay(1000) } }
     // Closing it, any way, locks it again at once: a parent who looked and handed the device back leaves nothing open.
     val close = { KidTv.lockAgain(); onClose() }
-    KidDialog(tv, close) {
+    KidDialog(tv, close, compact = true) {
         if (until > now) KidUnlocked(app, tv, until - now, close) else KidLocked(app, cfg, tv, close)
     }
 }
@@ -108,9 +117,13 @@ private fun KidLocked(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Un
             line = KidRules.pinText(r)
         }
     }
+    // While a wait counts down, the line says only what happened ("Wrong PIN"), not the wait a second time.
+    val shown = when { wait <= 0 -> line; line.startsWith("Wrong PIN") -> "Wrong PIN"; else -> "" }
     if (cfg.pin != null) {
-        // The digits typed so far, as dots.
-        Text(if (pin.isEmpty()) "Type the parent PIN" else "● ".repeat(pin.length).trim(), style = tvText(if (tv) 28.sp else 22.sp, Palette.textSoft),
+        // The digits typed so far, as dots; what happened ("Wrong PIN") in their place above the keypad, so it's always in sight.
+        if (pin.isEmpty() && shown.isNotEmpty()) Text(shown, style = tvText(if (tv) 24.sp else 18.sp, Palette.danger),
+            textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+        else Text(if (pin.isEmpty()) "Type the parent PIN" else "● ".repeat(pin.length).trim(), style = tvText(if (tv) 28.sp else 22.sp, Palette.textSoft),
             modifier = Modifier.padding(top = 12.dp).semantics { contentDescription = "${pin.length} digits typed" })
         if (wait > 0) Text(KidRules.waitText(wait), style = tvText(if (tv) 24.sp else 18.sp, Palette.textSoft), textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 10.dp))
@@ -118,10 +131,6 @@ private fun KidLocked(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Un
             onOk = { if (wait > 0) line = "" else ok() })
     } else Text("No parent PIN is set. A parent's phone can open this.", style = tvText(if (tv) 24.sp else 18.sp, Palette.textSoft),
         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
-    // While a wait counts down above, the line says only what happened ("Wrong PIN"), not the wait a second time.
-    val shown = when { wait <= 0 -> line; line.startsWith("Wrong PIN") -> "Wrong PIN"; else -> "" }
-    if (shown.isNotEmpty()) Text(shown, style = tvText(if (tv) 24.sp else 18.sp, Palette.danger),
-        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
     var asked by remember { mutableStateOf("") }
     if (asked.isNotEmpty()) Text(asked, style = tvText(if (tv) 22.sp else 17.sp, Palette.textSoft), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
     Box(Modifier.padding(top = 16.dp)) {
@@ -147,9 +156,12 @@ private fun KidUnlocked(app: Muninn, tv: Boolean, left: Long, onClose: () -> Uni
     val at = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(System.currentTimeMillis() + left))
     Text("Open until $at. Everything else is set on a parent's phone, on this device's page.", style = tvText(if (tv) 22.sp else 16.sp, Palette.textSoft),
         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+    // The keypad's key had the remote's focus and is gone now: it lands here, so no press is lost.
+    val first = remember { FocusRequester() }
     Box(Modifier.padding(top = 16.dp)) {
-        BigButton("Android settings for Muninn", icon = "gear") { if (!TvUpdate.openAppPage(context)) Ui.say(TvWords.ASK_PARENT, true) }
+        BigButton("Android settings for Muninn", icon = "gear", requester = first) { if (!TvUpdate.openAppPage(context)) Ui.say(TvWords.ASK_PARENT, true) }
     }
+    if (tv) LaunchedEffect(Unit) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
     Text("Leaving kids' mode erases the messages and people on this device. Then it runs as a normal Muninn.", style = tvText(if (tv) 22.sp else 16.sp, Palette.textMuted),
         textAlign = TextAlign.Center, modifier = Modifier.padding(top = 18.dp))
     HoldToConfirm("Hold to leave kids' mode", "Hold for 5 seconds to erase this device and leave kids' mode",

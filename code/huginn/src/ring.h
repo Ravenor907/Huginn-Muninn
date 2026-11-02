@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QSet>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QList>
@@ -85,12 +86,22 @@ QString nudgeKind(const QString &room);
 QString blobKind(int voiceMs, int videoMs, const QString &file);
 // A name in a nudge: control and format characters taken out, trimmed, at most kNudgeNameMax characters. Not a string: "".
 QString nudgeClean(const QJsonValue &v);
-// What a nudge says. An n1 nudge names nobody and is a "msg".
+// What a nudge says. An n1 nudge names nobody and is a "msg". known: it opened with the ring key, which only contacts
+// get, so its "from" is a contact's own word; one that opened with the nudge key may be any group peer's (anonymous).
 struct Nudge {
     qint64 ts = 0;
     QString from, chat;
     QString kind = QStringLiteral("msg");
+    bool known = true;
 };
+// Round 14: a nudge from the nudge key names nobody: "from" goes, only the group's name ("chat") stays.
+Nudge anonymous(const Nudge &n);
+// A nudge older than this by its own ts is a replay or long gone: dropped.
+constexpr qint64 kNudgeMaxAgeMs = 2LL * 86400000;
+inline bool nudgeFresh(const Nudge &n, qint64 nowMs) { return n.ts >= nowMs - kNudgeMaxAgeMs; }
+// Round 14: someone whose app can't nudge this device while locked: a contact whose known caps have neither n1 nor
+// n2, or a group-only peer without n2. Unknown caps (empty) count as able.
+bool cantNudge(const QStringList &caps, bool groupOnly);
 // {"t":"nudge","ts":<ms>}: the n1 form, nothing else.
 QByteArray nudgePlain(qint64 ts);
 // {"t":"nudge","ts","from","chat","kind"}: the n2 form, names cleaned as a receiver cleans them.
@@ -115,6 +126,27 @@ QString nudgeText(int mode, const QString &kind, int count);
 // Checks shared/vectors/e1b1-vectors.json; prints what it found. Returns true when everything matches.
 bool selfTest(const QString &vectorsPath);
 }
+
+// Round 14: what a locked device does with nudges that name nobody (from the nudge key, so maybe not a contact). Each
+// new group name gets its own notification, at most kMaxKeys per lock, then they fold into one naming nothing; they
+// sound at most once per kAlertEveryMs in all. A contact's nudge (known) sounds as before.
+class LockedNudgeLimit
+{
+public:
+    static constexpr qint64 kAlertEveryMs = 120000;
+    static constexpr int kMaxKeys = 3;
+    struct Take {
+        RingWire::Nudge n;   // as it will read
+        QString key;         // its notification
+        bool alert = true;   // may sound
+    };
+    Take take(int mode, const RingWire::Nudge &n, qint64 nowMs);
+    void clear();
+
+private:
+    QSet<QString> m_keys;
+    qint64 m_lastAlert = -kAlertEveryMs;
+};
 
 // Cap n1: at most one nudge per recipient per RingWire::kNudgeEveryMs.
 class NudgeGate

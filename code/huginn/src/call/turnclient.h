@@ -4,6 +4,7 @@
 
 #include <QHash>
 #include <QHostAddress>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QObject>
 #include <QPointer>
@@ -46,17 +47,41 @@ public:
     // identityKey: this device's chat key (SPKI DER); its SHA-256 is the Worker's "id".
     // done is called exactly once, never from inside get().
     void get(const QByteArray &identityKey, std::function<void(const TurnLogin &login, const QString &why)> done);
-    // Builds the request body (also used by the self-test).
-    static QByteArray body(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret);
+    // Builds the request body (also used by the self-test); tok is the install token, left out when empty.
+    static QByteArray body(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret, const QString &tok = QString());
+
+    // Install tokens (relay.md "Install tokens"): an install registers once with a proof of work and gets a token the
+    // Worker signed, renewed by every login; logins with it never share a pool with requests that only know APP_SECRET.
+    static constexpr int kPowBits = 18;
+    static constexpr qint64 kTokenSpareS = 86400;   // a token with less left than this is registered again first
+    // SHA-256 of "huginn-relay pow v1:" + id + ":" + t + ":" + pow starts with bits zero bits.
+    static bool powOk(const QByteArray &idHex, qint64 t, qint64 pow, int bits = kPowBits);
+    // The smallest such pow (about 260,000 tries on average), or -1 after maxTries.
+    static qint64 solvePow(const QByteArray &idHex, qint64 t, int bits = kPowBits, qint64 maxTries = qint64(1) << 26);
+    // {"id", "t", "sig", "pow"}.
+    static QByteArray regBody(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret, qint64 pow);
+    // A kept token "<id>|<tok>|<exp>": the token when it is this id's and more than kTokenSpareS is left, else empty.
+    static QString tokenFor(const QString &kept, const QString &idHex, qint64 nowS);
+    // {"tok", "exp"} in an answer, as kept; empty when there's none.
+    static QString tokenOf(const QJsonObject &o, const QString &idHex);
+    // The Worker's time in a 401 {"error":"stale","now":...}, or -1.
+    static qint64 staleNow(const QJsonObject &o);
 
 private:
     void fetch();
+    void postTurn(const QString &tok);
+    void registerThen();
     void finish(const TurnLogin &login, const QString &why);
+    QString idHex() const;
+    qint64 workerNow() const;
 
     QNetworkAccessManager m_net;
     TurnLogin m_cache;
     QByteArray m_identity;
     qint64 m_blockedUntil = 0;
+    qint64 m_regNotBefore = 0;   // ms: no registration before (the next UTC day after a 429, else an hour)
+    qint64 m_offsetS = 0;        // the Worker's clock less this device's, learned from a "stale" answer
+    int m_retries = 0;
     bool m_busy = false;
     QList<std::function<void(const TurnLogin &, const QString &)>> m_waiting;
 };

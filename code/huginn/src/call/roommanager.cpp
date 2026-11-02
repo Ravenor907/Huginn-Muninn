@@ -397,6 +397,14 @@ QString RoomManager::join(const QString &g, const QString &ch)
     m_audio->pull = [this](qint16 *pcm) { mix(pcm); };
     connect(m_audio, &AudioIO::captured, this, &RoomManager::onMic);
     connect(m_audio, &AudioIO::outputsChanged, this, &RoomManager::changed);
+    // A microphone plugged in or pulled out while in the room: followed, and a toast says which. Joined with none,
+    // the note about it goes once one is open.
+    connect(m_audio, &AudioIO::deviceNotice, this, [this](const QString &text) {
+        if (text.startsWith(QStringLiteral("Microphone: ")))
+            m_note.clear();
+        Q_EMIT finished(text);
+        Q_EMIT changed();
+    });
     if (!m_audio->start())
         m_note = QStringLiteral("The microphone isn't available");
     announce(false);

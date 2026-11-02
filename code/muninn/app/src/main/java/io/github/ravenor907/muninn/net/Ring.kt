@@ -219,8 +219,21 @@ object NudgeWire {
         return s
     }
 
-    /** What a nudge says. An n1 nudge names nobody and is a "msg". */
-    data class Nudge(val ts: Long, val from: String = "", val chat: String = "", val kind: String = "msg")
+    /**
+     * What a nudge says. An n1 nudge names nobody and is a "msg". [known]: it opened with the ring key, which only
+     * contacts get, so its "from" is a contact's own word. One that opened with the nudge key may come from any group
+     * peer, so it never names a person ([anonymous]).
+     */
+    data class Nudge(val ts: Long, val from: String = "", val chat: String = "", val kind: String = "msg", val known: Boolean = true)
+
+    /** Round 14: a nudge from the nudge key names nobody: "from" goes, only the group's name ("chat") stays. */
+    fun anonymous(n: Nudge): Nudge = n.copy(from = "", known = false)
+
+    /** A nudge older than this (by its own ts) is a replay or long gone: dropped. */
+    const val MAX_AGE_MS = 2 * 86_400_000L
+
+    /** Fresh enough to notify: not older than [MAX_AGE_MS] by its ts (a clock ahead is fine). */
+    fun fresh(n: Nudge, nowMs: Long): Boolean = n.ts >= nowMs - MAX_AGE_MS
 
     /** The n1 nudge plaintext: {"t":"nudge","ts":<ms>}. Nothing else. */
     fun plain(ts: Long): String = JSONObject().put("t", "nudge").put("ts", ts).toString()
@@ -256,28 +269,32 @@ object NudgeWire {
     } catch (e: Exception) { null }
 
     /** An event for the ring mailbox that isn't a ring: a nudge only while [locked] (unlocked, the message itself notifies). */
-    fun ringMailbox(locked: Boolean, content: String, ring: RingKey): Nudge? = if (locked) ring.nudge(content) else null
+    fun ringMailbox(locked: Boolean, content: String, ring: RingKey, nowMs: Long = System.currentTimeMillis()): Nudge? =
+        if (locked) ring.nudge(content)?.takeIf { fresh(it, nowMs) } else null
 
     /** An event for the nudge mailbox: only ever a nudge (never a ring), and only while [locked]. */
-    fun nudgeMailbox(locked: Boolean, content: String, key: NudgeKey): Nudge? = if (locked) key.nudge(content) else null
+    fun nudgeMailbox(locked: Boolean, content: String, key: NudgeKey, nowMs: Long = System.currentTimeMillis()): Nudge? =
+        if (locked) key.nudge(content)?.takeIf { fresh(it, nowMs) }?.let { anonymous(it) } else null
 
     /** Where a nudge goes: the key it's sealed to, the mailbox, and whether it's the n2 form. */
     data class Route(val pub: String, val mailbox: String, val rich: Boolean)
 
     /**
-     * n2: their nudge key and nudge mailbox (a contact or a group peer), else a contact's ring key and ring mailbox.
-     * n1 only: a contact's ring key, the plain form. Null: no nudge (neither cap, or no key from them yet).
+     * A contact: their ring key and ring mailbox (the n2 form when they say n2), so their phone knows the nudge came
+     * from a contact and may show my name (round 14: what opens with the nudge key names nobody). A group-only peer,
+     * or a contact whose ring key hasn't come yet: their nudge key and nudge mailbox (n2 only). Null: no nudge
+     * (neither cap, or no key from them yet).
      */
     fun route(caps: Set<String>, groupOnly: Boolean, k: PeerKeys.Keys?): Route? {
         if (k == null) return null
         val rich = RICH_CAP in caps
+        val rk = k.rk
+        val rp = k.rp
+        if (!groupOnly && (rich || CAP in caps) && rk != null && rp != null) return Route(rk, rp, rich)
         val nk = k.nk
         val np = k.np
         if (rich && nk != null && np != null) return Route(nk, np, true)
-        val rk = k.rk
-        val rp = k.rp
-        if (groupOnly || (!rich && CAP !in caps) || rk == null || rp == null) return null
-        return Route(rk, rp, rich)
+        return null
     }
 
     /** What [Gate] counts a nudge under: the person, and with n2 the chat too (a group's nudge isn't held back by a 1:1 one). */
@@ -286,8 +303,12 @@ object NudgeWire {
     /** What a locked nudge's notification shows: Settings › Notifications › What notifications show. */
     enum class Show { NOTHING, NAME, MESSAGE }
 
-    /** One notification per sender and chat; with Nothing, one for everything. */
-    fun groupKey(show: Show, n: Nudge): String = if (show == Show.NOTHING) "" else n.from + "\n" + n.chat
+    /** One notification per sender and chat; with Nothing, one for everything. One naming nobody ([Nudge.known] false): per group. */
+    fun groupKey(show: Show, n: Nudge): String = when {
+        show == Show.NOTHING -> ""
+        !n.known -> "?\n" + n.chat
+        else -> n.from + "\n" + n.chat
+    }
 
     /** Its title: who it's from, and the group ("from · chat"). "Muninn" with Nothing, or for a nudge naming nobody (n1). */
     fun title(show: Show, n: Nudge): String = when {
@@ -321,6 +342,47 @@ object NudgeWire {
         from.isNotEmpty() -> contacts.filter { clean(it.second) == from }
         else -> emptyList<Pair<String, String>>()
     }.singleOrNull()?.first
+
+    /**
+     * Round 14: what a locked device does with nudges that name nobody (from the nudge key, so maybe not a contact).
+     * Each new group name gets its own notification, at most [MAX_KEYS] of them per lock; after that they fold into one
+     * that names nothing. They alert at most once per [ALERT_EVERY_MS] in all, whatever they claim to be, so no one
+     * in a group can buzz a locked phone over and over. Nudges from contacts ([Nudge.known]) alert as before.
+     */
+    class LockedLimit(private val alertEveryMs: Long = ALERT_EVERY_MS) {
+        private val keys = LinkedHashSet<String>()
+        private var lastAlert = Long.MIN_VALUE / 2
+        /** What to show: [n] as it will read, the notification's key, and whether it may sound. */
+        data class Take(val n: Nudge, val key: String, val alert: Boolean)
+        @Synchronized
+        fun take(show: Show, n: Nudge, nowMs: Long): Take {
+            if (n.known) return Take(n, groupKey(show, n), true)
+            var shown = n
+            var key = groupKey(show, n)
+            if (key !in keys) {
+                if (keys.size >= MAX_KEYS) { shown = n.copy(chat = ""); key = groupKey(show, shown) }
+                keys.add(key)
+            }
+            val alert = nowMs - lastAlert >= alertEveryMs
+            if (alert) lastAlert = nowMs
+            return Take(shown, key, alert)
+        }
+        /** Unlocked: start over. */
+        @Synchronized
+        fun clear() { keys.clear(); lastAlert = Long.MIN_VALUE / 2 }
+        companion object {
+            const val ALERT_EVERY_MS = 2 * 60_000L
+            const val MAX_KEYS = 3
+        }
+    }
+
+    /**
+     * Round 14 (caps known to lack nudges): someone whose app can't nudge this device while it's locked. A contact
+     * whose known caps have neither n1 nor n2 (an app before 1.33, an older Kids' TV), or a group-only peer without n2.
+     * Unknown caps (empty) count as able: only senders known to be older count.
+     */
+    fun cantNudge(caps: Set<String>, groupOnly: Boolean): Boolean =
+        caps.isNotEmpty() && if (groupOnly) RICH_CAP !in caps else (CAP !in caps && RICH_CAP !in caps)
 
     /** At most one nudge per [gateKey] per [EVERY_MS]. */
     class Gate(private val everyMs: Long = EVERY_MS) {

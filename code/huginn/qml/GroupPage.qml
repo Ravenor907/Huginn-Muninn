@@ -189,7 +189,7 @@ Rectangle {
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
         : shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "y", label: "Stop codes" }, { key: "b", label: "Close" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
-        : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
+        : typingIn ? [{ key: "a", label: "Send" }].concat(System.keyboardAvailable() ? [{ key: "y", label: "Keyboard" }] : [], [{ key: "lt", label: "Options" }, { key: "b", label: "Done" }])
         : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "channels" ? [{ key: "a", label: "Open" }].concat(callChoices.length ? [{ key: "y", label: "Call" }] : [],
@@ -739,7 +739,7 @@ Rectangle {
             DropArea {
                 anchors.fill: parent
                 enabled: !page.readOnly && !page.isTour
-                onDropped: drop => { if (drop.hasUrls) page.dropFiles(drop.urls); drop.accept() }
+                onDropped: drop => { const u = Ui.dropUrls(drop); if (u.length) page.dropFiles(u); drop.accept() }
                 Rectangle {
                     anchors.fill: parent
                     visible: parent.containsDrag
@@ -1000,10 +1000,10 @@ Rectangle {
     function write() {
         if (readOnly) { Ui.say("You're no longer in this group.", true); return }
         if (isTour) return
-        if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
+        if (compose.visible) { zone = "messages"; sel = -1; compose.writeHere(); return }
         const g = gid, ch = channelId, re = replyId
-        Ui.ask(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
-               t => { Chat.sendGroup(g, ch, t, re); page.replyId = "" }, false, true)
+        Ui.askMessage(re !== "" && replyMsg ? "Reply to " + replyMsg.name : "Message #" + channel.name, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
+               t => { Chat.sendGroup(g, ch, t, re); page.replyId = "" })
     }
     // Pictures (several at once as an album), a video message, a video file or a poll (MoreLayer).
     function pickPicture() {
@@ -1625,8 +1625,8 @@ Rectangle {
     function startEdit(m) {
         if (!m || !m.mine || m.photo || m.unsent || readOnly) return
         replyId = ""
-        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text) }
-        else { const g = gid, id = m.id; Ui.ask("Edit your message", "Everyone sees it marked (edited)", m.text, "Save", t => tell(Chat.editGroup(g, id, t), ""), false, true) }
+        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text); compose.writeHere() }
+        else { const g = gid, id = m.id; Ui.askMessage("Edit your message", "Everyone sees it marked (edited)", m.text, "Save", t => tell(Chat.editGroup(g, id, t), "")) }
     }
     function editLast() {
         for (let i = messages.length - 1; i >= 0; i--) {
@@ -1696,9 +1696,7 @@ Rectangle {
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
     // The on-screen keyboard would cover the message box at the foot: A writes the message in a prompt at the top
     // instead, and its A sends.
-    function writeAbove(box) {
-        Ui.ask(box.placeholder !== "" ? box.placeholder : "Message", "", box.text, "Send", t => { box.setText(t); box.enter() })
-    }
+    function writeAbove(box) { box.writeAbove() }
     function boxButton(box, b) {
         switch (b) {
         case "a":
@@ -1739,7 +1737,7 @@ Rectangle {
         case "left": zone = "messages"; return true
         case "right": return true
         case "a":
-            if (side === "thread") { if (threadBox.visible) threadBox.focusField(); else Ui.say("You're no longer in this group.", true) }
+            if (side === "thread") { if (threadBox.visible) threadBox.writeHere(); else Ui.say("You're no longer in this group.", true) }
             else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
             return true
         case "x": if (sideSel >= 0) sideOptions(sideSel); else groupMenu(); return true

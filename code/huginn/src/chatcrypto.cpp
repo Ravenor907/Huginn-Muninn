@@ -65,6 +65,23 @@ ChatCrypto::KeyPair ChatCrypto::newKeyPair()
     return kp;
 }
 
+QByteArray ChatCrypto::publicFromPrivate(const QByteArray &privateDer)
+{
+    if (privateDer.isEmpty())
+        return {};
+    EVP_PKEY *key = readPrivate(privateDer);
+    if (!key)
+        return {};
+    QByteArray out;
+    unsigned char *buf = nullptr;
+    const int n = i2d_PUBKEY(key, &buf);
+    if (n > 0)
+        out = QByteArray(reinterpret_cast<char *>(buf), n);
+    OPENSSL_free(buf);
+    EVP_PKEY_free(key);
+    return out;
+}
+
 QByteArray ChatCrypto::sharedKey(const QByteArray &myPrivateDer, const QByteArray &myPublicDer, const QByteArray &theirPublicDer)
 {
     EVP_PKEY *mine = readPrivate(myPrivateDer);

@@ -84,7 +84,8 @@ class Updater(private val context: Context, private val identity: Identity) {
                 val wait = newer && installAfter && (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() == true
                 _state.value = State(if (!newer) "Muninn is up to date" else if (wait) "Muninn $best is ready. It downloads on Wi-Fi, or tap to get it now"
                     else "Muninn $best is ready to install", best ?: "", false, newer)
-                if (newer && installAfter && !wait) download()
+                // Downloaded once and kept; Android's installer opens only from a tap (Update now), never by itself.
+                if (newer && installAfter && !wait) download(tapped = false)
             } catch (e: Exception) {
                 lastCheck = 0L   // try again next time Muninn opens
                 _state.value = State("Couldn't check for updates. Check your internet.")
@@ -116,8 +117,12 @@ class Updater(private val context: Context, private val identity: Identity) {
         }
     }
 
-    /** [back]: going back to stable ([backToStable]), the one time an older release may be installed. */
-    fun download(back: Boolean = false) {
+    /**
+     * [back]: going back to stable ([backToStable]), the one time an older release may be installed. [tapped]: the person
+     * asked (Update now), so Android's installer opens; an automatic check only gets the file ready (a Kids' TV's own
+     * [installer] still takes it). A file already downloaded and checked for this version is used again, not downloaded again.
+     */
+    fun download(back: Boolean = false, tapped: Boolean = true) {
         val u = url ?: return
         val block = signed
         val ver = version
@@ -147,6 +152,13 @@ class Updater(private val context: Context, private val identity: Identity) {
                 val signed = Ed25519.Check(hex(RELEASE_KEY), sig)
                 val dir = File(context.cacheDir, "updates").also { it.mkdirs() }
                 val out = File(dir, "Muninn.apk")
+                val note = File(dir, "Muninn.apk.ok")
+                // This version, already downloaded and checked: straight to installing it.
+                if (want != null && out.exists() && reuse(try { note.readText() } catch (_: Exception) { null }, ver, want) && shaOfFile(out) == want) {
+                    ready(out, ver, tapped)
+                    return@execute
+                }
+                note.delete()
                 val digest = java.security.MessageDigest.getInstance("SHA-256")
                 // GitHub's download links redirect to another host; OkHttp follows them.
                 val c = Net.client.newBuilder().readTimeout(2, java.util.concurrent.TimeUnit.MINUTES).build()
@@ -180,19 +192,39 @@ class Updater(private val context: Context, private val identity: Identity) {
                     _state.value = _state.value.copy(busy = false, status = VERSION_NOT_SIGNED)
                     return@execute
                 }
-                // A chat file on its way: installing closes Muninn and would stop it, so the update waits for it.
-                val waitUntil = System.currentTimeMillis() + 6 * 3_600_000L
-                while (io.github.ravenor907.muninn.net.FileLink.movingCount() > 0 && System.currentTimeMillis() < waitUntil) {
-                    _state.value = _state.value.copy(busy = true, status = "Installs when the file on its way is done")
-                    Thread.sleep(2000)
-                }
-                _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
-                main.post { if (installer?.invoke(out) != true) install(out) }
+                try { note.writeText(record(ver, got)) } catch (_: Exception) {}
+                ready(out, ver, tapped)
             } catch (e: Exception) {
-                _state.value = _state.value.copy(busy = false, status = "The download stopped. Try again.")
+                // A partial file would only take room (and the next try needs it): gone. A full disk is said as it is.
+                try { File(File(context.cacheDir, "updates"), "Muninn.apk").delete() } catch (_: Exception) {}
+                val full = e.message?.let { it.contains("ENOSPC") || it.contains("No space left", ignoreCase = true) } == true
+                _state.value = _state.value.copy(busy = false, status = if (full) "Not enough space on this device for the update." else "The download stopped. Try again.")
             }
         }
     }
+
+    /** A checked download of [ver] is ready: installed now when [tapped] (or by a Kids' TV's own installer), else it waits for a tap. */
+    private fun ready(out: File, ver: String, tapped: Boolean) {
+        val tv = installer
+        if (!tapped && tv == null) {
+            _state.value = _state.value.copy(busy = false, progress = 0f, status = "Muninn $ver is downloaded. Tap Update now to install it.")
+            return
+        }
+        // A chat file on its way: installing closes Muninn and would stop it, so the update waits for it.
+        val waitUntil = System.currentTimeMillis() + 6 * 3_600_000L
+        while (io.github.ravenor907.muninn.net.FileLink.movingCount() > 0 && System.currentTimeMillis() < waitUntil) {
+            _state.value = _state.value.copy(busy = true, status = "Installs when the file on its way is done")
+            Thread.sleep(2000)
+        }
+        _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
+        main.post { if (tv?.invoke(out) != true && tapped) install(out) }
+    }
+
+    private fun shaOfFile(f: File): String? = try {
+        val d = java.security.MessageDigest.getInstance("SHA-256")
+        f.inputStream().use { ins -> val buf = ByteArray(1 shl 16); while (true) { val n = ins.read(buf); if (n < 0) break; d.update(buf, 0, n) } }
+        d.digest().joinToString("") { "%02x".format(it) }
+    } catch (_: Exception) { null }
 
     /** What a check found: version, download link, SHA-256 and the APK's line in the signatures block (all may be null). */
     private data class Found(val version: String?, val url: String?, val sha: String?, val signed: SignedFile? = null)
@@ -300,17 +332,26 @@ class Updater(private val context: Context, private val identity: Identity) {
     }
 
     private fun install(apk: File) {
-        if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
-            context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            _state.value = _state.value.copy(status = "Allow Muninn to install updates, then press Install again")
-            return
+        // Some phones (a work profile, a kiosk, some Go phones) have no such page or block it: say so, never crash.
+        try {
+            if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
+                context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                _state.value = _state.value.copy(status = "Allow Muninn to install updates, then tap Update now again")
+                return
+            }
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
+            context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(status = "This phone doesn't let Muninn open the installer. Install Muninn.apk from the release page instead.")
         }
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
-        context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     companion object {
+        /** The note kept beside a checked download: its version and SHA-256. */
+        fun record(ver: String, sha: String) = "$ver\n$sha"
+        /** True when the note says the file is the checked download of [ver] with SHA-256 [sha]. */
+        fun reuse(note: String?, ver: String, sha: String): Boolean = note != null && note.trim() == record(ver, sha)
         private const val RELEASES = "https://api.github.com/repos/Ravenor907/Huginn-Muninn/releases?per_page=100"
         private const val LATEST = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest"
         private const val DOWNLOAD = "https://github.com/Ravenor907/Huginn-Muninn/releases/download"

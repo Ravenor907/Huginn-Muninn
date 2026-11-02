@@ -160,6 +160,9 @@ private:
     QString m_status;
     bool m_busy = false;
     bool m_auto = false;
+    // Windows: the version whose swap failed last time ("?" when not known): not downloaded again by itself.
+    QString m_failedVersion;
+    void forgetFailure();
     bool m_installing = false;
     QString m_readyPath;
 };

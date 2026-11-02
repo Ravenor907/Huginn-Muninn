@@ -159,6 +159,12 @@ object TvParent {
      * and sends the TV its first config. True if it was a TV's code.
      */
     fun adoptIfTv(app: Muninn, codeText: String): Boolean {
+        // Another family's Kids' Device, from its parent's Send its code: known as one (no setting it up), and that parent
+        // is the one asked to add this phone's Kids' Device back when it goes on one's list.
+        KidK14.kidCodeIn(codeText)?.let { (kid, by) ->
+            if (kid != app.identity.publicKey && !isManaged(kid)) { markKid(app, kid); if (by != app.identity.publicKey) noteKidFrom(app, kid, by) }
+            return true
+        }
         val key = tvKeyIn(codeText) ?: return false
         markKid(app, key)
         if (isManaged(key) || app.contacts.get(key) == null) return true
@@ -214,6 +220,16 @@ object TvParent {
         if (key in kidKeys.value) return
         kidKeys.value = kidKeys.value + key
         try { app.vault.write(File(app.filesDir, KIDS_FILE), JSONArray(kidKeys.value.toList()).toString()) } catch (_: Exception) {}
+    }
+
+    /** [key] isn't a Kids' Device any more (it left kids' mode, or this phone let it go): an ordinary contact again. */
+    private fun unmarkKid(app: Muninn, key: String) {
+        loadKids(app)
+        if (key in kidKeys.value) {
+            kidKeys.value = kidKeys.value - key
+            try { app.vault.write(File(app.filesDir, KIDS_FILE), JSONArray(kidKeys.value.toList()).toString()) } catch (_: Exception) {}
+        }
+        if (kidFrom.remove(key) != null) try { app.vault.write(File(app.filesDir, KID_FROM_FILE), JSONObject(kidFrom.toMap()).toString()) } catch (_: Exception) {}
     }
 
     /** A Kids' Device: one this phone looks after, or another family's it knows from a card or its code. */
@@ -284,8 +300,8 @@ object TvParent {
                 if (k7(app, key)) t.upd else null, if (k8(app, key)) t.keep else null,
                 if (k11) t.chat else null, if (k11) t.quiet else null, if (k11) t.pin else null,
                 if (k12) t.hav else null, if (k12) havw else null, if (k12) havh else null,
-                // k11: the time zone quiet times follow (this phone's until a parent picks another).
-                tz = if (k11) t.tz.ifEmpty { java.util.TimeZone.getDefault().id } else null,
+                // k11: the time zone quiet times follow (this phone's until a parent picks another; saved below).
+                tz = if (k11) KidRules.zoneToSend(t.tz, java.util.TimeZone.getDefault().id) else null,
                 // k13: the colors and Let the kid choose; the child's name a parent set (never the device's name).
                 look = if (k13) t.look else null, season = if (k13) t.season else null, accent = if (k13) t.accent else null,
                 lookPick = if (k13) t.lookPick else null, kname = if (k13) t.child.ifEmpty { null } else null,
@@ -297,8 +313,10 @@ object TvParent {
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
             newParents = TvRules.parse(cfg).parents.filter { it != me && it !in t.sharedWith }
+            // Round 14: a device set up before 1.35 had no zone kept: the one this config carries is kept now, so the next
+            // change (from any parent, wherever they are) sends the same zone instead of its own phone's.
             put(t.copy(v = v, pending = listOf(plain), pendingV = v, since = System.currentTimeMillis(), extrasSent = extras != null, k11Sent = extras?.chat != null,
-                sharedWith = (t.sharedWith + newParents).distinct()))
+                sharedWith = (t.sharedWith + newParents).distinct(), tz = KidRules.zoneToKeep(t.tz, extras?.tz)))
             tries[key] = 1 to System.currentTimeMillis() + RETRY[0]
             signed = cfg
         }
@@ -441,7 +459,9 @@ object TvParent {
                 }
                 else -> {
                     val done = v >= t.pendingV
-                    put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version, dev = dev))
+                    // Round 14: no zone kept here yet (set up before 1.35): the one the device runs is kept.
+                    put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version, dev = dev,
+                        tz = KidRules.zoneToKeep(t.tz, runs?.takeIf { KidRules.hasK11(it.raw) }?.tz)))
                     if (done) tries.remove(fromKey)
                     // The TV just showed it speaks k2: send the call and mic settings it hasn't had yet.
                     resend = done && !t.extrasSent && k2(app, fromKey) && (!t.calls || t.mic != TvRules.DEFAULT_MIC || (k5(app, fromKey) && t.nr != TvRules.NR_BOTH)
@@ -474,7 +494,8 @@ object TvParent {
         val people = cfg.contacts.filter { it.k != me && it.k != t.key }
         return t.copy(
             v = cfg.v, applied = cfg.v, pendingV = cfg.v, pending = emptyList(),
-            quick = cfg.quick, reach = people.map { it.k }, others = people, dictation = cfg.dictation,
+            // k14: an older parent app's config has no pictures on its quick messages: each keeps the one it had here.
+            quick = KidK14.keepPics(cfg.quick, t.quick, cfg.raw.has("gok")), reach = people.map { it.k }, others = people, dictation = cfg.dictation,
             parents = cfg.parents, calls = cfg.calls, mic = cfg.mic, extrasSent = cfg.raw.has("mic"), nr = cfg.nr,
             upd = if (cfg.raw.has("upd")) cfg.upd else t.upd, keep = cfg.keep ?: t.keep,
             // An older parent app's config has no k11 field: the device kept its level, quiet times and PIN (7.18), so does this phone.
@@ -866,8 +887,11 @@ object TvParent {
     /** The device left kids' mode (with the PIN, or a parent's yes): this phone stops looking after it. It stays a contact. */
     private fun takeLeft(app: Muninn, fromKey: String, o: JSONObject): Boolean {
         if (!KidRules.isLeft(o)) return false
+        // Sent by the device itself: it's an ordinary contact from now on, here and in the group pickers (7.18).
+        unmarkKid(app, fromKey)
         synchronized(lock) {
-            if (_tvs.value[fromKey] == null) return false
+            // Someone on its list (not a parent): nothing more to drop.
+            if (_tvs.value[fromKey] == null) return true
             _tvs.value = _tvs.value - fromKey
             save(app)
         }
@@ -973,13 +997,17 @@ object TvParent {
     private fun takeKidAdd(app: Muninn, fromKey: String, o: JSONObject): Boolean {
         val a = KidK14.kidAddIn(o) ?: return false
         if (app.contacts.get(fromKey) == null) return false
+        loadKids(app)
+        // Only a device this parent could have paired counts: never this phone, its own devices or the sender, never someone
+        // already here who isn't known as a Kids' Device, and never a device another parent handed over (by card or code).
+        if (!KidK14.kidAddOk(a.k, fromKey, app.identity.publicKey, a.tv, isManaged(a.k), app.contacts.get(a.k) != null, isKidDevice(a.k), kidFrom[a.k])) return true
         var title = ""
         var text = ""
         synchronized(lock) {
             val t = _tvs.value[a.tv] ?: return false
             if (t.disconnecting) return true
-            noteKidFrom(app, a.k, fromKey)
             if (a.k in t.reach) {
+                noteKidFrom(app, a.k, fromKey)
                 // Both lists have each other now.
                 if (a.k in t.waitKid) change(a.tv) { it.copy(waitKid = it.waitKid - a.k) }
                 send(app, fromKey, listOf(KidK14.kidOkMessage(a.tv, a.k)))
@@ -988,8 +1016,10 @@ object TvParent {
             if (t.kidAsks.any { it.add.k == a.k }) return true
             put(t.copy(kidAsks = t.kidAsks + KidAddAsk(a, fromKey)))
             val child = childName(app, t)
+            val who = app.chat.nameOf(fromKey)
             title = "Let ${a.n} talk with $child?"
-            text = "${app.chat.nameOf(fromKey)} put their Kids' Device for ${a.n} on its list. Add it to who $child can talk to?"
+            // Nothing can prove a device is a child's: said as it is, so the parent decides on who's asking.
+            text = KidK14.kidAddText(who, a.n, child, app.contacts.get(a.k) == null)
         }
         if (Ui.ask.value == null) Ui.sure(Ask(title, text, "Add", cancel = "Not now", onCancel = { answerKidAdd(app, a.tv, a.k, false) }) {
             answerKidAdd(app, a.tv, a.k, true)
@@ -1010,6 +1040,8 @@ object TvParent {
             app.chat.addContact(c.copy(invite = null))
         }
         markKid(app, k)
+        // Its parent (who asked) is the one asked to add this phone's device back.
+        noteKidFrom(app, k, ask.from)
         invite(app, key, listOf(k))
         send(app, ask.from, listOf(KidK14.kidOkMessage(key, k)))
         Ui.say("Added. The two devices can talk once it's online.")
@@ -1074,7 +1106,9 @@ object TvParent {
     /** Shares the TV's contact code, so someone the parent added can add the TV on their side. */
     fun shareText(app: Muninn, key: String): String? {
         val c = app.contacts.get(key) ?: return null
-        val code = Contacts.code(c.name, key, c.mailbox ?: "")
+        // k14: marked as a Kids' Device, with this parent, so another family's parent can put it on their own Kids' Device's
+        // list and this phone is asked to add theirs back.
+        val code = try { KidK14.kidCode(Contacts.code(c.name, key, c.mailbox ?: ""), app.identity.publicKey) } catch (_: Exception) { Contacts.code(c.name, key, c.mailbox ?: "") }
         return "Add our Kids' Device in Muninn so it can reach you: ${Contacts.link(code)}"
     }
 
@@ -1125,6 +1159,8 @@ object TvParent {
         }
         tries.remove(key)
         TvFiles.forget(key)
+        // If it's added again later (as a normal device, after "make it a normal device"), it isn't marked as a Kids' Device.
+        unmarkKid(app, key)
         try { app.chat.deleteConversation(key); app.chat.removeContact(key) } catch (_: Exception) {}
     }
 

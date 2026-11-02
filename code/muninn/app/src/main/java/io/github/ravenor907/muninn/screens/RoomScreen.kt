@@ -149,7 +149,11 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 Spacer(Modifier.height(8.dp))
                 val turned = sc.rotation % 180 != 0
                 val ratio = if (sc.width > 0 && sc.height > 0) (if (turned) sc.height.toFloat() / sc.width else sc.width.toFloat() / sc.height) else 16f / 9f
-                Box(Modifier.fillMaxWidth().aspectRatio(ratio.coerceIn(0.5f, 3f))) {
+                // At most 60% of the window high (a landscape tablet otherwise gets a screen taller than itself).
+                val roomConf = androidx.compose.ui.platform.LocalConfiguration.current
+                val shown = ratio.coerceIn(0.5f, 3f)
+                Box(Modifier.widthIn(max = RoomTiles.screenWidth(roomConf.screenWidthDp.toFloat(), roomConf.screenHeightDp.toFloat(), shown).dp)
+                    .fillMaxWidth().aspectRatio(shown)) {
                     VideoPicture({ RoomManager.screenSurface(it) }, sc.width, sc.height, sc.rotation,
                         Modifier.fillMaxSize().clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field),
                         if (hideNames) "Shared screen" else "${sc.name}'s screen")
@@ -163,11 +167,15 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             val showing = r.people.filter { !it.me && vid.pics[it.key]?.on == true }
             if (vid.cameraOn || showing.isNotEmpty()) {
                 Spacer(Modifier.height(16.dp))
-                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), maxItemsInEachRow = 2) {
-                    if (vid.cameraOn) RoomSelfView(Modifier.weight(1f).aspectRatio(3f / 4f))
+                // 2 across upright, 4 sideways, each at most 60% of the window high: every face fits on screen.
+                val tileConf = androidx.compose.ui.platform.LocalConfiguration.current
+                val tileW = RoomTiles.tileWidth(tileConf.screenWidthDp.toFloat(), tileConf.screenHeightDp.toFloat()).dp
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = RoomTiles.columns(tileConf.screenWidthDp.toFloat(), tileConf.screenHeightDp.toFloat())) {
+                    if (vid.cameraOn) RoomSelfView(Modifier.width(tileW).aspectRatio(3f / 4f))
                     showing.forEach { p ->
                         val pic = vid.pics[p.key] ?: io.github.ravenor907.muninn.net.call.RoomVideo.Pic()
-                        Box(Modifier.weight(1f).aspectRatio(3f / 4f).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field)) {
+                        Box(Modifier.width(tileW).aspectRatio(3f / 4f).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field)) {
                             VideoPicture({ io.github.ravenor907.muninn.net.call.RoomVideo.surface(p.key, it) }, pic.width, pic.height, pic.rotation,
                                 Modifier.fillMaxSize(), if (hideNames) "Someone's camera" else "${p.name}'s camera")
                             Text(if (hideNames) "?" else p.name, style = Type.small.copy(color = Palette.text), modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))

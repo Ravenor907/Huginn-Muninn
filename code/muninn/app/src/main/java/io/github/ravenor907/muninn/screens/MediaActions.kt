@@ -202,7 +202,13 @@ internal fun MediaActionRow(m: Chat.Msg, bytes: ByteArray?, a: MediaActions, onF
 @Composable
 internal fun MediaViewer(app: Muninn, m: Chat.Msg, a: MediaActions?, close: () -> Unit) {
     BackHandler { close() }
-    val bytes = remember(m.id) { app.chat.photo(m.photo) }
+    // Opened off the main thread (a video can be megabytes): a dark screen for that moment, then the media.
+    val loaded by produceState<Pair<Boolean, ByteArray?>>(false to null, m.id) { value = true to withContext(Dispatchers.IO) { app.chat.photo(m.photo) } }
+    if (!loaded.first) {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) { Text("Opening…", style = Type.normal.copy(color = Color.White)) }
+        return
+    }
+    val bytes = loaded.second
     var forwarding by remember(m.id) { mutableStateOf(false) }
     if (forwarding) ForwardMedia(app, m) { forwarding = false }
     val bar: (@Composable () -> Unit)? = if (a != null) ({ MediaActionRow(m, bytes, a, { forwarding = true }, close) }) else null

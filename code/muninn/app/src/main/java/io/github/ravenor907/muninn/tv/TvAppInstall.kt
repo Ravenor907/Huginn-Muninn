@@ -34,6 +34,9 @@ object TvAppInstall {
 
     private fun save(c: Context, l: List<TvInstalls.Ask>) = prefs(c).edit().putString(KEY, TvInstalls.toJson(l)).apply()
 
+    /** A disconnect or leaving kids' mode: apps that waited for the old family's yes are never offered to the next one. */
+    fun forget(c: Context) = prefs(c).edit().remove(KEY).apply()
+
     /** Apps a parent sent arrived (all their parts, saved in Downloads): every parent's phone is asked. */
     fun arrived(app: Muninn, files: List<Got>) {
         Thread {

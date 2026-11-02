@@ -15,6 +15,9 @@ Rectangle {
     color: Theme.ground
 
     readonly property bool ended: Calls.state === "ended"
+    // Locked: a call still goes on, but who it is stays behind the lock (as on the ring, IncomingCall.qml).
+    readonly property bool nameHidden: Vault.exists && Vault.screenLocked && System.tourDir.length === 0
+    readonly property string who: nameHidden ? "Someone" : Calls.peerName
     readonly property bool videoUp: Calls.peerCamera && !ended
     readonly property var prompts: ended ? [] : [{ key: "a", label: Calls.muted ? "Unmute mic" : "Mute mic" }, { key: "y", label: "Output" }]
                                                .concat(Calls.videoPossible ? [{ key: "x", label: Calls.cameraOn ? "Camera off" : "Camera on" }] : [])
@@ -155,8 +158,8 @@ Rectangle {
             }
             Avatar {
                 anchors.centerIn: parent
-                key: Calls.peerKey
-                name: Calls.peerName
+                key: page.nameHidden ? "" : Calls.peerKey
+                name: page.who
                 size: parent.width - Theme.px(16)
             }
         }
@@ -233,7 +236,7 @@ Rectangle {
                     anchors.left: parent.left; anchors.right: stripStatus.left; anchors.rightMargin: Theme.px(16)
                     anchors.verticalCenter: parent.verticalCenter
                     elide: Text.ElideRight
-                    text: Calls.peerName
+                    text: page.who
                     color: Theme.text
                     font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
                 }
@@ -277,7 +280,7 @@ Rectangle {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             elide: Text.ElideRight
-            text: Calls.peerName
+            text: page.who
             color: Theme.text
             font.family: Theme.display; font.pixelSize: Theme.fs(28); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
         }

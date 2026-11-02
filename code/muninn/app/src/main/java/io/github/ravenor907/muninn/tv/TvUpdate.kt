@@ -51,15 +51,21 @@ object TvUpdate {
     private const val DAY = 24 * 60 * 60_000L
     private const val HOUR = 60 * 60_000L
 
+    @Volatile private var daily: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var follow: kotlinx.coroutines.Job? = null
+
     /** Kids' mode only, once: hooks the installer, checks a minute after start, then every day. */
     fun start(app: Muninn) {
         if (started) return
         started = true
         val p0 = prefs(app)
         val version = try { app.updater.current } catch (_: Exception) { "" }
-        // u1: the last state, as the TV last said it; a newer Muninn running now means the update went in.
-        remote.value = TvUpd.St(version, p0.getString("uState", null)?.takeIf { it in TvUpd.STATES && it != TvUpd.DOWNLOADING && it != TvUpd.CHECKING } ?: TvUpd.CURRENT,
-            why = p0.getString("uWhy", null), at = p0.getLong("lastCheck", 0L))
+        // Install sessions left from an earlier run (a reboot or a kill mid-write, or a failed try) take room: gone now.
+        abandonOld(app)
+        // u1: the last state, as the TV last said it; a newer Muninn running now means the update went in. "Installing" or
+        // "Needs a tap" from before Muninn restarted is over: an install that went in shows as a newer version below, and
+        // one that didn't is tried again by the next check.
+        remote.value = TvUpd.St(version, TvUpd.onStart(p0.getString("uState", null)), why = p0.getString("uWhy", null), at = p0.getLong("lastCheck", 0L))
         // Muninn came back up as a newer version: the update went in, and the parents' phones hear so.
         try {
             val before = p0.getString("runs", "") ?: ""
@@ -70,13 +76,13 @@ object TvUpdate {
         } catch (_: Exception) {}
         app.updater.installer = { apk -> install(app, apk); true }
         // The Updater's steps (checking, downloading, done, failed) go to the parents' phones (u1).
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob()).launch {
+        follow = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob()).launch {
             app.updater.state.collect { st -> try { fromUpdater(app, st) } catch (_: Exception) {} }
         }
         // A minute after start, then once a day, and only while it's plugged in (a TV always is; a tablet in kids' mode
         // waits for its charger). The parents' phones hear the TV's version on start and every day.
         var first = true
-        timer.scheduleWithFixedDelay({
+        daily = timer.scheduleWithFixedDelay({
             try {
                 val now = System.currentTimeMillis()
                 val p = prefs(app)
@@ -93,6 +99,39 @@ object TvUpdate {
                 first = false
             } catch (_: Exception) {}
         }, 60_000, HOUR, TimeUnit.MILLISECONDS)
+    }
+
+    /**
+     * The device left kids' mode: no more silent checks or installs, and the normal Updater installs again (Android's own
+     * Install box, and Settings' "Check for updates automatically"). What it saved for the parents goes too.
+     */
+    fun stop(app: Muninn) {
+        daily?.cancel(false); daily = null
+        retry?.cancel(false); retry = null
+        follow?.cancel(); follow = null
+        app.updater.installer = null
+        waiting = null; afterCall = null; fails = 0
+        remote.value = null
+        state.value = State()
+        started = false
+        forget(app)
+    }
+
+    /** What this saved for the parents (the state they saw, the permissions asked for): a new family starts clean. */
+    fun forget(c: Context) {
+        val p = prefs(c)
+        val e = p.edit()
+        p.all.keys.filter { it.startsWith("asked:") || it in SAVED }.forEach { e.remove(it) }
+        e.apply()
+    }
+    private val SAVED = setOf("uState", "uWhy", "lastCheck", "lastDailyCheck", "lastReport")
+
+    /** Install sessions this app left open (a failed or cut-off try): abandoned, so their partial files go. */
+    private fun abandonOld(c: Context) {
+        try {
+            val pi = c.packageManager.packageInstaller
+            pi.mySessions.forEach { s -> try { pi.abandonSession(s.sessionId) } catch (_: Exception) {} }
+        } catch (_: Exception) {}
     }
 
     /** A parent asked (room tvconfig "update", or u1 "upnow"), the check on start, the daily check, or a try again. */
@@ -170,9 +209,16 @@ object TvUpdate {
         }
         if (!canInstall(c)) { waiting = apk; post(c, State(needsParent = true, status = TvWords.ASK_PARENT, code = "needs")); setRemote(c, TvUpd.TAP); return }
         waiting = null
+        // Not enough room for the install (Android copies the file, then unpacks it): said as it is, and tried again later.
+        if (!TvUpd.roomFor(apk.length(), try { c.filesDir.usableSpace } catch (_: Exception) { Long.MAX_VALUE })) {
+            post(c, State(status = "There isn't enough space for the update. It tries again later.", code = "failed"))
+            setRemote(c, TvUpd.FAILED, why = TvUpd.NO_SPACE)
+            return
+        }
         Thread {
+            var id = -1
+            val pi = c.packageManager.packageInstaller
             try {
-                val pi = c.packageManager.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
                     setAppPackageName(c.packageName)
                     // Muninn stays the installer of record, so every later update can skip the prompt.
@@ -183,7 +229,7 @@ object TvUpdate {
                         setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
                     }
                 }
-                val id = pi.createSession(params)
+                id = pi.createSession(params)
                 pi.openSession(id).use { s ->
                     s.openWrite("Muninn.apk", 0, apk.length()).use { os -> apk.inputStream().use { it.copyTo(os) }; s.fsync(os) }
                     val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
@@ -193,8 +239,12 @@ object TvUpdate {
                 post(c, State(status = "Installing the new Muninn…", code = "installing"))
                 setRemote(c, TvUpd.INSTALLING)
             } catch (e: Exception) {
-                post(c, State(status = "The update couldn't be installed. It tries again later.", code = "failed"))
-                setRemote(c, TvUpd.FAILED, why = "Couldn't start the install")
+                // The half-written session goes at once, so its partial file doesn't eat the room the next try needs.
+                if (id >= 0) try { pi.abandonSession(id) } catch (_: Exception) {}
+                val space = TvUpd.isNoSpace(e.message)
+                post(c, State(status = if (space) "There isn't enough space for the update. It tries again later."
+                    else "The update couldn't be installed. It tries again later.", code = "failed"))
+                setRemote(c, TvUpd.FAILED, why = if (space) TvUpd.NO_SPACE else "Couldn't start the install")
             }
         }.start()
     }
@@ -216,6 +266,10 @@ object TvUpdate {
                 // The TV screen shows "Ask a grown-up: press OK to update"; OK brings up Android's Install box.
             }
             PackageInstaller.STATUS_SUCCESS -> { post(c, State(status = "Muninn is up to date", code = "done")); setRemote(c, TvUpd.CURRENT) }
+            PackageInstaller.STATUS_FAILURE_STORAGE -> {
+                post(c, State(status = "There isn't enough space for the update. It tries again later.", code = "failed"))
+                setRemote(c, TvUpd.FAILED, why = TvUpd.NO_SPACE)
+            }
             else -> {
                 post(c, State(status = "The update didn't go in. It tries again later.", code = "failed"))
                 setRemote(c, TvUpd.FAILED, why = "Android didn't install it")

@@ -10,6 +10,22 @@
 #include <cstdio>
 #include <initializer_list>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <string>
+#endif
+
+namespace
+{
+// Characters that change which way text runs, or are there but take no room: in a file name they only ever hide what
+// it is ("Photos" U+202E "gpj.scr" shows as "Photosrcs.jpg").
+bool hiddenMark(char16_t c)
+{
+    return (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || (c >= 0x200b && c <= 0x200f) || c == 0x061c || c == 0xfeff
+        || c == 0x2060 || c == 0x180e;
+}
+}
+
 const char Sharing::kCap[] = "f2";
 const char Sharing::kEveryone[] = "everyone";
 const char Sharing::kAdmins[] = "admins";
@@ -120,8 +136,11 @@ QString Sharing::safeName(const QString &name, const QString &fallback)
 {
     static const QString refused = QStringLiteral("/\\:*?\"<>|");
     QString out;
-    for (const QChar c : name)
+    for (const QChar c : name) {
+        if (hiddenMark(c.unicode()))
+            continue;   // left out altogether
         out += c.unicode() < 0x20 || c.unicode() == 0x7f || refused.contains(c) ? QLatin1Char('_') : c;
+    }
     out = GroupWire::clip(out.trimmed(), 120);
     // No hidden names, no "." or "..", and nothing Windows would cut off.
     while (out.startsWith(QLatin1Char('.')) || out.startsWith(QLatin1Char(' ')))
@@ -171,9 +190,55 @@ QString Sharing::kindOf(const QString &name)
         return QStringLiteral("Archive");
     if (in({"apk", "apks", "xapk", "apkm"}))
         return QStringLiteral("App installer");
-    if (in({"exe", "msi", "bat", "cmd", "ps1", "sh", "appimage", "flatpak", "flatpakref"}))
+    // Everything Windows (or a Linux desktop) may run when it's opened: programs, scripts, shortcuts, installers and
+    // disk images that open as a drive.
+    if (in({"exe", "msi", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "msp", "bat", "cmd", "com", "scr", "pif", "cpl", "msc",
+            "lnk", "url", "website", "js", "jse", "vbs", "vbe", "wsf", "wsh", "wsc", "hta", "ps1", "psm1", "psd1", "reg", "jar", "jnlp", "iso",
+            "img", "vhd", "vhdx", "application", "gadget", "chm", "hlp", "inf", "ins", "isp", "sct", "scf", "shb", "settingcontent-ms",
+            "library-ms", "search-ms", "xll", "sh", "run", "py", "pl", "desktop", "deb", "rpm", "appimage", "flatpak", "flatpakref", "flatpakrepo"}))
         return QStringLiteral("Program");
     return QStringLiteral("File");
+}
+
+QString Sharing::openWarning(const QString &name)
+{
+    for (const QChar c : name)
+        if (hiddenMark(c.unicode()))
+            return QStringLiteral("The name \"%1\" has hidden characters that can make a file look like another kind. Opening it may run a "
+                                  "program. Open it only if you were expecting it.")
+                .arg(safeName(name, QStringLiteral("file")));
+    if (kindOf(name) != QLatin1String("Program"))
+        return {};
+    const QFileInfo fi(name);
+    const QString ext = fi.suffix();
+    // "invoice.pdf.exe": Windows hides the last part, so it looks like the one before it.
+    const QString inner = QFileInfo(fi.completeBaseName()).suffix();
+    const QString looks = inner.isEmpty() ? QString() : kindOf(QStringLiteral("x.") + inner);
+    if (!looks.isEmpty() && looks != QLatin1String("File") && looks != QLatin1String("Program"))
+        return QStringLiteral("\"%1\" looks like a %2 but is a program (.%3). Opening it runs it, and a program from someone else can take "
+                              "over this computer. Open it only if you were expecting it.")
+            .arg(name, looks.toLower(), ext);
+    return QStringLiteral("\"%1\" is a program (.%2). Opening it runs it, and a program from someone else can take over this computer. "
+                          "Open it only if you were expecting it.")
+        .arg(name, ext);
+}
+
+void Sharing::markFromInternet(const QString &path)
+{
+#ifdef Q_OS_WIN
+    // The Mark of the Web, as a browser leaves it: Windows' SmartScreen and its "Open File" warning then look at the
+    // file before it runs. A drive without streams (FAT32, exFAT) simply can't keep it.
+    const std::wstring stream = QDir::toNativeSeparators(path).toStdWString() + L":Zone.Identifier";
+    HANDLE h = CreateFileW(stream.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    static const char zone[] = "[ZoneTransfer]\r\nZoneId=3\r\n";
+    DWORD wrote = 0;
+    WriteFile(h, zone, DWORD(sizeof(zone) - 1), &wrote, nullptr);
+    CloseHandle(h);
+#else
+    Q_UNUSED(path);
+#endif
 }
 
 QString Sharing::declineText(const QString &why)
@@ -243,6 +308,18 @@ bool Sharing::selfTest()
     check(safeName(QStringLiteral("tail. . "), QStringLiteral("x")) == QLatin1String("tail"), QStringLiteral("name: trailing dots"));
     check(safeName(QStringLiteral("a\nb\tc"), QStringLiteral("x")) == QLatin1String("a_b_c"), QStringLiteral("name: control characters"));
     check(safeName(QString(300, QLatin1Char('a')), QStringLiteral("x")).size() == 120, QStringLiteral("name: length"));
+    // A name turned around by a hidden direction mark shows (and is saved) as what it really is.
+    check(safeName(QStringLiteral("Photos") + QChar(0x202e) + QStringLiteral("gpj.scr"), QStringLiteral("x")) == QLatin1String("Photosgpj.scr")
+              && safeName(QStringLiteral("a") + QChar(0x200b) + QChar(0x2066) + QStringLiteral("b.txt"), QStringLiteral("x")) == QLatin1String("ab.txt")
+              && safeName(QStringLiteral("a.txt:stream"), QStringLiteral("x")) == QLatin1String("a.txt_stream"),
+          QStringLiteral("name: hidden marks and streams"));
+    check(kindOf(QStringLiteral("x.scr")) == QLatin1String("Program") && kindOf(QStringLiteral("x.LNK")) == QLatin1String("Program")
+              && kindOf(QStringLiteral("x.vbs")) == QLatin1String("Program") && kindOf(QStringLiteral("x.iso")) == QLatin1String("Program"),
+          QStringLiteral("kinds: programs"));
+    check(!openWarning(QStringLiteral("invoice.pdf.exe")).isEmpty() && openWarning(QStringLiteral("invoice.pdf.exe")).contains(QLatin1String("looks like a pdf document"))
+              && !openWarning(QStringLiteral("Photos") + QChar(0x202e) + QStringLiteral("gpj.txt")).isEmpty() && openWarning(QStringLiteral("photo.jpg")).isEmpty()
+              && openWarning(QStringLiteral("notes.txt")).isEmpty(),
+          QStringLiteral("open warnings"));
     const QString f = folderFor(QStringLiteral("/home/me/Downloads"), QStringLiteral("Huginn"), QStringLiteral("../Ana"));
     check(f == QStringLiteral("/home/me/Downloads/Huginn/_Ana") && !f.contains(QLatin1String("..")), QStringLiteral("folder: ") + f);
     check(folderFor(QStringLiteral("/d"), QStringLiteral("Huginn"), QStringLiteral("..")) == QLatin1String("/d/Huginn/Chat"), QStringLiteral("folder: .."));

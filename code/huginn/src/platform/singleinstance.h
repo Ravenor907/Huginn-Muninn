@@ -28,6 +28,13 @@ public:
     // True: this is the only copy (keep going). False: another copy runs and was asked to show itself.
     // restarted: started by a copy that is closing; waits up to kRestartWaitMs for it to end first.
     bool claim(bool restarted = false);
+    // Why claim() said false: another copy answered and came to the front (nothing to say), or it holds the lock but
+    // doesn't answer (hung, or open on another computer or account using this folder), or the data folder can't be
+    // written at all (a full disk, a read-only folder).
+    enum Outcome { Claimed, Shown, NotAnswering, CantWrite };
+    Outcome outcome() const { return m_outcome; }
+    // What to say on screen for NotAnswering or CantWrite ("" otherwise).
+    QString problemText() const;
     static constexpr int kRestartWaitMs = 15000;
     // A copy that doesn't answer the knock in this long is hung (or closing and stuck). Only a stuck closing one is
     // asked to end itself, and its lock is taken once it has.
@@ -44,6 +51,9 @@ public:
     static constexpr int kStuckMs = 5000;
     // Unminimises, raises and focuses Huginn's windows (a window put away with tuck() is shown again first).
     static void bringToFront();
+    // Wayland and X11: the activation token a launcher or a notification click gave (XDG_ACTIVATION_TOKEN or
+    // DESKTOP_STARTUP_ID), set for this process just before bringToFront(), so the desktop lets the window come forward.
+    static void useActivationToken(const QByteArray &token);
     // Hides window where it can't be minimized (Steam's game mode): Huginn keeps running, and bringToFront()
     // (a notification, the tray, or starting Huginn again) shows it as it was.
     static void tuck(QWindow *window);
@@ -71,4 +81,6 @@ private:
     QString m_endAsk;
     QLockFile *m_lock = nullptr;
     QLocalServer *m_server = nullptr;
+    QString m_dir;
+    Outcome m_outcome = Claimed;
 };

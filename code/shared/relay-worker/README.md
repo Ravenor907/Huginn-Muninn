@@ -98,7 +98,10 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
 ## Good to know
 
 - Limits: each app install gets at most 30 logins a day, each internet address at most 60 a day (a home
-  shares one address, so this is a few installs' worth), and everyone together at most 3000 a day.
+  shares one address, so this is a few installs' worth). Since 1.4 each install registers once (a second or less of
+  work on the device, at most 6 new installs a day per address and 2000 for everyone) and gets a token that each login
+  renews. Logins with a token share a cap of 12,000 a day; logins without one (older apps, or anyone who pulled
+  `APP_SECRET` out of an app) share 1000 a day of their own, so they can never use up the others.
   An IPv6 address counts by its /48, the most one home or phone line is usually given, so one customer can't
   get around the cap by moving between their own addresses. The day resets at midnight UTC. When a limit is hit the Worker
   answers 429.
@@ -110,9 +113,10 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
 - If the storage object is missing or not working, the Worker refuses every request (answers 503).
   That is on purpose: the caps are what protect the TURN account.
 - Free plan budget, per login: 1 Worker request, 1 storage object request, 3 storage rows written (and the
-  same 3 or fewer deleted the next day). The free plan allows 100,000 Worker requests, 100,000 storage object
-  requests and 100,000 rows written a day. The 3000 a day cap uses at most 3000 requests of each kind and
-  about 18,000 rows, so 500 users fit with room to spare.
+  same 3 or fewer deleted the next day); per registration 1 of each and 2 rows. The free plan allows 100,000 Worker
+  requests, 100,000 storage object requests and 100,000 rows written a day. With every cap full that is at most
+  15,000 requests of each kind and 86,000 rows written and deleted, so it stays free. No new secret is needed: tokens
+  are signed with a key made from `TURN_KEY_API_TOKEN` (or a `TOKEN_KEY` secret, if you add one).
 - Each login lasts 30 minutes. The apps ask for a fresh one for a call when less than 5 minutes are left.
 - A request body over 1 KB is refused (413) before it is read.
 - TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage; step H's alert

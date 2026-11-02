@@ -17,6 +17,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -87,6 +88,7 @@ SingleInstance::SingleInstance(QObject *parent, const QString &where)
     // Per user: the app data folder differs per account, so its hash names the socket.
     const QString dir = where.isEmpty() ? Portable::dataDir() : where;
     QDir().mkpath(dir);
+    m_dir = dir;
     const QByteArray h = QCryptographicHash::hash(dir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
     m_name = QStringLiteral("io.github.ravenor907.Huginn-") + QString::fromLatin1(h);
     m_lock = new QLockFile(dir + QStringLiteral("/instance.lock"));
@@ -106,8 +108,32 @@ SingleInstance::~SingleInstance()
         s_current = nullptr;
 }
 
+namespace
+{
+// The lock file couldn't be made or written at all (a full disk, a read-only folder): not another copy.
+bool cantWrite(const QLockFile *lock)
+{
+    const QLockFile::LockError e = lock->error();
+    return e == QLockFile::PermissionError || e == QLockFile::UnknownError;
+}
+
+#ifndef Q_OS_WIN
+// Only a short, plain token is passed on (it goes into this process's environment).
+bool tokenOk(const QByteArray &t)
+{
+    if (t.isEmpty() || t.size() > 512)
+        return false;
+    for (const char c : t)
+        if (c <= ' ' || c > '~')
+            return false;
+    return true;
+}
+#endif
+}
+
 bool SingleInstance::claim(bool restarted)
 {
+    m_outcome = Claimed;
     // Started by a copy that is closing: wait for it to save and end, never alongside it.
     if (restarted) {
         QElapsedTimer waited;
@@ -118,13 +144,77 @@ bool SingleInstance::claim(bool restarted)
             listen();
             return true;
         }
+        if (cantWrite(m_lock)) {
+            m_outcome = CantWrite;
+            return false;
+        }
         qWarning("single instance: the closing copy is still running after %d s", kRestartWaitMs / 1000);
     }
-    if (m_lock->tryLock(200) || takeOverStaleLock()) {
+    if (m_lock->tryLock(200)) {
         listen();
         return true;
     }
+    // A full disk or a read-only folder fails here too: said as that, never as "another copy is open".
+    if (cantWrite(m_lock)) {
+        qWarning("single instance: the data folder can't be written");
+        m_outcome = CantWrite;
+        return false;
+    }
+    if (takeOverStaleLock()) {
+        m_outcome = Claimed;
+        listen();
+        return true;
+    }
+    if (m_outcome != Shown)
+        m_outcome = cantWrite(m_lock) ? CantWrite : NotAnswering;
     return false;
+}
+
+QString SingleInstance::problemText() const
+{
+    if (m_outcome == CantWrite)
+        return QStringLiteral("Huginn can't save in its data folder (%1). Free up space on the disk or check the folder's permissions, "
+                              "then open Huginn again.")
+            .arg(QDir::toNativeSeparators(m_dir));
+    if (m_outcome != NotAnswering)
+        return {};
+    qint64 pid = 0;
+    QString host, app;
+    m_lock->getLockInfo(&pid, &host, &app);
+    const QString here = QSysInfo::machineHostName();
+    // Another computer opened the same folder (a network drive, a synced or shared folder).
+    if (!host.isEmpty() && !here.isEmpty() && host.compare(here, Qt::CaseInsensitive) != 0)
+        return QStringLiteral("Huginn is already open on another computer (%1) that uses this same folder. Close it there first: "
+                              "two copies can't share one data folder.")
+            .arg(host);
+#ifdef Q_OS_WIN
+    // Another Windows account on this computer: its process can't be looked at from this one.
+    if (pid > 0) {
+        DWORD theirs = 0, mine = 0;
+        const bool known = ProcessIdToSessionId(DWORD(pid), &theirs) != 0;
+        const DWORD err = known ? 0 : GetLastError();
+        if ((!known && err == ERROR_ACCESS_DENIED) || (known && ProcessIdToSessionId(GetCurrentProcessId(), &mine) && theirs != mine))
+            return QStringLiteral("Huginn is already open under another Windows account on this computer, using this same folder. "
+                                  "Close it there first, or give each account its own copy of Huginn.");
+    }
+    return QStringLiteral("Huginn is already open%1 but isn't answering. Wait a moment, or end Huginn in Task Manager, then open it again.")
+        .arg(pid > 0 ? QStringLiteral(" (process %1)").arg(pid) : QString());
+#else
+    // In the Flatpak each copy has its own process numbers, so none is named.
+    return QStringLiteral("Huginn is already open%1 but isn't answering. Wait a moment, or end Huginn in your system monitor, then open it again.")
+        .arg(pid > 0 && !inFlatpak() ? QStringLiteral(" (process %1)").arg(pid) : QString());
+#endif
+}
+
+void SingleInstance::useActivationToken(const QByteArray &token)
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(token);
+#else
+    // Qt's Wayland window reads it in requestActivate() and then clears it.
+    if (tokenOk(token))
+        qputenv("XDG_ACTIVATION_TOKEN", token);
+#endif
 }
 
 void SingleInstance::listen()
@@ -140,14 +230,36 @@ void SingleInstance::listen()
         Busy::Scope busy("another copy started");
         while (QLocalSocket *s = m_server->nextPendingConnection()) {
             Busy::nameSocket(s, "single instance");
-            connect(s, &QLocalSocket::disconnected, s, &QObject::deleteLater);
+            // "show <token>": the knocking copy's activation token (Wayland), so the desktop lets this window forward.
+            // Shown once per knock, as soon as its line is in (or it hung up, or a moment passed without one).
+            auto show = [this, s](bool now) {
+                if (s->property("huginnShown").toBool())
+                    return;
+                const QByteArray line = s->readAll();
+                if (line.isEmpty() && !now && s->state() == QLocalSocket::ConnectedState)
+                    return;
+                s->setProperty("huginnShown", true);
+                const QByteArray first = line.split('\n').value(0).trimmed();
+                if (first.startsWith("show "))
+                    useActivationToken(first.mid(5).trimmed());
+                bringToFront();
+                Q_EMIT activated();
+            };
+            connect(s, &QLocalSocket::readyRead, s, [show] { show(false); });
+            connect(s, &QLocalSocket::disconnected, s, [s, show] {
+                show(true);
+                s->deleteLater();
+            });
+            QTimer::singleShot(1000, s, [s, show] {
+                show(true);
+                s->disconnectFromServer();
+            });
             // The answer says this copy is alive (the knocking copy then quits).
             s->write("ok\n");
             s->flush();
-            s->disconnectFromServer();
+            if (s->bytesAvailable() > 0)
+                show(false);
         }
-        bringToFront();
-        Q_EMIT activated();
     });
     if (!m_server->listen(m_name))
         qWarning("single instance: couldn't listen on %s", qPrintable(m_name));
@@ -192,7 +304,16 @@ bool SingleInstance::knock()
         QLocalSocket s;
         s.connectToServer(m_name);
         if (s.waitForConnected(700)) {
-            s.write("show\n");
+            QByteArray line = "show";
+#ifndef Q_OS_WIN
+            // The launcher's activation token goes along, so the running copy may come forward on Wayland.
+            const QByteArray token = qgetenv("XDG_ACTIVATION_TOKEN");
+            if (tokenOk(token)) {
+                line += ' ';
+                line += token;
+            }
+#endif
+            s.write(line + '\n');
             s.waitForBytesWritten(500);
             // Alive: it answers, or (a copy that never answers) it hangs up at once.
             const bool answered = s.waitForReadyRead(kAnswerMs) || s.state() != QLocalSocket::ConnectedState;
@@ -207,8 +328,10 @@ bool SingleInstance::knock()
 bool SingleInstance::takeOverStaleLock()
 {
     // Someone holds the lock: knock so they come forward. An answer means it runs: this copy quits.
-    if (knock())
+    if (knock()) {
+        m_outcome = Shown;
         return false;
+    }
     // Nobody answers. A copy that was killed left its lock: take it.
     if (m_lock->removeStaleLockFile() && m_lock->tryLock(200)) {
         qWarning("single instance: took over the lock of a copy that ended");
@@ -421,6 +544,7 @@ bool SingleInstance::selfTest()
         QProcess *p = holder(6000, false);
         SingleInstance second(nullptr, dir);
         check(!second.claim(false), "a second copy runs beside a live one");
+        check(second.outcome() == Shown && second.problemText().isEmpty(), "a second copy that was answered says nothing");
         p->kill();
         p->waitForFinished(5000);
         delete p;
@@ -449,6 +573,18 @@ bool SingleInstance::selfTest()
         p->kill();
         p->waitForFinished(2000);
         delete p;
+    }
+    // 4. A data folder that can't be written (here a "folder" that is really a file): said as that, never taken as
+    // another copy that is open.
+    {
+        const QString notDir = dir + QStringLiteral("/not-a-folder");
+        QFile f(notDir);
+        if (f.open(QIODevice::WriteOnly))
+            f.write("x");
+        f.close();
+        SingleInstance stuck(nullptr, notDir);
+        check(!stuck.claim(false) && stuck.outcome() == CantWrite && stuck.problemText().contains(QLatin1String("can't save")),
+              "a data folder that can't be written is said as that");
     }
     std::printf("instance self-test: %s\n", fail ? "FAILED" : "passed");
     return fail == 0;

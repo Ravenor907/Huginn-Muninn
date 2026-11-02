@@ -111,10 +111,16 @@ public:
     Q_INVOKABLE void notifyNow(const QString &title, const QString &body);
     // The screenshot tour only: draw Handheld mode for a stop (the tour otherwise always draws the desktop layout).
     Q_INVOKABLE void setTourHandheld(bool on);
+    // The on-screen keyboard in game mode and Handheld mode: Steam's where Steam is there (started from it, or running
+    // beside Huginn on Linux), else Windows' touch keyboard on Windows. Elsewhere it does nothing.
     Q_INVOKABLE void showSteamKeyboard();
-    // Steam's on-screen keyboard is what types here (game mode, or Handheld mode with Steam there): it covers the
-    // lower half of the window, so prompts sit at the top while it's up.
+    // That keyboard covers the lower half of the window: prompts sit at the top while it's up, and message boxes are
+    // written in the prompt at the top.
     Q_INVOKABLE bool keyboardCovers() const;
+    // showSteamKeyboard() opens something here (the "Keyboard" button chip shows only then).
+    Q_INVOKABLE bool keyboardAvailable() const;
+    // Main.qml: the controller is what's being used (not a keyboard). On Windows, the touch keyboard is only for it.
+    Q_INVOKABLE void setControllerInUse(bool on) { m_controllerInUse = on; }
     Q_INVOKABLE void hideSteamKeyboard();
     // The computer's own file picker, several at once. Empty when nothing was picked.
     Q_INVOKABLE QStringList pickFiles() const;
@@ -187,6 +193,14 @@ private:
     void updateHandheld();
     // Game mode's ways (the 7 inch guess, the on-screen keyboard) apply: handheld on, or game mode not forced Off.
     bool gameLike() const;
+    // Steam is there to show its keyboard: game mode, started from Steam, or (Linux, outside game mode) its client
+    // running beside Huginn, looked for now and then without waiting (checkSteam).
+    bool steamKeyboard() const;
+    void checkSteam() const;
+    mutable bool m_steamRunning = false;
+    bool m_controllerInUse = false;
+    mutable bool m_steamChecking = false;
+    mutable qint64 m_steamCheckedAt = 0;
     void watchScreen(QScreen *screen);
     void refit();
     void noteGraphics(const QString &what, bool software, const QString &loop);

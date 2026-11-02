@@ -36,15 +36,18 @@ APP_SECRET = "<64 hex chars, same value as the Worker secret>"
 ```
 
 `APP_SECRET` is not a real secret (anyone can pull it out of an app). It only stops casual scripts. The real
-protection is the Worker's daily caps.
+protection is the Worker's daily caps, and since 1.4 the install tokens below: whoever has `APP_SECRET` can use up
+only the pool of logins without a token, never the logins of installs that have one.
 
 ## Request
 
 `POST {WORKER_URL}/turn`, `Content-Type: application/json`, over HTTPS.
 
 ```json
-{"id": "<hex>", "t": 1800000000, "sig": "<hex>"}
+{"id": "<hex>", "t": 1800000000, "sig": "<hex>", "tok": "<token>"}
 ```
+
+`tok` (1.36) is the install token (below), left out when the install has none; older apps never send it.
 
 - `id`: lowercase hex SHA-256 (64 chars) of a random 32-byte relay id that each install makes once and keeps in
   its vault (`relayId` in `secrets.json`).
@@ -54,7 +57,41 @@ protection is the Worker's daily caps.
   string `id + "." + t`, for example `aaaa...aaaa.1800000000` (the 64-char id, a dot, then the digits of t).
 
 The Worker rejects `t` more than 300 s away from its clock. If the device clock is badly off, the request fails
-with 401 `stale`.
+with 401 `stale`, and (1.36) its body says the Worker's time: `{"error":"stale","now":1800000000}`. The app then
+tries once more with `t` corrected by that offset (and keeps the offset for its next requests); the signature still
+needs `APP_SECRET`, so nothing new is exposed.
+
+## Install tokens (1.36)
+
+The per-install cap used to be keyed by an `id` the app makes up, so a script with `APP_SECRET` could make a new `id`
+for every request and, from enough addresses, use up the day's logins for everyone. Now an install registers its `id`
+once, with a proof of work, and gets a short-lived token the Worker signs:
+
+`POST {WORKER_URL}/register`, the same body as `/turn` plus `pow`:
+
+```json
+{"id": "<hex>", "t": 1800000000, "sig": "<hex>", "pow": 465984}
+```
+
+- `pow`: a JSON integer >= 0 such that SHA-256 of the UTF-8 string `"huginn-relay pow v1:" + id + ":" + t + ":" + pow`
+  (pow in decimal) starts with **18 zero bits**. About 260,000 tries on average: well under a second on a phone,
+  on a thread of its own. It is bound to `t`, so it can't be worked out ahead of time beyond the 300 s skew. Vector:
+  `id` = 64 `a`, `t` = 1800000000: the smallest `pow` is 465984 (the Worker's test, Muninn `TurnTest`, Huginn
+  `--call-selftest`).
+- 200: `{"tok": "<exp>.<32 hex>", "exp": <unix seconds>}`, good for 7 days. The token is HMAC-SHA256 over
+  `"tok:" + id + ":" + exp`, keyed with the Worker secret `TOKEN_KEY` when set, else with a key made from
+  `TURN_KEY_API_TOKEN`, cut to 16 bytes. Changing either makes every install register again, nothing worse.
+- 401 `bad_pow` (the work doesn't check out), 401 `stale` and `bad_sig` as for `/turn`, 429 `ip_reg_limit` (6
+  registrations a day per internet address) or `reg_limit` (2000 a day for everyone). A full day refuses new
+  registrations only, never logins.
+
+The app keeps the token outside the vault, with the `id` it is for (Muninn: `relayToken` in its settings, Huginn:
+`relay/token`), as `id|tok|exp`: it only spends this install's own logins. It sends it on every `/turn`. Every 200
+from `/turn` with a token carries a new `tok` and `exp` (7 days from then), which replace the kept one, so an install
+that calls now and then never registers again. With less than a day left, or none, the app registers before asking.
+A 401 `bad_token` or `token_expired` drops the token, and the app registers once more and asks again. When
+registering fails (an older Worker answers 404, a 429, no answer) the login goes without a token, as before, and no
+registration is tried again for an hour (after a 429: until the next UTC day).
 
 ## Response
 
@@ -70,9 +107,13 @@ with 401 `stale`.
   ],
   "username": "...",
   "credential": "...",
-  "ttl": 1800
+  "ttl": 1800,
+  "tok": "...",
+  "exp": 1800604800
 }
 ```
+
+`tok` and `exp` only when the request had a good token (above).
 
 - `urls`: only `turn:` and `turns:` URLs, UDP and TCP, as Cloudflare returns them (ports 3478, 443, 80, 5349,
   maybe 53). Use them in the order given; skip any the app can't use.
@@ -85,8 +126,9 @@ Errors are JSON `{"error": "<code>"}`:
 | --- | --- | --- |
 | 400 | `bad_request` | Bug in the app. Don't retry. |
 | 413 | `too_large` | Body over 1 KB (refused before it is read). Bug in the app. Don't retry. |
-| 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. Don't retry this call. |
-| 429 | `id_limit`, `ip_limit`, `global_limit` | Daily cap reached (per install, per internet address, or for everyone). No relay until the next UTC day. |
+| 401 | `stale`, `bad_sig` | Clock wrong or wrong `APP_SECRET`. After `stale`, one more try with `t` corrected by `now`; else don't retry this call. |
+| 401 | `bad_token`, `token_expired` | Drop the token, register again (once), ask again. |
+| 429 | `id_limit`, `ip_limit`, `global_limit` | Daily cap reached (per install, per internet address, or for the pool the request is in). No relay until the next UTC day. |
 | 502 | `upstream` | Cloudflare TURN API failed. Retry later. |
 | 503 | `limits_unavailable`, `not_configured` | Worker not set up, or its limits storage is missing or down. Retry later. |
 
@@ -95,19 +137,23 @@ call fails with "Can't connect".
 
 ## Daily limits (Worker side)
 
-- Caps per UTC day: 30 logins per install (`id`), 60 per internet address, 3000 for everyone.
-  An IPv6 address counts by its /48.
+- Caps per UTC day: 30 logins per install (`id`), 60 per internet address. An IPv6 address counts by its /48.
+- Pools (1.36): logins with a good token share a free-plan safety cap of 12,000 a day; requests without a token (apps
+  before 1.36, or anyone with only `APP_SECRET`) share 1000 a day of their own. Using up the second never touches the
+  first. Registrations: 6 a day per address, 2000 a day for everyone.
 - The Worker counts in one SQLite-backed Durable Object (`RelayLimits`, binding `LIMITS`). One login is
   checked and counted in a single step inside it, so requests at the same moment can't pass a cap.
-  Each login writes 3 rows: everyone, the install's `id`, the address key.
+  Each login writes 3 rows: its pool (`t` with a token, `g` without), the install's `id`, the address key. Each
+  registration writes 2: all registrations (`rg`) and the address's registrations (`r:` and the address key).
 - The address key is HMAC-SHA256 (key: the Worker secret `TURN_KEY_API_TOKEN`) of `"ip:" + day + ":" + address`
   (or its /48), cut to 16 bytes. Addresses themselves are never stored or logged.
 - Rows from earlier days are deleted when the first request of a new day arrives.
 - If the binding is missing or the object fails, the Worker answers 503 `limits_unavailable` and hands out
   nothing.
 - Free plan budget per login: 1 Worker request, 1 Durable Object request, 3 rows written (later 3 or fewer
-  rows deleted). At the 3000 cap that is 3000 requests of each kind and about 18,000 rows a day, against
-  free allowances of 100,000 each.
+  rows deleted); per registration 1 of each and 2 rows. With every cap full (12,000 + 1000 logins, 2000
+  registrations) that is 15,000 requests of each kind and 43,000 rows written a day plus as many deleted (86,000),
+  against free allowances of 100,000 each. No other service is used.
 - After each release, the relay-deploy job deploys the Worker with `wrangler.toml` (`code/shared/relay-worker/README.md`); test builds and betas don't.
 
 ## Caching

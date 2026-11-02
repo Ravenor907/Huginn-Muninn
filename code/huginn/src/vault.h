@@ -187,9 +187,13 @@ public:
     static bool safeName(const QString &name);
     // Every file in a chat folder, opened with the data key (vault.key itself stays out).
     static Files collect(const QByteArray &key, const QString &dir);
-    // Writes the files, sealed with the data key, into a fresh folder next to dir, then swaps
-    // them in: everything in dir except vault.key is replaced.
-    static bool replaceAll(const QByteArray &key, const QString &dir, const Files &files, QString *error);
+    // Writes the files, sealed with the data key, into a fresh folder next to dir ("<dir>.restore", with vault.key:
+    // keyFile when given, else the one in dir), marks it complete, then swaps whole folders: dir becomes "<dir>.old",
+    // the stage becomes dir, and only then is the old one deleted. A failure at any point leaves dir as it was.
+    static bool replaceAll(const QByteArray &key, const QString &dir, const Files &files, QString *error, const QByteArray &keyFile = QByteArray());
+    // At start: a swap that was cut off (Huginn killed, power lost) is finished when its new folder was complete, or
+    // undone. What to say on screen ("" when there was nothing to do).
+    static QString finishSwap(const QString &dir);
     // A copy of dir (vault.key too) in a new "<dir>-kept-<date>" folder next to it. "" when it couldn't be made.
     static QString keepCopy(const QString &dir);
     static bool backupSelfTest();
@@ -225,6 +229,9 @@ Q_SIGNALS:
     void panicked(); // the panic combo just locked Chat: close anything that could show it
     void notice(const QString &text);   // something to say on screen at once (Huginn couldn't start again)
     void unlockFinished(bool ok);       // unlockInBackground() is done
+    // A file given to the saving thread still couldn't be written after its retries (another program holding it,
+    // a full disk): what it held is still in memory, so Chat marks it to be saved again and says so.
+    void saveLost(const QString &name);
 
 private:
     // Starts Huginn again (it waits for this copy to close) and closes this one. When it can't start, this copy

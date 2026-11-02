@@ -18,13 +18,25 @@ Window {
         // Game mode and Handheld mode: the whole screen from the first frame (game mode shows one window at a time).
         if ((System.gameMode || System.handheld) && !System.windowed) { x = 0; y = 0; width = Screen.width; height = Screen.height; return }
         const r = Settings.windowRect
-        const sw = Screen.desktopAvailableWidth, sh = Screen.desktopAvailableHeight
+        // The screen most of the saved window was on (at least 120 by 60 of it showing), so one left on a monitor to
+        // the left of or above the main one comes back there too.
+        const screens = Qt.application.screens
+        let home = null, most = 0
+        for (let i = 0; i < screens.length; i++) {
+            const s = screens[i]
+            const ow = Math.min(r.x + r.width, s.virtualX + s.width) - Math.max(r.x, s.virtualX)
+            const oh = Math.min(r.y + r.height, s.virtualY + s.height) - Math.max(r.y, s.virtualY)
+            if (ow >= 120 && oh >= 60 && ow * oh > most) { home = s; most = ow * oh }
+        }
+        // Sized to one screen (that one, or the window's own), never to the whole desktop across every monitor.
+        const sx = home ? home.virtualX : Screen.virtualX, sy = home ? home.virtualY : Screen.virtualY
+        const sw = home ? home.width : Screen.width, sh = home ? home.height : Screen.height
         if (r.width >= 320 && r.height >= 240 && r.width <= sw && r.height <= sh) {
             width = r.width; height = r.height
-            if (r.x >= 0 && r.y >= 0 && r.x + 120 <= sw && r.y + 60 <= sh) { x = r.x; y = r.y }
+            if (home) { x = r.x; y = r.y }
         } else {
             width = Math.round(sw * 0.8); height = Math.round(sh * 0.8)
-            x = Math.round((sw - width) / 2); y = Math.round((sh - height) / 2)
+            x = sx + Math.round((sw - width) / 2); y = sy + Math.round((sh - height) / 2)
         }
     }
     minimumWidth: 480
@@ -44,6 +56,22 @@ Window {
     color: Theme.ground
 
     readonly property bool touring: System.tourDir.length > 0
+    // Locked (a lock is set and Huginn is behind it): the whole window is the lock. Only Chats (where the lock screen
+    // is) and the power button stay on the rail; every other page, panel and menu is closed and refused until unlocked.
+    readonly property bool lockedOut: !touring && Vault.exists && Vault.screenLocked
+    onLockedOutChanged: {
+        if (lockedOut) lockDown()
+        else Qt.callLater(showSendRequest)   // a nearby-sharing request that came while locked is asked now
+    }
+    function lockDown() {
+        if (pageName !== "dms") { pageName = "dms"; pageArgs = ({}) }
+        focusZone = "content"
+        railIndex = 0
+        // Report a bug stays, behind its own lock. Every other panel, question and menu goes.
+        closePanels(true)
+        if (prompt.visible) prompt.cancel()
+        if (confirm.visible) confirm.dismiss()
+    }
     // A controller is being used (its wording and focus rings); a mouse or keyboard turns it off. Handheld mode
     // starts with it on, before the first button.
     property bool padInUse: false
@@ -91,7 +119,7 @@ Window {
         { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
         // Lock Huginn or close it (a small menu).
         { id: "exit", kind: "icon", icon: "power", label: "Lock or close", bottom: true, action: true }
-    ])
+    ]).filter(e => !app.lockedOut || e.id === "dms" || e.id === "exit")   // locked: only the lock screen and the power button
     // LB steps through the sections and groups (New group and the power menu are reached with the D-pad).
     readonly property var cycle: railItems.filter(e => !e.action).map(e => e.id)
 
@@ -105,6 +133,8 @@ Window {
 
     function openPage(name, args) {
         if (name === "chat") name = "dms"
+        // Locked: the lock screen (Chats) is the only page.
+        if (lockedOut && name !== "dms") { Ui.say("Unlock Huginn first.", true); name = "dms"; args = {} }
         pageArgs = args || {}
         focusZone = "content"
         if (name === pageName) {
@@ -178,7 +208,7 @@ Window {
     function restoreFocus() { keys.forceActiveFocus() }
     // The lock screen goes up (the power menu, or Lock in your card); messages still arrive behind it.
     // Settings › Profile › Status: your status card, as a click on your name opens it.
-    function openStatusCard() { meCard.open() }
+    function openStatusCard() { if (!lockedOut) meCard.open() }
     function lockNow() {
         if (!Vault.hasLock || Vault.screenLocked) return
         if (meCard.visible) meCard.close()
@@ -349,7 +379,7 @@ Window {
         width: parent.width
         onSearch: if (!app.touring) switcher.open()
         onShortcuts: shortcutsPanel.open()
-        onTransfers: transfersPanel.open(app.touring)
+        onTransfers: if (!app.lockedOut) transfersPanel.open(app.touring)
     }
 
     Rail {
@@ -385,6 +415,7 @@ Window {
         anchors.left: rail.visible ? rail.right : parent.left
         anchors.right: parent.right
         source: {
+            if (app.lockedOut) return "ChatPage.qml"   // locked: only the lock screen, whatever page was asked for
             if (app.pageName.startsWith("g:")) return "GroupPage.qml"
             switch (app.pageName) {
             case "dms": return "ChatPage.qml"
@@ -400,6 +431,8 @@ Window {
     // In a voice room or group call: who's in it and the controls, under every page.
     RoomBar {
         id: roomBar
+        // Locked: who's in the room and what they share stay behind the lock too.
+        visible: Rooms.inRoom && !app.lockedOut
         anchors.bottom: hints.visible ? hints.top : parent.bottom
         anchors.left: voicePanel.visible ? voicePanel.right : rail.visible ? rail.right : parent.left
         anchors.right: parent.right
@@ -422,7 +455,7 @@ Window {
         roomBar: roomBar
         cardOpen: meCard.visible
         compact: app.height < Theme.px(620)
-        onMeClicked: meCard.toggle()
+        onMeClicked: if (!app.lockedOut || meCard.visible) meCard.toggle()
         visible: app.pageList
         anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
         anchors.bottom: hints.visible ? hints.top : parent.bottom
@@ -669,6 +702,8 @@ Window {
     // A rail button's right-click menu: a group's (PeopleActions.groupRowMenu) or a short one for each section.
     function railMenu(e, item, x, y, viaKey) {
         if (!e) return
+        // Locked: only the power button has a menu (Lock is already done; Close Huginn).
+        if (lockedOut && e.id !== "exit") return
         ctxMenu.openAt(item, x, y, () => {
             if (e.kind === "group") { PeopleActions.groupRowMenu(String(e.id).substring(2), e.label, { tour: app.touring }); return }
             const later = f => Qt.callLater(() => { const p = page(); if (p && typeof p[f] === "function") p[f]() })
@@ -751,7 +786,7 @@ Window {
     // Every file coming or going (the top bar's Transfers), and a chat's Files (cap f2).
     TransfersPanel { id: transfersPanel; z: 27 }
     ChatFiles { id: chatFiles; z: 27 }
-    function openFiles(where, title) { chatFiles.open(where, title, app.touring) }
+    function openFiles(where, title) { if (!lockedOut) chatFiles.open(where, title, app.touring) }
     // Files › Show in chat: the chat or group opens at the file's message, lit for a moment.
     function showFileInChat(where, name) {
         if (where.indexOf("g:") === 0) openPage(where, { showFile: name })
@@ -766,6 +801,7 @@ Window {
     // Labs › Performance check (under Report a bug, which it can open with its report).
     PerfPanel { id: perfPanel; z: 27.5 }
     function openReport() {
+        if (lockedOut) return
         Labs.capture(app)
         labsReport.open(app.touring)
     }
@@ -774,9 +810,9 @@ Window {
         Labs.capture(app)
         labsReport.openWith(perfText)
     }
-    function openPerf() { perfPanel.open(app.touring) }
-    function openLabsReports() { labsInbox.open(app.touring) }
-    function openAppStorage() { appStorage.open(app.touring) }
+    function openPerf() { if (!lockedOut) perfPanel.open(app.touring) }
+    function openLabsReports() { if (!lockedOut) labsInbox.open(app.touring) }
+    function openAppStorage() { if (!lockedOut) appStorage.open(app.touring) }
     TextPrompt { id: prompt; z: 30 }
     CallPage { id: callPage; z: 36 }
     IncomingCall { id: incomingCall; z: 37 }
@@ -806,6 +842,8 @@ Window {
     // forgot: the lock screen's "Forgot it?" (what's here is erased, not kept, and a new lock is set after).
     function openBackup(mode, fromSetup, sample, forgot) {
         if (backupPanel.visible || (app.touring && !sample)) return
+        // Locked: only the lock screen's "Forgot it?" restore.
+        if (lockedOut && !forgot) return
         if (!fromSetup) app.closePanels()
         backupPanel.open(mode, !!fromSetup, !!sample, "", !!forgot)
     }
@@ -1031,6 +1069,7 @@ Window {
             count = visible ? count + 1 : 1
             title = t; body = b; where = w
             away = true
+            if (!visible) app.guardOverlay(newsBanner)
             visible = true
             if (newsGone.running) newsGone.restart()
         }
@@ -1186,6 +1225,8 @@ Window {
     // question is already open, wait for it to close instead of replacing it.
     function showSendRequest() {
         const r = LocalSend.request
+        // Locked: who wants to send what waits behind the lock, and is asked once Huginn is unlocked.
+        if (lockedOut && r.active) return
         if (!r.active) {
             if (confirm.visible && confirm.tag === "localsend") confirm.dismiss()
             return
@@ -1198,6 +1239,7 @@ Window {
                      r.names + " (" + r.sizeText + "). They'll be saved in " + (r.folder || Transfer.saveName) + ".",
                      "Accept", () => LocalSend.accept(), false, false, () => LocalSend.decline(), "localsend")
         confirm.cancelText = "Decline"
+        app.guardOverlay(confirm)
     }
     // The phone unlinked this PC and its own name from before wasn't known: ask for one, once a run, so its own
     // account doesn't keep the phone's name (Linked.nameWanted).
@@ -1284,7 +1326,8 @@ Window {
     // purpose), and on Linux too when the desktop offers no shortcut portal (GlobalKeys.everywhere false). It can't tell when the key was held behind a game, so the first time Huginn is back in front after being
     // behind in a voice room with push to talk on, a toast says so (once per room).
     readonly property bool inFront: Qt.application.state === Qt.ApplicationActive
-    readonly property bool talkInFrontOnly: Qt.platform.os === "windows" || !GlobalKeys.everywhere
+    // A controller's talk button never works behind a game either (padLive), even with the shortcut portal.
+    readonly property bool talkInFrontOnly: Qt.platform.os === "windows" || !GlobalKeys.everywhere || (TalkKey.key === 0 && TalkKey.padButton !== "")
     property bool talkWentBehind: false
     property bool talkToldOnce: false
     onInFrontChanged: {
@@ -1361,6 +1404,16 @@ Window {
         target: Updater
         function onNotice(text) { Ui.say(text, true) }
     }
+    // Opening a received program (or a file whose name hides what it is) asks first, wherever Open was pressed.
+    Connections {
+        target: FileLink
+        function onAskOpen(path, warning) {
+            if (app.lockedOut) return
+            Ui.sure("Open this file?", warning, "Open anyway", () => { if (!FileLink.openAnyway(path)) Ui.say("It can't be opened here.", true) }, false, true)
+            confirm.otherText = "Show in folder"
+            confirm.otherCallback = () => FileLink.showInFolder(path)
+        }
+    }
     Connections {
         target: LocalSend
         function onRequestChanged() { app.showSendRequest() }
@@ -1407,6 +1460,40 @@ Window {
     }
     function page() { return pageLoader.item && pageLoader.status === Loader.Ready ? pageLoader.item : null }
 
+    // A question that opens by itself (a ring, a nearby-sharing request, a notice that came while away) never takes a
+    // press meant for what was on screen: for half a second after it shows, every button is ignored, and a button
+    // already held when it showed is let go without answering. It takes a fresh press.
+    property var guarded: null
+    property real guardedAt: 0
+    property var guardedHeld: ({})
+    property var heldNow: ({})
+    function guardOverlay(o) {
+        guarded = o
+        guardedAt = Date.now()
+        guardedHeld = Object.assign({}, heldNow)
+    }
+    function overlayGuarded() {
+        const o = overlay()
+        return o !== null && o === guarded && Date.now() - guardedAt < 500
+    }
+    Connections {
+        target: incomingCall
+        function onVisibleChanged() { if (incomingCall.visible) app.guardOverlay(incomingCall) }
+    }
+    // The overlay on top right now: a voice message held on Y stops when anything opens over the chat (a ring, a
+    // question, a panel), and is thrown away, never sent by the Y release that the overlay takes.
+    readonly property var topOverlay: overlay()
+    onTopOverlayChanged: if (topOverlay !== null) dropVoice()
+    Connections {
+        target: app
+        function onInVoiceChanged() { if (app.inVoice) app.dropVoice() }
+    }
+    function dropVoice() {
+        if (!Voice.recording) return
+        Voice.cancel()
+        Ui.say("Recording cancelled.")
+    }
+
     function railButton(b) {
         switch (b) {
         // Up past Chats: the top bar's Search, Transfers and Keyboard shortcuts.
@@ -1420,6 +1507,7 @@ Window {
         }
     }
     function topBarMenu() {
+        if (lockedOut) return
         Ui.pickFrom("Top bar", [{ header: "", items: [{ name: "Go to a chat", icon: "search", url: "search" },
                                                       { name: "Transfers", icon: "down", url: "transfers" },
                                                       { name: "Keyboard shortcuts", icon: "keyboard", url: "keys" }] }], a => {
@@ -1448,12 +1536,15 @@ Window {
     property bool lbHeld: false
     property bool lbUsed: false
     function press(b) {
+        heldNow[b] = true
         // Select (View) shows or hides the button legend; any other button hides it and does its job.
         if (b === "back") { legend = !legend; return }
         legend = false
         // A tap on the legend's Mute or Deafen chip.
         if (b === "lb+up" || b === "lb+down") { if (inVoice) voiceKey(b); return }
         const o = overlay()
+        // A question that just opened by itself: not yet (guardOverlay).
+        if (o && overlayGuarded()) return
         if (o) { if (o.handleButton) o.handleButton(b); return }
         // Someone's shared screen made bigger: B makes it smaller again first.
         if (b === "b" && roomBar.screenBig && roomBar.screenOn) { roomBar.screenBig = false; return }
@@ -1474,6 +1565,9 @@ Window {
         else if (b === "start") openPage("settings", {})
     }
     function release(b) {
+        delete heldNow[b]
+        // Held from before a question opened by itself: its release isn't an answer.
+        if (guardedHeld[b]) { delete guardedHeld[b]; if (overlay() === guarded) return }
         if (b === "lb" && lbHeld) {
             lbHeld = false
             if (!lbUsed && !overlay()) stepSection(1)
@@ -1491,6 +1585,8 @@ Window {
     // The controller reaches Huginn even while a game is in front: only presses made with Huginn active and
     // focused count. A press that counted still gets its release.
     readonly property bool padLive: Qt.application.state === Qt.ApplicationActive && app.active
+    // Windows' touch keyboard comes up for the controller only (System.keyboardAvailable), never over a real keyboard.
+    onPadInUseChanged: System.setControllerInUse(padInUse)
     property var padDown: ({})
     Connections {
         target: Gamepad
@@ -1506,6 +1602,8 @@ Window {
                 if (button === "lb" && !picking) { app.lbHeld = true; app.lbUsed = true }
                 return
             }
+            // A question that just opened by itself (guardOverlay): the press is dropped, release and all.
+            if (app.overlayGuarded()) { delete app.padDown[button]; return }
             if (app.isPointerButton(button)) { app.legend = false; stick.press(button) }
             else app.press(button)
         }
@@ -1519,7 +1617,7 @@ Window {
             if (app.isPointerButton(button)) stick.release(button)
             else app.release(button)
         }
-        function onConnectedChanged() { if (!Gamepad.connected) { app.padDown = ({}); app.lbHeld = false; app.legend = false; app.padInUse = false; stick.hide(true) } }
+        function onConnectedChanged() { if (!Gamepad.connected) { app.padDown = ({}); app.heldNow = ({}); app.lbHeld = false; app.legend = false; app.padInUse = false; stick.hide(true) } }
     }
 
     // ------------------------------------------------------------- left stick: scroll
@@ -1701,6 +1799,10 @@ Window {
             { page: "dms", zone: "messages", shared: "media", file: "51-shared-media" },
             { page: "dms", zone: "messages", shared: "media", sharedMenu: true, file: "52-shared-media-menu" },
             { page: "dms", zone: "messages", shared: "voice", file: "53-shared-voice" },
+            // Y (Next tab) on Media and files, as the controller presses it: Media to Links.
+            { page: "dms", zone: "messages", shared: "media", sharedY: true, file: "53b-shared-next-tab" },
+            // A draft over 2,000 characters: the count under the box says it's too long, and it stays (never cut).
+            { page: "dms", zone: "messages", longDraft: true, file: "54-long-message" },
             // Right-click menus, each where a right click opens it: a person (with Mute open beside it), a group on the rail,
             // a folder, a message, a member, Settings on the rail, a text box, the empty list, and a group's Call popup.
             { page: "dms", folders: true, ctx: "person", file: "70-menu-person" },
@@ -1724,6 +1826,14 @@ Window {
             { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, file: "86-handheld-voice" },
             { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, textSize: "115", file: "86b-handheld-voice-large" },
             { page: "dms", setup: "lock", handheld: true, file: "86c-handheld-setup-lock" },
+            // The handheld at the Steam Deck's 883 by 552: Media and files after Y, Settings, and a draft carried on in
+            // the prompt at the top (cursor at the end, nothing selected).
+            { page: "dms", zone: "messages", shared: "media", sharedY: true, handheld: true, deck: true, file: "87-handheld-shared" },
+            { page: "settings", handheld: true, deck: true, file: "87b-handheld-settings" },
+            { page: "dms", zone: "messages", draftPrompt: true, handheld: true, deck: true, file: "87c-handheld-draft-prompt" },
+            { page: "dms", zone: "messages", draftPrompt: true, handheld: true, file: "87d-handheld-draft-prompt-1080p" },
+            // Open on a received program whose name hides what it is: asked first, never run by one click.
+            { page: "dms", zone: "messages", openProgram: true, file: "88-open-program" },
             { page: "dms", setup: "welcome", file: "60-setup-welcome" },
             { page: "dms", setup: "lock", file: "61-setup-lock" },
             { page: "dms", setup: "name", file: "62-setup-name" },
@@ -1758,6 +1868,7 @@ Window {
             Qt.callLater(() => { Settings.theme = theme; Settings.season = season; Settings.density = density; Settings.uiSize = size; Settings.textSize = textSize })
             // A portrait window: the one-column layout.
             if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 }
+            else if (s.handheld && s.deck) { app.width = 883; app.height = 552 }
             else if (s.handheld) { app.width = 914; app.height = 514 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
             // Handheld stops: Handheld mode's sizes (44 px targets) and its button legend, as on the device.
@@ -1777,6 +1888,8 @@ Window {
             // A contact's one menu, as the three dots, a right click or LT open it.
             if (s.picker) PeopleActions.contactMenu("tour", "Mira", { tour: true })
             if (s.prompt) prompt.open("Message everyone nearby", "You're " + Ui.myName, "", "Send", null, false, true)
+            if (s.draftPrompt) Ui.askMessage("Message Mira", "", "See you at the dock at seven, and bring the", "Send", null)
+            if (s.longDraft) Qt.callLater(() => { const p = app.page(); if (p && p.mainCompose) p.mainCompose.text = "All the notes from the trip, in one go. ".repeat(56) })
             if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Voice", note: "Hosts raid night on Fridays. Bring snacks." })
             if (s.shortcuts) shortcutsPanel.open()
             if (s.transfers) transfersPanel.open(true)
@@ -1799,13 +1912,19 @@ Window {
             if (s.ctx) Qt.callLater(() => app.tourMenu(s.ctx))
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             if (s.holdEarly) { confirm.open("Block Mira?", "They aren't told.", "Block", null, true, true); confirm.startHold(); confirm.stopHold() }
+            if (s.openProgram) {
+                Ui.sure("Open this file?", "\"invoice.pdf.exe\" looks like a pdf document but is a program (.exe). Opening it runs it, and a program from someone else can take over this computer. Open it only if you were expecting it.",
+                        "Open anyway", null, false, true)
+                confirm.otherText = "Show in folder"
+            }
             if (s.shared) {
-                const tab = s.shared, menu = !!s.sharedMenu
+                const tab = s.shared, menu = !!s.sharedMenu, next = !!s.sharedY
                 Qt.callLater(() => {
                     const p = app.page()
                     if (!p || !p.more) return
                     p.more.openShared()
                     p.more.sharedTab = tab
+                    if (next) p.more.handleButton("y")
                     if (menu) Qt.callLater(() => p.more.contextMenu())
                 })
             }

@@ -34,6 +34,9 @@ bool isRatchet(const QJsonObject &o);
 bool saysCapable(const QJsonObject &o);
 // The "caps" tokens of an envelope; *present is false when it has none (an app without caps).
 QStringList capsOf(const QJsonObject &o, bool *present = nullptr);
+// Round 14 (1.1): tokens the caps this app said last time (before) had that it doesn't say now: it went back to an older
+// release (Labs "Go back to stable"), so every contact is probed again and stops sending what it dropped.
+bool capsDropped(const QString &before, const QString &now);
 
 // Adds "cap" and "caps" and seals plain into the envelope fields (room, fromKey, fromName, mailbox, id, ...).
 // With a peer the ratchet is used and the peer moves on (save it before sending); when the

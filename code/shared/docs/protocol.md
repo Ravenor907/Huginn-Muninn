@@ -95,6 +95,16 @@ A receiver records the token set per contact from the last **authentic** envelop
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
 the contact's key changed (a changed key resets the set to empty, as it resets the ratchet).
 
+**Going back to an older release (1.36).** An ordinary envelope may be an old copy sent again, so it only ever adds
+tokens. An **empty receipt** (`"ids": []`: a caps probe, its answer, or the receipt that announces new keys, 23.2 and
+23.3) is made when it is sent and never retried with old bytes, so its envelope's `caps`, when present and not empty,
+**replace** the set kept for that contact (Muninn `Proto06.replacedCaps`, Huginn `Chat::noteCaps(..., replace)`). Each
+app keeps, outside the vault, the caps string it said when it last started (Muninn `lastCaps` in its settings, Huginn
+`caps/last`). At start, when that string has a token the app no longer says (Labs "Go back to stable", or any older
+release put back), it sends the 1.2 caps probe to every contact that isn't blocked, outside the hourly limit: the
+probe's own envelope carries the smaller set, so the contact stops sending what this app dropped (a Kids' Device gone
+back stops getting configs with fields it no longer reads). Apps before 1.36 keep adding tokens up; nothing breaks.
+
 ### 1.2 Caps probe
 
 A contact's caps are unknown until an authentic envelope with `caps` comes from them. To find out, send a receipt with no ids:
@@ -414,6 +424,14 @@ Plaintext `{"t": <type>, "call": <call id>, ...}`.
   identity even if a v1-sealed envelope was used. Vectors: `call.offer`, `call.answer`.
 - `ts`: caller's clock in ms, a JSON integer. The callee ignores an offer whose `ts` is more than 60 s old or 120 s ahead
   by its own clock, and shows it as a missed call instead (an offer can sit on a relay for hours).
+  **Clocks that differ (1.36).** An offer outside that window but no more than 10 minutes from the callee's clock either
+  way isn't judged at once. The caller sends its offer again every 3 s while it rings, so a second copy of the same
+  call that arrives at least 2.5 s after the first (by the callee's monotonic clock) shows the caller is there now: it
+  rings (its other checks are made at the offer's own time). Copies that waited on a relay arrive together and never
+  ring; with no second copy within 30 s it is a missed call, as before. Further than 10 minutes: a missed call at once.
+  Muninn `CallLogic.SkewGate`, Huginn `CallSkewGate`, reference `call_skew_judge` in `proto06_ref.py`. Nothing on the
+  wire changes; an older callee still applies only the 60 s / 120 s window. Locked ring envelopes (23.2) keep the
+  window as it is.
 - `codec`: `"opus16"` (5.5). An answer to an unknown codec is `decline`.
 - `ble`: true if this device can carry media to the other over Bluetooth LE right now (5.6).
 - `cands` and `lp`: below. `cands` is always there in `offer`, `answer` and `cands` (an empty array when
@@ -1308,7 +1326,8 @@ States: `checking`, `downloading`, `installing`, `current` (it runs the newest),
 - The TV also sends every parent an `upstate` a minute after it starts and once a day, so their phones know which
   Muninn it runs and when it last checked. A phone that knows a newer release than the TV's `app` says so.
 - A parent's phone shows the state on the TV's page and in Settings, Updates and about: "Checking", "Downloading 42%",
-  "Installing", "Up to date", "Needs a tap on the TV", "Failed: <why>", with "Last check". Update now is offered only
+  "Installing", "Up to date", "Needs a tap on the device", "Failed: <why>", with "Last check". A device short of room
+  says why `"Not enough space on the device"`, and abandons the install it couldn't write. Update now is offered only
   for a TV whose app says `u1`; for any other it says "Update this device first".
 - The older `update` (7.5) and the `update` field of `status` (7.13) stay as they are for apps without `u1`.
 
@@ -1335,6 +1354,13 @@ starts at `chat` 1, in the time zone of the phone that set it up.
 | `tz` | string, an IANA time zone id (`"America/Los_Angeles"`): a letter, then letters, digits, `_`, `+`, `-` and `/`, at most 64 characters | the device's own zone | the zone quiet times follow. A device that doesn't know the id uses its own zone |
 
 Anything else (`chat` 0 or 3, a repeated `n`, `s == e`, upper-case hex, an extra field) makes the config malformed.
+
+**The zone a parent keeps (1.36).** A parent's app keeps one zone per device and sends it in every config. A device
+paired before 1.35 had none kept, so each config went out with the sending phone's own zone, and quiet times moved
+whenever a parent in another zone changed anything. Now, while none is kept, the first zone that goes to the device (the
+sending phone's) or that the device's `applied` config already runs is kept from then on (Muninn
+`KidRules.zoneToKeep`), and every later config, from any parent, carries that one until a parent picks another. The
+parent page shows "Not set: uses <zone>" while none is kept. Nothing on the wire changes.
 
 **Older parent apps.** A config with none of `chat`, `quiet`, `pin` and `tz` comes from a parent's app without `k11`: the
 device takes the rest of it and keeps its current chatting level, quiet times, time zone and PIN. Such an app may not have
@@ -1388,7 +1414,7 @@ when it hasn't been heard from for 36 hours. Messages in room `tvconfig`:
 |---|---|---|
 | `unlockask` | the device, to each parent whose app says `k11` | `id`: 32 lowercase hex, fresh for each ask |
 | `unlock` | a parent | `id` of that ask. The device takes it only from a current parent, for the ask it has open, within 10 minutes of asking; it then opens "For a parent" for 10 minutes |
-| `left` | the device, to every parent | none (exactly `{"t":"left"}`): someone with the PIN or a parent's yes left kids' mode. The device then erases itself as a disconnect does (7.3) and runs as an ordinary Muninn. A parent's phone takes it only from a device it looks after, and stops looking after it (the contact stays) |
+| `left` | the device, to every parent and everyone on its list | none (exactly `{"t":"left"}`): someone with the PIN or a parent's yes left kids' mode. The device then erases itself as a disconnect does (7.3) and runs as an ordinary Muninn. A parent's phone stops looking after a device it looks after (the contact stays); any phone that knew it as a Kids' Device (a card, Send its code, `kidadd`) treats it as an ordinary contact again, in group pickers too |
 
 Exactly these fields; anything else is malformed and ignored. A parent's app asks its person before it sends `unlock`: a
 notification that names the ask, and a card on the device's page (a dialog only when no other dialog is open). After 10
@@ -1483,8 +1509,26 @@ a parent" in that group). The device asks each parent whose app says `k14`, once
 | t | from | fields |
 |---|---|---|
 | `ghold` | the device, to its parents | `g`: the group id. `k`: the member's chat key. `n`: their name (1 to 40). `gn`: the group's name (1 to 40). A parent's phone shows "Approve Sam in Soccer for Ava?" (a notification, a card on the device's page, a dialog when none is open). Approve puts (`g`, `k`) in `gok`; Decline keeps them hidden and isn't asked again |
-| `kidadd` | a parent, to the parent who handed them another family's Kids' Device | `tv`: that device. `k`: their own Kids' Device, now on its list. `n`: their child's name. `code`: `k`'s contact code (at most 2000 characters). The other parent's phone asks "Let Leo talk with Ava?"; Add puts `k` on `tv`'s list and answers `kidok`. One already on the list is answered `kidok` at once |
+| `kidadd` | a parent, to the parent who handed them another family's Kids' Device | `tv`: that device. `k`: their own Kids' Device, now on its list. `n`: their child's name. `code`: `k`'s contact code (at most 2000 characters). The other parent's phone asks "Let Leo talk with Ava?", saying that only the sender vouches for it; Add puts `k` on `tv`'s list and answers `kidok`. One already on the list is answered `kidok` at once. Ignored when `k` is the receiving phone, the sender, `tv` or one of its own devices; a contact there not known as a Kids' Device; or a device another parent handed over (by card or Send its code): only that parent asks for it |
 | `kidok` | a parent, to the other family's parent | `tv`: their Kids' Device. `k`: the asker's, now on `tv`'s list. The asker's phone takes `k` off `wait` |
+
+**Send its code.** People › Send its code shares the device's contact code with two more fields: `"kid":1` and `"by"` (the
+sharing parent's chat key). A phone that adds such a code knows the device as another family's Kids' Device (no setting it up,
+no card to it) and remembers `by` as the parent to send `kidadd` to when the device goes on one of its own devices' lists.
+Apps without `k14` read it as an ordinary code. A code with `"tv":1` is a pairing code (7.1), never this.
+
+**Quick message pictures.** A config with no `gok` comes from a parent app without `k14`, which never carries `e`: each quick
+message then keeps the picture it had, by `id`, on the device and on every parent's phone (the device keeps them beside its
+config as `qe`, by `id`, so a restart keeps them too).
+
+**Leaving and disconnecting.** A disconnect (7.3) and Leave kids' mode put back everything kids' mode changed on the device:
+its text size, size of everything, high contrast, color vision and less motion, its look, Seasonal and accent, how long
+messages stay, the parent's colors and accessibility it took, the kids' tabs, drafts and open chat, wrong PIN tries, apps and
+permission asks waiting for a parent, and the update state its parents saw (what the device had before kids' mode, kept when
+it became a Kids' Device; defaults when nothing was kept). Leave also stops the kids' jobs (trimming history, silent updates,
+answering group invites, the status to parents), puts back its own name, staying connected, how often it checks and Nearby,
+and clears first setup's marks, so first setup runs again and can make it a Kids' Device again. A Kids' Device on a tablet or
+phone follows the normal battery rules and doesn't show to people nearby; only a TV stays fully connected.
 
 Exactly these fields; anything else is malformed and ignored. A parent's page shows "Waiting for Leo's parent to add Ava"
 for each device in `wait`. A message a kid sends shows "Sending" until a relay or a direct route took it, then "Sent";
@@ -1841,6 +1885,24 @@ companion or as the phone (a Muninn phone usually; Huginn on Windows and Linux a
 companion). Envelopes in room `link` are sealed like private messages (v1) and go by the routing rules below; they are
 exempt from the 5-per-10-seconds limit and from the 2000-character cut, because only a paired device gets past the check
 below.
+
+**Replay (1.36).** A v1 envelope carries no time, and Seen keeps an envelope id only 2 days, so a relay could send a
+captured link frame again later, in a new event (a companion's `send` goes out again as you, an `unlink`, an old
+`setme`). So every link frame now carries two more fields, added once per frame (every route of one send carries the
+same ones):
+
+| field | value |
+|---|---|
+| `lts` | the sender's time in ms, a JSON integer |
+| `ln` | 16 random bytes, 32 lowercase hex |
+
+A receiver takes a frame from a linked device only when `lts` is within 36 hours of its own clock (less than the 2 days
+Seen and the phone's `send` ids last) and it hasn't taken that device's `ln` before; it remembers each `ln` (in the
+vault, `link-replay.json`) until 36 hours after the later of `lts` and its arrival. `chat`, `part`, `ping` and `pong`
+change nothing when they come twice: they are checked for time only and not remembered. Once a device has sent one
+stamped frame, its frames without `lts` and `ln` are dropped. Frames from an app before 1.36 (never stamped) are taken
+as before, and such an app ignores the two fields. A dropped frame is answered as if taken (nothing tells a relay which
+it was). Muninn `LinkReplay`, Huginn `LinkReplay`.
 
 **Routes.** A linked pair is usually in one household, behind one internet address that relays rate-limit, so link
 traffic MUST stay off the relays except for small live frames:
@@ -2346,6 +2408,14 @@ has passed, and drop it once it is gone from the devices anyway. It is taken fro
 whole day (UTC) the same for every chat, so it reveals neither the exact sending time nor the chat's limit. Receivers
 ignore the tag. Vectors: `expiry` in `pad-vectors.json` (with `blur` and `longestDays`).
 
+**Asking relays for the inbox (1.36).** On connecting, a device asks each relay with `since` = the time that relay last
+finished sending what it held (its EOSE cursor) less **40 minutes**: the 10-minute blur plus 30 minutes for a sender's
+clock that is off (it was 20 minutes, so a sender about 10 minutes slow was lost for good: relays filter live events by
+`since` too, and retries reuse the same event). What comes again is dropped as already seen. Muninn keeps the cursor in
+the relay's own time (its `Date` at connecting, believed within a day), so a receiver whose clock is fast doesn't move it
+ahead (`NetLogic.cursor`); Huginn keeps it by its own clock, covered by the same margin. Never further back than the
+longest message limit and a day, as before. Nothing on the wire changes.
+
 ## 21. Proven routes and bound envelopes (cap `s1`)
 
 Everything here is in `code/shared/tools/s1_ref.py`, which writes `code/shared/vectors/s1-vectors.json`.
@@ -2637,7 +2707,8 @@ can't ring. With `b1` it can:
 A locked device can't open anything in its inbox, so it can't tell a message from a receipt, a linked computer's
 `ping`, a profile status or room presence. So nothing that reaches the inbox while locked notifies: it is kept sealed
 until unlocking (Muninn) or left on the relays (Huginn), and says nothing. Only a **nudge** does: the sender says when
-a real message came, in a tiny envelope a locked device can open without its vault.
+a real message came, in a tiny envelope a locked device can open without its vault. One exception, "New activity"
+below, for senders known to be unable to nudge.
 
 - **What counts.** Rooms `private`, `rich`, `photo` (photos, voice and video messages, GIFs, small files, 14.2),
   `gmsg`, `gphoto`, room `file` with `t:"offer"`, and room `group` with `t:"invite"`. Nothing else: not receipts
@@ -2656,11 +2727,14 @@ a real message came, in a tiny envelope a locked device can open without its vau
   never gets the ring key, 23.2) can nudge a locked device and can't ring it.
 - **Sending.** When such a message goes to the relays, the sender also publishes one nudge, sealed exactly like a
   ring envelope (same key derivation and AAD) and padded and expiring like any other event:
-  - to someone whose caps include `n2`: the `n2` plaintext, sealed to their nudge key and sent to their nudge mailbox
-    (a contact or group peer); to a contact whose nudge key hasn't come yet, sealed to their ring key and sent to
-    their ring mailbox instead;
-  - to a contact whose caps include `n1` but not `n2`: the `n1` plaintext, sealed to their ring key and sent to their
-    ring mailbox (a group-only peer without `n2` gets none).
+  - to a **contact** whose caps include `n1` or `n2` and whose ring key it holds: sealed to their ring key and sent to
+    their ring mailbox, the `n2` plaintext when their caps include `n2`, else the `n1` one (1.36: a contact's nudge goes
+    to the ring key even when their nudge key has come, so their device knows a contact sent it, see Receiving);
+  - to a **group-only peer** whose caps include `n2`, or a contact whose ring key hasn't come yet: the `n2` plaintext,
+    sealed to their nudge key and sent to their nudge mailbox (a group-only peer without `n2` gets none).
+
+  Apps before 1.36 sent a contact's `n2` nudge to the nudge key; they still may, and it then shows as below without
+  the sender's name. Every receiver since 1.33 takes the `n2` form on the ring key, so nothing breaks.
 
   ```
   n1: {"t":"nudge","ts":<ms>}
@@ -2678,16 +2752,26 @@ a real message came, in a tiny envelope a locked device can open without its vau
   out and each is cut to 40 characters; a missing or unknown `kind` is `msg`. Other fields are ignored. A nudge never
   rings (it has no `call`), and a ring is never a nudge.
 - **Receiving, locked.** An event for the ring mailbox that opens with the ring key, or for the nudge mailbox that
-  opens with the nudge key, as a well-formed nudge puts up a notification. No freshness check: an old nudge still
-  means messages are waiting. What it shows follows the device's "What notifications show" setting, which is kept
+  opens with the nudge key, as a well-formed nudge puts up a notification. 1.36: a nudge whose `ts` is more than 2 days
+  older than the device's clock is dropped (a relay sending a captured one again; relays drop events after 30 days,
+  devices don't wait that long).
+  **Who it names (1.36).** Only contacts get the ring key, so a nudge that opens with it says what a contact sent. The
+  nudge key goes to every group peer too, and a nudge names its sender only by the sender's own word, so a group member
+  who isn't a contact could put up "Mom" on a locked phone. So a nudge that opens with the **nudge key never names a
+  person**: its `from` is dropped and only `chat` (the group's name) shows; a 1:1 one says "Muninn" (Huginn: "Huginn"),
+  "New message". Such nudges are also held down: each group name gets one notification, at most 3 per lock period, and
+  any after that fold into one naming nothing; together they alert (sound, vibration) at most once per 2 minutes,
+  whatever names they carry; and a tap opens the chat list, never a chat by name (Muninn `NudgeWire.LockedLimit`,
+  Huginn `LockedNudgeLimit`). Nudges from the ring key alert as before.
+  What it shows follows the device's "What notifications show" setting, which is kept
   outside the vault:
   - Name only, and Name and message: the title is `from` (a group's: `from · chat`), the text what came: "New
     message", "Photo", "Voice message", "Video message", "File" or "Group invite" (the message itself can't be opened
     while locked). A nudge naming nobody (`n1`) says "Muninn" (Huginn: "Huginn"), "New message".
   - Nothing: "Muninn" (Huginn: "Huginn"), "New message".
 
-  One notification per sender and chat (with Nothing, one for all), updated as more come ("3 new messages") and
-  alerting only the first time. Quiet hours, Do not disturb and Extreme battery saver apply as for any message. On
+  One notification per sender and chat (with Nothing, one for all; from the nudge key, one per group as above), updated
+  as more come ("3 new messages") and alerting only the first time. Quiet hours, Do not disturb and Extreme battery saver apply as for any message. On
   Muninn, a tap opens the lock screen, then that chat once unlocked when exactly one contact (1:1) or group (by
   `chat`) has that name, else the chat list; unlocking takes these notifications down (the messages themselves then
   notify). Huginn shows the same words and counts; a click brings it to its lock screen, then the chat list.
@@ -2697,6 +2781,15 @@ a real message came, in a tiny envelope a locked device can open without its vau
   only `t` and `ts`; an `n2` nudge also the sender's own name, the group's name and what kind of message came, never
   its text. Someone holding the locked device sees only what its notification setting shows. As with rings, the
   relays learn that the mailbox got an event, as they learn that the inbox did.
+
+- **New activity (1.36).** A sender whose app can't nudge (1.30 to 1.32, an older Kids' TV, a group-only peer without
+  `n2`) leaves a locked device silent. So each time the vault locks, the device works out, from the caps it knows, whether
+  any contact (not blocked) has caps without `n1` and `n2`, or any group-only peer has caps without `n2` (unknown caps
+  don't count), and keeps that one bit outside the vault (Muninn `lockedFallback` in its settings, Huginn
+  `notify/lockedFallback`, refreshed every 2 minutes while unlocked). While it is set, the first event that reaches the
+  inbox while locked puts up one notification, "Muninn" (Huginn: "Huginn"), "New activity", once per lock period: it
+  never says who or what (it may be a receipt). Quiet hours, Do not disturb and Extreme battery saver apply; unlocking
+  takes it down. Nothing on the wire changes.
 
 An app without `b1` or `e1` ignores the receipt fields and gets neither ring envelopes nor day key wrappings; with
 mixed versions everything falls back to sections 14 and 20. An app without `n1` or `n2` is sent no nudges; one with

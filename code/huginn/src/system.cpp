@@ -30,6 +30,7 @@
 #include <QUrl>
 #include <QImage>
 #include <QLocale>
+#include <QProcess>
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QTimer>
@@ -39,6 +40,7 @@
 #include <rhi/qrhi.h>
 #include <windows.h>
 #include <objbase.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <QColor>
 #include <QFont>
@@ -182,6 +184,7 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
     watchScreen(QGuiApplication::primaryScreen());
     detectHandheld();
     refit();
+    checkSteam();   // Steam beside Huginn (Linux Handheld mode): known before the first keyboard is wanted
     watchPower();
     // Input: every key, mouse, touch and controller press notes the time; 30 seconds without any is idle.
     m_inputClock.start();
@@ -783,24 +786,174 @@ void System::minimize(QQuickWindow *window)
         SingleInstance::tuck(window);
 }
 
+#ifdef Q_OS_WIN
+namespace
+{
+// Windows' touch keyboard, for a controller with no keyboard attached. Declared here (not from the SDK headers) so
+// every compiler sees the same thing: the touch keyboard's toggle and the input pane's place on screen.
+const GUID kUiHostNoLaunch = {0x4ce576fa, 0x83dc, 0x4f88, {0x95, 0x1c, 0x9d, 0x07, 0x82, 0xb4, 0xe3, 0x76}};
+const GUID kTipInvocationId = {0x37c994e7, 0x432b, 0x4834, {0xa2, 0xf7, 0xdc, 0xe1, 0xf1, 0x3b, 0x83, 0x4b}};
+const GUID kFrameworkInputPane = {0xd5120aa3, 0x46ba, 0x44c5, {0x82, 0x2d, 0xca, 0x80, 0x92, 0xc1, 0xfc, 0x72}};
+const GUID kFrameworkInputPaneId = {0x5752238b, 0x24f0, 0x495a, {0x82, 0xf1, 0x2f, 0xd5, 0x93, 0x05, 0x67, 0x96}};
+struct TipToggle : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Toggle(HWND wnd) = 0;
+};
+struct InputPaneArea : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Advise(IUnknown *window, IUnknown *handler, DWORD *cookie) = 0;
+    virtual HRESULT STDMETHODCALLTYPE AdviseWithHWND(HWND wnd, IUnknown *handler, DWORD *cookie) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Unadvise(DWORD cookie) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Location(RECT *rect) = 0;
+};
+
+// The touch keyboard is up: the input pane has a place on screen.
+bool touchKeyboardUp()
+{
+    InputPaneArea *pane = nullptr;
+    if (FAILED(CoCreateInstance(kFrameworkInputPane, nullptr, CLSCTX_INPROC_SERVER, kFrameworkInputPaneId, reinterpret_cast<void **>(&pane))) || !pane)
+        return false;
+    RECT r = {0, 0, 0, 0};
+    const bool up = SUCCEEDED(pane->Location(&r)) && r.right > r.left && r.bottom > r.top;
+    pane->Release();
+    return up;
+}
+
+// Toggle it; false when its host isn't running yet.
+bool toggleTouchKeyboard()
+{
+    TipToggle *tip = nullptr;
+    if (FAILED(CoCreateInstance(kUiHostNoLaunch, nullptr, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER, kTipInvocationId, reinterpret_cast<void **>(&tip))) || !tip)
+        return false;
+    tip->Toggle(GetDesktopWindow());
+    tip->Release();
+    return true;
+}
+
+void showTouchKeyboard(bool show)
+{
+    if (touchKeyboardUp() == show)
+        return;
+    if (toggleTouchKeyboard() || !show)
+        return;
+    // Its host starts with Windows' touch keyboard program; once it's there, the toggle works.
+    QString dir = qEnvironmentVariable("CommonProgramW6432");
+    if (dir.isEmpty())
+        dir = qEnvironmentVariable("CommonProgramFiles");
+    if (dir.isEmpty())
+        return;
+    const std::wstring exe = QDir::toNativeSeparators(dir + QStringLiteral("/microsoft shared/ink/TabTip.exe")).toStdWString();
+    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNOACTIVATE);
+    QTimer::singleShot(600, qApp, [] {
+        if (!touchKeyboardUp())
+            toggleTouchKeyboard();
+    });
+}
+}
+#endif
+
+bool System::steamKeyboard() const
+{
+    if (steamAround(m_gameMode))
+        return true;
+#ifdef Q_OS_LINUX
+    checkSteam();
+    return m_steamRunning;
+#else
+    return false;
+#endif
+}
+
+// Steam's client running beside Huginn (Handheld mode on the desktop): its keyboard can come up there too. Looked for
+// at most every 10 seconds, without waiting: in the Flatpak on the host (the sandbox sees only its own processes),
+// elsewhere in /proc. The answer counts from the next ask.
+void System::checkSteam() const
+{
+#ifdef Q_OS_LINUX
+    if (!gameLike() || m_steamChecking || !m_tourDir.isEmpty())
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_steamCheckedAt != 0 && now - m_steamCheckedAt < 10000)
+        return;
+    m_steamCheckedAt = now;
+    if (!inFlatpak()) {
+        bool found = false;
+        const QStringList pids = QDir(QStringLiteral("/proc")).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &pid : pids) {
+            if (pid.isEmpty() || !pid.at(0).isDigit())
+                continue;
+            QFile comm(QStringLiteral("/proc/") + pid + QStringLiteral("/comm"));
+            if (comm.open(QIODevice::ReadOnly) && comm.readLine().trimmed() == "steam") {
+                found = true;
+                break;
+            }
+        }
+        m_steamRunning = found;
+        return;
+    }
+    m_steamChecking = true;
+    auto *ps = new QProcess(const_cast<System *>(this));
+    connect(ps, &QProcess::finished, this, [this, ps](int code, QProcess::ExitStatus status) {
+        m_steamRunning = status == QProcess::NormalExit && code == 0;
+        m_steamChecking = false;
+        ps->deleteLater();
+    });
+    connect(ps, &QProcess::errorOccurred, this, [this, ps](QProcess::ProcessError e) {
+        if (e != QProcess::FailedToStart)
+            return;
+        m_steamRunning = false;
+        m_steamChecking = false;
+        ps->deleteLater();
+    });
+    ps->start(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("pgrep"), QStringLiteral("-x"), QStringLiteral("steam")});
+#endif
+}
+
 void System::showSteamKeyboard()
 {
     // Steam's own keyboard types into whatever has focus, in game mode and Handheld mode (when Steam is there to
-    // show it). Desktop users have a real keyboard; Windows shows its own touch keyboard for a tapped text field.
-    if (gameLike() && steamAround(m_gameMode)) {
+    // show it). On a Windows handheld with no Steam, Windows' touch keyboard. Desktop users have a real keyboard.
+    // The screenshot tour opens nothing outside its window.
+    if (!gameLike() || !m_tourDir.isEmpty())
+        return;
+    if (steamKeyboard()) {
         openSteamUrl(QStringLiteral("steam://open/keyboard"));
+        return;
     }
+#ifdef Q_OS_WIN
+    if (m_controllerInUse)
+        showTouchKeyboard(true);
+#endif
 }
 
 bool System::keyboardCovers() const
 {
-    return gameLike() && steamAround(m_gameMode);
+    return m_tourDir.isEmpty() && keyboardAvailable();
+}
+
+bool System::keyboardAvailable() const
+{
+    if (!gameLike())
+        return false;
+    if (!m_tourDir.isEmpty())
+        return true;   // the tour's handheld stops show the legend as on the device
+#ifdef Q_OS_WIN
+    // Windows' touch keyboard while the controller is what's in use: a keyboard's keys turn that off (Main.qml).
+    return steamKeyboard() || m_controllerInUse;
+#else
+    return steamKeyboard();
+#endif
 }
 
 void System::hideSteamKeyboard()
 {
-    if (gameLike() && steamAround(m_gameMode))
+    if (!gameLike() || !m_tourDir.isEmpty())
+        return;
+    if (steamKeyboard()) {
         openSteamUrl(QStringLiteral("steam://close/keyboard"));
+        return;
+    }
+#ifdef Q_OS_WIN
+    showTouchKeyboard(false);
+#endif
 }
 
 QStringList System::pickFiles() const

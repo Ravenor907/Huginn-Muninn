@@ -1,12 +1,15 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QSet>
 #include <QPointer>
 #include <QTimer>
 #include <QVariantList>
 #include <functional>
+
+#include "callsession.h"   // CallSkewGate
 
 class CallSession;
 class CallSignal;
@@ -167,6 +170,8 @@ private:
     qint64 m_preparedAt = 0;
     uint m_notification = 0;
     QSet<QString> m_handled;     // call ids already answered with busy or logged as missed
+    CallSkewGate m_skew;         // round 14: offers from a clock more than a minute off (5.2)
+    QElapsedTimer m_mono;        // its monotonic clock
     bool m_loaded = false;
     QSet<QString> m_trustOn, m_trustOff;   // the switch, where it was set (calltrust.json in the Vault)
     void loadTrust();

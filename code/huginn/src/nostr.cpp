@@ -622,13 +622,14 @@ void NostrWorker::signIn(const QString &url, QWebSocket *ws, const QString &chal
 
 qint64 NostrWorker::sinceFor(const QString &url) const
 {
-    // From 20 minutes before this relay last finished sending what it held (created_at is blurred up to kBlurS, and
-    // clocks differ). A relay with no cursor yet: from two days before the last event taken, as before. Never further
-    // back than the longest message limit (nothing older is kept anywhere).
+    // From 40 minutes before this relay last finished sending what it held (created_at is blurred up to kBlurS, and
+    // round 14: the sender's clock may be up to 30 minutes off too; whatever comes again is dropped as seen). A relay
+    // with no cursor yet: from two days before the last event taken, as before. Never further back than the longest
+    // message limit (nothing older is kept anywhere).
     const qint64 floor = qMax<qint64>(0, now() - (qint64(Nostr::kLongestDays) + 1) * 86400);
     const qint64 cursor = m_eoseAt.value(url, 0);
     if (cursor > 0)
-        return qMax(floor, cursor - 20 * 60);
+        return qMax(floor, cursor - Nostr::kSinceSlackS);
     return qMax(floor, m_since - 2 * 86400);
 }
 
@@ -1531,6 +1532,9 @@ bool Nostr::threadSelfTest()
         check("relay thread round trip (opened there, in order, copies and forgeries dropped)",
               bodies == QList<QByteArray>{"one", "two"} && onGui && openedOn.load() && openedOn.load() != gui);
         check("a relay's cursor waits while an event is left for later", !n.m_eoseAt.contains(url));
+        // Round 14: a sender 11 minutes slow, with the full blur, is still inside what is asked for (40 minutes back).
+        check("the since window covers the blur and 30 minutes of clock difference",
+              Nostr::kSinceSlackS == 2400 && 11 * 60 + Nostr::kBlurS - 1 <= Nostr::kSinceSlackS);
 
         // Asked again once unlocked: the cursor moves once everything before the EOSE is answered.
         n.resubscribe();

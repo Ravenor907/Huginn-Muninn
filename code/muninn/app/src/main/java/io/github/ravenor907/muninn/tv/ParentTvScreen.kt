@@ -838,7 +838,8 @@ private fun Quiet(app: Muninn, t: ManagedTv) {
     Note("During these times only parents' messages and calls get through. Everyone else's wait and arrive when it ends. " +
         "They follow this time zone and the time from your phone and the internet, so changing the clock or zone on the device changes nothing.")
     var zoning by remember { mutableStateOf(false) }
-    MenuRow("Time zone", t.tz.ifEmpty { java.util.TimeZone.getDefault().id }, enabled = k11) { zoning = true }
+    // Round 14: a device set up before 1.35 shows that no zone is kept yet (the next change keeps this phone's).
+    MenuRow("Time zone", t.tz.ifEmpty { "Not set: uses " + java.util.TimeZone.getDefault().id }, enabled = k11) { zoning = true }
     for (n in KidRules.QUIET_NAMES) QuietPart(t, n, k11)
     if (zoning) ZoneDialog(t.tz.ifEmpty { java.util.TimeZone.getDefault().id }, onCancel = { zoning = false }) { z -> zoning = false; TvParent.setTz(t.key, z) }
 }

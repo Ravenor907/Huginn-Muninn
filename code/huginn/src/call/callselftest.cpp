@@ -77,6 +77,28 @@ void relayChecks()
               && want == "a0115b4186fe1780017780b84bf5a20f0501934df65efb994e35c88f745e188c",
           "Worker request id and sig match Muninn's");
     {
+        // Install tokens (relay.md): the same proof of work vector as the Worker's test and Muninn's TurnTest.
+        const QByteArray aid(64, 'a');
+        check(RelayCredentials::solvePow(aid, 1800000000) == 465984 && RelayCredentials::powOk(aid, 1800000000, 465984)
+                  && !RelayCredentials::powOk(aid, 1800000001, 465984, 30) && !RelayCredentials::powOk(aid, 1800000000, -1),
+              "relay registration: proof of work matches the Worker's");
+        const QJsonObject reg = QJsonDocument::fromJson(RelayCredentials::regBody(key, 1800000000, QByteArray(64, 'a'), 7)).object();
+        const QJsonObject withTok = QJsonDocument::fromJson(RelayCredentials::body(key, 1, "s", QStringLiteral("x.y"))).object();
+        check(reg.value(QStringLiteral("pow")).toDouble() == 7.0 && reg.value(QStringLiteral("id")).toString() == id && !b.contains(QStringLiteral("tok"))
+                  && withTok.value(QStringLiteral("tok")).toString() == QLatin1String("x.y"),
+              "relay registration body, and tok only when there is a token");
+        const QString sid = QString(64, QLatin1Char('a'));
+        const QString kept = RelayCredentials::tokenOf(QJsonObject{{QStringLiteral("tok"), QStringLiteral("1800604800.abc")}, {QStringLiteral("exp"), 1800604800.0}}, sid);
+        check(kept == sid + QStringLiteral("|1800604800.abc|1800604800") && RelayCredentials::tokenFor(kept, sid, 1800000000) == QLatin1String("1800604800.abc")
+                  && RelayCredentials::tokenFor(kept, QString(64, QLatin1Char('b')), 1800000000).isEmpty()
+                  && RelayCredentials::tokenFor(kept, sid, 1800604800 - 86400).isEmpty()
+                  && RelayCredentials::tokenOf(QJsonObject{{QStringLiteral("urls"), QJsonArray()}}, sid).isEmpty(),
+              "relay tokens are kept per id and registered again with less than a day left");
+        check(RelayCredentials::staleNow(QJsonObject{{QStringLiteral("error"), QStringLiteral("stale")}, {QStringLiteral("now"), 1800000000.0}}) == 1800000000
+                  && RelayCredentials::staleNow(QJsonObject{{QStringLiteral("error"), QStringLiteral("stale")}}) == -1,
+              "a stale answer's time corrects the clock");
+    }
+    {
         QObject ctx;
         QHostAddress got, lit;
         bool done = false, litDone = false;
@@ -289,6 +311,17 @@ void signalingLoopback()
     check(CallSession::checkOffer(lastOffer, keyA, QDateTime::currentMSecsSinceEpoch()).isEmpty(), "our own offer checks out");
     check(CallSession::checkOffer(lastOffer, keyB, QDateTime::currentMSecsSinceEpoch()) == QLatin1String("signature"), "an offer from the wrong key is refused");
     check(CallSession::checkOffer(lastOffer, keyA, QDateTime::currentMSecsSinceEpoch() + 61000) == QLatin1String("stale"), "an offer over 60 s old is a missed call");
+    {
+        // Round 14: a caller's clock 70 s slow still rings once a second copy shows it is live; a relay's burst never does.
+        CallSkewGate g;
+        const qint64 now = 1800000000000, ts = now - 70000;
+        const bool live = g.judge(QStringLiteral("A"), ts, now, 1000) == QLatin1String("wait") && g.judge(QStringLiteral("A"), ts, now + 3000, 4000) == QLatin1String("ring");
+        const bool burst = g.judge(QStringLiteral("B"), ts, now, 1000) == QLatin1String("wait") && g.judge(QStringLiteral("B"), ts, now, 1100) == QLatin1String("wait")
+                           && g.judge(QStringLiteral("B"), ts, now + 40000, 41000) == QLatin1String("missed");
+        check(live && burst && g.judge(QStringLiteral("C"), now - 11 * 60000, now, 1) == QLatin1String("missed")
+                  && g.judge(QStringLiteral("D"), now + 5 * 60000, now, 1) == QLatin1String("wait") && g.judge(QStringLiteral("E"), now - 1000, now, 1) == QLatin1String("ring"),
+              "offers from a skewed clock ring once a second copy comes (5.2)");
+    }
     const QJsonArray cands = lastOffer.value(QStringLiteral("cands")).toArray();
     bool noIp = true;
     for (const QJsonValue &v : cands)

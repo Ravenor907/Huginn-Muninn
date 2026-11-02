@@ -101,6 +101,26 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
             .setTargetVideoEncodingBitRate(Videos.VIDEO_BITRATE).build())
     }
     val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
+    // Muninn turns with the phone without a new window, so the camera is told how the screen is turned: else photos and
+    // videos taken after turning come out sideways. Set again on every turn and just before each shot.
+    fun turnNow() {
+        val r = previewView.display?.rotation ?: return
+        imageCapture.targetRotation = r
+        if (recording == null) videoCapture.targetRotation = r
+    }
+    val orientation = androidx.compose.ui.platform.LocalConfiguration.current.orientation
+    LaunchedEffect(orientation) { turnNow() }
+    DisposableEffect(Unit) {
+        // A turn of 180 degrees changes no orientation, so the display itself is watched too.
+        val dm = context.getSystemService(android.content.Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+        val l = object : android.hardware.display.DisplayManager.DisplayListener {
+            override fun onDisplayAdded(id: Int) {}
+            override fun onDisplayRemoved(id: Int) {}
+            override fun onDisplayChanged(id: Int) { turnNow() }
+        }
+        dm?.registerDisplayListener(l, android.os.Handler(android.os.Looper.getMainLooper()))
+        onDispose { dm?.unregisterDisplayListener(l) }
+    }
     DisposableEffect(Unit) { onDispose {
         recording?.stop()
         try { ProcessCameraProvider.getInstance(context).get().unbindAll() } catch (_: Exception) {}
@@ -123,6 +143,7 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
 
     fun takePhoto() {
         busy = true
+        turnNow()
         val f = File(dir, "photo-${System.nanoTime()}.jpg")
         imageCapture.takePicture(ImageCapture.OutputFileOptions.Builder(f).build(), ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageSavedCallback {
@@ -141,6 +162,7 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
     @SuppressLint("MissingPermission")   // asked for above, before the camera opens
     fun startVideo() {
         if (!granted(Manifest.permission.RECORD_AUDIO)) { ask.launch(arrayOf(Manifest.permission.RECORD_AUDIO)); return }
+        turnNow()
         val f = File(dir, "video-${System.nanoTime()}.mp4")
         // Small enough to go through the relays like a photo: about 2 MB, a minute at most.
         val opts = FileOutputOptions.Builder(f).setFileSizeLimit(Photos.INTERNET_PIECES.toLong() * Photos.PIECE - 64 * 1024)

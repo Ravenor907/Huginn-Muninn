@@ -113,6 +113,9 @@ public:
     static QStringList pickRelays(const QStringList &all, const QSet<QString> &live, int n);
     // An event's created_at is up to this many seconds before the real time (section 20.3).
     static constexpr qint64 kBlurS = 600;
+    // Round 14: a relay is asked from this long before it last finished sending: the blur plus 30 minutes for a
+    // sender's clock that is off. What comes again is dropped as seen.
+    static constexpr qint64 kSinceSlackS = kBlurS + 30 * 60;
     // The longest message limit in days (section 16).
     static constexpr int kLongestDays = 30;
     // NIP-40 expiration for an event made at createdAt (already blurred): that time plus kBlurS plus the longest message

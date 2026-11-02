@@ -193,4 +193,20 @@ class CallLogicTest {
         assertFalse(CallLogic.lockedAnswerOk(now - 90_000, now))
         assertFalse(CallLogic.lockedAnswerOk(now + 121_000, now))
     }
+    /** Round 14 (5.2): a caller's clock more than a minute off still rings once a second copy shows it's live. */
+    @Test
+    fun skewedClocksStillRing() {
+        val g = CallLogic.SkewGate()
+        val now = 1_800_000_000_000L
+        val ts = now - 70_000
+        assertEquals("wait", g.judge("A", ts, now, 1_000))
+        assertEquals("ring", g.judge("A", ts, now + 3_000, 4_000))
+        // Copies that waited on a relay come together: never a ring, and missed once 30 s pass.
+        assertEquals("wait", g.judge("B", ts, now, 1_000))
+        assertEquals("wait", g.judge("B", ts, now, 1_100))
+        assertEquals("missed", g.judge("B", ts, now + 40_000, 41_000))
+        assertEquals("missed", g.judge("C", now - 11 * 60_000, now, 1))
+        assertEquals("wait", g.judge("D", now + 5 * 60_000, now, 1))
+        assertEquals("ring", g.judge("E", now - 1_000, now, 1))
+    }
 }

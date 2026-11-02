@@ -154,7 +154,7 @@ fun TransferScreen(app: Muninn, askDirectPermission: () -> Unit) {
             if (then != null) deliver(then, Share.pending.toList())
         }
     }
-    fun pick() { try { picker.launch(arrayOf("*/*")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } }
+    fun pick() { try { io.github.ravenor907.muninn.ui.Picking.launch(picker, arrayOf("*/*")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } }
 
     val targets = devices.map { d ->
         val icon = when (d.type) { "mobile" -> "phone"; "server", "headless" -> "server"; else -> "network" }

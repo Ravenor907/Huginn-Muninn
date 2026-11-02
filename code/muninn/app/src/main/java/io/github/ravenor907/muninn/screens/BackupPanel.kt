@@ -147,7 +147,7 @@ fun BackupFlow(app: Muninn, onClose: () -> Unit) {
             Text("No one can reset this password, so write it down somewhere safe. Without it the backup can't be opened.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
             Text("Next you pick where to save. Save it off this phone (Google Drive, or email it to yourself), so losing the phone doesn't lose it.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
             MButton(if (busy) "Saving…" else "Choose where to save", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
-                enabled = !busy && BackupFormat.strength(pw1) > 0 && pw1 == pw2) { saveTo.launch(Backup.fileName()) }
+                enabled = !busy && BackupFormat.strength(pw1) > 0 && pw1 == pw2) { io.github.ravenor907.muninn.ui.Picking.launch(saveTo, Backup.fileName()) }
             MButton("Back", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { step = "what" }
             if (busy) Bar(progress, Modifier.padding(top = 8.dp))
             if (error.isNotEmpty()) Text(error, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
@@ -245,7 +245,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
                 Text("Choose the backup file. Any name works, from Huginn or Muninn.", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
                 Text("Look in Download, or wherever you saved it.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
                 MButton("Choose file", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) {
-                    if (practice) Ui.say("Practice: this opens the file picker.") else pick.launch(arrayOf("*/*"))
+                    if (practice) Ui.say("Practice: this opens the file picker.") else io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("*/*"))
                 }
             }
             o == null -> {
@@ -256,7 +256,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
                 if (wrong) Text("Wrong password. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                 MButton(if (busy) "Checking…" else "Open", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
                     enabled = !busy && pw.isNotEmpty()) { openIt() }
-                MButton("Choose another file", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { pick.launch(arrayOf("*/*")) }
+                MButton("Choose another file", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("*/*")) }
             }
             else -> {
                 val s = BackupFormat.summary(o)

@@ -41,8 +41,21 @@ Column {
         progress = 0
         early = true
     }
+    // The hold was lost without a release (the key's release went to another window, or the focus moved away): it
+    // stops as a too-early release does, never confirming.
+    property bool byKey: false
+    function letGo() {
+        if (!down) return
+        down = false
+        byKey = false
+        ticker.stop()
+        progress = 0
+        early = true
+    }
+    readonly property bool appActive: Qt.application.state === Qt.ApplicationActive
+    onAppActiveChanged: if (!appActive) letGo()
     // Back to how it started (its dialog opened again, or closed).
-    function reset() { down = false; ticker.stop(); progress = 0; early = false }
+    function reset() { down = false; byKey = false; ticker.stop(); progress = 0; early = false }
 
     Timer {
         id: ticker
@@ -53,6 +66,7 @@ Column {
             if (hold.progress < 1) return
             stop()
             hold.down = false
+            hold.byKey = false
             hold.confirmed()
         }
     }
@@ -69,6 +83,7 @@ Column {
         border.color: hold.focused || face.activeFocus ? Theme.text : hold.danger ? Theme.dangerLine : Theme.accent
         clip: true
         activeFocusOnTab: true
+        onActiveFocusChanged: if (!activeFocus && hold.byKey) hold.letGo()
         Accessible.role: Accessible.Button
         Accessible.name: hold.spoken !== "" ? hold.spoken : hold.label
         Accessible.description: hold.early ? "Keep holding for 5 seconds" : ""
@@ -98,12 +113,12 @@ Column {
         }
         Keys.onPressed: event => {
             if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter && event.key !== Qt.Key_Space) return
-            if (!event.isAutoRepeat) hold.press()
+            if (!event.isAutoRepeat && !hold.down) { hold.byKey = true; hold.press() }
             event.accepted = true
         }
         Keys.onReleased: event => {
             if (event.key !== Qt.Key_Return && event.key !== Qt.Key_Enter && event.key !== Qt.Key_Space) return
-            if (!event.isAutoRepeat) hold.release()
+            if (!event.isAutoRepeat) { hold.byKey = false; hold.release() }
             event.accepted = true
         }
     }

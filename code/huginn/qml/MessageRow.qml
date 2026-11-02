@@ -413,7 +413,7 @@ Rectangle {
             pinnedNow: msg.host.pins.indexOf(msg.m.id) >= 0
             onReact: msg.host.openReact(msg.m.id, msg.m.myReaction || "")
             // In a thread its own box answers; from the pins, the chat's box does.
-            onReply: msg.inThread && msg.host.threadCompose.visible ? msg.host.threadCompose.focusField() : msg.host.startReply(msg.m.id)
+            onReply: msg.inThread && msg.host.threadCompose.visible ? msg.host.threadCompose.writeHere() : msg.host.startReply(msg.m.id)
             onThread: msg.host.openThread(msg.m.id)
             onEdit: msg.host.startEdit(msg.m)
             onPin: msg.host.togglePin(msg.m.id)

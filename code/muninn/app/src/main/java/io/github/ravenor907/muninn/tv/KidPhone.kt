@@ -149,7 +149,9 @@ private val COLUMN_MAX = 720.dp
 @Composable
 internal fun KidStyle(content: @Composable () -> Unit) {
     val base = LocalDensity.current
-    CompositionLocalProvider(LocalDensity provides Density(base.density, base.fontScale * KidUi.TEXT_BOOST), LocalRoundIcons provides true) {
+    // At a large text size already (130% or more), no boost on top: the biggest sizes still have to fit.
+    val boost = if (Access.text >= 1.3f) 1f else KidUi.TEXT_BOOST
+    CompositionLocalProvider(LocalDensity provides Density(base.density, base.fontScale * boost), LocalRoundIcons provides true) {
         content()
     }
 }
@@ -242,10 +244,14 @@ private fun PickNote(cfg: TvConfig, quiet: QuietTime?) {
 private fun KidHome(app: Muninn, cfg: TvConfig, quiet: QuietTime?, openKey: String?, onParent: () -> Unit) {
     // Back here does nothing: a kid can't back out into anything else.
     BackHandler(enabled = true) {}
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // The height, taken here once: what a quiet time holds never takes more than a quarter of it, so the parents (the only
+    // people at bedtime) always stay in sight below.
+    val heldMax = maxHeight * 0.25f
     Column(Modifier.fillMaxSize()) {
         GreetingCard(app, cfg, onParent)
         if (quiet != null) QuietLine(quiet, tv = false, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth())
-        HeldList(app, cfg, quiet)
+        HeldList(app, cfg, quiet, heldMax)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (KidPhoneNav.tab) {
                 "call" -> KidCalls(app, cfg, quiet)
@@ -255,21 +261,32 @@ private fun KidHome(app: Muninn, cfg: TvConfig, quiet: QuietTime?, openKey: Stri
         }
         KidTabs()
     }
+    }
 }
 
 /**
  * k14: what a quiet time is holding (a voice message or photo the kid finished), each with when it goes and Don't send.
  */
 @Composable
-private fun HeldList(app: Muninn, cfg: TvConfig, quiet: QuietTime?) {
+private fun HeldList(app: Muninn, cfg: TvConfig, quiet: QuietTime?, maxH: Dp) {
     val held by KidHoldStore.list.collectAsState()
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { KidHoldStore.load(app) } }
+    // More than one: one row ("3 waiting to send") that opens the list, so the people stay in sight.
+    var open by remember { mutableStateOf(false) }
     if (held.isEmpty()) return
     val context = LocalContext.current
     val h24 = android.text.format.DateFormat.is24HourFormat(context)
     val groupsAll by app.chat.groups.all.collectAsState()
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
-        held.forEach { h ->
+    Column(Modifier.fillMaxWidth().heightIn(max = maxH).verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 2.dp)) {
+        if (held.size > 1) Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(CARD)).background(Palette.panel)
+            .clickable(role = Role.Button) { open = !open }.semantics { stateDescription = if (open) "Open" else "Closed" }
+            .heightIn(min = TOUCH).padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            MIcon("clock", Palette.accent, 22.dp)
+            Text(KidK14.heldSummary(held.size), style = Type.normal.copy(fontSize = 16.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+            MIcon(if (open) "close" else "more", Palette.textMuted, 22.dp)
+        }
+        if (held.size == 1 || open) held.forEach { h ->
             val who = cfg.contacts.firstOrNull { it.k == h.k }?.n ?: groupsAll[h.k.removePrefix("g:")]?.state?.name ?: "someone"
             val what = if (h.kind == "voice") "Voice message" else "Photo"
             val line = "$what to $who. " + (quiet?.let { KidK14.willSend(it, h24) } ?: "Sending soon")
@@ -635,7 +652,11 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
         val callIcon = KidK14.callIconOnly(paneW, fontScale, back = !wide)
         // The smile and the photo, beside the box; folded into More when the box would get too narrow to type in.
         val icons = (if (cfg.quick.isNotEmpty()) 1 else 0) + (if (compose.photo) 1 else 0)
-        val fold = compose.text && KidK14.collapse(paneW, icons)
+        // At the largest sizes the box gets a row of its own above the buttons (then nothing needs folding), and the name
+        // a line of its own under the bar.
+        val boxRow = compose.text && KidK14.boxOwnRow(paneW, icons, fontScale)
+        val fold = compose.text && !boxRow && KidK14.collapse(paneW, icons)
+        val nameLine = KidK14.nameOwnLine(paneW, back = !wide, call = cfg.calls && !group)
         val chipState = if (sent.isEmpty()) "" else {
             val q = cfg.quick.firstOrNull { it.id == sent }
             val m = q?.let { x -> msgs.lastOrNull { it.mine && it.text == x.text && it.time >= sentAt - 2_000L } }
@@ -646,12 +667,14 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
                 // A tablet keeps the list beside the conversation, so there's nothing to go back to.
                 if (!wide) IconAction("back", "Back to chats", Palette.text, Modifier.size(TOUCH), size = 26.dp) { onBack() }
                 else Spacer(Modifier.width(12.dp))
-                io.github.ravenor907.muninn.ui.Avatar(p.k, p.n, AVATAR)
-                Text(p.n, style = Type.big.copy(fontSize = 20.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { heading() })
+                if (!nameLine) {
+                    io.github.ravenor907.muninn.ui.Avatar(p.k, p.n, AVATAR)
+                    Text(p.n, style = Type.big.copy(fontSize = 20.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { heading() })
+                } else Spacer(Modifier.weight(1f))
                 // At a large text size (or a narrow screen) Call is only its icon, so the name keeps its room.
                 if (cfg.calls && !group) {
-                    if (callIcon) Box(Modifier.size(TOUCH).clip(CircleShape).background(Palette.gold).clickable(role = Role.Button) { kidCall(app, context, p.k) }
+                    if (callIcon || nameLine) Box(Modifier.size(TOUCH).clip(CircleShape).background(Palette.gold).clickable(role = Role.Button) { kidCall(app, context, p.k) }
                         .semantics { contentDescription = "Call ${p.n}" }, contentAlignment = Alignment.Center) {
                         MIcon("call", Palette.onGold, 24.dp)
                     } else Row(Modifier.heightIn(min = TOUCH).clip(RoundedCornerShape(TOUCH / 2)).background(Palette.gold)
@@ -662,6 +685,8 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
                     }
                 }
             }
+            if (nameLine) Text(p.n, style = Type.big.copy(fontSize = 20.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 6.dp).semantics { heading() })
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
             // The newest at the bottom. The list is measured after the rows below, so it always keeps what they leave.
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
@@ -693,6 +718,22 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
                 if (cfg.quick.isNotEmpty()) MoreChoice("smile", "Quick messages", Modifier.weight(1f)) { more = false; toggleTray() }
                 if (compose.photo) MoreChoice("image", "Photo", Modifier.weight(1f)) { more = false; pickPhoto() }
             }
+            // The typing box: beside the buttons, or (at the largest sizes) on a row of its own above them.
+            val field: @Composable (Modifier) -> Unit = { m ->
+                val shape = RoundedCornerShape(TOUCH / 2)
+                val body = TextStyle(fontFamily = Type.body, fontSize = 17.sp, color = Palette.text)
+                Box(m.heightIn(min = TOUCH).clip(shape).background(Palette.field).hcBorder(shape)
+                    .padding(horizontal = 18.dp, vertical = 14.dp), contentAlignment = Alignment.CenterStart) {
+                    if (text.isEmpty()) Text("Type a message", style = body.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    BasicTextField(text, { setText(it.take(2000)) }, textStyle = body, cursorBrush = SolidColor(Palette.accent),
+                        // At a large text size the box grows to 3 lines at most, so the messages keep room.
+                        maxLines = if (fontScale >= 1.5f) 3 else 6,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { sendTyped() }),
+                        modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }.semantics { contentDescription = "Type a message" })
+                }
+            }
+            if (boxRow) field(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp))
             if (compose.text || compose.photo || compose.voice) Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 10.dp, top = 6.dp, bottom = 10.dp),
                 verticalAlignment = Alignment.Bottom) {
                 if (fold) RoundIcon("more", "More", on = more, toggle = true) { more = !more }
@@ -700,20 +741,8 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
                     if (cfg.quick.isNotEmpty()) RoundIcon("smile", "Quick messages", on = tray, toggle = true) { toggleTray() }
                     if (compose.photo) RoundIcon("image", "Send a photo") { pickPhoto() }
                 }
-                if (compose.text) {
-                    val shape = RoundedCornerShape(TOUCH / 2)
-                    val body = TextStyle(fontFamily = Type.body, fontSize = 17.sp, color = Palette.text)
-                    Box(Modifier.weight(1f).padding(horizontal = 6.dp).heightIn(min = TOUCH).clip(shape).background(Palette.field).hcBorder(shape)
-                        .padding(horizontal = 18.dp, vertical = 14.dp), contentAlignment = Alignment.CenterStart) {
-                        if (text.isEmpty()) Text("Type a message", style = body.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        BasicTextField(text, { setText(it.take(2000)) }, textStyle = body, cursorBrush = SolidColor(Palette.accent),
-                            // At a large text size the box grows to 3 lines at most, so the messages keep room.
-                            maxLines = if (fontScale >= 1.5f) 3 else 6,
-                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
-                            keyboardActions = KeyboardActions(onSend = { sendTyped() }),
-                            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }.semantics { contentDescription = "Type a message" })
-                    }
-                } else Spacer(Modifier.weight(1f))
+                if (compose.text && !boxRow) field(Modifier.weight(1f).padding(horizontal = 6.dp))
+                else Spacer(Modifier.weight(1f))
                 when {
                     compose.text && text.isNotBlank() -> RoundIcon("send", "Send", filled = true) { sendTyped() }
                     compose.voice -> RoundIcon("mic", "Voice message", filled = true) { record() }

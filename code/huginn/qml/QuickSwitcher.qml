@@ -152,6 +152,8 @@ Item {
         else if (b === "a") go(shown[row])
         else if (b === "up") row = Math.max(0, row - 1)
         else if (b === "down") row = Math.min(shown.length - 1, row + 1)
+        // Y: type the filter with the on-screen keyboard (the field sits at the top, above it).
+        else if (b === "y") { field.forceActiveFocus(); System.showSteamKeyboard() }
         return true
     }
 }

@@ -205,4 +205,57 @@ class TurnTest {
         assertEquals("a0115b4186fe1780017780b84bf5a20f0501934df65efb994e35c88f745e188c", o.getString("sig"))
         assertEquals(1_800_000_000L, (o.get("t") as Number).toLong())
     }
+    /** Install tokens (relay.md): the proof of work matches the Worker's and Huginn's, and a refused token is registered again. */
+    @Test
+    fun installTokens() {
+        val id = "a".repeat(64)
+        // The same vector as the relay Worker's test and Huginn's --call-selftest: the smallest number with 18 zero bits.
+        assertEquals(465_984L, TurnCreds.solve(id, 1_800_000_000L))
+        assertTrue(TurnCreds.powOk(id, 1_800_000_000L, 465_984L))
+        assertFalse(TurnCreds.powOk(id, 1_800_000_001L, 465_984L, 30))
+        assertFalse(TurnCreds.powOk(id, 1_800_000_000L, -1))
+        val reg = JSONObject(TurnCreds.regBody(ByteArray(91) { it.toByte() }, 1_800_000_000L, "abcabcabc", 7))
+        assertEquals(setOf("id", "t", "sig", "pow"), reg.keys().asSequence().toSet())
+        assertEquals(7L, reg.getLong("pow"))
+        // A body without a token is what older Workers and apps know; with one, "tok" is added at the end.
+        val der = ByteArray(91) { it.toByte() }
+        assertFalse(JSONObject(TurnCreds.body(der, 1L, "s")).has("tok"))
+        assertEquals("x.y", JSONObject(TurnCreds.body(der, 1L, "s", "x.y")).getString("tok"))
+        // Kept as id|tok|exp: only for this id and while more than a day is left.
+        val kept = TurnCreds.tokenOf("""{"urls":[],"tok":"1800604800.abc","exp":1800604800}""", id)
+        assertEquals("$id|1800604800.abc|1800604800", kept)
+        assertEquals("1800604800.abc", TurnCreds.tokenFor(kept, id, 1_800_000_000L))
+        assertNull(TurnCreds.tokenFor(kept, "b".repeat(64), 1_800_000_000L))
+        assertNull(TurnCreds.tokenFor(kept, id, 1_800_604_800L - 86_400L))
+        assertNull(TurnCreds.tokenOf("""{"urls":[]}""", id))
+        assertEquals(1_800_000_000L, TurnCreds.staleNow("""{"error":"stale","now":1800000000}"""))
+        assertNull(TurnCreds.staleNow("""{"error":"stale"}"""))
+        if (!RelayConfig.configured) return
+        // The whole round: no token yet, so register; the login refuses it once (bad_token), so register again.
+        var saved: String? = null
+        val prev = TurnCreds.store
+        TurnCreds.store = object : TurnCreds.TokenStore { override fun load() = saved; override fun save(value: String?) { saved = value } }
+        try {
+            TurnCreds.forget()
+            val now = System.currentTimeMillis()
+            val calls = mutableListOf<String>()
+            var refused = false
+            val login = TurnCreds.get(der, { url, body ->
+                val o = JSONObject(body)
+                val exp = now / 1000 + 7 * 86_400L
+                calls.add(url.substringAfterLast('/'))
+                when {
+                    url.endsWith("/register") -> {
+                        assertTrue(TurnCreds.powOk(o.getString("id"), o.getLong("t"), o.getLong("pow")))
+                        200 to """{"tok":"$exp.r${calls.size}","exp":$exp}"""
+                    }
+                    !refused -> { refused = true; assertTrue(o.has("tok")); 401 to """{"error":"bad_token"}""" }
+                    else -> 200 to """{"urls":["turn:t.example:3478?transport=udp"],"username":"u","credential":"c","ttl":1800,"tok":"$exp.n","exp":$exp}"""
+                }
+            }, now)
+            assertNotNull(login)
+            assertEquals(listOf("register", "turn", "register", "turn"), calls)
+            assertTrue(saved!!.endsWith(".n|" + (now / 1000 + 7 * 86_400L)))
+        } finally { TurnCreds.store = prev; TurnCreds.forget() }
+    }
 }

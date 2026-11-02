@@ -65,9 +65,10 @@ fun MoveSection(app: Muninn) {
         Text("Scan the new device's code. Same Wi-Fi.", style = Type.small)
         Text(MOVE_WARNING, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
         if (scanning) QrScanner(Modifier.fillMaxWidth().padding(top = 8.dp)) { code -> scanning = false; takeIt(code) }
-        else MButton("Scan the code", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "qr") { scanning = true }
+        // Moving sends everything to the other device: the current lock first.
+        else MButton("Scan the code", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "qr") { LockGate.ask(app, "Move from this device") { scanning = true } }
         Field(pasted, { pasted = it }, "Or paste the move code", Modifier.padding(top = 8.dp), single = false)
-        MButton("Next", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = pasted.isNotBlank()) { takeIt(pasted) }
+        MButton("Next", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, enabled = pasted.isNotBlank()) { val code = pasted; LockGate.ask(app, "Move from this device") { takeIt(code) } }
     }
     if (showing) MoveHereDialog(app) { showing = false }
 }
@@ -120,14 +121,18 @@ fun MoveHereDialog(app: Muninn, onDone: () -> Unit) {
 fun MoveCover(app: Muninn): Boolean {
     val out by Move.outgoing.collectAsState()
     val ask by Move.linkAsk.collectAsState()
+    // Never over the lock screen: the question waits until Muninn is unlocked.
+    val appLocked by io.github.ravenor907.muninn.ui.AppLock.locked.collectAsState()
+    val vaultLocked by app.vault.locked.collectAsState()
     var unlocking by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    ask?.let { name ->
+    if (!appLocked && !vaultLocked) ask?.let { name ->
         // Back is Don't link.
         AlertDialog(onDismissRequest = { Move.answerLink(app, false) }, properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false), containerColor = Palette.panel,
             title = { Text("Link $name?", style = Type.big) },
             text = { Text("$name wants to be a linked device.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
-            confirmButton = { MButton("Link", kind = Kind.Accent) { Move.answerLink(app, true) } },
+            // A linked device sees every chat: the current lock first.
+            confirmButton = { MButton("Link", kind = Kind.Accent) { LockGate.ask(app, "Link $name") { Move.answerLink(app, true) } } },
             dismissButton = { MButton("Don't link") { Move.answerLink(app, false) } })
     }
     val o = out ?: return false

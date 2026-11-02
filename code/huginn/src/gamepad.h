@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QObject>
 #include <QPointF>
+#include <QSet>
 #include <QTimer>
 
 #include <cmath>
@@ -18,7 +19,8 @@ class Gamepad : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(bool connected READ connected NOTIFY connectedChanged)
-    Q_PROPERTY(QString style READ style NOTIFY connectedChanged)
+    // The style of the controller that was used last (a docked pad and the built-in one can differ).
+    Q_PROPERTY(QString style READ style NOTIFY styleChanged)
     // Left stick, -1 to 1 (down is positive).
     Q_PROPERTY(double stickX READ stickX NOTIFY stickChanged)
     Q_PROPERTY(double stickY READ stickY NOTIFY stickChanged)
@@ -30,7 +32,8 @@ public:
     explicit Gamepad(QObject *parent = nullptr);
     ~Gamepad() override;
 
-    bool connected() const { return m_pad != nullptr; }
+    // Any controller at all: every one plugged in is read, so a docked pad works beside the built-in one.
+    bool connected() const { return !m_pads.isEmpty(); }
     QString style() const { return m_style; }
     // True while a held d-pad direction is repeating (not a fresh press).
     Q_INVOKABLE bool repeating() const { return m_repeating; }
@@ -58,27 +61,42 @@ Q_SIGNALS:
     void pressed(const QString &button);
     void released(const QString &button);
     void connectedChanged();
+    void styleChanged();
     void stickChanged();
 
 private:
     void poll();
     int pollInterval() const;
     void open(int index);
-    void down(const QString &button, bool repeats);
-    void up(const QString &button);
-    void axisAsButton(const QString &button, bool active, bool repeats);
+    void openAll();
+    void close(qint32 id);
+    // A press or release from one pad. Merged across pads: a button counts as down while any pad
+    // holds it, so one pad letting go can't end another's hold.
+    void down(qint32 pad, const QString &button, bool repeats);
+    void up(qint32 pad, const QString &button);
+    void axisAsButton(qint32 pad, const QString &button, bool active, bool repeats);
+    bool heldElsewhere(qint32 pad, const QString &button) const;
+    void useStyleOf(qint32 pad);
+    // The sticks as shown: per axis, the pad pushed furthest.
+    bool mergeSticks();
     // A stick's new value, a little rounded so its jitter at rest says nothing; true when it changed.
     static bool setAxis(double &axis, int raw);
     void retime();
 
+    struct Pad {
+        _SDL_GameController *ctl = nullptr;
+        QString style;
+        QSet<QString> held;   // buttons (and triggers) this pad holds now
+        double axes[4] = {0, 0, 0, 0};
+    };
+
     QTimer m_poll;
     QTimer m_repeat;
-    _SDL_GameController *m_pad = nullptr;
+    QHash<qint32, Pad> m_pads;
     bool m_sdlReady = false;
     QString m_style = QStringLiteral("xbox");
     QString m_repeatButton;
     bool m_repeating = false;
-    QHash<QString, bool> m_axisHeld;
     double m_stickX = 0;
     double m_stickY = 0;
     double m_rightX = 0;

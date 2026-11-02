@@ -20,9 +20,11 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QThread>
 #include <QUuid>
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <utility>
 #include <cstdio>
@@ -315,6 +317,98 @@ void Link::saveMirror()
     Q_EMIT changed();
 }
 
+// ------------------------------------------------------------------ round 14: replay
+
+QJsonObject LinkReplay::stamp(QJsonObject msg, qint64 nowMs)
+{
+    quint32 r[4];
+    QRandomGenerator::system()->fillRange(r);
+    QByteArray b;
+    for (quint32 x : r)
+        for (int i = 3; i >= 0; --i)
+            b.append(char((x >> (8 * i)) & 0xff));
+    msg.insert(QStringLiteral("lts"), double(nowMs));
+    msg.insert(QStringLiteral("ln"), QString::fromLatin1(b.toHex()));
+    return msg;
+}
+
+bool LinkReplay::take(const QString &from, const QJsonObject &p, qint64 nowMs)
+{
+    if (!p.contains(QStringLiteral("ln")))
+        return !m_stamps.contains(from);
+    const QJsonValue lnv = p.value(QStringLiteral("ln")), ltv = p.value(QStringLiteral("lts"));
+    const QString ln = lnv.toString();
+    if (!lnv.isString() || ln.size() != 32 || !std::all_of(ln.cbegin(), ln.cend(), [](QChar c) { const char16_t u = c.unicode(); return (u >= u'0' && u <= u'9') || (u >= u'a' && u <= u'f'); }))
+        return false;
+    const double d = ltv.toDouble();
+    if (!ltv.isDouble() || d != std::floor(d))
+        return false;
+    const qint64 t = qint64(d);
+    if (t < nowMs - kMaxAgeMs || t > nowMs + kMaxAgeMs)
+        return false;
+    for (auto it = m_seen.begin(); it != m_seen.end();) {
+        if (it.value() < nowMs)
+            it = m_seen.erase(it);
+        else
+            ++it;
+    }
+    if (!m_stamps.contains(from)) {
+        m_stamps.insert(from);
+        m_dirty = true;
+    }
+    const QString type = p.value(QStringLiteral("t")).toString();
+    if (type == QLatin1String("chat") || type == QLatin1String("part") || type == QLatin1String("ping") || type == QLatin1String("pong"))
+        return true;
+    const QString key = from + QLatin1Char('\n') + ln;
+    if (m_seen.contains(key))
+        return false;
+    m_seen.insert(key, qMax(nowMs, t) + kMaxAgeMs);
+    while (m_seen.size() > kMaxSeen) {
+        auto oldest = m_seen.begin();
+        for (auto it = m_seen.begin(); it != m_seen.end(); ++it)
+            if (it.value() < oldest.value())
+                oldest = it;
+        m_seen.erase(oldest);
+    }
+    m_dirty = true;
+    return true;
+}
+
+QByteArray LinkReplay::save()
+{
+    m_dirty = false;
+    QJsonObject n;
+    for (auto it = m_seen.cbegin(); it != m_seen.cend(); ++it)
+        n.insert(it.key(), double(it.value()));
+    QJsonArray st;
+    for (const QString &k : std::as_const(m_stamps))
+        st.append(k);
+    return QJsonDocument(QJsonObject{{QStringLiteral("s"), st}, {QStringLiteral("n"), n}}).toJson(QJsonDocument::Compact);
+}
+
+void LinkReplay::load(const QByteArray &json)
+{
+    const QJsonObject o = QJsonDocument::fromJson(json).object();
+    for (const QJsonValue &v : o.value(QStringLiteral("s")).toArray())
+        if (!v.toString().isEmpty())
+            m_stamps.insert(v.toString());
+    const QJsonObject n = o.value(QStringLiteral("n")).toObject();
+    for (auto it = n.constBegin(); it != n.constEnd(); ++it)
+        m_seen.insert(it.key(), qint64(it.value().toDouble()));
+}
+
+bool Link::replayOk(const QString &from, const QJsonObject &p)
+{
+    if (!m_replayLoaded) {
+        m_replayLoaded = true;
+        m_replay.load(m_chat->m_vault->read(QStringLiteral("link-replay.json")));
+    }
+    const bool ok = m_replay.take(from, p, now());
+    if (m_replay.dirty())
+        m_chat->m_vault->write(QStringLiteral("link-replay.json"), m_replay.save());
+    return ok;
+}
+
 void Link::sendTo(const Device &d, const QJsonObject &msg)
 {
     // Never history or a picture over the internet: those only on the home Wi-Fi (dropped when it isn't there now;
@@ -323,8 +417,8 @@ void Link::sendTo(const Device &d, const QJsonObject &msg)
         sendLan(d.key, msg);
         return;
     }
-    // Sealed like a private message: Bluetooth, the Wi-Fi and at most 2 relays.
-    m_chat->sendLink(d.key, msg, d.mailbox.size() == 64 ? d.mailbox : QString());
+    // Sealed like a private message: Bluetooth, the Wi-Fi and at most 2 relays. Round 14: stamped once ("lts", "ln").
+    m_chat->sendLink(d.key, LinkReplay::stamp(msg, now()), d.mailbox.size() == 64 ? d.mailbox : QString());
 }
 
 bool Link::internetOk(const QJsonObject &msg)
@@ -366,7 +460,7 @@ bool Link::sendLan(const QString &key, const QJsonObject &msg, std::function<voi
     const QString base = m_chat->baseTo(key);
     if (base.isEmpty())
         return false;
-    const QByteArray json = compact(m_chat->envelope(QStringLiteral("link"), key, compact(msg), QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    const QByteArray json = compact(m_chat->envelope(QStringLiteral("link"), key, compact(LinkReplay::stamp(msg, now())), QUuid::createUuid().toString(QUuid::WithoutBraces)));
     m_chat->post(base, json, std::move(done));
     return true;
 }
@@ -1472,6 +1566,9 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     // A phone unlinked with its copy kept here is linked no more: only a hello (linking it again) is taken from it.
     const bool samePhone = !m_phone.key.isEmpty() && m_phone.key == from;
     const bool ph = samePhone && !m_phone.gone;
+    // Round 14: a frame from a linked device that's too old, came before, or lacks the stamp it always has: dropped quietly.
+    if ((comp || ph) && !replayOk(from, p))
+        return true;
     if (ph)
         m_heardAt = now();   // cap l2: the phone is there (shown as its status)
     if (t == QLatin1String("hello") && !comp) {
@@ -2439,6 +2536,28 @@ bool Link::selfTest(const QJsonObject &v)
             bad++;
             std::fprintf(stderr, "link FAIL: should refuse %s\n", qPrintable(x.toString()));
         }
+
+    // Round 14: link frames are stamped; a replay, an old frame, or an unstamped one from a device that stamps is dropped.
+    {
+        const qint64 t0 = 1800000000000;
+        const QJsonObject send = LinkReplay::stamp(QJsonObject{{QStringLiteral("t"), QStringLiteral("send")}, {QStringLiteral("text"), QStringLiteral("hi")}}, t0);
+        LinkReplay r;
+        const QString pc = QStringLiteral("PC");
+        const bool oldApp = r.take(pc, QJsonObject{{QStringLiteral("t"), QStringLiteral("send")}}, t0);
+        const bool first = r.take(pc, send, t0 + 1000);
+        const bool again = r.take(pc, send, t0 + 2000);
+        const bool unstamped = r.take(pc, QJsonObject{{QStringLiteral("t"), QStringLiteral("unlink")}}, t0 + 3000);
+        const QJsonObject later = LinkReplay::stamp(QJsonObject{{QStringLiteral("t"), QStringLiteral("unlink")}}, t0);
+        const bool tooOld = r.take(pc, later, t0 + LinkReplay::kMaxAgeMs + 1);
+        const QJsonObject page = LinkReplay::stamp(QJsonObject{{QStringLiteral("t"), QStringLiteral("chat")}}, t0);
+        const bool pages = r.take(pc, page, t0) && r.take(pc, page, t0);
+        LinkReplay kept;
+        kept.load(r.save());
+        const bool remembered = !kept.take(pc, send, t0 + 5000) && !kept.take(pc, QJsonObject{{QStringLiteral("t"), QStringLiteral("send")}}, t0);
+        check(oldApp && first && !again && !unstamped && !tooOld && pages && remembered && send.value(QStringLiteral("ln")).toString().size() == 32
+                  && send.value(QStringLiteral("lts")).toDouble() == double(t0) && send.value(QStringLiteral("ln")) != later.value(QStringLiteral("ln")),
+              "link frames: stamped, and a replay, an old one or an unstamped one after stamps is dropped");
+    }
 
     // Paging and merging: pages of at most 100 messages and 20 KB of UTF-8 JSON, merged by id without losing any.
     QJsonArray small, big, wide;

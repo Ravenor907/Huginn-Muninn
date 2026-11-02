@@ -369,7 +369,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 bg {
                     if (Move.locked) return@bg
                     // A small live frame (section 15): close by, the Wi-Fi, and at most 2 relays, in their own outbox.
-                    val body = envelope("link", d.key, json, UUID.randomUUID().toString()).toString()
+                    // Round 14: stamped once ("lts", "ln"), so a relay can't send it again later.
+                    val body = envelope("link", d.key, Link.stamp(json), UUID.randomUUID().toString()).toString()
                     val k = d.key
                     ble.send(k, body, strict(k))
                     wifiTo(k)?.let { dev -> net.post(dev, PATH, body) }
@@ -393,7 +394,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun onLan(key: String) = lanTo(key) != null
             override fun sendLan(d: Link.Device, json: String): Boolean {
                 val dev = lanTo(d.key) ?: return false
-                val body = envelope("link", d.key, json, UUID.randomUUID().toString()).toString()
+                val body = envelope("link", d.key, Link.stamp(json), UUID.randomUUID().toString()).toString()
                 return net.post(dev, PATH, body) == 200
             }
             override fun readBytes(name: String): ByteArray? = vault.readBytes(File(context.filesDir, name))
@@ -553,6 +554,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             prefs.edit().remove(Backup.RESTORE_ANNOUNCE).apply()
             bg { try { wrapKeys.fresh(); announceKeys { RingWire.WRAP_CAP in it.caps } } catch (_: Exception) {} }
         }
+        // Round 14 (1.1): this app says fewer caps than last time (Labs "Go back to stable"): every contact is asked again
+        // (a caps probe), and its answer and the probe's own caps put both sides right.
+        val lastCaps = prefs.getString(LAST_CAPS, "").orEmpty()
+        if (Proto06.capsDropped(lastCaps, Proto06.CAPS)) bg {
+            val body = JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps").toString()
+            for (c in contacts.all.value) if (!c.groupOnly && c.chatKey !in id.muted()) try {
+                probed[c.chatKey] = System.currentTimeMillis()
+                deliver(c.chatKey, envelope("receipt", c.chatKey, body, UUID.randomUUID().toString()), c.mailbox)
+            } catch (_: Exception) {}
+        }
+        if (lastCaps != Proto06.CAPS) prefs.edit().putString(LAST_CAPS, Proto06.CAPS).apply()
         // Auto-delete: check every minute for messages past the chosen age, and for contacts 30 days in the trash.
         bg { emptyOldTrash() }
         bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune()
@@ -1328,6 +1340,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (r.optString("q") == "caps") bg {
                     deliver(fromKey, envelope("receipt", fromKey, withKeys(fromKey, JSONObject().put("ids", JSONArray()).put("s", "delivered")).toString(),
                         UUID.randomUUID().toString()), mailbox ?: contacts.get(fromKey)?.mailbox)
+                }
+                // Round 14 (1.1): an empty receipt (a caps probe or its answer) is made now, never an old copy sent again:
+                // its caps replace what was known, so an app gone back to an older release stops being sent what it dropped.
+                if (a.length() == 0) contacts.get(fromKey)?.let { c ->
+                    val fresh = Proto06.replacedCaps(c.caps, ChatWire.capsOf(o), o.has("caps"))
+                    if (fresh != c.caps) contacts.set(c.copy(caps = fresh))
                 }
                 // Caps b1 and e1: their ring key and newest day key, from a contact or group peer.
                 if (contacts.get(fromKey) != null) peerKeys.take(fromKey, RingWire.announceOf(r, System.currentTimeMillis() / 1000))
@@ -3178,6 +3196,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     companion object {
         const val PATH = "/api/huginn/v1/message"
+        /** Round 14: the caps this app said when it last started (outside the vault), to notice going back to stable. */
+        const val LAST_CAPS = "lastCaps"
         /** The chat page with the Labs reports (and what a report's notification opens). */
         const val LABS_PAGE = "labs"
         const val MAX = 2000

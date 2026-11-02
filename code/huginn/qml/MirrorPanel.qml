@@ -68,7 +68,7 @@ Rectangle {
     readonly property var prompts: (zone === "talk"
         ? [{ key: "a", label: picked && picked.failed ? "Retry" : picked && picked.media ? actionWord(picked) : "Reply" }, { key: "x", label: "Refresh" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Close" }])
-        .concat(chans.length > 1 ? [{ key: "lb", label: "Channel" }] : [])
+        .concat(chans.length > 1 ? [{ key: "lb", label: "Next channel" }] : [])
 
     // Picks the chat at [i] in the list: its draft comes back, the last one's is kept.
     function pick(i) {
@@ -210,7 +210,8 @@ Rectangle {
         const who = q.mine ? "you" : q.from || (current ? current.name : "")
         return "Replying to " + who + ": " + String(q.text || "").replace(/\s+/g, " ").substring(0, 80)
     }
-    function write() { if (current && !kept) { zone = "chats"; compose.focusField() } }
+    // Where the on-screen keyboard would cover the box, the prompt at the top instead (Composer.writeHere).
+    function write() { if (current && !kept) { zone = "chats"; compose.writeHere() } }
     // To the newest message (the "New messages" chip); with a controller, the newest one is picked.
     function toEnd() {
         talk.stick = true
@@ -218,7 +219,7 @@ Rectangle {
         talk.positionViewAtEnd()
         if (zone === "talk") msgSel = msgs.length - 1
     }
-    function replyTo(m) { if (!m || kept) return; replyId = m.id; compose.focusField() }
+    function replyTo(m) { if (!m || kept) return; replyId = m.id; compose.writeHere() }
     function refresh() { Ui.say(Linked.refresh()) }
     function stateWord(m) { return m.failed ? (m.err || "Didn't send") + " · Retry" : "Sending" }
     function actionWord(m) { return m.kind === "voice" ? (Voice.playing === m.media ? "Stop" : "Play") : "Save" }
@@ -295,8 +296,8 @@ Rectangle {
             case "a": if (picked && picked.failed) Linked.retrySend(picked.id); else if (picked && picked.media) act(picked); else if (picked) replyTo(picked); else write(); return true
             case "x": refresh(); return true
             case "left": case "b": zone = "chats"; msgSel = -1; return true
-            case "lb": stepChan(-1); return true
-            case "rb": stepChan(1); return true
+            // LB: the next channel, round to the first (RB is the pointer's click; ChatPage.ownsShoulders keeps LB here).
+            case "lb": stepChan(1); return true
             }
             return true
         }
@@ -307,8 +308,7 @@ Rectangle {
         case "a": write(); return true
         case "x": refresh(); return true
         case "b": close(); return true
-        case "lb": stepChan(-1); return true
-        case "rb": stepChan(1); return true
+        case "lb": stepChan(1); return true
         }
         return true
     }

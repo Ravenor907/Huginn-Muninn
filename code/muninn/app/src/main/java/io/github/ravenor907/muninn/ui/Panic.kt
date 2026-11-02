@@ -39,10 +39,21 @@ object Panic {
     fun shakeOn(context: Context): Boolean = prefs(context).getBoolean("shakeLock", false)
     fun setShake(context: Context, on: Boolean) { prefs(context).edit().putBoolean("shakeLock", on).apply(); updateShake(context) }
 
-    /** Locks now. False if panic lock is off in Settings. */
+    /** Extra on MainActivity's intent: open Settings › Set a lock (panic lock was asked for with no lock set). */
+    const val SET_LOCK = "setLock"
+
+    /** No password or pattern is set, so there's nothing to lock Muninn with: panic lock offers to set one instead. */
+    fun needsLock(context: Context): Boolean = (context.applicationContext as? Muninn)?.vault?.hasPassword == false
+
+    /**
+     * Locks now. False if panic lock is off in Settings, or no lock is set ([needsLock]): a lock screen asking for a
+     * password that doesn't exist would only lead to "Forgot it?" and erasing.
+     */
     fun lock(context: Context): Boolean {
-        if (!enabled(context)) return false
+        if (!enabled(context) || needsLock(context)) return false
         _locked.value = true
+        // The app-wide lock goes up too: every dialog closes, and nothing (Reply included) gets past it.
+        AppLock.raise()
         clearMessages(context)
         val app = context.applicationContext as? Muninn
         if (app != null && app.vault.hasPassword) forget(app)

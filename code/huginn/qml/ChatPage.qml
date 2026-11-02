@@ -100,8 +100,8 @@ Rectangle {
     }
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
-    // The lock's own LB (pattern or password) wins over moving along the rail.
-    readonly property bool ownsShoulders: lock.visible && !lock.asks
+    // The lock's own LB (pattern or password) wins over moving along the rail, and so does a phone group's LB (next channel).
+    readonly property bool ownsShoulders: (lock.visible && !lock.asks) || (mirror.visible && mirror.chans.length > 1)
 
     // The "New from" bar (plan 2.14): the unread chats newest first, its words, and when its X was last pressed (this run only).
     property real newFromClosed: 0
@@ -200,7 +200,7 @@ Rectangle {
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
-        : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
+        : typingIn ? [{ key: "a", label: "Send" }].concat(System.keyboardAvailable() ? [{ key: "y", label: "Keyboard" }] : [], [{ key: "lt", label: "Options" }, { key: "b", label: "Done" }])
         : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "menu" ? "Menu"
                                                                                   : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
@@ -1218,7 +1218,7 @@ Rectangle {
             DropArea {
                 anchors.fill: parent
                 enabled: page.openKey !== "" && !page.locked
-                onDropped: drop => { if (drop.hasUrls) page.dropFiles(drop.urls); drop.accept() }
+                onDropped: drop => { const u = Ui.dropUrls(drop); if (u.length) page.dropFiles(u); drop.accept() }
                 Rectangle {
                     anchors.fill: parent
                     visible: parent.containsDrag
@@ -1264,6 +1264,8 @@ Rectangle {
 
     // ============================================================= side panel: a thread or the pins
     property alias threadCompose: threadBox
+    // The chat's own message box (the screenshot tour's long draft).
+    property alias mainCompose: compose
     Rectangle {
         id: sidePanel
         visible: !lock.visible && page.openKey !== "" && page.side !== ""
@@ -1385,14 +1387,14 @@ Rectangle {
 
     // ============================================================= actions
     function write() {
-        if (compose.visible) { zone = "messages"; sel = -1; compose.focusField(); return }
+        if (compose.visible) { zone = "messages"; sel = -1; compose.writeHere(); return }
         if (openKey === "") {
             if (!Chat.nearbyOn) { Ui.say("Nearby room is off: Settings › Privacy and lock.", true); return }
-            Ui.ask("Message everyone nearby", "You're " + Ui.myName, "", "Send", t => Chat.sendNearby(t), false, true)
+            Ui.askMessage("Message everyone nearby", "You're " + Ui.myName, "", "Send", t => Chat.sendNearby(t))
         } else {
             const k = openKey, re = replyId
-            Ui.ask(re !== "" && replyMsg ? "Reply to " + (replyMsg.mine ? "yourself" : openName) : "Message " + openName, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
-                   t => { Chat.sendPrivate(k, t, re); page.replyId = "" }, false, true)
+            Ui.askMessage(re !== "" && replyMsg ? "Reply to " + (replyMsg.mine ? "yourself" : openName) : "Message " + openName, re !== "" && replyMsg ? (replyMsg.text || "Photo") : "", "", "Send",
+                   t => { Chat.sendPrivate(k, t, re); page.replyId = "" })
         }
     }
     // The + beside the title: add someone, join a group, show my code, or copy a one-time link.
@@ -1884,8 +1886,8 @@ Rectangle {
         if (!m || !m.mine || m.photo || m.unsent || openKey === "") return
         if (!Chat.hasM1(openKey)) { Ui.say(openName + " needs an update to see edits.", true); return }
         replyId = ""
-        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text) }
-        else { const k = openKey, id = m.id; Ui.ask("Edit your message", "", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }, false, true) }
+        if (compose.visible) { editId = m.id; zone = "messages"; sel = -1; compose.setText(m.text); compose.writeHere() }
+        else { const k = openKey, id = m.id; Ui.askMessage("Edit your message", "", m.text, "Save", t => { const r = Chat.editMessage(k, id, t); if (r !== "") Ui.say(r, true) }) }
     }
     // Up in an empty box: edit my last text message.
     function editLast() {
@@ -1952,9 +1954,7 @@ Rectangle {
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
     // The on-screen keyboard would cover the message box at the foot: A writes the message in a prompt at the top
     // instead, and its A sends.
-    function writeAbove(box) {
-        Ui.ask(box.placeholder !== "" ? box.placeholder : "Message", "", box.text, "Send", t => { box.setText(t); box.enter() })
-    }
+    function writeAbove(box) { box.writeAbove() }
     function boxButton(box, b) {
         switch (b) {
         case "a":
@@ -1995,7 +1995,7 @@ Rectangle {
         case "left": zone = "messages"; return true
         case "right": return true
         case "a":
-            if (side === "thread") threadBox.focusField()
+            if (side === "thread") threadBox.writeHere()
             else if (side === "pins" && sideSel >= 0) { const m = sideMsgs()[sideSel]; zone = "messages"; if (m) jumpTo(m.id) }
             return true
         case "x": if (sideSel >= 0) sideOptions(sideSel); else chatMenu(); return true

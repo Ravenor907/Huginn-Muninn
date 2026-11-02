@@ -20,10 +20,20 @@ class NotifyClicks : public QObject
 public:
     QHash<uint, std::function<void()>> pending;
     QHash<uint, std::function<void(const QString &)>> calls;   // notifyCall's buttons
+    // The desktop's activation token for a click (sent just before ActionInvoked): with it, Wayland lets the window
+    // come forward instead of only flashing on the taskbar.
+    QHash<uint, QByteArray> tokens;
 
 public Q_SLOTS:
+    void token(uint id, const QString &t)
+    {
+        if (tokens.size() > 50)
+            tokens.clear();
+        tokens.insert(id, t.toUtf8());
+    }
     void invoked(uint id, const QString &action)
     {
+        SingleInstance::useActivationToken(tokens.take(id));
         if (calls.contains(id)) {
             // A click on the ringing notification itself only brings Huginn up; its buttons stay live.
             if (action != QLatin1String("answer") && action != QLatin1String("decline")) {
@@ -46,6 +56,7 @@ public Q_SLOTS:
         Q_UNUSED(reason);
         pending.remove(id);
         calls.remove(id);
+        tokens.remove(id);
     }
 };
 
@@ -81,6 +92,7 @@ NotifyClicks *clicks()
         c = new NotifyClicks;
         c->setParent(QCoreApplication::instance());
         QDBusConnection bus = QDBusConnection::sessionBus();
+        bus.connect(kService, kPath, kService, QStringLiteral("ActivationToken"), c, SLOT(token(uint,QString)));
         bus.connect(kService, kPath, kService, QStringLiteral("ActionInvoked"), c, SLOT(invoked(uint,QString)));
         bus.connect(kService, kPath, kService, QStringLiteral("NotificationClosed"), c, SLOT(closed(uint,uint)));
     }

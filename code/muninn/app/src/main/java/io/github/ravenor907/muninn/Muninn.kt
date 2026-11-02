@@ -52,6 +52,8 @@ class Muninn : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // A Kids' Device whose Muninn keeps crashing as it starts: only the updater runs (tv/SafeStart).
+        io.github.ravenor907.muninn.tv.SafeStart.begin(this)
         vault = Vault(this)
         identity = Identity(this, vault)
         io.github.ravenor907.muninn.ui.Access.apply {
@@ -88,6 +90,8 @@ class Muninn : Application() {
         // Until the chats are open, what arrives waits (on the relays, or sealed in the locked store, see Nostr).
         // While locked, nothing in the inbox notifies (it may be a receipt, a check-in or presence): only a nudge does.
         nostr.onEnvelope = { false }
+        // Round 14: except once per lock, "New activity", when someone known to be on an app that can't nudge is around.
+        nostr.onLocked = { lockedActivity() }
         // legacy-peers.json: nothing reads it, so any copy in Muninn's files is deleted.
         try { java.io.File(filesDir, "legacy-peers.json").delete() } catch (_: Exception) {}
         // Cap b1: the ring key lives outside the vault (app-private files, never an OS key store), so a call rings even
@@ -123,6 +127,8 @@ class Muninn : Application() {
         power.install()
         // Moving to another device (cap x1): one under way goes on, and this device stays locked until it's done.
         io.github.ravenor907.muninn.net.Move.init(this)
+        // The safe mode: nothing else starts, only the updater looking for a newer Muninn.
+        if (io.github.ravenor907.muninn.tv.SafeStart.active) { io.github.ravenor907.muninn.tv.SafeStart.run(this); return }
         // Reading the stores takes a moment: off the main thread, with the window showing "Opening" meanwhile.
         if (vault.openDefault()) startAsync()
         io.github.ravenor907.muninn.net.MessageService.start(this)
@@ -152,14 +158,15 @@ class Muninn : Application() {
     /** Called once the vault is open. */
     @Synchronized
     fun start() {
-        if (ready.value) return
+        if (ready.value || io.github.ravenor907.muninn.tv.SafeStart.active) return
         net = LocalSend(this, identity)
         net.mailbox = nostr.publicKey
         ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
         // Hidden from people nearby: Bluetooth is silent too (section 21.3).
         ble.hidden = { !identity.visibleNearby }
-        // A Kids' TV keeps its own nearby behavior: the Nearby switch is for everyone else.
-        identity.kidsTv = { try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { false } }
+        // A Kids' TV keeps its own nearby behavior: the Nearby switch is for everyone else. A kids' phone or tablet follows
+        // its Nearby switch (off while it's a Kids' Device), so it doesn't show itself on a school's Wi-Fi.
+        identity.kidsTv = { try { io.github.ravenor907.muninn.tv.KidMode.on(this) && io.github.ravenor907.muninn.tv.KidMode.isTv(this) } catch (_: Exception) { false } }
         contacts = Contacts(this, vault)
         chat = Chat(this, net, ble, nostr, contacts, vault)
         chat.ringKey = nostr.ring
@@ -212,6 +219,12 @@ class Muninn : Application() {
 
     /** Locked: the pair keys and decoded pictures kept in memory go, and nothing held back is posted. */
     private fun lockedNow() {
+        // Round 14: whether anyone here can't nudge this phone (known caps without n1 or n2), kept outside the vault.
+        try {
+            val blocked = chat.blocked.value
+            val old = contacts.all.value.any { it.chatKey !in blocked && io.github.ravenor907.muninn.net.NudgeWire.cantNudge(it.caps, it.groupOnly) }
+            getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().putBoolean(LOCKED_FALLBACK, old).apply()
+        } catch (_: Exception) {}
         try { chat.forgetKeyCache() } catch (_: Exception) {}
         io.github.ravenor907.muninn.ui.PhotoCache.clear()
         coalesce.clear()
@@ -259,6 +272,32 @@ class Muninn : Application() {
 
     /** How many nudges each locked notification ([NudgeWire.groupKey]) counted since the last unlock. */
     private val lockedCounts = HashMap<String, Int>()
+    /** Round 14: nudges that name nobody (the nudge key) alert at most once per 2 minutes, in at most 3 notifications. */
+    private val lockedLimit = io.github.ravenor907.muninn.net.NudgeWire.LockedLimit()
+
+    /**
+     * Round 14: something reached the inbox while locked, and someone here is known to be on an app that can't nudge
+     * (1.30 to 1.32, an older Kids' TV): one "New activity" per lock, never saying who or what (it may be a receipt).
+     * Quiet hours and Extreme battery saver as for any message. Unlocking takes it down.
+     */
+    @Synchronized
+    fun lockedActivity() {
+        val prefs = getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
+        if (!vault.locked.value || !prefs.getBoolean(LOCKED_FALLBACK, false) || prefs.getBoolean("lockedAlerted", false)) return
+        if (power.extreme) return
+        val alert = try { power.alert("") } catch (_: Exception) { io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD }
+        if (alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.NONE) return
+        prefs.edit().putBoolean("lockedAlerted", true).apply()
+        val quiet = alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET || doNotDisturb()
+        val intent = Intent(this, MainActivity::class.java).putExtra("chat", "inbox").addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val open = PendingIntent.getActivity(this, OLD_LOCKED_ID, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val b = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Muninn").setContentText("New activity")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
+        try { NotificationManagerCompat.from(this).notify(OLD_LOCKED_ID, b.build()) } catch (_: SecurityException) {}
+    }
 
     /**
      * Caps n1 and n2: a nudge came while locked, so a real message is waiting. What it shows follows Settings ›
@@ -268,18 +307,22 @@ class Muninn : Application() {
      * for any message.
      */
     @Synchronized
-    fun lockedNudge(n: io.github.ravenor907.muninn.net.NudgeWire.Nudge) {
+    fun lockedNudge(came: io.github.ravenor907.muninn.net.NudgeWire.Nudge) {
         if (power.extreme) return
         val alert = try { power.alert("") } catch (_: Exception) { io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD }
         if (alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.NONE) return
-        val quiet = alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET || doNotDisturb()
         val show = lockedShow()
-        val key = io.github.ravenor907.muninn.net.NudgeWire.groupKey(show, n)
+        // Round 14: one that names nobody may be anyone in a group: folded and held to one alert per 2 minutes.
+        val took = lockedLimit.take(show, came, System.currentTimeMillis())
+        val n = took.n
+        val quiet = alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET || doNotDisturb() || !took.alert
+        val key = took.key
         val count = (lockedCounts[key] ?: 0) + 1
         lockedCounts[key] = count
         val id = key.hashCode()
         val intent = Intent(this, MainActivity::class.java).putExtra("chat", "inbox").addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        if (show != io.github.ravenor907.muninn.net.NudgeWire.Show.NOTHING) intent.putExtra(NUDGE_FROM, n.from).putExtra(NUDGE_CHAT, n.chat)
+        // Only a contact's nudge (ring key) may open a chat by name; one naming nobody opens the chat list.
+        if (show != io.github.ravenor907.muninn.net.NudgeWire.Show.NOTHING && n.known) intent.putExtra(NUDGE_FROM, n.from).putExtra(NUDGE_CHAT, n.chat)
         val open = PendingIntent.getActivity(this, NUDGE_TAG.hashCode() + id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val b = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(io.github.ravenor907.muninn.net.NudgeWire.title(show, n))
@@ -303,6 +346,7 @@ class Muninn : Application() {
     @Synchronized
     private fun cancelLockedNudges() {
         lockedCounts.clear()
+        lockedLimit.clear()
         try {
             val nm = NotificationManagerCompat.from(this)
             getSystemService(NotificationManager::class.java).activeNotifications.filter { it.tag == NUDGE_TAG }.forEach { nm.cancel(NUDGE_TAG, it.id) }
@@ -422,8 +466,9 @@ class Muninn : Application() {
             .apply { if (!putAway) replyAction(key)?.let { addAction(it) } }.build()
         try { NotificationManagerCompat.from(this).notify(key.hashCode(), n) } catch (_: SecurityException) {}
         // Kids' TV: also a short banner over the show or game, when a parent allowed "Show over other apps". Only on a TV: on
-        // a tablet or phone the notification is enough, and nothing takes the focus from the app in use.
-        if (!visible) try {
+        // a tablet or phone the notification is enough, and nothing takes the focus from the app in use. Never during a call:
+        // the call screen keeps the remote.
+        if (!visible && io.github.ravenor907.muninn.net.call.CallManager.call.value == null) try {
             if (io.github.ravenor907.muninn.tv.KidMode.on(this) && io.github.ravenor907.muninn.tv.KidMode.isTv(this))
                 io.github.ravenor907.muninn.tv.TvBanner.show(this, if (preview || nameOnly) name!! else "Muninn", if (preview) text ?: "New message" else "New message", key)
         } catch (_: Exception) {}
@@ -463,7 +508,7 @@ class Muninn : Application() {
 
     /**
      * Reply from the notification is allowed now: Muninn open, not panic-locked, not a Kids' TV, and the
-     * app lock isn't due (the same check MainActivity makes before showing anything).
+     * app lock isn't up or due (the same checks MainActivity makes before showing anything).
      */
     fun canReply(): Boolean {
         val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { true }
@@ -471,7 +516,9 @@ class Muninn : Application() {
             io.github.ravenor907.muninn.ui.AppLock.due(vault.hasPassword, io.github.ravenor907.muninn.ui.AppLock.awaySince,
                 android.os.SystemClock.elapsedRealtime(), identity.lockAfter)
         } catch (_: Exception) { true }
-        return io.github.ravenor907.muninn.ui.AppLock.canReply(ready.value, io.github.ravenor907.muninn.ui.Panic.locked.value, kids, lockDue)
+        // The lock is up (shown, or Lock now, or "Right away"): Reply opens the lock first, however recently Muninn was open.
+        return io.github.ravenor907.muninn.ui.AppLock.canReply(ready.value, io.github.ravenor907.muninn.ui.Panic.locked.value, kids, lockDue,
+            io.github.ravenor907.muninn.ui.AppLock.isLocked || vault.locked.value)
     }
 
     /** Reply is held back only by the app lock (not panic, not a Kids' TV, not still starting). */
@@ -516,6 +563,8 @@ class Muninn : Application() {
         private val OLD_LOCKED_ID = "inbox".hashCode()
         /** Notifications put up for nudges while locked carry this tag (all taken down at the next unlock). */
         const val NUDGE_TAG = "locked-nudge"
+        /** Round 14: someone here can't nudge (set at each lock), so the inbox may say "New activity" once per lock. */
+        const val LOCKED_FALLBACK = "lockedFallback"
         /** A locked notification's sender and group, for [openNudge]. */
         const val NUDGE_FROM = "nudgeFrom"
         const val NUDGE_CHAT = "nudgeChat"

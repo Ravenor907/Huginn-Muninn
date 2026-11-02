@@ -6,10 +6,21 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.BiasAlignment
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,6 +34,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -69,6 +81,25 @@ object PatternPath {
 }
 
 /**
+ * How big the pattern pad is drawn, in dp: the smaller of the width and height it's given, less [PAD] for the room
+ * around it, never over [MAX] (a tablet's pad stays hand-sized) and never under [MIN] (a small phone's stays drawable;
+ * the pages around it scroll instead). A side that isn't limited (a scrolling page) doesn't count.
+ */
+object PatternSize {
+    const val MAX = 320f
+    const val MIN = 160f
+    const val PAD = 16f
+
+    fun side(maxWidth: Float, maxHeight: Float, reserve: Float = 0f): Float {
+        val w = if (maxWidth.isFinite()) maxWidth else Float.POSITIVE_INFINITY
+        val h = if (maxHeight.isFinite()) maxHeight - reserve else Float.POSITIVE_INFINITY
+        val room = minOf(w, h)
+        if (!room.isFinite()) return MAX
+        return (room - PAD).coerceIn(MIN, MAX)
+    }
+}
+
+/**
  * Android-style 3×3 pattern. Drag through the dots; passing straight over a dot in between picks
  * it up too, as on Android. [error] colours it red after a wrong try. Calls [onDone] on release.
  * With a D-pad, TV remote, controller or arrow keys: a ring marks a dot, OK (Enter, A) starts there,
@@ -111,8 +142,13 @@ fun PatternPad(modifier: Modifier = Modifier, error: Boolean = false, enabled: B
     val focus = remember { FocusRequester() }
     LaunchedEffect(keysFirst, enabled) { if ((keysFirst || keyed) && enabled) try { focus.requestFocus() } catch (_: Exception) {} }
 
-    Column(modifier.graphicsLayer { translationX = nudge.value.dp.toPx() }, horizontalAlignment = Alignment.CenterHorizontally) {
-        Canvas(Modifier.fillMaxWidth().widthIn(max = 320.dp).aspectRatio(1f)
+    val hinting = focused && enabled
+    // Sized from both directions (PatternSize): the dots never run off the screen or under the buttons, and the
+    // pad never grows past a hand's reach on a tablet. Measured once here, outside the Column below.
+    BoxWithConstraints(modifier.graphicsLayer { translationX = nudge.value.dp.toPx() }.clipToBounds(), contentAlignment = Alignment.Center) {
+    val side = PatternSize.side(maxWidth.value, maxHeight.value, reserve = if (hinting) HINT_ROOM else 0f).dp
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Canvas(Modifier.size(side).clipToBounds()
             .focusRequester(focus)
             .onFocusChanged { focused = it.isFocused; if (!it.isFocused && drawing) clear() }
             .onKeyEvent { e ->
@@ -171,7 +207,66 @@ fun PatternPad(modifier: Modifier = Modifier, error: Boolean = false, enabled: B
             // The remote's highlight: a ring around the dot it's on.
             if (focused && enabled) drawCircle(Palette.accent, radius = size.width / 14f, center = center(cursor), style = Stroke(width = maxOf(2f, size.width / 120f)))
         }
-        if (focused && enabled) Text("Arrows move the ring. OK starts on a dot; move on through the dots, then OK again when done. Back starts over.",
-            style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp).widthIn(max = 320.dp))
+        if (hinting) Text("Arrows move the ring. OK starts on a dot; move on through the dots, then OK again when done. Back starts over.",
+            style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp).widthIn(max = side))
     }
+    }
+}
+
+/** Room kept under the pad for the remote's hint line, in dp. */
+private const val HINT_ROOM = 64f
+
+/**
+ * A page around a [PatternPad] that always fits: [top] (titles, the status line, Forgot it?) and [bottom] (Cancel, Skip)
+ * are never pushed off or squeezed to nothing. Upright, the pad gets the height left between them (never less than its
+ * smallest size) and sits at [bias] (-1 top, 0 middle, 1 bottom); a page taller than the screen (large text, a small
+ * phone) scrolls. Wider than tall (a phone on its side, a tablet in landscape): the words and buttons on the left,
+ * scrolling, and the pad on the right, as tall as the screen allows.
+ */
+@Composable
+fun PadPage(modifier: Modifier = Modifier, bias: Float = 0f, top: @Composable ColumnScope.() -> Unit,
+            bottom: @Composable ColumnScope.() -> Unit = {}, pad: @Composable () -> Unit) {
+    BoxWithConstraints(modifier) {
+        // Read once here: the Row and Column below use these, not the scope's own.
+        val roomW = maxWidth
+        val roomH = maxHeight
+        val padMin = (PatternSize.MIN + PatternSize.PAD).dp
+        val sideways = roomH.value.isFinite() && roomW.value.isFinite() && roomW > roomH && roomW >= padMin * 2
+        if (sideways) {
+            Row(Modifier.fillMaxSize()) {
+                Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(end = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) { top(); bottom() }
+                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = BiasAlignment(0f, bias)) { pad() }
+            }
+        } else {
+            Layout(content = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { top() }
+                Box(contentAlignment = BiasAlignment(0f, bias)) { pad() }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) { bottom() }
+            }, modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) { parts, c ->
+                val most = (PatternSize.MAX + PatternSize.PAD).dp.roundToPx()
+                val w = if (c.hasBoundedWidth) c.maxWidth else most
+                val fixed = Constraints(minWidth = w, maxWidth = w)
+                val t = parts[0].measure(fixed)
+                val b = parts[2].measure(fixed)
+                val room = if (roomH.value.isFinite()) roomH.roundToPx() else t.height + most + b.height
+                val padH = PadFit.padHeight(room, t.height, b.height, padMin.roundToPx())
+                val p = parts[1].measure(Constraints(minWidth = w, maxWidth = w, minHeight = padH, maxHeight = padH))
+                layout(w, t.height + padH + b.height) {
+                    t.place(0, 0)
+                    p.place(0, t.height)
+                    b.place(0, t.height + padH)
+                }
+            }
+        }
+    }
+}
+
+/** [PadPage]'s sums, kept apart so they can be tested. */
+object PadFit {
+    /** The pad's height: what's left of [room] under [top] and over [bottom], never less than [least]. */
+    fun padHeight(room: Int, top: Int, bottom: Int, least: Int): Int = maxOf(room - top - bottom, least)
+
+    /** Whether the whole page fits without scrolling. */
+    fun fits(room: Int, top: Int, bottom: Int, least: Int): Boolean = top + padHeight(room, top, bottom, least) + bottom <= room
 }

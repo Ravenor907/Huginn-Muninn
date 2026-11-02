@@ -650,13 +650,17 @@ private:
     void saveInvites();
     QString mailboxOf(const QString &key) const;
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
+    // Round 14: someone here is known to be on an app that can't nudge this device while it's locked (RingWire::cantNudge).
+    bool someoneCantNudge() const;
     // Sends over the internet: to their mailbox on the relays. False when they have none.
     // days: how long relays may keep it (0: this chat's message limit).
     // step: after each piece a relay took, how many have been so far.
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
                       std::function<void()> sent = nullptr, int days = 0, std::function<void(int)> step = nullptr);
     QVariantMap uploads() const { return m_uploads; }
-    void noteCaps(const QString &key, bool present, const QStringList &caps);
+    // replace (round 14, 1.1): the caps came on an empty receipt (a caps probe or its answer), made now and never an old
+    // copy sent again, so they are what the app says now: they replace the set instead of adding to it.
+    void noteCaps(const QString &key, bool present, const QStringList &caps, bool replace = false);
     // chatpeople.cpp
     void sayHello(const QString &key);
     void setAllowed(const QString &key, const QString &what, bool on);
@@ -817,6 +821,7 @@ private:
     // Who the message being handled proved to be from, whether it said "cap":"r1", and its "caps".
     QString m_openedFrom;
     bool m_openedCap = false, m_openedHasCaps = false;
+    bool m_openedReplaceCaps = false;                   // it was an empty receipt: its caps replace (noteCaps)
     int m_openedDays = 0;                               // its "days" (cap d1), 0 when none
     QStringList m_openedCaps;
     bool m_openedBound = false;                         // it came sealed with its clear fields (cap s1)

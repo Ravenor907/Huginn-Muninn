@@ -106,16 +106,41 @@ QtObject {
     function fieldMenu(field, x, y) { if (menu) menu.forField(field, x, y, false) }
     function say(text, bad) { if (toast) toast.show(text, bad) }
     function ask(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) { prompt.open(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) }
+    // Text that carries on what's there (a message draft, an edit): the cursor at the end and nothing selected, so the
+    // first key typed never replaces it. limit: the most characters it may hold (0 none); over it, Done says so and
+    // the prompt stays open with the text.
+    function askAppend(title, ctx, initial, confirmText, cb, limit) {
+        prompt.open(title, ctx, initial, confirmText, cb, false, true)
+        prompt.cursorToEnd()
+        prompt.limit = limit || 0
+    }
+    // A message: at most this many characters (Chat::kMax; counted as characters, not UTF-16 units).
+    readonly property int messageMax: 2000
+    function textLength(t) { return t.length <= messageMax ? t.length : Array.from(t).length }
+    function tooLongText(n) { return "2,000 characters at most (this has " + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "). Split it, or send it as a file." }
+    function askMessage(title, ctx, initial, confirmText, cb) { askAppend(title, ctx, initial, confirmText, cb, messageMax) }
     // Several lines of text (Enter starts a new line, Ctrl+Enter saves): a group's about text and rules.
     function askLong(title, ctx, initial, confirmText, cb) { prompt.openLong(title, ctx, initial, confirmText, cb) }
     // The same with a row of choices under the field: cb(text, choice).
     function askWith(title, ctx, initial, confirmText, choices, choice, choicesLabel, cb) { prompt.openWith(title, ctx, initial, confirmText, cb, false, true, choices, choice, choicesLabel) }
     // Someone's profile card: avatar, nickname, note, folders, and Message, Call and Video.
     // extra: { group, admin, owner, member } when opened from a group's member list.
-    function showProfile(key, name, extra) { if (profile && key) profile.show(key, name || "", extra || {}) }
+    // Never over the lock (Main.lockedOut): nobody's card or details show while Huginn is locked.
+    function showProfile(key, name, extra) { if (profile && key && !(main && main.lockedOut)) profile.show(key, name || "", extra || {}) }
     // The person panel (right click or hold on someone): role, what they can do, where their chat sits.
     property var person: null
-    function showPerson(key, name, extra) { if (person && key) person.show(key, name || "", extra || {}) }
+    // A drop's files. From a file manager outside the Flatpak sandbox, the document portal's key (the files themselves,
+    // from any folder); otherwise the drop's own URLs.
+    function dropUrls(drop) {
+        const kinds = ["application/vnd.portal.filetransfer", "application/vnd.portal.files"]
+        for (let i = 0; i < kinds.length; i++) {
+            if (!drop.formats || drop.formats.indexOf(kinds[i]) < 0) continue
+            const got = FileLink.portalUrls(drop.getDataAsString(kinds[i]))
+            if (got.length) return got
+        }
+        return drop.hasUrls ? drop.urls : []
+    }
+    function showPerson(key, name, extra) { if (person && key && !(main && main.lockedOut)) person.show(key, name || "", extra || {}) }
     function sure(title, message, confirmText, cb, hold, danger, onCancel, tag) { confirm.open(title, message, confirmText, cb, hold, danger, onCancel, tag) }
     // Files to send, then cb(paths) (nothing when none were picked). In game mode (or Handheld mode with the controller)
     // the system's file window can't be driven with the controller and may not even show, so Huginn's own list opens:

@@ -26,6 +26,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,7 +71,17 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
     val tv = remember { KidMode.isTv(context) }
     val wide = if (tv) 260.dp else 140.dp
     val call = c
-    BackHandler { if (call?.phase == Phase.INCOMING) CallManager.decline() else onClose() }
+    // Back never hides a call that's on (the microphone would stay open with no Hang up in sight): it declines a ring,
+    // closes once the call is over, and otherwise says how to end it.
+    var hint by remember { mutableStateOf(false) }
+    LaunchedEffect(hint) { if (hint) { delay(2500); hint = false } }
+    BackHandler {
+        when (KidCallBack.of(call?.phase)) {
+            KidCallBack.DECLINE -> CallManager.decline()
+            KidCallBack.CLOSE -> onClose()
+            KidCallBack.HINT -> hint = true
+        }
+    }
     Box(Modifier.fillMaxSize().background(Palette.ground), contentAlignment = Alignment.Center) {
         if (call == null) { Text("Call ended", style = tvTitle(34.sp)); return@Box }
         // The caller's camera, full screen behind the controls (the same surface path as the phone's call screen).
@@ -82,7 +93,7 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
             modifier = (if (showVideo) Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.ground.copy(alpha = 0.72f))
                 else Modifier.align(Alignment.Center))
                 .verticalScroll(androidx.compose.foundation.rememberScrollState())
-                .padding(horizontal = if (tv) 48.dp else 16.dp, vertical = if (showVideo) 20.dp else 32.dp)) {
+                .padding(horizontal = if (tv) 48.dp else 16.dp, vertical = if (showVideo) 27.dp else 32.dp)) {
             // No video coming: who it is, big.
             if (!showVideo) {
                 val initial = call.name.trim().let { if (it.isEmpty()) "?" else String(Character.toChars(it.codePointAt(0))).uppercase() }
@@ -104,6 +115,8 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
                 }
                 call.note.isNotEmpty() -> Text(call.note, style = tvText(22.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
             }
+            if (hint && KidCallBack.of(call.phase) == KidCallBack.HINT)
+                Text(HANG_UP_HINT, style = tvText(24.sp, Palette.goldBright, FontWeight.SemiBold), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
             val first = remember { FocusRequester() }
             Row(Modifier.padding(top = if (showVideo) 20.dp else 36.dp), horizontalArrangement = Arrangement.spacedBy(if (tv) 20.dp else 12.dp)) {
                 when (call.phase) {
@@ -119,6 +132,30 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
         }
     }
 }
+
+/** What Back does on a Kids' Device's call screen. */
+enum class KidCallBack {
+    /** A ring: Not now. */
+    DECLINE,
+    /** No call, or it's over: the screen closes. */
+    CLOSE,
+    /** A call on (or on its way): it stays, and the screen says to press Hang up. */
+    HINT;
+
+    companion object {
+        fun of(phase: Phase?): KidCallBack = when (phase) {
+            null, Phase.ENDED -> CLOSE
+            Phase.INCOMING -> DECLINE
+            else -> HINT
+        }
+
+        /** Whether a call in [phase] is one to go back to (ringing here, or on): the kids' screens offer the way back. */
+        fun live(phase: Phase?): Boolean = phase != null && phase != Phase.ENDED
+    }
+}
+
+/** The words for Back during a call. */
+internal const val HANG_UP_HINT = "Press Hang up to end the call"
 
 @Composable
 private fun status(c: CallManager.Ui): String {

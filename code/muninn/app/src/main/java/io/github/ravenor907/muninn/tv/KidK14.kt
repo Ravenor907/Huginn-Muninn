@@ -143,7 +143,18 @@ object KidK14 {
             child = if (r.has("child")) new.child else cur.child,
             gok = if (r.has("gok")) new.gok else cur.gok,
             wait = if (r.has("wait")) new.wait else cur.wait,
+            quick = keepPics(new.quick, cur.quick, r.has("gok")),
         )
+    }
+
+    /**
+     * Quick messages from a config: [k14] (the sender's app takes k14, so its config carries every picture there is) as
+     * they came; from an older app (no k14 field, so no pictures at all) each keeps the picture it had ([cur], by id).
+     */
+    fun keepPics(new: List<Quick>, cur: List<Quick>, k14: Boolean): List<Quick> {
+        if (k14) return new
+        val pics = cur.filter { it.e.isNotEmpty() }.associate { it.id to it.e }
+        return new.map { q -> if (q.e.isEmpty()) pics[q.id]?.let { q.copy(e = it) } ?: q else q }
     }
 
     /** True when config [c] lacks a k14 field, so the device keeps its values beside it. */
@@ -159,6 +170,8 @@ object KidK14 {
         if (c.child.isNotEmpty()) put("child", c.child)
         put("gok", gokJson(c.gok))
         put("wait", waitJson(c.wait))
+        // The quick messages' pictures, by id: an older parent app's config has none, so a restart keeps them too.
+        put("qe", JSONObject().apply { c.quick.filter { it.e.isNotEmpty() }.forEach { put(it.id, it.e) } })
     }
 
     /** [cfg] with the k14 values saved in [saved] for the fields its own config lacks. A damaged value is skipped. */
@@ -175,6 +188,10 @@ object KidK14 {
         if (!r.has("child")) (saved.opt("child") as? String)?.takeIf { nameOk(it) }?.let { c = c.copy(child = it) }
         if (!r.has("gok") && saved.has("gok")) runCatching { gokIn(saved.get("gok")) }.getOrNull()?.let { c = c.copy(gok = it) }
         if (!r.has("wait") && saved.has("wait")) runCatching { waitIn(saved.get("wait")) }.getOrNull()?.let { c = c.copy(wait = it) }
+        if (!r.has("gok")) saved.optJSONObject("qe")?.let { o ->
+            val kept = o.keys().asSequence().mapNotNull { id -> (o.opt(id) as? String)?.takeIf { emojiOk(it) }?.let { Quick(id, "", it) } }.toList()
+            c = c.copy(quick = keepPics(c.quick, kept, k14 = false))
+        }
         return c
     }
 
@@ -259,6 +276,21 @@ object KidK14 {
         return name < 96f
     }
 
+    /**
+     * The name gets its own line under the conversation's bar (and the avatar goes) when beside Back, the avatar and the
+     * Call icon it would get under 80 dp ([w] the pane's width; [back] a Back button; [call] the Call icon shows).
+     */
+    fun nameOwnLine(w: Float, back: Boolean, call: Boolean): Boolean =
+        w - (if (back) TOUCH else 12f) - 50f - 24f - 14f - (if (call) TOUCH else 0f) < 80f
+
+    /**
+     * The typing box takes a row of its own, above the buttons, when even folded it would get under [MIN_BOX] to type in
+     * (more at a bigger [fontScale], where each letter is wider).
+     */
+    fun boxOwnRow(w: Float, icons: Int, fontScale: Float): Boolean =
+        typingWidth(w, icons.coerceAtMost(1)) < MIN_BOX * fontScale.coerceAtLeast(1f)
+    const val MIN_BOX = 120f
+
     // ---- what a bubble says, and how a sent message is doing
 
     /** "4:05", a voice message's or video's length. */
@@ -281,6 +313,13 @@ object KidK14 {
             else -> text.removePrefix("$name: ").replace('\n', ' ')
         }
         return if (time.isEmpty()) "$name: $what" else "$name: $what, $time"
+    }
+
+    /** What a TV's quick message tile says after the press, from [sendState]: never "Sent" before it went. */
+    fun tileWord(state: String): String = when (state) {
+        "Sent" -> "Sent"
+        "Waiting" -> "Not sent yet"
+        else -> "Sending…"
     }
 
     /**
@@ -325,6 +364,9 @@ object KidK14 {
     /** What the kid reads in a group where some messages are held. */
     const val HELD_LINE = "Some messages are waiting for a parent"
 
+    /** The one row for what a quiet time holds, when there's more than one: it opens the list. */
+    fun heldSummary(n: Int): String = if (n == 1) "1 waiting to send" else "$n waiting to send"
+
     // ---- another family's Kids' Device
 
     /** Parent to parent (room "tvconfig"): put Kids' Device [KidAdd.k] on your Kids' Device [KidAdd.tv]. */
@@ -349,6 +391,52 @@ object KidK14 {
         if (!keyOk(tv) || !keyOk(k)) return null
         return tv as String to k as String
     }
+
+    // ---- Send its code: another family's Kids' Device, from its parent
+
+    /**
+     * People › Send its code: the device's contact code [code] with "kid":1 and "by" (the parent [by] who sent it), so the
+     * phone that adds it knows it's another family's Kids' Device and which parent to ask to add theirs (7.18). Older apps
+     * read it as an ordinary code.
+     */
+    fun kidCode(code: String, by: String): String {
+        val body = code.removePrefix(io.github.ravenor907.muninn.net.Contacts.PREFIX)
+        val o = JSONObject(String(java.util.Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("kid", 1).put("by", by)
+        return io.github.ravenor907.muninn.net.Contacts.PREFIX +
+            java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(o.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    /** The device's key and the parent's key in a code [kidCode] made, or null for any other code (a pairing code too). */
+    fun kidCodeIn(text: String): Pair<String, String>? {
+        val prefix = io.github.ravenor907.muninn.net.Contacts.PREFIX
+        val i = text.indexOf(prefix)
+        if (i < 0) return null
+        val body = text.substring(i + prefix.length).takeWhile { it.isLetterOrDigit() || it == '-' || it == '_' }
+        return try {
+            val o = JSONObject(String(java.util.Base64.getUrlDecoder().decode(body), Charsets.UTF_8))
+            if (o.optInt("kid") != 1 || o.has("tv")) return null
+            val k = o.opt("k"); val by = o.opt("by")
+            if (!keyOk(k) || !keyOk(by) || k == by) null else k as String to by as String
+        } catch (_: Exception) { null }
+    }
+
+    /**
+     * Whether a "kidadd" from [from] for device [k] onto this phone's device [tv] may be asked about. Never this phone ([me]),
+     * the sender, the device itself, or one of this phone's own devices ([mine]); never someone already a contact here who
+     * isn't known as a Kids' Device ([contact], [knownKid]); and never a device another parent handed over ([handedBy], from a
+     * card or Send its code): only its own parent asks for it.
+     */
+    fun kidAddOk(k: String, from: String, me: String, tv: String, mine: Boolean, contact: Boolean, knownKid: Boolean, handedBy: String?): Boolean = when {
+        k == me || k == from || k == tv || mine -> false
+        contact && !knownKid -> false
+        handedBy != null && handedBy != from -> false
+        else -> true
+    }
+
+    /** The ask on the parent's phone: who says so, and that only they can vouch for it. [new]: never seen on this phone. */
+    fun kidAddText(who: String, kid: String, child: String, new: Boolean): String =
+        "$who says this is their Kids' Device for $kid. Only add it if you trust $who." +
+            (if (new) " It's new to you." else "") + " Add it to who $child can talk to?"
 
     /** "Waiting for Leo's parent to add Ava" on the parent's page. */
     fun waitingText(other: String, child: String): String = "Waiting for $other's parent to add $child"

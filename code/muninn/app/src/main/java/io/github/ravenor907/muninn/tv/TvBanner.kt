@@ -11,7 +11,6 @@ import android.provider.Settings
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
@@ -25,9 +24,9 @@ import kotlinx.coroutines.delay
 
 /**
  * Kids' TV: a short banner for a new message over whatever is on (Google TV may keep notifications out of
- * sight while a show or a game plays). Only when a parent allowed "Show over other apps" and Muninn isn't
- * on screen. It goes away by itself after a few seconds; on the remote OK opens the chat and Back (or any
- * other key) closes it. The text is the notification's: just "New message" while previews are off.
+ * sight while a show or a game plays). Only when a parent allowed "Show over other apps", Muninn isn't
+ * on screen and no call is on. It goes away by itself after a few seconds and never takes the remote (the show or game
+ * keeps every key). The text is the notification's: just "New message" while previews are off.
  */
 object TvBanner {
     private const val SHOW_MS = 8_000L
@@ -35,10 +34,16 @@ object TvBanner {
     private var view: View? = null
     private val hide = Runnable { dismiss() }
 
-    /** [title] and [text] are what the notification shows (already private when previews are off). */
+    /** What the banner says under the message: it never takes the remote, so OK can't open it. */
+    const val OPEN_HINT = "Open Muninn to read it"
+    /** The TV's safe area (overscan): 48 dp at the sides, 27 dp at the top and bottom. */
+    private const val SAFE_X = 48
+    private const val SAFE_Y = 27
+
+    /** [title] and [text] are what the notification shows (already private when previews are off). Never during a call. */
     fun show(c: Context, title: String, text: String, key: String) {
         val app = c.applicationContext
-        if (!Settings.canDrawOverlays(app)) return
+        if (!Settings.canDrawOverlays(app) || io.github.ravenor907.muninn.net.call.CallManager.call.value != null) return
         main.post { try { put(app, title, text, key) } catch (_: Exception) { view = null } }
     }
 
@@ -51,34 +56,24 @@ object TvBanner {
             maxLines = 2; ellipsize = TextUtils.TruncateAt.END
             if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
         }
-        val box = object : LinearLayout(c) {
-            override fun dispatchKeyEvent(e: KeyEvent): Boolean {
-                if (e.action != KeyEvent.ACTION_UP) return true
-                when (e.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> { dismiss(); open(c, key) }
-                    else -> dismiss()
-                }
-                return true
-            }
-        }.apply {
+        // Never focusable: the show, game or call in front keeps every key on the remote. A touch screen can still tap it.
+        val box = LinearLayout(c).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(22), dp(14), dp(22), dp(14))
             background = GradientDrawable().apply { cornerRadius = dp(14).toFloat(); setColor(Color.argb(240, 20, 22, 30)); setStroke(dp(2), Color.rgb(212, 175, 55)) }
-            isFocusable = true; isFocusableInTouchMode = true
             addView(line(title, 24f, Color.WHITE, bold = true))
             addView(line(text, 20f, Color.rgb(225, 225, 230)))
-            addView(line("OK to open", 20f, Color.rgb(170, 170, 180)))
+            addView(line(OPEN_HINT, 20f, Color.rgb(170, 170, 180)))
             setOnClickListener { dismiss(); open(c, key) }
         }
         val lp = WindowManager.LayoutParams(
             dp(480), WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.END; x = dp(32); y = dp(32) }
+        ).apply { gravity = Gravity.TOP or Gravity.END; x = dp(SAFE_X); y = dp(SAFE_Y) }
         wm.addView(box, lp)
         view = box
-        box.requestFocus()
         main.postDelayed(hide, SHOW_MS)
     }
 
@@ -167,7 +162,7 @@ object TvBanner {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.BOTTOM or Gravity.END; x = dp(32); y = dp(32) }
+        ).apply { gravity = Gravity.BOTTOM or Gravity.END; x = dp(SAFE_X); y = dp(SAFE_Y) }
         wm.addView(box, lp)
         fileView = box; fileTitle = title; fileLine = text; fileBar = bar
     }

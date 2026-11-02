@@ -16,6 +16,33 @@
 
 class Chat;
 
+// Round 14 (protocol.md 15, "Replay"): room "link" is sealed with the static key (v1), so a relay could send an old frame
+// again days later ("send" a message again, "unlink"). Every link frame now carries "lts" (the sender's time, ms) and
+// "ln" (16 random bytes, hex). A receiver drops one more than kMaxAgeMs away from its own clock, and one whose "ln" it
+// took before (remembered kMaxAgeMs past the frame's time). Once a device has sent one stamped frame, its frames without
+// a stamp are dropped too (an app before 1.36 never stamps, so its frames are still taken). "chat", "part", "ping" and
+// "pong" change nothing when they come twice: checked for time only, so history pages don't fill the list.
+// The same as Muninn's LinkReplay.
+class LinkReplay
+{
+public:
+    static constexpr qint64 kMaxAgeMs = 36LL * 3600 * 1000;   // less than the 2 days Seen and the "send" ids are kept
+    static constexpr int kMaxSeen = 20000;
+    // msg with "lts" and "ln" added.
+    static QJsonObject stamp(QJsonObject msg, qint64 nowMs);
+    // Taken (true), or dropped: too old or far ahead, seen before, or unstamped from a device that stamps.
+    bool take(const QString &from, const QJsonObject &p, qint64 nowMs);
+    // Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}}.
+    QByteArray save();
+    void load(const QByteArray &json);
+    bool dirty() const { return m_dirty; }
+
+private:
+    QHash<QString, qint64> m_seen;   // from + "\n" + ln -> dropped from the list after this (ms)
+    QSet<QString> m_stamps;          // devices known to stamp
+    bool m_dirty = false;
+};
+
 // Linked devices, companion style (shared/docs/protocol.md section 15), the same as Muninn's Link.kt.
 // A companion shows a phone's 1:1 chats and sends through it while the phone is online; contacts see
 // nothing new. Routes (section 15): history ("chat" pages), media ("get", "part") and a "me" with its picture go only over
@@ -173,6 +200,8 @@ public:
     // Room "link" from fromKey, opened; via is the route it came on ("wifi", "bluetooth" or "internet").
     // False: not from a device linked with this one.
     bool receive(const QString &fromKey, const QJsonObject &p, const QString &via);
+    // Round 14: stamped before it goes (every route of one send carries the same stamp); checked as it comes.
+    bool replayOk(const QString &from, const QJsonObject &p);
     // On the phone: a message in or out of a 1:1 chat (Chat::addPrivate), for the companions.
     void onMessage(const QString &peer, const QVariantMap &m);
     // On a companion: messages past each chat's limit (cap d1, the phone's "d") go, as on the phone.
@@ -363,6 +392,8 @@ private:
     QString m_token, m_code;
     qint64 m_tokenUntil = 0;
     QHash<QString, qint64> m_tokens;        // every code shown that hasn't run out: a refreshed one leaves the last one working
+    LinkReplay m_replay;                    // round 14: link frames' stamps, kept in the vault (link-replay.json)
+    bool m_replayLoaded = false;
     bool m_ownOpen = false;
     // The companion's side of "me" (in link.json).
     mutable QString m_meName, m_meStatus, m_meCustom;

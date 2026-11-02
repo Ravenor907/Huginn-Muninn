@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import assert from "node:assert/strict";
-import worker, { handle, addressGroup, RelayLimits, SQL } from "./worker.js";
+import worker, { handle, addressGroup, RelayLimits, SQL, POW_BITS, TOKEN_TTL, powOk, makeToken } from "./worker.js";
 
 const SECRET = "test-app-secret";
 const ID = "a".repeat(64);
@@ -314,9 +314,9 @@ await test("no address header still counts (as one shared address)", async () =>
   assert.equal((await call(e, { id, t: NOW, sig: sign(id, NOW) }, { ip: null })).data.error, "ip_limit");
 });
 
-await test("global cap of 3000 per day", async () => {
+await test("requests without a token share a pool of 1000 a day", async () => {
   const lim = new FakeLimits();
-  lim.sql.rows.set(DAY + "|g", 3000);
+  lim.sql.rows.set(DAY + "|g", 1000);
   const r = await call(env(lim), { id: ID, t: NOW, sig: sign(ID, NOW) });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "global_limit");
@@ -349,6 +349,143 @@ await test("upstream failure is 502", async () => {
   globalThis.fetch = async () => new Response("{}", { status: 401 });
   assert.equal((await call(env(), { id: ID, t: NOW, sig: sign(ID, NOW) })).status, 502);
   globalThis.fetch = saved;
+});
+
+// ---- Round 14: install tokens (relay.md "Install tokens").
+
+function solve(id, t, bits = POW_BITS) {
+  for (let n = 0; ; n++) {
+    const d = createHash("sha256").update("huginn-relay pow v1:" + id + ":" + t + ":" + n).digest();
+    let left = bits, ok = true;
+    for (const b of d) {
+      if (left <= 0) break;
+      if (left >= 8) { if (b !== 0) { ok = false; break; } left -= 8; } else { ok = (b >> (8 - left)) === 0; break; }
+    }
+    if (ok) return n;
+  }
+}
+
+async function register(e, id = ID, opts = {}) {
+  const t = opts.now ?? NOW;
+  return call(e, { id, t, sig: sign(id, t), pow: opts.pow ?? solve(id, t) }, { ...opts, path: "/register" });
+}
+
+await test("proof of work: the app's hash and the Worker's agree", async () => {
+  const n = solve(ID, NOW);
+  assert.equal(await powOk(ID, NOW, n), true);
+  assert.equal(await powOk(ID, NOW + 1, n, 30), false);
+  assert.equal(await powOk(ID, NOW, -1), false);
+  assert.equal(await powOk(ID, NOW, 1.5), false);
+  assert.equal(POW_BITS, 18);
+});
+
+await test("register: proof of work gives a token good for 7 days", async () => {
+  const r = await register(env());
+  assert.equal(r.status, 200);
+  assert.equal(r.data.exp, NOW + TOKEN_TTL);
+  assert.equal(TOKEN_TTL, 7 * 86400);
+  assert.match(r.data.tok, /^\d+\.[0-9a-f]{32}$/);
+  assert.equal(r.data.tok, await makeToken(env(), ID, NOW + TOKEN_TTL));
+  // Worker-signed with its own secret: another Worker secret gives another token.
+  const e2 = env();
+  e2.TURN_KEY_API_TOKEN = "other";
+  assert.notEqual(r.data.tok, await makeToken(e2, ID, NOW + TOKEN_TTL));
+});
+
+await test("register: no or wrong proof of work, or a bad signature, is refused", async () => {
+  const e = env();
+  const n = solve(ID, NOW);
+  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW) }, { path: "/register" })).status, 400);
+  // The work is bound to the time: the same number a second later is (almost surely) no good.
+  let wrong = n + 1;
+  while (await powOk(ID, NOW, wrong)) wrong++;
+  const r = await register(e, ID, { pow: wrong });
+  assert.equal(r.status, 401);
+  assert.equal(r.data.error, "bad_pow");
+  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW, "wrong"), pow: n }, { path: "/register" })).status, 401);
+  assert.equal((await call(e, null, { path: "/register", method: "GET" })).status, 405);
+});
+
+await test("register: 6 a day per address, 2000 a day for everyone, and logins go on", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  const n = solve(ID, NOW);
+  for (let i = 0; i < 6; i++) assert.equal((await register(e, ID, { pow: n })).status, 200);
+  const r = await register(e, ID, { pow: n });
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "ip_reg_limit");
+  assert.equal((await register(e, ID, { pow: n, ip: "198.51.100.30" })).status, 200);
+  lim.sql.rows.set(DAY + "|rg", 2000);
+  const full = await register(e, ID, { pow: n, ip: "198.51.100.31" });
+  assert.equal(full.status, 429);
+  assert.equal(full.data.error, "reg_limit");
+  // A full day of registrations refuses new registrations only: logins still work.
+  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW) }, { ip: "198.51.100.31" })).status, 200);
+  // Each registration writes 2 rows.
+  const lim2 = new FakeLimits();
+  await register(env(lim2), ID, { pow: n });
+  assert.equal(lim2.sql.written, 2);
+});
+
+await test("a login with a token renews it, and its pool is not the shared one", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  const tok = (await register(e)).data.tok;
+  // Someone with APP_SECRET used up every login without a token today.
+  lim.sql.rows.set(DAY + "|g", 1000);
+  const old = await call(e, { id: "b".repeat(64), t: NOW, sig: sign("b".repeat(64), NOW) });
+  assert.equal(old.status, 429);
+  assert.equal(old.data.error, "global_limit");
+  const later = NOW + 60;
+  const r = await call(e, { id: ID, t: later, sig: sign(ID, later), tok }, { now: later });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.username, "user123");
+  assert.equal(r.data.exp, later + TOKEN_TTL);
+  assert.equal(r.data.tok, await makeToken(e, ID, later + TOKEN_TTL));
+  // A login without a token gets no token back.
+  const plain = await call(env(), { id: ID, t: NOW, sig: sign(ID, NOW) });
+  assert.equal(plain.data.tok, undefined);
+});
+
+await test("tokens: another id's, forged or run out are refused", async () => {
+  const e = env();
+  const tok = (await register(e)).data.tok;
+  const other = "b".repeat(64);
+  const r = await call(e, { id: other, t: NOW, sig: sign(other, NOW), tok });
+  assert.equal(r.status, 401);
+  assert.equal(r.data.error, "bad_token");
+  const forged = tok.slice(0, -1) + (tok.endsWith("0") ? "1" : "0");
+  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW), tok: forged })).data.error, "bad_token");
+  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW), tok: 5 })).data.error, "bad_token");
+  const after = NOW + TOKEN_TTL + 1;
+  const x = await call(e, { id: ID, t: after, sig: sign(ID, after), tok }, { now: after });
+  assert.equal(x.status, 401);
+  assert.equal(x.data.error, "token_expired");
+});
+
+await test("tokens: still 30 a day per install and 60 per address", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  const tok = (await register(e)).data.tok;
+  lim.sql.rows.set(DAY + "|u:" + ID, 30);
+  const r = await call(e, { id: ID, t: NOW, sig: sign(ID, NOW), tok });
+  assert.equal(r.status, 429);
+  assert.equal(r.data.error, "id_limit");
+  lim.sql.rows.set(DAY + "|t", 12000);
+  const other = "c".repeat(64);
+  const tok2 = (await register(e, other, { ip: "198.51.100.40" })).data.tok;
+  const g = await call(e, { id: other, t: NOW, sig: sign(other, NOW), tok: tok2 }, { ip: "198.51.100.40" });
+  assert.equal(g.data.error, "global_limit");
+});
+
+await test("a stale time says the Worker's time", async () => {
+  const r = await call(env(), { id: ID, t: NOW - 400, sig: sign(ID, NOW - 400) });
+  assert.equal(r.status, 401);
+  assert.equal(r.data.error, "stale");
+  assert.equal(r.data.now, NOW);
+  // Corrected by that offset, the next try works.
+  const t = NOW - 400 + (r.data.now - (NOW - 400));
+  assert.equal((await call(env(), { id: ID, t, sig: sign(ID, t) })).status, 200);
 });
 
 console.log(passed + " tests passed");

@@ -896,6 +896,7 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             reply(s, 422);
         } else {
             f->done = true;
+            Sharing::markFromInternet(f->savedAs);   // Windows checks it before it runs, as for a download
             reply(s, 200);
         }
         Q_EMIT progressChanged();

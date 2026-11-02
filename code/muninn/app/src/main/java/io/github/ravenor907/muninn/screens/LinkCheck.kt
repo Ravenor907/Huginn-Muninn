@@ -126,8 +126,9 @@ private fun MatchStep(name: String, emoji: String, companion: Boolean, onYes: ()
         Text("Do these match?", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
         Text(emoji, style = Type.big.copy(fontSize = 44.sp, letterSpacing = 6.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 22.dp))
         Text(if (companion) "Your phone shows 4 emoji too." else "$name shows 4 emoji too.", style = Type.normal, textAlign = TextAlign.Center)
-        MButton("They match", Modifier.fillMaxWidth().padding(top = 22.dp).focusRequester(first), Kind.Accent, icon = "check") { onYes() }
-        MButton("No", Modifier.fillMaxWidth().padding(top = 8.dp)) { onNo() }
+        // The focus starts on No: a stray Enter on a keyboard or remote must never confirm emoji nobody compared.
+        MButton("They match", Modifier.fillMaxWidth().padding(top = 22.dp), Kind.Accent, icon = "check") { onYes() }
+        MButton("No", Modifier.fillMaxWidth().padding(top = 8.dp).focusRequester(first)) { onNo() }
     }
 }
 
@@ -260,13 +261,20 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
     var wrong by remember { mutableStateOf(false) }
     var shakes by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    // The same count and waits as the lock screen, so guessing here is just as slow.
+    val tries = remember { LockTries(app) }
+    var waitUntil by remember { mutableStateOf(tries.waitUntil()) }
+    var now by remember { mutableStateOf(tries.elapsed()) }
+    LaunchedEffect(waitUntil) { while (tries.elapsed() < waitUntil) { now = tries.elapsed(); delay(500) }; now = tries.elapsed() }
+    val waiting = now < waitUntil
     fun tryIt(secret: String) {
-        if (busy) return
+        if (busy || waiting) return
         busy = true; wrong = false
         scope.launch {
             val ok = withContext(Dispatchers.Default) { try { app.vault.check(secret) } catch (_: Exception) { false } }
             busy = false
-            if (ok) { pw = ""; Link.showOwn(true); onDone(true) } else { wrong = true; shakes++ }
+            if (ok) { pw = ""; tries.right(); Link.showOwn(true); onDone(true) }
+            else { wrong = true; shakes++; val until = tries.wrong(); if (until > 0) waitUntil = until }
         }
     }
     AlertDialog(onDismissRequest = { onDone(false) }, containerColor = Palette.panel,
@@ -275,13 +283,14 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(if (pattern) "Draw your pattern." else "Type your password.", style = Type.normal)
                 if (pattern) Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
-                    PatternPad(error = wrong, enabled = !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
+                    PatternPad(error = wrong, enabled = !busy && !waiting, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
                 } else Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
                     keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
-                if (wrong) Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+                if (waiting) Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+                else if (wrong) Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             }
         },
-        confirmButton = { if (!pattern) MButton(if (busy) "Opening…" else "Open", kind = Kind.Accent, enabled = pw.isNotEmpty() && !busy) { tryIt(pw) } },
+        confirmButton = { if (!pattern) MButton(if (busy) "Opening…" else "Open", kind = Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt(pw) } },
         dismissButton = { MButton("Cancel") { onDone(false) } })
 }
 
@@ -335,14 +344,17 @@ internal fun LinkedDevicesPanel(app: Muninn) {
         Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // A tablet is the companion: it shows the QR. A phone scans it.
             if (tablet && phone == null) MButton("Link my phone", Modifier.fillMaxWidth(), Kind.Accent, icon = "qr") { LinkUi.companionOpen = true }
-            MButton(if (scanning) "Stop scanning" else "Scan to link", Modifier.fillMaxWidth(), if (tablet) Kind.Normal else Kind.Accent, icon = "qr") { scanning = !scanning; pasting = false }
+            // Linking mirrors every chat to that device: the current lock first (stopping needs nothing).
+            MButton(if (scanning) "Stop scanning" else "Scan to link", Modifier.fillMaxWidth(), if (tablet) Kind.Normal else Kind.Accent, icon = "qr") {
+                if (scanning) scanning = false else LockGate.ask(app, "Scan to link") { scanning = true; pasting = false }
+            }
             if (scanning) key(attempt) { QrScanner(Modifier.fillMaxWidth().height(280.dp)) { c -> take(c, scanned = true) } }
             if (!scanning) Text(if (pasting) "Paste the code from the other screen." else "Paste a code instead", style = Type.small.copy(color = Palette.textMuted),
                 modifier = Modifier.heightIn(min = 40.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                     .clickable(role = Role.Button, enabled = !pasting) { pasting = true }.padding(horizontal = 4.dp, vertical = 10.dp))
             if (pasting && !scanning) {
                 Field(pasted, { pasted = it }, "Link code", single = false)
-                MButton("Link", Modifier.fillMaxWidth(), enabled = pasted.isNotBlank()) { take(pasted) }
+                MButton("Link", Modifier.fillMaxWidth(), enabled = pasted.isNotBlank()) { val code = pasted; LockGate.ask(app, "Link this device") { take(code) } }
             }
         }
     }

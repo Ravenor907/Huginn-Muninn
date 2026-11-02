@@ -10,6 +10,7 @@
 #include <QQuickWindow>
 
 #include <cmath>
+#include <utility>
 
 namespace
 {
@@ -61,12 +62,7 @@ Gamepad::Gamepad(QObject *parent)
         return;
     }
     m_sdlReady = true;
-    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
-        if (SDL_IsGameController(i)) {
-            open(i);
-            break;
-        }
-    }
+    openAll();
     connect(&m_poll, &QTimer::timeout, this, &Gamepad::poll);
     m_poll.start(pollInterval());
     // Read as often as a frame while Huginn is in front, much less behind other windows.
@@ -85,8 +81,9 @@ Gamepad::Gamepad(QObject *parent)
 
 Gamepad::~Gamepad()
 {
-    if (m_pad)
-        SDL_GameControllerClose(m_pad);
+    for (const Pad &p : std::as_const(m_pads))
+        SDL_GameControllerClose(p.ctl);
+    m_pads.clear();
     if (m_sdlReady)
         SDL_Quit();
 }
@@ -96,7 +93,7 @@ Gamepad::~Gamepad()
 // for one every 2 seconds. Nothing is lost at rest: SDL keeps the presses until they are read.
 int Gamepad::pollInterval() const
 {
-    if (!m_pad)
+    if (m_pads.isEmpty())
         return 2000;
     const bool front = QGuiApplication::applicationState() == Qt::ApplicationActive;
     if (front && inUse())
@@ -110,8 +107,8 @@ int Gamepad::pollInterval() const
 bool Gamepad::inUse() const
 {
     bool held = !m_repeatButton.isEmpty() || m_held != Qt::NoButton || stickInUse();
-    for (auto it = m_axisHeld.cbegin(); it != m_axisHeld.cend() && !held; ++it)
-        held = it.value();
+    for (auto it = m_pads.cbegin(); it != m_pads.cend() && !held; ++it)
+        held = !it.value().held.isEmpty();
     return held || m_clock.elapsed() - m_lastActive < 1500;
 }
 
@@ -143,26 +140,87 @@ bool Gamepad::setAxis(double &axis, int raw)
 
 void Gamepad::open(int index)
 {
-    if (m_pad)
+    if (!SDL_IsGameController(index))
         return;
-    m_pad = SDL_GameControllerOpen(index);
-    if (!m_pad)
+    const qint32 id = SDL_JoystickGetDeviceInstanceID(index);
+    if (id < 0 || m_pads.contains(id))
         return;
-    switch (SDL_GameControllerGetType(m_pad)) {
+    _SDL_GameController *ctl = SDL_GameControllerOpen(index);
+    if (!ctl)
+        return;
+    Pad p;
+    p.ctl = ctl;
+    switch (SDL_GameControllerGetType(ctl)) {
     case SDL_CONTROLLER_TYPE_PS3:
     case SDL_CONTROLLER_TYPE_PS4:
     case SDL_CONTROLLER_TYPE_PS5:
-        m_style = QStringLiteral("playstation");
+        p.style = QStringLiteral("playstation");
         break;
     default:
-        m_style = QStringLiteral("xbox");
+        p.style = QStringLiteral("xbox");
     }
+    const bool first = m_pads.isEmpty();
+    m_pads.insert(id, p);
+    // The newest pad sets the prompts until another one is used (docking brings the new pad in hand).
+    useStyleOf(id);
     m_poll.setInterval(pollInterval());
-    Q_EMIT connectedChanged();
+    if (first)
+        Q_EMIT connectedChanged();
 }
 
-void Gamepad::down(const QString &button, bool repeats)
+void Gamepad::openAll()
 {
+    for (int i = 0; i < SDL_NumJoysticks(); ++i)
+        open(i);
+}
+
+void Gamepad::close(qint32 id)
+{
+    auto it = m_pads.find(id);
+    if (it == m_pads.end())
+        return;
+    // Whatever this pad held is let go, unless another pad holds the same button.
+    const QSet<QString> held = it.value().held;
+    for (const QString &b : held)
+        up(id, b);
+    SDL_GameControllerClose(it.value().ctl);
+    m_pads.erase(it);
+    if (mergeSticks())
+        Q_EMIT stickChanged();
+    if (!m_pads.isEmpty())
+        useStyleOf(m_pads.constBegin().key());
+    m_poll.setInterval(pollInterval());
+    if (m_pads.isEmpty())
+        Q_EMIT connectedChanged();
+}
+
+void Gamepad::useStyleOf(qint32 pad)
+{
+    const auto it = m_pads.constFind(pad);
+    if (it == m_pads.cend() || it.value().style == m_style)
+        return;
+    m_style = it.value().style;
+    Q_EMIT styleChanged();
+}
+
+bool Gamepad::heldElsewhere(qint32 pad, const QString &button) const
+{
+    for (auto it = m_pads.cbegin(); it != m_pads.cend(); ++it)
+        if (it.key() != pad && it.value().held.contains(button))
+            return true;
+    return false;
+}
+
+void Gamepad::down(qint32 pad, const QString &button, bool repeats)
+{
+    auto it = m_pads.find(pad);
+    if (it == m_pads.end() || it.value().held.contains(button))
+        return;
+    it.value().held.insert(button);
+    useStyleOf(pad);
+    // Already down on another pad: one press, not two.
+    if (heldElsewhere(pad, button))
+        return;
     Q_EMIT pressed(button);
     if (repeats) {
         m_repeatButton = button;
@@ -170,8 +228,13 @@ void Gamepad::down(const QString &button, bool repeats)
     }
 }
 
-void Gamepad::up(const QString &button)
+void Gamepad::up(qint32 pad, const QString &button)
 {
+    auto it = m_pads.find(pad);
+    if (it == m_pads.end() || !it.value().held.remove(button))
+        return;
+    if (heldElsewhere(pad, button))
+        return;
     if (m_repeatButton == button) {
         m_repeatButton.clear();
         m_repeat.stop();
@@ -179,16 +242,33 @@ void Gamepad::up(const QString &button)
     Q_EMIT released(button);
 }
 
-void Gamepad::axisAsButton(const QString &button, bool active, bool repeats)
+void Gamepad::axisAsButton(qint32 pad, const QString &button, bool active, bool repeats)
 {
-    const bool was = m_axisHeld.value(button);
-    if (active == was)
+    const auto it = m_pads.constFind(pad);
+    if (it == m_pads.cend() || it.value().held.contains(button) == active)
         return;
-    m_axisHeld[button] = active;
     if (active)
-        down(button, repeats);
+        down(pad, button, repeats);
     else
-        up(button);
+        up(pad, button);
+}
+
+bool Gamepad::mergeSticks()
+{
+    double merged[4] = {0, 0, 0, 0};
+    for (const Pad &p : std::as_const(m_pads))
+        for (int i = 0; i < 4; ++i)
+            if (std::abs(p.axes[i]) > std::abs(merged[i]))
+                merged[i] = p.axes[i];
+    double *out[4] = {&m_stickX, &m_stickY, &m_rightX, &m_rightY};
+    bool changed = false;
+    for (int i = 0; i < 4; ++i) {
+        if (*out[i] != merged[i]) {
+            *out[i] = merged[i];
+            changed = true;
+        }
+    }
+    return changed;
 }
 
 void Gamepad::poll()
@@ -205,50 +285,41 @@ void Gamepad::poll()
             open(e.cdevice.which);
             break;
         case SDL_CONTROLLERDEVICEREMOVED:
-            if (m_pad && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(m_pad)) == e.cdevice.which) {
-                SDL_GameControllerClose(m_pad);
-                m_pad = nullptr;
-                m_stickX = m_stickY = m_rightX = m_rightY = 0;
-                Q_EMIT stickChanged();
-                Q_EMIT connectedChanged();
-                for (int i = 0; i < SDL_NumJoysticks(); ++i)
-                    if (SDL_IsGameController(i)) { open(i); break; }
-                m_poll.setInterval(pollInterval());
-            }
+            close(e.cdevice.which);
             break;
         case SDL_CONTROLLERBUTTONDOWN: {
             const QString b = buttonName(e.cbutton.button);
             if (!b.isEmpty())
-                down(b, isDirection(b));
+                down(e.cbutton.which, b, isDirection(b));
             break;
         }
         case SDL_CONTROLLERBUTTONUP: {
             const QString b = buttonName(e.cbutton.button);
             if (!b.isEmpty())
-                up(b);
+                up(e.cbutton.which, b);
             break;
         }
         case SDL_CONTROLLERAXISMOTION: {
             const int v = e.caxis.value;
+            const qint32 pad = e.caxis.which;
+            int axis = -1;
             switch (e.caxis.axis) {
             case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
-                axisAsButton(QStringLiteral("lt"), v > kTrigger, false);
+                axisAsButton(pad, QStringLiteral("lt"), v > kTrigger, false);
                 break;
             case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:
-                axisAsButton(QStringLiteral("rt"), v > kTrigger, false);
+                axisAsButton(pad, QStringLiteral("rt"), v > kTrigger, false);
                 break;
-            case SDL_CONTROLLER_AXIS_LEFTX:
-                moved = setAxis(m_stickX, v) || moved;
-                break;
-            case SDL_CONTROLLER_AXIS_LEFTY:
-                moved = setAxis(m_stickY, v) || moved;
-                break;
-            case SDL_CONTROLLER_AXIS_RIGHTX:
-                moved = setAxis(m_rightX, v) || moved;
-                break;
-            case SDL_CONTROLLER_AXIS_RIGHTY:
-                moved = setAxis(m_rightY, v) || moved;
-                break;
+            case SDL_CONTROLLER_AXIS_LEFTX: axis = 0; break;
+            case SDL_CONTROLLER_AXIS_LEFTY: axis = 1; break;
+            case SDL_CONTROLLER_AXIS_RIGHTX: axis = 2; break;
+            case SDL_CONTROLLER_AXIS_RIGHTY: axis = 3; break;
+            }
+            auto it = m_pads.find(pad);
+            if (axis >= 0 && it != m_pads.end() && setAxis(it.value().axes[axis], v)) {
+                if (std::abs(it.value().axes[axis]) > 0.5)   // pushed on purpose, not drift
+                    useStyleOf(pad);
+                moved = mergeSticks() || moved;
             }
             break;
         }

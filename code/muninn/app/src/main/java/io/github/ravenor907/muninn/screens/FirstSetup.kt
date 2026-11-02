@@ -372,18 +372,22 @@ private fun LockPage(app: Muninn) {
         else Ui.sure(Ask("Skip the lock?", "Without a lock, anyone who can use this phone can open Muninn and read your chats. " +
             "You can set one any time in Settings › Privacy and lock.", "Skip") { w.skipLock(); Setup.next() })
     }, next = if (w.live) null else "Next", nextOn = drawn.isNotEmpty(), scroll = false) {
-        Title("Protect Muninn")
-        // Kind, not scary: when it locks, that nobody can reset it (the owner's choice, so it stays), and what helps.
-        Text("Muninn opens with a pattern or password you choose. It locks itself after ${io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER / 60_000} minutes away; " +
-            "you can change that in Settings › Privacy and lock.", style = Type.small)
-        Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a backup after setup " +
-            "(Settings › Devices and backup) to be safe.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-        if (w.live) LockSetup(app, onCancel = null, fill = true) { Setup.hasLock = true; Setup.next() }
-        else {
-            Text(drawn.ifEmpty { "Draw a pattern: connect at least 6 dots." }, style = Type.normal, modifier = Modifier.padding(top = 12.dp))
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                PatternPad { dots -> drawn = if (dots.size < 6) "Connect at least 6 dots." else "Practice: no lock was set." }
-            }
+        // The words scroll with the pad (PadPage, or LockSetup's own page), so at large text sizes or sideways the pad
+        // keeps its size and Back, Skip and Next below stay in reach.
+        val words: @Composable ColumnScope.() -> Unit = {
+            Box(Modifier.fillMaxWidth()) { Title("Protect Muninn") }
+            // Kind, not scary: when it locks, that nobody can reset it (the owner's choice, so it stays), and what helps.
+            Text("Muninn opens with a pattern or password you choose. It locks itself after ${io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER / 60_000} minutes away; " +
+                "you can change that in Settings › Privacy and lock.", style = Type.small, modifier = Modifier.fillMaxWidth())
+            Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a backup after setup " +
+                "(Settings › Devices and backup) to be safe.", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+        }
+        if (w.live) LockSetup(app, onCancel = null, fill = true, header = words) { Setup.hasLock = true; Setup.next() }
+        else io.github.ravenor907.muninn.ui.PadPage(Modifier.fillMaxSize(), top = {
+            words()
+            Text(drawn.ifEmpty { "Draw a pattern: connect at least 6 dots." }, style = Type.normal, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
+        }) {
+            PatternPad { dots -> drawn = if (dots.size < 6) "Connect at least 6 dots." else "Practice: no lock was set." }
         }
     }
 }

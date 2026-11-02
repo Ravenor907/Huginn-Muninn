@@ -4,6 +4,7 @@
 #include "stun.h"
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -31,6 +32,23 @@ struct TurnLogin;
 // when video works, "vid" (camera on) and "p2p" (direct path wanted, 5.8.1).
 // Timings: offer every 3 s for up to 45 s, answer every 2 s until the first media (15 s at most),
 // hangup, decline and busy 3 times over 2 s.
+// 5.2 (round 14): clocks that differ by more than a minute. An offer that checkOffer calls "stale" but whose ts is within
+// kSkewMs isn't judged at once: the caller sends its offer again every 3 s while it rings, so a second copy of the same
+// call at least kLiveGapMs later (by this device's monotonic clock) shows the caller is there now, and it rings. Copies
+// that waited on a relay come all at once, so they never ring; with no second copy in kWaitMs it's a missed call.
+class CallSkewGate
+{
+public:
+    static constexpr qint64 kSkewMs = 600000;
+    static constexpr qint64 kLiveGapMs = 2500;
+    static constexpr qint64 kWaitMs = 30000;
+    // "ring", "wait" (ask again with the next copy) or "missed"; ts and nowMs by the clocks, elapsedMs monotonic.
+    QString judge(const QString &call, qint64 ts, qint64 nowMs, qint64 elapsedMs);
+
+private:
+    QHash<QString, qint64> m_first;
+};
+
 class CallSession : public QObject
 {
     Q_OBJECT

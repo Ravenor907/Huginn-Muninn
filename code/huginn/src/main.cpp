@@ -73,6 +73,7 @@
 #include <QFont>
 #include <QFontDatabase>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -346,6 +347,27 @@ int main(int argc, char *argv[])
         PerfCheck::notStarting();   // nothing was drawn: no failed start to count
         return 1;
     };
+    // Windows: unzipped inside the old Huginn folder (Huginn\Huginn\Huginn.exe), this copy would start with no chats
+    // as if they were lost: asked first, before anything is made here.
+    if (!quiet && !args.isSet(restarted)) {
+        const QString older = Portable::nestedCopy();
+        if (!older.isEmpty()) {
+            QMessageBox box(QMessageBox::Warning, QStringLiteral("Huginn"),
+                            QStringLiteral("This Huginn was unzipped inside another Huginn folder (%1), which has your chats. This copy "
+                                           "would start with none.\n\nClose this one and open Huginn.exe in %1 instead, or move this "
+                                           "folder's files up into it to update it.")
+                                .arg(older));
+            QPushButton *close = box.addButton(QStringLiteral("Close"), QMessageBox::AcceptRole);
+            box.addButton(QStringLiteral("Start fresh here"), QMessageBox::DestructiveRole);
+            box.setDefaultButton(close);
+            box.exec();
+            if (box.clickedButton() == close) {
+                Platform::noStartLog();
+                PerfCheck::notStarting();
+                return 0;
+            }
+        }
+    }
     if (!quiet) {
         const QString problem = Portable::folderProblem();
         if (!problem.isEmpty())
@@ -362,6 +384,12 @@ int main(int argc, char *argv[])
     // until the copy that started it has saved and closed.
     auto *one = new SingleInstance(&app);
     if (!quiet && !one->claim(args.isSet(restarted))) {
+        // A copy that answered came to the front: nothing to say. One that holds the lock without answering (hung, or
+        // open on another computer or account using this folder), or a data folder that can't be written (a full
+        // disk, read-only): said on screen, never a silent quit.
+        const QString why = one->problemText();
+        if (!why.isEmpty())
+            return stopWith(why);
         Platform::noStartLog();
         PerfCheck::notStarting();   // this copy draws nothing: no failed start to count
         return 0;
@@ -379,6 +407,11 @@ int main(int argc, char *argv[])
         QString why;
         if (!Portable::moveOldData(&why))
             return stopWith(why);
+        // Windows: the data folder is this account's only, and one inside OneDrive is kept on this computer and said once.
+        Portable::makePrivate();
+        const QString synced = Portable::syncedWarning();
+        if (!synced.isEmpty())
+            QMessageBox::warning(nullptr, QStringLiteral("Huginn"), synced);
     }
     if (!quiet) {
         CrashLog::claimed();
@@ -540,9 +573,19 @@ int main(int argc, char *argv[])
             calls->ringLocked(call, ts);
             return;
         }
+        // Round 14: the ring key only contacts hold, so its nudge may name them; the nudge key may be any group peer's,
+        // so its nudge names only the group. Older than 2 days (a replay): dropped.
         RingWire::Nudge n;
-        if (vault->locked() && *lockedNudge && (nudgeKey->nudge(content, &n) || ringKey->nudge(content, &n)))
-            (*lockedNudge)(n);
+        if (!vault->locked() || !*lockedNudge)
+            return;
+        const qint64 at = QDateTime::currentMSecsSinceEpoch();
+        if (ringKey->nudge(content, &n)) {
+            if (RingWire::nudgeFresh(n, at))
+                (*lockedNudge)(n);
+        } else if (nudgeKey->nudge(content, &n)) {
+            if (RingWire::nudgeFresh(n, at))
+                (*lockedNudge)(RingWire::anonymous(n));
+        }
     };
     // Call history keeps as long as that chat keeps messages (7 days, up to 30 in Family and Work).
     QObject::connect(chat, &Chat::pruned, calls, [chat, calls] { calls->pruneHistory([chat](const QString &k) { return chat->keepCutoff(k); }); });
@@ -634,18 +677,40 @@ int main(int argc, char *argv[])
     // sender and chat, counting up as more come; the sound only for the first. Do not disturb and quiet hours as for
     // a message. The counts start over at the next unlock.
     auto lockedCounts = std::make_shared<QHash<QString, int>>();
-    QObject::connect(vault, &Vault::changed, &app, [vault, lockedCounts] {
-        if (!vault->locked())
+    // Round 14: nudges naming nobody (the nudge key) fold into at most 3 notifications and sound once per 2 minutes.
+    auto lockedLimit = std::make_shared<LockedNudgeLimit>();
+    // Round 14: "New activity" once per lock, only while someone here is known to be on an app that can't nudge.
+    auto activityShown = std::make_shared<bool>(false);
+    QObject::connect(vault, &Vault::changed, &app, [vault, lockedCounts, lockedLimit, activityShown] {
+        if (!vault->locked()) {
             lockedCounts->clear();
+            lockedLimit->clear();
+            *activityShown = false;
+        }
     });
-    *lockedNudge = [chat, sound, system, lockedCounts](const RingWire::Nudge &n) {
+    // Whether anyone here can't nudge, kept outside the vault (checked every 2 minutes while unlocked), so a locked
+    // Huginn started fresh still knows.
+    auto *cantNudgeCheck = new QTimer(&app);
+    cantNudgeCheck->setInterval(120000);
+    QObject::connect(cantNudgeCheck, &QTimer::timeout, chat, [vault, chat] {
+        if (vault->locked() || !chat->ready())
+            return;
+        const bool old = chat->someoneCantNudge();
+        QSettings st = Settings::store();
+        if (st.value(QStringLiteral("notify/lockedFallback"), false).toBool() != old)
+            st.setValue(QStringLiteral("notify/lockedFallback"), old);
+    });
+    cantNudgeCheck->start();
+    *lockedNudge = [chat, sound, system, lockedCounts, lockedLimit](const RingWire::Nudge &came) {
         if (Settings::silenced())
             return;
         const int mode = chat->previewMode();
-        const QString key = RingWire::nudgeGroupKey(mode, n);
+        const LockedNudgeLimit::Take took = lockedLimit->take(mode, came, QDateTime::currentMSecsSinceEpoch());
+        const RingWire::Nudge &n = took.n;
+        const QString key = took.key;
         const int count = lockedCounts->value(key) + 1;
         lockedCounts->insert(key, count);
-        if (count == 1 && !Settings::hushed() && Settings::messageSoundOn())
+        if (count == 1 && took.alert && !Settings::hushed() && Settings::messageSoundOn())
             sound->play();
         const QString title = RingWire::nudgeTitle(mode, n);
         const QString body = RingWire::nudgeText(mode, n.kind, count);
@@ -665,7 +730,27 @@ int main(int argc, char *argv[])
         // Stay reachable while Huginn runs: the relays (reconnecting by themselves) and Bluetooth.
         // Locked: what comes waits on the relays until Chat opens it once unlocked. Nothing in the inbox says anything
         // while locked (it may be a receipt, a check-in or presence): only a nudge does (lockedNudge).
-        nostr->onEnvelope = [](const QString &) { return false; };
+        // Round 14: except one "New activity" per lock while someone here is known to be on an app that can't nudge
+        // (1.30 to 1.32, an older Kids' TV). It says nothing of who or what (it may be a receipt).
+        nostr->onEnvelope = [vault, chat, sound, system, activityShown](const QString &) {
+            if (!vault->locked() || *activityShown || Settings::silenced()
+                || !Settings::store().value(QStringLiteral("notify/lockedFallback"), false).toBool())
+                return false;
+            *activityShown = true;
+            if (!Settings::hushed() && Settings::messageSoundOn())
+                sound->play();
+            const QString title = QStringLiteral("Huginn"), body = QStringLiteral("New activity");
+            auto open = [chat] { Q_EMIT chat->showChat(QString()); };
+            auto fallback = [chat, title, body] { Q_EMIT chat->banner(title, body, QString()); };
+            if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
+                Platform::notify(title, body, 6000, open, fallback, QString());
+                if (system->gameMode())
+                    fallback();
+            } else {
+                Q_EMIT chat->notice(title + QStringLiteral(": ") + body);
+            }
+            return false;
+        };
         // Unlocked (Chat has just started): introduce ourselves on Bluetooth links made while locked,
         // and ask the relays for the inbox again so messages that came while locked are read now.
         QObject::connect(vault, &Vault::opened, nostr, [nostr, ble] { ble->sayHello(); nostr->reconnectNow(); nostr->resubscribe(); });

@@ -14,12 +14,84 @@ object TurnCreds {
         override fun toString() = "Login(${urls.size} urls)"
     }
 
-    /** The request body: {"id", "t", "sig"} with sig = hex HMAC-SHA256(APP_SECRET, id + "." + t). */
-    fun body(identityDer: ByteArray, tSec: Long, secret: String): String {
-        val id = CallCrypto.hex(CallCrypto.sha256(identityDer))
+    /** The request body: {"id", "t", "sig"} with sig = hex HMAC-SHA256(APP_SECRET, id + "." + t), and the install token [tok] when there is one. */
+    fun body(identityDer: ByteArray, tSec: Long, secret: String, tok: String? = null): String {
+        val id = idOf(identityDer)
         val sig = CallCrypto.hex(CallCrypto.hmac256(secret.toByteArray(Charsets.UTF_8), "$id.$tSec".toByteArray(Charsets.UTF_8)))
-        return JSONObject().put("id", id).put("t", tSec).put("sig", sig).toString()
+        return JSONObject().put("id", id).put("t", tSec).put("sig", sig).apply { if (tok != null) put("tok", tok) }.toString()
     }
+
+    /** The relay id the Worker counts: lowercase hex SHA-256 of [identityDer]. */
+    fun idOf(identityDer: ByteArray): String = CallCrypto.hex(CallCrypto.sha256(identityDer))
+
+    // ---- Install tokens (relay.md "Install tokens"): registered once with proof of work, renewed by every login.
+
+    /** Leading zero bits the registration hash needs (the Worker's POW_BITS). */
+    const val POW_BITS = 18
+    /** A stored token is used while more than this is left of it; with less, the install registers again first. */
+    const val TOKEN_SPARE_S = 86_400L
+
+    /** SHA-256 of "huginn-relay pow v1:" + id + ":" + t + ":" + pow starts with [bits] zero bits. */
+    fun powOk(id: String, tSec: Long, pow: Long, bits: Int = POW_BITS): Boolean {
+        if (pow < 0) return false
+        val d = CallCrypto.sha256("huginn-relay pow v1:$id:$tSec:$pow".toByteArray(Charsets.UTF_8))
+        var left = bits
+        for (b in d) {
+            if (left <= 0) return true
+            val v = b.toInt() and 0xFF
+            if (left >= 8) { if (v != 0) return false; left -= 8 } else return (v shr (8 - left)) == 0
+        }
+        return left <= 0
+    }
+
+    /** The smallest proof of work for [id] at [tSec] (about 260,000 tries on average), or -1 after [maxTries]. */
+    fun solve(id: String, tSec: Long, bits: Int = POW_BITS, maxTries: Long = 1L shl 26): Long {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val head = "huginn-relay pow v1:$id:$tSec:".toByteArray(Charsets.UTF_8)
+        var n = 0L
+        while (n < maxTries) {
+            md.reset(); md.update(head); val d = md.digest(n.toString().toByteArray(Charsets.UTF_8))
+            var left = bits; var ok = true; var i = 0
+            while (left > 0) {
+                val v = d[i++].toInt() and 0xFF
+                if (left >= 8) { if (v != 0) { ok = false; break }; left -= 8 } else { ok = (v shr (8 - left)) == 0; break }
+            }
+            if (ok) return n
+            n++
+        }
+        return -1
+    }
+
+    /** The registration body: {"id", "t", "sig", "pow"}. */
+    fun regBody(identityDer: ByteArray, tSec: Long, secret: String, pow: Long): String =
+        JSONObject(body(identityDer, tSec, secret)).put("pow", pow).toString()
+
+    /** Where the install token is kept (outside the vault is fine: it only spends this install's own daily logins). */
+    interface TokenStore { fun load(): String?; fun save(value: String?) }
+    @Volatile var store: TokenStore? = null
+
+    /** A stored token: "<id>|<tok>|<exp>". Only this id's, and only while more than [TOKEN_SPARE_S] is left. */
+    fun tokenFor(stored: String?, id: String, nowS: Long): String? {
+        val p = stored?.split('|') ?: return null
+        if (p.size != 3 || p[0] != id) return null
+        val exp = p[2].toLongOrNull() ?: return null
+        return p[1].takeIf { it.isNotEmpty() && exp - nowS > TOKEN_SPARE_S }
+    }
+
+    /** {"tok", "exp"} in an answer, as kept by [store]; null when there's none. */
+    fun tokenOf(text: String, id: String): String? = try {
+        val o = JSONObject(text)
+        val tok = o.optString("tok"); val exp = o.optLong("exp", 0)
+        if (tok.isEmpty() || tok.contains('|') || exp <= 0) null else "$id|$tok|$exp"
+    } catch (e: Exception) { null }
+
+    /** The Worker's time in a 401 "stale" answer ({"error":"stale","now":...}), or null. */
+    fun staleNow(text: String): Long? = try {
+        val o = JSONObject(text)
+        if (o.optString("error") == "stale" && o.opt("now") is Number) o.getLong("now") else null
+    } catch (e: Exception) { null }
+
+    private fun errorOf(text: String): String = try { JSONObject(text).optString("error") } catch (e: Exception) { "" }
 
     /** Reads a 200 answer; null if anything is missing. Only turn: and turns: URLs are kept. */
     fun parse(text: String, nowMs: Long): Login? = try {
@@ -33,26 +105,65 @@ object TurnCreds {
 
     @Volatile private var cached: Login? = null
     @Volatile private var notBefore = 0L
+    /** No registration tried before this (ms): after a 429 the next UTC day, after anything else an hour. */
+    @Volatile private var regNotBefore = 0L
+    /** The Worker's clock less this device's (s), learned from a "stale" answer. */
+    @Volatile private var offsetS = 0L
 
     /** Why the last fetch failed, for the call screen ("" when it worked). Never a credential or an address. */
     @Volatile var lastProblem = ""; private set
 
     fun forget() { cached = null }
 
+    /** Registers [id] (proof of work first): the token as [store] keeps it, or null (the login goes without one). */
+    private fun register(identityDer: ByteArray, id: String, post: (url: String, body: String) -> Pair<Int, String>?, nowMs: Long): String? {
+        if (nowMs < regNotBefore) return null
+        val t = nowMs / 1000 + offsetS
+        val pow = solve(id, t)
+        if (pow < 0) return null
+        val r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/register", regBody(identityDer, t, RelayConfig.APP_SECRET, pow))
+        val kept = if (r?.first == 200) tokenOf(r.second, id) else null
+        if (kept == null) regNotBefore = if (r?.first == 429) nextUtcDayMs(nowMs) else nowMs + 3_600_000L
+        else store?.save(kept)
+        return kept
+    }
+
     /**
      * A usable login, from the cache or the Worker. Blocks (call it off the main thread). [post] does the
-     * HTTPS POST and returns (status, body) or null if it couldn't connect.
+     * HTTPS POST and returns (status, body) or null if it couldn't connect. With an install token (registered first
+     * when there's none), else without one as before. A token the Worker refuses is dropped and registered again once;
+     * a "stale" answer corrects the clock for one more try.
      */
     @Synchronized
     fun get(identityDer: ByteArray, post: (url: String, body: String) -> Pair<Int, String>?, nowMs: Long = System.currentTimeMillis()): Login? {
         cached?.let { if (it.usable(nowMs)) return it }
         if (!RelayConfig.configured) { lastProblem = "The internet relay isn't set up yet"; return null }
         if (nowMs < notBefore) { lastProblem = "The internet relay is resting"; return null }
-        val r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/turn", body(identityDer, nowMs / 1000, RelayConfig.APP_SECRET))
+        val id = idOf(identityDer)
+        var tok = tokenFor(try { store?.load() } catch (_: Exception) { null }, id, nowMs / 1000 + offsetS)
+        if (tok == null) tok = register(identityDer, id, post, nowMs)?.let { tokenFor(it, id, nowMs / 1000 + offsetS) }
+        var tries = 0
+        var r: Pair<Int, String>?
+        while (true) {
+            r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/turn", body(identityDer, nowMs / 1000 + offsetS, RelayConfig.APP_SECRET, tok))
+            if (r == null || r.first != 401 || tries++ > 1) break
+            val err = errorOf(r.second)
+            val now = staleNow(r.second)
+            if (now != null) { offsetS = now - nowMs / 1000; continue }
+            if (tok != null && (err == "bad_token" || err == "token_expired")) {
+                store?.save(null)
+                tok = register(identityDer, id, post, nowMs)?.let { tokenFor(it, id, nowMs / 1000 + offsetS) }
+                continue
+            }
+            break
+        }
         if (r == null) { lastProblem = "Couldn't reach the internet relay"; return null }
         val (status, text) = r
         when {
-            status == 200 -> parse(text, System.currentTimeMillis())?.let { cached = it; lastProblem = ""; return it }
+            status == 200 -> parse(text, System.currentTimeMillis())?.let { login ->
+                tokenOf(text, id)?.let { kept -> try { store?.save(kept) } catch (_: Exception) {} }
+                cached = login; lastProblem = ""; return login
+            }
             status == 429 -> notBefore = nextUtcDayMs(nowMs)
             status >= 500 -> notBefore = nowMs + 60_000
         }

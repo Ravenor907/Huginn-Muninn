@@ -82,11 +82,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Chat
+import io.github.ravenor907.muninn.net.Drafts
 import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.net.ChatOrder
 import io.github.ravenor907.muninn.net.Folders
@@ -386,7 +388,7 @@ fun ChatMain(app: Muninn) {
         else when (open) {
             "" -> Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 MIcon("chat", Palette.textFaint, 40.dp)
-                Text("Pick a chat on the left.", style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 12.dp))
+                Text(if (ChatNav.space.isNotEmpty()) "Pick a channel on the left." else "Pick a chat on the left.", style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 12.dp))
             }
             "code" -> MyCode(app)
             "add" -> AddSomeone(app)
@@ -625,6 +627,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val tvKeys = tvs.filter { !it.value.disconnecting }.keys
     val chip = ChatNav.filter.takeIf { it != "tv" || tvKeys.isNotEmpty() } ?: "all"
+    // No chips while every chat is archived: their filter goes back to All, so nothing stays hidden with no way back.
+    LaunchedEffect(chatRows.isEmpty()) { if (chatRows.isEmpty()) ChatNav.filter = "all" }
     fun chipKeeps(r: ChatRow): Boolean = when (chip) {
         "unread" -> r.key in unreadKeys
         "groups" -> r.group != null
@@ -886,7 +890,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }
             }
             if (chatRows.isEmpty()) item {
-                Text("No chats yet. Tap + to add someone.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                Text(if (archivedRows.isNotEmpty()) "All your chats are archived. They're in Archived, in the menu beside Search."
+                    else "No chats yet. Tap + to add someone.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             } else if (shownRows.isEmpty() && q.isNotEmpty()) item {
                 Text("No chats match “$q”.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             } else if (shownRows.isEmpty() && !sectioned) item {
@@ -1003,13 +1008,13 @@ private fun ArchivedScreen(app: Muninn) {
  */
 @Composable
 private fun ThreadBar(name: String, status: String, statusIcon: String, statusTint: Color, avatar: @Composable () -> Unit,
-                      actions: @Composable () -> Unit = {}, onMenu: (() -> Unit)?) {
+                      compact: Boolean = false, actions: @Composable () -> Unit = {}, onMenu: (() -> Unit)?) {
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = if (compact) 0.dp else 6.dp, bottom = if (compact) 0.dp else 6.dp), verticalAlignment = Alignment.CenterVertically) {
             // Tablets keep the chat list beside the conversation, so there's nothing to go back to.
             if (!ChatNav.wide) IconAction("back", "Back to chats", Palette.text, size = 24.dp) { ChatNav.open = "" }
             else Spacer(Modifier.width(12.dp))
-            Row(Modifier.weight(1f).heightIn(min = 52.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+            Row(Modifier.weight(1f).heightIn(min = if (compact) 44.dp else 52.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                 .then(if (onMenu != null) Modifier.clickable(role = Role.Button, onClickLabel = "Menu") { onMenu() } else Modifier).padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 avatar()
@@ -1071,7 +1076,7 @@ private fun NearbyRoom(app: Muninn) {
         }
         if (msgs.isEmpty()) Text("Say hello.", style = Type.normal.copy(color = Palette.textMuted), textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
-        Composer(text, { text = it }, "Message everyone nearby") { app.chat.sendNearby(text); text = "" }
+        Composer(text, { text = it }, "Message everyone nearby") { sendLong(text, { text = "" }) { p, _ -> app.chat.sendNearby(p) } }
     }
 }
 
@@ -1088,7 +1093,9 @@ private fun Conversation(app: Muninn, key: String) {
     val name = c?.shown ?: m?.name ?: app.chat.nameOf(key)
     // What their app speaks isn't known yet: ask once (protocol 0.6, 1.2).
     LaunchedEffect(key) { app.chat.probeCaps(key); app.chat.pruneSoon() }
-    var text by remember { mutableStateOf("") }
+    // A half-typed message, and what it answers or edits, are kept per chat (Drafts): leaving, switching, folding or a restart keeps them.
+    val draft0 = remember(key) { Drafts.get(app, key) }
+    var text by remember { mutableStateOf(draft0.text) }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.markRead(key); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     // Redraw as they come into or go out of range (route, and when to ask "Keep in touch?").
@@ -1108,11 +1115,13 @@ private fun Conversation(app: Muninn, key: String) {
         onDispose { if (app.openChat == key) app.openChat = ""; app.chat.typingTo(key, false) }
     }
     val scope = rememberCoroutineScope()
-    var picked by remember { mutableStateOf<Uri?>(null) }
+    // Photos picked and waiting for Send stay with the chat too (in memory only).
+    val picked0 = remember(key) { Drafts.picked[key].orEmpty().map { Uri.parse(it) } }
+    var picked by remember { mutableStateOf(picked0.singleOrNull()) }
     var preparing by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
     // Cap m2: several photos picked at once, the "+" menu, the camera ("photo" or "video"), a new poll, the Shared page.
-    var pickedMany by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pickedMany by remember { mutableStateOf(if (picked0.size > 1) picked0 else emptyList()) }
     // Cap a1: GIFs waiting to be sent, one panel at a time (picked, shared in or over the limits).
     var gifs by remember { mutableStateOf<List<PendingGif>>(emptyList()) }
     var attaching by remember { mutableStateOf(false) }
@@ -1121,8 +1130,14 @@ private fun Conversation(app: Muninn, key: String) {
     var shared by remember { mutableStateOf(false) }
     var sharedFiles by remember { mutableStateOf(false) }
     // Cap m1: the message being answered or edited, the one held for its sheet, search and the photos page.
-    var replyTo by remember { mutableStateOf<Chat.Msg?>(null) }
-    var editing by remember { mutableStateOf<Chat.Msg?>(null) }
+    var replyTo by remember { mutableStateOf(draft0.re.takeIf { it.isNotEmpty() }?.let { re -> msgs.firstOrNull { it.id == re } }) }
+    var editing by remember { mutableStateOf(draft0.edit.takeIf { it.isNotEmpty() }?.let { ed -> msgs.firstOrNull { it.id == ed } }) }
+    androidx.compose.runtime.SideEffect {
+        Drafts.put(key, Drafts.Draft(text, replyTo?.id.orEmpty(), editing?.id.orEmpty()))
+        val waiting = picked?.let { listOf(it.toString()) } ?: pickedMany.map { it.toString() }
+        if (waiting.isEmpty()) Drafts.picked.remove(key) else Drafts.picked[key] = waiting
+    }
+    DisposableEffect(key) { onDispose { Drafts.save(app) } }
     var sheetFor by remember { mutableStateOf<Chat.Msg?>(null) }
     var searching by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -1141,9 +1156,7 @@ private fun Conversation(app: Muninn, key: String) {
             if (rest.size == 1) picked = rest[0] else if (rest.size > 1) pickedMany = rest
         }
     }
-    val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        Ui.say(if (ok) "Ready. Hold the mic to record." else "Needs the microphone.", !ok)
-    }
+    val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> micAnswer(context, ok) }
     DisposableEffect(Unit) { onDispose { Voice.stopPlaying(); Voice.cancel() } }
     fun sendPhoto(uri: Uri, hd: Boolean) {
         preparing = true
@@ -1194,8 +1207,13 @@ private fun Conversation(app: Muninn, key: String) {
             val clean = app.chat.cleanFileName(chosenName ?: fallbackName)
             val card = io.github.ravenor907.muninn.net.FileLink.preparing(key, clean, size)
             val tmp = java.io.File(java.io.File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
-            val ok = try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
-            if (!ok) { tmp.delete(); io.github.ravenor907.muninn.net.FileLink.failed(key, clean, size, "That file couldn't be opened.", card) }
+            // The file is copied in first: with too little room on the phone, say that, not "couldn't be opened".
+            val room = try { tmp.parentFile?.usableSpace ?: Long.MAX_VALUE } catch (_: Exception) { Long.MAX_VALUE }
+            val full = size > 0 && room < size + 32L * 1024 * 1024
+            val ok = !full && try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
+            val why = if (full || (!ok && (try { tmp.parentFile?.usableSpace ?: Long.MAX_VALUE } catch (_: Exception) { Long.MAX_VALUE }) < 4L * 1024 * 1024))
+                "Not enough space on this phone. Free some up, then try again." else "That file couldn't be opened."
+            if (!ok) { tmp.delete(); io.github.ravenor907.muninn.net.FileLink.failed(key, clean, size, why, card) }
             else app.chat.sendFile(key, tmp, clean, card)?.let { Ui.say(it, true) }
             withContext(Dispatchers.Main) { then() }
         }
@@ -1271,8 +1289,12 @@ private fun Conversation(app: Muninn, key: String) {
     }
     val status = if (mutedNow && !typingNow) (if (said.isEmpty()) "Muted" else "Muted · $said") else said
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
-    Column(Modifier.fillMaxSize().imePadding()) {
-        ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(key, name, 40.dp, active = activeNow) }, actions = {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+    // Sideways with the keyboard up there's little height left: the bar shrinks to one line and the extra lines
+    // under it wait, so the list and the box to type in always fit.
+    val tight = maxHeight < 320.dp
+    Column(Modifier.fillMaxSize()) {
+        ThreadBar(name, if (tight) "" else status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(key, name, 40.dp, active = activeNow) }, compact = tight, actions = {
             // One Call button; Mute is in the menu. Someone met close by can be called too while on the same Wi-Fi.
             if (c != null || io.github.ravenor907.muninn.net.call.CallManager.canCall(key)) {
                 val callable = io.github.ravenor907.muninn.net.call.CallManager.canCall(key)
@@ -1288,23 +1310,23 @@ private fun Conversation(app: Muninn, key: String) {
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
         // How long messages stay, with one tap to Person details to keep them longer (a contact's chat; someone just met keeps 7 days).
-        if (c != null && !searching) KeepLine(keepDays) { openDetails(key) }
+        if (c != null && !searching && !tight) KeepLine(keepDays) { openDetails(key) }
         // Their security key changed: say so until the code has been checked.
-        if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (c?.keyChanged == true && !tight) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
             MButton("Compare emoji") { checkEmoji(app, key, name) }
         }
-        if (c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
+        if (!tight && c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
             Text(if (m.theySaid) "$name wants to keep in touch" else "Keep in touch with $name?", style = Type.big)
             Text("Then chat from anywhere.", style = Type.small)
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton("Yes", Modifier.weight(1f), Kind.Accent) { app.chat.keepInTouch(key) }
                 MButton("Not now", Modifier.weight(1f)) { app.chat.notNow(key) }
             }
-        } else if (c == null && m?.iSaid == true) Text("Waiting for $name to say yes.", style = Type.small,
+        } else if (!tight && c == null && m?.iSaid == true) Text("Waiting for $name to say yes.", style = Type.small,
             modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp))
         // A call with them going on: back to it.
-        callNow?.takeIf { it.peerKey == key && it.phase != io.github.ravenor907.muninn.net.call.CallSession.Phase.ENDED }?.let {
+        if (!tight) callNow?.takeIf { it.peerKey == key && it.phase != io.github.ravenor907.muninn.net.call.CallSession.Phase.ENDED }?.let {
             Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp).clip(CircleShape).background(Palette.goldTint)
                 .clickable(role = Role.Button) { CallActivity.show(context) }.padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -1350,7 +1372,7 @@ private fun Conversation(app: Muninn, key: String) {
             }
             if (typingNow) item(key = "typing") { TypingRow(name) }
         }
-        if (msgs.isEmpty() && calls.isEmpty()) Text("No messages yet.", style = Type.normal.copy(color = Palette.textMuted), textAlign = TextAlign.Center,
+        if (msgs.isEmpty() && calls.isEmpty() && !tight) Text("No messages yet.", style = Type.normal.copy(color = Palette.textMuted), textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
         picked?.let { uri ->
             Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -1372,8 +1394,9 @@ private fun Conversation(app: Muninn, key: String) {
                 sendPhoto(p.uri, false)   // a shared copy stays until the next share clears it
             }, onFile = { gifs = gifs - p; sendAsFile(p.uri, "animation.gif") { p.done() } }) { gifs = gifs - p; p.done() }
         }
-        if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true }, onFile = { pickFile.launch(arrayOf("*/*")) }) { attaching = false }
+        if (attaching) AttachDialog(onPhotos = { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
+            onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
         DirectFiles(key, name) { p, file, n -> scope.launch(Dispatchers.IO) { app.chat.sendFile(p, file, n)?.let { Ui.say(it, true) } } }
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -1392,16 +1415,21 @@ private fun Conversation(app: Muninn, key: String) {
         }, onImage = { uri -> scope.launch {
             // From the keyboard (a GIF or sticker picked in Gboard): a GIF goes at once, a picture asks like a picked photo.
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
-        } }, voice = VoiceHooks(
+        } }, voice = if (editing != null) null else VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
             ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
             send = { aac, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVoice(key, aac, ms) } },
-        ), banner = banner) {
+        ), banner = banner, tight = tight) {
             val e = editing
-            if (e != null) { app.chat.editMessage(key, e.id, text)?.let { Ui.say(it, true) }; editing = null }
-            else { app.chat.sendPrivate(key, text, replyTo?.id ?: ""); replyTo = null }
-            text = ""
+            if (e != null) {
+                if (!editFits(text)) return@Composer
+                app.chat.editMessage(key, e.id, text)?.let { Ui.say(it, true) }; editing = null; text = ""
+            } else {
+                val re = replyTo?.id ?: ""
+                sendLong(text, { replyTo = null; text = "" }) { p, first -> app.chat.sendPrivate(key, p, if (first) re else "") }
+            }
         }
+    }
     }
     }
     sheetFor?.let { s ->
@@ -1439,6 +1467,51 @@ private fun Conversation(app: Muninn, key: String) {
 
 private class VoiceHooks(val allowed: () -> Boolean, val ask: () -> Unit, val send: (ByteArray, Int) -> Unit)
 
+/** The microphone asked for: ready, or why not. Refused for good (Android won't ask again): a way to Muninn's app settings. */
+private fun micAnswer(context: android.content.Context, ok: Boolean) {
+    if (ok) { Ui.say("Ready. Hold the mic to record."); return }
+    val act = context as? android.app.Activity
+    if (act != null && !act.shouldShowRequestPermissionRationale(android.Manifest.permission.RECORD_AUDIO))
+        Ui.sure(Ask("Allow the microphone?", "Android won't ask again. To send voice messages, allow the microphone in Muninn's settings.",
+            "Open settings", cancel = "Not now", onConfirm = {
+                try {
+                    context.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", context.packageName, null)))
+                } catch (_: Exception) { Ui.say("Open Settings › Apps › Muninn › Permissions to allow the microphone.", true) }
+            }))
+    else Ui.say("Needs the microphone.", true)
+}
+
+/**
+ * Sends [text], never cut: longer than one message holds ([Chat.MAX]), it asks first and goes as up to [Drafts.MAX_PARTS]
+ * messages, split at line breaks or spaces; longer still, it says so and the text stays. [send] gets each part and
+ * whether it's the first (only the first answers a message). [done] clears the box once it's sent.
+ */
+internal fun sendLong(text: String, done: () -> Unit, send: (String, Boolean) -> Unit) {
+    val parts = Drafts.split(text, Chat.MAX)
+    when {
+        parts.isEmpty() -> done()
+        parts.size == 1 -> { send(parts[0], true); done() }
+        parts.size > Drafts.MAX_PARTS -> Ui.say("That's too long to send as messages. Send it as a file instead.", true)
+        else -> Ui.sure(Ask("Send as ${parts.size} messages?",
+            "One message holds up to ${Chat.MAX} characters, so this goes in ${parts.size} parts, split at line breaks or spaces. Nothing is cut.",
+            "Send ${parts.size}", onConfirm = {
+                // A moment apart, so they keep their order everywhere.
+                val main = android.os.Handler(android.os.Looper.getMainLooper())
+                parts.forEachIndexed { i, p -> if (i == 0) send(p, true) else main.postDelayed({ send(p, false) }, i * 50L) }
+                done()
+            }))
+    }
+}
+
+/** An edit must fit in one message: longer, it says so and nothing is cut. */
+private fun editFits(text: String): Boolean {
+    val n = Proto06.chars(text.trim())
+    if (n <= Chat.MAX) return true
+    Ui.say("An edit can be at most ${Chat.MAX} characters. This one is $n.", true)
+    return false
+}
+
 /**
  * The message box. [onImage]: a picture or GIF the keyboard put in (Gboard's GIFs and stickers, a pasted picture),
  * handed over as its content link; without it the keyboard is told no pictures are taken here.
@@ -1446,9 +1519,11 @@ private class VoiceHooks(val allowed: () -> Boolean, val ask: () -> Unit, val se
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPhoto: (() -> Unit)? = null, voice: VoiceHooks? = null,
-                     banner: (@Composable () -> Unit)? = null, onImage: ((Uri) -> Unit)? = null, onSend: () -> Unit) {
+                     banner: (@Composable () -> Unit)? = null, onImage: ((Uri) -> Unit)? = null, tight: Boolean = false, onSend: () -> Unit) {
     val onImageSet = onImage != null
     val context = LocalContext.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val onSendNow by rememberUpdatedState(onSend)
     // The box keeps its own text (so the keyboard can put pictures in); [text] stays the one that counts. A change
     // from outside (sent and cleared, an emoji, a message to edit) is put in the box; typing goes back out.
     val field = rememberTextFieldState(text)
@@ -1459,7 +1534,8 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
         val want = text
         if (field.text.toString() != want) field.edit { replace(0, length, want) }
     }
-    LaunchedEffect(field) { snapshotFlow { field.text.toString() }.collect { if (it != textNow) onTextNow(it.take(Chat.MAX)) } }
+    // Never cut here: a long message is split or refused when sent (sendLong), with a line saying so before that.
+    LaunchedEffect(field) { snapshotFlow { field.text.toString() }.collect { if (it != textNow) onTextNow(it.take(Drafts.KEEP_MAX)) } }
     val receiver = remember {
         object : ReceiveContentListener {
             override fun onReceive(transferableContent: TransferableContent): TransferableContent? {
@@ -1474,11 +1550,14 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     }
     var emoji by remember { mutableStateOf(false) }
     // GIFs come in from the keyboard (Gboard's GIF key) or the photo picker: the emoji window's GIF button says how.
-    if (emoji) EmojiPicker("Emoji", { e -> onText((text + e).take(Chat.MAX)) }, onGif = if (onImageSet && onPhoto != null) ({
+    if (emoji) EmojiPicker("Emoji", { e -> onText((text + e).take(Drafts.KEEP_MAX)) }, onGif = if (onImageSet && onPhoto != null) ({
         emoji = false
         gifHelp(onPhoto)
     }) else null) { emoji = false }
     banner?.invoke()
+    val longBy = Proto06.chars(text.trim())
+    if (longBy > Chat.MAX) Text("$longBy characters: more than one message holds (${Chat.MAX}).",
+        style = Type.small.copy(color = Palette.textMuted), modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp))
     val recording by Voice.recording.collectAsState()
     var dragged by remember { mutableStateOf(0f) }
     var shown by remember { mutableStateOf(0L) }
@@ -1493,7 +1572,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
             Text(if (dragged < -120f) "Let go to cancel" else "‹ Slide left to cancel", style = Type.small.copy(color = if (dragged < -120f) Palette.danger else Palette.textSoft))
         }
     }
-    Row(Modifier.fillMaxWidth().padding(start = if (onPhoto != null) 6.dp else 12.dp, end = 10.dp, top = 8.dp, bottom = 12.dp),
+    Row(Modifier.fillMaxWidth().padding(start = if (onPhoto != null) 6.dp else 12.dp, end = 10.dp, top = if (tight) 4.dp else 8.dp, bottom = if (tight) 4.dp else 12.dp),
         verticalAlignment = Alignment.Bottom) {
         if (onPhoto != null) { IconAction("plus", "Attach", Palette.textMuted, size = 24.dp) { onPhoto() }; Spacer(Modifier.width(4.dp)) }
         val shape = io.github.ravenor907.muninn.ui.LookShapes.composer
@@ -1502,8 +1581,10 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
             Box(Modifier.weight(1f).padding(vertical = 11.dp), contentAlignment = Alignment.CenterStart) {
                 if (text.isEmpty()) Text(hint, style = bodyStyle.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BasicTextField(state = field, textStyle = bodyStyle, cursorBrush = SolidColor(Palette.accent),
-                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 6),
+                    lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (tight) 2 else 6),
                     modifier = Modifier.fillMaxWidth().then(if (onImage != null) Modifier.contentReceiver(receiver) else Modifier)
+                        // A hardware keyboard: Enter sends, Shift+Enter is a new line, Tab and Shift+Tab move on (never typed in).
+                        .onPreviewKeyEvent { ev -> composerKey(ev, focus) { if (textNow.isNotBlank()) onSendNow() } }
                         .semantics { contentDescription = hint })
             }
             IconAction("smile", "Emoji", Palette.textMuted, size = 20.dp) { emoji = true }
@@ -1608,7 +1689,9 @@ private fun AddSomeone(app: Muninn) {
     val context = LocalContext.current
     var text by remember {
         val clip = (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-        mutableStateOf(ChatNav.incoming.ifEmpty { if (Contacts.unlink(clip).contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }.also { ChatNav.incoming = "" })
+        // A tablet's or computer's link code is never taken from a link or the clipboard, only scanned or typed here.
+        mutableStateOf(ChatNav.incoming.ifEmpty { if (Contacts.unlink(clip).contains(Contacts.PREFIX) || clip.contains(Proto06.CODE_PREFIX)) clip else "" }
+            .let { if (io.github.ravenor907.muninn.net.Link.isCode(it)) "" else it }.also { ChatNav.incoming = "" })
     }
     // Tap phones together needs NFC (and isn't offered on a TV).
     val hasNfc = remember { !io.github.ravenor907.muninn.tv.KidMode.isTv(context) && android.nfc.NfcAdapter.getDefaultAdapter(context) != null }
@@ -1641,7 +1724,10 @@ private fun AddSomeone(app: Muninn) {
                     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
                         QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 340.dp))) { scanned ->
                             // A tablet's or computer's link code (Link your phone): linked here, the emoji come up next.
-                            if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) LinkUi.take(scanned)?.let { Ui.say(it, true) } ?: run { ChatNav.open = "" }
+                            // Linking mirrors every chat to that device: the current lock first.
+                            if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) LockGate.ask(app, "Link this device") {
+                                LinkUi.take(scanned)?.let { Ui.say(it, true) } ?: run { ChatNav.open = "" }
+                            }
                             else text = Contacts.unlink(scanned)
                         }
                     }
@@ -1651,7 +1737,8 @@ private fun AddSomeone(app: Muninn) {
                     Modifier.padding(vertical = 12.dp), single = false)
                 invite != null -> Panel(Modifier.padding(top = 12.dp)) { JoinCard(app, invite) { text = ""; if (!invite.expired) ChatNav.open = "" } }
                 io.github.ravenor907.muninn.net.Link.isCode(text) -> MButton("Link this device", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "link") {
-                    LinkUi.take(text)?.let { Ui.say(it, true) } ?: run { text = ""; ChatNav.open = "" }
+                    val code = text
+                    LockGate.ask(app, "Link this device") { LinkUi.take(code)?.let { Ui.say(it, true) } ?: run { text = ""; ChatNav.open = "" } }
                 }
                 found == null -> {
                     Field(text, { text = it }, "Paste a code or link", Modifier.padding(vertical = 10.dp), single = false)
@@ -1769,7 +1856,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
     Column(Modifier.fillMaxWidth().then(swipe)) {
         Box(Modifier.fillMaxWidth().offset { androidx.compose.ui.unit.IntOffset(dragX.toInt() / 2, 0) }, contentAlignment = align) {
             if (dragX > 40f) MIcon("reply", if (dragX > 140f) Palette.gold else Palette.textMuted, 20.dp, Modifier.align(Alignment.CenterStart).offset(x = (-28).dp))
-            Box(Modifier.fillMaxWidth(0.8f), contentAlignment = align) {
+            // At most 560 dp wide, so lines stay readable on a wide tablet.
+            Box(Modifier.widthIn(max = 560.dp).fillMaxWidth(0.8f), contentAlignment = align) {
                 Column(
                     Modifier.clip(shape).background(if (highlight) Palette.goldTint else if (m.mine) LocalMineBubble.current.takeOrElse { Palette.bubbleMine } else Palette.field).hcBorder(shape)
                         .then(if (highlight) Modifier.border(1.dp, Palette.gold, shape) else Modifier)
@@ -1846,7 +1934,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
             }
         }
         if (m.unsent.isEmpty()) Box(Modifier.fillMaxWidth(), contentAlignment = align) {
-            Box(Modifier.fillMaxWidth(0.8f)) { ReactionChips(m.reactions, me, m.mine, onReactions) }
+            Box(Modifier.widthIn(max = 560.dp).fillMaxWidth(0.8f)) { ReactionChips(m.reactions, me, m.mine, onReactions) }
         }
     }
 }
@@ -2445,7 +2533,10 @@ private fun GroupConversation(app: Muninn, g: String) {
     val chName = s.channel(ch)?.n ?: "general"
     // A removed channel's messages show in main.
     val msgs = chats[g].orEmpty().filter { it.ch == ch || (ch == Proto06.MAIN && s.channel(it.ch)?.t != "text") }
-    var text by remember(ch) { mutableStateOf("") }
+    // Each channel keeps its own half-typed message and what it answers or edits (Drafts).
+    val draftKey = Drafts.groupKey(g, ch)
+    val draft0 = remember(draftKey) { Drafts.get(app, draftKey) }
+    var text by remember(ch) { mutableStateOf(draft0.text) }
     val list = rememberLazyListState()
     LaunchedEffect(g) { app.chat.pruneSoon() }
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groupRead(g); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
@@ -2470,8 +2561,10 @@ private fun GroupConversation(app: Muninn, g: String) {
     var shared by remember { mutableStateOf(false) }
     var sharedFiles by remember { mutableStateOf(false) }
     // Cap m1: answering, editing, and the message held for its sheet.
-    var replyTo by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
-    var editing by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
+    var replyTo by remember(ch) { mutableStateOf(draft0.re.takeIf { it.isNotEmpty() }?.let { re -> msgs.firstOrNull { it.id == re } }) }
+    var editing by remember(ch) { mutableStateOf(draft0.edit.takeIf { it.isNotEmpty() }?.let { ed -> msgs.firstOrNull { it.id == ed } }) }
+    androidx.compose.runtime.SideEffect { Drafts.put(draftKey, Drafts.Draft(text, replyTo?.id.orEmpty(), editing?.id.orEmpty())) }
+    DisposableEffect(draftKey) { onDispose { Drafts.save(app) } }
     var sheetFor by remember { mutableStateOf<Groups.GMsg?>(null) }
     // An admin's hold on a channel chip: its dialog (NEW_VOICE: a new voice room).
     var editChannel by remember { mutableStateOf<Proto06.Channel?>(null) }
@@ -2516,9 +2609,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             if (rest.size == 1) picked = rest[0] else if (rest.size > 1) pickedMany = rest
         }
     }
-    val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        Ui.say(if (ok) "Ready. Hold the mic to record." else "Needs the microphone.", !ok)
-    }
+    val micAsk = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> micAnswer(context, ok) }
     DisposableEffect(Unit) { onDispose { Voice.stopPlaying(); Voice.cancel() } }
     fun sendPhoto(uri: Uri, hd: Boolean) {
         preparing = true
@@ -2597,10 +2688,13 @@ private fun GroupConversation(app: Muninn, g: String) {
     val groupFlags by app.chat.flags.all.collectAsState()
     val groupMuted = (groupFlags.muted[key] ?: 0L) > System.currentTimeMillis()
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
-    Column(Modifier.fillMaxSize().imePadding()) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+    // Sideways with the keyboard up: one-line bar, and the extra lines wait, so the list and the box to type in fit.
+    val tight = maxHeight < 320.dp
+    Column(Modifier.fillMaxSize()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
-            (if (groupMuted) "Muted · " else "") + "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
-            { GroupAvatar(s.name, otherMembers, 40.dp) }, actions = {
+            if (tight) "" else (if (groupMuted) "Muted · " else "") + "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
+            { GroupAvatar(s.name, otherMembers, 40.dp) }, compact = tight, actions = {
                 // One Call button, like a person's; Mute is in the menu.
                 if (!grp.readOnly) {
                     RoomManager.presence.collectAsState().value   // re-reads the group's calls when they change
@@ -2640,16 +2734,16 @@ private fun GroupConversation(app: Muninn, g: String) {
         // Only #general and one voice room (every new group): no chips, so it reads like one chat. They show once a
         // second channel is added (Group settings › Channels); the voice room stays in the Call button as Drop-in call.
         val manyChannels = s.channels.count { it.t == "text" } > 1 || s.channels.count { it.t == "voice" } > 1 || calls.isNotEmpty()
-        if (!ChatNav.wide && manyChannels) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
+        if (!ChatNav.wide && manyChannels && !tight) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
         // No chips (a small group): who is in the drop-in call still shows, on one line with Join.
-        if (!ChatNav.wide && !manyChannels && inRoom?.g != g) s.channels.firstOrNull { it.t == "voice" }?.let { v ->
+        if (!ChatNav.wide && !manyChannels && inRoom?.g != g && !tight) s.channels.firstOrNull { it.t == "voice" }?.let { v ->
             val who = RoomManager.whoIn(g, v.id).filter { !it.me }
             if (who.isNotEmpty()) InVoiceLine(who.map { it.name }) { RoomActivity.join(context, g, v.id) }
         }
         // How long messages stay, with one tap to see how to keep them longer.
         var keepInfo by remember { mutableStateOf(false) }
         // Only an admin can change it (a Folk group by making it Family), so for everyone else the link only explains.
-        if (!grp.readOnly && !searching) KeepLine(io.github.ravenor907.muninn.net.Limits.groupDays(s), if (admin) null else "Why?") { keepInfo = true }
+        if (!grp.readOnly && !searching && !tight) KeepLine(io.github.ravenor907.muninn.net.Limits.groupDays(s), if (admin) null else "Why?") { keepInfo = true }
         // Made Family from here: how many days, asked right away (it stays at what it was until one is picked).
         var keepPick by remember { mutableStateOf(false) }
         if (keepInfo) GroupKeepDialog(s, admin, onSettings = { keepInfo = false; ChatNav.open = "$key/settings" }, onFamily = {
@@ -2664,7 +2758,7 @@ private fun GroupConversation(app: Muninn, g: String) {
         }) { keepPick = false }
         // Cap g3: the group's about text (description and rules), at the top of its first channel. It never expires.
         // Paragraphs show one a line; a tap folds it to one line (kept for this run), for small screens.
-        if (s.about.isNotEmpty() && ch == Proto06.MAIN) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = {
+        if (s.about.isNotEmpty() && ch == Proto06.MAIN && !tight) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = {
             if (g in AboutFold.folded) AboutFold.folded.remove(g) else AboutFold.folded.add(g)
         }) {
             val shown = Groups.aboutShown(s.about)
@@ -2672,7 +2766,7 @@ private fun GroupConversation(app: Muninn, g: String) {
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.semantics { contentDescription = "About this group: $shown. Tap to ${if (g in AboutFold.folded) "show it all" else "fold it"}." })
         }
-        inRoom?.let { r -> Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = { RoomActivity.show(context) }) {
+        if (!tight) inRoom?.let { r -> Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = { RoomActivity.show(context) }) {
             Text("In ${r.title}${if (r.groupName.isNotEmpty()) " · ${r.groupName}" else ""}", style = Type.big)
             Text(if (r.muted) "You're muted · tap to open" else "Tap to open", style = Type.small)
         } }
@@ -2737,9 +2831,9 @@ private fun GroupConversation(app: Muninn, g: String) {
         }
         // Cap f2: a file to everyone in the group, by the best route to each; its cards show here and in Transfers.
         val pickGroupFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendFileFrom(app, context, scope, key, uri) }
-        if (attaching) AttachDialog(onPhotos = { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+        if (attaching) AttachDialog(onPhotos = { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
-            onFile = { try { pickGroupFile.launch(arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
+            onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickGroupFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
         DirectFiles(key, s.name)
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -2765,17 +2859,24 @@ private fun GroupConversation(app: Muninn, g: String) {
             attaching = true
         }, onImage = { uri -> scope.launch {
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
-        } }, voice = VoiceHooks(
+        } }, voice = if (editing != null) null else VoiceHooks(
             allowed = { androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
             ask = { micAsk.launch(android.Manifest.permission.RECORD_AUDIO) },
             send = { aac, ms -> scope.launch(Dispatchers.IO) { app.chat.sendGroupVoice(g, ch, aac, ms) } },
-        )) {
+        ), tight = tight) {
             val e = editing
-            if (e != null) { app.chat.groups.editText(g, e.id, text)?.let { Ui.say(it, true) }; editing = null }
-            else if (!app.chat.sendGroupText(g, ch, text, replyTo?.id ?: "")) { if (app.chat.groups.myStatus(g).isEmpty() && !adminsOnlyHere) Ui.say("Too long to send.", true) }
-            else replyTo = null
-            text = ""
+            if (e != null) {
+                if (!editFits(text)) return@Composer
+                app.chat.groups.editText(g, e.id, text)?.let { Ui.say(it, true) }; editing = null; text = ""
+            } else {
+                val re = replyTo?.id ?: ""
+                sendLong(text, { replyTo = null; text = "" }) { p, first ->
+                    if (!app.chat.sendGroupText(g, ch, p, if (first) re else "") && first && app.chat.groups.myStatus(g).isEmpty() && !adminsOnlyHere)
+                        Ui.say("That couldn't be sent.", true)
+                }
+            }
         }
+    }
     }
     }
     editChannel?.let { c -> ChannelDialog(app, g, c.takeIf { it !== NEW_VOICE }, startVoice = true) { editChannel = null } }
@@ -3207,9 +3308,12 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
                 }
             }
         }
-        Composer(text, { text = it.take(Chat.MAX) }, "Message through your phone") {
+        Composer(text, { text = it }, "Message through your phone") {
             val t = text.trim()
-            if (t.isNotEmpty()) {
+            // Never cut: a message through the phone is one message, so a longer one is refused and kept here.
+            if (Proto06.chars(t) > io.github.ravenor907.muninn.net.LinkWire.TEXT_MAX)
+                Ui.say("A message through your phone can be at most ${io.github.ravenor907.muninn.net.LinkWire.TEXT_MAX} characters. This one is ${Proto06.chars(t)}.", true)
+            else if (t.isNotEmpty()) {
                 val r = io.github.ravenor907.muninn.net.Link.sendFromCompanion(peer, t)
                 if (r == null) text = "" else Ui.say(r, true)
             }

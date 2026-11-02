@@ -81,6 +81,22 @@ Updater::Updater(Settings *settings, QObject *parent)
     });
     // Sleep stops the clock ticks: one that comes far later than asked means the computer just woke. A minute later
     // (the network is back by then) Huginn checks, and the timed check starts over from there.
+    // Windows: an update whose swap didn't go in last time (platform/winupdate.cpp) says why, once, a moment after
+    // start; timed checks then leave that version alone until Check now.
+    if (WinUpdate::supported()) {
+        QSettings s = Settings::store();
+        if (s.value(QStringLiteral("update/trying")).toString() == m_current)
+            s.remove(QStringLiteral("update/trying"));
+        const QString failed = s.value(QStringLiteral("update/failed")).toString();
+        const QString version = failed.section(QLatin1Char('|'), 0, 0), why = failed.section(QLatin1Char('|'), 1);
+        if (!failed.isEmpty() && (version == m_current || why.isEmpty())) {
+            s.remove(QStringLiteral("update/failed"));   // it went in after all
+        } else if (!failed.isEmpty()) {
+            m_failedVersion = version.isEmpty() ? QStringLiteral("?") : version;
+            m_status = why;
+            QTimer::singleShot(5000, this, [this, why] { Q_EMIT notice(why); });
+        }
+    }
     m_wake.setInterval(60000);
     connect(&m_wake, &QTimer::timeout, this, [this] {
         const qint64 wall = QDateTime::currentMSecsSinceEpoch();
@@ -180,8 +196,18 @@ QString Updater::assetName() const
     return WinUpdate::supported() ? WinUpdate::assetName() : QStringLiteral("Huginn.flatpak");
 }
 
+void Updater::forgetFailure()
+{
+    if (m_failedVersion.isEmpty())
+        return;
+    m_failedVersion.clear();
+    QSettings s = Settings::store();
+    s.remove(QStringLiteral("update/failed"));
+}
+
 void Updater::check()
 {
+    forgetFailure();   // Check now tries a version that failed before again
     m_goingBack = false;
     fetch(false);
 }
@@ -407,6 +433,12 @@ void Updater::chosen(const QString &bestVer, const QString &bestTag, const QStri
         download(bestAsset, bestTag);
         return;
     }
+    // A version whose swap didn't go in last time isn't downloaded again by itself (the reason was said at start).
+    if (autoMode && available() && !m_failedVersion.isEmpty() && (m_failedVersion == bestVer || m_failedVersion == QLatin1String("?"))) {
+        m_status = QStringLiteral("Huginn %1 couldn't be installed last time. Check now tries again.").arg(bestVer);
+        Q_EMIT changed();
+        return;
+    }
     if (autoMode && available()) {
         m_auto = true;
         download(bestAsset, bestTag);
@@ -418,6 +450,7 @@ void Updater::chosen(const QString &bestVer, const QString &bestTag, const QStri
 
 void Updater::install()
 {
+    forgetFailure();
     if (!m_readyPath.isEmpty()) {
         restartToUpdate();
         return;
@@ -648,6 +681,12 @@ void Updater::installNow(const QString &path)
     }
     m_status = QStringLiteral("Installing…");
     Q_EMIT changed();
+    {
+        // The version being put in, so a swap that fails at the next start can say which one (platform/winupdate.cpp).
+        QSettings s = Settings::store();
+        s.setValue(QStringLiteral("update/trying"), m_latest);
+        s.sync();
+    }
     WinUpdate::install(path, this, [this](bool ok, bool restarting, const QString &msg) {
         m_busy = false;
         // Closed only when the new copy really started; otherwise Huginn stays open and says so.

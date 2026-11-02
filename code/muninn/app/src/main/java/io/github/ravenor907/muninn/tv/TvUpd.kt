@@ -161,6 +161,7 @@ object TvUpd {
         status.contains("isn't newer than") -> CURRENT to null
         status.startsWith("Couldn't check") -> FAILED to "No internet"
         status.startsWith("Couldn't find") -> FAILED to "No release found"
+        status.startsWith("Not enough space") -> FAILED to NO_SPACE
         status.startsWith("The download stopped") -> FAILED to "Download stopped"
         status.contains("didn't match") -> FAILED to "Download didn't match"
         status.contains("can't be checked") -> FAILED to "Download can't be checked"
@@ -169,6 +170,22 @@ object TvUpd {
         busy && progress > 0f -> DOWNLOADING to null
         else -> null
     }
+
+    /** The reason a parent reads when the device has no room for an update. */
+    const val NO_SPACE = "Not enough space on the device"
+
+    /** Room for an install of an APK of [apkBytes] with [free] bytes free: Android copies it and unpacks it (2.5 times). */
+    fun roomFor(apkBytes: Long, free: Long): Boolean = apkBytes <= 0L || free >= apkBytes * 5 / 2
+
+    /** True when an error's [message] says the disk is full (ENOSPC). */
+    fun isNoSpace(message: String?): Boolean = message != null && (message.contains("ENOSPC") || message.contains("No space left", ignoreCase = true))
+
+    /**
+     * The state a device starts with, from the one it saved ([saved]). Checking and downloading were cut off. Installing
+     * or Needs a tap were too: an install that went in shows as a newer version, and one that didn't goes again with the
+     * next check. Failed stays, with its reason.
+     */
+    fun onStart(saved: String?): String = saved?.takeIf { it == FAILED || it == CURRENT } ?: CURRENT
 
     private fun textOk(s: String, max: Int): Boolean =
         s.isNotEmpty() && s.none { it.code < 0x20 || it.code == 0x7F } && s.codePointCount(0, s.length) <= max

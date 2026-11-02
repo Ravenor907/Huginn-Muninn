@@ -93,10 +93,13 @@ class CallActivity : ComponentActivity() {
         }
         // Gone once the call is over (after the short "Call ended" moment).
         lifecycleScope.launch { var seen = false; CallManager.call.collect { if (it != null) seen = true else if (seen) close() } }
+        // Made again (dark mode during a call, or after Android stopped it): Android hands back the first Answer or Call
+        // intent, which must not answer or call a second time.
+        if (savedInstanceState != null) intent?.action = SHOW
         handle(intent)
     }
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); handle(intent) }
 
     override fun onResume() { super.onResume(); keyguard = isLocked() }
 

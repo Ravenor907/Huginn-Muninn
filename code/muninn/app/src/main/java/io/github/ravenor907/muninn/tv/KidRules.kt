@@ -166,6 +166,16 @@ object KidRules {
     fun zoneOf(tz: String): java.util.TimeZone? =
         if (tz.isEmpty() || !TZ.matches(tz)) null else java.util.TimeZone.getTimeZone(tz).takeIf { it.id == tz }
 
+    /** Round 14 (7.18): the zone a parent's config carries: the one kept for the device, or this phone's while none is. */
+    fun zoneToSend(kept: String, mine: String): String = kept.ifEmpty { mine }
+
+    /**
+     * Round 14 (7.18): the zone a parent keeps for a device. A device set up before 1.35 has none kept: the first zone
+     * that goes to it or that it runs is kept from then on (unless it isn't a zone this phone knows).
+     */
+    fun zoneToKeep(kept: String, came: String?): String =
+        if (kept.isNotEmpty() || came.isNullOrEmpty() || zoneOf(came) == null) kept else came
+
     /** The time now by [a] (null: no trusted time yet), at the device's elapsedRealtime [elapsed]. */
     fun trustedNow(a: TimeAnchor?, elapsed: Long): Long? = a?.let { it.wall + (elapsed - it.at) }
 
@@ -396,7 +406,22 @@ object KidRules {
     fun unlockOk(fromKey: String, parents: Collection<String>, asked: String?, askedAt: Long, id: String, now: Long): Boolean =
         fromKey in parents && asked != null && id == asked && now - askedAt in 0L..ASK_MS
 
-    /** Device to parents: it left kids' mode (someone with the PIN or a parent's phone said so). */
+    /** The largest text scale "For a parent" uses on a tablet or phone, so its keypad fits at the largest sizes. */
+    const val PAD_FONT_MAX = 1.5f
+
+    /** How long a pairing code shows before a fresh one (its invite lasts an hour of the clock's time). */
+    const val CODE_FRESH_MS = 50 * 60_000L
+
+    /** A pairing code made at [madeAt] (the clock) needs remaking at [now]: near its hour, or the clock went back. */
+    fun codeStale(madeAt: Long, now: Long): Boolean = now - madeAt >= CODE_FRESH_MS || now < madeAt
+
+    /**
+     * The remote's search, mic or Assistant button (Android's KEYCODE_SEARCH 84, KEYCODE_ASSIST 219, KEYCODE_VOICE_ASSIST
+     * 231): a Kids' Device keeps it for a voice message, so it never leaves Muninn for the system's search.
+     */
+    fun isMicKey(code: Int): Boolean = code == 84 || code == 219 || code == 231
+
+    /** Device to parents (and everyone on its list, so they stop treating it as a Kids' Device): it left kids' mode. */
     fun leftMessage(): String = JSONObject().put("t", "left").toString()
 
     fun isLeft(o: JSONObject): Boolean = Canon.keys(o) == setOf("t") && o.opt("t") == "left"

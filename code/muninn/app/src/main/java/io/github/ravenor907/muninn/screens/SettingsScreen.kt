@@ -33,6 +33,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import io.github.ravenor907.muninn.ui.Access
 import kotlin.math.roundToInt
 import io.github.ravenor907.muninn.Muninn
@@ -103,7 +105,9 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     }
     if (folder == "lockset") { ChangeLock(app); return }
     androidx.compose.runtime.key(folder) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+    // At most 720 dp wide, centred: on a wide tablet a switch stays near its label.
+    Column(Modifier.fillMaxSize().wrapContentWidth(androidx.compose.ui.Alignment.CenterHorizontally).widthIn(max = 720.dp).fillMaxWidth()
+        .padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
         if (page != null) FolderHeader(page.title) { SettingsNav.folder = page.parent }
         when (folder) {
             "" -> ShortList(app)
@@ -494,7 +498,9 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
                 MButton(label, m, if (lockAfter == ms) Kind.Accent else Kind.Normal) { lockAfter = ms; id.lockAfter = ms }
             }
             ToggleRow("Panic lock", if (onTv) "Lock instantly from the icon" else "Lock instantly from tile or icon", panic) {
-                panic = it; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, it)
+                // Turning it off takes the current lock: someone else with the phone mustn't take the owner's way to lock it.
+                if (it) { panic = true; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, true) }
+                else LockGate.ask(app, "Turn off panic lock") { panic = false; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, false) }
             }
         }
     }
@@ -543,11 +549,15 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
         ToggleRow("Look for Nearby in the background", "Uses more battery", closeBy) { closeBy = it; app.power.closeBy = it }
         PageRow("Blocked people", if (blocked.isEmpty()) "Nobody" else "${blocked.size}") { SettingsNav.goTab = "contacts" }
         // Destructive, so last, red, and asked first.
+        // Held, like Delete chat, and then the current lock: nobody else with the phone can take the lock off.
         if (hasLock) io.github.ravenor907.muninn.ui.MenuRow("lock", "Turn off the lock", danger = true) {
-            Ui.sure(Ask("Turn off the lock?", "Anyone with this phone can read your chats.", "Turn off", danger = true) {
-                try { app.vault.setPassword(null) } catch (_: Exception) {}
-                hasLock = app.vault.hasPassword
-                if (!hasLock) { io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off.") }
+            Ui.sure(Ask("Turn off the lock?", "Anyone with this phone can read your chats.", "Hold to turn off", danger = true, hold = true,
+                spoken = "Hold for 5 seconds to turn off the lock") {
+                LockGate.ask(app, "Turn off the lock") {
+                    try { app.vault.setPassword(null) } catch (_: Exception) {}
+                    hasLock = app.vault.hasPassword
+                    if (!hasLock) { io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off.") }
+                }
             })
         }
     }
@@ -556,9 +566,12 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
 /** Settings › Privacy and lock › Change lock: a page of its own, so the pattern sits where it's set to. */
 @Composable
 private fun ChangeLock(app: Muninn) {
+    // A lock already set is asked for first: nobody else with the phone can put in a lock the owner doesn't know.
+    var proven by remember { mutableStateOf(!app.vault.hasPassword) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         FolderHeader(if (app.vault.hasPassword) "Change lock" else "Set a lock") { SettingsNav.folder = "lock" }
-        LockSetup(app, onCancel = { SettingsNav.folder = "lock" }, fill = true) { SettingsNav.folder = "lock" }
+        if (!proven) ConfirmLock(app, "Change lock", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true }
+        else LockSetup(app, onCancel = { SettingsNav.folder = "lock" }, fill = true) { SettingsNav.folder = "lock" }
     }
 }
 
@@ -662,7 +675,7 @@ private fun DevicesPage(app: Muninn) {
         }
     }
     Framed("Files") {
-        PageRow("Save files to", where) { try { pick.launch(null) } catch (_: Exception) { Ui.say("This phone has no folder picker.", true) } }
+        PageRow("Save files to", where) { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, null) } catch (_: Exception) { Ui.say("This phone has no folder picker.", true) } }
         if (picked) PageRow("Use Downloads again", "") {
             io.github.ravenor907.muninn.net.Received.choose(ctx, null)
             where = io.github.ravenor907.muninn.net.Received.shownRoot(); picked = false
@@ -727,15 +740,11 @@ private fun UpdateChannel(app: Muninn) {
 /** Delete all messages and Erase everything: red, last on Devices and backup › More, each held to confirm. */
 @Composable
 private fun EraseRows(app: Muninn) {
-    val ctx = androidx.compose.ui.platform.LocalContext.current
     var erased by remember { mutableStateOf(false) }
     if (erased) {
-        // "Erased", then Muninn starts again as new.
-        androidx.compose.runtime.LaunchedEffect(Unit) {
-            withContext(Dispatchers.IO) { try { app.vault.eraseAll() } catch (_: Exception) {} }
-            kotlinx.coroutines.delay(1500)
-            restartApp(ctx)
-        }
+        // "Erased", then Muninn starts again as new. Back does nothing meanwhile: the erase and the restart run on
+        // their own (EraseRun), not in this screen, so nothing can stop them halfway.
+        androidx.activity.compose.BackHandler {}
         Row(Modifier.padding(vertical = 14.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             MIcon("check", Palette.accent, 22.dp)
             Text("Erased", style = Type.big, modifier = Modifier.padding(start = 12.dp))
@@ -750,7 +759,7 @@ private fun EraseRows(app: Muninn) {
     }
     io.github.ravenor907.muninn.ui.MenuRow("warning", "Erase everything", danger = true) {
         Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings. This can't be undone.",
-            "Hold to erase", danger = true, hold = true, spoken = "Hold for 5 seconds to erase everything") { erased = true })
+            "Hold to erase", danger = true, hold = true, spoken = "Hold for 5 seconds to erase everything") { erased = true; EraseRun.start(app) })
     }
 }
 
@@ -862,6 +871,27 @@ private fun FolderHeader(title: String, onBack: () -> Unit) {
             MIcon("back", Palette.text, 24.dp)
         }
         Text(title.uppercase(), style = Type.title.copy(fontSize = 17.sp, letterSpacing = 2.sp), modifier = Modifier.weight(1f).padding(start = 4.dp))
+    }
+}
+
+/**
+ * Erase everything, run to the end: on its own thread, not tied to any screen, so Back, a tab or the lock can't stop it
+ * halfway (with the key gone but chats still in memory). Saves still waiting are dropped with the key (VaultCore.forget),
+ * then Muninn starts again as new.
+ */
+private object EraseRun {
+    @Volatile private var running = false
+
+    fun start(app: Muninn) {
+        if (running) return
+        running = true
+        val ctx = app.applicationContext
+        Thread {
+            try { app.vault.eraseAll() } catch (_: Exception) {}
+            // A moment for "Erased" to be read.
+            try { Thread.sleep(1500) } catch (_: Exception) {}
+            restartApp(ctx)
+        }.start()
     }
 }
 

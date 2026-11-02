@@ -234,4 +234,26 @@ class LinkTest {
         assertEquals("Confirm the emoji on your phone", LinkWire.errText("confirm"))
         assertEquals("Not a contact on your phone", LinkWire.errText("not a contact"))
     }
+    /** Round 14 (15, "Replay"): stamped frames; a replay, an old one, or an unstamped one from a device that stamps is dropped. */
+    @Test
+    fun linkFramesCantBeReplayed() {
+        val t0 = 1_800_000_000_000L
+        val send = org.json.JSONObject(io.github.ravenor907.muninn.net.LinkReplay.stamp("""{"t":"send","text":"hi"}""", t0))
+        assertEquals(32, send.getString("ln").length)
+        assertEquals(t0, send.getLong("lts"))
+        val r = io.github.ravenor907.muninn.net.LinkReplay()
+        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))       // an app before 1.36: taken
+        assertTrue(r.take("PC", send, t0 + 1_000))
+        assertFalse(r.take("PC", send, t0 + 2_000))                                    // the same frame again
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"unlink"}"""), t0 + 3_000))  // unstamped, now that it stamps
+        val unlink = org.json.JSONObject(io.github.ravenor907.muninn.net.LinkReplay.stamp("""{"t":"unlink"}""", t0))
+        assertFalse(r.take("PC", unlink, t0 + io.github.ravenor907.muninn.net.LinkReplay.MAX_AGE_MS + 1))
+        val page = org.json.JSONObject(io.github.ravenor907.muninn.net.LinkReplay.stamp("""{"t":"chat"}""", t0))
+        assertTrue(r.take("PC", page, t0) && r.take("PC", page, t0))                 // history pages: time only
+        val kept = io.github.ravenor907.muninn.net.LinkReplay()
+        kept.load(r.save())
+        assertFalse(kept.take("PC", send, t0 + 5_000))
+        assertFalse(kept.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        assertTrue(send.getString("ln") != unlink.getString("ln"))
+    }
 }

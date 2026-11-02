@@ -473,6 +473,29 @@ void CallSession::sendOffer()
 
 // ------------------------------------------------------------------ incoming
 
+QString CallSkewGate::judge(const QString &call, qint64 ts, qint64 nowMs, qint64 elapsedMs)
+{
+    if (ts >= nowMs - 60000 && ts <= nowMs + 120000)
+        return QStringLiteral("ring");
+    if (ts < nowMs - kSkewMs || ts > nowMs + kSkewMs)
+        return QStringLiteral("missed");
+    for (auto it = m_first.begin(); it != m_first.end();) {
+        if (elapsedMs - it.value() > 2 * kWaitMs)
+            it = m_first.erase(it);
+        else
+            ++it;
+    }
+    const auto f = m_first.constFind(call);
+    if (f == m_first.cend()) {
+        m_first.insert(call, elapsedMs);
+        return QStringLiteral("wait");
+    }
+    const qint64 gap = elapsedMs - f.value();
+    if (gap > kWaitMs)
+        return QStringLiteral("missed");
+    return gap >= kLiveGapMs ? QStringLiteral("ring") : QStringLiteral("wait");
+}
+
 QString CallSession::checkOffer(const QJsonObject &o, const QString &fromKey, qint64 now)
 {
     const QString callId = str(o, "call"), eph = str(o, "eph");

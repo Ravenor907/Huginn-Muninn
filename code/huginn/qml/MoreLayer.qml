@@ -301,7 +301,7 @@ Item {
             HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: more.sharedOpen = false }
         }
         Segmented {
-            id: sharedTabs
+            id: sharedSeg
             anchors.top: sharedHead.bottom; anchors.topMargin: Theme.px(10)
             x: Theme.px(20)
             width: Math.min(implicitWidth, parent.width - Theme.px(40))
@@ -314,7 +314,7 @@ Item {
             id: tileGrid
             readonly property int columns: Math.max(1, Math.floor(width / Theme.px(150)))
             visible: more.sharedTab !== "links"
-            anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
+            anchors.top: sharedSeg.bottom; anchors.topMargin: Theme.px(12)
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true
@@ -402,7 +402,7 @@ Item {
         ListView {
             id: linkList
             visible: more.sharedTab === "links"
-            anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
+            anchors.top: sharedSeg.bottom; anchors.topMargin: Theme.px(12)
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true

@@ -38,13 +38,20 @@ QString checkRules(const QJsonObject &state);
 // "Everyone can send files", "Only admins can send files · Up to 25 MB", "Nobody can send files".
 QString rulesLine(const QJsonObject &state);
 
-// One safe file or folder name: no folders, "..", control characters, characters Windows refuses, trailing dots or
-// spaces, or reserved names (CON, NUL, COM1...). fallback when nothing is left.
+// One safe file or folder name: no folders, "..", control characters, hidden direction or zero-width marks,
+// characters Windows refuses (":" streams too), trailing dots or spaces, or reserved names (CON, NUL, COM1...).
+// fallback when nothing is left.
 QString safeName(const QString &name, const QString &fallback);
 // The folder a chat's files go in: base/<app>/<chat name, made safe>.
 QString folderFor(const QString &base, const QString &app, const QString &chatName);
 // A file's kind in a few words, from its name: "PDF document", "Picture", "App installer", "File".
 QString kindOf(const QString &name);
+// Before opening a received file: empty when it's safe to open with a click, else what to ask (a program or script,
+// one whose real kind Windows hides behind another extension, or a name with hidden direction marks).
+QString openWarning(const QString &name);
+// Windows: marks a received file as from the internet (its Zone.Identifier stream), so Windows checks it before it
+// runs. Does nothing elsewhere.
+void markFromInternet(const QString &path);
 
 // A decline's "why" (27.4) in plain words for the sender: "rules", "space", "no".
 QString declineText(const QString &why);

@@ -309,7 +309,17 @@ object CallManager {
             }
             // Answered while locked: answered now only while the caller still rings (45 s); older, a missed call.
             val answeredLocked = chose == true && CallLogic.lockedAnswerOk(s.ts, System.currentTimeMillis())
-            if (!answeredLocked && (chose == true || !CallLogic.fresh(s.ts, System.currentTimeMillis()))) {
+            // Round 14: the clocks differ by more than a minute. A second copy of the offer a few seconds later shows the
+            // caller is there now: it rings. Until then nothing; with none in 30 s, a missed call.
+            val skew = if (answeredLocked || chose == true) "" else skewGate.judge(s.call, s.ts, System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())
+            if (skew == "wait") {
+                val call = s.call; val ts = s.ts
+                exec.schedule(Runnable {
+                    if (remember(call)) addLog(Log(call, fromKey, nameOf(fromKey), false, ts, 0, "missed")).also { app?.let { x -> Ringer.missed(x, nameOf(fromKey), fromKey) } }
+                }, CallLogic.SkewGate.WAIT_MS + 1_000L, TimeUnit.MILLISECONDS)
+                return@execute
+            }
+            if (!answeredLocked && (chose == true || skew == "missed")) {
                 // Sat on a relay too long: a missed call, no ringing.
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, s.ts, 0, "missed")).also { Ringer.missed(a, nameOf(fromKey), fromKey) }
                 return@execute
@@ -367,6 +377,9 @@ object CallManager {
     @Volatile private var silentRing: String? = null
 
     /** True the first time a call id is seen. */
+    /** Round 14: offers from a clock more than a minute off ring once a second copy shows the caller is there (5.2). */
+    private val skewGate = CallLogic.SkewGate()
+
     private fun remember(id: String): Boolean = synchronized(seen) {
         val now = System.currentTimeMillis()
         seen.entries.removeAll { now - it.value > 10 * 60_000 }
@@ -393,6 +406,11 @@ object CallManager {
         } catch (e: Exception) { null }
         override fun relayLogin(): TurnCreds.Login? {
             val a = app ?: return null
+            // The install token (relay.md "Install tokens") lives in Muninn's own settings, outside the vault.
+            if (TurnCreds.store == null) TurnCreds.store = object : TurnCreds.TokenStore {
+                override fun load(): String? = a.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("relayToken", null)
+                override fun save(value: String?) { a.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("relayToken", value).apply() }
+            }
             return TurnCreds.get(a.identity.relayId(), { url, body -> post(url, body) })
         }
         override fun resolve(host: String) = TurnClient.lookup(host)

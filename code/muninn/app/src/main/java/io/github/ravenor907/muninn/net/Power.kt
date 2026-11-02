@@ -360,7 +360,9 @@ class Power(private val app: Muninn) {
         val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0 ||
             battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) == false ||
             app.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-        val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }
+        // A Kids' TV on the mains stays fully connected; a kids' phone or tablet follows the normal battery rules (its
+        // "Check for messages" is Live, so calls and messages still come at once).
+        val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(app) && io.github.ravenor907.muninn.tv.KidMode.isTv(app) } catch (_: Exception) { false }
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val percent = if (level >= 0 && scale > 0) level * 100 / scale else 100

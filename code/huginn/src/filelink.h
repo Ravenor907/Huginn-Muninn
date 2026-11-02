@@ -209,7 +209,13 @@ public:
     // Retry: the card goes and its file is sent again.
     Q_INVOKABLE void retry(const QString &id);
     // Open: the app this computer uses for that kind of file (only when the person asks). Show in folder: its folder.
-    Q_INVOKABLE bool openFile(const QString &path) const;
+    // A program or a file whose name hides what it is (Sharing::openWarning) isn't opened: askOpen says why, and
+    // openAnyway opens it once the person agrees.
+    Q_INVOKABLE bool openFile(const QString &path);
+    Q_INVOKABLE bool openAnyway(const QString &path) const;
+    // Linux: a drop's document-portal key (application/vnd.portal.filetransfer) as file URLs the sandbox can read; empty
+    // when there is none (Ui.dropUrls then uses the drop's own URLs).
+    Q_INVOKABLE QVariantList portalUrls(const QString &key) const;
     Q_INVOKABLE bool showInFolder(const QString &path) const;
 
     // A file of mine that can't go at all: its card says why (wifi: only the same Wi-Fi can take it).
@@ -260,6 +266,8 @@ public:
 Q_SIGNALS:
     void changed();
     void notice(const QString &text);
+    // openFile() of a file that may run as a program: what to ask before opening it.
+    void askOpen(const QString &path, const QString &warning);
     // A file that asks Accept or Decline first: worth a system notification (id: its card; where: its chat).
     void offered(const QString &id, const QString &where, const QString &text);
 

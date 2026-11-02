@@ -256,6 +256,8 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
     BackHandler { close() }
     var playing by remember { mutableStateOf(true) }
     val player = remember { MediaPlayer() }
+    // The video's own shape (width / height, already turned as recorded): a sideways clip is never squeezed into a tall box.
+    var ratio by remember(bytes) { mutableStateOf(9f / 16f) }
     DisposableEffect(Unit) { onDispose { try { player.release() } catch (_: Exception) {} } }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -273,6 +275,7 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
                                 player.reset()
                                 player.setDataSource(BytesSource(bytes))
                                 player.setDisplay(h)
+                                player.setOnVideoSizeChangedListener { _, w, hh -> if (w > 0 && hh > 0) ratio = w.toFloat() / hh }
                                 player.setOnPreparedListener { it.start() }
                                 player.setOnCompletionListener { playing = false }
                                 player.prepareAsync()
@@ -282,7 +285,7 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
                         override fun surfaceDestroyed(h: SurfaceHolder) { try { player.stop() } catch (_: Exception) {} }
                     })
                 }
-            }, modifier = Modifier.fillMaxWidth().aspectRatio(9f / 16f, matchHeightConstraintsFirst = true))
+            }, modifier = Modifier.aspectRatio(ratio))
         }
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.Center) {
             MButton(if (playing) "Pause" else "Play", icon = if (playing) "pause" else "play") {
@@ -387,7 +390,7 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
                 val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 9 } }
                 LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
                 if (tiles.isEmpty()) Text(if (tab == "media") "No photos or videos yet." else "No voice messages yet.", style = Type.normal, modifier = Modifier.padding(12.dp))
-                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(androidx.compose.foundation.lazy.grid.GridCells.Fixed(3), Modifier.weight(1f).padding(10.dp), state = grid) {
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(androidx.compose.foundation.lazy.grid.GridCells.Adaptive(110.dp), Modifier.weight(1f).padding(10.dp), state = grid) {
                     items(minOf(shown, tiles.size), key = { tiles[it].id }) { i ->
                         val m = tiles[i]
                         MediaTile(m, bytes, onOpen = { onOpen(m) }, onLong = { if (actions != null) { options = m } else onOpen(m) })

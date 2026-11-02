@@ -13,6 +13,8 @@ struct KeyPair {
 };
 
 KeyPair newKeyPair();
+// The public half (SubjectPublicKeyInfo) worked out from a PKCS#8 private key (empty on bad input).
+QByteArray publicFromPrivate(const QByteArray &privateDer);
 // The shared 32-byte key between my private key and their public key (empty on bad input).
 QByteArray sharedKey(const QByteArray &myPrivateDer, const QByteArray &myPublicDer, const QByteArray &theirPublicDer);
 QString pairingCode(const QByteArray &key);

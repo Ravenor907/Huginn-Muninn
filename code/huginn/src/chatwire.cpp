@@ -309,6 +309,15 @@ bool hasOnly(const QByteArray &bytes, std::set<std::string> want)
 }
 }
 
+bool ChatWire::capsDropped(const QString &before, const QString &now)
+{
+    const QStringList had = before.split(QLatin1Char(' '), Qt::SkipEmptyParts), has = now.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    for (const QString &t : had)
+        if (!has.contains(t))
+            return true;
+    return false;
+}
+
 bool ChatWire::selfTest()
 {
     int pass = 0, fail = 0;
@@ -347,6 +356,9 @@ bool ChatWire::selfTest()
         odd.insert(QStringLiteral("caps"), QStringLiteral("r1 g1 c1 c2 k1 k2 k3 k4 k5 k6 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1"));
         check(ChatWire::capsOf(odd, &present).contains(QStringLiteral("s1")), "caps: all of Muninn's tokens are kept");
         check(ChatWire::capsOf(QJsonObject(), &present).isEmpty() && !present, "no caps field: an app without caps");
+        check(capsDropped(QStringLiteral("r1 g1 n2 zz9"), QStringLiteral("r1 g1 n2")) && !capsDropped(QStringLiteral("r1 g1"), QStringLiteral("g1 r1 n2"))
+                  && !capsDropped(QString(), QLatin1String(kCaps)),
+              "going back to an older release is noticed by the caps it no longer says");
         check(ChatWire::useRatchet(QStringLiteral("gmsg"), true, true) && ChatWire::useRatchet(QStringLiteral("group"), true, true)
                   && ChatWire::useRatchet(QStringLiteral("greceipt"), true, true) && ChatWire::useRatchet(QStringLiteral("gphoto"), true, true)
                   && !ChatWire::useRatchet(QStringLiteral("gmsg"), true, false),

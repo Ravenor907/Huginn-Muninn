@@ -187,6 +187,37 @@ object CallLogic {
     /** 5.2: an offer is fresh if its ts is at most 60 s old and at most 120 s ahead. */
     fun fresh(tsMs: Long, nowMs: Long) = tsMs >= nowMs - 60_000 && tsMs <= nowMs + 120_000
 
+    /** 5.2 (round 14): how far apart two clocks may be for a live offer to still ring. */
+    const val SKEW_MS = 10 * 60_000L
+
+    /**
+     * 5.2 (round 14): clocks that differ by more than a minute. An offer outside [fresh] but within [SKEW_MS] isn't
+     * judged at once: the caller sends its offer again every 3 s while it rings, so a second copy of the same call at
+     * least [LIVE_GAP_MS] later (by this device's own uptime clock) shows the caller is there now, and it rings. Copies
+     * that waited on a relay come all at once, so they never ring; with no second copy in [WAIT_MS] it's a missed call.
+     */
+    class SkewGate {
+        private val first = HashMap<String, Long>()
+        /** "ring", "wait" (ask again with the next copy) or "missed". [elapsedMs]: this device's uptime clock. */
+        @Synchronized
+        fun judge(call: String, tsMs: Long, nowMs: Long, elapsedMs: Long): String {
+            if (fresh(tsMs, nowMs)) return "ring"
+            if (tsMs < nowMs - SKEW_MS || tsMs > nowMs + SKEW_MS) return "missed"
+            first.entries.removeAll { elapsedMs - it.value > 2 * WAIT_MS }
+            val f = first[call] ?: run { first[call] = elapsedMs; return "wait" }
+            val gap = elapsedMs - f
+            return when {
+                gap > WAIT_MS -> "missed"
+                gap >= LIVE_GAP_MS -> "ring"
+                else -> "wait"
+            }
+        }
+        companion object {
+            const val LIVE_GAP_MS = 2_500L
+            const val WAIT_MS = 30_000L
+        }
+    }
+
     /**
      * Answered on the locked ringing screen: the offer, opened after unlocking, is answered only while the caller is
      * still ringing ([RING_MS] from its time). Older, it's a missed call.

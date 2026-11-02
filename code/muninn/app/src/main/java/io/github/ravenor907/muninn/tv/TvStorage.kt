@@ -29,6 +29,7 @@ object TvStorage {
     private val KEEP_CACHES = setOf("updates")
     private val worker = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-storage").apply { isDaemon = true; priority = Thread.MIN_PRIORITY } }
     @Volatile private var started = false
+    @Volatile private var job: java.util.concurrent.ScheduledFuture<*>? = null
 
     /** Bytes Muninn's own files and caches take on this device. */
     fun used(app: Muninn): Long = size(app.filesDir) + size(app.cacheDir) + (app.externalCacheDir?.let { size(it) } ?: 0L)
@@ -41,12 +42,19 @@ object TvStorage {
     fun start(app: Muninn) {
         if (started) return
         started = true
-        worker.scheduleWithFixedDelay({ try { trim(app) } catch (_: Exception) {} }, 30, 6 * 3600, TimeUnit.SECONDS)
+        job = worker.scheduleWithFixedDelay({ try { trim(app) } catch (_: Exception) {} }, 30, 6 * 3600, TimeUnit.SECONDS)
     }
 
-    /** The automatic cap: recent history, smaller photos, no old voice messages, no stale caches. */
+    /** The device left kids' mode: the trimming stops (an ordinary Muninn keeps all its history). */
+    fun stop() {
+        job?.cancel(false)
+        job = null
+        started = false
+    }
+
+    /** The automatic cap: recent history, smaller photos, no old voice messages, no stale caches. Only in kids' mode. */
     fun trim(app: Muninn) {
-        if (!app.ready.value) return
+        if (!app.ready.value || !KidMode.on(app)) return
         val now = System.currentTimeMillis()
         app.chat.trimHistory(KEEP, now - VOICE_DAYS * DAY, MAX_BLOBS, SHRINK_OVER) { shrink(it) }
         val caches = listOfNotNull(app.cacheDir, app.externalCacheDir)

@@ -34,6 +34,8 @@
 #include <QMutexLocker>
 #include <QWaitCondition>
 #include <algorithm>
+#include <iterator>
+#include <limits>
 #include <atomic>
 #include <cstdio>
 #include <memory>
@@ -188,8 +190,15 @@ public:
         QString name, file;
         QByteArray key;
         std::function<QByteArray()> make;
+        int tries = 0;             // failed writes so far
+        qint64 notBefore = 0;      // a retry waits until then (steadyMs())
     };
     SaveQueue() { setObjectName(QStringLiteral("huginn-saving")); }
+    // A file that still couldn't be written after every retry (called on the saving thread).
+    std::function<void(const QString &)> lost;
+    // Waits between the tries of a file that couldn't be written (another program holding it, a full disk).
+    static constexpr int kRetryMs[] = {1000, 3000, 10000};
+    static qint64 steadyMs() { return QDeadlineTimer::current().deadline(); }
 
     void put(Job job)
     {
@@ -249,19 +258,47 @@ protected:
             Job job;
             {
                 QMutexLocker l(&m_lock);
-                while (m_jobs.empty() && !m_stopping)
-                    m_wake.wait(&m_lock);
-                if (m_jobs.empty())
-                    return;   // stopping, and nothing left
-                job = std::move(m_jobs.front());
-                m_jobs.erase(m_jobs.begin());
+                for (;;) {
+                    if (m_jobs.empty()) {
+                        if (m_stopping)
+                            return;   // stopping, and nothing left
+                        m_wake.wait(&m_lock);
+                        continue;
+                    }
+                    // The first one due (a retry waits its turn; closing, nothing waits).
+                    const qint64 now = steadyMs();
+                    auto due = std::find_if(m_jobs.begin(), m_jobs.end(), [&](const Job &j) { return m_stopping || j.notBefore <= now; });
+                    if (due != m_jobs.end()) {
+                        job = std::move(*due);
+                        m_jobs.erase(due);
+                        break;
+                    }
+                    qint64 soonest = std::numeric_limits<qint64>::max();
+                    for (const Job &j : m_jobs)
+                        soonest = std::min(soonest, j.notBefore);
+                    m_wake.wait(&m_lock, QDeadlineTimer(std::max<qint64>(1, soonest - now)));
+                }
                 m_current = job.name;
             }
             const bool ok = writeNow(job);
             QMutexLocker l(&m_lock);
             m_current.clear();
-            if (!ok)
+            if (!ok) {
                 ++m_failures;
+                // Tried again after a while, unless a newer save of the same file is already waiting (it replaces this).
+                const bool newer = std::any_of(m_jobs.begin(), m_jobs.end(), [&](const Job &j) { return j.name == job.name; });
+                if (!newer && job.tries < int(std::size(kRetryMs))) {
+                    job.notBefore = steadyMs() + (s_quick() ? 20 : kRetryMs[job.tries]);
+                    ++job.tries;
+                    m_jobs.push_back(std::move(job));
+                } else if (!newer && lost) {
+                    // Given up: said on screen, and what it held is saved again from memory later (Chat).
+                    const QString name = job.name;
+                    l.unlock();
+                    lost(name);
+                    l.relock();
+                }
+            }
             m_idle.wakeAll();
         }
     }
@@ -299,6 +336,7 @@ private:
         return false;
     }
     static int s_slow();
+    static bool s_quick();
 
     QMutex m_lock;
     QWaitCondition m_wake, m_idle;
@@ -311,13 +349,22 @@ private:
 namespace
 {
 std::atomic<int> s_slowWrites{0};   // --perf-selftest only
+std::atomic<bool> s_quickRetries{false};   // --perf-selftest only: retries a moment apart
 }
 int SaveQueue::s_slow() { return s_slowWrites.load(); }
+bool SaveQueue::s_quick() { return s_quickRetries.load(); }
 
 Vault::Vault(QObject *parent)
     : QObject(parent), m_shared(std::make_shared<Shared>())
 {
+    // A restore cut off last time (killed, power lost) is finished or undone before anything reads the chats.
+    if (const QString said = finishSwap(System::dataDir() + QStringLiteral("/chat")); !said.isEmpty())
+        QTimer::singleShot(3000, this, [this, said] { Q_EMIT notice(said); });
     m_saves = new SaveQueue;
+    // A save that still couldn't be written after its retries: said on the window's thread (Chat saves it again).
+    m_saves->lost = [this](const QString &name) {
+        QMetaObject::invokeMethod(this, [this, name] { Q_EMIT saveLost(name); }, Qt::QueuedConnection);
+    };
     m_saves->start();
     // Every change of the key (unlock, panic, erase, restore) is followed by changed(): the copy for other threads follows.
     connect(this, &Vault::changed, this, &Vault::shareKey);
@@ -703,6 +750,9 @@ void Vault::eraseAll()
     // What waits to be saved would only bring files back: dropped (the one being written ends first).
     m_saves->dropAll(30000);
     QDir(dataDir()).removeRecursively();
+    // A restore's folders left beside it (finishSwap) go too.
+    QDir(System::dataDir() + QStringLiteral("/chat.restore")).removeRecursively();
+    QDir(System::dataDir() + QStringLiteral("/chat.old")).removeRecursively();
     // Copies kept before a restore (keepCopy) go too.
     for (const QFileInfo &fi : QDir(System::dataDir()).entryInfoList({QStringLiteral("chat-kept-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
         QDir(fi.absoluteFilePath()).removeRecursively();
@@ -1433,49 +1483,119 @@ Vault::Files Vault::collect(const QByteArray &key, const QString &dir)
     return out;
 }
 
-bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &files, QString *error)
+namespace
+{
+// In a restore's new folder once every file is written; gone once the swap is done.
+const QString kComplete = QStringLiteral(".restore-complete");
+
+// A folder that was in use a moment ago (a file another program, like antivirus, looks at) can take a moment to let go.
+bool renameDir(const QString &from, const QString &to)
+{
+    for (int i = 0; i < 12; ++i) {
+        if (QDir().rename(from, to))
+            return true;
+        QThread::msleep(250);
+    }
+    return false;
+}
+}
+
+bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &files, QString *error, const QByteArray &keyFile)
 {
     // Everything is written and checked in a new folder first, so a failure leaves Chat as it was.
-    const QString stage = QDir::cleanPath(dir) + QStringLiteral(".restore");
+    const QString clean = QDir::cleanPath(dir);
+    const QString stage = clean + QStringLiteral(".restore"), old = clean + QStringLiteral(".old");
     QDir(stage).removeRecursively();
+    auto failed = [&](const QString &why) {
+        QDir(stage).removeRecursively();
+        *error = why;
+        return false;
+    };
     for (const auto &f : files) {
         if (!safeName(f.first) || f.first == QLatin1String("vault.key") || f.first == kSettingsEntry)
             continue;
         const QString target = stage + QLatin1Char('/') + f.first;
         QDir().mkpath(QFileInfo(target).absolutePath());
         QSaveFile out(target);
-        if (!out.open(QIODevice::WriteOnly) || out.write(kMagic + seal(key, f.second)) < 0 || !out.commit()) {
-            QDir(stage).removeRecursively();
-            *error = QStringLiteral("Couldn't write the restored chats. Is the disk full?");
+        if (!out.open(QIODevice::WriteOnly) || out.write(kMagic + seal(key, f.second)) < 0 || !out.commit())
+            return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
+    }
+    // The lock goes along: a new one (a restore behind the lock), or the one that is there now.
+    QDir().mkpath(stage);
+    const QString stagedKey = stage + QStringLiteral("/vault.key");
+    if (!keyFile.isEmpty()) {
+        const QFileDevice::Permissions owner = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+        QSaveFile k(stagedKey);
+        if (!k.open(QIODevice::WriteOnly))
+            return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
+        k.setPermissions(owner);
+        if (k.write(keyFile) != keyFile.size() || !k.commit())
+            return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
+        QFile::setPermissions(stagedKey, owner);
+    } else if (QFileInfo::exists(clean + QStringLiteral("/vault.key")) && !QFile::copy(clean + QStringLiteral("/vault.key"), stagedKey)) {
+        return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
+    }
+    {
+        QFile done(stage + QLatin1Char('/') + kComplete);
+        if (!done.open(QIODevice::WriteOnly) || done.write("1") != 1 || !done.flush())
+            return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
+    }
+    // Swap whole folders (renames on the same disk): the old one aside, the new one in, and only then the old one goes.
+    // Cut off anywhere, the next start finishes or undoes it (finishSwap).
+    QDir(old).removeRecursively();
+    const bool hadDir = QFileInfo(clean).isDir();
+    if (hadDir && !renameDir(clean, old))
+        return failed(QStringLiteral("Another program is using Huginn's chat folder, so nothing changed. Close it and try again."));
+    if (!renameDir(stage, clean)) {
+        // The old folder back in place; the new one stays beside it for the next start to finish (it is complete).
+        if (hadDir && !renameDir(old, clean)) {
+            *error = QStringLiteral("The restore couldn't finish. Close Huginn and open it again to finish it.");
             return false;
         }
+        return failed(QStringLiteral("Another program is using Huginn's chat folder, so nothing changed. Close it and try again."));
     }
-    // Swap: clear Chat's folder except the lock, then move the new files in.
-    QDir d(dir);
-    d.mkpath(QStringLiteral("."));
-    const QFileInfoList old = d.entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
-    for (const QFileInfo &fi : old) {
-        if (fi.fileName() == QLatin1String("vault.key"))
-            continue;
-        if (fi.isDir() && !fi.isSymLink())
-            QDir(fi.absoluteFilePath()).removeRecursively();
-        else
-            QFile::remove(fi.absoluteFilePath());
+    // The old folder goes first: a start that finds the mark still here only tidies up.
+    QDir(old).removeRecursively();
+    QFile::remove(clean + QLatin1Char('/') + kComplete);
+    return true;
+}
+
+QString Vault::finishSwap(const QString &dir)
+{
+    const QString clean = QDir::cleanPath(dir);
+    const QString stage = clean + QStringLiteral(".restore"), old = clean + QStringLiteral(".old");
+    const bool hasOld = QFileInfo(old).isDir(), hasStage = QFileInfo(stage).isDir(), hasDir = QFileInfo(clean).isDir();
+    const bool stageComplete = hasStage && QFileInfo::exists(stage + QLatin1Char('/') + kComplete);
+    QString said;
+    if (hasDir && QFileInfo::exists(clean + QLatin1Char('/') + kComplete)) {
+        // Swapped in; only the tidying was left.
+        if (hasOld)
+            QDir(old).removeRecursively();
+        QFile::remove(clean + QLatin1Char('/') + kComplete);
+        CrashLog::note(QStringLiteral("vault: finished tidying up after a restore"));
+    } else if (!hasDir && hasOld) {
+        if (stageComplete && QDir().rename(stage, clean)) {
+            // Cut off between the two renames, with every new file written: finished.
+            QDir(old).removeRecursively();
+            QFile::remove(clean + QLatin1Char('/') + kComplete);
+            CrashLog::note(QStringLiteral("vault: finished a restore that was cut off"));
+            said = QStringLiteral("A restore was cut off, and is finished now.");
+        } else if (QDir().rename(old, clean)) {
+            QDir(stage).removeRecursively();
+            CrashLog::note(QStringLiteral("vault: undid a restore that was cut off"));
+            said = QStringLiteral("A restore didn't finish, so your chats are as they were before it. Restore again to try once more.");
+        } else {
+            said = QStringLiteral("A restore didn't finish. Your previous chats are in %1.").arg(QDir::toNativeSeparators(old));
+        }
+    } else if (hasDir && hasOld) {
+        // The old folder aside but not yet deleted, with no sign the new one is complete: kept, never deleted unseen.
+        said = QStringLiteral("A restore didn't finish. Your previous chats are in %1.").arg(QDir::toNativeSeparators(old));
     }
-    bool all = true;
-    const QDir sd(stage);
-    QDirIterator it(stage, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-    while (it.hasNext()) {
-        const QString from = it.next();
-        const QString to = dir + QLatin1Char('/') + sd.relativeFilePath(from);
-        QDir().mkpath(QFileInfo(to).absolutePath());
-        QFile::remove(to);
-        all &= QFile::rename(from, to);
+    if (QFileInfo(stage).isDir() && QFileInfo(clean).isDir()) {
+        // A stage that never went in: what's in place is untouched; the backup can be restored again.
+        QDir(stage).removeRecursively();
     }
-    QDir(stage).removeRecursively();
-    if (!all)
-        *error = QStringLiteral("Some restored files couldn't be moved into place.");
-    return all;
+    return said;
 }
 
 QVariantMap Vault::backupInfo() const
@@ -1752,20 +1872,18 @@ void Vault::restoreErasing()
     m_saves->dropAll(30000);
     QByteArray fresh = random(32);
     QString error;
-    if (!replaceAll(fresh, dataDir(), files, &error)) {
-        fresh.fill(0);
+    // The backup has no lock in it: Huginn opens without one, and asks for a new one before anything shows. The new key
+    // goes in with the restored files, in one swap, so the files and the key that opens them are never apart.
+    QByteArray keyBytes = QJsonDocument(QJsonObject{{QStringLiteral("mode"), QStringLiteral("open")},
+                                                    {QStringLiteral("key"), QString::fromLatin1(fresh.toBase64())},
+                                                    {QStringLiteral("needsLock"), true}})
+                              .toJson(QJsonDocument::Compact);
+    const bool swapped = replaceAll(fresh, dataDir(), files, &error, keyBytes);
+    keyBytes.fill(0);
+    fresh.fill(0);
+    if (!swapped) {
         forgetOpened();
         Q_EMIT done(QStringLiteral("restore"), false, error);
-        return;
-    }
-    // The backup has no lock in it: Huginn opens without one, and asks for a new one before anything shows.
-    const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(fresh.toBase64())},
-                        {QStringLiteral("needsLock"), true}};
-    const bool keyOk = writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    fresh.fill(0);
-    if (!keyOk) {
-        forgetOpened();
-        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Couldn't save Huginn's new key. Open the backup and try again."));
         return;
     }
     for (const auto &e : files)
@@ -1930,6 +2048,39 @@ bool Vault::backupSelfTest()
     QFile keptKey(keptDir + QStringLiteral("/vault.key"));
     check("copy kept first", !keptDir.isEmpty() && keptDir.startsWith(dst + QStringLiteral("-kept-")) && keptKey.open(QIODevice::ReadOnly)
                                  && keptKey.readAll() == "other lock" && collect(keyB, keptDir) == want);
+    kept.close();
+    keptKey.close();
+    // Whole folders swap: nothing is left beside it, and a new lock goes in with the files (a restore behind the lock).
+    check("a restore swaps whole folders", replaceAll(keyB, dst, back, &error, QByteArrayLiteral("new lock")) && collect(keyB, dst) == want
+                                               && !QFileInfo::exists(dst + QStringLiteral(".old")) && !QFileInfo::exists(dst + QStringLiteral(".restore"))
+                                               && !QFileInfo::exists(dst + QStringLiteral("/.restore-complete")) && [&] {
+                                                      QFile k(dst + QStringLiteral("/vault.key"));
+                                                      return k.open(QIODevice::ReadOnly) && k.readAll() == "new lock";
+                                                  }());
+    // Cut off between the two renames: a complete new folder is finished at the next start, an incomplete one undone.
+    {
+        const QString cut = tmp.path() + QStringLiteral("/c/chat");
+        check("cut-off setup", replaceAll(keyA, cut, stale, &error));
+        QDir().rename(cut, cut + QStringLiteral(".old"));
+        replaceAll(keyB, cut + QStringLiteral("-stage"), back, &error);
+        QDir().rename(cut + QStringLiteral("-stage"), cut + QStringLiteral(".restore"));
+        QFile mark(cut + QStringLiteral(".restore/.restore-complete"));
+        if (mark.open(QIODevice::WriteOnly))
+            mark.write("1");
+        mark.close();
+        const QString said = finishSwap(cut);
+        check("a cut-off restore with every file written is finished", !said.isEmpty() && collect(keyB, cut) == want
+                                                                            && !QFileInfo::exists(cut + QStringLiteral(".old"))
+                                                                            && !QFileInfo::exists(cut + QStringLiteral("/.restore-complete")));
+        QDir().rename(cut, cut + QStringLiteral(".old"));
+        replaceAll(keyA, cut + QStringLiteral("-half"), stale, &error);
+        QDir().rename(cut + QStringLiteral("-half"), cut + QStringLiteral(".restore"));   // no mark: not complete
+        const QString undone = finishSwap(cut);
+        check("a cut-off restore that wasn't complete is undone", !undone.isEmpty() && collect(keyB, cut) == want
+                                                                       && !QFileInfo::exists(cut + QStringLiteral(".restore"))
+                                                                       && !QFileInfo::exists(cut + QStringLiteral(".old")));
+        check("nothing to finish says nothing", finishSwap(cut).isEmpty());
+    }
     check("unsafe names refused", !safeName(QStringLiteral("../x")) && !safeName(QStringLiteral("/etc/x")) && !safeName(QStringLiteral("a//b"))
                                       && safeName(QStringLiteral("photos/abc")));
     return all;
@@ -2271,6 +2422,32 @@ bool Vault::saveQueueSelfTest()
         q.finish(5000);
         check("dropped saves are never written", !QFile::exists(tmp.filePath(QStringLiteral("drop3.json"))));
         s_slowWrites = 0;
+    }
+    // A file that can't be written (here a folder that is really a file) is tried again, then said, never dropped silently.
+    {
+        s_quickRetries = true;
+        SaveQueue q;
+        std::atomic<int> lostCount{0}, made{0};
+        q.lost = [&lostCount](const QString &) { ++lostCount; };
+        q.start();
+        {
+            QFile blocker(tmp.filePath(QStringLiteral("blocker")));
+            if (blocker.open(QIODevice::WriteOnly))
+                blocker.write("x");
+        }
+        SaveQueue::Job j;
+        j.name = QStringLiteral("stuck.json");
+        j.file = tmp.filePath(QStringLiteral("blocker/stuck.json"));
+        j.key = key;
+        j.make = [&made] { ++made; return QByteArray("stuck"); };
+        q.put(std::move(j));
+        QElapsedTimer t;
+        t.start();
+        while (lostCount.load() == 0 && t.elapsed() < 15000)
+            QThread::msleep(20);
+        check("a save that can't be written is tried again, then said", lostCount.load() == 1 && made.load() == 4);
+        check("the saving thread stops after a lost save", q.finish(5000));
+        s_quickRetries = false;
     }
     return all;
 }

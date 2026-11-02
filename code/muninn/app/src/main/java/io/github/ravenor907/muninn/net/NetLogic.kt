@@ -61,8 +61,21 @@ object NetLogic {
     /** Wait before connecting [url]'s relay again: the longer of its own wait and the swap wait. */
     fun reconnectMs(n: Int, streak: Int): Long = maxOf(retryMs(n), swapMs(streak))
 
-    /** Events can be backdated up to 10 minutes (see [Nostr.publish]): look back twice that past the last finish. */
-    const val SINCE_SLACK_S = 20 * 60L
+    /**
+     * Events can be backdated up to 10 minutes (see [Nostr.publish]), and the sender's clock may be off too (round 14):
+     * look back the blur plus 30 minutes past the last finish. Whatever comes again is dropped as seen.
+     */
+    const val SINCE_SLACK_S = 40 * 60L
+
+    /** At most this much (s) is believed of a relay's own clock against this device's. */
+    const val RELAY_OFFSET_MAX_S = 86_400L
+
+    /**
+     * Round 14: a relay's EOSE cursor is kept in the relay's own time (its answer's Date), so this device's clock
+     * being off doesn't move it: [localS] by this device's clock plus [relayOffsetS] (relay less local), when known.
+     */
+    fun cursor(localS: Long, relayOffsetS: Long?): Long =
+        localS + (relayOffsetS?.takeIf { it in -RELAY_OFFSET_MAX_S..RELAY_OFFSET_MAX_S } ?: 0L)
     /**
      * Never ask for more than the longest message limit (and a day for blurred times) back: nothing older is kept
      * anywhere, and a phone or TV offline for days still gets everything that waits for it.

@@ -3,6 +3,7 @@
 
 #include <QAudioSink>
 #include <QAudioSource>
+#include <QDateTime>
 #include <QIODevice>
 #include <QMediaDevices>
 #include <cstring>
@@ -30,8 +31,13 @@ AudioIO::AudioIO(QObject *parent) : QObject(parent)
                 still = true;
         if (!still)
             setOutput(QString());
+        else
+            followOutputs();
         Q_EMIT outputsChanged();
     });
+    // A microphone plugged in or pulled out mid-call: a call that had none picks it up, and one whose microphone
+    // went away moves to the default (or back to Settings' pick when it returns).
+    connect(m_devices, &QMediaDevices::audioInputsChanged, this, &AudioIO::followInputs);
     m_pump.setTimerType(Qt::PreciseTimer);
     m_pump.setInterval(10);
     connect(&m_pump, &QTimer::timeout, this, &AudioIO::pump);
@@ -89,11 +95,7 @@ void AudioIO::stop()
 {
     m_running = false;
     m_pump.stop();
-    if (m_source) {
-        m_source->stop();
-        delete m_source;
-        m_source = nullptr;
-    }
+    stopInput();
     stopOutput();
     m_mono.clear();
     m_frame.clear();
@@ -104,7 +106,7 @@ void AudioIO::stop()
     m_voice = nullptr;
 }
 
-bool AudioIO::startInput()
+QAudioDevice AudioIO::inputWanted()
 {
     // Settings › Calls › Microphone, while it's plugged in; the system default otherwise.
     QAudioDevice dev = QMediaDevices::defaultAudioInput();
@@ -112,6 +114,67 @@ bool AudioIO::startInput()
     for (const QAudioDevice &d : QMediaDevices::audioInputs())
         if (!mic.isEmpty() && QString::fromLatin1(d.id()) == mic)
             dev = d;
+    return dev;
+}
+
+QAudioDevice AudioIO::outputWanted() const
+{
+    QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+        if (!m_outputId.isEmpty() && QString::fromLatin1(d.id()) == m_outputId)
+            dev = d;
+    return dev;
+}
+
+void AudioIO::stopInput()
+{
+    if (m_source) {
+        m_source->disconnect(this);
+        m_source->stop();
+        m_source->deleteLater();
+        m_source = nullptr;
+    }
+    m_in = nullptr;
+    m_inDev = QAudioDevice();
+    m_frame.clear();
+}
+
+void AudioIO::followInputs()
+{
+    if (!m_running)
+        return;
+    const QAudioDevice want = inputWanted();
+    if (m_source && !want.isNull() && want.id() == m_inDev.id())
+        return;
+    const bool had = m_source != nullptr;
+    const QByteArray before = m_lastMic;
+    stopInput();
+    if (want.isNull()) {
+        if (had)
+            Q_EMIT deviceNotice(QStringLiteral("Microphone unplugged. Plug one in to be heard."));
+        m_lastMic.clear();
+        return;
+    }
+    if (startInput() && m_inDev.id() != before)
+        Q_EMIT deviceNotice(QStringLiteral("Microphone: ") + m_inDev.description());
+}
+
+void AudioIO::followOutputs()
+{
+    // Following the default (no output picked): docked, the call moves to the new default (HDMI, a dock's jack).
+    if (!m_running || !m_outputId.isEmpty())
+        return;
+    const QAudioDevice want = outputWanted();
+    if (want.isNull() || (m_sink && want.id() == m_outDev.id()))
+        return;
+    stopOutput();
+    if (startOutput())
+        Q_EMIT deviceNotice(QStringLiteral("Sound: ") + m_outDev.description());
+}
+
+bool AudioIO::startInput()
+{
+    const QAudioDevice dev = inputWanted();
     if (dev.isNull())
         return false;
     m_inFormat = pick(dev);
@@ -124,16 +187,29 @@ bool AudioIO::startInput()
         m_source = nullptr;
         return false;
     }
+    m_inDev = dev;
+    m_lastMic = dev.id();
     connect(m_in, &QIODevice::readyRead, this, &AudioIO::onInput);
+    // The microphone stopped by itself (pulled out, or lost over sleep): open it, or the default, again.
+    connect(m_source, &QAudioSource::stateChanged, this, [this](QAudio::State st) {
+        if (st != QAudio::StoppedState || !m_source || m_source->error() == QAudio::NoError)
+            return;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const int wait = now - m_inRestartAt < 1000 ? 1000 : 0;
+        m_inRestartAt = now + wait;
+        QTimer::singleShot(wait, this, [this] {
+            if (!m_running)
+                return;
+            stopInput();
+            followInputs();
+        });
+    });
     return true;
 }
 
 bool AudioIO::startOutput()
 {
-    QAudioDevice dev = QMediaDevices::defaultAudioOutput();
-    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
-        if (!m_outputId.isEmpty() && QString::fromLatin1(d.id()) == m_outputId)
-            dev = d;
+    const QAudioDevice dev = outputWanted();
     if (dev.isNull())
         return false;
     m_outFormat = pick(dev);
@@ -147,16 +223,30 @@ bool AudioIO::startOutput()
         return false;
     }
     m_pending.clear();
+    m_outDev = dev;
+    // The speaker stopped by itself (unplugged, or lost over sleep): open the one wanted now again, once a second at most.
+    connect(m_sink, &QAudioSink::stateChanged, this, [this](QAudio::State st) {
+        if (st != QAudio::StoppedState || !m_sink || m_sink->error() == QAudio::NoError || m_sink->error() == QAudio::UnderrunError)
+            return;
+        QTimer::singleShot(1000, this, [this] {
+            if (!m_running || (m_sink && m_sink->state() != QAudio::StoppedState))
+                return;
+            stopOutput();
+            startOutput();
+        });
+    });
     return true;
 }
 
 void AudioIO::stopOutput()
 {
     if (m_sink) {
+        m_sink->disconnect(this);
         m_sink->stop();
         delete m_sink;
         m_sink = nullptr;
     }
+    m_outDev = QAudioDevice();
     m_pending.clear();
 }
 

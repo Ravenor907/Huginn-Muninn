@@ -165,6 +165,72 @@ object LinkWire {
 }
 
 /**
+ * Round 14 (15, "Replay"): room "link" is sealed with the static key (v1), so a relay could send an old frame again
+ * days later ("send" a message again, "unlink"). Every link frame now carries "lts" (the sender's time, ms) and "ln"
+ * (16 random bytes, hex). A receiver drops one more than [MAX_AGE_MS] away from its own clock, and one whose "ln" it
+ * took before (remembered [MAX_AGE_MS] past the frame's time). Once a device has sent one stamped frame, its frames
+ * without a stamp are dropped too (an app before 1.36 never stamps, so its frames are still taken). Frames that change
+ * nothing when they come twice ([UNREMEMBERED]) are checked for time only, so history pages don't fill the list.
+ */
+class LinkReplay {
+    private val seen = LinkedHashMap<String, Long>()   // from + "\n" + ln -> drop from the list after this (ms)
+    private val stamps = HashSet<String>()              // devices known to stamp
+    @Volatile var dirty = false; private set
+
+    /** Taken (true), or dropped: too old or far ahead, seen before, or unstamped from a device that stamps. */
+    @Synchronized
+    fun take(from: String, p: JSONObject, nowMs: Long): Boolean {
+        val ln = p.opt("ln")
+        if (ln == null) return from !in stamps
+        val lts = p.opt("lts")
+        if (ln !is String || !NONCE.matches(ln) || lts !is Number || lts is Double || lts is Float) return false
+        val t = lts.toLong()
+        if (t < nowMs - MAX_AGE_MS || t > nowMs + MAX_AGE_MS) return false
+        seen.entries.removeIf { it.value < nowMs }
+        if (stamps.add(from)) dirty = true
+        if (p.optString("t") in UNREMEMBERED) return true
+        val key = from + "\n" + ln
+        if (seen.containsKey(key)) return false
+        seen[key] = maxOf(nowMs, t) + MAX_AGE_MS
+        while (seen.size > MAX_SEEN) seen.remove(seen.keys.first())
+        dirty = true
+        return true
+    }
+
+    /** Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}}. */
+    @Synchronized
+    fun save(): String {
+        dirty = false
+        return JSONObject().put("s", org.json.JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } }).toString()
+    }
+
+    @Synchronized
+    fun load(text: String?) {
+        if (text.isNullOrEmpty()) return
+        try {
+            val o = JSONObject(text)
+            o.optJSONArray("s")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { stamps.add(it) } }
+            o.optJSONObject("n")?.let { n -> n.keys().forEach { k -> seen[k] = n.optLong(k) } }
+        } catch (_: Exception) {}
+    }
+
+    companion object {
+        /** Less than the 2 days Seen and the "send" ids are kept, so a frame is never older than what guards it. */
+        const val MAX_AGE_MS = 36 * 60 * 60_000L
+        const val MAX_SEEN = 20_000
+        val UNREMEMBERED = setOf("chat", "part", "ping", "pong")
+        private val NONCE = Regex("^[0-9a-f]{32}$")
+        private val rng = java.security.SecureRandom()
+
+        /** [json] with "lts" and "ln" added (what every link frame carries from 1.4). */
+        fun stamp(json: String, nowMs: Long = System.currentTimeMillis()): String = try {
+            val b = ByteArray(16).also { rng.nextBytes(it) }
+            JSONObject(json).put("lts", nowMs).put("ln", b.joinToString("") { "%02x".format(it.toInt() and 0xFF) }).toString()
+        } catch (e: Exception) { json }
+    }
+}
+
+/**
  * Linked devices, companion style (shared/docs/protocol.md section 15): a tablet or computer shows this phone's
  * 1:1 chats and sends through it, while this phone is online. Contacts see nothing new: every message still comes from
  * and goes to this phone. Between the two devices everything is sealed like a private message.
@@ -674,6 +740,8 @@ object Link {
         val t = p.optString("t")
         val comp = _companions.value.firstOrNull { it.key == from }
         val ph = _phone.value?.takeIf { it.key == from }
+        // Round 14: a frame from a linked device that's too old, came before, or lacks the stamp it always has: dropped quietly.
+        if ((comp != null || ph != null) && !replayOk(h, from, p)) return true
         if (comp != null) {
             // Heard from now; written down at most once an hour, enough for the 14 days in [askReplace].
             val now = System.currentTimeMillis()
@@ -1015,6 +1083,23 @@ object Link {
             val json = JSONObject().put("t", "read").put("peer", peer).put("upTo", t).toString()
             _companions.value.filter { it.ok && it.l2 }.forEach { h.send(it, json) }
         }, 2000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    /** Round 14: link frames' stamps ([LinkReplay]), kept in the vault ([REPLAY]). */
+    private val replay = LinkReplay()
+    @Volatile private var replayLoaded = false
+    private const val REPLAY = "link-replay.json"
+
+    /** Stamps a frame before it goes (every route of one send carries the same stamp). */
+    fun stamp(json: String): String = LinkReplay.stamp(json)
+
+    private fun replayOk(h: Host, from: String, p: JSONObject): Boolean {
+        if (!replayLoaded) synchronized(replay) {
+            if (!replayLoaded) { try { replay.load(h.read(REPLAY)) } catch (_: Exception) {}; replayLoaded = true }
+        }
+        val ok = replay.take(from, p, System.currentTimeMillis())
+        if (replay.dirty) try { h.write(REPLAY, replay.save()) } catch (_: Exception) {}
+        return ok
     }
 
     /** Ids of companions' "send" already sent (kept two days, on disk), so none goes out twice. */

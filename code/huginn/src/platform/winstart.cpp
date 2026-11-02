@@ -41,6 +41,7 @@ QProcessEnvironment childEnvironment() { return QProcessEnvironment::systemEnvir
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -242,9 +243,18 @@ void beginStart()
 
     // The DLLs are in lib\ (a private assembly, see packaging/windows/huginn.manifest.in). Qt looks for
     // OpenSSL's libssl by full path in Huginn's folder, the system folder and then PATH, so lib\ goes on PATH.
+    // Wide strings all the way: a folder name outside the system's code page (a check mark, a Polish name on an English
+    // Windows) would otherwise turn into question marks and Qt's secure connections couldn't load.
     const QString lib = dir + QStringLiteral("/lib");
-    if (!dir.isEmpty() && QFileInfo::exists(lib + QStringLiteral("/lib.manifest")))
-        qputenv("PATH", QDir::toNativeSeparators(lib).toLocal8Bit() + ';' + qgetenv("PATH"));
+    if (!dir.isEmpty() && QFileInfo::exists(lib + QStringLiteral("/lib.manifest"))) {
+        const wchar_t *was = _wgetenv(L"PATH");
+        const std::wstring path = QDir::toNativeSeparators(lib).toStdWString() + L";" + (was ? std::wstring(was) : std::wstring());
+        _wputenv_s(L"PATH", path.c_str());
+        // And OpenSSL's TLS library loaded now by its full path, so Qt finds it already there whatever PATH holds.
+        const QString ssl = lib + QStringLiteral("/libssl-3-x64.dll");
+        if (QFileInfo::exists(ssl) && !LoadLibraryW(QDir::toNativeSeparators(ssl).toStdWString().c_str()))
+            logLine(QStringLiteral("couldn't load lib\\libssl-3-x64.dll"));
+    }
 }
 
 void startClaimed(bool tidy)

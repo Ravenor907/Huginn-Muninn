@@ -187,6 +187,22 @@ def envelope_id(gid, recipient_key):
 
 # ------------------------------------------------------------------ calls
 
+CALL_SKEW_MS, CALL_LIVE_GAP_MS, CALL_SKEW_WAIT_MS = 600_000, 2_500, 30_000
+
+def call_skew_judge(first, call, ts, now, elapsed):
+    """5.2 (round 14): "ring", "wait" or "missed" for an offer, with clocks that may differ. [first]: call id to the
+    monotonic time its first copy came. Outside the 60 s / 120 s window but within 10 minutes, a second copy at least
+    2.5 s later rings (the caller resends every 3 s); copies that waited on a relay come together and never ring."""
+    if now - 60_000 <= ts <= now + 120_000: return "ring"
+    if ts < now - CALL_SKEW_MS or ts > now + CALL_SKEW_MS: return "missed"
+    for k in [k for k, v in first.items() if elapsed - v > 2 * CALL_SKEW_WAIT_MS]: del first[k]
+    if call not in first:
+        first[call] = elapsed
+        return "wait"
+    gap = elapsed - first[call]
+    if gap > CALL_SKEW_WAIT_MS: return "missed"
+    return "ring" if gap >= CALL_LIVE_GAP_MS else "wait"
+
 def call_tag(call_id_b64url): return hashlib.sha256(b"huginn-muninn call tag" + b64url_d(call_id_b64url)).digest()[:2]
 
 def call_root(my_eph, their_eph_b64, call_id_b64url, offer_eph_b64, answer_eph_b64):
@@ -518,6 +534,13 @@ def main():
     rootA = call_root(ephA, eB, call_id, eA, eB)
     rootB = call_root(ephB, eA, call_id, eA, eB)
     expect(rootA == rootB, "both ends get the same call root")
+    first, now = {}, 1_800_000_000_000
+    expect(call_skew_judge(first, "A", now - 70_000, now, 1_000) == "wait" and call_skew_judge(first, "A", now - 70_000, now + 3_000, 4_000) == "ring",
+           "a caller 70 s slow rings once a second copy comes (5.2)")
+    expect(call_skew_judge(first, "B", now - 70_000, now, 1_000) == "wait" and call_skew_judge(first, "B", now - 70_000, now, 1_100) == "wait"
+           and call_skew_judge(first, "B", now - 70_000, now + 40_000, 41_000) == "missed", "copies that waited on a relay never ring")
+    expect(call_skew_judge(first, "C", now - 660_000, now, 1) == "missed" and call_skew_judge(first, "E", now - 1_000, now, 1) == "ring",
+           "over 10 minutes off is missed, a fresh offer rings")
     tag = call_tag(call_id)
     epochs = []
     for e in (0, 1, 2):

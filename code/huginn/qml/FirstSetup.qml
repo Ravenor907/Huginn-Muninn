@@ -208,7 +208,7 @@ Item {
             System.showSteamKeyboard()
             return
         }
-        Ui.ask(title, "", field.text, confirmText, t => { field.text = t; done() }, false, true)
+        Ui.askAppend(title, "", field.text, confirmText, t => { field.text = t; done() })
     }
     function run(id) {
         switch (id) {

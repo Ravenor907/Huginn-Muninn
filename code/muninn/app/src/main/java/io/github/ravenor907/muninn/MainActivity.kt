@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -96,13 +99,21 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private companion object {
+        /** Saved with the window: a share was already taken (never offered twice), the tab, and the open chat. */
+        const val SHARE_TAKEN = "shareTaken"
+        const val SAVED_TAB = "tab"
+        const val SAVED_BEFORE = "beforeSettings"
+        const val SAVED_OPEN = "open"
+    }
     private val app get() = application as Muninn
     /** The bottom tab (phones) or rail button (tablets): chat, calls, files, contacts, or settings (the gear). */
     private var tab by mutableStateOf("chat")
     /** Where the gear goes back to. */
     private var beforeSettings = "chat"
-    /** Password set and Muninn was away long enough: ask for it before showing anything. */
-    private var uiLocked by mutableStateOf(false)
+    /** Password set and Muninn was away long enough (or Lock now, or a panic lock): ask for it before showing anything.
+     *  Kept for the whole process (AppLock), so a new window never skips it. */
+    private val uiLocked get() = io.github.ravenor907.muninn.ui.AppLock.isLocked
     /** Test builds only: the emulator screenshots open screens without setting a lock. */
     private val ciSkip get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 && intent?.getBooleanExtra("ci", false) == true
     private var netStarted = false
@@ -171,6 +182,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         io.github.ravenor907.muninn.ui.Panic.watch(this, this)
+        // Every dialog and sheet closes when the lock goes up, from anywhere (a question left open never works over the lock).
+        io.github.ravenor907.muninn.ui.AppLock.onRaise = ::closeForLock
         secure()
         // Decided before anything is drawn: a window opened after Muninn was away (the message service
         // keeps the app running with no window) shows the lock first, never the chats behind it.
@@ -185,8 +198,14 @@ class MainActivity : ComponentActivity() {
         // Muninn's window is closed. So a fresh open would land back in whatever chat was last on screen:
         // start on the chat list unless a notification (extra "chat") or a scanned code asks otherwise.
         if (savedInstanceState == null) { ChatNav.open = ""; ChatNav.hold = ""; io.github.ravenor907.muninn.tv.TvNav.home() }
+        else if (!uiLocked) {
+            // A new window (dark mode, font size) keeps its tab; after process death the open chat comes back too (behind the lock).
+            savedInstanceState.getString(SAVED_TAB)?.let { tab = it }
+            savedInstanceState.getString(SAVED_BEFORE)?.let { beforeSettings = it }
+            if (ChatNav.open.isEmpty()) savedInstanceState.getString(SAVED_OPEN)?.let { ChatNav.open = it }
+        }
         intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
-        if (ciSkip && intent?.getStringExtra("screen") == "lock") uiLocked = true   // CI: the lock screen
+        if (ciSkip && intent?.getStringExtra("screen") == "lock") io.github.ravenor907.muninn.ui.AppLock.raise()   // CI: the lock screen
         if (ciSkip) intent?.getStringExtra("folder")?.let { SettingsNav.folder = it }   // CI: a Settings page
         if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: a person's three-dot menu
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
@@ -195,8 +214,9 @@ class MainActivity : ComponentActivity() {
         if (ciSkip && intent?.getBooleanExtra("roomjoin", false) == true && app.ready.value) ciRoom(true)   // CI: the join sheet
         if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs
             Thread { android.util.Log.i("Muninn", "TvVoice self-check: " + io.github.ravenor907.muninn.tv.TvVoice.selfCheck()) }.start()
-        if (savedInstanceState == null) { openChat(intent); openAdd(intent) }
-        handleShare(intent)
+        if (savedInstanceState == null) { openChat(intent); openAdd(intent); openSetLock(intent) }
+        // A share is used once: not again when the window is made again (dark mode, font size, after process death).
+        if (savedInstanceState == null || !savedInstanceState.getBoolean(SHARE_TAKEN)) handleShare(intent)
         setContent { MuninnTheme { Root() } }
     }
 
@@ -209,7 +229,14 @@ class MainActivity : ComponentActivity() {
             intent.getStringExtra("chat") == null) { toList(); io.github.ravenor907.muninn.tv.TvNav.home() }
         openChat(intent)
         openAdd(intent)
+        openSetLock(intent)
         intent.getStringExtra("screen")?.let { show(it) }
+    }
+
+    /** Panic lock (the tile or the Lock now shortcut) with no lock set: Settings › Set a lock, so there's something to lock with. */
+    private fun openSetLock(i: Intent?) {
+        if (i?.getBooleanExtra(io.github.ravenor907.muninn.ui.Panic.SET_LOCK, false) != true || app.vault.hasPassword) return
+        show("settings"); SettingsNav.folder = "lockset"
     }
 
     /** Set when an intent picked the chat to show; cleared once Muninn is back on screen (onResume). */
@@ -237,8 +264,10 @@ class MainActivity : ComponentActivity() {
                     (it.contains(io.github.ravenor907.muninn.net.Contacts.PREFIX) || it.contains(io.github.ravenor907.muninn.net.Proto06.CODE_PREFIX)) }
             else -> null
         } ?: return
-        // A move code (cap x1) is only ever taken inside the Move screen, never from a link.
+        // A move code (cap x1) is only ever taken inside the Move screen, never from a link. A link code (a tablet's or
+        // computer's) only from Muninn's own scanner or typed there: a link on a page or in a message never opens linking.
         if (code.contains(io.github.ravenor907.muninn.net.MoveWire.PREFIX)) return
+        if (io.github.ravenor907.muninn.net.Link.isCode(code)) return
         ChatNav.incoming = code
         tab = "chat"; ChatNav.open = "add"; intentChose = true
     }
@@ -304,14 +333,14 @@ class MainActivity : ComponentActivity() {
     /** Away long enough (even with no window in between): the lock, before the first frame. */
     private fun lockIfDue() {
         val pw = app.vault.hasPassword
-        if (io.github.ravenor907.muninn.ui.AppLock.due(pw, io.github.ravenor907.muninn.ui.AppLock.awaySince,
-                android.os.SystemClock.elapsedRealtime(), app.identity.lockAfter)) {
-            uiLocked = true
-            // Away long enough to lock: come back to the chat list, not the chat that was open. A notification
-            // tap can arrive just before or just after this (onNewIntent), so only its choice is kept.
-            if (!intentChose) toList()
-        }
-        io.github.ravenor907.muninn.ui.AppLock.awaySince = 0L
+        val now = android.os.SystemClock.elapsedRealtime()
+        val after = io.github.ravenor907.muninn.ui.Picking.lockAfter(app.identity.lockAfter,
+            io.github.ravenor907.muninn.ui.Picking.since, io.github.ravenor907.muninn.ui.AppLock.awaySince)
+        // Away long enough to lock: come back to the chat list, not the chat that was open. A notification
+        // tap can arrive just before or just after this (onNewIntent), so only its choice is kept.
+        if (io.github.ravenor907.muninn.ui.AppLock.due(pw, io.github.ravenor907.muninn.ui.AppLock.awaySince, now, after) && !intentChose) toList()
+        // Puts the lock up when due; never takes it down (only the lock screen does), so a new window can't skip it.
+        io.github.ravenor907.muninn.ui.AppLock.onShow(pw, now, after)
     }
 
     /**
@@ -337,15 +366,25 @@ class MainActivity : ComponentActivity() {
         super.onPause()
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(SHARE_TAKEN, true)
+        outState.putString(SAVED_TAB, tab)
+        outState.putString(SAVED_BEFORE, beforeSettings)
+        outState.putString(SAVED_OPEN, ChatNav.open)
+    }
+
     override fun onStop() {
+        io.github.ravenor907.muninn.net.Drafts.save(app)
         app.visible = false
         if (app.ready.value && !isChangingConfigurations) app.chat.foreground(false)
-        // A new window for a changed setting (dark mode, language) isn't leaving Muninn.
-        if (!isChangingConfigurations) {
-            io.github.ravenor907.muninn.ui.AppLock.awaySince = android.os.SystemClock.elapsedRealtime().coerceAtLeast(1L)
-            // "Right away": the lock goes up now, so nothing else is ever drawn on the way back.
-            if (app.vault.hasPassword && app.identity.lockAfter == 0L && !ciSkip) uiLocked = true
-        }
+        // A new window for a changed setting (dark mode, language) isn't leaving Muninn; a lock already up stays up
+        // either way (AppLock lives for the whole process). "Right away": the lock goes up now, so nothing else is ever
+        // drawn on the way back. A picker Muninn opened itself (a photo, a file, Restore) doesn't count: its result must come back.
+        val away = android.os.SystemClock.elapsedRealtime().coerceAtLeast(1L)
+        io.github.ravenor907.muninn.ui.AppLock.onHide(app.vault.hasPassword && !ciSkip, away,
+            io.github.ravenor907.muninn.ui.Picking.lockAfter(app.identity.lockAfter, io.github.ravenor907.muninn.ui.Picking.since, away),
+            isChangingConfigurations)
         super.onStop()
     }
 
@@ -354,8 +393,16 @@ class MainActivity : ComponentActivity() {
         secure()
         recents()
         intentChose = false
+        io.github.ravenor907.muninn.ui.Picking.since = 0L
+        io.github.ravenor907.muninn.net.Drafts.load(app)
         // Kids' TV: a call that came in over a show just ended; the show goes on, not Muninn.
-        if (io.github.ravenor907.muninn.tv.TvCallFocus.sendBack()) moveTaskToBack(true)
+        // A Kids' Device with a call ringing or on (Home was pressed mid-call, or it rang over a show and nothing came up):
+        // opening Muninn goes straight back to the call, where Answer or Hang up is.
+        if (io.github.ravenor907.muninn.tv.TvCallFocus.sendBack()) {
+            moveTaskToBack(true)
+        } else if (io.github.ravenor907.muninn.tv.KidMode.saved(this) && io.github.ravenor907.muninn.tv.KidCallBack.live(io.github.ravenor907.muninn.net.call.CallManager.call.value?.phase)) {
+            try { io.github.ravenor907.muninn.screens.CallActivity.show(this) } catch (_: Exception) {}
+        }
         // "Check for updates automatically" off: nothing asks GitHub here (Check now still does). A Kids' TV follows its parent (k7).
         val autoUpdate = if (io.github.ravenor907.muninn.tv.KidMode.on(app)) io.github.ravenor907.muninn.tv.KidTv.state.value.cfg?.upd ?: true
             else app.identity.autoUpdate
@@ -367,6 +414,13 @@ class MainActivity : ComponentActivity() {
             app.ble.start()
         }
     }
+
+    /**
+     * A Kids' Device: the remote's search or mic button never leaves Muninn for the system's search or Assistant (a chat
+     * takes it for a voice message instead). Everyone else gets Android's own search.
+     */
+    override fun onSearchRequested(): Boolean =
+        if (io.github.ravenor907.muninn.tv.KidMode.saved(this)) true else super.onSearchRequested()
 
     private fun startDirect() {
         val perms = if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -383,6 +437,8 @@ class MainActivity : ComponentActivity() {
         val uris = if (i.action == Intent.ACTION_SEND) listOfNotNull(if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM))
             else (if (Build.VERSION.SDK_INT >= 33) i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableArrayListExtra(Intent.EXTRA_STREAM)).orEmpty()
         if (uris.isEmpty()) return
+        // Taken now: the window's intent no longer says Share, so nothing hands it over a second time.
+        if (i === intent) setIntent(Intent(i).setAction(Intent.ACTION_MAIN))
         val busy = app.ready.value && app.net.transfer.value.active
         Thread {
             // One GIF: it goes into a chat, animated (cap a1). Anything else waits in Files.
@@ -397,7 +453,11 @@ class MainActivity : ComponentActivity() {
                 val handed = uris.filter { Share.handedOver(this, it) }
                 runOnUiThread {
                     if (handed.isEmpty()) Ui.say("That couldn't be read.", true)
-                    else { io.github.ravenor907.muninn.screens.ShareTo.pending.addAll(handed); show("chat") }
+                    else {
+                        val waiting = io.github.ravenor907.muninn.screens.ShareTo.pending
+                        waiting.addAll(handed.distinct().filter { it !in waiting })
+                        show("chat")
+                    }
                 }
             }
         }.start()
@@ -431,16 +491,18 @@ class MainActivity : ComponentActivity() {
         // Moving to another device (cap x1): locked while it moves, then "Moved to [name]".
         if (io.github.ravenor907.muninn.screens.MoveCover(app)) return
         val vaultLocked by app.vault.locked.collectAsState()
+        val appLocked by io.github.ravenor907.muninn.ui.AppLock.locked.collectAsState()
         // Open, and everything is still starting off the main thread: a light "Opening" instead of the lock screen.
-        if (!ready && !vaultLocked && !uiLocked && !panic) {
+        if (!ready && !vaultLocked && !appLocked && !panic) {
             LaunchedEffect(Unit) { app.startAsync() }
             Opening()
             return
         }
-        if (!ready || uiLocked || panic) {
+        // The vault locked (a panic lock) always shows the lock too.
+        if (!ready || appLocked || panic || vaultLocked) {
             // Locked again: a linked tablet's own chats are sealed away again too.
             LaunchedEffect(Unit) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
-            LockScreen(app) { ok -> if (ok) { uiLocked = false; app.startAsync { startNet(); suggestStronger() } } }
+            LockScreen(app) { ok -> if (ok) { io.github.ravenor907.muninn.ui.AppLock.opened(); app.startAsync { startNet(); suggestStronger() } } }
             return
         }
         // Restored after "Forgot it?": a new lock first, with no Skip, before any chat shows (the old lock isn't in the backup).
@@ -537,6 +599,8 @@ class MainActivity : ComponentActivity() {
                 text = { Text("${r.names} (${LocalSend.size(r.size)}). They'll be saved in ${Received.place(this@MainActivity)}.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
                 confirmButton = { MButton("Accept", kind = Kind.Accent) { acceptFiles { app.net.accept() } } },
                 dismissButton = { MButton("Decline") { app.net.decline() } },
+                // A stray tap beside it doesn't decline the files: only Decline (or Back) does.
+                properties = androidx.compose.ui.window.DialogProperties(dismissOnClickOutside = false),
             )
         }
         // Every item's three-dot menu (also on holding a chat or person), from anywhere: one sheet.
@@ -547,7 +611,7 @@ class MainActivity : ComponentActivity() {
             app.chat.contacts.all.value.firstOrNull { !it.groupOnly }?.let { ChatNav.hold = it.chatKey }
                 ?: app.chat.groups.all.value.keys.firstOrNull()?.let { ChatNav.hold = io.github.ravenor907.muninn.net.Folders.groupKey(it) }
         }
-        if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.ItemMenu(app, ChatNav.hold, onChats = { tab = "chat" }, onLock = { uiLocked = true }) {
+        if (ChatNav.hold.isNotEmpty()) io.github.ravenor907.muninn.screens.ItemMenu(app, ChatNav.hold, onChats = { tab = "chat" }, onLock = { io.github.ravenor907.muninn.ui.AppLock.raise() }) {
             ChatNav.hold = ""; ChatNav.menuGroup = ""
         }
         io.github.ravenor907.muninn.screens.GroupCallPicker(app)
@@ -556,6 +620,8 @@ class MainActivity : ComponentActivity() {
         // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
         io.github.ravenor907.muninn.screens.LinkCheck()
         ask?.let { AskDialog(it) }
+        // Something asked for the current lock first (Turn off the lock, linking, moving): over everything else.
+        io.github.ravenor907.muninn.screens.LockGateDialog(app)
     }
 
     /** What a tab shows (the chat tab on phones; tablets lay chat out themselves). */
@@ -715,7 +781,9 @@ class MainActivity : ComponentActivity() {
     private fun TabletLayout(toast: Pair<String, Boolean>?, width: androidx.compose.ui.unit.Dp) {
         // A phone on its side is narrower than a tablet: the list takes a little less, so the chat keeps room.
         val listW = minOf(270.dp, width * 0.34f)
-        Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        // A camera cutout on a side edge (sideways foldables and tablets) keeps clear of the rail and the buttons.
+        Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.displayCutout.only(androidx.compose.foundation.layout.WindowInsetsSides.Horizontal))) {
             Column(Modifier.width(80.dp).fillMaxHeight().background(Palette.groundDeep).padding(vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 // Groups can be many: the top part scrolls, the tabs below stay put.
@@ -798,4 +866,14 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
         }
     }
+}
+
+/**
+ * The lock went up: every dialog and sheet closes, as if dismissed, so nothing asked before the lock can be answered
+ * over it (or after it, without the lock). Sheets kept in a screen's own state go with that screen, which the lock replaces.
+ */
+internal fun closeForLock() {
+    Ui.ask.value?.let { a -> Ui.ask.value = null; try { a.onCancel() } catch (_: Exception) {} }
+    ChatNav.hold = ""; ChatNav.menuGroup = ""; ChatNav.callPick = false
+    io.github.ravenor907.muninn.screens.LockGate.close()
 }

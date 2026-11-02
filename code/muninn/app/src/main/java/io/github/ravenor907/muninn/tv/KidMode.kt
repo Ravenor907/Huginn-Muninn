@@ -77,10 +77,25 @@ object KidMode {
      * Before pairing only: run this TV as an ordinary Muninn (with a lock and Settings) from now on. Once a
      * parent has paired it, only a parent can let it go: their Disconnect with "make it a normal TV" ([free]).
      */
-    fun useNormally(app: Muninn) { if (!paired(app)) decide(app, "normal") }
+    fun useNormally(app: Muninn) {
+        if (paired(app)) return
+        // As Leave does: the kids' jobs stop, and its own name and settings come back.
+        Tv.stopKids(app)
+        KidReset.restore(app)
+        KidReset.afterLeave(app)
+        decide(app, "normal")
+    }
 
-    /** k11: someone with the parent PIN (or a parent's phone) let it go: erased, it runs as an ordinary Muninn now. */
-    internal fun leave(app: Muninn) { free(app); decide(app, "normal") }
+    /**
+     * k11: someone with the parent PIN (or a parent's phone) let it go: erased, it runs as an ordinary Muninn now. The kids'
+     * jobs stop, its own name and settings come back, and first setup runs again (it can be made a Kids' Device again there).
+     */
+    internal fun leave(app: Muninn) {
+        free(app)
+        Tv.stopKids(app)
+        KidReset.afterLeave(app)
+        decide(app, "normal")
+    }
 
     /** A parent has paired this TV at some point and hasn't let it go: the kids can't leave kids' mode. */
     fun paired(context: Context): Boolean = prefs(context).getBoolean("paired", false)
@@ -92,6 +107,8 @@ object KidMode {
     fun saved(context: Context): Boolean = prefs(context).getString("mode", null) == "kids"
 
     private fun decide(app: Muninn, m: String): Boolean {
+        // Becoming a Kids' Device: what this device had before is kept, so leaving kids' mode puts it all back.
+        if (m == "kids" && prefs(app).getString("mode", null) != "kids") KidReset.saveOwner(app)
         prefs(app).edit().putString("mode", m).apply()
         mode = m
         return m == "kids"
@@ -413,7 +430,9 @@ object KidTv {
     fun leave(app: Muninn) {
         if (!unlocked() || wiping.value) return
         val msg = KidRules.leftMessage()
-        _state.value.parents.forEach { send(app, it, msg) }
+        // The parents stop looking after it; everyone else on its list stops treating it as a Kids' Device (7.18).
+        val s = _state.value
+        (s.parents + (s.cfg?.contacts?.map { it.k } ?: emptyList())).distinct().forEach { send(app, it, msg) }
         wiping.value = true
         Thread {
             try { Thread.sleep(3000); wipe(app); KidMode.leave(app) } catch (_: Exception) {}
@@ -658,7 +677,10 @@ object KidTv {
         HavDevice.clear(app)
         // k14: anything a quiet time held, and the group members already asked about.
         KidHoldStore.clear(app)
-        prefs(app).edit().remove(HELD_ASKED).apply()
+        // Wrong PIN tries count only against the PIN they were typed for, never the next family's.
+        prefs(app).edit().remove(HELD_ASKED).remove(PIN_FAILS).remove(PIN_AT).remove(PIN_BOOT).apply()
+        // Everything else kids' mode changed (sizes, look, how long messages stay, drafts, waiting asks): put back.
+        KidReset.restore(app)
         unlockedUntil.value = 0L
         asked = null
         lastAsk = 0L
@@ -671,15 +693,26 @@ object KidTv {
      * (and tells them when it goes quiet); and group invites, taken only from its parents, any other declined.
      */
     internal fun watch(app: Muninn) {
-        statusTimer.scheduleWithFixedDelay({ try { if (_state.value.cfg != null) sendStatus(app, null) } catch (_: Exception) {} },
+        stopWatch()
+        statusJob = statusTimer.scheduleWithFixedDelay({ try { if (_state.value.cfg != null) sendStatus(app, null) } catch (_: Exception) {} },
             1L, 360L, java.util.concurrent.TimeUnit.MINUTES)
-        CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
+        invites = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             app.chat.groups.pending.collect { list ->
+                // Only while it's a Kids' Device: an ordinary Muninn answers its own invites.
+                if (!KidMode.on(app)) return@collect
                 for (inv in list) try {
                     if (groupInviteOk(inv.from)) app.chat.groups.acceptInvite(inv) else app.chat.groups.declineInvite(inv)
                 } catch (_: Exception) {}
             }
         }
+    }
+    @Volatile private var statusJob: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var invites: kotlinx.coroutines.Job? = null
+
+    /** Left kids' mode: no more status to parents, and group invites are the person's own to answer again. */
+    internal fun stopWatch() {
+        statusJob?.cancel(false); statusJob = null
+        invites?.cancel(); invites = null
     }
 
     /** The vault can't be opened (its data key file is gone): nothing on it is readable, so start the TV over. */
@@ -716,12 +749,24 @@ object Tv : TvHandler {
         // A Kids' TV is always reachable at once, whatever "Check for messages" said before it became one.
         if (app.power.check != io.github.ravenor907.muninn.net.PowerLogic.Check.LIVE) app.power.check = io.github.ravenor907.muninn.net.PowerLogic.Check.LIVE
         if (!app.identity.stayConnected) app.identity.stayConnected = true
+        // A kids' phone or tablet doesn't show itself to people nearby (a school's Wi-Fi): its parents' files still come over
+        // the relays and the home Wi-Fi. Put back when it leaves kids' mode (KidReset).
+        if (!KidMode.isTv(app) && app.identity.visibleNearby) app.identity.visibleNearby = false
         io.github.ravenor907.muninn.net.MessageService.start(app)
         TvRing.watch(app)
         TvUpdate.start(app)
         TvStorage.start(app)
         KidTv.askParents(app)
         KidTv.watch(app)
+    }
+
+    /** Left kids' mode: the trimming, the silent updates, the status to parents and the invite answers all stop. */
+    internal fun stopKids(app: Muninn) {
+        if (!kidsStarted) return
+        kidsStarted = false
+        try { TvStorage.stop() } catch (_: Exception) {}
+        try { TvUpdate.stop(app) } catch (_: Exception) {}
+        KidTv.stopWatch()
     }
 
     fun bridge(app: Muninn): TvBridge? = if (app.ready.value) app.chat as? TvBridge else null

@@ -12,6 +12,7 @@
 #include "videoengine.h"
 #include "vpxcodec.h"
 #include "../vault.h"
+#include "../platform/singleinstance.h"
 #include "../ring.h"
 
 #include <QVideoSink>
@@ -39,6 +40,7 @@ QString str(const QJsonObject &o, const char *k) { return o.value(QLatin1String(
 CallManager::CallManager(CallSignal *signal, Vault *vault, QObject *parent)
     : QObject(parent), m_signal(signal), m_vault(vault), m_relay(new RelayCredentials(this))
 {
+    m_mono.start();
     connect(m_signal, &CallSignal::received, this, &CallManager::onSignal);
     connect(m_signal, &CallSignal::mediaReceived, this, [this](const QString &from, const QByteArray &pkt) {
         if (m_session && m_session->peerKey() == from && m_session->media())
@@ -348,6 +350,9 @@ QString CallManager::startCall(const QString &key, bool video)
 {
     if (!available())
         return QStringLiteral("Calls aren't available in this build.");
+    // Nobody is called from behind the lock.
+    if (m_vault && m_vault->screenLocked())
+        return QStringLiteral("Unlock Huginn first.");
     if (m_session && m_session->state() != CallSession::Ended)
         return QStringLiteral("You're already in a call.");
     if (busyElsewhere && busyElsewhere())
@@ -498,7 +503,34 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         m_signal->send(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), id}});
         return;
     }
-    if (why == QLatin1String("stale")) {
+    QString checked = why;
+    if (why == QLatin1String("stale") && !answeredLocked && choice == 0) {
+        // Round 14: the clocks may differ by more than a minute. A second copy of the offer a few seconds later shows
+        // the caller is there now: it rings (checked again at its own time). Until then nothing; none in 30 s: missed.
+        const QString skew = m_skew.judge(id, offerTs, nowMs(), m_mono.elapsed());
+        if (skew == QLatin1String("wait")) {
+            QPointer<CallManager> self(this);
+            QTimer::singleShot(int(CallSkewGate::kWaitMs + 1000), this, [self, id, from, offerTs] {
+                if (!self || self->m_handled.contains(id))
+                    return;
+                self->m_handled.insert(id);
+                self->addHistory(from, false, QStringLiteral("missed"), offerTs, 0);
+            });
+            return;
+        }
+        if (skew == QLatin1String("ring")) {
+            checked = CallSession::checkOffer(msg, from, offerTs);
+            m_handled.insert(id);   // its "wait" timer stays quiet: it rang
+        }
+        if (checked == QLatin1String("codec")) {
+            m_handled.insert(id);
+            m_signal->send(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), id}});
+            return;
+        }
+        if (!checked.isEmpty() && checked != QLatin1String("stale"))
+            return;
+    }
+    if (checked == QLatin1String("stale")) {
         // An old offer that waited on a relay: a missed call, never a ringing one.
         m_handled.insert(id);
         addHistory(from, false, QStringLiteral("missed"), qint64(msg.value(QStringLiteral("ts")).toDouble()), 0);
@@ -618,6 +650,9 @@ void CallManager::onNotificationAction(const QString &action)
     if (m_lockedRinging && !m_session) {
         m_lockedChoice = action == QLatin1String("answer") ? 1 : action == QLatin1String("decline") ? 2 : 0;
         endLockedRing();
+        // Answer: the window comes forward for the unlock, so the caller isn't left waiting while it's looked for.
+        if (m_lockedChoice == 1)
+            SingleInstance::bringToFront();
         return;
     }
     if (action == QLatin1String("answer"))
@@ -658,6 +693,9 @@ void CallManager::prime(CallSession *s)
     s->c2Local = true;
     s->videoCodec = vpxAvailable();
     connect(s, &CallSession::mediaStarted, this, [this, s] {
+        // A microphone or speaker the call followed by itself (plugged in, pulled out, docked): a toast says which.
+        if (s->media() && s->media()->audio())
+            connect(s->media()->audio(), &AudioIO::deviceNotice, this, &CallManager::finished, Qt::UniqueConnection);
         if (s == m_session)
             startVideo();
     });

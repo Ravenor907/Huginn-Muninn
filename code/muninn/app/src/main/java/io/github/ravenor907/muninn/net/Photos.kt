@@ -99,16 +99,14 @@ object Photos {
     private fun upright(context: Context, uri: Uri, b: Bitmap): Bitmap {
         val turn = try {
             context.contentResolver.openInputStream(uri)?.use {
-                when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                    else -> 0f
-                }
-            } ?: 0f
-        } catch (e: Exception) { 0f }
-        if (turn == 0f) return b
-        return Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { postRotate(turn) }, true)
+                ExifTurn.of(ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL))
+            } ?: ExifTurn.of(1)
+        } catch (e: Exception) { ExifTurn.of(1) }
+        if (turn.degrees == 0f && !turn.mirror) return b
+        return Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply {
+            postRotate(turn.degrees)
+            if (turn.mirror) postScale(-1f, 1f)
+        }, true)
     }
 
     /** Best quality that fits the size limit; shrinks further if even low quality doesn't fit. */

@@ -7,6 +7,7 @@
 #include "singleinstance.h"
 
 #include "crashlog.h"
+#include "../settings.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -15,6 +16,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QSaveFile>
 #include <QSet>
 #include <QStringList>
 #include <QThread>
@@ -71,6 +73,18 @@ const QString kAside = QStringLiteral(".huginn-old");
 // In update-staging once the update is unpacked and checked: the SHA-256 of the staged Huginn.exe.
 const QString kReady = QStringLiteral("update.ready");
 const QString kStaging = QStringLiteral("update-staging");
+// In lib\: every file the last update put there (one relative path a line). Only those are ever deleted by the next one.
+const QString kInstalled = QStringLiteral("lib/huginn-files.txt");
+
+// A swap that didn't go in: why, kept in settings ("update/failed" = "<version>|<sentence>"). The next start says so,
+// and timed checks don't download that version again until Check now (updater.cpp).
+void noteFailed(const QString &version, const QString &why)
+{
+    CrashLog::note(QStringLiteral("update: ") + why);
+    QSettings s = Settings::store();
+    s.setValue(QStringLiteral("update/failed"), version + QLatin1Char('|') + why);
+    s.sync();
+}
 
 // The portable folder people unzipped: the one with Huginn.exe. Works before Qt has started.
 QString appDir()
@@ -250,8 +264,8 @@ QString folderProblem()
     // Qt doesn't read Windows permissions by default, so just try writing.
     QFile probe(appDir() + QStringLiteral("/.huginn-write-test"));
     if (!probe.open(QIODevice::WriteOnly)) {
-        return QStringLiteral("Huginn can't update itself where it is (%1). Move the Huginn folder somewhere of your own, "
-                              "like Documents or the Desktop, and try again.")
+        return QStringLiteral("Huginn can't update itself where it is (%1). Move the Huginn folder to a folder of your own that "
+                              "isn't synced to the cloud, like C:\\Users\\<you>\\Huginn, and try again.")
             .arg(QDir::toNativeSeparators(appDir()));
     }
     probe.close();
@@ -319,16 +333,45 @@ bool finishAtStart()
         }
         if (!failed.isEmpty()) {
             rollBack(moved);
-            CrashLog::note(QStringLiteral("update: couldn't replace ") + failed + QStringLiteral("; kept the version that was there"));
+            noteFailed(QCoreApplication::applicationVersion(),
+                       QStringLiteral("The update couldn't replace %1 (another program, often antivirus, was using it), so Huginn kept the "
+                                      "version it had. Try again later with Check now in Settings › Updates and about.")
+                           .arg(QDir::toNativeSeparators(failed)));
         } else {
-            // Whatever lib\ held that the new version doesn't (old plugins Qt would still find) goes.
+            // What lib\ held that the new version doesn't (old plugins Qt would still find) goes, but only files an
+            // update of Huginn put there (the list from last time). Nothing else in the folder is ever touched.
+            const QString listPath = root + QLatin1Char('/') + kInstalled;
+            QStringList before;
+            {
+                QFile list(listPath);
+                if (list.open(QIODevice::ReadOnly | QIODevice::Text))
+                    before = QString::fromUtf8(list.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+            }
+            const bool ours = QFileInfo::exists(root + QStringLiteral("/lib/lib.manifest"));
+            // No list yet (the first update since lists were kept): only the kinds of file Huginn's lib\ is made of.
+            static const QStringList kKinds = {QStringLiteral("dll"), QStringLiteral("qml"), QStringLiteral("qmldir"), QStringLiteral("qmltypes"),
+                                               QStringLiteral("qm"), QStringLiteral("js"), QStringLiteral("mjs"), QStringLiteral("metainfo")};
             QDirIterator old(root + QStringLiteral("/lib"), QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
-            while (old.hasNext()) {
+            while (ours && old.hasNext()) {
                 const QString f = old.next();
-                if (!f.endsWith(kAside, Qt::CaseInsensitive) && !fresh.contains(QDir::cleanPath(f).toLower()))
+                if (f.endsWith(kAside, Qt::CaseInsensitive) || fresh.contains(QDir::cleanPath(f).toLower()))
+                    continue;
+                const QString rel = QDir(root).relativeFilePath(f);
+                const bool listed = before.contains(rel, Qt::CaseInsensitive);
+                if (listed || (before.isEmpty() && kKinds.contains(QFileInfo(f).suffix().toLower())))
                     QFile::remove(f);
             }
+            QStringList now;
+            for (const QString &rel : files)
+                if (rel.startsWith(QLatin1String("lib/"), Qt::CaseInsensitive))
+                    now << rel;
+            QSaveFile list(listPath);
+            if (!list.open(QIODevice::WriteOnly | QIODevice::Text) || list.write(now.join(QLatin1Char('\n')).toUtf8() + '\n') < 0 || !list.commit())
+                CrashLog::note(QStringLiteral("update: couldn't keep the list of lib files"));
             deleteAsides(root);
+            QSettings st = Settings::store();
+            st.remove(QStringLiteral("update/failed"));
+            st.sync();
         }
         // Huginn from its own folder (updated, or as it was): it waits until this copy has ended, then removes
         // update-staging.
@@ -351,7 +394,12 @@ bool finishAtStart()
     const bool tried = want.endsWith(" tried");
     want = want.left(64);
     if (tried || want.size() != 64 || fileSha256(staged) != want) {
-        CrashLog::note(tried ? QStringLiteral("update: the staged update didn't finish; removed") : QStringLiteral("update: the staged update didn't match; removed"));
+        // Said on screen at the next start (Updater), and that version isn't downloaded again by itself.
+        const QString version = Settings::store().value(QStringLiteral("update/trying")).toString();
+        noteFailed(version, tried ? QStringLiteral("The update didn't finish: the new Huginn.exe didn't start (antivirus may have blocked it). "
+                                                   "Huginn kept the version it had. Try again later with Check now in Settings › Updates and about.")
+                                  : QStringLiteral("The update was changed or removed before it went in (antivirus may have quarantined it). "
+                                                   "Huginn kept the version it had. Try again later with Check now in Settings › Updates and about."));
         QDir(stagingDir()).removeRecursively();
         return false;
     }
@@ -361,6 +409,9 @@ bool finishAtStart()
     }
     if (SingleInstance::startAgain(staged, stagingDir()))
         return true;
+    noteFailed(Settings::store().value(QStringLiteral("update/trying")).toString(),
+               QStringLiteral("The update couldn't start the new Huginn.exe (antivirus may have blocked it). Huginn kept the version it had. "
+                              "Try again later with Check now in Settings › Updates and about."));
     QDir(stagingDir()).removeRecursively();
     return false;
 #else
