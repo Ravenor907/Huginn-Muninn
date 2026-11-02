@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#101112">
+<title>Huginn and Muninn: anti-deplatforming, secure communication</title>
+<meta name="description" content="Anti-deplatforming. Secure communication. For you and the ones you care about. Free, open source, end-to-end encrypted messages, calls and files for Windows, Linux, Android and Google TV. No account, no phone number, no central server.">
+<link rel="icon" href="raven-gold.png">
+<style>
+  :root {
+    --ground:#101112; --deep:#0C0D0E; --panel:#17191B; --raised:#1D1E20; --line:#2C2F33; --line2:#34373B;
+    --text:#E4E1DA; --soft:#C4C0B7; --muted:#9C978D; --faint:#6E6A62;
+    --gold:#C2A25E; --gold-hi:#E3C27A; --iron:#A9B4BE;
+    --serif: "Cinzel", "Trajan Pro", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: "Barlow", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--ground); color:var(--text); font:17px/1.6 var(--sans); -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+  a { color:var(--gold); text-decoration:none; }
+  a:hover { color:var(--gold-hi); }
+  a:focus-visible, summary:focus-visible { outline:2px solid var(--gold); outline-offset:3px; border-radius:6px; }
+  .wrap { max-width:1120px; margin:0 auto; padding:0 22px; }
+
+  /* Top bar */
+  nav { position:sticky; top:0; z-index:5; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+        background:rgba(16,17,18,.78); border-bottom:1px solid rgba(44,47,51,.6); }
+  nav .wrap { display:flex; align-items:center; gap:18px; height:60px; }
+  nav .brand { display:flex; align-items:center; gap:10px; color:var(--text); font:600 15px/1 var(--serif); letter-spacing:.22em; }
+  nav .brand img { width:30px; height:30px; }
+  nav .links { margin-left:auto; display:flex; gap:22px; font-size:15px; }
+  nav .links a { color:var(--muted); }
+  nav .links a:hover { color:var(--text); }
+  @media (max-width:720px) { nav .links a.opt { display:none; } }
+
+  /* Hero */
+  .hero { position:relative; padding:96px 0 84px; text-align:center; isolation:isolate; }
+  .hero::before { content:""; position:absolute; inset:-20% -10% 0; z-index:-2;
+    background:radial-gradient(60% 55% at 50% 30%, rgba(194,162,94,.16), transparent 70%),
+               radial-gradient(40% 40% at 80% 70%, rgba(169,180,190,.07), transparent 70%),
+               linear-gradient(180deg, var(--deep), var(--ground)); }
+  .hero::after { content:""; position:absolute; inset:0; z-index:-1; opacity:.5;
+    background-image:radial-gradient(rgba(228,225,218,.06) 1px, transparent 1px); background-size:26px 26px;
+    -webkit-mask-image:radial-gradient(ellipse at 50% 35%, #000 20%, transparent 70%); mask-image:radial-gradient(ellipse at 50% 35%, #000 20%, transparent 70%); }
+  .raven { width:150px; height:150px; filter:drop-shadow(0 10px 40px rgba(194,162,94,.35)); animation:hover 7s ease-in-out infinite; }
+  .runes { margin:18px 0 0; color:var(--faint); letter-spacing:.5em; font-size:15px; }
+  h1 { font:600 clamp(34px, 6.2vw, 68px)/1.08 var(--serif); letter-spacing:.02em; margin:22px auto 0; max-width:900px;
+       background:linear-gradient(180deg, #F3E2C7 0%, var(--gold) 55%, #9C7E43 100%); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  h1 .soft { display:block; margin-top:12px; font-size:.5em; letter-spacing:.06em; color:var(--soft); background:none; -webkit-text-fill-color:var(--soft); }
+  .lede { max-width:700px; margin:26px auto 0; color:var(--soft); font-size:19px; }
+  .lede b { color:var(--text); }
+
+  .downloads { display:flex; flex-wrap:wrap; justify-content:center; gap:14px; margin-top:38px; }
+  .btn { display:inline-flex; align-items:center; gap:12px; padding:14px 22px; border-radius:12px; font-weight:600; font-size:16px;
+         color:var(--text); background:var(--panel); border:1px solid var(--line2); transition:transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
+  .btn small { display:block; font-weight:400; font-size:13px; color:var(--muted); }
+  .btn svg { width:22px; height:22px; flex:none; }
+  .btn:hover { color:var(--text); transform:translateY(-2px); border-color:var(--gold); box-shadow:0 10px 30px -12px rgba(194,162,94,.5); }
+  .btn.primary { background:linear-gradient(180deg, #D3B26C, var(--gold)); color:#1A140A; border-color:transparent; }
+  .btn.primary small { color:#3B2E14; }
+  .btn.primary:hover { color:#1A140A; box-shadow:0 12px 36px -10px rgba(227,194,122,.6); }
+  .fine { margin-top:16px; color:var(--faint); font-size:14px; }
+
+  /* Sections */
+  section { padding:84px 0; border-top:1px solid rgba(44,47,51,.55); }
+  .eyebrow { color:var(--gold); font:600 13px/1 var(--sans); letter-spacing:.28em; text-transform:uppercase; }
+  h2 { font:600 clamp(28px, 4vw, 40px)/1.15 var(--serif); letter-spacing:.03em; margin:14px 0 14px; color:var(--text); }
+  .intro { color:var(--soft); max-width:720px; margin:0 0 40px; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:16px; }
+  .card { position:relative; background:linear-gradient(180deg, var(--panel), #141617); border:1px solid var(--line); border-radius:16px; padding:22px;
+          transition:transform .25s ease, border-color .25s ease; overflow:hidden; }
+  .card::before { content:""; position:absolute; inset:0; opacity:0; transition:opacity .3s ease;
+                  background:radial-gradient(120% 80% at 0% 0%, rgba(194,162,94,.10), transparent 60%); }
+  .card:hover { transform:translateY(-3px); border-color:#4A4232; }
+  .card:hover::before { opacity:1; }
+  .card .ico { font-size:26px; line-height:1; }
+  .card h3 { margin:14px 0 6px; font-size:18px; font-weight:600; color:var(--text); }
+  .card p { margin:0; color:var(--muted); font-size:15.5px; }
+
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:48px; align-items:center; }
+  @media (max-width:860px) { .two { grid-template-columns:1fr; } }
+  .list { list-style:none; padding:0; margin:0; display:grid; gap:14px; }
+  .list li { padding-left:30px; position:relative; color:var(--soft); }
+  .list li::before { content:""; position:absolute; left:4px; top:.6em; width:10px; height:10px; transform:rotate(45deg);
+                     border:2px solid var(--gold); border-radius:2px; }
+  .list b { color:var(--text); }
+
+  /* Relay diagram */
+  .diagram { background:radial-gradient(80% 80% at 50% 50%, rgba(194,162,94,.06), transparent 70%), var(--deep);
+             border:1px solid var(--line); border-radius:20px; padding:18px; }
+  .diagram svg { width:100%; height:auto; display:block; }
+  .diagram text { font-family:var(--sans); fill:var(--soft); font-size:13px; }
+  .diagram .lbl { fill:var(--text); font-size:15px; font-weight:600; }
+  .diagram .flow { stroke:var(--gold); stroke-width:1.6; fill:none; stroke-dasharray:4 8; animation:flow 2.4s linear infinite; opacity:.85; }
+  .diagram .near { stroke:var(--iron); stroke-width:1.4; fill:none; stroke-dasharray:2 6; opacity:.6; }
+  .diagram .node { fill:var(--panel); stroke:var(--line2); }
+  .diagram .relay { fill:var(--raised); stroke:#4A4232; }
+  .caption { text-align:center; color:var(--muted); font-size:14.5px; margin:12px 0 0; }
+
+  .sec { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:16px; }
+  .sec .card h3 { margin-top:0; display:flex; align-items:center; gap:10px; }
+  .sec .card h3::before { content:""; width:8px; height:8px; border-radius:50%; background:var(--gold); box-shadow:0 0 12px var(--gold); flex:none; }
+
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+  td { padding:14px 18px; border-top:1px solid var(--line); color:var(--soft); }
+  tr:first-child td { border-top:0; }
+  td.n { width:56px; text-align:center; color:var(--gold); font-weight:700; }
+
+  .dl { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:16px; }
+  .dl .card { display:flex; flex-direction:column; }
+  .dl .card .btn { margin-top:auto; justify-content:center; }
+  .dl .card p { margin-bottom:18px; }
+  .note { margin-top:22px; color:var(--muted); font-size:15px; max-width:860px; }
+  .note b { color:var(--soft); }
+
+  details { background:var(--panel); border:1px solid var(--line); border-radius:14px; margin-bottom:12px; overflow:hidden; }
+  summary { cursor:pointer; list-style:none; padding:18px 22px; font-weight:600; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+  summary::-webkit-details-marker { display:none; }
+  summary::after { content:"+"; color:var(--gold); font-size:22px; line-height:1; transition:transform .25s ease; }
+  details[open] summary::after { transform:rotate(45deg); }
+  details > div { padding:0 22px 20px; color:var(--soft); }
+  details ul { margin:0; padding-left:20px; }
+  details li { margin:6px 0; }
+
+  footer { padding:56px 0 64px; text-align:center; color:var(--faint); font-size:14px; border-top:1px solid rgba(44,47,51,.55); }
+  footer img { width:38px; height:38px; opacity:.75; }
+  footer p { margin:10px 0 0; }
+  footer .tag { color:var(--muted); font-style:italic; }
+
+  /* Motion */
+  .reveal { animation:rise .9s cubic-bezier(.2,.7,.2,1) both; }
+  .d1 { animation-delay:.08s; } .d2 { animation-delay:.18s; } .d3 { animation-delay:.3s; } .d4 { animation-delay:.42s; }
+  @keyframes rise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+  @keyframes hover { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-8px); } }
+  @keyframes flow { to { stroke-dashoffset:-24; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation:none !important; transition:none !important; }
+    html { scroll-behavior:auto; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="raven-gold.png" alt="">HUGINN &amp; MUNINN</a>
+    <div class="links">
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#why">Why</a>
+      <a class="opt" href="#security">Security</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/Ravenor907/Huginn-Muninn">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <img class="raven reveal" src="raven-gold.png" alt="A gold raven">
+    <div class="runes reveal d1">ᚺᚢᚷᛁᚾᚾ · ᛗᚢᚾᛁᚾᚾ</div>
+    <h1 class="reveal d2">Anti-deplatforming. Secure communication.<span class="soft">For you and the ones you care about.</span></h1>
+    <p class="lede reveal d3"><b>Huginn</b> is the desktop app: a portable zip for Windows and a Flatpak for Linux. <b>Muninn</b> is the Android app: phones and tablets, plus Kids' TV on Google TV. No account, no phone number, no central server.</p>
+    <div class="downloads reveal d4">
+      <a class="btn primary" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg>
+        <span>Muninn for Android<small>Muninn.apk</small></span></a>
+      <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <span>Huginn for Windows<small>Portable zip</small></span></a>
+      <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></svg>
+        <span>Huginn for Linux<small>Flatpak</small></span></a>
+    </div>
+    <p class="fine">Free and open source under GPL-3.0. No ads, no trackers.</p>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="eyebrow">What's inside</div>
+    <h2>Everything you need to stay close</h2>
+    <p class="intro">Messages, calls, rooms and files, sealed end to end, on your phone, your computer and your TV.</p>
+    <div class="grid">
+      <div class="card"><div class="ico">💬</div><h3>Chats</h3><p>Messages, photos, albums, voice and video messages, polls, replies and reactions.</p></div>
+      <div class="card"><div class="ico">🛡️</div><h3>Groups: Folk and Family</h3><p>Up to 50 people with channels. Folk keeps 7 days and allows invite links; Family keeps up to 30 and admins add people.</p></div>
+      <div class="card"><div class="ico">📞</div><h3>Calls and voice rooms</h3><p>Voice and video calls, group video for up to 4, and drop-in voice rooms for up to 8.</p></div>
+      <div class="card"><div class="ico">🖥️</div><h3>Screen share</h3><p>Share your Windows screen in a voice room; everyone in it can watch, on a phone or a computer.</p></div>
+      <div class="card"><div class="ico">📁</div><h3>Files</h3><p>Straight between devices on the same Wi-Fi or over the internet, with pause and resume.</p></div>
+      <div class="card"><div class="ico">🔗</div><h3>Linked PC</h3><p>Link Huginn to your phone and use your chats from the computer, sent through the phone.</p></div>
+      <div class="card"><div class="ico">📺</div><h3>Kids' TV</h3><p>A Google TV mode where kids reach only the people their parents allow.</p></div>
+      <div class="card"><div class="ico">💾</div><h3>Backups</h3><p>One file, encrypted with your password, that restores on a phone or a computer.</p></div>
+      <div class="card"><div class="ico">🎨</div><h3>Look</h3><p>Dark in stone, iron and aged gold, true Black for OLED, or Light, with accent colors and seasonal Autumn and Snow.</p></div>
+      <div class="card"><div class="ico">👁️</div><h3>Accessibility</h3><p>Color vision modes for red, green or blue weak sight, plus high contrast and larger text.</p></div>
+      <div class="card"><div class="ico">🎮</div><h3>Controller and handheld</h3><p>Every action works from a controller, on Linux handhelds in game mode, TV boxes and desktops.</p></div>
+      <div class="card"><div class="ico">📡</div><h3>No internet needed nearby</h3><p>On the same Wi-Fi or over Bluetooth, messages go device to device.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <div class="wrap two">
+    <div>
+      <div class="eyebrow">Why anti-deplatforming</div>
+      <h2>No account to close. No server to ban you.</h2>
+      <ul class="list">
+        <li><b>No account, phone number or email.</b> Your identity is a key made on your device, and only you hold it.</li>
+        <li><b>No central server.</b> No company server in the middle stores your contacts or decides who may talk.</li>
+        <li><b>Many independent relays.</b> Each message is sealed and published to several public Nostr relays at once (five by default). One going down doesn't matter.</li>
+        <li><b>Direct when close.</b> Same Wi-Fi or Bluetooth: device to device, no internet needed.</li>
+        <li><b>Cloudflare, plainly.</b> A free relay Worker hands out logins for Cloudflare's call relay, used for internet calls when a direct path isn't possible. Messages never go through it, and internet calls can be turned off.</li>
+      </ul>
+    </div>
+    <div class="diagram">
+      <svg viewBox="0 0 520 360" role="img" aria-label="Your devices send sealed messages to many independent relays, which pass them to the people you care about. Nearby devices talk directly.">
+        <path class="flow" d="M110 180 C 190 180, 200 50, 260 50"/>
+        <path class="flow" d="M110 180 C 190 180, 200 115, 260 115"/>
+        <path class="flow" d="M110 180 L 260 180"/>
+        <path class="flow" d="M110 180 C 190 180, 200 245, 260 245"/>
+        <path class="flow" d="M110 180 C 190 180, 200 310, 260 310"/>
+        <path class="flow" d="M260 50 C 320 50, 330 180, 410 180"/>
+        <path class="flow" d="M260 115 C 320 115, 330 180, 410 180"/>
+        <path class="flow" d="M260 180 L 410 180"/>
+        <path class="flow" d="M260 245 C 320 245, 330 180, 410 180"/>
+        <path class="flow" d="M260 310 C 320 310, 330 180, 410 180"/>
+        <path class="near" d="M60 228 C 60 352, 460 352, 460 228"/>
+        <rect class="node" x="10" y="132" width="100" height="96" rx="16"/>
+        <text class="lbl" x="60" y="172" text-anchor="middle">Your</text>
+        <text class="lbl" x="60" y="192" text-anchor="middle">devices</text>
+        <rect class="node" x="410" y="132" width="100" height="96" rx="16"/>
+        <text class="lbl" x="460" y="166" text-anchor="middle">The ones</text>
+        <text class="lbl" x="460" y="186" text-anchor="middle">you care</text>
+        <text class="lbl" x="460" y="206" text-anchor="middle">about</text>
+        <g>
+          <rect class="relay" x="222" y="34" width="76" height="32" rx="16"/><text x="260" y="55" text-anchor="middle">relay</text>
+          <rect class="relay" x="222" y="99" width="76" height="32" rx="16"/><text x="260" y="120" text-anchor="middle">relay</text>
+          <rect class="relay" x="222" y="164" width="76" height="32" rx="16"/><text x="260" y="185" text-anchor="middle">relay</text>
+          <rect class="relay" x="222" y="229" width="76" height="32" rx="16"/><text x="260" y="250" text-anchor="middle">relay</text>
+          <rect class="relay" x="222" y="294" width="76" height="32" rx="16"/><text x="260" y="315" text-anchor="middle">relay</text>
+        </g>
+        <text x="260" y="352" text-anchor="middle">same Wi-Fi or Bluetooth</text>
+      </svg>
+      <p class="caption">Relays pass along sealed envelopes they can't read. Nothing in the middle can ban you.</p>
+    </div>
+  </div>
+</section>
+
+<section id="security">
+  <div class="wrap">
+    <div class="eyebrow">Secure communication</div>
+    <h2>Sealed for one person at a time</h2>
+    <p class="intro">Everything is built on keys that live only on your devices.</p>
+    <div class="sec">
+      <div class="card"><h3>Per message, per recipient</h3><p>A ratchet per contact gives every message a fresh key. In groups each message is sealed separately to each member: no group key.</p></div>
+      <div class="card"><h3>Forward secrecy with day keys</h3><p>Relay envelopes are also sealed to a short-lived day key the recipient deletes, so a key stolen later can't open old traffic.</p></div>
+      <div class="card"><h3>Signed group control</h3><p>Members, roles and rules are a snapshot signed by an admin. Unsigned changes are refused.</p></div>
+      <div class="card"><h3>Password-encrypted backups</h3><p>scrypt and AES-256-GCM. There has never been an unencrypted backup.</p></div>
+      <div class="card"><h3>App lock</h3><p>A pattern or a password locks everything the app keeps, with a panic lock to close it at once.</p></div>
+      <div class="card"><h3>Nothing held outside</h3><p>Keys and chats live in the app's own encrypted vault, never in an OS key store or an outside service.</p></div>
+      <div class="card"><h3>IP addresses never shown</h3><p>Neither app ever puts an IP address on screen.</p></div>
+      <div class="card"><h3>Safety codes, in person</h3><p>A 6-digit code and 4 emoji per contact. Same on both screens means nobody is in between.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="wrap two">
+    <div>
+      <div class="eyebrow">Privacy at a glance</div>
+      <h2>What it never does</h2>
+      <p class="intro">Messages expire on every device: 7 days, or up to 30 for Family. Relays only ever see sealed, padded envelopes that expire too.</p>
+    </div>
+    <table>
+      <tr><td>Ask for a phone number, email or account</td><td class="n">Never</td></tr>
+      <tr><td>Show ads or carry trackers</td><td class="n">Never</td></tr>
+      <tr><td>Use Google Play services or Firebase</td><td class="n">Never</td></tr>
+      <tr><td>Keep your keys in an OS key store</td><td class="n">Never</td></tr>
+      <tr><td>Show anyone's IP address</td><td class="n">Never</td></tr>
+      <tr><td>Install an update the project didn't sign</td><td class="n">Never</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="eyebrow">Download</div>
+    <h2>Get the ravens</h2>
+    <p class="intro">Always the latest release. Every download is signed with the project's own key.</p>
+    <div class="dl">
+      <div class="card"><div class="ico">📱</div><h3>Muninn for Android</h3><p>Phones, tablets and Google TV. Open the file on the device and install it. If Play Protect doesn't know the app, tap More details, then Install anyway.</p>
+        <a class="btn primary" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">Download Muninn.apk</a></div>
+      <div class="card"><div class="ico">🪟</div><h3>Huginn for Windows</h3><p>Unzip anywhere and run Huginn.exe. Nothing to install. Keep the data folder beside it when you update by hand.</p>
+        <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip">Download Huginn-Windows.zip</a></div>
+      <div class="card"><div class="ico">🐧</div><h3>Huginn for Linux</h3><p>Desktops and Linux handhelds in game mode. Open the Flatpak to install it.</p>
+        <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak">Download Huginn.flatpak</a></div>
+    </div>
+    <p class="note"><b>Updates are built in.</b> Both apps download a new release and check its signatures against the project key before installing anything; a file that doesn't match is refused. Huginn then waits for you to press Restart now, and Muninn for you to tap Install.</p>
+    <p class="note"><b>Windows SmartScreen.</b> Huginn.exe has no paid code-signing certificate, so the first time Windows may say "Windows protected your PC". Choose More info, then Run anyway. To check a download yourself, see <a href="https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md">how to check a download</a>.</p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap" style="max-width:820px">
+    <div class="eyebrow">FAQ</div>
+    <h2>Questions</h2>
+    <details><summary>No server? How does a message get there?</summary><div>Over the internet, your app seals the message for the person it's for and publishes it to several public Nostr relays at once. Their app takes whichever copy arrives first. The relays can't read it. On the same Wi-Fi or over Bluetooth it goes straight from one device to the other.</div></details>
+    <details><summary>What if a relay is shut down?</summary><div>Nothing changes for you. Every message goes to all the relays at once, so the others still carry it, and your app keeps sending it again for a day until it is delivered.</div></details>
+    <details><summary>Is it free?</summary><div>Yes. Both apps are free and open source under GPL-3.0, with no ads and nothing to pay for.</div></details>
+    <details><summary>How do I add someone?</summary><div>Tap <b>+</b>, then <b>Add someone</b>. Face to face, scan their QR code with Muninn; from afar, paste the code or link they sent you. Then check your safety code together in person.</div></details>
+    <details><summary>What does Cloudflare see?</summary><div>Only for internet calls without a direct path: the call relay sees your public address and carries encrypted media it can't decode. The relay Worker that hands out its logins sees your address, a hash of a random id and the time. Turn off Internet calls and calls use only Wi-Fi and Bluetooth.</div></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <img src="valknut.png" alt="">
+    <p class="tag">Two ravens. Your contacts. Your conversations. Your way.</p>
+    <p><a href="https://github.com/Ravenor907/Huginn-Muninn">Source on GitHub</a> · <a href="https://github.com/Ravenor907/Huginn-Muninn/blob/main/.github/SECURITY.md">Report a security problem</a> · GPL-3.0 · by Ravenor907</p>
+  </div>
+</footer>
+
+</body>
+</html>

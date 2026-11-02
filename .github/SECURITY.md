@@ -16,7 +16,7 @@ reporting is the one way in.
 - Huginn (Windows and Linux) and Muninn (Android and Google TV), the latest release.
 - Their encryption and the wire protocol ([code/shared/docs/protocol.md](../code/shared/docs/protocol.md)): reading, changing
   or faking messages, calls, files or contacts you shouldn't be able to.
-- Anything that leaks data the [Privacy](README.md#privacy) section says stays private.
+- Anything that leaks data the [Privacy](README.md#privacy-at-a-glance) section says stays private.
 - The updaters: getting either app to install something that isn't a signed release
   ([code/shared/docs/releases.md](../code/shared/docs/releases.md)).
 - The relay Worker in `code/shared/relay-worker/` and the add page in `code/shared/site/add/`.
