@@ -650,7 +650,7 @@ QSGNode *Fall::updatePaintNode(QSGNode *old, UpdatePaintNodeData *)
     if (!n->texture || n->gen != m_atlasGen || n->dpr != dpr) {
         Atlas a = makeAtlas(dpr);
         QSGTexture *t = a.image.isNull() ? nullptr
-                                         : win->createTextureFromImage(a.image, QQuickWindow::TextureHasAlphaChannel | QQuickWindow::TextureHasMipmaps);
+                                         : win->createTextureFromImage(a.image, QQuickWindow::CreateTextureOptions(QQuickWindow::TextureHasAlphaChannel) | QQuickWindow::TextureHasMipmaps);
         if (!t) {
             delete n;
             return nullptr;
