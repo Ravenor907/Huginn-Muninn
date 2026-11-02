@@ -1887,13 +1887,8 @@ private fun CallButton(label: String, choices: List<CallChoice>, unavailable: St
     Box {
         val tint = if (choices.isEmpty()) Palette.textSoft else Palette.text
         val tap: () -> Unit = { if (choices.isEmpty()) { if (unavailable.isNotEmpty()) Ui.say(unavailable) } else open = true }
-        // Video calls offered: a phone and a camera side by side, so video is easy to find.
-        if (choices.any { it.icon == "video" }) Row(Modifier.heightIn(min = 48.dp).clip(CircleShape).clickable(role = Role.Button) { tap() }
-            .semantics { contentDescription = "$label: voice or video" }.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            MIcon("call", tint, 21.dp)
-            Spacer(Modifier.width(8.dp))
-            MIcon("video", tint, 21.dp)
-        } else IconAction("call", label, tint) { tap() }
+        // A plain phone either way; Video call is one of the choices it opens.
+        IconAction("call", if (choices.any { it.icon == "video" }) "$label: voice or video" else label, tint) { tap() }
         DropdownMenu(expanded = open && choices.isNotEmpty(), onDismissRequest = { open = false }) {
             choices.forEach { c ->
                 DropdownMenuItem(text = { Text(c.text, style = Type.normal.copy(color = Palette.text), maxLines = 1) },

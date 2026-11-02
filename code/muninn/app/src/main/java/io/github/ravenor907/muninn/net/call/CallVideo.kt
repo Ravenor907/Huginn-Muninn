@@ -22,7 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 
 /**
@@ -38,6 +38,13 @@ object Vp8 {
             val list = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
             list.any { it.isEncoder && it.supportedTypes.any { t -> t.equals(MIME, true) } } && list.any { !it.isEncoder && it.supportedTypes.any { t -> t.equals(MIME, true) } }
         } catch (e: Throwable) { false }
+    }
+
+    /** A hardware codec (Android 10 says so; before that, Android's own software codecs go by their names). */
+    fun isHardware(i: MediaCodecInfo): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= 29) return i.isHardwareAccelerated && !i.isSoftwareOnly
+        val n = i.name.lowercase()
+        return !(n.startsWith("omx.google.") || n.startsWith("c2.android.") || n.startsWith("omx.ffmpeg.") || n.contains(".sw."))
     }
 
     /** The size a VP8 keyframe says (RFC 6386 9.1), or null when [data] isn't a keyframe. */
@@ -157,21 +164,30 @@ class Vp8Encoder(val width: Int, val height: Int, fps: Int, kbps: Int) : AutoClo
     override fun close() { try { codec.stop() } catch (_: Exception) {}; try { codec.release() } catch (_: Exception) {} }
 }
 
-/** VP8 decoder onto a Surface (a TextureView's). Started at the first keyframe; a keyframe of another size starts it again. */
+/**
+ * VP8 decoder onto a Surface (a TextureView's): the decoder renders straight to it, nothing is copied by hand.
+ * Started at the first keyframe; a keyframe of another size starts it again. The device's hardware VP8 decoder
+ * is tried first (a TV box's CPU is too weak for the software one at 720p), then the software one.
+ */
 class Vp8Decoder(private val surface: Surface) : AutoCloseable {
     private var codec: MediaCodec? = null
     private var size: Size? = null
     private val info = MediaCodec.BufferInfo()
     private var pts = 0L
+    @Volatile private var lastInputAt = 0L
+
+    /** The decoder in use is the device's hardware one. */
+    var hardware = false; private set
+
+    /** Fed a frame within the last 100 ms: its picture may still come out (the caller drains sooner). */
+    val busy: Boolean get() = codec != null && System.currentTimeMillis() - lastInputAt < 100
 
     /** False when it couldn't take [data] (no keyframe yet): the caller asks for one. */
     fun decode(data: ByteArray, key: Boolean): Boolean {
         val ks = if (key) Vp8.keyframeSize(data) else null
         if (ks != null && ks != size) {
             close()
-            val c = try { MediaCodec.createDecoderByType(Vp8.MIME) } catch (e: Exception) { return false }
-            try { c.configure(MediaFormat.createVideoFormat(Vp8.MIME, ks.width, ks.height), surface, null, 0); c.start() }
-            catch (e: Exception) { try { c.release() } catch (_: Exception) {}; return false }
+            val c = open(ks) ?: return false
             codec = c; size = ks
         }
         val c = codec ?: return false
@@ -186,21 +202,69 @@ class Vp8Decoder(private val surface: Surface) : AutoCloseable {
             }
             if (i < 0) return false
             val b = c.getInputBuffer(i)!!
-            b.clear(); b.put(data)
+            b.clear()
+            if (data.size > b.capacity()) { c.queueInputBuffer(i, 0, 0, pts, 0); return false }
+            b.put(data)
             c.queueInputBuffer(i, 0, data.size, pts, 0)
             pts += 33_000
+            lastInputAt = System.currentTimeMillis()
             drain(c)
             true
         } catch (e: Exception) { close(); false }
     }
 
+    /** Shows what the decoder has finished since the last call (the worker calls this while it waits for frames). */
+    fun drain() { val c = codec ?: return; try { drain(c) } catch (e: Exception) { close() } }
+
+    /** Only the newest finished picture goes on screen; older ones still waiting are late and are let go unshown. */
     private fun drain(c: MediaCodec) {
+        var last = -1
         while (true) {
             val o = c.dequeueOutputBuffer(info, 0)
-            if (o < 0) break
-            c.releaseOutputBuffer(o, true)
+            if (o == MediaCodec.INFO_TRY_AGAIN_LATER) break
+            if (o < 0) continue   // format or buffers changed: nothing to show, ask again
+            if (last >= 0) c.releaseOutputBuffer(last, false)
+            last = o
         }
+        if (last >= 0) c.releaseOutputBuffer(last, true)
     }
+
+    /** A started decoder for [s]: hardware ones first, each tried with low-latency hints and then without. */
+    private fun open(s: Size): MediaCodec? {
+        for ((name, hw) in candidates(s)) {
+            for (hints in listOf(true, false)) {
+                val c = try { MediaCodec.createByCodecName(name) } catch (e: Exception) { null } ?: break
+                try {
+                    c.configure(format(s, hints), surface, null, 0); c.start()
+                    hardware = hw
+                    return c
+                } catch (e: Exception) { try { c.release() } catch (_: Exception) {} }
+            }
+        }
+        // Nothing in the list would start: whatever Android picks, as before.
+        val c = try { MediaCodec.createDecoderByType(Vp8.MIME) } catch (e: Exception) { return null }
+        return try { c.configure(MediaFormat.createVideoFormat(Vp8.MIME, s.width, s.height), surface, null, 0); c.start(); hardware = false; c }
+        catch (e: Exception) { try { c.release() } catch (_: Exception) {}; null }
+    }
+
+    private fun format(s: Size, hints: Boolean) = MediaFormat.createVideoFormat(Vp8.MIME, s.width, s.height).apply {
+        if (!hints) return@apply
+        // Room for a big keyframe, real-time priority, and no frames held back where the decoder can do that.
+        setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxOf(s.width * s.height, 256 * 1024))
+        setInteger(MediaFormat.KEY_PRIORITY, 0)
+        if (android.os.Build.VERSION.SDK_INT >= 30) setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+    }
+
+    /** The VP8 decoders that take [s] (name, hardware), hardware first; secure-only ones left out. */
+    private fun candidates(s: Size): List<Pair<String, Boolean>> = try {
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { !it.isEncoder && it.supportedTypes.any { t -> t.equals(Vp8.MIME, true) } && !it.name.endsWith(".secure") }
+            .filter { i ->
+                try { i.getCapabilitiesForType(Vp8.MIME).videoCapabilities?.isSizeSupported(s.width, s.height) != false } catch (e: Exception) { true }
+            }
+            .map { i -> i.name to Vp8.isHardware(i) }
+            .sortedBy { if (it.second) 0 else 1 }
+    } catch (e: Exception) { emptyList() }
 
     val videoSize: Size? get() = size
 
@@ -215,7 +279,8 @@ class Vp8Decoder(private val surface: Surface) : AutoCloseable {
  * that come while there is no surface are dropped; a new surface asks for a keyframe ([askKey]).
  */
 class RemoteVideo(private val thread: String, private val askKey: () -> Unit, private val onSize: (Int, Int, Int) -> Unit) {
-    private val queue = LinkedBlockingQueue<Triple<ByteArray, Boolean, Int>>(60)
+    private class Item(val data: ByteArray, val key: Boolean, val rotation: Int)
+    private val queue = LinkedBlockingDeque<Item>()
     private var worker: Thread? = null
     @Volatile private var surface: Surface? = null
     @Volatile private var changed = false
@@ -243,34 +308,66 @@ class RemoteVideo(private val thread: String, private val askKey: () -> Unit, pr
 
     fun frame(data: ByteArray, key: Boolean, rotation: Int) {
         if (worker == null) start()
-        if (!queue.offer(Triple(data, key, rotation))) { queue.clear(); askKey() }
+        if (queue.size >= MAX_QUEUE) { queue.clear(); askKey() }
+        queue.offerLast(Item(data, key, rotation))
     }
 
+    /**
+     * Frames are decoded in order on this thread (never the screen's). When the decoder falls [BEHIND] frames behind,
+     * the late ones are dropped rather than shown late: it jumps to the newest keyframe waiting, or, with none,
+     * drops them all and waits for the keyframe it asks for (VP8 frames build on the ones before, so a gap needs one).
+     * Those keyframe requests are also what tells the sender to send something lighter (CallMedia).
+     */
     @Synchronized fun start() {
         if (worker != null) return
         worker = Thread({
+            try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) } catch (_: Exception) {}
             var dec: Vp8Decoder? = null
             var decSurface: Surface? = null
+            var waitKey = false
             try {
                 while (!Thread.currentThread().isInterrupted) {
-                    // Short polls, so a surface that goes away is let go of quickly.
-                    val next = queue.poll(20, TimeUnit.MILLISECONDS)
+                    // Short polls, so a surface that goes away is let go of quickly; shorter while a picture is on its way.
+                    var next = queue.pollFirst(if (dec?.busy == true) 4L else 20L, TimeUnit.MILLISECONDS)
                     synchronized(lock) {
                         val now = surface
                         if (changed || now !== decSurface) { changed = false; dec?.close(); dec = null; decSurface = now; inUse = null; lock.notifyAll() }
                     }
-                    val (data, key, rot) = next ?: continue
+                    if (next == null) {
+                        // Nothing new: show what the decoder finished meanwhile, not only when the next frame comes.
+                        val d = dec
+                        if (d != null && synchronized(lock) { surface === decSurface }) d.drain()
+                        continue
+                    }
+                    if (queue.size >= BEHIND) {
+                        val all = ArrayList<Item>(queue.size + 1).apply { add(next!!) }
+                        queue.drainTo(all)
+                        val k = all.indexOfLast { it.key }
+                        if (k >= 0) {
+                            next = all[k]
+                            for (i in all.size - 1 downTo k + 1) queue.offerFirst(all[i])
+                        } else { waitKey = true; askKey(); continue }
+                    }
+                    val item = next!!
+                    if (waitKey && !item.key) { askKey(); continue }
                     val sf = decSurface ?: continue
                     val ok = synchronized(lock) { if (surface === sf) { inUse = sf; true } else { inUse = null; lock.notifyAll(); false } }
                     if (!ok) continue
                     val d = dec ?: Vp8Decoder(sf).also { dec = it }
-                    if (!d.decode(data, key)) { askKey(); continue }
+                    if (!d.decode(item.data, item.key)) { waitKey = true; askKey(); continue }
+                    waitKey = false
                     val sz = d.videoSize ?: continue
-                    if (sz.width != w || sz.height != h || rot != r) { w = sz.width; h = sz.height; r = rot; onSize(w, h, r) }
+                    if (sz.width != w || sz.height != h || item.rotation != r) { w = sz.width; h = sz.height; r = item.rotation; onSize(w, h, r) }
                 }
             } catch (_: InterruptedException) {
             } finally { dec?.close(); synchronized(lock) { inUse = null; lock.notifyAll() } }
         }, thread).apply { isDaemon = true; start() }
+    }
+
+    private companion object {
+        /** About a quarter of a second at 30 frames a second: later than this, frames are dropped, not queued. */
+        const val BEHIND = 8
+        const val MAX_QUEUE = 60
     }
 
     @Synchronized fun stop() {
@@ -444,8 +541,10 @@ object CallVideo {
         val m = s.mediaNow ?: return
         if (!_state.value.cameraOn) return
         val now = System.currentTimeMillis()
-        if (now - lastFrameAt < 1000L / prof.fps - 3) return   // the profile's frame rate at most
-        lastFrameAt = now
+        // The profile's frame rate at most, kept on a schedule: a 30 fps camera gives 20 or 24 a second, not every other frame (15).
+        val every = 1000L / prof.fps
+        if (now + 3 < lastFrameAt) return
+        lastFrameAt = maxOf(lastFrameAt + every, now + every / 2)   // when the next frame is due
         val w = img.width and 1.inv(); val h = img.height and 1.inv()
         var e = encoder
         if (e == null || e.width != w || e.height != h) {

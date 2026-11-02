@@ -288,7 +288,11 @@ class CallMedia(
             CallCrypto.REPORT -> if (c2) VideoWire.decodeReport(o.payload)?.let { onReport(it) }
             // A keyframe that just went out answers it already (requests cross on the way).
             CallCrypto.KEY_REQUEST -> if (c2 && o.payload.isNotEmpty() && (o.payload[0].toInt() and 0xFF) <= 1 &&
-                System.currentTimeMillis() - keySentAt[o.payload[0].toInt()] >= KEY_GAP_MS) events.onKeyframeWanted(o.payload[0].toInt())
+                System.currentTimeMillis() - keySentAt[o.payload[0].toInt()] >= KEY_GAP_MS) {
+                val s = o.payload[0].toInt()
+                if (s == VideoWire.CAMERA && sending[s]) onCameraKeyAsked()
+                events.onKeyframeWanted(s)
+            }
             CallCrypto.NACK -> if (c2) VideoWire.decodeNack(o.payload)?.let { onNack(it) }
         }
         forgetOldKeys()
@@ -453,8 +457,27 @@ class CallMedia(
     fun profile(stream: Int): VideoWire.Profile {
         val free = wasFree
         if ((stream and 1) == VideoWire.SCREEN) return VideoWire.screenProfile(free)
-        val p = VideoWire.cameraProfile(free)
-        return if (lowPower) VideoWire.lowPower(p) else p
+        var p = VideoWire.cameraProfile(free)
+        if (lowPower) p = VideoWire.lowPower(p)
+        if (peerTv || strain.strained) p = VideoWire.light(p)
+        return p
+    }
+
+    /**
+     * The peer is a Kids' TV this phone manages: a TV box's weak decoder gets the light camera from the start
+     * (VideoWire.light). Known only here, so nothing new goes on the wire.
+     */
+    private val peerTv: Boolean by lazy { try { io.github.ravenor907.muninn.tv.TvParent.isManaged(peerKey) } catch (e: Throwable) { false } }
+
+    /** Keyframe requests for the camera: a receiver that keeps asking can't keep up, and gets the light camera too. */
+    private val strain = VideoWire.Strain()
+
+    private fun onCameraKeyAsked() {
+        val became = synchronized(strain) { strain.keyAsked(System.currentTimeMillis()) }
+        if (became && !peerTv) post {
+            rate[0].setCap(profile(VideoWire.CAMERA).capKbps)
+            events.onProfile()
+        }
     }
 
     @Volatile private var lowPower = false
@@ -488,6 +511,7 @@ class CallMedia(
         val s = stream and 1
         if (sending[s] == on) return
         sending[s] = on
+        if (on && s == VideoWire.CAMERA) synchronized(strain) { strain.start(System.currentTimeMillis()) }
         if (!on) synchronized(sent[s]) { sent[s].clear() }
         if (c2 && gotFirst) post { sendReport() }
     }

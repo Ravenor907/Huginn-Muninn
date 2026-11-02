@@ -643,14 +643,22 @@ Rectangle {
             accent: page.tinted && page.picked ? page.tint : "transparent"
             // Name, one Call button (Voice call and Video call in its popup), Find and the person's one menu.
             // Mute is in the menu, so the name keeps its room.
-            HButton {
+            // A plain phone, like Muninn's; Video call is one of the choices it opens.
+            Rectangle {
                 id: callBtn
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !page.locked && page.openKey !== ""
-                text: "Call"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: page.tinted ? "accent" : "plain"; accent: page.tint
-                focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "call"
-                onClicked: page.callMenu()
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: callHover.hovered ? Theme.raised : "transparent"
+                border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "call" ? Theme.focusWidth : 0
+                border.color: Theme.text
+                Accessible.role: Accessible.Button
+                Accessible.name: "Call"
+                Accessible.onPressAction: page.callMenu()
+                Icon { anchors.centerIn: parent; name: "call"; size: Theme.px(18); color: page.tinted ? page.tint : callHover.hovered ? Theme.text : Theme.textMuted }
+                HoverHandler { id: callHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.callMenu() }
             }
             // Find in this chat (Ctrl+F too).
             Rectangle {

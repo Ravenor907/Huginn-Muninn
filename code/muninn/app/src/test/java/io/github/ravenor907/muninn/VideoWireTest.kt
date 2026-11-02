@@ -116,6 +116,28 @@ class VideoWireTest {
     }
 
     @Test
+    fun aStrugglingReceiverGetsTheLightCamera() {
+        for (free in listOf(false, true)) {
+            val p = VideoWire.light(VideoWire.cameraProfile(free))
+            assertEquals(640, p.width); assertEquals(360, p.height)
+            assertTrue(p.fps <= 20)
+            assertTrue(p.capKbps <= 800 && p.capKbps <= VideoWire.cameraProfile(free).capKbps)
+        }
+        val s = VideoWire.Strain()
+        s.start(0)
+        // The first seconds don't count; then 4 requests within 10 s do, once.
+        repeat(6) { assertFalse(s.keyAsked(it * 500L)) }
+        assertFalse(s.keyAsked(6_000)); assertFalse(s.keyAsked(9_000)); assertFalse(s.keyAsked(12_000))
+        assertTrue(s.keyAsked(14_000))
+        assertTrue(s.strained)
+        assertFalse(s.keyAsked(14_500))
+        // Spread out, they don't.
+        val t = VideoWire.Strain(); t.start(0)
+        for (at in listOf(6_000L, 11_000L, 16_000L, 21_000L, 26_000L)) assertFalse(t.keyAsked(at))
+        assertFalse(t.strained)
+    }
+
+    @Test
     fun aLowBatteryMakesTheCameraLighter() {
         for (free in listOf(false, true)) {
             val p = VideoWire.lowPower(VideoWire.cameraProfile(free))

@@ -504,13 +504,20 @@ Rectangle {
             subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only"
                     : (!page.isTour && (Chat.chats, Chat.groups, Chat.isMuted("g:" + page.gid)) ? "Muted · " : "") + (page.info.name || "")
             // One Call button, like a person's: Call everyone and Drop-in call (whichever apply) in its popup.
-            HButton {
+            // A plain phone, like a person's chat.
+            Rectangle {
                 id: groupCallBtn
                 anchors.verticalCenter: parent.verticalCenter
                 visible: page.callChoices.length > 0
-                text: "Call"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
-                onClicked: page.callMenu()
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: groupCallHover.hovered ? Theme.raised : "transparent"
+                Accessible.role: Accessible.Button
+                Accessible.name: "Call"
+                Accessible.onPressAction: page.callMenu()
+                Icon { anchors.centerIn: parent; name: "call"; size: Theme.px(18); color: groupCallHover.hovered ? Theme.text : Theme.textMuted }
+                HoverHandler { id: groupCallHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.callMenu() }
             }
             // Find in this channel (Ctrl+F too).
             Rectangle {

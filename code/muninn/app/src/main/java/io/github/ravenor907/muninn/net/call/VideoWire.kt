@@ -255,4 +255,34 @@ object VideoWire {
     fun screenProfile(freePath: Boolean) = if (freePath) Profile(1920, 1080, 10, 2500) else Profile(1280, 720, 8, 800)
     /** The camera on a low battery or Android's Battery Saver: 360p at 15 frames a second at most, so encoding and the radio cost less. */
     fun lowPower(p: Profile) = Profile(minOf(p.width, 480), minOf(p.height, 360), minOf(p.fps, 15), minOf(p.capKbps, 400))
+    /**
+     * The camera toward a receiver that can't keep up (a Kids' TV, or one whose decoder keeps asking for keyframes):
+     * 360p at 20 frames a second at most, and a bitrate that still fits the path (the relay's 700 stays 700).
+     */
+    fun light(p: Profile) = Profile(minOf(p.width, 640), minOf(p.height, 360), minOf(p.fps, 20), minOf(p.capKbps, 800))
+
+    /**
+     * The receiver is struggling: it asked for a keyframe [NEEDED] times within [WINDOW_MS] (a decoder that falls behind
+     * drops frames and asks for one, as does loss nothing could repair). The first [GRACE_MS] after the camera starts
+     * don't count (the first picture and a screen coming up ask too). Once strained it stays so for the call.
+     */
+    class Strain {
+        private val asks = ArrayDeque<Long>()
+        private var since = 0L
+        var strained = false; private set
+
+        fun start(now: Long) { since = now; asks.clear() }
+
+        /** A keyframe request came; true the moment it makes the receiver strained. */
+        fun keyAsked(now: Long): Boolean {
+            if (strained || now - since < GRACE_MS) return false
+            asks.addLast(now)
+            while (asks.isNotEmpty() && now - asks.first() > WINDOW_MS) asks.removeFirst()
+            if (asks.size < NEEDED) return false
+            strained = true
+            return true
+        }
+
+        companion object { const val NEEDED = 4; const val WINDOW_MS = 10_000L; const val GRACE_MS = 5_000L }
+    }
 }
