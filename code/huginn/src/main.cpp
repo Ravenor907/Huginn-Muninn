@@ -241,7 +241,7 @@ int main(int argc, char *argv[])
     args.addOption(wifiTest);
     QCommandLineOption stabilityTest(QStringLiteral("stability-selftest"), QStringLiteral("On a throwaway profile: a saved file that can't be read is never written over, a restarted copy waits for the closing one, a stuck one is taken over (for CI), then quit."));
     args.addOption(stabilityTest);
-    QCommandLineOption perfTest(QStringLiteral("perf-selftest"), QStringLiteral("On a throwaway profile: events through the relay thread and back, a shutdown that never hangs, saves in order on the saving thread, a flush that waits for them (for CI), then quit."));
+    QCommandLineOption perfTest(QStringLiteral("perf-selftest"), QStringLiteral("On a throwaway profile: events through the relay thread and back, a shutdown that never hangs, saves in order on the saving thread, a flush that waits for them, list rows changed one at a time, icons drawn once, Seasonal leaves in one batch (for CI), then quit."));
     args.addOption(perfTest);
     // Started by a copy that is closing (an update, a restore): wait for it to end before starting.
     QCommandLineOption restarted(QStringLiteral("restarted"), QStringLiteral("Wait for the copy that started this one to close."));
@@ -321,7 +321,9 @@ int main(int argc, char *argv[])
     if (args.isSet(perfTest)) {
         WifiSelfTest::isolate();
         const bool a = Nostr::threadSelfTest(), b = Vault::saveQueueSelfTest();
-        return selfTested(a && b);
+        // Phase 3: list rows changed one at a time, icons drawn once and shared, Seasonal in one batch.
+        const bool c = LiveList::selfTest(), d = IconProvider::selfTest(), e = Fall::selfTest();
+        return selfTested(a && b && c && d && e);
     }
     if (args.isSet(privacyTest)) {
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();

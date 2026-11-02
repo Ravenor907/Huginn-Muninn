@@ -930,14 +930,24 @@ Rectangle {
                             color: modelData.failed ? Theme.danger : Theme.textMuted
                             font.family: Theme.body; font.pixelSize: Theme.fs(11)
                         }
-                        // Cap m2: an album, a video message, a poll or a link preview.
-                        MoreParts { width: parent.width; host: page; m: modelData; where: page.openKey }
-                        Reactions {
+                        // Cap m2: an album, a video message, a poll or a link preview. Made only when the message has one.
+                        Loader {
+                            active: !modelData.unsent && !modelData.system && (!!modelData.album || modelData.video > 0 || !!modelData.pollView || !!modelData.lp)
+                            visible: active
                             width: parent.width
-                            list: modelData.rxList || []
-                            add: page.openKey !== ""
-                            onToggled: (e, mine) => page.reactTo(modelData.id, mine ? "" : e)
-                            onMore: page.openReact(modelData.id, modelData.myReaction || "")
+                            sourceComponent: MoreParts { host: page; m: modelData; where: page.openKey }
+                        }
+                        // Reactions, made only when there are some.
+                        Loader {
+                            active: (modelData.rxList || []).length > 0
+                            visible: active
+                            width: parent.width
+                            sourceComponent: Reactions {
+                                list: modelData.rxList || []
+                                add: page.openKey !== ""
+                                onToggled: (e, mine) => page.reactTo(modelData.id, mine ? "" : e)
+                                onMore: page.openReact(modelData.id, modelData.myReaction || "")
+                            }
                         }
                         // A thread: how many replies, opening them beside the chat.
                         Text {
@@ -952,23 +962,27 @@ Rectangle {
                         }
                     }
                     // React, reply, edit and more over the corner while the pointer is on it or the
-                    // controller has it picked.
-                    HoverBar {
+                    // controller has it picked (made only then).
+                    Loader {
                         id: tools
-                        visible: page.openKey !== "" && (msgHover.hovered || msg.picked) && !modelData.system && !modelData.unsent
+                        active: page.openKey !== "" && (msgHover.hovered || msg.picked) && !modelData.system && !modelData.unsent
+                        visible: active
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
                         y: msg.lineH - Theme.px(6)
                         z: 2
-                        canEdit: !!modelData.mine && !modelData.photo && !modelData.failed
-                        canThread: true
-                        canPin: true
-                        pinnedNow: page.pins.indexOf(modelData.id) >= 0
-                        onReact: page.openReact(modelData.id, modelData.myReaction || "")
-                        onReply: page.startReply(modelData.id)
-                        onThread: page.openThread(modelData.id)
-                        onPin: page.togglePin(modelData.id)
-                        onEdit: page.startEdit(modelData)
-                        onMore: { page.zone = "messages"; page.sel = index; Ui.menuAt(tools, tools.width, tools.height, () => page.options()) }
+                        sourceComponent: HoverBar {
+                            id: bar
+                            canEdit: !!modelData.mine && !modelData.photo && !modelData.failed
+                            canThread: true
+                            canPin: true
+                            pinnedNow: page.pins.indexOf(modelData.id) >= 0
+                            onReact: page.openReact(modelData.id, modelData.myReaction || "")
+                            onReply: page.startReply(modelData.id)
+                            onThread: page.openThread(modelData.id)
+                            onPin: page.togglePin(modelData.id)
+                            onEdit: page.startEdit(modelData)
+                            onMore: { page.zone = "messages"; page.sel = index; Ui.menuAt(bar, bar.width, bar.height, () => page.options()) }
+                        }
                     }
                     HoverHandler { id: msgHover }
                     // A click (a mouse or the right stick's pointer) picks it and opens a photo; a

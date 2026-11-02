@@ -29,6 +29,9 @@ public:
 
     Q_INVOKABLE QVariant get(int row) const { return row >= 0 && row < m_items.size() ? m_items.at(row) : QVariant(); }
 
+    // --perf-selftest: a new message adds one row, a changed one redraws one row, and nothing starts over.
+    static bool selfTest();
+
 Q_SIGNALS:
     void itemsChanged();
     void keysChanged();

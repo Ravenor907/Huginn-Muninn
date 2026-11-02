@@ -5,7 +5,9 @@ import Huginn
 // One message: name, time (and "(edited)"), for mine a check mark with how many have read it in a
 // circle; the quoted message of a reply, the text or picture or voice, reactions, "N replies" (a
 // thread), and the tools over its corner (pointed at, or picked with the controller). An @mention
-// of me is lit up.
+// of me is lit up. Only what a message has is made: the quote, picture, GIF, voice, file card, album or poll,
+// reactions, replies and the tools over its corner are each loaded when present (or pointed at) and gone otherwise,
+// so a plain message is a few texts. Nothing in a row runs a timer or an animation while it sits there.
 Rectangle {
     id: msg
     // The page it sits on (GroupPage or ChatPage): its clock, actions, pins and photo viewer.
@@ -39,6 +41,9 @@ Rectangle {
     // Settings › Look: Compact drops the pictures and the room between messages; Spacious adds room.
     readonly property int pad: grouped ? Theme.px(1) : Theme.px(Theme.compact ? 2 : Theme.spacious ? 8 : 5)
     height: m.system ? note.height + Theme.px(12) : folded ? lineH + foldBox.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
+    // What this message has, worked out once for the parts below.
+    readonly property bool live: !!m && !m.system && !m.unsent
+    readonly property bool hasPhoto: !!m && !!m.photo && !m.voice && !m.file && !m.unsent && !m.video && !m.album
     radius: 0
     // Find in this chat: 1 a match, 2 the match shown (the page's find bar).
     property int found: 0
@@ -48,24 +53,33 @@ Rectangle {
     Rectangle { visible: (!!msg.m.mention || msg.found > 0) && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH
                 color: msg.found === 1 && !msg.m.mention ? Theme.lineMuted : msg.accent }
 
-    Item {
-        visible: msg.lineH > 0
-        width: parent.width; height: msg.lineH
-        Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
-        Rectangle {
-            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-            width: newText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(20), newText.implicitHeight + Theme.px(4)); radius: Theme.radius; color: Theme.danger
-            Text { textFormat: Text.PlainText; id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
+    Loader {
+        active: msg.lineH > 0
+        visible: active
+        width: msg.width; height: msg.lineH
+        sourceComponent: Item {
+            Rectangle { anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 1; color: Theme.danger }
+            Rectangle {
+                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                width: newText.implicitWidth + Theme.px(14); height: Math.max(Theme.px(20), newText.implicitHeight + Theme.px(4)); radius: Theme.radius; color: Theme.danger
+                Text { textFormat: Text.PlainText; id: newText; anchors.centerIn: parent; text: "NEW MESSAGES"; color: Theme.ground; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold }
+            }
         }
     }
     // A note from Huginn itself (someone joined, the group was renamed).
-    Rectangle {
+    Loader {
         id: note
-        visible: !!msg.m.system
+        active: !!msg.m.system
+        visible: active
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.verticalCenter: parent.verticalCenter
+        sourceComponent: noteBox
+    }
+    Component {
+        id: noteBox
+    Rectangle {
         // As wide as the words up to 90% of the row; measured apart from noteText, whose width follows this one.
-        width: Math.min(parent.width * 0.9, Math.ceil(noteMetrics.advanceWidth) + Theme.px(30))
+        width: Math.min(msg.width * 0.9, Math.ceil(noteMetrics.advanceWidth) + Theme.px(30))
         height: noteText.implicitHeight + Theme.px(14)
         TextMetrics { id: noteMetrics; font: noteText.font; text: noteText.text }
         radius: Theme.radius
@@ -76,7 +90,7 @@ Rectangle {
             textFormat: Text.PlainText
             id: noteText
             anchors.centerIn: parent
-            width: Math.max(0, note.width - Theme.px(28))
+            width: Math.max(0, parent.width - Theme.px(28))
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.Wrap
             text: msg.m.system ? (msg.m.text || "") + (msg.m.call ? "  ·  Call back" : "") : ""
@@ -86,10 +100,13 @@ Rectangle {
         HoverHandler { id: noteHover; enabled: !!msg.m.call; cursorShape: Qt.PointingHandCursor }
         TapHandler { enabled: !!msg.m.call; onTapped: msg.callBack() }
     }
-    Rectangle {
+    }
+    Loader {
         id: foldBox
-        visible: msg.folded && !msg.m.system
+        active: msg.folded && !msg.m.system
+        visible: active
         x: Theme.px(Theme.compact ? 16 : 72); y: msg.lineH + Theme.px(6)
+        sourceComponent: Rectangle {
         width: foldText.implicitWidth + Theme.px(24)
         height: foldText.implicitHeight + Theme.px(10)
         radius: Theme.radius
@@ -107,6 +124,7 @@ Rectangle {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
         }
         HoverHandler { id: foldHover; cursorShape: Qt.PointingHandCursor }
+    }
     }
     Avatar {
         id: face
@@ -156,9 +174,11 @@ Rectangle {
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
             // Mine and read: a check mark and how many have read it, in a circle.
-            Row {
-                visible: !!msg.m.mine && !msg.m.unsent && (msg.m.readCount || 0) > 0
+            Loader {
+                active: !!msg.m.mine && !msg.m.unsent && (msg.m.readCount || 0) > 0
+                visible: active
                 anchors.verticalCenter: whoText.verticalCenter
+                sourceComponent: Row {
                 spacing: Theme.px(3)
                 Accessible.role: Accessible.StaticText
                 Accessible.name: "Read by " + (msg.m.readCount || 0)
@@ -169,29 +189,40 @@ Rectangle {
                     color: "transparent"; border.color: msg.accent; border.width: 1
                     Text { textFormat: Text.PlainText; id: readN; anchors.centerIn: parent; text: msg.m.readCount || 0; color: msg.accent; font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold }
                 }
+                }
             }
         }
-        QuoteLine {
-            visible: !!msg.m.reName && !msg.m.unsent
-            who: msg.m.reName || ""
-            what: msg.m.reText || ""
-            onJump: host.jumpTo(msg.m.re)
+        Loader {
+            active: !!msg.m.reName && !msg.m.unsent
+            visible: active
+            sourceComponent: QuoteLine {
+                // Up to the column's width (its parent here is this Loader, which takes its size from it).
+                limit: col.width
+                who: msg.m.reName || ""
+                what: msg.m.reText || ""
+                onJump: msg.host.jumpTo(msg.m.re)
+            }
         }
-        Image {
-            visible: !!msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album && !msg.m.gif
-            width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
-            fillMode: Image.PreserveAspectCrop
-            asynchronous: true
-            // Read, shrunk to the bubble (sharp up to twice its size) and kept in memory on the loading thread (ThumbProvider).
-            sourceSize.width: Math.ceil(width * 2)
-            sourceSize.height: Math.ceil(height * 2)
-            source: visible && !host.isTour ? "image://thumb/" + msg.m.photo : ""
+        Loader {
+            active: msg.hasPhoto && !msg.m.gif
+            visible: active
+            sourceComponent: Image {
+                width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
+                fillMode: Image.PreserveAspectCrop
+                asynchronous: true
+                // Read, shrunk to the bubble (sharp up to twice its size) and kept in memory on the loading thread (ThumbProvider).
+                sourceSize.width: Math.ceil(width * 2)
+                sourceSize.height: Math.ceil(height * 2)
+                source: msg.host && !msg.host.isTour ? "image://thumb/" + msg.m.photo : ""
+            }
         }
         // A GIF (cap a1): it moves while Huginn is in front; with Less motion or Battery saver it holds its first frame until played.
-        Item {
+        Loader {
+            active: msg.hasPhoto && !!msg.m.gif
+            visible: active
+            sourceComponent: Item {
             id: gifBox
             property bool asked: false
-            visible: !!msg.m.photo && !!msg.m.gif && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album
             width: Math.min(Theme.px(300), col.width); height: Math.round(width * 170 / 300)
             clip: true
             AnimatedImage {
@@ -199,8 +230,8 @@ Rectangle {
                 fillMode: Image.PreserveAspectCrop
                 cache: false
                 // Chat.gifUrl checks the GIF limits again before anything decodes it.
-                source: gifBox.visible && !msg.host.isTour ? Chat.gifUrl(msg.m.photo) : ""
-                playing: gifBox.visible && (Theme.motion || gifBox.asked) && Qt.application.state === Qt.ApplicationActive
+                source: msg.host && !msg.host.isTour ? Chat.gifUrl(msg.m.photo) : ""
+                playing: (Theme.motion || gifBox.asked) && Qt.application.state === Qt.ApplicationActive
             }
             Rectangle {
                 visible: !Theme.motion
@@ -218,9 +249,12 @@ Rectangle {
                 color: Qt.rgba(0, 0, 0, 0.6)
                 Text { id: gifTag; textFormat: Text.PlainText; anchors.centerIn: parent; text: "GIF"; color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(11) }
             }
+            }
         }
-        Row {
-            visible: !!msg.m.voice && !msg.m.unsent
+        Loader {
+            active: !!msg.m.voice && !msg.m.unsent
+            visible: active
+            sourceComponent: Row {
             spacing: Theme.px(10)
             Icon { name: Voice.playing === msg.m.id ? "stop" : "play"; color: msg.accent }
             Column {
@@ -231,15 +265,18 @@ Rectangle {
                 }
                 Text { textFormat: Text.PlainText; text: "Voice message · " + Voice.length(msg.m.voice || 0); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
             }
+            }
         }
         // A file that went as a message (the internet route): type icon, name, size and how it's going ("Sending 42%"
         // with a bar, "Sent", "Sent · Saved in their Downloads"). Theirs was saved to Downloads when it came: Open and
         // Folder (Save if it couldn't be then). Nothing received opens by itself.
-        Rectangle {
+        Loader {
+            active: !!msg.m.file && !msg.m.unsent
+            visible: active
+            sourceComponent: Rectangle {
             id: fileCard
-            visible: !!msg.m.file && !msg.m.unsent
-            readonly property real up: visible && msg.m.mine && Chat.uploads[msg.m.id] !== undefined ? Chat.uploads[msg.m.id] : -1
-            readonly property bool sending: visible && !!msg.m.mine && !msg.m.failed && msg.m.state === "sending"
+            readonly property real up: msg.m.mine && Chat.uploads[msg.m.id] !== undefined ? Chat.uploads[msg.m.id] : -1
+            readonly property bool sending: !!msg.m.mine && !msg.m.failed && msg.m.state === "sending"
             readonly property string savedPath: msg.m.saved || ""
             width: Math.min(Theme.px(380), col.width)
             height: fileHead.height + Theme.px(20) + (fileButtons.visible ? fileButtons.height + Theme.px(8) : 0) + (fileBar.visible ? Theme.px(10) : 0)
@@ -314,6 +351,7 @@ Rectangle {
                     onClicked: if (!FileLink.showInFolder(fileCard.savedPath)) Ui.say("It's not in Downloads any more.", true)
                 }
             }
+            }
         }
         Text {
             visible: (!msg.m.photo || !!msg.m.unsent) && !(msg.m.pollView && !msg.m.unsent)
@@ -325,43 +363,60 @@ Rectangle {
             color: msg.m.unsent ? Theme.textMuted : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
         }
         // Cap m2: an album, a video message, a poll or a link preview.
-        MoreParts { width: parent.width; host: msg.host; m: msg.m; where: msg.host && msg.host.more ? msg.host.more.where : "" }
-        Reactions {
+        Loader {
+            active: msg.live && (!!msg.m.album || msg.m.video > 0 || !!msg.m.pollView || !!msg.m.lp)
+            visible: active
             width: parent.width
-            list: msg.m.rxList || []
-            add: msg.hoverTools
-            onToggled: (e, mine) => host.reactTo(msg.m.id, mine ? "" : e)
-            onMore: host.openReact(msg.m.id, msg.m.myReaction || "")
+            sourceComponent: MoreParts { host: msg.host; m: msg.m; where: msg.host && msg.host.more ? msg.host.more.where : "" }
+        }
+        Loader {
+            active: (msg.m.rxList || []).length > 0
+            visible: active
+            width: parent.width
+            sourceComponent: Reactions {
+                list: msg.m.rxList || []
+                add: msg.hoverTools
+                onToggled: (e, mine) => msg.host.reactTo(msg.m.id, mine ? "" : e)
+                onMore: msg.host.openReact(msg.m.id, msg.m.myReaction || "")
+            }
         }
         // A thread: how many replies, opening them beside the channel.
-        Text {
-            textFormat: Text.PlainText
-            visible: !msg.inThread && (msg.m.replies || 0) > 0 && !msg.m.unsent
-            text: (msg.m.replies === 1 ? "1 reply" : msg.m.replies + " replies") + " ›"
-            color: msg.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
-            Accessible.role: Accessible.Button
-            Accessible.name: "Open the thread"
-            HoverHandler { cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: host.openThread(msg.m.id) }
+        Loader {
+            active: !msg.inThread && (msg.m.replies || 0) > 0 && !msg.m.unsent
+            visible: active
+            sourceComponent: Text {
+                textFormat: Text.PlainText
+                text: (msg.m.replies === 1 ? "1 reply" : msg.m.replies + " replies") + " ›"
+                color: msg.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+                Accessible.role: Accessible.Button
+                Accessible.name: "Open the thread"
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: msg.host.openThread(msg.m.id) }
+            }
         }
     }
-    HoverBar {
+    // Made only while pointed at or picked.
+    Loader {
         id: tools
-        visible: msg.hoverTools && (msgHover.hovered || msg.picked) && !msg.m.system && !msg.m.unsent
+        active: msg.hoverTools && (msgHover.hovered || msg.picked) && msg.live
+        visible: active
         anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
         y: msg.lineH - Theme.px(6)
         z: 2
-        canEdit: !!msg.m.mine && !msg.m.photo && !msg.m.failed && !msg.m.file
-        canThread: !msg.inThread
-        canPin: !msg.inThread
-        pinnedNow: host.pins.indexOf(msg.m.id) >= 0
-        onReact: host.openReact(msg.m.id, msg.m.myReaction || "")
-        // In a thread its own box answers; from the pins, the chat's box does.
-        onReply: msg.inThread && host.threadCompose.visible ? host.threadCompose.focusField() : host.startReply(msg.m.id)
-        onThread: host.openThread(msg.m.id)
-        onEdit: host.startEdit(msg.m)
-        onPin: host.togglePin(msg.m.id)
-        onMore: Ui.menuAt(tools, tools.width, tools.height, () => msg.options())
+        sourceComponent: HoverBar {
+            id: bar
+            canEdit: !!msg.m.mine && !msg.m.photo && !msg.m.failed && !msg.m.file
+            canThread: !msg.inThread
+            canPin: !msg.inThread
+            pinnedNow: msg.host.pins.indexOf(msg.m.id) >= 0
+            onReact: msg.host.openReact(msg.m.id, msg.m.myReaction || "")
+            // In a thread its own box answers; from the pins, the chat's box does.
+            onReply: msg.inThread && msg.host.threadCompose.visible ? msg.host.threadCompose.focusField() : msg.host.startReply(msg.m.id)
+            onThread: msg.host.openThread(msg.m.id)
+            onEdit: msg.host.startEdit(msg.m)
+            onPin: msg.host.togglePin(msg.m.id)
+            onMore: Ui.menuAt(bar, bar.width, bar.height, () => msg.options())
+        }
     }
     HoverHandler { id: msgHover }
     // A click (a mouse or the right stick's pointer) picks it and opens a photo; a right click opens

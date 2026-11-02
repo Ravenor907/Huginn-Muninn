@@ -6,9 +6,11 @@ Rectangle {
     id: quote
     property string who: ""
     property string what: ""
+    // As wide as the words, up to this (the column it sits in; set it when loaded, where the parent is a Loader).
+    property real limit: parent ? parent.width : Theme.px(400)
     signal jump()
     height: Theme.px(30)
-    width: Math.min(parent ? parent.width : Theme.px(400), quoteText.implicitWidth + Theme.px(26))
+    width: Math.min(limit, quoteText.implicitWidth + Theme.px(26))
     radius: Theme.radius
     color: qHover.hovered ? Theme.raised : Theme.panel
     Accessible.role: Accessible.Button

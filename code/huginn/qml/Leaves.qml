@@ -8,10 +8,10 @@ import Huginn
 // One engine for both seasons; kind only picks the shapes. Autumn: three leaf shapes (maple, oak and a serrated
 // elm) in seven colors, and maple seeds. Snow: six-armed crystals in the leaves' and seeds' places, white (soft
 // gray-blue on Light) and a little see-through.
-// Each is drawn once on its own small Canvas; Fall (fall.cpp) moves them from C++ at most 30 times a
-// second (15 in the background), no script per frame: they glide sideways as they fall, rock and tumble,
-// flip edge-on and back, and lean into a gust now and then; the seeds spin and orbit as they drop. It
-// stops while the window is hidden or minimized, after a minute in the background, and after 30 seconds
+// Fall (fall.cpp) draws each shape once into one picture and puts every leaf on screen in one batch, moving them
+// from C++ at most 30 times a second (15 in the background), no item or script per leaf: they glide sideways as they
+// fall, rock and tumble, flip edge-on and back, and lean into a gust now and then; the seeds spin and orbit as they
+// drop. It stops while the window is hidden or minimized, after a minute in the background, and after 30 seconds
 // without input on battery; Less motion and Battery saver lay everything still, scattered across the ground.
 // Settings › Look: Animation (Off draws nothing and stops it), Amount (1 to 400 on screen; until it's moved,
 // Theme.fallCount scales it by the window's area) and Size (15% to 600%). Very big ones are fewer, so all
@@ -64,8 +64,6 @@ Item {
                  flipT: 1.9 + r() * 1.3, phase: r() * 100, dir: r() < 0.5 ? -1 : 1, glide: 0.5 + r() * 0.75,
                  tumbleT: 2.7 + r() * 2.8, zig: 0.65 + r() * 0.75, op: depth === 0 ? 0.6 : depth === 1 ? 0.85 : 1 }
     }
-    // The drawn size of a leaf: its own width times the slider.
-    function sideOf(q) { return Math.max(3, Math.ceil((q.w || 24) * sizeScale)) }
 
     // The ground: the season's (or the picked background), a little lighter near the top. Settings › Look › Gradient
     // sets how strong (flat to twice the usual); a faint speckle over it keeps the gradient smooth, without bands.
@@ -105,223 +103,39 @@ Item {
         smooth: true
     }
 
-    // What moves them (fall.cpp): 30 frames a second in front, 15 behind other windows.
+    // What moves and draws them (fall.cpp): 30 frames a second in front, 15 behind other windows; all of them in one
+    // batch over the ground.
     Fall {
         id: driver
+        anchors.fill: parent
         running: leaves.moving
         fps: leaves.winActive ? 30 : 15
-        areaWidth: leaves.width
-        areaHeight: leaves.height
         sizeScale: leaves.sizeScale
         snow: leaves.kind === "snow"
+        plan: leaves.visible ? leaves.plan : []
+        inks: leaves.inks
     }
-    readonly property real tau: Math.PI * 2
     // Less motion, Animation off, or nothing drawn yet: everything in its place for one moment, no wind. Held
-    // still for another reason (in the background, idle on battery), everything stays where it was.
+    // still for another reason (in the background, idle on battery), everything stays where it was. A new plan,
+    // size or season while still is placed by Fall itself.
     function settle() { driver.settle() }
     onMovingChanged: if (!moving && (!Theme.motion || !falling)) settle()
-    onPlanChanged: Qt.callLater(settle)
-    onKindChanged: Qt.callLater(settle)
-    onSizeScaleChanged: Qt.callLater(settle)
-    onWidthChanged: { Qt.callLater(settle); sizeSoon.restart() }
-    onHeightChanged: { Qt.callLater(settle); sizeSoon.restart() }
+    onWidthChanged: sizeSoon.restart()
+    onHeightChanged: sizeSoon.restart()
 
-    Repeater {
-        id: rep
-        model: leaves.visible ? leaves.plan.length : 0
-        delegate: Item {
-            id: leaf
-            required property int index
-            readonly property var p: leaves.plan[index] || ({})
-            // The drawn size: the leaf's own width times the slider. The canvas is drawn at that size,
-            // so it stays crisp; the slider repaints it once, not every frame.
-            readonly property int side: leaves.sideOf(p)
-            // No size of its own: it sits at the turning point (the stem's base, or a flake's middle), where Fall
-            // turns and flips it.
-            width: 0; height: 0
-            opacity: p.op || 1
-            transform: [
-                Scale { id: flipT; xScale: 1 },
-                Rotation { id: rotT; angle: 0 }
-            ]
-            onPChanged: if (p.kind) driver.add(leaf, flipT, rotT, p)
-            Component.onCompleted: if (p.kind) driver.add(leaf, flipT, rotT, p)
-            Component.onDestruction: driver.remove(leaf)
-
-            Canvas {
-                id: cv
-                x: -leaf.side * (leaves.kind === "snow" ? 0.5 : 0.25)
-                y: -leaf.side * 0.5
-                width: leaf.side; height: leaf.side
-                renderTarget: Canvas.Image
-                renderStrategy: Canvas.Immediate
-                onWidthChanged: requestPaint()
-                readonly property int sym: leaf.p.sym === undefined ? 0 : leaf.p.sym
-                onSymChanged: requestPaint()
-                readonly property string kind: leaves.kind
-                onKindChanged: requestPaint()
-                // A new theme or Color vision repaints it in the new colors.
-                readonly property var inks: leaves.inks
-                onInksChanged: requestPaint()
-                onPaint: {
-                    const ctx = getContext("2d")
-                    ctx.reset()
-                    ctx.clearRect(0, 0, width, height)
-                    // The shapes are drawn in a 48 by 48 box whose origin, the stem's base, sits at (12, 24).
-                    const k = width / 48
-                    ctx.translate(12 * k, 24 * k)
-                    ctx.scale(k, k)
-                    ctx.lineJoin = "round"; ctx.lineCap = "round"
-                    if (kind === "snow") leaves.drawFlake(ctx, sym, 12, 1)
-                    else if (sym >= 15) leaves.drawSeed(ctx, sym - 15, 1)
-                    else leaves.drawLeaf(ctx, sym, 1, null)
-                }
-            }
-        }
-    }
-
-    // ------------------------------------------------------------- the shapes
-    // Fifteen leaves: shape (maple, oak, elm) and color (light to dark of the gradient, which is also the vein color).
-    readonly property var leafShape: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]
-    readonly property var leafTone: [0, 0, 1, 2, 3, 1, 0, 1, 0, 4, 5, 2, 6, 2, 6]
+    // ------------------------------------------------------------- the colors
+    // Seven leaf colors (light to dark of the gradient, which is also the vein color); fall.cpp has the shapes.
     readonly property var tones: [
         ["#f7d994", "#e8b45a", "#9a6a22"], ["#f6c384", "#e59a4c", "#8d4f1c"], ["#e88a5e", "#c45a2e", "#6e2c12"],
         ["#f0a26c", "#d6763a", "#7f3a16"], ["#dd7a56", "#b9452a", "#5e2010"], ["#cf9a55", "#a86a2a", "#5a3512"],
         ["#f2d57a", "#d9a93f", "#8c6a1d"]
     ]
     // The colors drawn for this theme and Color vision (see Theme.leafInk), as "#rrggbb": the leaves' and seeds'
-    // tones, the seed's glint and the flakes.
+    // tones, the seed's glint and the flakes. A change draws the shapes again in the new colors.
     function ink(c) { return String(Theme.leafInk(c)) }
     readonly property var inks: ({ leaves: tones.map(t => t.map(ink)), seeds: seedTones.map(t => t.map(ink)), glint: ink("#9a7a44"), flake: String(Theme.flakeInk) })
     readonly property var seedTones: [
         ["#6a4a22", "#b89a5c", "#e9d9a8"], ["#6a4a22", "#b89a5c", "#e9d9a8"], ["#7a5a2a", "#c9a86a", "#e9d9a8"],
         ["#7a5a2a", "#c9a86a", "#e9d9a8"], ["#8a6a33", "#d4b67a", "#e9d9a8"], ["#7a5a2a", "#c9a86a", "#e9d9a8"]
     ]
-    // The oak and elm outlines as points around the edge.
-    readonly property var oak: [29.0, 0.0, 28.0, 1.8, 24.0, 4.3, 23.1, 5.4, 23.1, 6.7, 24.5, 10.6, 24.2, 12.4, 22.0, 13.1, 15.8, 12.5, 15.1, 13.3, 14.1, 17.0, 12.9, 17.9, 10.5, 16.6, 6.0, 11.2, 2.2, 14.7, 1.3, 15.0, 0.6, 14.6, 0.2, 12.0, 0.9, 5.7, 0.0, 0.0, 0.9, -5.7, 0.2, -12.0, 0.6, -14.6, 1.3, -15.0, 2.2, -14.7, 6.0, -11.2, 10.5, -16.6, 12.9, -17.9, 14.1, -17.0, 15.1, -13.3, 15.8, -12.5, 22.0, -13.1, 24.2, -12.4, 24.5, -10.6, 23.1, -6.7, 23.1, -5.4, 24.0, -4.3, 28.0, -1.8]
-    readonly property var elm: [36.0, 0.0, 36.2, 1.5, 33.6, 3.1, 32.3, 4.9, 28.4, 5.6, 27.2, 6.8, 24.3, 6.7, 23.7, 7.9, 21.4, 7.5, 21.0, 8.7, 19.2, 8.0, 18.7, 9.2, 17.2, 8.2, 16.5, 9.5, 15.3, 8.4, 14.5, 9.6, 13.6, 8.4, 12.5, 9.6, 11.8, 8.3, 10.4, 9.4, 9.9, 8.1, 8.2, 9.0, 7.8, 7.7, 5.8, 8.3, 5.3, 7.0, 3.0, 7.1, 2.7, 5.8, 0.3, 5.3, 0.2, 3.8, -2.0, 2.6, -1.3, 0.9, -2.0, 0.0, -2.5, -0.9, -0.8, -2.4, -1.1, -4.0, 1.4, -4.9, 1.6, -6.3, 4.0, -6.5, 4.5, -7.8, 6.6, -7.4, 7.0, -8.7, 8.9, -8.0, 9.3, -9.2, 10.8, -8.2, 11.5, -9.5, 12.7, -8.4, 13.5, -9.6, 14.4, -8.4, 15.5, -9.6, 16.2, -8.3, 17.6, -9.4, 18.1, -8.1, 19.8, -9.0, 20.3, -7.7, 22.3, -8.3, 22.8, -7.1, 25.2, -7.4, 26.2, -6.2, 29.8, -6.0, 31.1, -4.7, 34.8, -3.3, 35.2, -1.1]
-    // Veins from the stem's base, as quadratic curves (control point, then end), and the spots.
-    readonly property var veins: [
-        [[19.5, 0, 35, 0], [13.5, -10.5, 23, -21], [13.5, 10.5, 23, 21], [5.5, -11.5, 7, -23], [5.5, 11.5, 7, 23]],
-        [[15, 0, 26, 0], [10, -5.5, 16, -11], [10, 5.5, 16, 11], [6, -6, 8, -12], [6, 6, 8, 12]],
-        [[18, 0, 32, 0], [9, -4, 14, -8], [9, 4, 14, 8], [13, -3, 22, -6], [13, 3, 22, 6]]
-    ]
-    readonly property var spots: [
-        [[7.8, -1.9, 1.1], [8.2, -7, 0.8], [18.1, -6.3, 1.2], [16.6, -6.5, 1], [13.2, -1.6, 1.4]],
-        [[6.3, 7.9, 0.9], [9.2, -3.1, 0.9]],
-        [[17.6, -1.5, 1.1], [7, -8.1, 0.7], [8.2, -6.3, 1.2]]
-    ]
-    function outline(ctx, shape) {
-        if (shape === 0) {
-            // The maple: five pointed lobes.
-            ctx.moveTo(1, -2); ctx.quadraticCurveTo(3.1, -5.5, 4, -9); ctx.quadraticCurveTo(2.4, -12, 2, -15)
-            ctx.lineTo(7, -23); ctx.lineTo(10, -18); ctx.quadraticCurveTo(12.6, -19, 14, -20); ctx.quadraticCurveTo(12.9, -16.5, 13, -13)
-            ctx.quadraticCurveTo(15.6, -14.5, 17, -16); ctx.lineTo(23, -21); ctx.lineTo(26, -15); ctx.quadraticCurveTo(24.4, -12.5, 24, -10)
-            ctx.quadraticCurveTo(21.9, -8.5, 21, -7); ctx.quadraticCurveTo(23.6, -7, 25, -7); ctx.quadraticCurveTo(27.6, -8, 29, -9)
-            ctx.quadraticCurveTo(32.1, -6, 34, -3); ctx.lineTo(35, 0); ctx.lineTo(34, 3); ctx.quadraticCurveTo(30.9, 6, 29, 9)
-            ctx.quadraticCurveTo(26.4, 8, 25, 7); ctx.quadraticCurveTo(22.4, 7, 21, 7); ctx.quadraticCurveTo(23.1, 8.5, 24, 10)
-            ctx.quadraticCurveTo(25.6, 12.5, 26, 15); ctx.lineTo(23, 21); ctx.lineTo(17, 16); ctx.quadraticCurveTo(14.4, 14.5, 13, 13)
-            ctx.quadraticCurveTo(14.1, 16.5, 14, 20); ctx.quadraticCurveTo(11.4, 19, 10, 18); ctx.lineTo(7, 23); ctx.lineTo(2, 15)
-            ctx.quadraticCurveTo(3.6, 12, 4, 9); ctx.quadraticCurveTo(1.9, 5.5, 1, 2); ctx.closePath()
-            return
-        }
-        const pts = shape === 1 ? oak : elm
-        ctx.moveTo(pts[0], pts[1])
-        for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1])
-        ctx.closePath()
-    }
-    // One radial gradient per color for drawLeaf, lit from near the stem.
-    function leafFills(ctx) {
-        const out = []
-        for (let i = 0; i < inks.leaves.length; ++i) {
-            const tone = inks.leaves[i]
-            const g = ctx.createRadialGradient(7.2, -2.4, 0, 7.2, -2.4, 31.2)
-            g.addColorStop(0, tone[0]); g.addColorStop(0.55, tone[1]); g.addColorStop(1, tone[2])
-            out.push(g)
-        }
-        return out
-    }
-    // A leaf at the origin, its stem's base; a is its opacity, fills the gradients from leafFills (or
-    // null to make its own).
-    function drawLeaf(ctx, sym, a, fills) {
-        const shape = leafShape[sym] || 0
-        const t = leafTone[sym] || 0
-        const tone = inks.leaves[t]
-        const dark = tone[2]
-        ctx.globalAlpha = a
-        // The stem.
-        ctx.strokeStyle = dark; ctx.lineWidth = 1.2
-        ctx.beginPath(); ctx.moveTo(-7, 1.2); ctx.quadraticCurveTo(-3.5, 0.4, 0, 0); ctx.stroke()
-        // The blade, lit from near the stem.
-        ctx.fillStyle = fills ? fills[t] : leafFills(ctx)[t]
-        ctx.lineWidth = 0.35
-        ctx.beginPath(); outline(ctx, shape); ctx.fill(); ctx.stroke()
-        // Veins and a few spots.
-        ctx.globalAlpha = 0.8 * a; ctx.lineWidth = 0.7
-        const vs = veins[shape]
-        ctx.beginPath()
-        for (let i = 0; i < vs.length; ++i) { const v = vs[i]; ctx.moveTo(0, 0); ctx.quadraticCurveTo(v[0], v[1], v[2], v[3]) }
-        ctx.stroke()
-        ctx.globalAlpha = 0.35 * a; ctx.fillStyle = dark
-        const sp = spots[shape]
-        for (let i = 0; i < sp.length; ++i) { const c = sp[i]; ctx.beginPath(); ctx.arc(c[0], c[1], c[2], 0, tau); ctx.fill() }
-        ctx.globalAlpha = 1
-    }
-    // A snowflake in a leaf's or seed's place, its middle at (at, 0) (12 right of the stem's base in a
-    // leaf's box): six-armed crystals in three sizes, so every flake shows its turn and flip: big for
-    // one leaf shape, medium for another, small for the third and for a seed. a is its opacity.
-    function drawFlake(ctx, sym, at, a) {
-        const type = sym >= 15 ? 2 : (leafShape[sym] || 0)
-        const ln = flakeLines[type]
-        if (at !== 0) ctx.translate(at, 0)
-        ctx.globalAlpha = 0.85 * a
-        ctx.strokeStyle = inks.flake; ctx.lineWidth = 1.8
-        ctx.beginPath()
-        for (let i = 0; i < ln.length; i += 4) { ctx.moveTo(ln[i], ln[i + 1]); ctx.lineTo(ln[i + 2], ln[i + 3]) }
-        ctx.stroke()
-        ctx.globalAlpha = 1
-    }
-    // Each crystal's strokes, worked out once: (x1, y1, x2, y2) for each arm and each side branch.
-    readonly property var flakeLines: [crystal(14, [0.5, 0.75]), crystal(11, [0.6]), crystal(8, [0.55])]
-    function crystal(r, twigs) {
-        const out = []
-        const third = Math.PI / 3
-        for (let i = 0; i < 6; ++i) {
-            const a = i * third, c = Math.cos(a), n = Math.sin(a)
-            out.push(0, 0, c * r, n * r)
-            for (let j = 0; j < twigs.length; ++j) {
-                const at = twigs[j], len = r * (at > 0.6 ? 0.2 : 0.3)
-                for (let side = -1; side <= 1; side += 2) {
-                    const b = a + side * third
-                    out.push(c * r * at, n * r * at, c * r * at + Math.cos(b) * len, n * r * at + Math.sin(b) * len)
-                }
-            }
-        }
-        return out
-    }
-    // A maple seed, the seed itself at the origin; a is its opacity.
-    function drawSeed(ctx, n, a) {
-        const tone = inks.seeds[n] || inks.seeds[0]
-        const g = ctx.createLinearGradient(2, 0, 38, 0)
-        g.addColorStop(0, tone[0]); g.addColorStop(0.25, tone[1]); g.addColorStop(1, tone[2])
-        // The wing.
-        ctx.globalAlpha = 0.95 * a
-        ctx.fillStyle = g; ctx.strokeStyle = tone[0]; ctx.lineWidth = 0.5
-        ctx.beginPath(); ctx.moveTo(2, 0); ctx.bezierCurveTo(8, -9, 22, -11, 34, -7); ctx.bezierCurveTo(38, -5, 38, 1, 34, 3)
-        ctx.bezierCurveTo(24, 7, 10, 7, 2, 2); ctx.closePath(); ctx.fill(); ctx.stroke()
-        // Its ribs.
-        ctx.globalAlpha = 0.55 * a; ctx.lineWidth = 0.35
-        ctx.beginPath()
-        ctx.moveTo(4, -1); ctx.quadraticCurveTo(18, -6, 33, -6)
-        ctx.moveTo(4, 0); ctx.quadraticCurveTo(18, -3, 33, -3)
-        ctx.moveTo(4, 0.5); ctx.quadraticCurveTo(18, 0, 33, -1)
-        ctx.moveTo(4, 1); ctx.quadraticCurveTo(18, 2, 33, 1)
-        ctx.stroke()
-        // The seed itself, with a glint.
-        ctx.globalAlpha = a; ctx.fillStyle = tone[0]
-        ctx.beginPath(); ctx.ellipse(1 - 4.2, -3, 8.4, 6); ctx.fill()
-        ctx.globalAlpha = 0.7 * a; ctx.fillStyle = inks.glint
-        ctx.beginPath(); ctx.ellipse(-2.2, -2, 4.4, 2.4); ctx.fill()
-        ctx.globalAlpha = 1
-    }
 }

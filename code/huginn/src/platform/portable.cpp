@@ -113,7 +113,9 @@ namespace Portable
 {
 QString rootFor(const QString &exeDir)
 {
-    QString dir = QDir::cleanPath(QDir::fromNativeSeparators(exeDir));
+    QString dir = exeDir;
+    dir.replace(QLatin1Char('\\'), QLatin1Char('/'));   // Windows paths, also when tested elsewhere
+    dir = QDir::cleanPath(dir);
     // The staged update runs from update-staging (platform/winupdate.cpp): its data is the main copy's.
     const qsizetype slash = dir.lastIndexOf(QLatin1Char('/'));
     if (slash > 0 && dir.mid(slash + 1).compare(QLatin1String("update-staging"), Qt::CaseInsensitive) == 0)

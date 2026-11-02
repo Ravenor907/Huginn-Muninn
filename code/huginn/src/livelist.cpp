@@ -5,6 +5,8 @@
 #include <QSet>
 #include <QVariantMap>
 
+#include <cstdio>
+
 LiveList::LiveList(QObject *parent)
     : QAbstractListModel(parent)
 {
@@ -105,4 +107,55 @@ QVariant LiveList::data(const QModelIndex &index, int role) const
 QHash<int, QByteArray> LiveList::roleNames() const
 {
     return {{Qt::UserRole, "item"}};
+}
+
+// ------------------------------------------------------------------ --perf-selftest
+
+bool LiveList::selfTest()
+{
+    bool all = true;
+    const auto check = [&all](const char *what, bool ok) {
+        std::printf("perf self-test: %s: %s\n", what, ok ? "ok" : "FAILED");
+        all = all && ok;
+    };
+    // A chat of 500 messages, as ChatPage gives it (rows told apart by id).
+    LiveList list;
+    list.setKeys({QStringLiteral("id")});
+    QVariantList msgs;
+    for (int i = 0; i < 500; ++i)
+        msgs << QVariantMap{{QStringLiteral("id"), QString::number(i)}, {QStringLiteral("text"), QStringLiteral("message %1").arg(i)}};
+    list.setItems(msgs);
+
+    // What the list tells the view: rows added, rows changed (each changed row counted), and any start over.
+    int inserted = 0, insertCalls = 0, changedRows = 0, removed = 0, moved = 0, resets = 0;
+    connect(&list, &QAbstractItemModel::rowsInserted, &list, [&](const QModelIndex &, int first, int last) { inserted += last - first + 1; ++insertCalls; });
+    connect(&list, &QAbstractItemModel::dataChanged, &list, [&](const QModelIndex &a, const QModelIndex &b) { changedRows += b.row() - a.row() + 1; });
+    connect(&list, &QAbstractItemModel::rowsRemoved, &list, [&](const QModelIndex &, int first, int last) { removed += last - first + 1; });
+    connect(&list, &QAbstractItemModel::rowsMoved, &list, [&] { ++moved; });
+    connect(&list, &QAbstractItemModel::modelReset, &list, [&] { ++resets; });
+    const auto clear = [&] { inserted = insertCalls = changedRows = removed = moved = resets = 0; };
+
+    // A new message: one row added at the end, nothing else touched.
+    msgs << QVariantMap{{QStringLiteral("id"), QStringLiteral("500")}, {QStringLiteral("text"), QStringLiteral("new")}};
+    list.setItems(msgs);
+    check("a new message adds one row and touches no other", inserted == 1 && insertCalls == 1 && changedRows == 0 && removed == 0 && moved == 0
+                                                               && resets == 0 && list.rowCount() == 501);
+    // A reaction or a read mark on one message: that row alone changes.
+    clear();
+    QVariantMap m = msgs.at(250).toMap();
+    m.insert(QStringLiteral("rx"), QStringLiteral("+1"));
+    msgs[250] = m;
+    list.setItems(msgs);
+    check("a changed message redraws its row alone", changedRows == 1 && inserted == 0 && removed == 0 && moved == 0 && resets == 0);
+    // Deleted for everyone: one row goes.
+    clear();
+    msgs.removeAt(10);
+    list.setItems(msgs);
+    check("a removed message takes one row away", removed == 1 && inserted == 0 && changedRows == 0 && moved == 0 && resets == 0
+                                                     && list.rowCount() == 500);
+    // The same list again: nothing at all.
+    clear();
+    list.setItems(msgs);
+    check("the same messages again change nothing", inserted == 0 && changedRows == 0 && removed == 0 && moved == 0 && resets == 0);
+    return all;
 }
