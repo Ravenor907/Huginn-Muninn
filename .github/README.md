@@ -1,6 +1,8 @@
 <p align="center"><img src="../code/shared/docs/banner.png" width="100%" alt="Huginn and Muninn"></p>
 
-<h1 align="center">Anti-deplatforming. Secure communication.<br>For you and the ones you care about.</h1>
+<h1 align="center">Anti-deplatforming.<br>Secure communication.</h1>
+
+<h3 align="center">For you and the ones you care about.</h3>
 
 <p align="center">
 <b>Huginn</b> is the desktop app: a portable zip for Windows and a Flatpak for Linux.<br>

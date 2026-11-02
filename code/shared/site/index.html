@@ -45,6 +45,13 @@
   .hero::after { content:""; position:absolute; inset:0; z-index:-1; opacity:.5;
     background-image:radial-gradient(rgba(228,225,218,.06) 1px, transparent 1px); background-size:26px 26px;
     -webkit-mask-image:radial-gradient(ellipse at 50% 35%, #000 20%, transparent 70%); mask-image:radial-gradient(ellipse at 50% 35%, #000 20%, transparent 70%); }
+  .pair { display:flex; justify-content:center; gap:28px; margin:0; }
+  .pair figure { margin:0; display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .pair figcaption { font-size:12px; letter-spacing:.3em; text-transform:uppercase; color:var(--soft); }
+  .pair figure:nth-child(2) .raven { animation-delay:-3.5s; }
+  .raven.mirror { transform:scaleX(-1); animation-name:hoverm; }
+  .raven.silver { filter:drop-shadow(0 10px 40px rgba(200,205,211,.30)); }
+  h1 .line { display:block; }
   .raven { width:150px; height:150px; filter:drop-shadow(0 10px 40px rgba(194,162,94,.35)); animation:hover 7s ease-in-out infinite; }
   .runes { margin:18px 0 0; color:var(--faint); letter-spacing:.5em; font-size:15px; }
   h1 { font:600 clamp(34px, 6.2vw, 68px)/1.08 var(--serif); letter-spacing:.02em; margin:22px auto 0; max-width:900px;
@@ -136,6 +143,7 @@
   .d1 { animation-delay:.08s; } .d2 { animation-delay:.18s; } .d3 { animation-delay:.3s; } .d4 { animation-delay:.42s; }
   @keyframes rise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
   @keyframes hover { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-8px); } }
+  @keyframes hoverm { 0%,100% { transform:scaleX(-1) translateY(0); } 50% { transform:scaleX(-1) translateY(-8px); } }
   @keyframes flow { to { stroke-dashoffset:-24; } }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation:none !important; transition:none !important; }
@@ -160,9 +168,12 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <img class="raven reveal" src="raven-gold.png" alt="A gold raven">
+    <div class="pair reveal">
+      <figure><img class="raven" src="raven-gold.png" alt="Huginn, a gold raven"><figcaption>Huginn</figcaption></figure>
+      <figure><img class="raven mirror silver" src="raven.png" alt="Muninn, a silver raven"><figcaption>Muninn</figcaption></figure>
+    </div>
     <div class="runes reveal d1">ᚺᚢᚷᛁᚾᚾ · ᛗᚢᚾᛁᚾᚾ</div>
-    <h1 class="reveal d2">Anti-deplatforming. Secure communication.<span class="soft">For you and the ones you care about.</span></h1>
+    <h1 class="reveal d2"><span class="line">Anti-deplatforming.</span><span class="line">Secure communication.</span><span class="soft">For you and the ones you care about.</span></h1>
     <p class="lede reveal d3"><b>Huginn</b> is the desktop app: a portable zip for Windows and a Flatpak for Linux. <b>Muninn</b> is the Android app: phones and tablets, plus Kids' TV on Google TV. No account, no phone number, no central server.</p>
     <div class="downloads reveal d4">
       <a class="btn primary" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">
