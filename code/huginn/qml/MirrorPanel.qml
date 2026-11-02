@@ -173,11 +173,17 @@ Rectangle {
     onLastShownChanged: if (visible && current && !readSoon.running) readSoon.start()
     Connections {
         target: Qt.application
-        function onStateChanged() { if (Qt.application.state === Qt.ApplicationActive) panel.looked(); else readSoon.stop() }
+        function onStateChanged() {
+            if (Qt.application.state === Qt.ApplicationActive) { panel.looked(); if (panel.checksIn) Linked.ping() }
+            else readSoon.stop()
+        }
     }
-    // While open: the time moves on, and the phone is asked whether it's there (at most once a minute).
+    // While open: the time moves on, and the phone is asked whether it's there (at most once a minute), only while
+    // Huginn is in front and in use: never minimized, hidden or behind a game (Linked.ping checks that too).
+    readonly property bool checksIn: panel.visible && !panel.kept && Qt.application.state === Qt.ApplicationActive && Window.active
+                                     && Window.visibility !== Window.Minimized && Window.visibility !== Window.Hidden
     Timer { interval: 5000; repeat: true; running: panel.visible; onTriggered: panel.clock = Date.now() }
-    Timer { interval: 60000; repeat: true; running: panel.visible && !panel.kept; onTriggered: Linked.ping() }
+    Timer { interval: 60000; repeat: true; running: panel.checksIn; onTriggered: Linked.ping() }
 
     function send(t) {
         if (!current) return

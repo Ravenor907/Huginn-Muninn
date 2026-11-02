@@ -123,7 +123,7 @@ Item {
             return
         }
         Ui.sure("Forgot your lock?", "Your chats are encrypted with it, so nobody can open or reset it. If you made a backup, you can erase what's on this computer "
-                + "and put the backup back. Messages that came after the backup are lost. Then you set a new lock.\n\nNo backup? Settings › Erase everything "
+                + "and put the backup back. Messages that came after the backup are lost. Then you set a new lock.\n\nNo backup? Settings › Devices and backup › Erase everything "
                 + "starts again. Contacts will need to add you again.",
                 "Restore from a backup", restore)
     }
@@ -155,9 +155,9 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.lead !== "" ? panel.lead + "\n" : "") + (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : panel.mode === "renew" ? "Set a new lock. Your old one isn't in the backup. Nobody can reset it, so pick one you'll remember, and make a new backup once you're in (Settings › Backup)."
-                  : panel.mode === "setup" ? (panel.usePattern ? "Keeps your chats private on this computer. Connect at least 6 dots. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Backup)."
-                                                                : "Keeps your chats private on this computer. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Backup). A few words make a good password.")
+                  : panel.mode === "renew" ? "Set a new lock. Your old one isn't in the backup. Nobody can reset it, so pick one you'll remember, and make a new backup once you're in (Settings › Devices and backup)."
+                  : panel.mode === "setup" ? (panel.usePattern ? "Keeps your chats private on this computer. Connect at least 6 dots. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Devices and backup)."
+                                                                : "Keeps your chats private on this computer. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Devices and backup). A few words make a good password.")
                   : "Nobody can reset it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }

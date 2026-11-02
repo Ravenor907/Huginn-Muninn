@@ -22,6 +22,7 @@
 const char RingWire::kRingCap[] = "b1";
 const char RingWire::kWrapCap[] = "e1";
 const char RingWire::kNudgeCap[] = "n1";
+const char RingWire::kRichNudgeCap[] = "n2";
 
 namespace
 {
@@ -165,9 +166,70 @@ bool RingWire::nudgeCounts(const QString &room, const QByteArray &plain)
     return room == QLatin1String("file") ? t == QLatin1String("offer") : t == QLatin1String("invite");
 }
 
+QString RingWire::nudgeKind(const QString &room)
+{
+    if (room == QLatin1String("photo") || room == QLatin1String("gphoto"))
+        return QStringLiteral("photo");
+    if (room == QLatin1String("file"))
+        return QStringLiteral("file");
+    if (room == QLatin1String("group"))
+        return QStringLiteral("invite");
+    return QStringLiteral("msg");
+}
+
+QString RingWire::blobKind(int voiceMs, int videoMs, const QString &file)
+{
+    if (voiceMs > 0)
+        return QStringLiteral("voice");
+    if (videoMs > 0)
+        return QStringLiteral("video");
+    if (!file.isEmpty())
+        return QStringLiteral("file");
+    return QStringLiteral("photo");
+}
+
+namespace
+{
+const QStringList kNudgeKinds{QStringLiteral("msg"), QStringLiteral("photo"), QStringLiteral("voice"), QStringLiteral("video"), QStringLiteral("file"),
+                              QStringLiteral("invite")};
+QString knownKind(const QJsonValue &v)
+{
+    return v.isString() && kNudgeKinds.contains(v.toString()) ? v.toString() : QStringLiteral("msg");
+}
+}
+
+QString RingWire::nudgeClean(const QJsonValue &v)
+{
+    if (!v.isString())
+        return QString();
+    QString out;
+    for (const uint cp : v.toString().toUcs4()) {
+        const QChar::Category c = QChar::category(char32_t(cp));
+        if (c == QChar::Other_Control || c == QChar::Other_Format || c == QChar::Other_Surrogate || c == QChar::Separator_Line
+            || c == QChar::Separator_Paragraph || cp == 0xFFFD)
+            continue;
+        const char32_t one = char32_t(cp);
+        out += QString::fromUcs4(&one, 1);
+    }
+    out = out.trimmed();
+    if (out.size() > kNudgeNameMax) {
+        out = out.left(kNudgeNameMax);
+        if (out.back().isHighSurrogate())
+            out.chop(1);
+        out = out.trimmed();
+    }
+    return out;
+}
+
 QByteArray RingWire::nudgePlain(qint64 ts)
 {
     return compact(QJsonObject{{QStringLiteral("t"), QStringLiteral("nudge")}, {QStringLiteral("ts"), ts}});
+}
+
+QByteArray RingWire::richNudgePlain(qint64 ts, const QString &from, const QString &chat, const QString &kind)
+{
+    return compact(QJsonObject{{QStringLiteral("t"), QStringLiteral("nudge")}, {QStringLiteral("ts"), ts}, {QStringLiteral("from"), nudgeClean(from)},
+                               {QStringLiteral("chat"), nudgeClean(chat)}, {QStringLiteral("kind"), knownKind(kind)}});
 }
 
 bool RingWire::nudgeOk(const QJsonObject &p)
@@ -175,25 +237,77 @@ bool RingWire::nudgeOk(const QJsonObject &p)
     return p.value(QStringLiteral("t")).toString() == QLatin1String("nudge") && wholeNumber(p.value(QStringLiteral("ts")));
 }
 
-QString RingWire::nudgeContent(const QString &ringPub, qint64 ts)
+bool RingWire::nudgeRead(const QJsonObject &p, Nudge *n)
 {
-    const QJsonObject o = sealRing(ringPub, nudgePlain(ts));
+    if (!nudgeOk(p))
+        return false;
+    n->ts = p.value(QStringLiteral("ts")).toInteger();
+    n->from = nudgeClean(p.value(QStringLiteral("from")));
+    n->chat = nudgeClean(p.value(QStringLiteral("chat")));
+    n->kind = knownKind(p.value(QStringLiteral("kind")));
+    return true;
+}
+
+namespace
+{
+QString sealNudge(const QString &pub, const QByteArray &plain)
+{
+    const QJsonObject o = RingWire::sealRing(pub, plain);
     if (o.isEmpty())
         return QString();
     return b64(Nostr::pad(compact(o)));
 }
+}
 
-bool RingWire::openNudgeContent(const QString &content, const ChatCrypto::KeyPair &ring, qint64 *ts)
+QString RingWire::nudgeContent(const QString &ringPub, qint64 ts) { return sealNudge(ringPub, nudgePlain(ts)); }
+
+QString RingWire::richNudgeContent(const QString &pub, qint64 ts, const QString &from, const QString &chat, const QString &kind)
+{
+    return sealNudge(pub, richNudgePlain(ts, from, chat, kind));
+}
+
+bool RingWire::openNudgeContent(const QString &content, const ChatCrypto::KeyPair &keys, Nudge *n)
 {
     const QJsonObject o = QJsonDocument::fromJson(QByteArray::fromBase64(content.toLatin1())).object();
     if (o.isEmpty())
         return false;
     bool ok = false;
-    const QJsonObject p = QJsonDocument::fromJson(openRing(o, ring, &ok)).object();
-    if (!ok || !nudgeOk(p))
-        return false;
-    *ts = p.value(QStringLiteral("ts")).toInteger();
-    return true;
+    const QJsonObject p = QJsonDocument::fromJson(openRing(o, keys, &ok)).object();
+    return ok && nudgeRead(p, n);
+}
+
+QString RingWire::nudgeGroupKey(int mode, const Nudge &n) { return mode <= 0 ? QString() : n.from + QLatin1Char('\n') + n.chat; }
+
+QString RingWire::nudgeTitle(int mode, const Nudge &n)
+{
+    if (mode <= 0)
+        return QStringLiteral("Huginn");
+    if (!n.from.isEmpty() && !n.chat.isEmpty())
+        return n.from + QStringLiteral(" · ") + n.chat;
+    if (!n.from.isEmpty())
+        return n.from;
+    if (!n.chat.isEmpty())
+        return n.chat;
+    return QStringLiteral("Huginn");
+}
+
+QString RingWire::nudgeText(int mode, const QString &kind, int count)
+{
+    if (count > 1)
+        return QStringLiteral("%1 new messages").arg(count);
+    if (mode <= 0)
+        return QStringLiteral("New message");
+    if (kind == QLatin1String("photo"))
+        return QStringLiteral("Photo");
+    if (kind == QLatin1String("voice"))
+        return QStringLiteral("Voice message");
+    if (kind == QLatin1String("video"))
+        return QStringLiteral("Video message");
+    if (kind == QLatin1String("file"))
+        return QStringLiteral("File");
+    if (kind == QLatin1String("invite"))
+        return QStringLiteral("Group invite");
+    return QStringLiteral("New message");
 }
 
 bool NudgeGate::take(const QString &key, qint64 nowMs)
@@ -225,6 +339,12 @@ RingWire::Announce RingWire::announceOf(const QJsonObject &r, qint64 nowS)
             a.wk = r.value(QStringLiteral("wk")).toString();
             a.wt = t;
         }
+    }
+    // Cap n2: the nudge key and nudge mailbox, checked like the ring key's.
+    const QJsonValue np = r.value(QStringLiteral("np"));
+    if (keyOk(r.value(QStringLiteral("nk"))) && np.isString() && mailbox.match(np.toString()).hasMatch()) {
+        a.nk = r.value(QStringLiteral("nk")).toString();
+        a.np = np.toString();
     }
     return a;
 }
@@ -374,6 +494,8 @@ void PeerKeys::load()
         a.rp = o.value(QStringLiteral("rp")).toString();
         a.wk = o.value(QStringLiteral("wk")).toString();
         a.wt = o.value(QStringLiteral("wt")).toInteger();
+        a.nk = o.value(QStringLiteral("nk")).toString();
+        a.np = o.value(QStringLiteral("np")).toString();
         m_keys.insert(it.key(), a);
     }
 }
@@ -383,14 +505,14 @@ void PeerKeys::save() const
     QJsonObject all;
     for (auto it = m_keys.cbegin(); it != m_keys.cend(); ++it)
         all.insert(it.key(), QJsonObject{{QStringLiteral("rk"), it->rk}, {QStringLiteral("rp"), it->rp}, {QStringLiteral("wk"), it->wk},
-                                         {QStringLiteral("wt"), it->wt}});
+                                         {QStringLiteral("wt"), it->wt}, {QStringLiteral("nk"), it->nk}, {QStringLiteral("np"), it->np}});
     if (m_write)
         m_write(QJsonDocument(all).toJson(QJsonDocument::Compact));
 }
 
 void PeerKeys::take(const QString &key, const RingWire::Announce &a)
 {
-    if (a.rk.isEmpty() && a.wk.isEmpty())
+    if (a.rk.isEmpty() && a.wk.isEmpty() && a.nk.isEmpty())
         return;
     load();
     const RingWire::Announce old = m_keys.value(key);
@@ -403,7 +525,11 @@ void PeerKeys::take(const QString &key, const RingWire::Announce &a)
         now.wk = a.wk;
         now.wt = a.wt;
     }
-    if (now.rk == old.rk && now.rp == old.rp && now.wk == old.wk && now.wt == old.wt)
+    if (!a.nk.isEmpty()) {
+        now.nk = a.nk;
+        now.np = a.np;
+    }
+    if (now.rk == old.rk && now.rp == old.rp && now.wk == old.wk && now.wt == old.wt && now.nk == old.nk && now.np == old.np)
         return;
     m_keys.insert(key, now);
     save();
@@ -550,6 +676,16 @@ bool RingKey::open(const QString &content, QString *callId, qint64 *ts)
     return m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_old.keys, callId, ts);
 }
 
+bool RingKey::nudge(const QString &content, RingWire::Nudge *n)
+{
+    if (m_forgotten)
+        return false;
+    load();
+    if (RingWire::openNudgeContent(content, m_now.keys, n))
+        return true;
+    return m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_old.keys, n);
+}
+
 void RingKey::renew()
 {
     m_forgotten = false;
@@ -660,18 +796,39 @@ bool RingWire::selfTest(const QString &vectorsPath)
                                      && !nudgeOk(QJsonObject{{QStringLiteral("t"), QStringLiteral("nudge")}, {QStringLiteral("ts"), -1}})
                                      && !nudgeOk(QJsonObject{{QStringLiteral("t"), QStringLiteral("ring")}, {QStringLiteral("ts"), 1}}));
         const QString nc = nudgeContent(b64(ring.publicDer), 1761500130000);
-        qint64 nts = 0;
+        Nudge got;
         QString ncall;
         qint64 rts = 0;
-        const bool opens = openNudgeContent(nc, ring, &nts) && nts == 1761500130000;
-        bool wrongOpens = true;
-        {
-            qint64 x = 0;
-            wrongOpens = openNudgeContent(nc, wrong, &x);
-        }
-        qint64 y = 0;
+        const bool opens = openNudgeContent(nc, ring, &got) && got.ts == 1761500130000 && got.from.isEmpty() && got.chat.isEmpty()
+                           && got.kind == QLatin1String("msg");
+        Nudge x, y;
+        const bool wrongOpens = openNudgeContent(nc, wrong, &x);
         check("nudge envelope", nc.size() % 1024 == 0 && opens && !wrongOpens && !openRingContent(nc, ring, &ncall, &rts)
                                     && !openNudgeContent(content, ring, &y));
+        // Cap n2: who, which group and what kind; cleaned, capped, an unknown kind read as "msg"; the n1 form still taken.
+        const QJsonObject rp = QJsonDocument::fromJson(richNudgePlain(1761500130000, QStringLiteral("  Raven "), QString(), QStringLiteral("voice"))).object();
+        check("n2 nudge plaintext", rp.keys() == QStringList({QStringLiteral("chat"), QStringLiteral("from"), QStringLiteral("kind"), QStringLiteral("t"), QStringLiteral("ts")})
+                                        && rp.value(QStringLiteral("from")).toString() == QLatin1String("Raven") && rp.value(QStringLiteral("chat")).toString().isEmpty()
+                                        && rp.value(QStringLiteral("kind")).toString() == QLatin1String("voice"));
+        Nudge rich, odd;
+        const QString rc = richNudgeContent(b64(ring.publicDer), 42, QStringLiteral("Raven"), QStringLiteral("The Family"), QStringLiteral("video"));
+        const bool richOpens = openNudgeContent(rc, ring, &rich) && rich.ts == 42 && rich.from == QLatin1String("Raven")
+                               && rich.chat == QLatin1String("The Family") && rich.kind == QLatin1String("video");
+        const bool oddRead = nudgeRead(QJsonObject{{QStringLiteral("t"), QStringLiteral("nudge")}, {QStringLiteral("ts"), 5}, {QStringLiteral("kind"), QStringLiteral("dance")},
+                                                   {QStringLiteral("from"), 12}, {QStringLiteral("chat"), QString(100, QLatin1Char('x'))}},
+                                       &odd)
+                             && odd.kind == QLatin1String("msg") && odd.from.isEmpty() && odd.chat.size() == kNudgeNameMax;
+        check("n2 nudge envelope", rc.size() % 1024 == 0 && richOpens && oddRead && !openRingContent(rc, ring, &ncall, &rts)
+                                       && nudgeClean(QString(QStringLiteral("Ann") + QChar(0) + QChar(0x0A) + QChar(0x202E) + QStringLiteral("Bob") + QChar(0x2028))) == QLatin1String("AnnBob"));
+        check("n2 kinds", nudgeKind(QStringLiteral("gmsg")) == QLatin1String("msg") && nudgeKind(QStringLiteral("gphoto")) == QLatin1String("photo")
+                              && nudgeKind(QStringLiteral("file")) == QLatin1String("file") && nudgeKind(QStringLiteral("group")) == QLatin1String("invite")
+                              && blobKind(5, 0, QString()) == QLatin1String("voice") && blobKind(0, 5, QString()) == QLatin1String("video")
+                              && blobKind(0, 0, QStringLiteral("a.pdf")) == QLatin1String("file") && blobKind(0, 0, QString()) == QLatin1String("photo"));
+        const Nudge ann{1, QStringLiteral("Ann"), QStringLiteral("Gaming"), QStringLiteral("photo")};
+        check("locked nudge notification", nudgeTitle(1, ann) == QStringLiteral("Ann · Gaming") && nudgeTitle(0, ann) == QLatin1String("Huginn")
+                                               && nudgeText(2, QStringLiteral("photo"), 1) == QLatin1String("Photo") && nudgeText(0, QStringLiteral("photo"), 1) == QLatin1String("New message")
+                                               && nudgeText(1, QStringLiteral("msg"), 3) == QLatin1String("3 new messages")
+                                               && nudgeGroupKey(0, ann) == nudgeGroupKey(0, Nudge{}) && nudgeGroupKey(1, ann) != nudgeGroupKey(1, Nudge{}));
         check("nudge only for real messages",
               nudgeCounts(QStringLiteral("private"), {}) && nudgeCounts(QStringLiteral("rich"), {}) && nudgeCounts(QStringLiteral("photo"), {})
                   && nudgeCounts(QStringLiteral("gmsg"), {}) && nudgeCounts(QStringLiteral("gphoto"), {})
@@ -686,7 +843,8 @@ bool RingWire::selfTest(const QString &vectorsPath)
         check("nudges coalesce", kNudgeEveryMs == 60000 && gate.take(QStringLiteral("A"), t0) && !gate.take(QStringLiteral("A"), t0 + 1)
                                      && !gate.take(QStringLiteral("A"), t0 + kNudgeEveryMs - 1) && gate.take(QStringLiteral("B"), t0 + 1)
                                      && gate.take(QStringLiteral("A"), t0 + kNudgeEveryMs) && !gate.take(QStringLiteral("A"), t0 + kNudgeEveryMs + 5));
-        check("caps say n1, last", QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' ')).constLast() == QLatin1String(kNudgeCap));
+        const QStringList caps = QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' '));
+        check("caps say n1 and n2", caps.contains(QLatin1String(kNudgeCap)) && caps.indexOf(QLatin1String(kRichNudgeCap)) > caps.indexOf(QLatin1String(kNudgeCap)));
     }
     bool plains = true;
     for (const QJsonValue &p : v.value(QStringLiteral("ringPlain")).toObject().value(QStringLiteral("good")).toArray())

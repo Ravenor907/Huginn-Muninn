@@ -16,15 +16,19 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.github.ravenor907.muninn.Muninn
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Muninn keeping itself up to date on a Kids' TV: it looks for a new release when it starts and once a
- * day (and when a parent presses Update TV on their phone), downloads it with the usual [Updater], and
- * installs it with a PackageInstaller session. Android asks once on the TV (Install, with the remote);
- * after Muninn has installed itself once, Android 12 and newer let later updates go in without asking.
+ * Muninn keeping itself up to date on a Kids' TV: it looks for a new release a minute after it starts and once a
+ * day (and when a parent presses Update now on their phone), downloads it with the usual [Updater] (the same SHA-256
+ * and signature checks), and installs it with a PackageInstaller session that asks for no tap. Android asks once on
+ * the TV (the first update, while another app is Muninn's installer of record): the TV then shows "Ask a grown-up:
+ * press OK to update". After Muninn has installed itself once, Android 12 and newer let later updates go in without
+ * asking. Never during a call. A failed try comes back after 5 min, 15 min, 1 h, 4 h, then every 12 h.
+ * The parents' phones hear how it goes (cap u1, [TvUpd]): on start, every day, and at each step.
  */
 object TvUpdate {
     /**
@@ -37,6 +41,12 @@ object TvUpdate {
     private val timer = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-update").apply { isDaemon = true } }
     @Volatile private var started = false
     @Volatile private var waiting: File? = null
+    /** u1: what the parents' phones were last told (or would be). */
+    val remote = MutableStateFlow<TvUpd.St?>(null)
+    @Volatile private var fails = 0
+    @Volatile private var retry: java.util.concurrent.ScheduledFuture<*>? = null
+    /** A downloaded update held back while a call is on. */
+    @Volatile private var afterCall: File? = null
     private const val ACTION = "io.github.ravenor907.muninn.tv.INSTALLED"
     private const val DAY = 24 * 60 * 60_000L
     private const val HOUR = 60 * 60_000L
@@ -45,39 +55,120 @@ object TvUpdate {
     fun start(app: Muninn) {
         if (started) return
         started = true
+        val p0 = prefs(app)
+        val version = try { app.updater.current } catch (_: Exception) { "" }
+        // u1: the last state, as the TV last said it; a newer Muninn running now means the update went in.
+        remote.value = TvUpd.St(version, p0.getString("uState", null)?.takeIf { it in TvUpd.STATES && it != TvUpd.DOWNLOADING && it != TvUpd.CHECKING } ?: TvUpd.CURRENT,
+            why = p0.getString("uWhy", null), at = p0.getLong("lastCheck", 0L))
         // Muninn came back up as a newer version: the update went in, and the parents' phones hear so.
         try {
-            val now = app.updater.current
-            val before = prefs(app).getString("runs", "") ?: ""
-            if (before != now) {
-                prefs(app).edit().putString("runs", now).apply()
-                if (before.isNotEmpty()) post(app, State(status = "Muninn is up to date", code = "done"))
+            val before = p0.getString("runs", "") ?: ""
+            if (before != version) {
+                p0.edit().putString("runs", version).apply()
+                if (before.isNotEmpty()) { post(app, State(status = "Muninn is up to date", code = "done")); setRemote(app, TvUpd.CURRENT) }
             }
         } catch (_: Exception) {}
         app.updater.installer = { apk -> install(app, apk); true }
-        // Once a day, and only while it's plugged in (a TV always is; a tablet in kids' mode waits for its charger).
+        // The Updater's steps (checking, downloading, done, failed) go to the parents' phones (u1).
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob()).launch {
+            app.updater.state.collect { st -> try { fromUpdater(app, st) } catch (_: Exception) {} }
+        }
+        // A minute after start, then once a day, and only while it's plugged in (a TV always is; a tablet in kids' mode
+        // waits for its charger). The parents' phones hear the TV's version on start and every day.
+        var first = true
         timer.scheduleWithFixedDelay({
             try {
                 val now = System.currentTimeMillis()
                 val p = prefs(app)
                 // k7 (7.12): a parent who turned automatic checks off turns them off here too; otherwise they stay on.
                 val auto = KidTv.state.value.cfg?.upd ?: true
-                if (auto && now - p.getLong("lastDailyCheck", 0L) >= DAY && app.power.charging()) {
+                if (auto && (first || now - p.getLong("lastDailyCheck", 0L) >= DAY) && app.power.charging()) {
                     p.edit().putLong("lastDailyCheck", now).apply()
                     checkNow(app)
                 }
+                if (first || now - p.getLong("lastReport", 0L) >= DAY) {
+                    p.edit().putLong("lastReport", now).apply()
+                    report(app, null)
+                }
+                first = false
             } catch (_: Exception) {}
         }, 60_000, HOUR, TimeUnit.MILLISECONDS)
     }
 
-    /** A parent asked (room tvconfig "update"), or the daily check. */
+    /** A parent asked (room tvconfig "update", or u1 "upnow"), the check on start, the daily check, or a try again. */
     fun checkNow(app: Muninn) { app.updater.check(installAfter = true) }
+
+    /** u1: a parent's Update now. They hear where the TV is at once, then each step. */
+    fun remoteNow(app: Muninn, parent: String) {
+        report(app, listOf(parent))
+        checkNow(app)
+    }
+
+    /** u1: the TV's state to [to] (every parent with u1 when null), whether or not it changed. */
+    private fun report(app: Muninn, to: List<String>?) {
+        val st = remote.value ?: TvUpd.St(try { app.updater.current } catch (_: Exception) { "" }, TvUpd.CURRENT, at = prefs(app).getLong("lastCheck", 0L))
+        KidTv.sendUpd(app, TvUpd.stateMessage(st), to)
+    }
+
+    /** u1: a new state; the parents' phones hear it when it's worth a frame ([TvUpd.worthSending]). */
+    private fun setRemote(c: Context, s: String, p: Int? = null, why: String? = null) {
+        val app = c.applicationContext as? Muninn ?: return
+        val prefs = prefs(app)
+        val now = System.currentTimeMillis()
+        // A check that ended (up to date, or failed) is the last check.
+        if (s == TvUpd.CURRENT || s == TvUpd.FAILED) prefs.edit().putLong("lastCheck", now).apply()
+        prefs.edit().putString("uState", s).putString("uWhy", why).apply()
+        val next = TvUpd.St(try { app.updater.current } catch (_: Exception) { "" }, s, p, why, prefs.getLong("lastCheck", 0L))
+        val prev = remote.value
+        remote.value = next
+        if (TvUpd.worthSending(prev, next)) KidTv.sendUpd(app, TvUpd.stateMessage(next), null)
+        when (s) {
+            TvUpd.CURRENT -> { fails = 0; retry?.cancel(false); retry = null }
+            // Once per failure: the Updater may say the same line again.
+            TvUpd.FAILED -> if (prev?.s != TvUpd.FAILED || prev?.why != why) tryAgain(app)
+        }
+    }
+
+    /** After a failure: try again later, sooner at first (5 min, 15 min, 1 h, 4 h, then every 12 h), unless a parent turned Auto-update off. */
+    private fun tryAgain(app: Muninn) {
+        if (KidTv.state.value.cfg?.upd == false) return
+        fails++
+        retry?.cancel(false)
+        retry = timer.schedule(Runnable { try { checkNow(app) } catch (_: Exception) {} }, TvUpd.retryMs(fails), TimeUnit.MILLISECONDS)
+    }
+
+    private fun fromUpdater(app: Muninn, st: io.github.ravenor907.muninn.update.Updater.State) {
+        val (s, why) = TvUpd.fromUpdater(st.status, st.busy, st.progress) ?: return
+        // An install on its way (or waiting for OK on the TV) isn't undone by the Updater's last line.
+        val cur = remote.value?.s
+        if ((cur == TvUpd.INSTALLING || cur == TvUpd.TAP) && s == TvUpd.DOWNLOADING) return
+        setRemote(app, s, if (s == TvUpd.DOWNLOADING) (st.progress * 100).toInt().coerceIn(0, 100) else null, why)
+    }
+
+    /** A call is on: an update never goes in then (installing closes Muninn). */
+    private fun inCall(): Boolean = io.github.ravenor907.muninn.net.call.CallManager.call.value != null
 
     fun canInstall(c: Context) = Build.VERSION.SDK_INT < 26 || c.packageManager.canRequestPackageInstalls()
 
-    /** Installs [apk] with a session; without the "install unknown apps" permission it waits for a parent. */
+    /**
+     * Installs [apk] with a session; without the "install unknown apps" permission it waits for someone at the TV
+     * (the TV's prompt opens that setting). During a call it waits for the call to end.
+     */
     fun install(c: Context, apk: File) {
-        if (!canInstall(c)) { waiting = apk; post(c, State(needsParent = true, status = TvWords.ASK_PARENT, code = "needs")); return }
+        if (inCall()) {
+            val first = afterCall == null
+            afterCall = apk
+            if (first) timer.schedule(object : Runnable {
+                override fun run() {
+                    val held = afterCall ?: return
+                    if (inCall()) { timer.schedule(this, 30, TimeUnit.SECONDS); return }
+                    afterCall = null
+                    if (held.exists()) install(c, held)
+                }
+            }, 30, TimeUnit.SECONDS)
+            return
+        }
+        if (!canInstall(c)) { waiting = apk; post(c, State(needsParent = true, status = TvWords.ASK_PARENT, code = "needs")); setRemote(c, TvUpd.TAP); return }
         waiting = null
         Thread {
             try {
@@ -100,8 +191,10 @@ object TvUpdate {
                     s.commit(done.intentSender)
                 }
                 post(c, State(status = "Installing the new Muninn…", code = "installing"))
+                setRemote(c, TvUpd.INSTALLING)
             } catch (e: Exception) {
-                post(c, State(status = "The update couldn't be installed. It tries again tomorrow.", code = "failed"))
+                post(c, State(status = "The update couldn't be installed. It tries again later.", code = "failed"))
+                setRemote(c, TvUpd.FAILED, why = "Couldn't start the install")
             }
         }.start()
     }
@@ -119,11 +212,14 @@ object TvUpdate {
                     else i.getParcelableExtra(Intent.EXTRA_INTENT)) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 post(c, State(confirm = confirm, status = "A new Muninn is ready", code = "ready"))
-                // On screen now: Android's Install box comes straight up. Otherwise the TV screen offers it.
-                try { if ((c.applicationContext as? Muninn)?.visible == true) c.startActivity(confirm) } catch (_: Exception) {}
+                setRemote(c, TvUpd.TAP)
+                // The TV screen shows "Ask a grown-up: press OK to update"; OK brings up Android's Install box.
             }
-            PackageInstaller.STATUS_SUCCESS -> post(c, State(status = "Muninn is up to date", code = "done"))
-            else -> post(c, State(status = "The update didn't go in. It tries again tomorrow.", code = "failed"))
+            PackageInstaller.STATUS_SUCCESS -> { post(c, State(status = "Muninn is up to date", code = "done")); setRemote(c, TvUpd.CURRENT) }
+            else -> {
+                post(c, State(status = "The update didn't go in. It tries again later.", code = "failed"))
+                setRemote(c, TvUpd.FAILED, why = "Android didn't install it")
+            }
         }
     }
 
@@ -134,12 +230,19 @@ object TvUpdate {
         if (st.code != was) (c.applicationContext as? Muninn)?.let { try { KidTv.updateChanged(it) } catch (_: Exception) {} }
     }
 
-    /** The remote's OK on "Install the update": Android's own Install box. */
+    /**
+     * The remote's OK on "Ask a grown-up: press OK to update": Android's own Install box, or, while Muninn may not
+     * install apps yet, the Android setting that allows it (the update goes in once it's on, see [resume]).
+     */
     fun confirm(c: Context) {
-        val i = state.value.confirm ?: return
+        val i = state.value.confirm
+        if (i == null) { if (state.value.needsParent) open(c, "install"); return }
         state.value = state.value.copy(confirm = null)
         try { c.startActivity(i) } catch (_: Exception) {}
     }
+
+    /** The TV's full-screen update prompt shows: a confirm or a permission is waiting, and no call is on. */
+    fun prompting(st: State, inCall: Boolean): Boolean = !inCall && (st.confirm != null || st.needsParent)
 
     // ------------------------------------------------------------------ permissions a parent asks for from their phone
 

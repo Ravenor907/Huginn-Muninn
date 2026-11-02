@@ -480,7 +480,7 @@ fun MuninnTheme(content: @Composable () -> Unit) {
     }
 }
 
-/** Settings › Lock and privacy › Private keyboard. Set from the saved choice when Muninn starts, and by the switch. */
+/** Settings › Privacy and lock › Private keyboard. Set from the saved choice when Muninn starts, and by the switch. */
 object PrivateKeyboard {
     var on by androidx.compose.runtime.mutableStateOf(false)
 }

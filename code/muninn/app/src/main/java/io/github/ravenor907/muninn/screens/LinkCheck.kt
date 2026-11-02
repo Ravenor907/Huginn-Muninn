@@ -74,7 +74,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Linking by QR (shared/docs/protocol.md section 15). A tablet shows "Link your phone" with a big QR; the phone scans it
- * (Settings › Linked devices › Scan to link, or any scanner in Muninn); both screens show the same 4 emoji and the
+ * (Settings › Devices and backup › Scan to link, or any scanner in Muninn); both screens show the same 4 emoji and the
  * person says they match; then "Linked". Never on a Kids' TV (it has its own screens and never gets here).
  */
 object LinkUi {
@@ -187,7 +187,7 @@ fun LinkYourPhone(app: Muninn, onClose: () -> Unit) {
                         RavenMark()
                         Text("Link your phone", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
                         if (code.isNotEmpty()) Box(Modifier.padding(top = 18.dp)) { Qr(code, 340.dp) }
-                        Text("In Muninn: Settings › Linked devices › Scan to link", style = Type.normal, textAlign = TextAlign.Center,
+                        Text("In Muninn: Settings › Devices and backup › Scan to link", style = Type.normal, textAlign = TextAlign.Center,
                             modifier = Modifier.padding(top = 16.dp))
                         MButton("Skip", Modifier.fillMaxWidth().padding(top = 22.dp).focusRequester(skip)) { close() }
                         // For a phone without a camera: the same code as text, to paste there.
@@ -285,7 +285,7 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
         dismissButton = { MButton("Cancel") { onDone(false) } })
 }
 
-/** Settings › Linked devices: this phone's companions and Scan to link; on a tablet, Link my phone and its phone. */
+/** Settings › Devices and backup: this phone's companions and Scan to link; on a tablet, Link my phone and its phone. */
 @Composable
 internal fun LinkedDevicesPanel(app: Muninn) {
     val ctx = LocalContext.current

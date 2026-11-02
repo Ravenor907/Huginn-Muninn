@@ -60,7 +60,7 @@ Item {
     function copyInstead() {
         if (tour || shownCode === "") return
         Chat.copyText(shownCode, true)
-        Ui.note("Link code copied", "Paste it in Muninn: Settings › Linked devices › Scan to link. Works once, for 10 minutes. It's cleared from the clipboard in a minute.")
+        Ui.note("Link code copied", "Paste it in Muninn: Settings › Devices and backup › Scan to link. Works once, for 10 minutes. It's cleared from the clipboard in a minute.")
     }
     function handleButton(b) {
         if (b === "left" || b === "up") focusIndex = Math.max(0, focusAt - 1)
@@ -157,7 +157,7 @@ Item {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: "In Muninn: Settings › Linked devices › Scan to link"
+                text: "In Muninn: Settings › Devices and backup › Scan to link"
                 color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
             }
 

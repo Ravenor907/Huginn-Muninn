@@ -40,7 +40,7 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putBoolean("nearbyChat", v).apply()
 
     /**
-     * Settings › Lock and privacy › Nearby. Off: no Nearby room or Nearby list, nobody new can message over Bluetooth
+     * Settings › Privacy and lock › Nearby. Off: no Nearby room or Nearby list, nobody new can message over Bluetooth
      * or Wi-Fi, and nothing about this phone goes out on its own ([nearbyOff]). Contacts still reach it.
      */
     var visibleNearby: Boolean
@@ -54,7 +54,7 @@ class Identity(context: Context, private val vault: Vault) {
     @Volatile var kidsTv: () -> Boolean = { false }
 
     /**
-     * Settings › Lock and privacy › Nearby is off: nothing is announced on the Wi-Fi or Bluetooth, nothing is scanned
+     * Settings › Privacy and lock › Nearby is off: nothing is announced on the Wi-Fi or Bluetooth, nothing is scanned
      * for, nobody nearby is listed and only contacts are answered. Contacts still reach this phone on the home Wi-Fi
      * where they were last seen (shared/docs/protocol.md 21.3). Never on a Kids' TV.
      */
@@ -133,7 +133,7 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getBoolean("stayConnected", true)
         set(v) = prefs.edit().putBoolean("stayConnected", v).apply()
 
-    // ---- accessibility (Settings › Accessibility)
+    // ---- accessibility (Settings › Look)
     var uiSize: Float
         get() = prefs.getFloat("uiSize", 1f)
         set(v) = prefs.edit().putFloat("uiSize", v).apply()

@@ -87,6 +87,8 @@ Rectangle {
         if (a.zone) zone = a.zone
         if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
+        // Opened from a notification: no "New from" bar on the way back to the list, until the next new message.
+        if (a.noticed) newFromClosed = Date.now()
         if (a.add) Qt.callLater(addSomeone)   // Contacts › +
         if (a.mirror) { const p = a.mirror; Qt.callLater(() => mirror.open(p)) }   // Contacts › a phone contact › Message
         // A contact's menu › Find in chat, Media and files › Media, or More › Pinned messages.
@@ -99,11 +101,35 @@ Rectangle {
     // The lock's own LB (pattern or password) wins over moving along the rail.
     readonly property bool ownsShoulders: lock.visible && !lock.asks
 
+    // The "New from" bar (plan 2.14): the unread chats newest first, its words, and when its X was last pressed (this run only).
+    property real newFromClosed: 0
+    readonly property var unreadChats: tour || locked ? [] : Chat.chats.filter(c => c.contact && !c.archived && (c.newCount || 0) > 0)
+                                                                 .sort((a, b) => (b.time || 0) - (a.time || 0))
+    readonly property real newestUnread: unreadChats.length ? Number(unreadChats[0].time || 0) : 0
+    readonly property string newFromText: unreadChats.length === 0 ? ""
+        : "New from " + unreadChats.slice(0, 2).map(c => c.name).join(", ") + (unreadChats.length > 2 ? " +" + (unreadChats.length - 2) : "")
+    readonly property bool newFromShown: newFromText !== "" && newestUnread > newFromClosed
+    // The bar comes and goes above the rows: the controller's focus stays on the same row.
+    onNewFromShownChanged: row = Math.max(0, row + (newFromShown ? 1 : -1))
+    function openNewFrom() {
+        if (unreadChats.length === 1) { openKey = unreadChats[0].key; picked = true; zone = "messages"; return }
+        // Several: the first unread row (they sit at the top of their section), or a folded folder holding one.
+        let i = entries.findIndex(x => x.kind === "chat" && (x.newCount || 0) > 0)
+        if (i < 0) i = entries.findIndex(x => x.kind === "folder" && x.unread)
+        if (i < 0) return
+        zone = "list"
+        row = i
+        listPane.positionViewAtIndex(i, ListView.Beginning)
+    }
+    function hideNewFrom() { newFromClosed = newestUnread }
+
     // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
     // keep their own order; people in no folder go newest first until they're moved.
     readonly property var entries: {
         // Rows waiting for an answer carry a short tag instead of a second line.
         const out = []
+        // "New from Mom, Taylor +3" at the top (plan 2.14): A opens the one unread chat, or goes to the unread ones.
+        if (newFromShown) out.push({ kind: "newfrom", name: newFromText })
         // A linked phone (this device as its companion): its chats in their own section at the top, then this device's own.
         if (Linked.phone.key && !tour) {
             const phoneChats = Linked.phone.ok ? Linked.mirror : []
@@ -122,18 +148,24 @@ Rectangle {
         // Contacts only: anyone else is in the Nearby section at the bottom.
         const all = Chat.chats, chats = all.filter(c => !c.archived && c.contact), byKey = {}
         chats.forEach(c => byKey[c.key] = c)
-        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, route: c.route, section: section,
-                                          tag: c.pinned && section === "" ? "Pinned" : "", muted: !!c.muted })
+        // A chat's row: its name, the last message under it, and how many are new.
+        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, newCount: c.newCount || 0, last: c.last || "",
+                                          route: c.route, section: section, tag: c.pinned && section === "" ? "Pinned" : "", muted: !!c.muted })
+        // Plan 2.14: pinned first, then the unread ones newest first, then the rest as before (newest first, or as moved).
+        const fresh = c => (c.newCount || 0) > 0
+        const newestFirst = (a, b) => (b.time || 0) - (a.time || 0)
         const order = Chat.topOrder
         const loose = chats.filter(c => !(c.folders || []).length)
         loose.filter(c => c.pinned).forEach(c => out.push(person(c, "")))
-        loose.filter(c => !c.pinned && order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
-        order.forEach(k => { const c = byKey[k]; if (c && !c.pinned && !(c.folders || []).length) out.push(person(c, "")) })
+        loose.filter(c => !c.pinned && fresh(c)).sort(newestFirst).forEach(c => out.push(person(c, "")))
+        loose.filter(c => !c.pinned && !fresh(c) && order.indexOf(c.key) < 0).forEach(c => out.push(person(c, "")))
+        order.forEach(k => { const c = byKey[k]; if (c && !c.pinned && !fresh(c) && !(c.folders || []).length) out.push(person(c, "")) })
         Chat.folders.forEach(f => {
             const keys = (f.keys || []).filter(k => !!byKey[k])
             out.push({ kind: "folder", id: f.id, name: f.name, collapsed: !!f.collapsed, count: keys.length,
                        unread: !!f.collapsed && keys.some(k => byKey[k].unread) })
-            if (!f.collapsed) keys.forEach(k => out.push(person(byKey[k], f.id)))
+            const shown = keys.filter(k => fresh(byKey[k])).sort((a, b) => newestFirst(byKey[a], byKey[b])).concat(keys.filter(k => !fresh(byKey[k])))
+            if (!f.collapsed) shown.forEach(k => out.push(person(byKey[k], f.id)))
         })
         const archived = all.filter(c => c.archived)
         if (archived.length) out.push({ kind: "archived", name: "Archived", tag: String(archived.length), unread: archived.some(c => c.unread) })
@@ -170,6 +202,8 @@ Rectangle {
                                                                                   : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
+        : zone === "list" && entries[row] && entries[row].kind === "newfrom" ? [{ key: "a", label: unreadChats.length === 1 ? "Open" : "Go to them" },
+                                                                             { key: "lt", label: "Hide" }, { key: "b", label: "Back" }]
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
                              { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
         : !picked ? [{ key: "a", label: "Add someone" }, { key: "b", label: "Back" }]
@@ -320,8 +354,11 @@ Rectangle {
                 readonly property bool on: page.active && page.zone === "list" && page.row === index
                 readonly property bool isHeader: modelData.kind === "folder"
                 readonly property real labelHeight: modelData.label ? Theme.px(30) : 0
+                // A chat with messages: two lines (the name, then the last message).
+                readonly property bool twoLines: modelData.kind === "chat" && !!modelData.last
+                readonly property real rowHeight: twoLines ? Theme.px(54) : Theme.px(42)
                 width: listPane.width
-                height: labelHeight + (isHeader ? Theme.px(30) : Theme.px(42))
+                height: labelHeight + (isHeader ? Theme.px(30) : rowHeight)
 
                 // The start of the bottom section (Nearby), or of the people around you.
                 Item {
@@ -402,15 +439,18 @@ Rectangle {
                     visible: !entry.isHeader
                     anchors.bottom: parent.bottom
                     width: parent.width
-                    height: Theme.px(42)
+                    height: entry.rowHeight
                     radius: Theme.radius
                     // The one being dragged stays dim in its old place until it's dropped.
                     opacity: page.dragKey !== "" && modelData.kind === "chat" && modelData.key === page.dragKey && modelData.section === page.dragFrom ? 0.4 : 1
-                    color: on || here ? Theme.tile : rowHover.hovered ? Theme.raised : "transparent"
+                    // The "New from" bar sits on the accent's soft fill.
+                    color: on || here ? Theme.tile : modelData.kind === "newfrom" ? Theme.accentFill : rowHover.hovered ? Theme.raised : "transparent"
                     border.width: on ? Theme.focusWidth : 0
                     border.color: Theme.accent
-                    Accessible.role: Accessible.ListItem
-                    Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.muted ? ", muted" : "") + (modelData.unread ? ", unread" : "")
+                    Accessible.role: modelData.kind === "newfrom" ? Accessible.Button : Accessible.ListItem
+                    Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.muted ? ", muted" : "")
+                                     + ((modelData.newCount || 0) > 0 ? ", " + modelData.newCount + " unread" : modelData.unread ? ", unread" : "")
+                                     + (entry.twoLines ? ", " + modelData.last : "")
                     Rectangle {
                         id: ava
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
@@ -431,8 +471,9 @@ Rectangle {
                             visible: !parent.parent.person
                             anchors.centerIn: parent
                             size: Theme.px(18)
-                            name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : modelData.kind === "archived" ? "folder" : "people"
-                            color: parent.parent.here || parent.parent.on ? Theme.accent : Theme.textMuted
+                            name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : modelData.kind === "archived" ? "folder"
+                                : modelData.kind === "newfrom" ? "bell" : "people"
+                            color: parent.parent.here || parent.parent.on || modelData.kind === "newfrom" ? Theme.accent : Theme.textMuted
                         }
                         // Requests wait for an answer: a lock badge so they stand out.
                         Rectangle {
@@ -443,16 +484,50 @@ Rectangle {
                             color: Theme.accent
                         }
                     }
-                    // One line: the name, a short tag for what waits for an answer, the unread dot and the three dots.
+                    // The name, a short tag for what waits for an answer, the unread count (or dot) and the three dots.
+                    // Unread (plan 2.14): the name bold and the last message in full text color; read: lighter and muted.
                     Text {
+                        id: nameText
                         textFormat: Text.PlainText
                         anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                        anchors.right: mutedIcon.visible ? mutedIcon.left : tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left
+                        anchors.right: closeNew.visible ? closeNew.left : mutedIcon.visible ? mutedIcon.left : tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left
                         anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenterOffset: entry.twoLines ? -Theme.px(9) : 0
                         elide: Text.ElideRight; text: modelData.name || ""
-                        color: parent.on || parent.here || modelData.unread ? Theme.text : Theme.textSoft
-                        font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: modelData.unread ? Font.DemiBold : Font.Medium
+                        color: parent.on || parent.here || modelData.unread || modelData.kind === "newfrom" ? Theme.text : Theme.textSoft
+                        font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                        font.weight: (modelData.newCount || 0) > 0 ? Font.Bold : modelData.unread || modelData.kind === "newfrom" ? Font.DemiBold : Font.Normal
+                    }
+                    // The last message, under the name.
+                    Text {
+                        visible: entry.twoLines
+                        textFormat: Text.PlainText
+                        anchors.left: nameText.left
+                        anchors.right: dot.visible ? dot.left : rowMore.left
+                        anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.verticalCenterOffset: Theme.px(10)
+                        elide: Text.ElideRight; maximumLineCount: 1
+                        text: String(modelData.last || "").replace(/\s+/g, " ")
+                        color: (modelData.newCount || 0) > 0 ? Theme.text : Theme.textMuted
+                        font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    }
+                    // The "New from" bar's X: hidden until the next new message (a controller uses X).
+                    Rectangle {
+                        id: closeNew
+                        visible: modelData.kind === "newfrom"
+                        anchors.right: rowMore.left; anchors.rightMargin: Theme.px(2)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: visible ? Theme.px(28) : 0; height: Theme.px(28)
+                        radius: Theme.radius
+                        color: closeArea.containsMouse ? Theme.raised : "transparent"
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Hide until the next message"
+                        Accessible.onPressAction: page.hideNewFrom()
+                        Icon { anchors.centerIn: parent; name: "close"; size: Theme.px(14); lineWidth: 2; color: closeArea.containsMouse ? Theme.text : Theme.textMuted }
+                        // A MouseArea, so the click never reaches the bar underneath.
+                        MouseArea { id: closeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: page.hideNewFrom() }
                     }
                     // A muted chat: a bell struck through.
                     Icon {
@@ -481,14 +556,27 @@ Rectangle {
                             font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold
                         }
                     }
+                    // Unread: how many in the accent (a chat with something new), else a dot.
                     Rectangle {
                         id: dot
+                        readonly property int n: modelData.kind === "chat" ? modelData.newCount || 0 : 0
                         anchors.right: rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
-                        width: Theme.px(8); height: width; radius: width / 2
+                        height: n > 0 ? Theme.px(18) : Theme.px(8)
+                        width: n > 0 ? Math.max(height, countText.implicitWidth + Theme.px(10)) : height
+                        radius: height / 2
                         // A chat with its own color shows it here too.
                         color: modelData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(modelData.key))) : Theme.accent
                         visible: !!modelData.unread
+                        Text {
+                            id: countText
+                            visible: dot.n > 0
+                            anchors.centerIn: parent
+                            textFormat: Text.PlainText
+                            text: dot.n > 99 ? "99+" : String(dot.n)
+                            color: Theme.onAccent
+                            font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold
+                        }
                     }
                     HoverHandler { id: rowHover }
                     // Someone nearby and the other rows: a right click or a long press for their menu (rowContext).
@@ -1382,6 +1470,15 @@ Rectangle {
             return
         }
         if (e.kind === "folder") { folderOptions(e); return }
+        // The "New from" bar: open, or hide it until the next new message.
+        if (e.kind === "newfrom") {
+            Ui.pickFrom("New messages", [{ header: "", items: [{ name: unreadChats.length === 1 ? "Open" : "Go to them", icon: "thread", url: "open" },
+                                                               { name: "Hide until the next message", icon: "close", url: "hide" }] }], a => {
+                if (a === "open") page.openNewFrom()
+                else if (a === "hide") page.hideNewFrom()
+            })
+            return
+        }
         // A chat from the phone: mute it (on the phone too). The chat isn't opened, so nothing in it is marked read.
         if (e.kind === "mirror" && e.peer) {
             const c = Linked.mirror.find(x => x.peer === e.peer)
@@ -1522,7 +1619,7 @@ Rectangle {
     // First open, after the lock is set: what people see as your name (prefilled; Skip keeps it), then Link your phone.
     function askFirstName() {
         const next = () => { if (!Linked.phone.key && Linked.companions.length === 0 && Ui.main) Ui.main.showLinkPhone(true) }
-        Ui.ask("What should people call you?", "A nickname is fine. Change it any time in Settings › You.", Chat.username, "Continue",
+        Ui.ask("What should people call you?", "A nickname is fine. Change it any time in Settings › Profile.", Chat.username, "Continue",
                t => { Chat.username = t; Qt.callLater(next) }, false, false)
         if (Ui.prompt) { Ui.prompt.cancelText = "Skip"; Ui.prompt.cancelCallback = () => Qt.callLater(next) }
     }
@@ -1620,6 +1717,7 @@ Rectangle {
         const e = entries[row]
         if (!e) return
         switch (e.kind) {
+        case "newfrom": openNewFrom(); return
         case "nearby": openKey = ""; picked = true; zone = "messages"; return
         case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
         case "ginvite":
@@ -1931,7 +2029,8 @@ Rectangle {
             else write()
             return true
         case "x":
-            if (zone === "list") listOptions()
+            if (zone === "list" && entries[row] && entries[row].kind === "newfrom") hideNewFrom()   // the "New from" bar's X
+            else if (zone === "list") listOptions()
             else if (zone === "messages" && sel >= 0) options()
             else if (zone === "messages" && openKey !== "") chatMenu()
             else if (zone === "messages") write()

@@ -177,6 +177,8 @@ Window {
     }
     function restoreFocus() { keys.forceActiveFocus() }
     // The lock screen goes up (the power menu, or Lock in your card); messages still arrive behind it.
+    // Settings › Profile › Status: your status card, as a click on your name opens it.
+    function openStatusCard() { meCard.open() }
     function lockNow() {
         if (!Vault.hasLock || Vault.screenLocked) return
         if (meCard.visible) meCard.close()
@@ -273,7 +275,7 @@ Window {
     onInVoiceChanged: {
         if (inVoice && afterFiles !== "")
             cancelWait((Rooms.inRoom ? "You're in a voice room now" : "You're in a call now")
-                       + (afterFiles === "restart" ? ", so the update waits. Restart now is in Settings › About." : ", so Huginn stays open."))
+                       + (afterFiles === "restart" ? ", so the update waits. Restart now is in Settings › Updates and about." : ", so Huginn stays open."))
     }
     Connections {
         target: FileLink
@@ -291,7 +293,7 @@ Window {
             // Paused while waiting: it would never finish, so Huginn stays (and says so) rather than cut it off.
             if (FileLink.pausedCount > 0) {
                 app.sayOutOfSight(what === "restart" ? "Huginn didn't restart" : "Huginn didn't close",
-                                  what === "restart" ? "A file is paused, so the update waits. Restart now is in Settings › About." : "A file is paused, so Huginn stays open.", false)
+                                  what === "restart" ? "A file is paused, so the update waits. Restart now is in Settings › Updates and about." : "A file is paused, so Huginn stays open.", false)
                 return
             }
             // Something else started meanwhile (a call, a voice room, another file): ask again rather than cut it off.
@@ -318,7 +320,7 @@ Window {
         if (outOfSight()) System.notifyNow(title, text)
         Ui.say(text, bad)
     }
-    // Restart now (the update bar, Settings › About): a call, a voice room or a file on its way asks first, and the
+    // Restart now (the update bar, Settings › Updates and about): a call, a voice room or a file on its way asks first, and the
     // update can wait for the file.
     function restartForUpdate() {
         const files = FileLink.closeWarning !== ""
@@ -488,6 +490,24 @@ Window {
         onTriggered: {
             if (Profile.myStatus !== "online" || Calls.inCall || Rooms.inRoom) return
             if (Date.now() - app.lastInput >= app.awayAfterMs) { app.autoAway = true; Profile.setStatus("away") }
+        }
+    }
+    // Asked once: an install from before What notifications show was picked anywhere (no saved choice) that shows
+    // Nothing. Not over the lock screen, a call, first setup or another dialog; it waits and looks again. It saves
+    // Nothing as it opens, so Back (or a click outside) keeps Nothing and it never asks again. Settings › Notifications
+    // › What notifications show changes it after.
+    Timer {
+        id: askWho
+        interval: 5000; running: !app.touring; repeat: true
+        onTriggered: {
+            if (Chat.previewModeChosen() || Chat.previewMode !== 0) { stop(); return }
+            if (!Chat.ready || Vault.screenLocked || Calls.inCall || Rooms.inRoom || setup.visible || Settings.setupState === "started" || app.overlay()) return
+            stop()
+            Chat.previewMode = 0
+            Ui.pickFrom("Show who messages are from?", [{ header: "", items: [
+                { name: "Name only (recommended)", detail: "Who it's from, not the message", url: "1" },
+                { name: "Name and message", detail: "Who it's from and a short preview", url: "2" },
+                { name: "Nothing", detail: "Only \"New message\"", url: "0" }] }], v => Chat.previewMode = Number(v))
         }
     }
 
@@ -662,7 +682,7 @@ Window {
             else if (e.id === "files") items = [{ name: "Open", icon: "folder", url: "open" }, { name: "Transfers", icon: "down", url: "transfers" },
                                                 { name: "Look again", icon: "search", url: "look" }]
             else if (e.id === "settings") items = [{ name: "Look", icon: "image", url: "s:look" }, { name: "Notifications", icon: "bell", url: "s:notify" },
-                                                   { name: "Privacy and lock", icon: "lock", url: "s:privacy" }, { name: "Devices", icon: "phone", url: "s:devices" },
+                                                   { name: "Privacy and lock", icon: "lock", url: "s:privacy" }, { name: "Devices and backup", icon: "phone", url: "s:devices" },
                                                    { name: "Keyboard shortcuts", icon: "keyboard", url: "keys" }]
             else if (e.id === "exit") items = rail.menuItems.map(m => ({ name: m.label, icon: m.icon, url: m.id, danger: !!m.danger }))
             Ui.pickFrom(e.label || "", [{ header: "", items: items }], a => {
@@ -688,7 +708,7 @@ Window {
         const left = rail.width + Theme.px(140)
         if (what === "person") {
             at(left, Theme.px(160), () => PeopleActions.personMenu("tour", "Mira", { tour: true }))
-            ctxMenu.openSubNamed("Mute notifications")
+            ctxMenu.openSubNamed("Mute")
         } else if (what === "group") {
             const r = rail.spotRect("g:tour-crew")
             at(r ? r.x + r.width / 2 : Theme.px(36), r ? r.y + r.height / 2 : Theme.px(140), () => PeopleActions.groupRowMenu("tour-crew", "Gaming Crew", { tour: true }))
@@ -798,9 +818,28 @@ Window {
         if (Vault.screenLocked) setupWaits = true
         else openSetup(false)
     }
+    // A notification clicked while locked: its chat, opened once Huginn is unlocked (plan 2.14 point 3).
+    property string afterUnlock: ""
     Connections {
         target: Vault
-        function onChanged() { if (app.setupWaits && !Vault.screenLocked) { app.setupWaits = false; app.openSetup(false) } }
+        function onChanged() {
+            if (app.setupWaits && !Vault.screenLocked) { app.setupWaits = false; app.openSetup(false) }
+            if (app.afterUnlock !== "" && !Vault.screenLocked) {
+                const w = app.afterUnlock
+                app.afterUnlock = ""
+                Qt.callLater(() => app.openNoticed(w))
+            }
+        }
+    }
+    // Where a clicked notification goes: its chat (a contact's key, "g:<group>" or "g:<group>:<channel>", a phone's
+    // "mirror:<peer>#<channel>"; "" the chat list). Locked: the chat list with the lock, then that chat once unlocked.
+    function openNoticed(where) {
+        if (Vault.screenLocked || where === "") { app.afterUnlock = Vault.screenLocked ? where : ""; app.openPage("dms", {}); return }
+        if (where.startsWith("mirror:")) app.openPage("dms", { mirror: where.substring(7) })   // a chat from the phone ("<peer>#<channel>" opens that tab)
+        else if (where.startsWith("g:")) {
+            const parts = where.split(":")
+            app.openPage("g:" + parts[1], parts.length > 2 ? { channel: parts.slice(2).join(":"), zone: "messages" } : {})
+        } else app.openPage("dms", { open: where, noticed: true })
     }
     // The tour's stops on the real screen, in window coordinates ({x, y, width, height}), or null when not on show.
     function tourSpot(id) {
@@ -869,7 +908,7 @@ Window {
     }
 
     // A checked update waiting: a slim bar along the top; Huginn installs it only on Restart now. Later puts the bar
-    // away until the next timed check (or the next start); Settings › About still has Restart now.
+    // away until the next timed check (or the next start); Settings › Updates and about still has Restart now.
     property bool updateLater: false
     Connections {
         target: Updater
@@ -897,7 +936,7 @@ Window {
                 color: Theme.text
                 font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
-            HButton { text: "Later"; kind: "plain"; onClicked: { app.updateLater = true; Ui.say("Restart now is in Settings › About.") } }
+            HButton { text: "Later"; kind: "plain"; onClicked: { app.updateLater = true; Ui.say("Restart now is in Settings › Updates and about.") } }
             HButton { text: "Restart now"; kind: "primary"; onClicked: app.restartForUpdate() }
         }
     }
@@ -963,7 +1002,7 @@ Window {
             }
             HButton {
                 text: app.afterFiles === "restart" ? "Don't restart" : "Don't close"
-                onClicked: app.cancelWait(app.afterFiles === "restart" ? "The update waits. Restart now is in Settings › About." : "Huginn stays open.")
+                onClicked: app.cancelWait(app.afterFiles === "restart" ? "The update waits. Restart now is in Settings › Updates and about." : "Huginn stays open.")
             }
         }
     }
@@ -1181,12 +1220,7 @@ Window {
         // A notification was clicked: its chat (a contact's key, "g:<group>" or "g:<group>:<channel>"; "" the chat list).
         function onShowChat(where) {
             if (newsBanner.visible && newsBanner.where === where) newsBanner.hide()
-            if (Vault.screenLocked || where === "") { app.openPage("dms", {}); return }
-            if (where.startsWith("mirror:")) app.openPage("dms", { mirror: where.substring(7) })   // a chat from the phone ("<peer>#<channel>" opens that tab)
-            else if (where.startsWith("g:")) {
-                const parts = where.split(":")
-                app.openPage("g:" + parts[1], parts.length > 2 ? { channel: parts.slice(2).join(":"), zone: "messages" } : {})
-            } else app.openPage("dms", { open: where })
+            app.openNoticed(where)
         }
         // The system couldn't show a notification: the banner at the top of the window says it instead.
         function onBanner(title, body, where) { newsBanner.show(title, body, where) }
@@ -1308,6 +1342,7 @@ Window {
     Connections {
         target: Vault
         function onPanicked() {
+            app.afterUnlock = ""   // a panic lock never opens a chat by itself after
             if (prompt.visible) prompt.cancel()
             // First setup goes too (a real one picks up again after the next unlock or start).
             if (setup.visible) { setup.visible = false; app.setupWaits = Settings.setupState === "started" }
@@ -1624,12 +1659,12 @@ Window {
             // A contact's menu › Details, the other sub-page.
             { page: "dms", zone: "messages", person: true, personPage: "edit", file: "31-edit" },
             { page: "files", filesMenu: true, file: "32-files-menu" },
-            // Labs mode: its group in About, Report a bug, and Labs reports.
+            // Labs mode: Updates and about with the update channel, Report a bug, and Labs reports.
             { page: "settings", section: "about", labs: true, file: "33-labs" },
-            { page: "settings", section: "about", labs: true, report: true, file: "34-labs-report" },
+            { page: "settings", section: "labs", labs: true, report: true, file: "34-labs-report" },
             { page: "dms", labsInbox: true, file: "35-labs-reports" },
-            // Seasonal in Snow: the Look page with the season's settings, then a conversation.
-            { page: "settings", section: "look", theme: "dark", season: "snow", file: "36-snow-look" },
+            // Seasonal in Snow: the Look page with the season's settings (under More), then a conversation.
+            { page: "settings", section: "look", more: true, theme: "dark", season: "snow", file: "36-snow-look" },
             { page: "g:tour-crew", zone: "messages", theme: "dark", season: "snow", file: "37-snow" },
             // Link your phone: the code, the 4 emoji and Linked (the code on the Snow ground too).
             { page: "dms", linkPhone: "code", file: "38-link-phone" },
@@ -1639,12 +1674,12 @@ Window {
             // Settings › Notifications, and Find in a channel with its matches lit.
             { page: "settings", section: "notify", file: "42-notifications" },
             { page: "g:tour-crew", zone: "messages", find: "in", file: "43-find" },
-            // Labs › App storage (sample files: nothing on this computer is touched).
-            { page: "settings", section: "about", labs: true, appStorage: true, file: "44-app-storage" },
+            // Devices and backup › More › App storage (sample files: nothing on this computer is touched).
+            { page: "settings", section: "devices", more: true, appStorage: true, file: "44-app-storage" },
             // Labs › Performance check with sample results (nothing is measured).
-            { page: "settings", section: "about", labs: true, perf: true, file: "45-performance-check" },
-            // Seasonal over True black: the Look page with leaves falling on pure black.
-            { page: "settings", section: "look", theme: "black", season: "autumn", file: "46-look-seasonal-black" },
+            { page: "settings", section: "labs", labs: true, perf: true, file: "45-performance-check" },
+            // Seasonal over True black: the Look page (its More open) with leaves falling on pure black.
+            { page: "settings", section: "look", more: true, theme: "black", season: "autumn", file: "46-look-seasonal-black" },
             // Look at the largest text size: the pickers stay whole, under their names or as a dropdown.
             { page: "settings", section: "look", textSize: "150", file: "47-look-largest-text" },
             { page: "settings", section: "look", textSize: "150", small: true, file: "48-look-largest-small" },
@@ -1667,13 +1702,13 @@ Window {
             { page: "dms", ctx: "space", small: true, file: "77-menu-empty-list" },
             // A group's one Call button, its popup open: Call everyone, Pick people and Drop-in call for each room.
             { page: "g:tour-crew", zone: "messages", ctx: "call", file: "78-menu-call" },
-            // Settings › Backup: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
-            { page: "settings", section: "backup", backup: "what", file: "80-backup" },
-            { page: "settings", section: "backup", backup: "password", file: "81-backup-password" },
-            { page: "settings", section: "backup", backup: "saved", file: "82-backup-saved" },
-            { page: "settings", section: "backup", restore: "pick", file: "83-restore-choose" },
-            { page: "settings", section: "backup", restore: "password", file: "84-restore-password" },
-            { page: "settings", section: "backup", restore: "summary", file: "85-restore-summary" },
+            // Settings › Devices and backup › Back up: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
+            { page: "settings", section: "devices", backup: "what", file: "80-backup" },
+            { page: "settings", section: "devices", backup: "password", file: "81-backup-password" },
+            { page: "settings", section: "devices", backup: "saved", file: "82-backup-saved" },
+            { page: "settings", section: "devices", restore: "pick", file: "83-restore-choose" },
+            { page: "settings", section: "devices", restore: "password", file: "84-restore-password" },
+            { page: "settings", section: "devices", restore: "summary", file: "85-restore-summary" },
             // The handheld's layout (a 7 inch 1080p screen at its fit: 914 by 514 design px) in a voice room.
             { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, file: "86-handheld-voice" },
             { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, textSize: "115", file: "86b-handheld-voice-large" },
@@ -1718,6 +1753,7 @@ Window {
             Settings.labs = s.labs ? true : savedLabs
             const args = { tour: true }
             if (s.section) args.section = s.section
+            if (s.more) args.more = true
             if (s.zone) args.zone = s.zone
             if (s.groupOptions) args.groupOptions = true
             if (s.voice) args.voice = true

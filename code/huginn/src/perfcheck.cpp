@@ -1616,7 +1616,7 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
     // Animations: Off lay everything still whatever the setting says.
     QString seasonal = m_settings->seasonAnimation();
     if (seasonal != QLatin1String("off")) {
-        const QString still = m_settings->reduceMotion() ? QStringLiteral("Less motion")
+        const QString still = m_settings->reduceMotion() ? QStringLiteral("Reduce motion")
                               : m_system->batterySaving() && seasonal != QLatin1String("battery") ? QStringLiteral("Battery saver")
                               : s_animationsOff           ? QStringLiteral("Animations off")
                                                           : QString();
@@ -1624,7 +1624,7 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
             seasonal += QStringLiteral(" (held still: ") + still + QLatin1Char(')');
     }
     out << QStringLiteral("Theme: ") + theme + (look.isEmpty() || look == theme ? QString() : QString(QStringLiteral(" (") + look + QLatin1Char(')')))
-               + QStringLiteral(", Seasonal animation ") + seasonal + QStringLiteral(", Less motion ")
+               + QStringLiteral(", Seasonal animation ") + seasonal + QStringLiteral(", Reduce motion ")
                + (m_settings->reduceMotion() ? QStringLiteral("on") : QStringLiteral("off")) + QStringLiteral(", High contrast ")
                + (m_settings->highContrast() ? QStringLiteral("on") : QStringLiteral("off"));
     out << QStringLiteral("Tried settings in use: ") + describe(s_started);

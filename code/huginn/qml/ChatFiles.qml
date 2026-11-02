@@ -123,7 +123,7 @@ Item {
                 textFormat: Text.PlainText
                 width: parent.width; elide: Text.ElideMiddle
                 visible: panel.saveText !== ""
-                text: "Received files are saved in " + panel.saveText + ". Settings › Devices › Save files to changes it."
+                text: "Received files are saved in " + panel.saveText + ". Settings › Devices and backup › Save files to changes it."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
             }
             TextField {

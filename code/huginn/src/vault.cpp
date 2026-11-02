@@ -1738,7 +1738,7 @@ void Vault::restoreErasing()
     }
     // Only from behind the lock: open, the usual restore keeps a copy instead (Settings › Backup).
     if (m_restarting || !exists() || !hasLock() || !screenLocked()) {
-        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Huginn isn't locked. Use Settings › Backup instead."));
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Huginn isn't locked. Use Settings › Devices and backup instead."));
         return;
     }
     QString why;

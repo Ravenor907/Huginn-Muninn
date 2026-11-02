@@ -81,20 +81,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /**
-     * Cap n1 (section 23.3): a real message ([NudgeWire.counts]) to a contact whose app says n1 also sends a nudge to
-     * their ring mailbox, sealed to their ring key, so their phone can say "Muninn is locked" while locked there.
-     * At most one a minute per person.
+     * Caps n1 and n2 (section 23.3): a real message ([NudgeWire.counts]) also sends a nudge, so their phone can say a
+     * message came while it's locked there. n2 (a contact or a group peer): my name, the group's name ("" for 1:1) and
+     * the [kind], to their nudge mailbox ([NudgeWire.route]). n1 only (a contact): the plain nudge to their ring mailbox.
+     * At most one a minute per person (and chat, n2).
      */
-    private fun nudgeIf(room: String, plain: String, to: String) {
+    private fun nudgeIf(room: String, plain: String, to: String, kind: String = NudgeWire.kindOf(room), chat: String = "") {
         if (Move.locked || !NudgeWire.counts(room, plain)) return
-        val c = contacts.contact(to) ?: return
-        if (NudgeWire.CAP !in c.caps) return
-        val k = peerKeys.get(to) ?: return
-        val rk = k.rk ?: return
-        val rp = k.rp ?: return
+        val c = contacts.get(to) ?: return
+        if (c.chatKey in id.muted()) return
+        val r = NudgeWire.route(c.caps, c.groupOnly, peerKeys.get(to)) ?: return
         val now = System.currentTimeMillis()
-        if (!nudged.take(to, now)) return
-        try { nostr.publish(rp, NudgeWire.content(rk, now), days = Limits.LONGEST) } catch (_: Exception) {}
+        if (!nudged.take(NudgeWire.gateKey(to, r.rich, chat), now)) return
+        val content = if (r.rich) NudgeWire.richContent(r.pub, now, id.username, chat, kind) else NudgeWire.content(r.pub, now)
+        try { nostr.publish(r.mailbox, content, days = Limits.LONGEST) } catch (_: Exception) {}
     }
     @Volatile override var tvHandler: io.github.ravenor907.muninn.tv.TvHandler? = null
     override fun sendTvRoom(peerKey: String, plain: String) {
@@ -266,9 +266,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val peerKeys = PeerKeys({ vault.read(File(context.filesDir, "peerkeys.json")) }, { vault.write(File(context.filesDir, "peerkeys.json"), it) })
     /** Cap b1: this device's ring key, outside the vault (set by the app). */
     @Volatile var ringKey: RingKey? = null
+    /** Cap n2: this device's nudge key, outside the vault (set by the app). It only ever takes nudges, never rings. */
+    @Volatile var nudgeKey: NudgeKey? = null
     /** Call ids a ring envelope already went out for (one per call). */
     private val rung: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    /** Cap n1: when each person was last nudged. */
+    /** Caps n1 and n2: when each person (and chat, n2) was last nudged. */
     private val nudged = NudgeWire.Gate()
     /** Contacts my keys went to when their app first said b1 or e1 (once each while Muninn runs). */
     private val keysSent: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -555,7 +557,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         bg { emptyOldTrash() }
         bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune()
             // A ring mailbox replaced after a block: 2 days later it isn't asked for any more.
-            if (ringKey?.prune() == true) nostr.resubscribe() } catch (_: Exception) {} } }
+            // A nudge mailbox replaced with it (cap n2) too.
+            val ringGone = ringKey?.prune() == true
+            val nudgeGone = nudgeKey?.prune() == true
+            if (ringGone || nudgeGone) nostr.resubscribe() } catch (_: Exception) {} } }
     }
 
     /**
@@ -909,13 +914,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         _blocked.value = id.muted()
         Link.accountChanged()   // cap l1: a linked computer shows the block too
         // Cap b1: what they hold no longer rings this phone. A new ring key and ring mailbox go to the other b1
-        // contacts; the old mailbox is listened on 2 more days.
+        // contacts; the old mailbox is listened on 2 more days. Cap n2: the nudge key is made new with it, so they
+        // can't nudge either, and goes to the other n2 contacts and group peers.
         if (on && !was) ringKey?.let { r ->
             bg {
                 try {
                     r.renew()
+                    nudgeKey?.renew()
                     nostr.resubscribe()
-                    announceKeys { RingWire.RING_CAP in it.caps && it.chatKey != peerKey }
+                    announceKeys { (RingWire.RING_CAP in it.caps || NudgeWire.RICH_CAP in it.caps) && it.chatKey != peerKey }
                 } catch (_: Exception) {}
             }
         }
@@ -1171,8 +1178,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             boundAt = if (c.boundAt == 0L && Proof.isBound(o)) System.currentTimeMillis() else c.boundAt)
         if (now != c) contacts.set(now)
         if (days != c.days) bg { prune() }
-        // Caps b1 and e1: their app says so now, so my ring key and day key go to them.
-        if ((RingWire.RING_CAP in caps && RingWire.RING_CAP !in c.caps) || (RingWire.WRAP_CAP in caps && RingWire.WRAP_CAP !in c.caps)) sendKeys(fromKey)
+        // Caps b1, e1 and n2: their app says so now, so my ring key, day key and nudge key go to them.
+        if ((RingWire.RING_CAP in caps && RingWire.RING_CAP !in c.caps) || (RingWire.WRAP_CAP in caps && RingWire.WRAP_CAP !in c.caps) ||
+            (NudgeWire.RICH_CAP in caps && NudgeWire.RICH_CAP !in c.caps)) sendKeys(fromKey)
     }
 
     private fun handle(o: JSONObject, envRoom: String, fromKey: String, name: String, mailbox: String?, sentId: String, via: String,
@@ -1942,17 +1950,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // The ring key only to contacts (never a group peer or someone met close by).
         if (RingWire.RING_CAP in caps && isContact(peerKey)) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
         if (RingWire.WRAP_CAP in caps) try { wrapKeys.current().let { d -> o.put("wk", d.pub).put("wt", d.t) } } catch (_: Exception) {}
+        // Cap n2: the nudge key to a contact or group peer (never anyone blocked). It can only nudge, never ring.
+        if (NudgeWire.RICH_CAP in caps && contacts.get(peerKey) != null && peerKey !in id.muted())
+            nudgeKey?.let { n -> try { o.put("nk", n.publicKey).put("np", n.mailbox) } catch (_: Exception) {} }
         return o
     }
 
     /**
-     * My keys, in an empty receipt, to every contact [which] picks (after a restore, or a new ring key after a block).
-     * Never to anyone blocked or in the trash.
+     * My keys, in an empty receipt, to every contact [which] picks (after a restore, or a new ring key after a block),
+     * and to group peers whose app says n2 (for the nudge key). Never to anyone blocked or in the trash.
      */
     private fun announceKeys(which: (Contact) -> Boolean) {
         val muted = id.muted()
         for (c in contacts.all.value) {
-            if (c.groupOnly || c.chatKey in muted || trash.has(c.chatKey) || !which(c)) continue
+            if ((c.groupOnly && NudgeWire.RICH_CAP !in c.caps) || c.chatKey in muted || trash.has(c.chatKey) || !which(c)) continue
             val body = withKeys(c.chatKey, JSONObject().put("ids", JSONArray()).put("s", "delivered")).toString()
             try { deliver(c.chatKey, envelope("receipt", c.chatKey, body, UUID.randomUUID().toString()), c.mailbox) } catch (_: Exception) {}
         }
@@ -2356,7 +2367,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val mailbox = backupMailbox(m)
         if ((!any || t.count >= 2) && parts.size <= (if (m.gif) Gifs.PIECES else Photos.INTERNET_PIECES) && mailbox != null) {
             if (!publishNow(t)) any = true
-            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) { any = true; nudgeIf("photo", "", k) }
+            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) { any = true; nudgeIf("photo", "", k, NudgeWire.blobKind(m.voice, m.video, m.file)) }
         }
         if (!any && t.count == 1) {
             update(m.peerKey, m.id) { it.copy(failed = true) }
@@ -2753,7 +2764,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             else outbox.fresh(o.env, stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
         spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null, groupDays(o.g),
             if (o.gif) Gifs.PIECES else Photos.INTERNET_PIECES)
-        if (o.net) nudgeIf(o.room, o.plain, o.to)
+        // Caps n1 and n2: a group message or invite nudges; n2 says which group, and what came.
+        if (o.net) nudgeIf(o.room, o.plain, o.to, if (o.room == "gphoto") NudgeWire.blobKind(o.voice, o.video, "") else NudgeWire.kindOf(o.room),
+            try { groups.group(o.g)?.state?.name.orEmpty() } catch (_: Exception) { "" })
     }
 
     /** A group photo or voice message: the usual photo pieces plus g, ch and gid in the clear (3.9). */

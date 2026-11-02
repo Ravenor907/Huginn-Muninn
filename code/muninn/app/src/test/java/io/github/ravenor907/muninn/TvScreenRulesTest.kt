@@ -55,10 +55,18 @@ class TvScreenRulesTest {
 
     @Test
     fun theParentMenuHasEveryPartOnceWithDisconnectLast() {
+        // One page per TV (settings plan 2.10): its parts, then More with the rarely used ones, Disconnect TV last.
         val ids = ParentTvMenu.items.map { it.first }
-        assertEquals(listOf("people", "parents", "quick", "sound", "names", "apps", "permissions", "storage", "keep", "disconnect"), ids)
-        assertEquals(ids.distinct(), ids)
+        assertEquals(listOf("people", "parents", "sound", "quick", "apps", "updates", "more"), ids)
+        assertEquals(listOf("names", "keep", "permissions", "storage", "disconnect"), ParentTvMenu.more.map { it.first })
+        val all = ids + ParentTvMenu.more.map { it.first }
+        assertEquals(all.distinct(), all)
+        assertEquals("Who it can call", ParentTvMenu.label("people"))
+        assertEquals("Calls and mic", ParentTvMenu.label("sound"))
+        assertEquals("Messages stay for", ParentTvMenu.label("keep"))
         assertEquals("Disconnect TV", ParentTvMenu.label("disconnect"))
+        // The TV's chat menu opens the page itself with an id the page doesn't know.
+        assertNull(ParentTvMenu.label("page"))
         assertNull(ParentTvMenu.label("nope"))
         assertNull(ParentTvMenu.label(null))
     }

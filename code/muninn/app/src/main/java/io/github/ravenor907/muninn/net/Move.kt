@@ -370,7 +370,7 @@ object Move {
     fun becomeLinked(a: Muninn): String? {
         if (!a.ready.value && !(a.vault.openDefault().also { if (it) a.start() })) return "Unlock Muninn first."
         val o = json(a, "out")
-        if (o == null || System.currentTimeMillis() - o.optLong("at") > LINK_MS) { startFresh(a); return "That was more than 10 minutes ago. Link it from Settings › Linked devices instead." }
+        if (o == null || System.currentTimeMillis() - o.optLong("at") > LINK_MS) { startFresh(a); return "That was more than 10 minutes ago. Link it from Settings › Devices and backup instead." }
         val k = ChatCrypto.b64d(o.getString("k"))
         val body = JSONObject().put("t", "link").put("d", MoveWire.seal(k, Link.myLinkCode().toByteArray(), MoveWire.LINK_AAD)).toString()
         val addrs = (listOf(o.optString("addr")) + o.optJSONArray("all").let { x -> if (x == null) emptyList() else (0 until x.length()).map { x.getString(it) } }).filter { it.isNotEmpty() }

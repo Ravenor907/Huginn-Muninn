@@ -47,8 +47,8 @@ class Muninn : Application() {
     /** The conversation on screen right now ("" for none). */
     @Volatile var openChat = ""
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    /** Cap n1: legacy-peers.json, outside the vault (net/Ring.kt, LegacyPeers). */
-    private val legacyPeers by lazy { io.github.ravenor907.muninn.net.LegacyPeers(java.io.File(filesDir, "legacy-peers.json")) }
+    /** A locked nudge's notification was tapped: its sender and group, for the chat to open once unlocked ([openNudge]). */
+    @Volatile var nudgeOpen: Pair<String, String>? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -86,14 +86,10 @@ class Muninn : Application() {
             })
         }
         // Until the chats are open, what arrives waits (on the relays, or sealed in the locked store, see Nostr).
+        // While locked, nothing in the inbox notifies (it may be a receipt, a check-in or presence): only a nudge does.
         nostr.onEnvelope = { false }
-        // While locked: one "Muninn is locked" notice, once until the next unlock. Cap n1: a sealed event in the inbox
-        // (it may be a receipt, a check-in or presence) only says so while someone may write without nudging
-        // (legacy-peers.json, outside the vault); everyone else nudges the ring mailbox when a real message comes.
-        nostr.onLocked = {
-            if (io.github.ravenor907.muninn.net.NudgeWire.inboxNotices(io.github.ravenor907.muninn.net.Proto06.caps(io.github.ravenor907.muninn.net.Proto06.CAPS),
-                    legacyPeers.read())) lockedNotice()
-        }
+        // legacy-peers.json: nothing reads it, so any copy in Muninn's files is deleted.
+        try { java.io.File(filesDir, "legacy-peers.json").delete() } catch (_: Exception) {}
         // Cap b1: the ring key lives outside the vault (app-private files, never an OS key store), so a call rings even
         // while Muninn is locked. Only "Incoming call", no name: answering opens the lock screen, and the call itself
         // (kept sealed with everything else that came while locked) is picked up once Muninn is unlocked.
@@ -103,15 +99,20 @@ class Muninn : Application() {
             val rang = ring.open(content)
             if (rang != null) {
                 io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, rang.first, rang.second)
-            } else if (io.github.ravenor907.muninn.net.NudgeWire.ringMailboxNotices(vault.locked.value, content, ring)) {
-                // Cap n1: a nudge says a real message came. Unlocked, it's ignored (the message itself notifies).
-                lockedNotice()
+            } else {
+                // Caps n1 and n2: a nudge says a real message came. Unlocked, it's ignored (the message itself notifies).
+                io.github.ravenor907.muninn.net.NudgeWire.ringMailbox(vault.locked.value, content, ring)?.let { lockedNudge(it) }
             }
         }
-        // Erase everything and Move: the ring key, the day keys and what was kept while locked all go.
+        // Cap n2: the nudge key, kept like the ring key, for contacts and group peers. Its mailbox only ever nudges.
+        val nudgeKey = io.github.ravenor907.muninn.net.NudgeKey(java.io.File(filesDir, "nudge-key.json"))
+        nostr.nudgeKey = nudgeKey
+        nostr.onNudge = { content -> io.github.ravenor907.muninn.net.NudgeWire.nudgeMailbox(vault.locked.value, content, nudgeKey)?.let { lockedNudge(it) } }
+        // Erase everything and Move: the ring and nudge keys, the day keys and what was kept while locked all go.
         vault.onErase = {
             ring.forget()
-            legacyPeers.forget()
+            nudgeKey.forget()
+            try { java.io.File(filesDir, "legacy-peers.json").delete() } catch (_: Exception) {}
             nostr.forgetHeld()
             if (ready.value) try { chat.forgetKeys(); chat.forgetKeyCache() } catch (_: Exception) {}
             io.github.ravenor907.muninn.ui.PhotoCache.clear()
@@ -162,10 +163,7 @@ class Muninn : Application() {
         contacts = Contacts(this, vault)
         chat = Chat(this, net, ble, nostr, contacts, vault)
         chat.ringKey = nostr.ring
-        // Cap n1: whether anyone may write without nudging, kept outside the vault for while it's locked.
-        scope.launch(Dispatchers.IO) {
-            contacts.all.collect { if (!vault.locked.value) legacyPeers.write(io.github.ravenor907.muninn.net.NudgeWire.legacy(it)) }
-        }
+        chat.nudgeKey = nostr.nudgeKey
         profile = io.github.ravenor907.muninn.net.Profile(this, vault, contacts, chat)
         chat.profile = profile
         io.github.ravenor907.muninn.tv.Tv.install(this)
@@ -243,40 +241,85 @@ class Muninn : Application() {
     }
 
     /**
-     * Just unlocked: the "Unlock Muninn" notice goes, what was kept sealed while locked is opened (and deleted),
-     * and the relays are asked again for anything that had to stay with them.
+     * Just unlocked: the notifications nudges put up while locked go (the messages themselves notify now), what was
+     * kept sealed while locked is opened (and deleted), and the relays are asked again for anything that had to stay
+     * with them. A locked notification tapped on the way here opens its chat.
      */
     private fun unlocked() {
-        getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().remove(LOCKED_ALERTED).apply()
-        NotificationManagerCompat.from(this).cancel(LOCKED_ID)
+        cancelLockedNudges()
+        // Any notification still under the inbox id goes too.
+        NotificationManagerCompat.from(this).cancel(OLD_LOCKED_ID)
+        getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().remove("lockedAlerted").apply()
         Thread {
             try { nostr.openHeld() } catch (_: Exception) {}
             nostr.resubscribe()
         }.start()
+        mainHandler.post { openNudge() }
     }
 
+    /** How many nudges each locked notification ([NudgeWire.groupKey]) counted since the last unlock. */
+    private val lockedCounts = HashMap<String, Int>()
+
     /**
-     * Something arrived while locked: a nudge (cap n1) for a real message, or, while someone may write without
-     * nudging, any event in the inbox (receipts, a linked computer's check-ins and room presence can't be told apart
-     * from a message then), so the notice stays calm: "Unlock to get new messages". It goes up and buzzes once per
-     * locked spell, and never comes back on its own until the next unlock (the owner's choice). Never during Extreme battery saver (no notifications then).
+     * Caps n1 and n2: a nudge came while locked, so a real message is waiting. What it shows follows Settings ›
+     * Notifications › What notifications show: Name only and Name and message say who and what kind ("Photo"), never
+     * the message (it can't be opened while locked); Nothing says "Muninn", "New message". One notification per sender
+     * and chat, counting up as more come, and alerting only the first time. Quiet hours and Extreme battery saver as
+     * for any message.
      */
     @Synchronized
-    fun lockedNotice() {
+    fun lockedNudge(n: io.github.ravenor907.muninn.net.NudgeWire.Nudge) {
         if (power.extreme) return
-        val prefs = getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
-        // Once until the next unlock.
-        if (prefs.getBoolean(LOCKED_ALERTED, false)) return
-        val open = PendingIntent.getActivity(this, LOCKED_ID, Intent(this, MainActivity::class.java).putExtra("chat", "inbox")
-            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("Muninn is locked").setContentText("Unlock to get new messages")
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setVibrate(BUZZ).setOnlyAlertOnce(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
-        try { NotificationManagerCompat.from(this).notify(LOCKED_ID, n) } catch (_: SecurityException) {}
-        prefs.edit().putBoolean(LOCKED_ALERTED, true).apply()
+        val alert = try { power.alert("") } catch (_: Exception) { io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD }
+        if (alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.NONE) return
+        val quiet = alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET || doNotDisturb()
+        val show = lockedShow()
+        val key = io.github.ravenor907.muninn.net.NudgeWire.groupKey(show, n)
+        val count = (lockedCounts[key] ?: 0) + 1
+        lockedCounts[key] = count
+        val id = key.hashCode()
+        val intent = Intent(this, MainActivity::class.java).putExtra("chat", "inbox").addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (show != io.github.ravenor907.muninn.net.NudgeWire.Show.NOTHING) intent.putExtra(NUDGE_FROM, n.from).putExtra(NUDGE_CHAT, n.chat)
+        val open = PendingIntent.getActivity(this, NUDGE_TAG.hashCode() + id, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val b = NotificationCompat.Builder(this, if (quiet) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(io.github.ravenor907.muninn.net.NudgeWire.title(show, n))
+            .setContentText(io.github.ravenor907.muninn.net.NudgeWire.text(show, n.kind, count))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
+        if (count > 1) b.setNumber(count)
+        try { NotificationManagerCompat.from(this).notify(NUDGE_TAG, id, b.build()) } catch (_: SecurityException) {}
+    }
+
+    /** What locked notifications show: the same choice as every notification (kept outside the vault); never a name while panic-locked. */
+    private fun lockedShow(): io.github.ravenor907.muninn.net.NudgeWire.Show = when {
+        io.github.ravenor907.muninn.ui.Panic.locked.value -> io.github.ravenor907.muninn.net.NudgeWire.Show.NOTHING
+        identity.showPreview -> io.github.ravenor907.muninn.net.NudgeWire.Show.MESSAGE
+        identity.showSender -> io.github.ravenor907.muninn.net.NudgeWire.Show.NAME
+        else -> io.github.ravenor907.muninn.net.NudgeWire.Show.NOTHING
+    }
+
+    /** Unlocked: every notification a nudge put up goes, and the counts start over. */
+    @Synchronized
+    private fun cancelLockedNudges() {
+        lockedCounts.clear()
+        try {
+            val nm = NotificationManagerCompat.from(this)
+            getSystemService(NotificationManager::class.java).activeNotifications.filter { it.tag == NUDGE_TAG }.forEach { nm.cancel(NUDGE_TAG, it.id) }
+        } catch (_: Exception) {}
+    }
+
+    /** A tapped locked notification ([nudgeOpen]), once Muninn is unlocked: its chat when one matches, else the chat list. */
+    fun openNudge() {
+        val (from, where) = nudgeOpen ?: return
+        if (!ready.value || vault.locked.value) return
+        nudgeOpen = null
+        val key = try {
+            io.github.ravenor907.muninn.net.NudgeWire.match(from, where,
+                contacts.all.value.filter { !it.groupOnly }.map { it.chatKey to it.name },
+                chat.groups.all.value.values.map { io.github.ravenor907.muninn.net.Folders.groupKey(it.g) to it.state.name })
+        } catch (_: Exception) { null } ?: return
+        io.github.ravenor907.muninn.screens.SettingsNav.goChat = key
     }
 
     // ---- status: Away on its own after 10 minutes without a touch, and back to Online at the next one.
@@ -449,9 +492,13 @@ class Muninn : Application() {
     companion object {
         const val MESSAGES = "raven_messages"
         const val QUIET = "raven_quiet"
-        /** The "Muninn is locked" notification (the same id the inbox notice always had). */
-        val LOCKED_ID = "inbox".hashCode()
-        private const val LOCKED_ALERTED = "lockedAlerted"
+        /** The inbox notification id: anything under it is taken down at the next unlock. */
+        private val OLD_LOCKED_ID = "inbox".hashCode()
+        /** Notifications put up for nudges while locked carry this tag (all taken down at the next unlock). */
+        const val NUDGE_TAG = "locked-nudge"
+        /** A locked notification's sender and group, for [openNudge]. */
+        const val NUDGE_FROM = "nudgeFrom"
+        const val NUDGE_CHAT = "nudgeChat"
         val BUZZ = longArrayOf(0, 140, 90, 140)
         /** Without a touch this long while Online, the status goes to Away. */
         const val IDLE_MS = 10 * 60_000L

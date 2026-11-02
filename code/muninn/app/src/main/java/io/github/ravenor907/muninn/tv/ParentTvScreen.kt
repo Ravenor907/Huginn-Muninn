@@ -74,46 +74,66 @@ import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 
 /**
- * The Kids' TV's menu on a parent's phone, one row per part, each opening its own screen. The same ids open a
- * part straight from elsewhere (the TV contact's menu): `ParentTvScreen(app, tvKey, section = id)`.
+ * The one Kids' TV page on a parent's phone, one per TV, reached from Settings and from the TV's chat menu ("Kids' TV
+ * settings"). Its header has the TV's Muninn version, how its update is going and Update now; then one row per part,
+ * each opening its own screen. The rarely used parts are under More. The same ids open a part straight from elsewhere:
+ * `ParentTvScreen(app, tvKey, section = id)` (an id it doesn't know, such as "page", opens the page itself).
  */
 object ParentTvMenu {
-    /** (id, label) in menu order. Disconnect is last. */
+    /** (id, label) on the page, in order. */
     val items: List<Pair<String, String>> = listOf(
-        "people" to "People",
+        "people" to "Who it can call",
         "parents" to "Parents",
+        "sound" to "Calls and mic",
         "quick" to "Quick messages",
-        "sound" to "Sound",
+        "apps" to "Apps",
+        "updates" to "Updates",
+        "more" to "More",
+    )
+
+    /** (id, label) under More, in order. Disconnect is last. */
+    val more: List<Pair<String, String>> = listOf(
         "names" to "Names",
-        "apps" to "Apps and updates",
+        "keep" to "Messages stay for",
         "permissions" to "TV permissions",
         "storage" to "Storage",
-        "keep" to "Delete messages after",
         "disconnect" to "Disconnect TV",
     )
 
-    /** The label for [id], or null if it isn't one of [items]. */
-    fun label(id: String?): String? = items.firstOrNull { it.first == id }?.second
+    /** The label for [id], or null if it isn't one of [items] or [more]. */
+    fun label(id: String?): String? = (items + more).firstOrNull { it.first == id }?.second
+}
+
+/** The TV's line: "Muninn 1.33 · Up to date" (cap u1), or what an older TV's status said. */
+fun tvUpdateLine(app: Muninn, t: ManagedTv): String =
+    TvUpd.line(t.app, t.upd1, TvUpd.behind(t.app, app.updater.current, app.updater.state.value.latest), TvRules.updateText(t.update))
+
+/** Update now on the phone (u1): asks the TV, or says it needs one update on the TV first. */
+fun askTvUpdate(app: Muninn, t: ManagedTv) {
+    if (TvParent.updateNow(app, t.key)) Ui.say("Asked the TV to update") else Ui.say(TvUpd.NEEDS_FIRST, true)
 }
 
 /** What each TV permission is called on the phone, in [TvRules.PERMS] order. */
 private val PERM_NAMES = mapOf("mic" to "Microphone", "notify" to "Notifications", "overlay" to "Show over other apps", "install" to "Install updates")
 
 private const val UPDATE_FIRST = "Update the TV first"
-private const val INSTALLS_OFF = "The TV can't install updates or apps. Turn on TV permissions, Install updates."
+private const val INSTALLS_OFF = "The TV can't install apps. Turn on Install updates in Updates."
 
 /**
- * "Kids' TV" on a parent's phone. [section]: null shows the menu; one of [ParentTvMenu.items]' ids opens that
- * screen. Back from a screen opened from the menu returns to the menu; Back from the menu, or from a [section]
- * opened straight from elsewhere (the TV contact's menu), calls [onBack]. Every change goes to the TV as a new signed config.
+ * A Kids' TV's page on a parent's phone. [section]: null (or an id it doesn't know) shows the page; an id of
+ * [ParentTvMenu.items] or [ParentTvMenu.more] opens that part. Back from a part returns to where it was opened from
+ * (the page, or More); Back from the page, or from a [section] opened straight from elsewhere, calls [onBack].
+ * Every change goes to the TV as a new signed config.
  */
 @Composable
 fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: () -> Unit) {
     val tvs by TvParent.tvs.collectAsState()
     val t = tvs[tvKey]
-    var open by remember(section) { mutableStateOf(section?.takeIf { ParentTvMenu.label(it) != null }) }
-    // A section opened straight from elsewhere goes back there, not to this menu.
-    fun back() { if (open != null && section == null) open = null else onBack() }
+    val direct = section?.takeIf { ParentTvMenu.label(it) != null }
+    // The parts opened, in order (More, then one of its parts). A part opened straight from elsewhere goes back there.
+    var stack by remember(section) { mutableStateOf(listOfNotNull(direct)) }
+    val open = stack.lastOrNull()
+    fun back() { if (stack.size > (if (direct != null) 1 else 0)) stack = stack.dropLast(1) else onBack() }
     BackHandler { back() }
     if (t == null || t.disconnecting) { LaunchedEffect(Unit) { onBack() }; return }
     val contacts by app.contacts.all.collectAsState()
@@ -139,13 +159,15 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
         Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
             when (open) {
-                null -> Menu(app, t) { open = it }
+                null -> { UpdateHeader(app, t); Menu(app, t) { stack = stack + it } }
                 "people" -> People(app, t)
                 "parents" -> Parents(app, t)
                 "quick" -> QuickMessages(t)
                 "sound" -> Sound(app, t)
                 "names" -> Names(app, t, tvName)
                 "apps" -> Apps(app, t)
+                "updates" -> Updates(app, t)
+                "more" -> More(app, t, tvName) { stack = stack + it }
                 "permissions" -> Permissions(app, t)
                 "storage" -> Storage(app, t)
                 "keep" -> Keep(app, t)
@@ -159,17 +181,73 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
 
 @Composable
 private fun Menu(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
+    val asks by TvAppAsks.items.collectAsState()
     for ((id, label) in ParentTvMenu.items) {
         val value = when (id) {
             "people" -> "${TvParent.people(app, t).size + t.waiting.size}"
             "parents" -> "${t.parents.size}"
             "quick" -> "${t.quick.size}"
             "sound" -> if (t.calls) "Calls on" else "Calls off"
-            "names" -> t.myName.ifBlank { "Parent" }
-            "apps" -> t.app
-            "permissions" -> t.off?.let { off -> if (off.isEmpty()) "All on" else "${off.size} off" } ?: ""
-            "storage" -> if (t.used >= 0) sizeText(t.used) else ""
+            "apps" -> asks.let { TvAppAsks.of(app, t.key).count { !it.answered } }.let { n -> if (n > 0) "$n waiting for you" else "" }
+            "updates" -> if (t.upd) "Auto-update on" else "Auto-update off"
+            else -> ""
+        }
+        MenuRow(label, value) { onOpen(id) }
+    }
+}
+
+/** The page's header: the TV's Muninn and how its update is going, and Update now (cap u1). */
+@Composable
+private fun UpdateHeader(app: Muninn, t: ManagedTv) {
+    val can = TvParent.u1(app, t.key)
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(tvUpdateLine(app, t), style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+        MButton("Update now", Modifier.padding(start = 12.dp), Kind.Accent, enabled = can) { askTvUpdate(app, t) }
+    }
+    if (!can) Note(TvUpd.NEEDS_FIRST)
+    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(Palette.hairline))
+}
+
+/** Updates: how the TV's update is going, Update now, the Install updates permission, and Auto-update. */
+@Composable
+private fun Updates(app: Muninn, t: ManagedTv) {
+    val can = TvParent.u1(app, t.key)
+    val k7 = TvParent.k7(app, t.key)
+    val k8 = TvParent.k8(app, t.key)
+    // "Last check: 5 min ago" moves on by itself.
+    val now by androidx.compose.runtime.produceState(System.currentTimeMillis()) { while (true) { kotlinx.coroutines.delay(30_000); value = System.currentTimeMillis() } }
+    Text(tvUpdateLine(app, t), style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+    t.upd1?.let { st ->
+        if (st.s == TvUpd.DOWNLOADING) io.github.ravenor907.muninn.ui.Bar((st.p ?: 0) / 100f, Modifier.padding(top = 6.dp), Palette.gold)
+        Text(TvUpd.lastCheck(st.at, now), style = Type.small, modifier = Modifier.padding(top = 4.dp))
+    }
+    MButton("Update now", Modifier.fillMaxWidth().padding(vertical = 8.dp), Kind.Accent, enabled = can) { askTvUpdate(app, t) }
+    if (!can) Note(TvUpd.NEEDS_FIRST)
+    // The TV installs updates by itself only while this is on.
+    val installOff = t.off?.contains("install")
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(PERM_NAMES["install"] ?: "Install updates", style = Type.normal.copy(color = Palette.text))
+            if (installOff != null) Text(if (installOff) "Off" else "On", style = Type.small.copy(fontSize = 13.sp, color = if (installOff) Palette.textMuted else Palette.online))
+        }
+        if (installOff != false) MButton("Ask TV", enabled = k8) {
+            if (TvParent.askAllow(app, t.key, "install")) Ui.say("Asked the TV") else Ui.say(UPDATE_FIRST, true)
+        }
+    }
+    TvToggle("Auto-update", "", t.upd, enabled = k7) { on -> TvParent.setUpd(t.key, on) }
+    if (!k7) Note(UPDATE_FIRST)
+}
+
+/** More: the TV's names, then the rarely used parts, Disconnect TV last. */
+@Composable
+private fun More(app: Muninn, t: ManagedTv, tvName: String, onOpen: (String) -> Unit) {
+    Names(app, t, tvName)
+    for ((id, label) in ParentTvMenu.more) {
+        if (id == "names") continue
+        val value = when (id) {
             "keep" -> keepName(t.keep)
+            "permissions" -> t.off?.filter { it != "install" }?.let { off -> if (off.isEmpty()) "All on" else "${off.size} off" } ?: ""
+            "storage" -> if (t.used >= 0) sizeText(t.used) else ""
             else -> ""
         }
         MenuRow(label, value, danger = id == "disconnect") { onOpen(id) }
@@ -390,7 +468,7 @@ private fun Names(app: Muninn, t: ManagedTv, tvName: String) {
     }
 }
 
-/** Send an app over the Wi-Fi, update now, and the TV's Auto-update. */
+/** Send an app over the Wi-Fi, and the apps waiting for a parent's Install. */
 @Composable
 private fun Apps(app: Muninn, t: ManagedTv) {
     val tvKey = t.key
@@ -407,12 +485,10 @@ private fun Apps(app: Muninn, t: ManagedTv) {
             }.start()
         }
     }
-    // Each part is off while the TV's app can't take it: apps (k4), Update now (k2), Auto-update (k7).
-    val k2 = TvParent.k2(app, tvKey)
+    // Apps are off while the TV's app can't take them (k4).
     val k4 = TvParent.k4(app, tvKey)
-    val k7 = TvParent.k7(app, tvKey)
     val installsOff = t.off?.contains("install") == true
-    if (!k2 || !k4 || !k7) Note(UPDATE_FIRST)
+    if (!k4) Note(UPDATE_FIRST)
     if (installsOff) Note(INSTALLS_OFF)
     MenuRow("Send an app", "", enabled = k4) { sendingApp = true }
     // Apps waiting in the TV's Downloads (k9, 7.15): nothing installs there until a parent says Install here.
@@ -449,16 +525,6 @@ private fun Apps(app: Muninn, t: ManagedTv) {
             MButton("Done", Modifier.padding(top = 6.dp)) { app.net.clearFinished() }
         }
     }
-    MenuRow("Update now", t.app, enabled = k2) {
-        when {
-            !TvParent.updateTv(app, tvKey) -> Ui.say(UPDATE_FIRST, true)
-            // The TV still looks and downloads; it installs once Install updates is on.
-            installsOff -> Ui.say(INSTALLS_OFF, true)
-            else -> Ui.say("Asked the TV to update")
-        }
-    }
-    TvRules.updateText(t.update).takeIf { it.isNotEmpty() }?.let { InfoRow("Last update", it) }
-    TvToggle("Auto-update", "", t.upd, enabled = k7) { on -> TvParent.setUpd(tvKey, on) }
     if (sendingApp) io.github.ravenor907.muninn.screens.AppPicker(
         onCancel = { sendingApp = false },
         onFile = { sendingApp = false; try { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } },
@@ -475,7 +541,8 @@ private fun Apps(app: Muninn, t: ManagedTv) {
 private fun Permissions(app: Muninn, t: ManagedTv) {
     val k8 = TvParent.k8(app, t.key)
     Note(if (k8) "Press Allow on the TV." else UPDATE_FIRST)
-    for (id in TvRules.PERMS) {
+    // Install updates is with Updates.
+    for (id in TvRules.PERMS.filter { it != "install" }) {
         val state = when {
             t.off == null -> ""
             id in t.off -> "Off"

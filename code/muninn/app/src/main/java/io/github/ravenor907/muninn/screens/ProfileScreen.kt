@@ -170,9 +170,8 @@ fun ProfileScreen(app: Muninn) {
         Status.INVISIBLE -> "Look offline. You still get everything."
     }, style = Type.small, modifier = Modifier.padding(top = 4.dp))
 
-    Section("More")
+    Spacer(Modifier.height(12.dp))
     ProfileRow("My code", "For someone to scan") { SettingsNav.goChat = "code" }
-    ProfileRow("Linked devices", "Computer or tablet") { SettingsNav.folder = "link" }
     Spacer(Modifier.height(8.dp))
 }
 

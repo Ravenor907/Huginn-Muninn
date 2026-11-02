@@ -359,18 +359,27 @@ private fun TvAllow(app: Muninn) {
 /** The one line the TV shows while Android asks for its permissions right after pairing. */
 private const val SETUP_LINE = "Parent: press Allow so the kids can talk"
 
-/** A new Muninn is downloaded and Android wants its Install box: OK on the remote brings it up. */
+/**
+ * A new Muninn is downloaded and can't go in by itself (Android wants its Install box, or Muninn may not install apps
+ * yet): the whole screen says "Ask a grown-up: press OK to update", and OK brings up Android's box (or the setting).
+ * Never during a call. Later hides it for half an hour.
+ */
 @Composable
 private fun TvUpdatePrompt() {
     val context = LocalContext.current
     val st by TvUpdate.state.collectAsState()
+    val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
     var later by remember { mutableStateOf(false) }
     LaunchedEffect(st) { later = false }
-    if (later || st.confirm == null) return
-    TvDialog(onBack = { later = true }) {
-        MIcon("download", Palette.goldBright, 64.dp)
-        Text("New Muninn", style = tvTitle(32.sp), modifier = Modifier.padding(top = 12.dp))
-        DialogButtons(listOf("Install" to { TvUpdate.confirm(context) }, "Later" to { later = true }))
+    LaunchedEffect(later) { if (later) { delay(30 * 60_000L); later = false } }
+    if (later || !TvUpdate.prompting(st, call != null)) return
+    Dialog(onDismissRequest = { later = true }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxSize().background(Palette.ground).padding(48.dp),
+            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            MIcon("download", Palette.goldBright, 96.dp)
+            Text(TvUpd.TV_PROMPT, style = tvTitle(40.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 20.dp))
+            DialogButtons(listOf("Update" to { TvUpdate.confirm(context) }, "Later" to { later = true }))
+        }
     }
 }
 

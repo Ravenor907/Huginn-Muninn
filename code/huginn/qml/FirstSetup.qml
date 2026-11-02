@@ -140,7 +140,7 @@ Item {
         practice = false; ribbon = false; steps = []; index = 0
         if (real) Settings.setupState = "done"
         if (!Ui.main) return
-        if (labs) Ui.main.openPage("settings", { section: "about" })
+        if (labs) Ui.main.openPage("settings", { section: "labs" })
         else if (real) {
             Ui.main.openPage("dms", {})
             if (startChat) Qt.callLater(() => { const p = Ui.main.page(); if (p && p.addMenu) p.addMenu() })
@@ -342,7 +342,7 @@ Item {
                 spacing: Theme.px(12)
                 topPadding: Theme.px(12)
                 Title { text: "WHAT'S YOUR NAME?" }
-                Line { text: "Any name your friends will recognize. A nickname is fine. Change it any time in Settings › You." }
+                Line { text: "Any name your friends will recognize. A nickname is fine. Change it any time in Settings › Profile." }
                 Field { id: nameInput; focusId: "nameField"; placeholder: "A name"; onEnter: setup.saveName() }
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -361,7 +361,7 @@ Item {
                 topPadding: Theme.px(12)
                 Title { text: "LINK YOUR PHONE" }
                 Line { text: Linked.phone.key && !setup.practice ? "Your phone is linked." : "Your phone's Muninn chats, here too. Optional." }
-                Line { text: "In Muninn: Settings › Linked devices › Scan to link." }
+                Line { text: "In Muninn: Settings › Devices and backup › Scan to link." }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Show the code"; kind: "primary"; focused: setup.lit("linkNow"); onClicked: setup.run("linkNow") }
             }
 

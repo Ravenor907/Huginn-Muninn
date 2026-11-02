@@ -71,7 +71,7 @@ object AppStorageOps {
     }
 }
 
-/** Labs › App storage: what Muninn keeps in its own folders that can go. Opened from Settings › Labs. */
+/** App storage: what Muninn keeps in its own folders that can go. Opened from Settings › Devices and backup › More. */
 @Composable
 internal fun AppStorageScreen() {
     val context = LocalContext.current

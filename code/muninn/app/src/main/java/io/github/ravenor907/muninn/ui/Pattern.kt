@@ -74,7 +74,7 @@ object PatternPath {
  * With a D-pad, TV remote, controller or arrow keys: a ring marks a dot, OK (Enter, A) starts there,
  * moving on picks up each dot the ring reaches, OK again is done, and Back (B) starts over.
  * Raise [shake] after a wrong pattern and the pad gives a short shake. Every dot picked up gives a short tick.
- * [trail] off (Settings › Lock and privacy › Hide the pattern as I draw): no line and no lit dots while drawing,
+ * [trail] off (Settings › Privacy and lock › Hide the pattern as I draw): no line and no lit dots while drawing,
  * so nobody watching sees it; the ticks still say a dot was taken.
  */
 @Composable

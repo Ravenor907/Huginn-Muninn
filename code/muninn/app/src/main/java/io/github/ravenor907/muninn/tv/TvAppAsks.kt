@@ -17,7 +17,7 @@ import java.io.File
 
 /**
  * A parent's phone's side of parent-approved installs on a Kids' TV (cap k9, 7.15): the TV's "Install app.apk?"
- * shows in the Kids' TV menu (Apps and updates) and as a notification; Install or Not now goes back to the TV,
+ * shows on the Kids' TV page (Apps) and as a notification; Install or Not now goes back to the TV,
  * and the TV's answer ("Installed", "Needs Install updates permission", "Failed: …") shows under it.
  */
 object TvAppAsks {
@@ -95,7 +95,7 @@ object TvAppAsks {
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(app, Muninn.MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(if (preview) "Install ${a.name} on ${app.chat.nameOf(tv)}?" else "A Kids' TV asks to install an app")
-            .setContentText("Install or Not now: Kids' TV, Apps and updates")
+            .setContentText("Install or Not now: Kids' TV settings, Apps")
             .setPriority(NotificationCompat.PRIORITY_HIGH).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(app).notify(("app" + a.h).hashCode(), n) } catch (_: SecurityException) {}

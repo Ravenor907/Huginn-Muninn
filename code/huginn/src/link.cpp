@@ -14,7 +14,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QStandardPaths>
+#include <QWindow>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
@@ -119,7 +121,7 @@ Link::Link(Chat *chat, QObject *parent)
         if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone)
             return;
         // Cap l1: a phone linked before this version is asked once a run whether it keeps the whole account in step.
-        if (!m_phone.l1 && !m_capsAsked) {
+        if (!m_phone.l1 && !m_capsAsked && inFront()) {
             m_capsAsked = true;
             sendTo(m_phone, syncFrame(false));
         }
@@ -951,7 +953,7 @@ QString Link::link(const QString &text, bool confirmed)
     if (!m_chat->ready())
         return QStringLiteral("Unlock Huginn first.");
     if (text.indexOf(QString::fromLatin1(kPrefix)) < 0)
-        return QStringLiteral("That isn't a link code. On the other device: Settings › Linked devices › Link this PC to my phone.");
+        return QStringLiteral("That isn't a link code. On the other device: Settings › Devices and backup › Linked devices › Link this PC to my phone.");
     const QJsonObject o = readCode(text);
     if (o.isEmpty())
         return QStringLiteral("That link code is damaged.");
@@ -2366,10 +2368,16 @@ QString Link::setMute(const QString &peer, qint64 until)
                       until >= kMuteForever ? QJsonObject{{QStringLiteral("f"), true}} : QJsonObject{{QStringLiteral("u"), double(until)}});
 }
 
+bool Link::inFront()
+{
+    const QWindow *w = QGuiApplication::focusWindow();
+    return mayCheckIn(QGuiApplication::applicationState(), w && w->isVisible(), w && w->windowStates().testFlag(Qt::WindowMinimized));
+}
+
 void Link::ping()
 {
     ensureLoaded();
-    if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone)
+    if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone || !inFront())
         return;
     const qint64 t = now();
     if (m_pingAt > 0 && t - m_pingAt < 60000)
@@ -2531,6 +2539,10 @@ bool Link::selfTest(const QJsonObject &v)
         QJsonObject me = f("me");
         me.insert(QStringLiteral("pic"), QStringLiteral("AAAA"));
         check(!internetOk(me), "a me with its picture never uses the internet");
+        check(mayCheckIn(Qt::ApplicationActive, true, false) && !mayCheckIn(Qt::ApplicationInactive, true, false)
+                  && !mayCheckIn(Qt::ApplicationHidden, true, false) && !mayCheckIn(Qt::ApplicationSuspended, true, false)
+                  && !mayCheckIn(Qt::ApplicationActive, false, false) && !mayCheckIn(Qt::ApplicationActive, true, true),
+              "a companion checks in with its phone only while in front and in use");
         check(refreshDue(0, 1) && !refreshDue(1000, 1000 + kRefreshEveryMs - 1) && refreshDue(1000, 1000 + kRefreshEveryMs),
               "Refresh at most once in 10 minutes");
         check(errText(QStringLiteral("confirm")) == QLatin1String("Confirm the emoji on your phone")

@@ -32,11 +32,13 @@ for screen in chats files contacts settings; do
   s=$screen; [ "$s" = chats ] && s=chat
   shot "$screen" --es screen "$s"
 done
-# Settings: the short list's pages and More settings (each page opens on its own).
-shot settings-more --es screen settings --es folder more
+# Settings: the short list's pages (each page opens on its own).
+shot settings-notify --es screen settings --es folder notify
 shot settings-lock --es screen settings --es folder lock
 shot settings-look --es screen settings --es folder look
-shot settings-notify --es screen settings --es folder notify
+shot settings-battery --es screen settings --es folder battery
+shot settings-devices --es screen settings --es folder devices
+shot settings-about --es screen settings --es folder about
 # A conversation (top bar, bubbles, composer), Add someone (camera first) and the lock screen.
 shot conversation --es chat demo
 shot add-someone --es chat add

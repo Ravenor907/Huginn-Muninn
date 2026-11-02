@@ -42,7 +42,6 @@ import io.github.ravenor907.muninn.net.LabsInbox
 import io.github.ravenor907.muninn.net.LabsWire
 import io.github.ravenor907.muninn.net.Photos
 import io.github.ravenor907.muninn.ui.Ask
-import io.github.ravenor907.muninn.ui.ChoiceRow
 import io.github.ravenor907.muninn.ui.Corner
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Framed
@@ -59,8 +58,8 @@ import java.util.Date
 
 /**
  * Labs mode: tap the raven in Settings 10 times (within 5 seconds) to turn it on, 10 more to turn it off. It shows
- * the Labs section in Settings (update channel, going back to stable, reporting a bug, App storage) and Report a bug
- * in the chat list's menu.
+ * the Labs section in Settings (reporting a bug, replaying first setup), the update channel on Updates and about,
+ * and Report a bug in the chat list's menu.
  */
 object Labs {
     private val taps = ArrayDeque<Long>()
@@ -130,23 +129,13 @@ object Labs {
         listOf(Build.MANUFACTURER, Build.MODEL).filter { !it.isNullOrBlank() }.joinToString(" "))
 }
 
-/** Settings' Labs section: update channel, going back to stable, reporting a bug, App storage, replaying first setup. */
+/** Settings' Labs section: reporting a bug and replaying first setup. The update channel is on Updates and about. */
 @Composable
 internal fun LabsSection(app: Muninn) {
     val context = LocalContext.current
     Labs.changed
-    val pre = app.identity.preRelease
     Framed("Labs") {
-        Text("Update channel", style = Type.normal, modifier = Modifier.padding(top = 10.dp))
-        ChoiceRow(2, Modifier.padding(vertical = 8.dp), minWidth = 120.dp) { i, m ->
-            if (i == 0) MButton("Stable", m, if (!pre) Kind.Accent else Kind.Normal) { Labs.setPreRelease(app, false) }
-            else MButton("Pre-release", m, if (pre) Kind.Accent else Kind.Normal) { Labs.setPreRelease(app, true) }
-        }
-        Text(if (pre) "Updates include pre-release builds." else "Updates are stable releases only.", style = Type.small)
-        Spacer(Modifier.height(6.dp))
-        MenuRow("undo", "Go back to stable") { Labs.goBack(app) }
         MenuRow("info", "Report a bug") { Labs.report(context) }
-        MenuRow("folder", "App storage") { SettingsNav.goChat = "appstorage" }
         // First setup again, as practice: nothing it does is saved.
         MenuRow("refresh", "Replay first setup (practice)") { Setup.practice(app) }
     }

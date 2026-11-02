@@ -180,21 +180,6 @@ internal fun KeepChoices(app: Muninn, key: String, name: String, folders: List<F
         style = Type.small, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
 }
 
-/** "Keep longer", from the top of a 1:1 chat: [KeepChoices] in a small window. */
-@Composable
-internal fun KeepLongerDialog(app: Muninn, key: String, name: String, onDismiss: () -> Unit) {
-    val folders by app.chat.folders.all.collectAsState()
-    app.chat.contacts.all.collectAsState().value   // redraws when their days or mine change
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Palette.panel,
-        shape = Corner,
-        title = { Text("How long messages stay", style = Type.big) },
-        text = { Column(Modifier.verticalScroll(rememberScrollState())) { KeepChoices(app, key, name, folders) } },
-        confirmButton = { io.github.ravenor907.muninn.ui.MButton("Done") { onDismiss() } },
-    )
-}
-
 /** Puts [key] in the [role] folder (making it if it was deleted) and takes it out of the other two. Null: none. */
 private fun setRole(app: Muninn, key: String, role: String?) {
     val fs = app.chat.folders.all.value
@@ -210,13 +195,8 @@ internal fun checkEmoji(app: Muninn, key: String, name: String) {
         "They match", onConfirm = { app.chat.verify(key, name) }))
 }
 
-/** The Kids' TV menu as (section id, label), Disconnect last. */
-private fun tvRows(): List<Pair<String, String>> = io.github.ravenor907.muninn.tv.ParentTvMenu.items
-
-private fun tvIcon(id: String) = when (id) {
-    "people" -> "people"; "parents" -> "user"; "quick" -> "chat"; "sound" -> "audio"; "names" -> "edit"; "apps" -> "tv"
-    "permissions" -> "shield"; "storage" -> "folder"; "keep" -> "clock"; else -> "close"
-}
+/** The Kids' TV page itself (not one of its parts): `openTvSection(key, TV_PAGE)`. */
+internal const val TV_PAGE = "page"
 
 /** Opens a Kids' TV section from anywhere: the chat column shows it, and Back returns to where it was opened. */
 internal fun openTvSection(key: String, section: String) {
@@ -277,11 +257,19 @@ private fun MenuTitle(text: String, avatar: @Composable () -> Unit = {}) {
     Box(Modifier.fillMaxWidth().padding(bottom = 4.dp).height(1.dp).background(Palette.hairline))
 }
 
-/** The chat list's own menu: refresh, a new folder, whether Muninn is online, and locking now. */
+/** The chat list's own menu: mark all read, refresh, a new folder, whether Muninn is online, locking now, and Settings. */
 @Composable
 private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -> Unit, done: () -> Unit) {
     val up by app.nostr.connected.collectAsState()
     MenuTitle("Chats")
+    // Every chat and group read, as if each was opened (read receipts go out only where they're on).
+    MenuRow("check", "Mark all read") {
+        done()
+        val ch = app.chat
+        ch.unread.value.forEach { ch.markRead(it) }
+        ch.groups.unreadGroups.value.forEach { ch.groupRead(it) }
+        ch.flags.all.value.unread.forEach { k -> if (k.startsWith("g:")) ch.groupRead(k.removePrefix("g:")) else ch.markRead(k) }
+    }
     MenuRow("refresh", "Refresh") { done(); app.refreshChats(); app.refreshNearby(); Ui.say("Checking for new messages…") }
     MenuRow("folder", "New folder") { onFolder() }
     MenuRow("people", "Requests", value = if (ChatNav.asks > 0) "${ChatNav.asks}" else "") { done(); ChatNav.open = "requests" }
@@ -308,13 +296,16 @@ private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -
     // Labs mode: report a bug (a screenshot of the list as it is, then the report screen).
     val context = androidx.compose.ui.platform.LocalContext.current
     if (Labs.on(app)) MenuRow("info", "Report a bug") { done(); Labs.report(context) }
+    // The same as the valknut, for anyone looking for Settings in this menu.
+    MenuRow("gear", "Settings") { done(); SettingsNav.goTab = "settings" }
 }
 
 /**
  * A person's menu, short enough for one screen: a row of round buttons (Search, Media, Mute, Details), then
  * Notifications, Mark unread and Start a group, then More. More ([more]) has the rest: Move up and down, Hide (someone
  * nearby who isn't a contact), then the red ones, Block, Delete chat and Delete contact. A Kids' TV has the same shape,
- * with its first sections in the list and the rest under More. From a group's People page, the group's actions too.
+ * with "Kids' TV settings" (its one page) first and only Move and Delete chat under More. From a group's People page,
+ * the group's actions too.
  */
 @Composable
 private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit, more: Boolean, go: (String) -> Unit, done: () -> Unit) {
@@ -345,25 +336,22 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         QuickButton(if (muted) "sound" else "mute", if (muted) "Unmute" else "Mute", on = muted) {
             if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
         }
-        QuickButton("user", "Details") { done(); ChatNav.space = ""; openDetails(key); onChats() }
+        // A Kids' TV this phone looks after: Details is its Kids' TV page (a person's details don't fit a TV).
+        QuickButton("user", "Details") { done(); ChatNav.space = ""; if (tv) openTvSection(key, TV_PAGE) else openDetails(key); onChats() }
     }
     if (tv) {
-        // A Kids' TV this phone looks after: its first sections here, the rest under More, Disconnect TV last.
-        val rows = tvRows().filter { it.first != "disconnect" }
-        val section: @Composable (Pair<String, String>) -> Unit = { (id, label) -> MenuRow(tvIcon(id), label) { done(); openTvSection(key, id); onChats() } }
+        // A Kids' TV this phone looks after: a chat menu, with its one Kids' TV page first. Everything about the TV
+        // (Disconnect TV too) is on that page.
         if (!more) {
-            rows.take(TV_FIRST).forEach { section(it) }
+            MenuRow("tv", "Kids' TV settings") { done(); openTvSection(key, TV_PAGE); onChats() }
             MenuRow("clock", "Notifications") { go("notify") }
             MoreRow { go("more") }
             return
         }
-        rows.drop(TV_FIRST).forEach { section(it) }
+        MoveRows(app, key)
         MenuGap()
         deleteChat()
-        tvRows().firstOrNull { it.first == "disconnect" }?.let { (id, label) ->
-            MenuRow(tvIcon(id), label, danger = true) { done(); openTvSection(key, id); onChats() }
-        }
-        // No Block for a TV this phone looks after: Disconnect TV is how it goes.
+        // No Block for a TV this phone looks after: Disconnect TV (on its page) is how it goes.
         MenuRow("back", "Back") { go("") }
         return
     }
@@ -429,9 +417,6 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
     }
     MenuRow("back", "Back") { go("") }
 }
-
-/** How many Kids' TV sections show on its menu's first page; the rest are under More. */
-private const val TV_FIRST = 3
 
 /** Start a group, with [key] already picked. */
 @Composable
@@ -509,17 +494,13 @@ private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     val big = group && (app.chat.groups.group(key.removePrefix("g:"))?.state?.members?.size ?: 0) > ChatFlags.BIG_GROUP
     val mode = ChatFlags.modeFor(flags.notify[key], app.identity.reduceNotifications, group, big)
     fun pick(m: String) { app.chat.flags.setNotify(key, m) }
+    // Not picked for this chat: it follows Settings › Notifications (and a big group's mentions-only start).
+    if (flags.notify[key].isNullOrEmpty()) Text("Follows Settings: " + when (mode) {
+        ChatFlags.ONE -> "One until I open it"; ChatFlags.MENTIONS -> "Only mentions and replies to me"; else -> "Every message"
+    }, style = Type.small, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
     MenuRow("chat", "Every message", value = if (mode == ChatFlags.EVERY) "On" else "") { pick(ChatFlags.EVERY) }
     MenuRow("clock", "One until I open it", value = if (mode == ChatFlags.ONE) "On" else "") { pick(ChatFlags.ONE) }
     if (group) MenuRow("people", "Only mentions and replies to me", value = if (mode == ChatFlags.MENTIONS) "On" else "") { pick(ChatFlags.MENTIONS) }
-    if (group) {
-        // The same nicknames as Settings › Notifications, saved as they're typed.
-        var nick by remember { mutableStateOf(app.identity.mentionNames) }
-        Column(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-            Text("Also mention me as", style = io.github.ravenor907.muninn.ui.Type.small)
-            Field(nick, { nick = it.take(80); app.identity.mentionNames = nick }, "Nicknames, like tay, T", Modifier.padding(top = 4.dp))
-        }
-    }
     if (!group) {
         var ra by remember(key) { mutableStateOf(app.power.isRightAway(key)) }
         Column(Modifier.padding(horizontal = 20.dp)) {

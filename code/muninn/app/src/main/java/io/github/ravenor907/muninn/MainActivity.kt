@@ -246,6 +246,8 @@ class MainActivity : ComponentActivity() {
     /** A message notification was tapped: open that conversation. */
     private fun openChat(i: Intent?) {
         val key = i?.getStringExtra("chat") ?: return
+        // A notification put up while locked (caps n1 and n2): its chat is found by name once Muninn is unlocked.
+        i.getStringExtra(Muninn.NUDGE_FROM)?.let { from -> app.nudgeOpen = from to i.getStringExtra(Muninn.NUDGE_CHAT).orEmpty(); app.openNudge() }
         // A Kids' TV: the notification's or banner's person (the TV's own screen ignores anyone not on its list).
         if (key != "inbox") io.github.ravenor907.muninn.tv.TvNav.show(key)
         tab = "chat"
@@ -253,6 +255,9 @@ class MainActivity : ComponentActivity() {
         val ch = i.getStringExtra("ch").orEmpty()
         if (key.startsWith("g:") && ch.isNotEmpty()) ChatNav.channel[key.removePrefix("g:")] = ch
         ChatNav.open = if (key == "inbox") "" else key
+        // Opened from a notification: no "New from" bar on the way back to the list, until the next new message (plan 2.14).
+        ChatNav.newFromClosed = System.currentTimeMillis()
+        // The lock (if due) shows first; this chat stays chosen behind it and opens once unlocked (lockIfDue keeps it).
         intentChose = true
     }
 
@@ -490,6 +495,9 @@ class MainActivity : ComponentActivity() {
         // A chat page asked for a Settings page (the chat list's "to finish" sheet): over to Settings with it open.
         val goSettings = SettingsNav.goSettings
         LaunchedEffect(goSettings) { if (goSettings.isNotEmpty()) { SettingsNav.goSettings = ""; show("settings"); SettingsNav.folder = goSettings } }
+        // Settings asked for a tab (Blocked people opens Contacts).
+        val goTab = SettingsNav.goTab
+        LaunchedEffect(goTab) { if (goTab.isNotEmpty()) { SettingsNav.goTab = ""; show(goTab) } }
         // On the Files tab, Muninn looks for devices on the Wi-Fi at full speed (slower elsewhere, to save battery).
         LaunchedEffect(tab) { app.power.filesOpen.value = tab == "files" }
         // Back from another tab (or Settings) goes to where you came from, then the chat list.
@@ -517,6 +525,8 @@ class MainActivity : ComponentActivity() {
             io.github.ravenor907.muninn.screens.TourOverlay()
         }
 
+        // Once, after an update, for anyone still on Nothing who never chose: show who messages are from?
+        if (!ciSkip && !touring) io.github.ravenor907.muninn.screens.WhoFromAsk(app)
         request?.let { r ->
             AlertDialog(
                 onDismissRequest = { app.net.decline() },
@@ -560,7 +570,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun UpdateBanner() {
         val up by app.updater.state.collectAsState()
-        if (up.ready && tab != "settings") Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable(role = Role.Button) { show("settings") }.padding(10.dp)) {
+        if (up.ready && tab != "settings") Row(Modifier.fillMaxWidth().background(Palette.accentFill).clickable(role = Role.Button) { show("settings"); SettingsNav.folder = "about" }.padding(10.dp)) {
             Text("Muninn ${up.latest} is ready. Tap to install.", style = Type.small.copy(color = Palette.accent))
         }
     }

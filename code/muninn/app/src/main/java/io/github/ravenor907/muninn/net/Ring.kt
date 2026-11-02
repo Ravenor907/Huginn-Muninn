@@ -117,15 +117,17 @@ object RingWire {
         if (p == null || !ringOk(p)) null else p.getString("call") to (p.get("ts") as Number).toLong()
     } catch (e: Exception) { null }
 
-    /** What a receipt's "rk", "rp", "wk", "wt" say; each half null when absent or malformed. */
-    data class Announce(val rk: String?, val rp: String?, val wk: String?, val wt: Long)
+    /** What a receipt's "rk", "rp", "wk", "wt" (and "nk", "np", cap n2) say; each half null when absent or malformed. */
+    data class Announce(val rk: String?, val rp: String?, val wk: String?, val wt: Long, val nk: String? = null, val np: String? = null)
 
     fun announceOf(r: JSONObject, nowS: Long): Announce {
         val ringOk = keyOk(r.opt("rk")) && (r.opt("rp") as? String)?.let { MAILBOX.matches(it) } == true
         val wt = r.opt("wt")
         val wrapOk = keyOk(r.opt("wk")) && Rich.isTs(wt) && (wt as Number).toLong().let { nowS - it < WRAP_KEEP_S && it - nowS <= WRAP_AHEAD_S }
+        val nudgeOk = keyOk(r.opt("nk")) && (r.opt("np") as? String)?.let { MAILBOX.matches(it) } == true
         return Announce(if (ringOk) r.getString("rk") else null, if (ringOk) r.getString("rp") else null,
-            if (wrapOk) r.getString("wk") else null, if (wrapOk) (wt as Number).toLong() else 0L)
+            if (wrapOk) r.getString("wk") else null, if (wrapOk) (wt as Number).toLong() else 0L,
+            if (nudgeOk) r.getString("nk") else null, if (nudgeOk) r.getString("np") else null)
     }
 
     /** A sender wraps with a day key only within a week of when it was made. */
@@ -150,15 +152,24 @@ object RingWire {
 }
 
 /**
- * Cap n1 (protocol.md 23.3): a nudge. Sending a real message (text, photo, voice or video message, file offer, group
- * invite) to a contact whose app says n1 also sends one tiny ring envelope {"t":"nudge","ts":...} to their ring
- * mailbox, at most one a minute per person. A locked phone opens it with its ring key and says "Muninn is locked" only
- * then, instead of on every receipt, check-in or presence that reaches its inbox.
+ * Caps n1 and n2 (protocol.md 23.3): nudges. Sending a real message (text, photo, voice or video message, file offer,
+ * group invite) to someone whose app says n1 or n2 also sends one tiny sealed envelope that a locked phone can open
+ * without its vault, at most one a minute per person (per person and chat with n2). A locked phone notifies only for
+ * these: never for receipts, check-ins, presence or anything else that reaches its inbox.
+ *  - n1: {"t":"nudge","ts":...} sealed to their ring key, to their ring mailbox. Contacts only.
+ *  - n2: the same with "from" (the sender's name), "chat" ("" for 1:1, else the group's name) and "kind", sealed to
+ *    their nudge key ([NudgeKey], which contacts and group peers get) and sent to their nudge mailbox; to a contact
+ *    whose nudge key hasn't come yet, sealed to their ring key instead.
  */
 object NudgeWire {
     const val CAP = "n1"
-    /** At most one nudge per recipient in this long. */
+    const val RICH_CAP = "n2"
+    /** At most one nudge per recipient (per recipient and chat, n2) in this long. */
     const val EVERY_MS = 60_000L
+    /** "from" and "chat" are at most this many characters. */
+    const val NAME_MAX = 40
+    /** What a message is. Anything else reads as "msg". */
+    val KINDS = listOf("msg", "photo", "voice", "video", "file", "invite")
 
     /** Whether something sent in [room] with plaintext [plain] is a real message (and so is worth a nudge). */
     fun counts(room: String, plain: String): Boolean = when (room) {
@@ -170,40 +181,148 @@ object NudgeWire {
 
     private fun tOf(plain: String): String = try { JSONObject(plain).optString("t") } catch (e: Exception) { "" }
 
-    /** The nudge plaintext: {"t":"nudge","ts":<ms>}. Nothing else: no name, no text, no chat. */
+    /** The kind of a real message in [room] (a photo room's own kind comes from [blobKind]). */
+    fun kindOf(room: String): String = when (room) {
+        "photo", "gphoto" -> "photo"
+        "file" -> "file"
+        "group" -> "invite"
+        else -> "msg"
+    }
+
+    /** A photo room message: a voice message, a video message, a small file, or a photo (a GIF too). */
+    fun blobKind(voiceMs: Int, videoMs: Int, file: String): String = when {
+        voiceMs > 0 -> "voice"
+        videoMs > 0 -> "video"
+        file.isNotEmpty() -> "file"
+        else -> "photo"
+    }
+
+    /** A name in a nudge: control and format characters taken out, trimmed, at most [NAME_MAX] characters. Not a string: "". */
+    fun clean(x: Any?): String {
+        if (x !is String) return ""
+        val b = StringBuilder()
+        var i = 0
+        while (i < x.length) {
+            val cp = x.codePointAt(i)
+            i += Character.charCount(cp)
+            val t = Character.getType(cp)
+            if (Character.isISOControl(cp) || t == Character.FORMAT.toInt() || t == Character.SURROGATE.toInt() ||
+                t == Character.LINE_SEPARATOR.toInt() || t == Character.PARAGRAPH_SEPARATOR.toInt()) continue
+            b.appendCodePoint(cp)
+        }
+        var s = b.toString().trim()
+        if (s.length > NAME_MAX) {
+            s = s.take(NAME_MAX)
+            if (Character.isHighSurrogate(s.last())) s = s.dropLast(1)
+            s = s.trim()
+        }
+        return s
+    }
+
+    /** What a nudge says. An n1 nudge names nobody and is a "msg". */
+    data class Nudge(val ts: Long, val from: String = "", val chat: String = "", val kind: String = "msg")
+
+    /** The n1 nudge plaintext: {"t":"nudge","ts":<ms>}. Nothing else. */
     fun plain(ts: Long): String = JSONObject().put("t", "nudge").put("ts", ts).toString()
 
-    /** Well-formed: t "nudge" and ts an integer 0 <= ts < 2^53. Other fields are ignored. */
+    /** The n2 nudge plaintext: {"t":"nudge","ts","from","chat","kind"}, the names cleaned as a receiver cleans them. */
+    fun richPlain(ts: Long, from: String, chat: String, kind: String): String = JSONObject().put("t", "nudge").put("ts", ts)
+        .put("from", clean(from)).put("chat", clean(chat)).put("kind", if (kind in KINDS) kind else "msg").toString()
+
+    /** Well-formed: t "nudge" and ts an integer 0 <= ts < 2^53. Other fields are ignored here. */
     fun ok(p: JSONObject): Boolean = p.opt("t") == "nudge" && Rich.isTs(p.opt("ts"))
 
-    /** The relay event's content: sealed to their ring key like a ring, padded like every relay envelope (section 20). */
-    fun content(ringPub: String, ts: Long): String =
-        Base64.getEncoder().encodeToString(EnvelopePad.pad(RingWire.sealRing(ringPub, plain(ts).toByteArray()).toString()).toByteArray())
+    /** A well-formed nudge, n1 or n2: names cleaned, an unknown or missing kind is "msg". */
+    fun read(p: JSONObject): Nudge? {
+        if (!ok(p)) return null
+        val k = p.opt("kind")
+        return Nudge((p.get("ts") as Number).toLong(), clean(p.opt("from")), clean(p.opt("chat")), if (k is String && k in KINDS) k else "msg")
+    }
 
-    /** A nudge's content opened with [ring]: its ts, or null when it isn't a good nudge. */
-    fun openContent(content: String, ring: KeyPair): Long? = try {
+    /** Sealed like a ring envelope and padded like every relay envelope (section 20). */
+    private fun seal(pub: String, plain: String): String =
+        Base64.getEncoder().encodeToString(EnvelopePad.pad(RingWire.sealRing(pub, plain.toByteArray()).toString()).toByteArray())
+
+    /** An n1 nudge's relay event content, sealed to their ring key. */
+    fun content(ringPub: String, ts: Long): String = seal(ringPub, plain(ts))
+
+    /** An n2 nudge's relay event content, sealed to their nudge key (or their ring key, see [route]). */
+    fun richContent(pub: String, ts: Long, from: String, chat: String, kind: String): String = seal(pub, richPlain(ts, from, chat, kind))
+
+    /** A nudge's content opened with [keys] (a ring key or a nudge key): what it says, or null when it isn't a good nudge. */
+    fun openContent(content: String, keys: KeyPair): Nudge? = try {
         val o = JSONObject(String(Base64.getDecoder().decode(content)))
-        val p = RingWire.openRing(o, ring)?.let { JSONObject(String(it, Charsets.UTF_8)) }
-        if (p == null || !ok(p)) null else (p.get("ts") as Number).toLong()
+        RingWire.openRing(o, keys)?.let { read(JSONObject(String(it, Charsets.UTF_8))) }
     } catch (e: Exception) { null }
 
+    /** An event for the ring mailbox that isn't a ring: a nudge only while [locked] (unlocked, the message itself notifies). */
+    fun ringMailbox(locked: Boolean, content: String, ring: RingKey): Nudge? = if (locked) ring.nudge(content) else null
+
+    /** An event for the nudge mailbox: only ever a nudge (never a ring), and only while [locked]. */
+    fun nudgeMailbox(locked: Boolean, content: String, key: NudgeKey): Nudge? = if (locked) key.nudge(content) else null
+
+    /** Where a nudge goes: the key it's sealed to, the mailbox, and whether it's the n2 form. */
+    data class Route(val pub: String, val mailbox: String, val rich: Boolean)
+
     /**
-     * While locked, whether an event in the normal inbox (which can't be opened, so it may be a receipt, a check-in or
-     * a message) puts up the notice: only when this app doesn't nudge-listen or someone who writes may not nudge.
+     * n2: their nudge key and nudge mailbox (a contact or a group peer), else a contact's ring key and ring mailbox.
+     * n1 only: a contact's ring key, the plain form. Null: no nudge (neither cap, or no key from them yet).
      */
-    fun inboxNotices(ourCaps: Set<String>, legacyPeers: Boolean): Boolean = CAP !in ourCaps || legacyPeers
+    fun route(caps: Set<String>, groupOnly: Boolean, k: PeerKeys.Keys?): Route? {
+        if (k == null) return null
+        val rich = RICH_CAP in caps
+        val nk = k.nk
+        val np = k.np
+        if (rich && nk != null && np != null) return Route(nk, np, true)
+        val rk = k.rk
+        val rp = k.rp
+        if (groupOnly || (!rich && CAP !in caps) || rk == null || rp == null) return null
+        return Route(rk, rp, rich)
+    }
 
-    /** An event for the ring mailbox that isn't a ring: the notice only while [locked] and only for a good nudge. */
-    fun ringMailboxNotices(locked: Boolean, content: String, ring: RingKey): Boolean = locked && ring.nudge(content) != null
+    /** What [Gate] counts a nudge under: the person, and with n2 the chat too (a group's nudge isn't held back by a 1:1 one). */
+    fun gateKey(to: String, rich: Boolean, chat: String): String = if (rich) to + "\n" + chat else to
+
+    /** What a locked nudge's notification shows: Settings › Notifications › What notifications show. */
+    enum class Show { NOTHING, NAME, MESSAGE }
+
+    /** One notification per sender and chat; with Nothing, one for everything. */
+    fun groupKey(show: Show, n: Nudge): String = if (show == Show.NOTHING) "" else n.from + "\n" + n.chat
+
+    /** Its title: who it's from, and the group ("from · chat"). "Muninn" with Nothing, or for a nudge naming nobody (n1). */
+    fun title(show: Show, n: Nudge): String = when {
+        show == Show.NOTHING -> "Muninn"
+        n.from.isNotEmpty() && n.chat.isNotEmpty() -> n.from + " · " + n.chat
+        n.from.isNotEmpty() -> n.from
+        n.chat.isNotEmpty() -> n.chat
+        else -> "Muninn"
+    }
+
+    /** Its text: what came (the message itself can't be opened while locked), or how many once more came. */
+    fun text(show: Show, kind: String, count: Int): String = when {
+        count > 1 -> "$count new messages"
+        show == Show.NOTHING -> "New message"
+        else -> when (kind) {
+            "photo" -> "Photo"
+            "voice" -> "Voice message"
+            "video" -> "Video message"
+            "file" -> "File"
+            "invite" -> "Group invite"
+            else -> "New message"
+        }
+    }
 
     /**
-     * True when someone may write without nudging: a contact whose app hasn't said n1 (or whose caps aren't known),
-     * or a group-only peer (it never gets the ring key, 23.2). An empty list counts too, so a list that didn't load
-     * never turns the old notice off.
+     * The chat a tapped locked notification opens once unlocked: the one group named [chat], or for 1:1 the one contact
+     * named [from] ([contacts] and [groups] are key to name). Null (the chat list) when none or more than one match.
      */
-    fun legacy(people: List<Contact>): Boolean = people.isEmpty() || people.any { it.groupOnly || CAP !in it.caps }
+    fun match(from: String, chat: String, contacts: List<Pair<String, String>>, groups: List<Pair<String, String>>): String? = when {
+        chat.isNotEmpty() -> groups.filter { clean(it.second) == chat }
+        from.isNotEmpty() -> contacts.filter { clean(it.second) == from }
+        else -> emptyList<Pair<String, String>>()
+    }.singleOrNull()?.first
 
-    /** At most one nudge per recipient per [EVERY_MS]. */
+    /** At most one nudge per [gateKey] per [EVERY_MS]. */
     class Gate(private val everyMs: Long = EVERY_MS) {
         private val last = HashMap<String, Long>()
         /** True when a nudge to [key] may go now (and counts it). */
@@ -219,28 +338,29 @@ object NudgeWire {
 }
 
 /**
- * Cap n1: `legacy-peers.json`, a small plain file outside the vault: {"legacyPeers":true|false}. The contacts are in
- * the vault, so a locked phone reads this instead, written whenever they change while unlocked. Missing or unreadable
- * means true (the notice on any inbox event, as before n1).
+ * Cap n2: this device's nudge key, a P-256 key pair and a Nostr secret for its nudge mailbox, kept like the ring key in
+ * app-private storage outside the vault (`nudge-key.json`) and erased with it. Its public half goes to contacts and
+ * group peers whose app says n2 ("nk", "np"), so group members can nudge too. It only ever opens nudges: a ring sealed
+ * to it is never a call, so someone who got it through a group can't ring this phone. Made new with the ring key (a block).
  */
-class LegacyPeers(private val file: File) {
-    @Volatile private var known: Boolean? = null
-
-    fun read(): Boolean = known ?: (when (val r = SafeFile.read(file) { b -> JSONObject(String(b)).getBoolean("legacyPeers") }) {
-        is SafeFile.Read.Ok -> r.value
-        else -> true
-    }).also { known = it }
-
-    /** Written only when it changes. */
-    @Synchronized
-    fun write(v: Boolean) {
-        if (known == v && SafeFile.exists(file)) return
-        try { SafeFile.write(file, JSONObject().put("legacyPeers", v).toString().toByteArray()); known = v } catch (_: Exception) {}
-    }
-
-    /** Erase everything and Move: the file goes (true again). */
-    @Synchronized
-    fun forget() { known = null; SafeFile.delete(file) }
+class NudgeKey(file: File) {
+    private val keys = RingKey(file)
+    /** The public half, as it goes in "nk". */
+    val publicKey: String get() = keys.publicKey
+    /** The nudge mailbox ("np"). */
+    val mailbox: String get() = keys.mailbox
+    /** Every nudge mailbox read now: the current one, and one replaced after a block for [RingKey.OLD_MS]. */
+    fun mailboxes(nowMs: Long = System.currentTimeMillis()): List<String> = keys.mailboxes(nowMs)
+    /** Their Nostr secrets, the same order (NIP-42). */
+    fun nostrSecrets(nowMs: Long = System.currentTimeMillis()): List<ByteArray> = keys.nostrSecrets(nowMs)
+    /** A nudge's content opened: what it says, or null. Never a ring. */
+    fun nudge(content: String, nowMs: Long = System.currentTimeMillis()): NudgeWire.Nudge? = keys.nudge(content, nowMs)
+    /** Someone was blocked: a new nudge key and mailbox, like the ring key. */
+    fun renew(nowMs: Long = System.currentTimeMillis()) = keys.renew(nowMs)
+    /** A replaced nudge key past [RingKey.OLD_MS] goes. True when one went. */
+    fun prune(nowMs: Long = System.currentTimeMillis()): Boolean = keys.prune(nowMs)
+    /** Erase everything and Move: a new nudge key next time. */
+    fun forget() = keys.forget()
 }
 
 /** This device's day keys (e1): a new one every day, each kept [RingWire.WRAP_KEEP_S]. Saved (encrypted) through [write]. */
@@ -304,31 +424,37 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
     fun drop() = synchronized(lock) { days = mutableListOf() }
 }
 
-/** What each contact announced (b1, e1): their ring key and ring mailbox, their newest day key. Saved (encrypted) through [write]. */
+/**
+ * What each contact or group peer announced (b1, e1, n2): their ring key and ring mailbox, their newest day key, their
+ * nudge key and nudge mailbox. Saved (encrypted) through [write].
+ */
 class PeerKeys(private val read: () -> String?, private val write: (String) -> Unit) {
-    data class Keys(val rk: String? = null, val rp: String? = null, val wk: String? = null, val wt: Long = 0)
+    data class Keys(val rk: String? = null, val rp: String? = null, val wk: String? = null, val wt: Long = 0,
+                    val nk: String? = null, val np: String? = null)
     private val lock = Any()
     private var map: MutableMap<String, Keys>? = null
 
     private fun all(): MutableMap<String, Keys> = map ?: try {
         val o = JSONObject(read() ?: "{}")
         o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let { Keys(it.optString("rk").ifEmpty { null }, it.optString("rp").ifEmpty { null },
-            it.optString("wk").ifEmpty { null }, it.optLong("wt")) } }.toMutableMap()
+            it.optString("wk").ifEmpty { null }, it.optLong("wt"), it.optString("nk").ifEmpty { null }, it.optString("np").ifEmpty { null }) } }.toMutableMap()
     } catch (e: Exception) { mutableMapOf() }.also { map = it }
 
     private fun save(m: Map<String, Keys>) {
         val o = JSONObject()
-        for ((k, v) in m) o.put(k, JSONObject().put("rk", v.rk ?: "").put("rp", v.rp ?: "").put("wk", v.wk ?: "").put("wt", v.wt))
+        for ((k, v) in m) o.put(k, JSONObject().put("rk", v.rk ?: "").put("rp", v.rp ?: "").put("wk", v.wk ?: "").put("wt", v.wt)
+            .put("nk", v.nk ?: "").put("np", v.np ?: ""))
         try { write(o.toString()) } catch (_: Exception) {}
     }
 
-    /** Takes what an authentic receipt from [key] announced: the ring key as it says, a day key only when newer. */
+    /** Takes what an authentic receipt from [key] announced: the ring and nudge keys as it says, a day key only when newer. */
     fun take(key: String, a: RingWire.Announce) = synchronized(lock) {
-        if (a.rk == null && a.wk == null) return@synchronized
+        if (a.rk == null && a.wk == null && a.nk == null) return@synchronized
         val m = all()
         val old = m[key] ?: Keys()
         val now = Keys(a.rk ?: old.rk, if (a.rk != null) a.rp else old.rp,
-            if (a.wk != null && a.wt > old.wt) a.wk else old.wk, if (a.wk != null && a.wt > old.wt) a.wt else old.wt)
+            if (a.wk != null && a.wt > old.wt) a.wk else old.wk, if (a.wk != null && a.wt > old.wt) a.wt else old.wt,
+            a.nk ?: old.nk, if (a.nk != null) a.np else old.np)
         if (now != old) { m[key] = now; save(m) }
     }
 
@@ -408,8 +534,8 @@ class RingKey(private val file: File) {
     fun open(content: String, nowMs: Long = System.currentTimeMillis()): Pair<String, Long>? =
         live(nowMs).firstNotNullOfOrNull { RingWire.openRingContent(content, it.keys) }
 
-    /** A nudge's content opened (cap n1): its ts, or null. */
-    fun nudge(content: String, nowMs: Long = System.currentTimeMillis()): Long? =
+    /** A nudge's content opened (caps n1 and n2): what it says, or null. */
+    fun nudge(content: String, nowMs: Long = System.currentTimeMillis()): NudgeWire.Nudge? =
         live(nowMs).firstNotNullOfOrNull { NudgeWire.openContent(content, it.keys) }
 
     /**

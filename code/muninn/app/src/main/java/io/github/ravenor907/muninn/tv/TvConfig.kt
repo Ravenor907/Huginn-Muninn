@@ -361,10 +361,10 @@ object TvRules {
         return Status(m.toInt(), u, t, own, off, update)
     }
 
-    // ---- the TV's own updates, in its status: what a parent's phone shows under Apps and updates
+    // ---- the TV's own updates, in its status: what a parent's phone shows for a TV without u1 (TvUpd)
     /**
      * "needs": a new Muninn is downloaded and waits for Install updates; "ready": it waits for Install on the TV;
-     * "installing"; "done": the TV runs the newest; "failed": it didn't go in (the TV tries again the next day).
+     * "installing"; "done": the TV runs the newest; "failed": it didn't go in (the TV tries again later, 7.17).
      */
     val UPDATE_STATES = listOf("needs", "ready", "installing", "done", "failed")
 
@@ -374,7 +374,7 @@ object TvRules {
         "ready" -> "Waiting for Install on the TV"
         "installing" -> "Installing"
         "done" -> "Up to date"
-        "failed" -> "The update didn't install. The TV tries again tomorrow."
+        "failed" -> "The update didn't install. The TV tries again later."
         else -> ""
     }
 

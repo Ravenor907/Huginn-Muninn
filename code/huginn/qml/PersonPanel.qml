@@ -41,7 +41,7 @@ Item {
 
     readonly property var rows: page === "can" ? [
         { id: "always", label: "Always right away", toggle: true },
-        { id: "calls", label: "Calls and video", toggle: true },
+        { id: "calls", label: "Call me", toggle: true },
         { id: "files", label: "Send me files", toggle: true },
         { id: "active", label: "See when I'm active", toggle: true },
         { id: "direct", label: "Direct calls and files (shares your address)", toggle: true },

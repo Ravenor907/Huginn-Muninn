@@ -328,7 +328,7 @@ private fun WelcomePage(app: Muninn) {
             RestoreFlow(app, practice = !Setup.writes.live, onCancel = { restoring = false }) { o ->
                 Backup.restoreKeeping(app, o)
                 Setup.restored(app)
-                "Restored. Set a lock any time in Settings › Lock and privacy. Muninn is restarting."
+                "Restored. Set a lock any time in Settings › Privacy and lock. Muninn is restarting."
             }
         }
         return
@@ -351,21 +351,21 @@ private fun LockPage(app: Muninn) {
     val w = Setup.writes
     if (w.live && lockChosen(app)) {
         // Back here after choosing: nothing to change.
-        Page { Title("Protect Muninn"); Line(if (app.vault.hasPassword) "Your lock is set." else "No lock. Set one in Settings › Lock and privacy.") }
+        Page { Title("Protect Muninn"); Line(if (app.vault.hasPassword) "Your lock is set." else "No lock. Set one in Settings › Privacy and lock.") }
         return
     }
     var drawn by remember { mutableStateOf("") }
     Page(skip = "Skip", onSkip = {
         if (!w.live) Setup.next()
         else Ui.sure(Ask("Skip the lock?", "Without a lock, anyone who can use this phone can open Muninn and read your chats. " +
-            "You can set one any time in Settings › Lock and privacy.", "Skip") { w.skipLock(); Setup.next() })
+            "You can set one any time in Settings › Privacy and lock.", "Skip") { w.skipLock(); Setup.next() })
     }, next = if (w.live) null else "Next", nextOn = drawn.isNotEmpty(), scroll = false) {
         Title("Protect Muninn")
         // Kind, not scary: when it locks, that nobody can reset it (the owner's choice, so it stays), and what helps.
         Text("Muninn opens with a pattern or password you choose. It locks itself after ${io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER / 60_000} minutes away; " +
-            "you can change that in Settings › Lock and privacy.", style = Type.small)
+            "you can change that in Settings › Privacy and lock.", style = Type.small)
         Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a backup after setup " +
-            "(Settings › Backup) to be safe.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            "(Settings › Devices and backup) to be safe.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
         if (w.live) LockSetup(app, onCancel = null, fill = true) { Setup.hasLock = true; Setup.next() }
         else {
             Text(drawn.ifEmpty { "Draw a pattern: connect at least 6 dots." }, style = Type.normal, modifier = Modifier.padding(top = 12.dp))
@@ -535,7 +535,7 @@ private fun ended(scanned: String): Boolean {
 /** A code scanned on the Add people page: added (said back), or why not. */
 private fun added(app: Muninn, scanned: String): String {
     val text = Contacts.unlink(scanned)
-    if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) return "That's a link code. Use Settings › Linked devices."
+    if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) return "That's a link code. Use Settings › Devices and backup."
     val found = Contacts.parse(text) ?: return "That isn't a Muninn code."
     if (Contacts.expires(text) in 1 until System.currentTimeMillis()) return "That code from ${found.name.ifBlank { "them" }} has run out. Ask them for a new one."
     if (found.chatKey == app.identity.publicKey) return "That's your own code."
@@ -553,7 +553,7 @@ private fun LinkPage(app: Muninn) {
     Page(skip = "Skip") {
         Title("Link your phone")
         Box(Modifier.fillMaxWidth().padding(top = 14.dp), contentAlignment = Alignment.Center) { PracticeQr(240.dp) }
-        Line("In Muninn: Settings › Linked devices › Scan to link")
+        Line("In Muninn: Settings › Devices and backup › Scan to link")
     }
 }
 
@@ -566,7 +566,7 @@ private fun DonePage() {
                 contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
             Text("You're set.", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
             Text("Messages, photos and calls delete after 7 days, so old chats can't leak. To see how long a chat keeps messages, or keep it longer, tap the line at the top of it.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
-            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › Backup. If you ever forget your lock, tap “Forgot it?” on the lock screen to put the backup back.",
+            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › Devices and backup. If you ever forget your lock, tap “Forgot it?” on the lock screen to put the backup back.",
                 style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             if (practice) Text("Practice ends here and goes back to Labs.", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }

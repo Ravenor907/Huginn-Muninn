@@ -509,23 +509,40 @@ int main(int argc, char *argv[])
     // rings even while Huginn is locked: only "Incoming call", no name, until it's unlocked.
     auto *ringKey = new RingKey(System::dataDir() + QStringLiteral("/ring-key.json"));
     chat->setRingKey(ringKey);
-    nostr->ringMailboxes = [ringKey] { return ringKey->mailboxes(); };
-    nostr->ringSecrets = [ringKey] { return ringKey->nostrSecrets(); };
-    // Erase everything (and Move, which erases this computer when it's done): the ring key file goes too.
-    QObject::connect(vault, &Vault::erased, vault, [ringKey] { ringKey->forget(); });
-    // Two days after a block renewed the ring key, the old ring mailbox is no longer read.
+    // Cap n2: the nudge key, kept the same way, goes to contacts and group peers so they can nudge. Its mailbox is read
+    // on the ring mailbox's request, but only the ring key ever opens a ring: a ring sealed to the nudge key never rings.
+    auto *nudgeKey = new NudgeKey(System::dataDir() + QStringLiteral("/nudge-key.json"));
+    chat->setNudgeKey(nudgeKey);
+    nostr->ringMailboxes = [ringKey, nudgeKey] { return ringKey->mailboxes() + nudgeKey->mailboxes(); };
+    nostr->ringSecrets = [ringKey, nudgeKey] { return ringKey->nostrSecrets() + nudgeKey->nostrSecrets(); };
+    // Erase everything (and Move, which erases this computer when it's done): the ring and nudge key files go too.
+    QObject::connect(vault, &Vault::erased, vault, [ringKey, nudgeKey] {
+        ringKey->forget();
+        nudgeKey->forget();
+    });
+    // Two days after a block renewed the ring and nudge keys, the old mailboxes are no longer read.
     auto *ringOld = new QTimer(&app);
     ringOld->setInterval(3600000);
-    QObject::connect(ringOld, &QTimer::timeout, nostr, [ringKey, nostr] {
-        if (ringKey->dropOld())
+    QObject::connect(ringOld, &QTimer::timeout, nostr, [ringKey, nudgeKey, nostr] {
+        const bool ringGone = ringKey->dropOld();
+        const bool nudgeGone = nudgeKey->dropOld();
+        if (ringGone || nudgeGone)
             nostr->resubscribe();
     });
     ringOld->start();
-    nostr->onRing = [ringKey, calls](const QString &content) {
+    // Caps n1 and n2: a nudge while the vault is locked says a real message came (lockedNudge, set below once the
+    // message sound is made). Unlocked, a nudge is ignored: the message itself notifies.
+    auto lockedNudge = std::make_shared<std::function<void(const RingWire::Nudge &)>>();
+    nostr->onRing = [ringKey, nudgeKey, calls, vault, lockedNudge](const QString &content) {
         QString call;
         qint64 ts = 0;
-        if (ringKey->open(content, &call, &ts))
+        if (ringKey->open(content, &call, &ts)) {
             calls->ringLocked(call, ts);
+            return;
+        }
+        RingWire::Nudge n;
+        if (vault->locked() && *lockedNudge && (nudgeKey->nudge(content, &n) || ringKey->nudge(content, &n)))
+            (*lockedNudge)(n);
     };
     // Call history keeps as long as that chat keeps messages (7 days, up to 30 in Family and Work).
     QObject::connect(chat, &Chat::pruned, calls, [chat, calls] { calls->pruneHistory([chat](const QString &k) { return chat->keepCutoff(k); }); });
@@ -612,21 +629,43 @@ int main(int argc, char *argv[])
     // The raven call: for new messages, and once when something arrives while Chat is locked.
     auto *sound = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/raven_message.wav"), &app);
 
+    // Caps n1 and n2: a nudge while locked. What it shows follows Settings > Notifications > Show: who and what kind
+    // ("Photo"), never the message (it can't be opened while locked); nothing shows "Huginn", "New message". One per
+    // sender and chat, counting up as more come; the sound only for the first. Do not disturb and quiet hours as for
+    // a message. The counts start over at the next unlock.
+    auto lockedCounts = std::make_shared<QHash<QString, int>>();
+    QObject::connect(vault, &Vault::changed, &app, [vault, lockedCounts] {
+        if (!vault->locked())
+            lockedCounts->clear();
+    });
+    *lockedNudge = [chat, sound, system, lockedCounts](const RingWire::Nudge &n) {
+        if (Settings::silenced())
+            return;
+        const int mode = chat->previewMode();
+        const QString key = RingWire::nudgeGroupKey(mode, n);
+        const int count = lockedCounts->value(key) + 1;
+        lockedCounts->insert(key, count);
+        if (count == 1 && !Settings::hushed() && Settings::messageSoundOn())
+            sound->play();
+        const QString title = RingWire::nudgeTitle(mode, n);
+        const QString body = RingWire::nudgeText(mode, n.kind, count);
+        // A click brings Huginn to its lock screen; the chat list shows once it's unlocked.
+        auto open = [chat] { Q_EMIT chat->showChat(QString()); };
+        auto fallback = [chat, title, body] { Q_EMIT chat->banner(title, body, QString()); };
+        if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
+            Platform::notify(title, body, 6000, open, fallback, QString());
+            if (system->gameMode())
+                fallback();
+        } else {
+            Q_EMIT chat->notice(title + QStringLiteral(": ") + body);
+        }
+    };
+
     if (!quiet) {
         // Stay reachable while Huginn runs: the relays (reconnecting by themselves) and Bluetooth.
-        // Locked: say something came, once per message (replaced by Chat once unlocked).
-        // At most once every few minutes: retries and receipts would otherwise each raise one.
-        nostr->onEnvelope = [chat, sound](const QString &) {
-            static qint64 last = 0;
-            const qint64 t = QDateTime::currentMSecsSinceEpoch();
-            if (t - last > 5 * 60000) {
-                last = t;
-                if (!Settings::hushed() && Settings::messageSoundOn())
-                    sound->play();
-                Q_EMIT chat->notice(QStringLiteral("New message. Unlock Huginn to read it."));
-            }
-            return false;
-        };
+        // Locked: what comes waits on the relays until Chat opens it once unlocked. Nothing in the inbox says anything
+        // while locked (it may be a receipt, a check-in or presence): only a nudge does (lockedNudge).
+        nostr->onEnvelope = [](const QString &) { return false; };
         // Unlocked (Chat has just started): introduce ourselves on Bluetooth links made while locked,
         // and ask the relays for the inbox again so messages that came while locked are read now.
         QObject::connect(vault, &Vault::opened, nostr, [nostr, ble] { ble->sayHello(); nostr->reconnectNow(); nostr->resubscribe(); });

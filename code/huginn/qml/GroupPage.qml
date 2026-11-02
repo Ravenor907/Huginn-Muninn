@@ -1036,7 +1036,7 @@ Rectangle {
         if (admin && !isTour && (info.reportsUnread || 0) > 0) top.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
         top.push({ name: "Search", icon: "search", detail: "In #" + channel.name, url: "find" },
                  { name: "Media", icon: "image", detail: "And files", url: "media" },
-                 { name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
+                 { name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
                  { name: "Group settings", icon: "gear", url: "settings" })
         // The about box at the top of the first channel: fold it to one line, or show it all.
         if (aboutBox.visible) top.push({ name: aboutBox.folded ? "Show rules" : "Fold rules", icon: "info", detail: "About and rules at the top", url: "foldabout" })
@@ -1048,7 +1048,7 @@ Rectangle {
         items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers, url: "people" })
         // Family: each member's safety code is checked once.
         const unchecked = family && !readOnly && !isTour ? members.filter(m => !m.me && !m.checked).length : 0
-        if (unchecked) items.push({ name: "Check safety codes", icon: "check", detail: unchecked + " to check", url: "check" })
+        if (unchecked) items.push({ name: "Compare emoji", icon: "check", detail: unchecked + " to check", url: "check" })
         items.push({ name: "More", icon: "more", url: "more" })
         Ui.pickFrom(info.name || "Group", [{ header: "", items: top }, { header: "", items: items }], a => groupAction(a))
     }
@@ -1106,7 +1106,7 @@ Rectangle {
     function checkMenu() {
         const left = members.filter(m => !m.me && !m.checked)
         if (!left.length) { Ui.say("Everyone is checked."); return }
-        Ui.pickFrom("Check safety codes", [{ header: "Match the code with each one, in person", items: left.map(m => ({ name: m.name, icon: "check", url: m.key })) }],
+        Ui.pickFrom("Compare emoji", [{ header: "Match the code with each one, in person", items: left.map(m => ({ name: m.name, icon: "check", url: m.key })) }],
                     k => PeopleActions.checkCode(k), () => page.groupMenu())
     }
     // People: everyone in the group; each opens their member menu.
@@ -1225,7 +1225,7 @@ Rectangle {
             items.push(inIt ? { name: "Leave " + c.name, icon: "call", url: "leave" } : { name: "Join", icon: "call", url: "join" })
             if (inIt && Rooms.canShare) items.push({ name: "Share my screen", icon: "screen", url: "share", check: Rooms.sharing })
         } else {
-            items.push({ name: "Open", icon: "hash", url: "open" }, { name: "Mark as read", icon: "check", url: "read" })
+            items.push({ name: "Open", icon: "hash", url: "open" }, { name: "Mark read", icon: "check", url: "read" })
             // Muting is for the whole group (no per-channel mute yet), so it says so.
             items.push({ name: (!isTour && Chat.isMuted("g:" + g) ? "Unmute " : "Mute ") + (info.name || "the group") + "…", icon: "bell", url: "mute" })
         }
@@ -1452,7 +1452,7 @@ Rectangle {
         if (admin && !m.admin) items.push({ name: "Make admin", icon: "shield", url: "admin" })
         else if (admin && info.amOwner && !m.owner) items.push({ name: "Remove admin", icon: "shield", url: "unadmin" })
         if (admin && info.amOwner && !m.owner) items.push({ name: "Make owner", icon: "crown", url: "owner" })
-        if (family && !readOnly && !isTour) items.push({ name: "Check safety code", icon: "check", detail: m.checked ? "Checked" : "Not checked", url: "check" })
+        if (family && !readOnly && !isTour) items.push({ name: "Compare emoji", icon: "check", detail: m.checked ? "Checked" : "Not checked", url: "check" })
         // Cap g2: Mute for me and Volume (only here); Timeout and Ban for admins, in their own section.
         const mod = ModActions.items(gid, m.key, isTour, m.name).map(x =>
             x.url === "mod:volume" ? Object.assign({}, x, { sub: () => ModActions.volumeMenu(m.key, m.name, null, isTour) })

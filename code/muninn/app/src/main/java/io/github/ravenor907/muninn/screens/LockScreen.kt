@@ -108,7 +108,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     // Clear of the gesture bar too, so the pattern and Erase never sit under it.
     Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
         Brand()
-        // A pattern: the dots sit where Settings › Lock and privacy says (Lower unless changed), for one-handed use.
+        // A pattern: the dots sit where Settings › Privacy and lock says (Lower unless changed), for one-handed use.
         if (pattern) Column(Modifier.weight(1f).fillMaxWidth().padding(16.dp), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
             Text("Draw your pattern to open", style = Type.big)
             Text(when {
@@ -231,7 +231,7 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
             onDone()
         }
     }
-    // [fill]: the rest of the screen is ours, so the pattern sits where Settings › Lock and privacy says.
+    // [fill]: the rest of the screen is ours, so the pattern sits where Settings › Privacy and lock says.
     // A password page scrolls above the keyboard, so the fields and Save stay reachable at large text sizes; the
     // pattern page keeps its spacing so the dots sit where they're set to.
     val scroll = androidx.compose.foundation.rememberScrollState()
@@ -285,7 +285,7 @@ fun FirstLock(app: Muninn, done: () -> Unit) {
                 style = Type.small)
             LockSetup(app, onCancel = {
                 Ui.sure(Ask("Skip the lock?", "Without a lock, anyone who can use this phone can open Muninn and read your chats. " +
-                    "You can set one any time in Settings › Lock and privacy.", "Skip") { skipLock(app); done() })
+                    "You can set one any time in Settings › Privacy and lock.", "Skip") { skipLock(app); done() })
             }, fill = true, cancelText = "Skip") { done() }
         }
     }
@@ -305,7 +305,7 @@ fun NewLock(app: Muninn, done: () -> Unit) {
             Text("Protect Muninn", style = Type.big)
             Text("Set a new lock. Your old one isn't in the backup.", style = Type.normal)
             Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a new backup " +
-                "(Settings › Backup) once you're in.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                "(Settings › Devices and backup) once you're in.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             LockSetup(app, onCancel = null, fill = true) { done() }
         }
     }

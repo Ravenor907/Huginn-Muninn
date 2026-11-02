@@ -1,45 +1,55 @@
 import QtQuick
 import Huginn
 
-// Settings: one flat list on the left (You, Notifications, Look, Calls, Privacy and lock, Devices,
-// Controller, Backup, About, and Erase last in red). A choice opens its rows on the right, related
-// ones together in framed sections. Changes save as you go. About starts with the raven: ten presses
-// (a click or A) turn Labs mode on or off, which adds the Labs group (update channel, bug reports, App storage,
-// Performance check).
+// Settings: one flat list on the left. Profile at the top (your picture, name and status), then Notifications,
+// Privacy and lock, Calls, Look, Battery and data, Devices and backup, and Updates and about, the one place to update
+// Huginn. A choice opens its rows on the right, related ones together in framed sections; what's used less waits
+// behind the page's More row. Changes save as you go. Updates and about starts with the raven: ten presses (a click or
+// A) turn Labs mode on or off, which adds Labs at the bottom (bug reports, Performance check, practice setup) and the
+// update channel.
 Rectangle {
     id: page
     // Seasonal: a frosted pane, so what falls shows while Look's settings change.
     color: Theme.sheet
     // False while the controller focus is on the rail, so only one thing looks focused.
     readonly property bool active: !Ui.main || Ui.main.focusZone === "content"
-    property string section: "you"    // the open page: one of items' ids
+    property string section: "profile"    // the open page: one of items' ids
     property int pick: 0              // the focused item on the left
     property int row: 0
     property bool inSection: false
-    // Another page opens one by name ({ section: "privacy" }).
+    // The open page's More row: shows the rest of its rows under it. Closed again on another page.
+    property bool moreOpen: false
+    // Another page opens one by name ({ section: "privacy" }); more: true opens its More too.
     function setArgs(a) {
         if (a.section === undefined) return
-        const named = { "lock": "privacy", "keep": "privacy", "nearby": "privacy", "picture": "you", "access": "look", "panels": "look", "linked": "devices" }
+        const named = { "you": "profile", "picture": "profile", "lock": "privacy", "keep": "privacy", "nearby": "privacy", "access": "look",
+                        "panels": "look", "linked": "devices", "backup": "devices", "erase": "devices", "storage": "devices", "controller": "about" }
         const id = named[a.section] || a.section
         const i = items.findIndex(m => m.id === id)
         if (i < 0) return
-        section = id; row = a.row || 0; inSection = true; pick = i
+        section = id
+        moreOpen = !!a.more || ["panels", "erase", "storage", "controller"].indexOf(a.section) >= 0
+        row = a.row || 0; inSection = true; pick = i
     }
     // The desktop's list column edge, so Main.qml can put the resize handle on it.
     readonly property int listEdge: middle.visible ? middle.width : 0
 
+    // Profile is a card, not a numbered section. Labs shows only while Labs mode is on.
     readonly property var items: [
-        { id: "you", title: "You", icon: "person" },
-        { id: "notify", title: "Notifications", icon: "speaker" },
-        { id: "look", title: "Look", icon: "image" },
-        { id: "calls", title: "Calls", icon: "call" },
+        { id: "profile", title: "Profile", icon: "person", card: true },
+        { id: "notify", title: "Notifications", icon: "bell" },
         { id: "privacy", title: "Privacy and lock", icon: "lock" },
-        { id: "devices", title: "Devices", icon: "phone" },
-        { id: "controller", title: "Controller", icon: "keyboard" },
-        { id: "backup", title: "Backup", icon: "shield" },
-        { id: "about", title: "About", icon: "info" },
-        { id: "erase", title: "Erase", icon: "close", danger: true }
-    ]
+        { id: "calls", title: "Calls", icon: "call" },
+        { id: "look", title: "Look", icon: "image" },
+        { id: "battery", title: "Battery and data", icon: "power" },
+        { id: "devices", title: "Devices and backup", icon: "phone" },
+        { id: "about", title: "Updates and about", icon: "info" }
+    ].concat(Settings.labs ? [{ id: "labs", title: "Labs", icon: "gear" }] : [])
+    // Labs turned off while it was open: back to Updates and about, where the raven is.
+    onItemsChanged: {
+        if (!items.some(m => m.id === section)) section = "about"
+        if (pick >= items.length) pick = items.length - 1
+    }
     readonly property var current: items.find(m => m.id === section) || items[0]
     readonly property var prompts: inSection ? [{ key: "a", label: "Change" }, { key: "b", label: "Back" }]
                                              : [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
@@ -82,63 +92,133 @@ Rectangle {
     // Color vision: only the ones that look different (Theme.distinctSwatches).
     readonly property var swatches: Theme.distinctSwatches(["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"])
 
+
     // Each row: { kind: "segmented"|"toggle"|"accent"|"swatches"|"grounds"|"button"|"size"|"slider"|"info", group, title, note, ... }.
     // A segmented row's value is Settings[key] (or Chat's), unless the row gives its own value.
-    // Rows with the same group sit in one framed section; notes are a few words at most.
+    // Rows with the same group sit in one framed section; notes are a few words at most. withMore puts the rest
+    // behind the page's More row.
     readonly property var rows: {
         switch (section) {
-        case "you": return [
+        case "profile": return page.withMore([
             { kind: "button", key: "chatName", title: "Name", note: Ui.myName, label: "Change" },
             { kind: "button", key: "picture", title: "Picture", label: Profile.hasMyPicture ? "Change" : "Choose" },
-            { kind: "swatches", key: "myColour", title: "Avatar color" },
+            // Your status card (a click on your name at the bottom left) is where status is set.
+            { kind: "button", key: "status", title: "Status", note: page.statusLine, label: "Change" },
             { kind: "button", key: "myCode", title: "My code", label: "Show" }
-        ]
-        case "notify": return [
+        ], [
+            { kind: "swatches", key: "myColour", title: "Avatar color" }
+        ], "Avatar color")
+        case "notify": return page.withMore([
             // What a notification shows: who it's from and a short preview, who it's from, or only "New message".
-            { kind: "segmented", key: "previewMode", chat: true, title: "Show in notifications",
+            { kind: "segmented", key: "previewMode", chat: true, title: "What notifications show",
               options: [{ value: "2", label: "Name and message" }, { value: "1", label: "Name only" }, { value: "0", label: "Nothing" }] },
             { kind: "toggle", key: "reduceNotifications", chat: true, title: "Reduce notifications", note: "One per chat until you open it" },
-            { kind: "toggle", key: "messageSound", title: "Message sound" },
-            // The same as Do not disturb on your status card.
-            { kind: "toggle", key: "dnd", own: true, on: Ui.myStatus === "dnd", title: "Do not disturb", note: "No sounds or notifications" },
+            // The people set to Always right away, to see and remove. Adding is in a person's details.
+            { kind: "button", key: "rightAway", title: "Always right away", note: page.rightAwayNote, label: "See", enabled: page.rightAwayKeys.length > 0 },
             { group: "Quiet hours", kind: "toggle", key: "quietHours", title: "Quiet hours",
               note: Settings.quietHours ? page.hourName(Settings.quietFrom) + " to " + page.hourName(Settings.quietTo) + ", no sounds" : "No sounds overnight" },
             { group: "Quiet hours", kind: "button", key: "quietFrom", hide: !Settings.quietHours, title: "From: " + page.hourName(Settings.quietFrom), label: "Change" },
             { group: "Quiet hours", kind: "button", key: "quietTo", hide: !Settings.quietHours, title: "To: " + page.hourName(Settings.quietTo), label: "Change" }
-        ].filter(r => !r.hide)
-        case "look": return [
+        ], [
+            { kind: "toggle", key: "messageSound", title: "Message sound" }
+        ], "Message sound")
+        case "privacy": return page.withMore([
+            { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
+              note: "Locks only when you choose. Can't be recovered", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
+            { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
+            { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
+            { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
+            { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: Settings.dataSaver ? "Off while Data saver is on" : "" },
+            // Windows only: screenshots and screen recordings leave Huginn's window out.
+            { group: "Privacy", kind: "toggle", key: "blockScreenshots", hide: Qt.platform.os !== "windows", title: "Block screenshots", note: "Hides Huginn from captures" },
+            { group: "Privacy", kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages",
+              options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "1 day" }] },
+            // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
+            { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby", note: "Off: contacts only, nothing announced" },
+            { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
+            { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" }
+        ], [
+            { kind: "segmented", key: "lockPosition", title: "Pattern position",
+              options: [{ value: "top", label: "Top" }, { value: "middle", label: "Middle" }, { value: "lower", label: "Lower" }] },
+            { kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw" },
+            { group: "  ", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" }
+        ], Vault.hasLock ? "Pattern position, Turn off the lock" : "Pattern position")
+        case "calls": return page.withMore([
+            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
+            { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
+            { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
+            { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" },
+            // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
+            // With push to talk on and no key or controller button yet, the mic uses voice activity (never dead), and says so.
+            { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk",
+              note: Settings.pushToTalk && !TalkKey.hasKey ? "No talk key yet, so your mic uses voice activity until you pick one"
+                    : Settings.pushToTalk && TalkKey.padAway ? "No controller connected, so your mic uses voice activity until one is" : GlobalKeys.talkNote },
+            // Change or Remove key (a keyboard key can go: the controller button alone, or voice activity).
+            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.key !== 0 ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
+              note: TalkKey.capturing ? page.pickNote
+                    : !TalkKey.hasKey ? "Pick the key you'll hold to talk, or a controller button. A key that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
+                    : TalkKey.key === 0 ? "A keyboard key too, if you like. One that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
+                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Insert, Pause or Scroll Lock, always talk"
+                    : "Talks even while you type", label: TalkKey.capturing ? "Cancel" : TalkKey.hasKey ? "Change" : "Pick a key" }
+        ], [
+            { kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
+              title: "Voice activity", note: "Voice rooms only. Sends only while you talk, so game sound stays out",
+              options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
+            // The bar under the slider is your microphone's level: lit while it goes out.
+            { kind: "slider", key: "gateThreshold", hide: Rooms.pushToTalk || Rooms.gateMode === "off",
+              title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself"
+                                                : Ui.main && Ui.main.padInUse ? "A: back to Automatic" : "",
+              low: "Picks up more", high: "Picks up less" },
+            { kind: "button", key: "micTest", hide: Rooms.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
+              note: Rooms.micTest ? "Talk: the bar lights while you'd be heard" : "Shows your level on the bar", label: Rooms.micTest ? "Stop" : "Test" },
+            // The two keys and where they work. Windows: they can be moved off keys a game or another app uses
+            // (still RegisterHotKey only); elsewhere they show what they are.
+            { kind: GlobalKeys.changeable ? "button" : "info", key: "muteKey", title: "Mute key: " + GlobalKeys.muteName,
+              note: GlobalKeys.capturing === 1 ? GlobalKeys.captureNote : GlobalKeys.keysNote, label: GlobalKeys.capturing === 1 ? "Press keys" : "Change" },
+            { kind: GlobalKeys.changeable ? "button" : "info", key: "deafenKey", title: "Deafen key: " + GlobalKeys.deafenName,
+              note: GlobalKeys.capturing === 2 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 2 ? "Press keys" : "Change" },
+            { kind: "button", key: "resetKeys", hide: !GlobalKeys.changeable || (GlobalKeys.muteSequence === "Ctrl+Shift+M" && GlobalKeys.deafenSequence === "Ctrl+Shift+D"),
+              title: "Mute and deafen keys", note: "Back to Ctrl+Shift+M and Ctrl+Shift+D", label: "Reset" },
+            { kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds",
+              note: GlobalKeys.everywhere ? "A short sound when the keys turn them on or off, heard over a game"
+                  : "A short sound when the keys (or LB with Up or Down) turn them on or off" },
+            { kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
+              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: page.padNote(TalkKey.padButton), label: "Remove" }
+        ], Rooms.pushToTalk ? "Mute key, Deafen key, Controller talk button" : "Voice activity, Mute key, Deafen key")
+        case "look": return page.withMore([
             { group: "Theme", kind: "segmented", key: "theme", title: "Theme", value: Theme.choice,
               options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }] },
-            // Seasonal, over any theme: the season, its background (on Dark), what falls and how much.
-            { group: "Theme", kind: "segmented", key: "season", title: "Seasonal", note: "Over any theme",
-              value: Theme.seasonPick, options: Theme.seasonChoices },
-            { group: "Theme", kind: "grounds", key: "seasonGround", hide: !Theme.tinted, title: "Background" },
-            { group: "Theme", kind: "slider", key: "seasonGradient", hide: !Theme.seasonal || Theme.flatGround,
-              title: "Gradient: " + (Settings.seasonGradient === 0 ? "Flat" : Settings.seasonGradient + "%"), low: "Flat", high: "Strong" },
-            { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: !Theme.seasonal, title: "Animation",
-              note: Settings.seasonAnimation === "off" ? "" : Settings.reduceMotion ? "Held still by Less motion" : Perf.animationsOff ? "Held still on this computer"
-                    : page.fallBatteryHeld ? "" : Settings.seasonAnimation === "battery" ? "Moves on battery too, at a slower pace" : "Less motion and Battery saver hold it still",
-              options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }, { value: "battery", label: "On, even on battery" }] },
-            // Held still on battery: why, in one line, and Move anyway switches Animation to On, even on battery.
-            { group: "Theme", kind: "button", key: "fallAnyway", hide: !page.fallBatteryHeld,
-              title: System.batterySaving ? "Held still by Battery saver" : "On battery, held still after 30 s without input", label: "Move anyway" },
-            { group: "Theme", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
-              title: "Amount: " + page.fallShown + (Theme.snow ? (page.fallShown === 1 ? " flake" : " flakes") : (page.fallShown === 1 ? " leaf" : " leaves")),
-              low: "1", high: "400" },
-            { group: "Theme", kind: "slider", key: "fallSize", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
-              title: "Size: " + Settings.fallSize + "%", low: "Tiny", high: "Huge" },
-            { group: "Theme", kind: "accent", key: "accent", title: "Accent color" },
-            { group: "Theme", kind: "segmented", key: "density", title: "Messages",
-              options: [{ value: "compact", label: "Compact" }, { value: "cozy", label: "Default" }, { value: "spacious", label: "Spacious" }] },
-            { group: "Size", kind: "size", key: "uiSize", title: "Size: " + Settings.uiSize + "%",
-              note: System.screenScale > 1.001 ? "Already made bigger for this small screen. Ctrl+= and Ctrl+- too" : "Ctrl+= and Ctrl+- too" },
+            { group: "Theme", kind: "accent", key: "accent", title: "Accent" },
             { group: "Size", kind: "segmented", key: "textSize", title: "Text size",
               options: [{ value: "100", label: "Normal" }, { value: "115", label: "Large" }, { value: "130", label: "Larger" }, { value: "150", label: "Largest" }] },
+            { group: "Size", kind: "size", key: "uiSize", title: "Size of everything: " + Settings.uiSize + "%",
+              note: System.screenScale > 1.001 ? "Already made bigger for this small screen. Ctrl+= and Ctrl+- too" : "Ctrl+= and Ctrl+- too" },
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
-            // Color vision: every color that means something, remapped for it; the preview shows them.
-            { group: "Accessibility", kind: "segmented", key: "colorVision", title: "Color vision", options: Theme.visionChoices },
-            { group: "Accessibility", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
-            { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Less motion" },
+            { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Reduce motion" },
+            // Color vision: every color that means something, remapped for it; its preview is under More.
+            { group: "Accessibility", kind: "segmented", key: "colorVision", title: "Color vision", options: Theme.visionChoices }
+        ], [
+            { group: "Color vision", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
+            // Seasonal, over any theme: the season, its background (on Dark), what falls and how much.
+            { group: "Seasonal", kind: "segmented", key: "season", title: "Seasonal", note: "Over any theme",
+              value: Theme.seasonPick, options: Theme.seasonChoices },
+            { group: "Seasonal", kind: "grounds", key: "seasonGround", hide: !Theme.tinted, title: "Background" },
+            { group: "Seasonal", kind: "slider", key: "seasonGradient", hide: !Theme.seasonal || Theme.flatGround,
+              title: "Gradient: " + (Settings.seasonGradient === 0 ? "Flat" : Settings.seasonGradient + "%"), low: "Flat", high: "Strong" },
+            { group: "Seasonal", kind: "segmented", key: "seasonAnimation", hide: !Theme.seasonal, title: "Animation",
+              note: Settings.seasonAnimation === "off" ? "" : Settings.reduceMotion ? "Held still by Reduce motion" : Perf.animationsOff ? "Held still on this computer"
+                    : page.fallBatteryHeld ? "" : Settings.seasonAnimation === "battery" ? "Moves on battery too, at a slower pace" : "Reduce motion and Battery saver hold it still",
+              options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }, { value: "battery", label: "On, even on battery" }] },
+            // Held still on battery: why, in one line, and Move anyway switches Animation to On, even on battery.
+            { group: "Seasonal", kind: "button", key: "fallAnyway", hide: !page.fallBatteryHeld,
+              title: System.batterySaving ? "Held still by Battery saver" : "On battery, held still after 30 s without input", label: "Move anyway" },
+            { group: "Seasonal", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
+              title: "Amount: " + page.fallShown + (Theme.snow ? (page.fallShown === 1 ? " flake" : " flakes") : (page.fallShown === 1 ? " leaf" : " leaves")),
+              low: "1", high: "400" },
+            { group: "Seasonal", kind: "slider", key: "fallSize", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
+              title: "Size: " + Settings.fallSize + "%", low: "Tiny", high: "Huge" },
+            { group: "Messages", kind: "segmented", key: "density", title: "Messages density",
+              options: [{ value: "compact", label: "Compact" }, { value: "cozy", label: "Default" }, { value: "spacious", label: "Spacious" }] },
             { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode || System.handheld },
             // The window's X: Leave Huginn? (with Don't ask again), or what was picked there.
             { group: "Window", kind: "segmented", key: "closeAction", title: "Close button", hide: System.gameMode,
@@ -147,130 +227,91 @@ Rectangle {
             { group: "Window", kind: "segmented", key: "handheldMode", title: "Handheld mode",
               note: "Detected: " + (System.handheldModel !== "" ? System.handheldModel : System.handheldDetected ? "a handheld" : "not a handheld"),
               options: [{ value: "auto", label: "Automatic" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
-            // No animations, fewer background checks and 30 fps timers. Automatic: on while on battery.
-            { group: "Window", kind: "segmented", key: "batterySaver", title: "Battery saver",
-              note: (System.onBattery ? "On battery" : "Plugged in") + (System.batterySaving ? ". Saving now" : ""),
-              options: [{ value: "auto", label: "Automatic" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
             { group: "Panels", kind: "toggle", key: "showList", title: "Show the chat list", note: "Ctrl+Shift+L" },
             { group: "Panels", kind: "toggle", key: "showMembers", title: "Show group members", note: "Ctrl+Shift+U" },
             { group: "Panels", kind: "button", key: "resetPanels", title: "Panel sizes", label: "Reset" }
-        ].filter(r => !r.hide)
-        case "calls": return [
-            { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
-            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
-            // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
-            // With push to talk on and no key or controller button yet, the mic uses voice activity (never dead), and says so.
-            { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk",
-              note: Settings.pushToTalk && !TalkKey.hasKey ? "No talk key yet, so your mic uses voice activity until you pick one"
-                    : Settings.pushToTalk && TalkKey.padAway ? "No controller connected, so your mic uses voice activity until one is" : GlobalKeys.talkNote },
-            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.key !== 0 ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
-              note: TalkKey.capturing ? page.pickNote
-                    : !TalkKey.hasKey ? "Pick the key you'll hold to talk, or a controller button. A key that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
-                    : TalkKey.key === 0 ? "A keyboard key too, if you like. One that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
-                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Insert, Pause or Scroll Lock, always talk"
-                    : "Talks even while you type", label: TalkKey.capturing ? "Cancel" : TalkKey.hasKey ? "Change" : "Pick a key" },
-            // A keyboard key can go too: the controller button alone, or voice activity with push to talk still on.
-            { group: "Talking", kind: "button", key: "clearTalkKey", hide: !Settings.pushToTalk || TalkKey.key === 0 || TalkKey.capturing,
-              title: "No keyboard key", note: TalkKey.padButton !== "" ? "Only the controller button talks" : "Voice activity until you pick one", label: "Remove key" },
-            { group: "Talking", kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
-              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: page.padNote(TalkKey.padButton), label: "Remove" },
-            { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
-              title: "Voice activity", note: "Voice rooms only. Sends only while you talk, so game sound stays out",
-              options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
-            // The bar under the slider is your microphone's level: lit while it goes out.
-            { group: "Talking", kind: "slider", key: "gateThreshold", hide: Rooms.pushToTalk || Rooms.gateMode === "off",
-              title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself"
-                                                : Ui.main && Ui.main.padInUse ? "A: back to Automatic" : "",
-              low: "Picks up more", high: "Picks up less" },
-            { group: "Talking", kind: "button", key: "micTest", hide: Rooms.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
-              note: Rooms.micTest ? "Talk: the bar lights while you'd be heard" : "Shows your level on the bar", label: Rooms.micTest ? "Stop" : "Test" },
-            { group: "Talking", kind: "info", title: "Mute and deafen keys", note: GlobalKeys.keysNote },
-            // Windows: the two combinations can be moved off keys a game or another app uses (still RegisterHotKey only).
-            { group: "Talking", kind: "button", key: "muteKey", hide: !GlobalKeys.changeable, title: "Mute key: " + GlobalKeys.muteName,
-              note: GlobalKeys.capturing === 1 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 1 ? "Press keys" : "Change" },
-            { group: "Talking", kind: "button", key: "deafenKey", hide: !GlobalKeys.changeable, title: "Deafen key: " + GlobalKeys.deafenName,
-              note: GlobalKeys.capturing === 2 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 2 ? "Press keys" : "Change" },
-            { group: "Talking", kind: "button", key: "resetKeys", hide: !GlobalKeys.changeable || (GlobalKeys.muteSequence === "Ctrl+Shift+M" && GlobalKeys.deafenSequence === "Ctrl+Shift+D"),
-              title: "Mute and deafen keys", note: "Back to Ctrl+Shift+M and Ctrl+Shift+D", label: "Reset" },
-            { group: "Talking", kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds",
-              note: GlobalKeys.everywhere ? "A short sound when the keys turn them on or off, heard over a game"
-                  : "A short sound when the keys (or LB with Up or Down) turn them on or off" },
-            { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
-            { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" }
-        ].filter(r => !r.hide)
-        case "privacy": return [
-            { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
-              note: "Locks your chats. Can't be recovered.", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
-            { group: "Lock", kind: "segmented", key: "lockPosition", title: "Pattern position",
-              options: [{ value: "top", label: "Top" }, { value: "middle", label: "Middle" }, { value: "lower", label: "Lower" }] },
-            { group: "Lock", kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw" },
-            { group: "Lock", kind: "info", hide: Vault.exists && !Vault.hasLock, title: "When it locks", note: "Only when you choose: Lock, or Lock and close" },
-            { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
-            { group: "Lock", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" },
-            // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
-            { group: "Privacy", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby", note: "Off: contacts only, nothing announced" },
-            { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
-            { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
-            { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: Settings.dataSaver ? "Off while Data saver is on" : "" },
-            { group: "Privacy", kind: "toggle", key: "dataSaver", title: "Data saver", note: "Files ask first. No link previews" },
-            // Windows only: screenshots and screen recordings leave Huginn's window out.
-            { group: "Privacy", kind: "toggle", key: "blockScreenshots", hide: Qt.platform.os !== "windows", title: "Block screenshots", note: "Hides Huginn from captures" },
-            { group: "Privacy", kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages",
-              options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "One day" }] },
-            { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
-            { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" }
-        ].filter(r => !r.hide)
-        case "devices": return [
-            { kind: "button", key: "linked", title: "Linked devices", note: !Linked.phone.key ? "" : (Linked.phone.gone ? "Copy kept from " + Linked.phone.name : "Linked to " + Linked.phone.name), label: "Open" },
-            { kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" },
-            { kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
-            { kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Save in Downloads again", label: "Reset" },
-            { kind: "button", key: "deviceName", title: "This computer's name", note: Settings.deviceName, label: "Change" }
-        ].filter(r => !r.hide)
-        case "controller": return [
-            { kind: "info", title: "Show the buttons", note: "Press View (Select)" },
-            { kind: "info", title: "Move and pick", note: "D-pad moves, A picks, B goes back" },
-            { kind: "info", title: "Sections", note: "LB goes to the next one. Hold LB with Left or Right to step" },
-            { kind: "info", title: "Options", note: "LT opens the options for what's picked" },
-            { kind: "info", title: "Settings", note: "Menu (Start)" },
-            { kind: "info", title: "Scroll", note: "Left stick" },
-            { kind: "info", title: "Pointer", note: "Right stick moves, RB or R3 clicks, RT right-clicks" },
-            { kind: "info", title: "Search and Transfers", note: "Up from the top of a list or the rail" },
-            { kind: "info", title: "In voice", note: "While Huginn is in front: hold LB, then Up mutes and Down deafens" },
-            { kind: "info", title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
-            { kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
+        ], "Seasonal, Messages density, Window, Panels")
+        case "battery": return [
+            // No animations, fewer background checks and 30 fps timers. Automatic: on while on battery.
+            { kind: "segmented", key: "batterySaver", title: "Battery saver",
+              note: (System.onBattery ? "On battery" : "Plugged in") + (System.batterySaving ? ". Saving now" : ""),
+              options: [{ value: "auto", label: "Automatic" }, { value: "on", label: "On" }, { value: "off", label: "Off" }] },
+            { kind: "toggle", key: "dataSaver", title: "Data saver", note: "Files ask first. No link previews" }
         ]
-        case "backup": return [
-            { kind: "button", key: "backup", title: "Back up", note: "One encrypted file, saved where you choose", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
-            { kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy }
-        ]
-        case "about": return [
+        case "devices": return page.withMore([
+            { group: "Devices", kind: "button", key: "linked", title: "Linked devices", note: !Linked.phone.key ? "" : (Linked.phone.gone ? "Copy kept from " + Linked.phone.name : "Linked to " + Linked.phone.name), label: "Open" },
+            { group: "Devices", kind: "button", key: "deviceName", title: "This device's name", note: Settings.deviceName, label: "Change" },
+            { group: "Devices", kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" },
+            { group: "Backup", kind: "button", key: "backup", title: "Back up", note: "One encrypted file, saved where you choose", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
+            { group: "Backup", kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy },
+            { group: "Files", kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
+            { group: "Files", kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Use Downloads again", label: "Reset" }
+        ], [
+            { kind: "button", key: "storage", title: "App storage", note: "Files Huginn keeps", label: "Open" },
+            { group: "  ", kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
+            { group: "  ", kind: "button", key: "eraseChat", title: "Erase everything", note: "Deletes everything on this device.", label: "Erase" }
+        ], "App storage, Erase everything")
+        case "about": return page.withMore([
             { kind: "raven", key: "raven", title: "Huginn " + System.version, note: Settings.labs ? "Labs mode on" : "" },
-            // What draws the window. Drawn by the processor (no working graphics driver), everything is slow.
-            { kind: "info", hide: System.graphics === "", title: System.softwareGraphics ? "Graphics: slow" : "Graphics",
-              note: System.softwareGraphics ? "No graphics card in use, so Huginn is slow. " + System.graphics : System.graphics },
             { kind: "button", key: "check", title: Updater.status,
               label: Updater.ready ? "Restart now" : Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
             { kind: "toggle", key: "autoUpdate", title: "Update automatically" },
+            // Labs mode only. Go back to stable only while on Pre-release (or running a pre-release).
+            { kind: "segmented", key: "updateChannel", hide: !Settings.labs, title: "Update channel",
+              options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
+            { kind: "button", key: "goStable", hide: !Settings.labs || (Settings.updateChannel !== "beta" && System.version.indexOf("beta") < 0),
+              title: "Go back to stable", note: "Installs the latest stable", label: "Go back", enabled: !Updater.busy },
+            // Drawn by the processor (no working graphics driver), everything is slow: said here, not under More.
+            { kind: "info", hide: !System.softwareGraphics || System.graphics === "", title: "Graphics: slow",
+              note: "No graphics card in use, so Huginn is slow. " + System.graphics }
+        ], [
             // Where everything Huginn keeps is (the portable build's data folder beside Huginn.exe).
             { kind: "button", key: "dataFolder", title: "Your data: " + System.dataFolder,
               note: System.portable ? "Keep the data folder when you update by hand" : "", label: "Open folder" },
+            { kind: "info", hide: System.softwareGraphics || System.graphics === "", title: "Graphics", note: System.graphics },
             { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" },
-            { group: "Labs", kind: "segmented", key: "updateChannel", hide: !Settings.labs, title: "Update channel",
-              options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
-            { group: "Labs", kind: "button", key: "goStable", hide: !Settings.labs, title: "Go back to stable", note: "Installs the latest stable",
-              label: "Go back", enabled: !Updater.busy },
-            { group: "Labs", kind: "button", key: "report", hide: !Settings.labs, title: "Report a bug", note: "Screenshot optional", label: "Report" },
-            { group: "Labs", kind: "button", key: "storage", hide: !Settings.labs, title: "App storage", note: "Files Huginn keeps", label: "Open" },
-            { group: "Labs", kind: "button", key: "perf", hide: !Settings.labs, title: "Performance check", note: "Lag and size", label: "Open" },
-            { group: "Labs", kind: "button", key: "practice", hide: !Settings.labs, title: "Replay first setup (practice)", note: "Nothing is saved", label: "Start" }
-        ].filter(r => !r.hide)
-        case "erase": return [
-            { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
-            { kind: "button", key: "eraseChat", title: "Erase everything", note: "Deletes everything on this device.", label: "Erase" }
+            // The controller's buttons, while one is connected (or on a handheld), and every keyboard shortcut.
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Show the buttons", note: "Press View (Select)" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Move and pick", note: "D-pad moves, A picks, B goes back" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Sections", note: "LB goes to the next one. Hold LB with Left or Right to step" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Options", note: "LT opens the options for what's picked" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Settings", note: "Menu (Start)" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Scroll", note: "Left stick" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Pointer", note: "Right stick moves, RB or R3 clicks, RT right-clicks" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Search and Transfers", note: "Up from the top of a list or the rail" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "In voice", note: "While Huginn is in front: hold LB, then Up mutes and Down deafens" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
+            { group: "Controls and shortcuts", kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
+        ], "Your data, Controls and shortcuts")
+        case "labs": return [
+            { kind: "button", key: "report", title: "Report a bug", note: "Screenshot optional", label: "Report" },
+            { kind: "button", key: "perf", title: "Performance check", note: "Lag and size", label: "Open" },
+            { kind: "button", key: "practice", title: "Replay first setup (practice)", note: "Nothing is saved", label: "Start" }
         ]
         }
         return []
+    }
+    // A page's rows: the common ones, then a More row and (once it's opened) the rest under it. Rows of the rest
+    // with no group share the More row's frame; "  " (blank, apart) keeps red rows in their own frame, last.
+    function withMore(base, extra, note) {
+        const top = base.filter(r => !r.hide)
+        const rest = extra.filter(r => !r.hide).map(r => r.group ? r : Object.assign({ group: " " }, r))
+        if (!rest.length) return top
+        return top.concat([{ group: " ", kind: "button", key: "more", title: "More", note: page.moreOpen ? "" : note, label: page.moreOpen ? "Hide" : "Show" }])
+                  .concat(page.moreOpen ? rest : [])
+    }
+    // Updates and about › More: the controller's buttons only while one is connected or on a handheld.
+    readonly property bool padHelp: Gamepad.connected || System.handheld
+    // Profile › Status: what your status card says.
+    readonly property string statusLine: (Ui.myStatus === "away" ? "Away" : Ui.myStatus === "dnd" ? "Do not disturb" : Ui.myStatus === "invisible" ? "Invisible" : "Online")
+                                         + (Ui.myCustomStatus !== "" ? " · " + Ui.myCustomStatus : "")
+    // Notifications › Always right away: who's on it (bumped after one is removed here).
+    property int rightAwayRev: 0
+    readonly property var rightAwayKeys: (rightAwayRev, section === "notify" && Chat.ready ? Chat.rightAwayKeys() : [])
+    readonly property string rightAwayNote: {
+        const n = rightAwayKeys.map(k => Chat.nameOf(k))
+        if (!n.length) return "Nobody yet. Set it in a person's details"
+        return n.slice(0, 2).join(", ") + (n.length > 2 ? " + " + (n.length - 2) : "")
     }
     // The rows in their framed sections: [{ title, start (the first row's index), rows }].
     readonly property var groups: {
@@ -286,7 +327,7 @@ Rectangle {
     // Labs turned off under the focus: it stays on a row that's still there.
     onRowsChanged: if (row >= rows.length) row = Math.max(0, rows.length - 1)
 
-    // The raven in About: ten presses in a row (a few seconds apart at most) turn Labs mode on or off.
+    // The raven in Updates and about: ten presses in a row (a few seconds apart at most) turn Labs mode on or off.
     property int ravenTaps: 0
     Timer { id: ravenReset; interval: 3000; onTriggered: page.ravenTaps = 0 }
     function tapRaven() {
@@ -347,33 +388,60 @@ Rectangle {
                             id: navRow
                             readonly property bool here: page.section === modelData.id && !Theme.portrait
                             readonly property bool on: page.active && !page.inSection && page.pick === index && !!Ui.main && Ui.main.padInUse
+                            // Profile: your picture, name and status, as a card above the sections.
+                            readonly property bool card: !!modelData.card
                             width: navCol.width
                             onOnChanged: if (on) page.revealNav(navRow)
-                            height: Math.max(Theme.px(44), navText.implicitHeight + Theme.px(16)) + (modelData.danger ? Theme.px(6) : 0)
+                            height: navRow.card ? Math.max(Theme.px(64), navTexts.implicitHeight + Theme.px(20)) : Math.max(Theme.px(44), navTexts.implicitHeight + Theme.px(16))
                             color: here || on ? Theme.tile : itemHover.hovered ? Theme.raised : "transparent"
                             border.width: on ? Theme.focusWidth : 0
                             border.color: Theme.accent
                             Accessible.role: Accessible.PageTab
-                            Accessible.name: modelData.title
-                            // Erase sits apart, under a stronger line.
-                            Rectangle { visible: index > 0; width: parent.width; height: modelData.danger ? 2 : 1; color: modelData.danger ? Theme.dangerLine : Theme.seam }
+                            Accessible.name: navRow.card ? modelData.title + ", " + Ui.myName : modelData.title
+                            // The sections sit under the card, apart from it by a stronger line.
+                            Rectangle { visible: index > 0; width: parent.width; height: index === 1 ? 2 : 1; color: index === 1 ? Theme.line : Theme.seam }
                             Icon {
                                 id: navIcon
+                                visible: !navRow.card
                                 anchors.left: parent.left; anchors.leftMargin: Theme.px(12)
                                 anchors.verticalCenter: parent.verticalCenter
                                 name: modelData.icon; size: Theme.px(18)
-                                color: modelData.danger ? Theme.danger : navRow.here ? Theme.accent : Theme.textMuted
+                                color: navRow.here ? Theme.accent : Theme.textMuted
                             }
-                            Text {
-                                textFormat: Text.PlainText
-                                id: navText
-                                anchors.left: navIcon.right; anchors.leftMargin: Theme.px(12)
+                            Avatar {
+                                id: navAvatar
+                                visible: navRow.card
+                                anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
+                                anchors.verticalCenter: parent.verticalCenter
+                                key: navRow.card ? "me" : ""
+                                name: Ui.myName
+                                size: Theme.px(40)
+                                showDot: navRow.card
+                                backdrop: Theme.panel
+                            }
+                            Column {
+                                id: navTexts
+                                anchors.left: navRow.card ? navAvatar.right : navIcon.right; anchors.leftMargin: Theme.px(12)
                                 anchors.right: chev.left; anchors.rightMargin: Theme.px(8)
                                 anchors.verticalCenter: parent.verticalCenter
-                                elide: Text.ElideRight
-                                text: modelData.title
-                                color: modelData.danger ? Theme.danger : Theme.text
-                                font.family: Theme.body; font.pixelSize: Theme.fs(15)
+                                spacing: Theme.px(1)
+                                Text {
+                                    textFormat: Text.PlainText
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                    text: navRow.card && Ui.myName !== "" ? Ui.myName : modelData.title
+                                    color: Theme.text
+                                    font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: navRow.card ? Font.DemiBold : Font.Normal
+                                }
+                                Text {
+                                    textFormat: Text.PlainText
+                                    visible: navRow.card
+                                    width: parent.width
+                                    elide: Text.ElideRight
+                                    text: navRow.card ? page.statusLine : ""
+                                    color: Theme.textMuted
+                                    font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                                }
                             }
                             Icon { id: chev; anchors.right: parent.right; anchors.rightMargin: Theme.px(10); anchors.verticalCenter: parent.verticalCenter; name: "forward"; size: Theme.px(14); color: Theme.textMuted }
                             HoverHandler { id: itemHover; cursorShape: Qt.PointingHandCursor }
@@ -507,7 +575,7 @@ Rectangle {
             height: Math.max(Theme.px(36), segCtl.visible ? segCtl.implicitHeight : 0, buttonCtl.visible ? buttonCtl.implicitHeight : 0,
                              ravenCtl.visible ? ravenCtl.height : 0, sliderCtl.visible ? sliderCtl.implicitHeight : 0,
                              previewCtl.visible ? previewCtl.implicitHeight : 0)
-            // About: the raven. Ten presses turn Labs mode on or off.
+            // Updates and about: the raven. Ten presses turn Labs mode on or off.
             Image {
                 id: ravenCtl
                 anchors.right: parent.right
@@ -557,7 +625,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: rowItem.r.kind === "toggle"
                 // invert: the switch reads the other way round from the setting (Hide the pattern = trail off).
-                checked: rowItem.r.kind !== "toggle" ? false : rowItem.r.own ? !!rowItem.r.on : (page.source(rowItem.r)[rowItem.r.key] !== !!rowItem.r.invert)
+                checked: rowItem.r.kind !== "toggle" ? false : page.source(rowItem.r)[rowItem.r.key] !== !!rowItem.r.invert
                 onToggled: page.flip(rowItem.r)
             }
             Row {
@@ -792,7 +860,7 @@ Rectangle {
         }
     }
     // Leaving Settings (or this part of it) stops "Pick a key", so the next key pressed elsewhere never becomes the talk key.
-    onSectionChanged: { rowsView.contentY = 0; Rooms.micTest = false; TalkKey.stopCapture() }
+    onSectionChanged: { rowsView.contentY = 0; moreOpen = false; Rooms.micTest = false; TalkKey.stopCapture() }
     onVisibleChanged: if (!visible) TalkKey.stopCapture()
     Component.onDestruction: { Rooms.micTest = false; TalkKey.stopCapture() }
 
@@ -820,9 +888,8 @@ Rectangle {
     }
     // Where a toggle's value lives.
     function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
-    // A switch flipped. Do not disturb is your status (the same as the status card's).
+    // A switch flipped.
     function flip(r) {
-        if (r.key === "dnd") { Ui.setMyStatus(Ui.myStatus === "dnd" ? "online" : "dnd"); if (Ui.main) Ui.main.autoAway = false; return }
         const o = source(r)
         o[r.key] = !o[r.key]
     }
@@ -856,6 +923,26 @@ Rectangle {
         Ui.main.openBackup("restore", false)
     }
 
+    // Calls › Talk key: Change, or with a keyboard key, Change or Remove (the controller button alone, or voice activity).
+    function changeTalkKey() {
+        if (TalkKey.capturing) { TalkKey.stopCapture(); return }
+        if (TalkKey.key === 0) { TalkKey.capture(); return }
+        Ui.pickFrom("Talk key: " + TalkKey.keyName, [{ header: "", items: [
+            { name: "Change key", url: "change" },
+            { name: "Remove key", detail: TalkKey.padButton !== "" ? "Only the controller button talks" : "Voice activity until you pick one", url: "remove" }] }],
+            a => { if (a === "change") TalkKey.capture(); else if (a === "remove") TalkKey.clearKey() })
+    }
+    // Notifications › Always right away: everyone on it; picking one takes them off.
+    function seeRightAway() {
+        const keys = rightAwayKeys
+        if (!keys.length) return
+        Ui.pickFrom("Always right away", [{ header: "Pick someone to take them off", items: keys.map(k => ({ name: Chat.nameOf(k), url: k })) }], k => {
+            Chat.setRightAway(k, false)
+            rightAwayRev++
+            Ui.say(Chat.nameOf(k) + " is no longer Always right away.")
+        })
+    }
+
     function press(key) {
         const job = running()
         if (key === "chatName") Ui.ask("Your name", "A nickname is fine", Ui.myName, "Save", t => Ui.setMyName(t))
@@ -873,11 +960,13 @@ Rectangle {
         else if (key === "micDevice" || key === "speakerDevice") pickDevice(key)
         else if (key === "saveFolder") { if (Transfer.pickSaveFolder()) Ui.say("Received files now go in " + Transfer.saveName + "/Huginn.") }
         else if (key === "saveFolderReset") { Transfer.resetSaveFolder(); Ui.say("Received files go in Downloads/Huginn again.") }
-        else if (key === "deviceName") Ui.ask("This computer's name", "Your phone and nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
+        else if (key === "deviceName") Ui.ask("This device's name", "Your phone and nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
         else if (key === "micTest") Rooms.micTest = !Rooms.micTest
-        else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
+        else if (key === "talkKey") changeTalkKey()
         else if (key === "talkPad") TalkKey.clearPad()
-        else if (key === "clearTalkKey") TalkKey.clearKey()
+        else if (key === "more") moreOpen = !moreOpen
+        else if (key === "status") { if (Ui.main) Ui.main.openStatusCard() }
+        else if (key === "rightAway") seeRightAway()
         else if (key === "muteKey" || key === "deafenKey") {
             const which = key === "muteKey" ? 1 : 2
             if (GlobalKeys.capturing === which) GlobalKeys.stopCapture(); else GlobalKeys.capture(which)

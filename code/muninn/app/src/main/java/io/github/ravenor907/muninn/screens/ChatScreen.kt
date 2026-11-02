@@ -88,6 +88,7 @@ import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.Chat
 import io.github.ravenor907.muninn.net.Contacts
+import io.github.ravenor907.muninn.net.ChatOrder
 import io.github.ravenor907.muninn.net.Folders
 import io.github.ravenor907.muninn.net.Groups
 import io.github.ravenor907.muninn.net.Proto06
@@ -184,6 +185,12 @@ object ChatNav {
     var callPick by mutableStateOf(false)
     /** Who New group starts with picked (Start a group, from a person's menu). */
     var groupWith by mutableStateOf(setOf<String>())
+    /** How Add someone starts (from the + menu): "pick" a contact to message, "tv" to pair a Kids' TV, "" the camera. */
+    var addMode by mutableStateOf("")
+    /** The chat list's "New from" bar: when its X was pressed, or a notification opened a chat (0: never). For this run only. */
+    var newFromClosed by mutableStateOf(0L)
+    /** The chat list's filter chip: "all", "unread", "groups" or "tv". For this run only. */
+    var filter by mutableStateOf("all")
     /**
      * On a tablet ([TABLET_SW_DP]) and at least this wide, Muninn uses the tablet layout (rail, chat list,
      * conversation); on a phone, a conversation takes the whole screen.
@@ -276,11 +283,14 @@ internal fun routeShort(r: String) = when (r) {
     else -> "Not reachable"
 }
 
-// The "Quiet" chat look. Every size is dp/sp, so Settings › Accessibility size and text scaling apply.
+// The "Quiet" chat look. Every size is dp/sp, so Settings › Look size and text scaling apply.
 private val nameStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, color = Palette.text)
 private val previewStyle get() = TextStyle(fontFamily = Type.body, fontSize = 15.sp, color = Palette.textMuted)
 private val metaStyle get() = TextStyle(fontFamily = Type.body, fontSize = 13.sp, color = Palette.textMuted)
-private val tinyStyle get() = TextStyle(fontFamily = Type.body, fontSize = 12.sp, color = Palette.textMuted)
+/** The chat list's + button and its margin (the list leaves room for both under its last row). */
+private val PLUS_SIZE = 56.dp
+private val PLUS_MARGIN = 16.dp
+private val tinyStyle get() =TextStyle(fontFamily = Type.body, fontSize = 12.sp, color = Palette.textMuted)
 private val bodyStyle get() = TextStyle(fontFamily = Type.body, fontSize = 16.sp, color = Palette.text)
 private val labelStyle get() = TextStyle(fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 1.5.sp, color = Palette.textMuted)
 
@@ -526,19 +536,25 @@ private fun PersonRow(name: String, preview: String, time: String, unread: Int, 
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
+            // Unread (plan 2.14): the name bold and the preview in full text color; read: normal weight and muted.
+            val fresh = unread > 0
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(name, style = nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                if (muted) MIcon("mute", Palette.textMuted, 14.dp, modifier = Modifier.padding(start = 6.dp).semantics { contentDescription = "Muted" })
-                Spacer(Modifier.weight(1f))
-                if (time.isNotEmpty()) Text(time, style = metaStyle.copy(color = if (unread > 0) Palette.gold else Palette.textMuted),
+                // The name takes all the room up to the time (the mute bell stays right after it).
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, style = nameStyle.copy(fontWeight = if (fresh) FontWeight.Bold else FontWeight.Normal), maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (muted) MIcon("mute", Palette.textMuted, 14.dp, modifier = Modifier.padding(start = 6.dp).semantics { contentDescription = "Muted" })
+                }
+                if (time.isNotEmpty()) Text(time, style = metaStyle.copy(color = if (fresh) Palette.accent else Palette.textMuted),
                     maxLines = 1, modifier = Modifier.padding(start = 8.dp))
             }
             Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(preview, style = previewStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                if (unread > 0) Box(Modifier.padding(start = 8.dp).heightIn(min = 20.dp).widthIn(min = 20.dp).clip(io.github.ravenor907.muninn.ui.Corner)
-                    .background(Palette.gold).padding(horizontal = 6.dp).semantics { contentDescription = "$unread unread" },
+                Text(preview, style = previewStyle.copy(color = if (fresh) Palette.text else Palette.textMuted), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                if (fresh) Box(Modifier.padding(start = 8.dp).heightIn(min = 20.dp).widthIn(min = 20.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+                    .background(Palette.accent).padding(horizontal = 6.dp).semantics { contentDescription = "$unread unread" },
                     contentAlignment = Alignment.Center) {
-                    Text(if (unread > 99) "99+" else "$unread", style = tinyStyle.copy(fontWeight = FontWeight.SemiBold, color = Palette.onGold))
+                    Text(if (unread > 99) "99+" else "$unread", style = tinyStyle.copy(fontWeight = FontWeight.SemiBold, color = Palette.onAccent))
                 } else if (dot) Box(Modifier.padding(start = 8.dp).size(10.dp).clip(CircleShape).background(Palette.gold)
                     .semantics { contentDescription = "Waiting on you" })
             }
@@ -600,9 +616,31 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val chatRows = if (q.isEmpty()) everyRow.filter { it.key !in flagState.archived } else everyRow
     val archivedRows = everyRow.filter { it.key in flagState.archived }
     fun lastText(r: ChatRow): String? = if (r.group != null) gmsgs[r.group]?.lastOrNull()?.let { groupPreview(app, it) } else convos[r.key]?.lastOrNull()?.let { preview(it) }
-    val shownRows = if (q.isEmpty()) chatRows else chatRows.filter { c ->
-        c.name.contains(q, ignoreCase = true) || c.alt.contains(q, ignoreCase = true) || lastText(c)?.contains(q, ignoreCase = true) == true
+    // Something new in it (the same test as the row's count), or marked unread.
+    fun isUnread(r: ChatRow): Boolean = (if (r.group != null) r.group in gunread else r.key in unread) || r.key in flagState.unread
+    val unreadKeys = chatRows.filter { isUnread(it) }.map { it.key }.toSet()
+    // Filter chips under search: All, Unread, Groups, Kids' TV (only with one paired). Not kept between runs.
+    val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
+    val tvKeys = tvs.filter { !it.value.disconnecting }.keys
+    val chip = ChatNav.filter.takeIf { it != "tv" || tvKeys.isNotEmpty() } ?: "all"
+    fun chipKeeps(r: ChatRow): Boolean = when (chip) {
+        "unread" -> r.key in unreadKeys
+        "groups" -> r.group != null
+        "tv" -> r.key in tvKeys
+        else -> true
     }
+    // Pinned chats (from Person details) come first in their section, in the order they were pinned.
+    val pins by People.all.collectAsState()
+    fun pinFirst(l: List<String>): List<String> = pins.pinned.filter { it in l } + l.filter { it !in pins.pinned }
+    val rowTime = chatRows.associate { it.key to lastTime(it) }
+    // Unread ones under the pinned ones, newest first (plan 2.14, owner decision D10). Search keeps newest first.
+    fun unreadUp(l: List<String>): List<String> = ChatOrder.unreadUp(pinFirst(l), pins.pinned, unreadKeys) { rowTime[it] ?: 0L }
+    val shownRows = if (q.isEmpty()) chatRows.filter { chipKeeps(it) }.let { l -> val at = l.associateBy { it.key }; unreadUp(l.map { it.key }).mapNotNull { at[it] } }
+        else chatRows.filter { c ->
+            (c.name.contains(q, ignoreCase = true) || c.alt.contains(q, ignoreCase = true) || lastText(c)?.contains(q, ignoreCase = true) == true) && chipKeeps(c)
+        }
+    // The "New from" bar: the unread chats, newest first (chatRows is newest first already).
+    val unreadNewest = chatRows.filter { it.key in unreadKeys }
     // Nearby off: no Nearby room and nobody nearby listed.
     val visible = app.identity.visibleNearby
     // Nearby, never mixed in with the chats: anyone who isn't a contact, chatted with or just around, newest first.
@@ -624,10 +662,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val byKey = chatRows.associateBy { it.key }
     val newest = chatRows.map { it.key }
     val foldered = folders.flatMap { it.keys }.toSet()
-    // Pinned chats (from Person details) come first in their section, in the order they were pinned.
-    val pins by People.all.collectAsState()
-    fun pinFirst(l: List<String>): List<String> = pins.pinned.filter { it in l } + l.filter { it !in pins.pinned }
-    fun sectionKeys(sec: String): List<String> = pinFirst(if (sec == Folders.NONE) Folders.arrange(newest.filter { it !in foldered }, topOrder)
+    // Each section: pinned, then unread newest first, then the rest (newest first, except what was moved by hand).
+    fun sectionKeys(sec: String): List<String> = unreadUp(if (sec == Folders.NONE) Folders.arrange(newest.filter { it !in foldered }, topOrder)
         else folders.firstOrNull { it.id == sec }?.let { f -> Folders.arrange(newest.filter { it in f.keys }, f.keys) }.orEmpty())
     // Hold a chat and drag it: within its section to reorder, or onto another section (its header or a chat in it) to move it there.
     val listState = rememberLazyListState()
@@ -657,7 +693,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         if (to != d.section) app.chat.folders.move(d.key, d.section, to)
         app.chat.folders.order(to, order)
     }
-    val sectioned = q.isEmpty()
+    // A filter chip other than All shows one plain list, like search.
+    val sectioned = q.isEmpty() && chip == "all"
     if (sectioned) {
         spots["h"] = Folders.NONE to null
         sectionKeys(Folders.NONE).forEach { spots["c|$it"] = Folders.NONE to it }
@@ -671,6 +708,31 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         }
     }
     val hover = dropSpot()
+    // The "New from" bar: names inside the unlocked app; over the lock screen only if notifications may name people.
+    val overLock = LocalContext.current.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+    val newestUnread = unreadNewest.firstOrNull()?.let { rowTime[it.key] } ?: 0L
+    val barText = ChatOrder.newFrom(unreadNewest.map { it.name }, ChatOrder.namesShown(overLock, app.identity.showNames))
+    val showBar = sectioned && barText.isNotEmpty() && ChatOrder.barShown(newestUnread, ChatNav.newFromClosed)
+    val scope = rememberCoroutineScope()
+    // The list's place of the first unread chat (unread ones sit at the top of their section), or a folded folder holding one.
+    // Counts the items the same way the list below adds them.
+    fun firstUnreadItem(): Int {
+        var i = waitingJoins.size + 1 + (if (linkedPhone?.ok == true) 1 else 0) + (if (folders.isNotEmpty()) 1 else 0)
+        val none = sectionKeys(Folders.NONE).filter { byKey.containsKey(it) }
+        none.indexOfFirst { it in unreadKeys }.let { if (it >= 0) return i + it }
+        i += none.size
+        for (f in folders) {
+            val keys = sectionKeys(f.id)
+            if (f.collapsed) { if (keys.any { it in unreadKeys }) return i; i++; continue }
+            i++
+            val rows = keys.filter { byKey.containsKey(it) }
+            rows.indexOfFirst { it in unreadKeys }.let { if (it >= 0) return i + it }
+            i += rows.size + (if (keys.isEmpty()) 1 else 0)
+        }
+        return 0
+    }
+    // Nearby shows with All only.
+    val nearbyOn = chip == "all"
 
     // One chat on the list. [sec]: the section it's under ("" no folder), null in search results (nothing to move there).
     val chatRow: @Composable (ChatRow, String?, String) -> Unit = { c, sec, item ->
@@ -715,7 +777,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     }
 
     Box(Modifier.fillMaxSize().frosted()) {
-        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+        // Room under the last row for the + button: its size and both margins, plus a small gap.
+        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = PLUS_SIZE + PLUS_MARGIN * 2 + 8.dp)) {
             // A join by a code or link: the admin's app lets me in when it's next online.
             items(waitingJoins, key = { "w|" + it.g }) { w ->
                 Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -741,6 +804,12 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                         if (ChatNav.asks > 0) Box(Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(10.dp).clip(CircleShape).background(Palette.accent))
                     }
                 }
+                // Filter chips: All, Unread, Groups, and Kids' TV once one is paired.
+                if (chatRows.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("all" to "All", "unread" to "Unread", "groups" to "Groups", "tv" to "Kids' TV").filter { it.first != "tv" || tvKeys.isNotEmpty() }
+                        .forEach { (id, label) -> Chip(label, chip == id) { ChatNav.filter = id } }
+                }
                 // Something waiting (a group invite, someone wanting to chat, an introduction): one row at the top, so it's never missed.
                 val firstAsk = ginvites.firstOrNull()?.let { "${app.chat.contacts.get(it.from)?.shown ?: it.fromName} invited you to ${it.name}" }
                     ?: requests.firstOrNull()?.let { "${it.name} wants to chat" }
@@ -763,6 +832,23 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }
                 if (app.power.extreme) Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
                     ExtremeBanner("Battery") { SettingsNav.goSettings = "battery" }
+                }
+                // "New from Mom, Taylor +3" (plan 2.14): one unread chat opens it, several scroll to them at the top.
+                // X hides it until the next new message.
+                if (showBar) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+                    .background(Palette.accentFill).clickable(role = Role.Button) {
+                        val one = unreadNewest.singleOrNull()
+                        if (one == null) scope.launch { listState.animateScrollToItem(firstUnreadItem()) }
+                        else if (one.group != null) ChatNav.openGroup(one.group)
+                        else ChatNav.open = one.key
+                    }.padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    MIcon("chat", Palette.accent, 18.dp)
+                    Text(barText, style = Type.normal.copy(color = Palette.text, fontWeight = FontWeight.SemiBold), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
+                    Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button) { ChatNav.newFromClosed = newestUnread }
+                        .semantics { contentDescription = "Hide until the next message" }, contentAlignment = Alignment.Center) {
+                        MIcon("close", Palette.textMuted, 18.dp)
+                    }
                 }
             }
             // A linked tablet: the phone's chats, one row at the top.
@@ -801,36 +887,53 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 Text("No chats yet. Tap + to add someone.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             } else if (shownRows.isEmpty() && q.isNotEmpty()) item {
                 Text("No chats match “$q”.", style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            } else if (shownRows.isEmpty() && !sectioned) item {
+                Text(when (chip) { "unread" -> "No unread chats."; "groups" -> "No groups yet."; else -> "No Kids' TV chats." },
+                    style = Type.normal, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             }
             // Nearby, in a small section of its own at the very bottom, below every chat and folder.
-            if (showRoom || shownNearby.isNotEmpty()) item(key = "nearby") {
+            if (nearbyOn && (showRoom || shownNearby.isNotEmpty())) item(key = "nearby") {
                 Box(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp).height(1.dp).background(Palette.hairline))
                 ListLabel("Nearby")
             }
-            if (showRoom) item(key = "room") {
+            if (nearbyOn && showRoom) item(key = "room") {
                 PersonRow("Nearby room", roomPreview, room.lastOrNull()?.let { when_(it.time) } ?: "", 0, false, { RoomAvatar(48.dp) }) { ChatNav.open = "nearby" }
             }
             // Hold one (or its menu) for Hide, Block, Mute and Delete chat.
-            items(shownNearby, key = { "n|" + it.key }) { c -> chatRow(c, null, "n|" + c.key) }
+            if (nearbyOn) items(shownNearby, key = { "n|" + it.key }) { c -> chatRow(c, null, "n|" + c.key) }
             // Requests, archived chats and the trash live in the chat list's menu (the dots beside Search).
             val pendingIntros = intros.count { !it.iSaid && !it.declined } + app.chat.familyOffers().size
             ChatNav.asks = requests.size + ginvites.size + pendingIntros
             ChatNav.archived = archivedRows.size
             ChatNav.trashed = trashed.size
-            // Room under the last row for the + button.
-            item { Spacer(Modifier.height(96.dp)) }
         }
-        // Add someone: a round gold button at the bottom left, above the tabs.
-        Box(Modifier.align(Alignment.BottomStart).padding(16.dp).size(56.dp).tourSpot("plus").clip(CircleShape).background(Palette.gold)
-            .clickable(role = Role.Button) { ChatNav.open = "add" }.semantics { contentDescription = "Add someone, join a group or make one" },
-            contentAlignment = Alignment.Center) { MIcon("plus", Palette.onGold, 26.dp) }
+        // The + button, bottom left above the tabs: New chat, New group, Add contact, Pair a Kids' TV.
+        var plusOpen by remember { mutableStateOf(false) }
+        Box(Modifier.align(Alignment.BottomStart).padding(PLUS_MARGIN)) {
+            Box(Modifier.size(PLUS_SIZE).tourSpot("plus").clip(CircleShape).background(Palette.gold)
+                .clickable(role = Role.Button) { plusOpen = true }.semantics { contentDescription = "New chat, new group, add contact or pair a Kids' TV" },
+                contentAlignment = Alignment.Center) { MIcon("plus", Palette.onGold, 26.dp) }
+            DropdownMenu(expanded = plusOpen, onDismissRequest = { plusOpen = false }) {
+                val anyone = contacts.any { !it.groupOnly }
+                listOf(Triple("chat", "New chat", if (anyone) "pick" else ""), Triple("people", "New group", "group"),
+                    Triple("qr", "Add contact", ""), Triple("tv", "Pair a Kids' TV", "tv")).forEach { (icon, label, how) ->
+                    DropdownMenuItem(text = { Text(label, style = Type.normal.copy(color = Palette.text), maxLines = 1) },
+                        leadingIcon = { MIcon(icon, Palette.accent, 20.dp) },
+                        onClick = {
+                            plusOpen = false
+                            if (how == "group") ChatNav.open = "newgroup"
+                            else { ChatNav.addMode = how; ChatNav.open = "add" }
+                        })
+                }
+            }
+        }
     }
     FolderDialogs(app, editingFolder) { editingFolder = null }
 }
 
 /**
  * Move up and Move down for [key] on the chat list, in the section it shows in (its first folder, or none): each null
- * where it can't go. The same order the list shows: pinned first, then what was moved by hand, then newest.
+ * where it can't go. The same order the list shows: pinned first, then unread newest first, then what was moved by hand, then newest.
  */
 internal fun listMoves(app: Muninn, key: String): Pair<(() -> Unit)?, (() -> Unit)?> {
     val ch = app.chat
@@ -850,7 +953,9 @@ internal fun listMoves(app: Muninn, key: String): Pair<(() -> Unit)?, (() -> Uni
     val sec = f?.id ?: Folders.NONE
     val foldered = folders.flatMap { it.keys }.toSet()
     val raw = if (f == null) Folders.arrange(keys.filter { it !in foldered }, ch.folders.top.value) else Folders.arrange(keys.filter { it in f.keys }, f.keys)
-    val l = flags.pinned.filter { it in raw } + raw.filter { it !in flags.pinned }
+    // Unread ones under the pinned ones, newest first, as the list shows them.
+    val unread = raw.filter { k -> k in flags.unread || (if (k.startsWith("g:")) k.removePrefix("g:") in ch.groups.unreadGroups.value else k in ch.unread.value) }.toSet()
+    val l = ChatOrder.unreadUp(flags.pinned.filter { it in raw } + raw.filter { it !in flags.pinned }, flags.pinned, unread) { last(it) }
     val i = l.indexOf(key)
     if (i < 0) return Pair(null, null)
     val up: (() -> Unit)? = if (i > 0) ({ ch.folders.order(sec, Folders.shift(l, key, -1)) }) else null
@@ -1142,8 +1247,6 @@ private fun Conversation(app: Muninn, key: String) {
         else -> ""
     }
     val status = if (mutedNow && !typingNow) (if (said.isEmpty()) "Muted" else "Muted · $said") else said
-    var keeping by remember { mutableStateOf(false) }
-    if (keeping) KeepLongerDialog(app, key, name) { keeping = false }
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(key, name, 40.dp, active = activeNow) }, actions = {
@@ -1161,8 +1264,8 @@ private fun Conversation(app: Muninn, key: String) {
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }
-        // How long messages stay, with one tap to keep them longer (a contact's chat; someone just met keeps 7 days).
-        if (c != null && !searching) KeepLine(keepDays) { keeping = true }
+        // How long messages stay, with one tap to Person details to keep them longer (a contact's chat; someone just met keeps 7 days).
+        if (c != null && !searching) KeepLine(keepDays) { openDetails(key) }
         // Their security key changed: say so until the code has been checked.
         if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
@@ -1486,13 +1589,15 @@ private fun AddSomeone(app: Muninn) {
     }
     // Tap phones together needs NFC (and isn't offered on a TV).
     val hasNfc = remember { !io.github.ravenor907.muninn.tv.KidMode.isTv(context) && android.nfc.NfcAdapter.getDefaultAdapter(context) != null }
+    // From the + menu: "pick" (New chat) starts on the contacts, "tv" (Pair a Kids' TV) on the camera for the TV's code.
+    val start = remember { ChatNav.addMode.also { ChatNav.addMode = "" } }
     // "": the camera; "paste": typing or pasting a code or invite link.
-    var mode by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf(if (start == "pick") "pick" else "") }
     val found = Contacts.parse(text)
     val invite = GroupLinks.parse(app, text)
     BackHandler(enabled = text.isNotEmpty() || mode.isNotEmpty()) { if (text.isNotEmpty()) text = "" else mode = "" }
     Column(Modifier.fillMaxSize().imePadding()) {
-        PageBar(if (mode == "join") "Join a group" else "Add someone")
+        PageBar(if (mode == "join") "Join a group" else if (mode == "pick") "New chat" else if (start == "tv") "Pair a Kids' TV" else "Add someone")
         // Scrolls, so everything stays reachable with larger size and text settings or the keyboard up.
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             // Like a messenger's compose button: someone already added comes first, then joining, then the camera.
@@ -1517,7 +1622,7 @@ private fun AddSomeone(app: Muninn) {
                             else text = Contacts.unlink(scanned)
                         }
                     }
-                    Text("Point at their code.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+                    Text(if (start == "tv") "Point at the code on the TV." else "Point at their code.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
                 }
                 text.isBlank() -> Field(text, { text = it }, if (mode == "join") "Paste the invite link or code" else "Paste a code or invite link",
                     Modifier.padding(vertical = 12.dp), single = false)

@@ -83,7 +83,9 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `f2` | file sharing (section 27): the `lan` candidate, group files (`g` on an offer), the group's file rules (`fs` and `fm` in the state), `why` on a decline, and the Hold packet. Muninn and Huginn. |
 | `g4` | join refusals (28.5): an admin's app that couldn't take a `join` answers `t:"joinno"` with why, so the joiner's row says "Not let in" instead of waiting. Muninn and Huginn. |
 | `f3` | resume and long waits (27.7): a stopped file goes on from the pieces the receiver kept, 2 minutes of silence before a transfer stops (with a packet a second while quiet), and a big file's offer waits a day. Muninn and Huginn. |
-| `n1` | nudges (section 23.3): a real message to someone whose caps include `n1` also sends one small ring envelope `{"t":"nudge","ts":...}` to their ring mailbox, so a locked phone says "Muninn is locked" only when a message came. Needs `b1`. Muninn and Huginn send them; Muninn acts on them (Huginn ignores one). |
+| `n1` | nudges (section 23.3): a real message to someone whose caps include `n1` also sends one small envelope `{"t":"nudge","ts":...}` sealed to their ring key, to their ring mailbox, so a locked device notifies only when a message came. Needs `b1`. Muninn and Huginn. |
+| `n2` | richer nudges and the nudge key (section 23.3): `nk` and `np` in receipts to contacts and group peers; a nudge to someone whose caps include `n2` also says who sent it, the group's name and what kind of message came, sealed to their nudge key, to their nudge mailbox, so group members can nudge too. The nudge key never rings. Muninn and Huginn. |
+| `u1` | a kids' TV updates by itself and reports it (7.17): `upnow` from a parent, `upstate` from the TV. Muninn only. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -1206,7 +1208,7 @@ know `off` ignore it.
 
 The TV's `status` may also carry `"update":<state>`, the result of its last update since Muninn started: `needs` (a new
 Muninn is downloaded and waits for the Install updates permission, `install` above), `ready` (it waits for Install on
-the TV), `installing`, `done` (the TV runs the newest) or `failed` (it didn't go in; the TV tries again the next day).
+the TV), `installing`, `done` (the TV runs the newest) or `failed` (it didn't go in; the TV tries again later, 7.17).
 Absent: nothing to report. A state an app doesn't know is ignored. The TV sends `status` when it changes, and a
 parent's phone shows it with the TV's apps and updates.
 
@@ -1269,6 +1271,40 @@ pairwise like the rest of section 7.
 - The TV takes `files`, `filedel` and `filemove` only from a current parent and answers with a fresh `filelist`; after
   `filedel` or `filemove` its `status` (7.7) follows. Malformed messages are ignored.
 
+### 7.17 The TV keeps itself up to date, and Update now from anywhere (`u1`)
+
+A Kids' TV must stay up to date even when no parent is near it. All messages are in room `tvconfig`, sealed pairwise
+like the rest of section 7, so they go over the internet relays too and each one is from the key it says.
+
+On its own, the TV (Muninn in kids' mode) looks for a new release a minute after it starts and once a day, unless a
+parent turned automatic checks off (`upd`, 7.12). It downloads and checks the release exactly as Muninn always does
+(SHA-256, the project's `.sig` and `.vsig`, newer than what it runs; `releases.md`), and installs it with a
+PackageInstaller session that asks for no tap (Android 12 and newer, `USER_ACTION_NOT_REQUIRED`, permission
+`UPDATE_PACKAGES_WITHOUT_USER_ACTION`). Android only lets that go through once Muninn is its own installer of record, so
+the first such update, and any update while Muninn may not install apps (`install`, 7.13), needs someone at the TV: the
+TV then shows "Ask a grown-up: press OK to update" over the whole screen, and OK brings up Android's Install box (or the
+setting that allows installs). Nothing installs during a call: the update waits until the call ends, and the prompt
+doesn't show. A try that fails comes back after 5 minutes, 15 minutes, 1 hour, 4 hours, then every 12 hours, until one
+works or the daily check comes round.
+
+| t | from | fields |
+|---|---|---|
+| `upnow` | a parent | none (exactly `{"t":"upnow"}`): look for a new release now and install it, whether or not `upd` is on |
+| `upstate` | the TV, to each parent whose app says `u1` | `app` (its Muninn version, 1 to 16 characters), `s` (state), `at` (when its last check ended, ms of the TV's clock, 0: never; an integer `0 <= n < 2^53`), `p` (only with `downloading`, required: integer 0 to 100), `why` (only with `failed`, optional: 1 to 60 characters) |
+
+States: `checking`, `downloading`, `installing`, `current` (it runs the newest), `tap` (it waits for someone at the TV),
+`failed`. No other fields; text has no control characters. Anything else is malformed and ignored.
+
+- The TV takes `upnow` only from a current parent while it has a config; anyone else on its list gets `removed` (7.14),
+  anyone else nothing. It answers that parent at once with an `upstate` for where it is, then sends every parent an
+  `upstate` at each step: a new state, version or reason, and while downloading each further tenth.
+- The TV also sends every parent an `upstate` a minute after it starts and once a day, so their phones know which
+  Muninn it runs and when it last checked. A phone that knows a newer release than the TV's `app` says so.
+- A parent's phone shows the state on the TV's page and in Settings, Updates and about: "Checking", "Downloading 42%",
+  "Installing", "Up to date", "Needs a tap on the TV", "Failed: <why>", with "Last check". Update now is offered only
+  for a TV whose app says `u1`; for any other it says "This TV needs one update on the TV first".
+- The older `update` (7.5) and the `update` field of `status` (7.13) stay as they are for apps without `u1`.
+
 ## 8. Message types
 
 | room | t | plaintext | ratchet | retried | dedupe | needs |
@@ -1289,6 +1325,7 @@ pairwise like the rest of section 7.
 | `tvconfig` | `status` `usage` `clear` | 7.7 | yes | no | Seen | k3 |
 | `tvconfig` | `appask` `appok` `appno` `appres` | 7.15 | yes | no | Seen | k9 |
 | `tvconfig` | `files` `filelist` `filedel` `filemove` | 7.16 | yes | no | Seen | k10 |
+| `tvconfig` | `upnow` `upstate` | 7.17 | yes | no | Seen | u1 |
 | `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |
@@ -1806,7 +1843,8 @@ for a name. A kept copy keeps the phone's name until it's removed.
 Small live frames in room `link`, between a checked pair; Huginn takes the companion side and Muninn the phone side.
 
 **The gate.** The companion sends `{"t": "ping", "caps": "l1 l2 l3", "dn": its device name}` when the phone's chats are
-opened and at most once a minute while they're on screen (its `sync` says `"caps": "l1 l2 l3"` too; `l3` is 15.3). A phone with `l2`
+opened and at most once a minute while they're on screen, and only while the companion app is in front and in use:
+active, its window shown and not minimized, never behind a game. Its `sync` says `"caps": "l1 l2 l3"` too (`l3` is 15.3). A phone with `l2`
 marks that companion, keeps `dn` (one line, at most 40 characters) as its name in its list of linked devices, and
 answers `{"t": "pong"}`. A phone without it ignores both, and nothing below is sent to the companion. The companion
 treats the phone as `l2` from the first `pong`, and shows its status in plain words: online (a `pong` or any frame in the
@@ -2151,7 +2189,7 @@ A proof is a signed object (2.2) by the chat key, without the object itself on t
 
 ### 21.3 Nearby off (hidden from people nearby)
 
-Settings › Privacy › Nearby is one switch (Muninn: Settings › Lock and privacy). Off, a device sends nothing about
+Settings › Privacy › Nearby is one switch (Muninn: Settings › Privacy and lock). Off, a device sends nothing about
 itself close by on its own, looks for nobody and lists nobody nearby:
 
 - **Wi-Fi.** No multicast announcement, no answer on multicast, and no scan of the home network ("Look again" and
@@ -2315,7 +2353,7 @@ move (18). Between Muninn and Huginn `@move.json` (18.4) carries it as
 after the move. Received pictures travel too (they are vault files), with the per-person sent versions, so nothing is
 sent twice.
 
-## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`, `n1`)
+## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`, `n1`, `n2`)
 
 Everything here is in `code/shared/tools/e1b1_ref.py`, which writes `code/shared/vectors/e1b1-vectors.json`. `ECDH(a, B)` below is
 `ChatCrypto.sharedKey` (section 0: HKDF over the P-256 secret, salted with both public keys).
@@ -2403,45 +2441,75 @@ can't ring. With `b1` it can:
 - Someone holding a locked device learns only that calls came and when; the relays learn that the ring mailbox got an
   event, as they learn that the mailbox did.
 
-### 23.3 Nudges (`n1`)
+### 23.3 Nudges (`n1`, `n2`)
 
 A locked device can't open anything in its inbox, so it can't tell a message from a receipt, a linked computer's
-`ping` or room presence. Before `n1`, every inbox event while locked put up "Muninn is locked". With `n1` the sender
-says when a real message came:
+`ping`, a profile status or room presence. So nothing that reaches the inbox while locked notifies: it is kept sealed
+until unlocking (Muninn) or left on the relays (Huginn), and says nothing. Only a **nudge** does: the sender says when
+a real message came, in a tiny envelope a locked device can open without its vault.
 
 - **What counts.** Rooms `private`, `rich`, `photo` (photos, voice and video messages, GIFs, small files, 14.2),
   `gmsg`, `gphoto`, room `file` with `t:"offer"`, and room `group` with `t:"invite"`. Nothing else: not receipts
   (`receipt`, `greceipt`), `live` (typing, active status), `profile`, `link`, `call`, `mx` (reactions, edits, votes),
   `unsend`, `keep`, `intro`, presence, or any other group control or state.
-- **Sending.** When such a message goes to the relays for a **contact** whose caps include `n1` and whose ring key and
-  ring mailbox (`rk`, `rp`, 23.2) the sender holds, the sender also publishes one **nudge** to that ring mailbox,
-  sealed exactly like a ring envelope (same key derivation and AAD), padded and expiring like any other event:
+- **The nudge key (`n2`).** Besides its ring key, each device makes a **nudge key**: a P-256 key pair and a Nostr
+  secret for its **nudge mailbox**, kept exactly like the ring key outside the vault (Muninn: `nudge-key.json` in its
+  files; Huginn: `nudge-key.json` beside `ring-key.json`), erased with it, made new with it when someone is blocked
+  (the old nudge mailbox is still read for 2 days), and never in backups. Its public half goes in every receipt to a
+  **contact or group peer** whose caps include `n2` (never to someone blocked): `"nk"` (base64 SPKI) and `"np"` (the
+  nudge mailbox, 64 lowercase hex), and in an empty receipt `{"ids":[],"s":"delivered"}` the first time their caps
+  gain `n2`, and to every other `n2` contact and group peer after a block. A receiver takes both from an authentic
+  receipt of a contact or group peer when `nk` is a P-256 SPKI as in 23.1 and `np` is 64 lowercase hex, and keeps the
+  latest. A device subscribes to its nudge mailbox on its ring mailbox's request and signs in as it when a relay asks.
+  The nudge key only ever opens nudges: a ring sealed to it never rings, so a group member who isn't a contact (who
+  never gets the ring key, 23.2) can nudge a locked device and can't ring it.
+- **Sending.** When such a message goes to the relays, the sender also publishes one nudge, sealed exactly like a
+  ring envelope (same key derivation and AAD) and padded and expiring like any other event:
+  - to someone whose caps include `n2`: the `n2` plaintext, sealed to their nudge key and sent to their nudge mailbox
+    (a contact or group peer); to a contact whose nudge key hasn't come yet, sealed to their ring key and sent to
+    their ring mailbox instead;
+  - to a contact whose caps include `n1` but not `n2`: the `n1` plaintext, sealed to their ring key and sent to their
+    ring mailbox (a group-only peer without `n2` gets none).
 
   ```
-  {"e": one-off public key, "n": nonce, "d": AES-256-GCM(key, {"t":"nudge","ts":<ms>}, AAD "huginn-muninn")}
+  n1: {"t":"nudge","ts":<ms>}
+  n2: {"t":"nudge","ts":<ms>,"from":<the sender's own name>,"chat":<"" for 1:1, else the group's name>,
+       "kind":"msg"|"photo"|"voice"|"video"|"file"|"invite"}
+  {"e": one-off public key, "n": nonce, "d": AES-256-GCM(key, plaintext, AAD "huginn-muninn")}
   ```
 
-  Coalesced on the sender's side: at most one nudge per recipient per 60 s, whatever the number of messages, rooms
-  or retries. A nudge plaintext is well-formed when `t` is `nudge` and `ts` an integer 0 <= ts < 2^53; other fields
-  are ignored. A nudge never rings (it has no `call`), and a ring is never a nudge.
-- **Receiving, locked.** An event for the ring mailbox that opens with the ring key as a well-formed nudge puts up the
-  locked notice ("Muninn is locked", "Unlock to get new messages"), once per locked spell as before. No freshness
-  check: an old nudge still means messages are waiting. **Unlocked**, a nudge is ignored (the message itself
-  notifies). Huginn ignores nudges.
-- **The normal inbox while locked.** Events are still kept sealed until unlocking, but they put up the notice only
-  while someone may write without nudging. Contacts are in the vault, so Muninn keeps a small plain file outside it,
-  `legacy-peers.json` (`{"legacyPeers": true|false}`, beside `ring-key.json`), written whenever the contacts or their
-  caps change while unlocked. It is true when any contact's caps lack `n1` (or aren't known), when there is any
-  group-only peer (it never gets the ring key, 23.2, so it can't nudge), or when the list is empty. A missing or
-  unreadable file counts as true, so the old behavior stays until every contact's app says `n1`. Erase everything and
-  Move delete the file. Someone holding a locked phone can learn from it only whether every contact's app is new.
-- **Privacy.** The relays see one more small event to the ring mailbox per burst of messages (at most one a minute
-  per recipient), padded to the smallest size, with nothing inside but `t` and `ts`: no sender, name, text or chat.
-  As with rings, they learn that the ring mailbox got an event, as they learn that the inbox did.
+  `kind`: `msg` for text (`private`, `rich`, `gmsg`), `photo` for a photo or GIF, `voice`, `video`, `file` for a
+  small file or a file offer, `invite` for a group invite (whose `chat` is the group's name). `from` and `chat` are
+  trimmed, without control or format characters, and at most 40 characters. Coalesced on the sender's side: at most
+  one nudge per recipient per 60 s (`n2`: per recipient and chat), whatever the number of messages or retries.
+- **Well-formed.** `t` is `nudge` and `ts` an integer 0 <= ts < 2^53. A receiver takes both forms: one without `from`
+  or `chat` names nobody; `from` and `chat` that aren't strings are empty; control and format characters are taken
+  out and each is cut to 40 characters; a missing or unknown `kind` is `msg`. Other fields are ignored. A nudge never
+  rings (it has no `call`), and a ring is never a nudge.
+- **Receiving, locked.** An event for the ring mailbox that opens with the ring key, or for the nudge mailbox that
+  opens with the nudge key, as a well-formed nudge puts up a notification. No freshness check: an old nudge still
+  means messages are waiting. What it shows follows the device's "What notifications show" setting, which is kept
+  outside the vault:
+  - Name only, and Name and message: the title is `from` (a group's: `from · chat`), the text what came: "New
+    message", "Photo", "Voice message", "Video message", "File" or "Group invite" (the message itself can't be opened
+    while locked). A nudge naming nobody (`n1`) says "Muninn" (Huginn: "Huginn"), "New message".
+  - Nothing: "Muninn" (Huginn: "Huginn"), "New message".
+
+  One notification per sender and chat (with Nothing, one for all), updated as more come ("3 new messages") and
+  alerting only the first time. Quiet hours, Do not disturb and Extreme battery saver apply as for any message. On
+  Muninn, a tap opens the lock screen, then that chat once unlocked when exactly one contact (1:1) or group (by
+  `chat`) has that name, else the chat list; unlocking takes these notifications down (the messages themselves then
+  notify). Huginn shows the same words and counts; a click brings it to its lock screen, then the chat list.
+  **Unlocked**, a nudge is ignored (the message itself notifies).
+- **Privacy.** The relays see one more small event to the ring or nudge mailbox per burst of messages (at most one a
+  minute per recipient and chat), padded to the smallest size. Inside, sealed to the recipient: an `n1` nudge holds
+  only `t` and `ts`; an `n2` nudge also the sender's own name, the group's name and what kind of message came, never
+  its text. Someone holding the locked device sees only what its notification setting shows. As with rings, the
+  relays learn that the mailbox got an event, as they learn that the inbox did.
 
 An app without `b1` or `e1` ignores the receipt fields and gets neither ring envelopes nor day key wrappings; with
-mixed versions everything falls back to sections 14 and 20. An app without `n1` is sent no nudges, and its messages
-keep the locked notice on every inbox event (above).
+mixed versions everything falls back to sections 14 and 20. An app without `n1` or `n2` is sent no nudges; one with
+`n1` only gets the `n1` form. Muninn deletes any `legacy-peers.json` in its files at start; nothing reads it.
 
 ## 24. Labs bug reports (field `lb`)
 

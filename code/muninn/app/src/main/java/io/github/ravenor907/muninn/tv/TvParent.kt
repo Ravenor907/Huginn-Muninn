@@ -57,6 +57,8 @@ data class ManagedTv(
     val off: List<String>? = null,
     /** The TV's last update state from its status (one of [TvRules.UPDATE_STATES], or "" when not known). */
     val update: String = "",
+    /** u1 (7.17): the TV's last "upstate" (null: none yet), and when it came (this phone's clock). */
+    val upd1: TvUpd.St? = null, val upd1At: Long = 0,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -247,6 +249,8 @@ object TvParent {
         if (o.optString("t") == "appask" || o.optString("t") == "appres") return _tvs.value.containsKey(fromKey) && TvAppAsks.handle(app, fromKey, o)
         // k10 (7.16): the TV's App storage list, for a parent in Labs mode.
         if (o.optString("t") == "filelist") return _tvs.value.containsKey(fromKey) && TvFiles.take(fromKey, o)
+        // u1 (7.17): how the TV's update is going, only from a TV this phone looks after.
+        if (o.optString("t") == "upstate") return takeUpstate(app, fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false
@@ -547,6 +551,31 @@ object TvParent {
         return true
     }
 
+    /** The TV's app said "u1": Update now from anywhere, with its steps on this phone (7.17). */
+    fun u1(app: Muninn, key: String): Boolean = TvUpd.canAsk(app.contacts.get(key)?.caps ?: emptySet())
+
+    /** u1: Update now. False (and a caps probe) while the TV's app lacks u1. */
+    fun updateNow(app: Muninn, key: String): Boolean {
+        if (!u1(app, key)) { app.chat.probeCaps(key); return false }
+        send(app, key, listOf(TvUpd.nowMessage()))
+        return true
+    }
+
+    /** u1: the TV's "upstate". A new failure, or a TV that needs a tap, is said once here. */
+    private fun takeUpstate(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        val st = TvUpd.stateIn(o) ?: return false
+        var news: String? = null
+        synchronized(lock) {
+            val t = _tvs.value[fromKey] ?: return false
+            if (t.disconnecting) return true
+            val was = t.upd1
+            if ((st.s == TvUpd.FAILED || st.s == TvUpd.TAP) && (was?.s != st.s || was?.why != st.why)) news = TvUpd.text(st)
+            put(t.copy(upd1 = st, upd1At = System.currentTimeMillis(), app = st.app))
+        }
+        news?.let { Ui.say("${app.contacts.get(fromKey)?.shown ?: "Kids' TV"}: $it", true) }
+        return true
+    }
+
     /** Shares the TV's contact code, so someone the parent added can add the TV on their side. */
     fun shareText(app: Muninn, key: String): String? {
         val c = app.contacts.get(key) ?: return null
@@ -614,7 +643,8 @@ object TvParent {
             .put("waiting", JSONObject().apply { t.waiting.forEach { (k, v) -> put(k, v) } })
             .put("others", JSONArray().apply { t.others.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("sharedWith", JSONArray(t.sharedWith)).put("nr", t.nr).put("upd", t.upd).put("keep", t.keep).put("update", t.update)
-            .apply { t.off?.let { put("off", JSONArray(it)) } })
+            .apply { t.off?.let { put("off", JSONArray(it)) } }
+            .apply { t.upd1?.let { put("upd1", JSONObject(TvUpd.stateMessage(it))).put("upd1At", t.upd1At) } })
     }
 
     /** [autoUpdate]: this phone's own update switch, for a TV saved without its own Auto-update. */
@@ -634,7 +664,8 @@ object TvParent {
                 strs(x.optJSONArray("sharedWith")), x.optInt("nr", TvRules.NR_BOTH).coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH),
                 x.optBoolean("upd", autoUpdate), x.optInt("keep", TvRules.MAX_KEEP).coerceIn(TvRules.MIN_KEEP, TvRules.MAX_KEEP),
                 x.optJSONArray("off")?.let { strs(it) },
-                x.optString("update").takeIf { it in TvRules.UPDATE_STATES } ?: "")
+                x.optString("update").takeIf { it in TvRules.UPDATE_STATES } ?: "",
+                upd1 = x.optJSONObject("upd1")?.let { TvUpd.stateIn(it) }, upd1At = x.optLong("upd1At"))
         } catch (e: Exception) { null }
     }.toMap()
 }

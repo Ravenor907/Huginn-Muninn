@@ -124,6 +124,8 @@ public:
         return 1;
     }
     void setPreviewMode(int v) { m_settings.setValue(QStringLiteral("chat/previewMode"), qBound(0, v, 2)); Q_EMIT changed(); }
+    // Picked once (first setup, Settings or the one-time question): an older install with no previewMode key gets asked.
+    Q_INVOKABLE bool previewModeChosen() const { return m_settings.contains(QStringLiteral("chat/previewMode")); }
     bool reduceNotifications() const { return m_settings.value(QStringLiteral("chat/reduceNotifications"), false).toBool(); }
     void setReduceNotifications(bool v) { m_settings.setValue(QStringLiteral("chat/reduceNotifications"), v); Q_EMIT changed(); }
     void setShowPreview(bool v) { setPreviewMode(v ? 2 : 0); }
@@ -310,6 +312,8 @@ public:
     // Always right away (as Muninn's list): their messages make a sound and a notification even while muted.
     Q_INVOKABLE bool isRightAway(const QString &key) const { return m_rightAway.contains(key); }
     Q_INVOKABLE void setRightAway(const QString &key, bool on);
+    // Everyone set to Always right away, for the list in Settings › Notifications.
+    Q_INVOKABLE QStringList rightAwayKeys() const { return QStringList(m_rightAway.cbegin(), m_rightAway.cend()); }
     // A color for this chat ("" for the usual, else "#RRGGBB"), only on this computer.
     Q_INVOKABLE QString chatColor(const QString &key) const { return m_chatColors.value(key); }
     Q_INVOKABLE void setChatColor(const QString &key, const QString &color);
@@ -471,6 +475,8 @@ public:
     void setProfile(Profile *profile) { m_profile = profile; }
     // Cap b1: this device's ring key, outside the vault (main.cpp makes it).
     void setRingKey(RingKey *ring) { m_ringKey = ring; }
+    // Cap n2: this device's nudge key, outside the vault (main.cpp makes it). It only ever takes nudges, never rings.
+    void setNudgeKey(NudgeKey *key) { m_nudgeKey = key; }
     // Labs (labs.*): bug reports to the Labs contact, and on the Huginn with the Labs key, its inbox.
     void setLabs(Labs *labs) { m_labs = labs; }
     // Mute for me, volume, group timeouts and bans (cap g2, moderation.*), made in main.cpp.
@@ -617,18 +623,21 @@ private:
     std::unique_ptr<WrapKeys> m_wrapKeys;
     std::unique_ptr<PeerKeys> m_peerKeys;
     RingKey *m_ringKey = nullptr;
+    NudgeKey *m_nudgeKey = nullptr;   // cap n2
     QSet<QString> m_rung;       // call ids a ring envelope already went out for
     QSet<QString> m_keysSent;   // contacts my keys went to when their app first said b1 or e1
     // A receipt to an app that says b1 or e1 carries my day key ("wk", "wt"), and to a contact (not a group-only peer,
-    // never someone blocked) my ring key and mailbox ("rk", "rp").
+    // never someone blocked) my ring key and mailbox ("rk", "rp"). To a contact or group peer whose app says n2 (never
+    // someone blocked): my nudge key and nudge mailbox ("nk", "np").
     QJsonObject withKeys(const QString &key, QJsonObject o) const;
     // An empty receipt with my keys; once per person unless again (a block renewed the ring key, a restore the day key).
     void sendKeys(const QString &key, bool again = false);
     // A 1:1 offer also goes as a ring envelope to their ring mailbox (b1).
     void ring(const QString &key, const QJsonObject &msg);
-    // Cap n1 (section 23.3): a real message (RingWire::nudgeCounts) to a contact whose app says n1 also sends a nudge
-    // to their ring mailbox, at most one a minute per person (m_nudged).
-    void nudge(const QString &key, const QString &room, const QByteArray &plain);
+    // Caps n1 and n2 (section 23.3): a real message (RingWire::nudgeCounts) also sends a nudge. n2 (a contact or group
+    // peer): my name, the group's name (chat, "" for 1:1) and the kind ("" for RingWire::nudgeKind(room)), to their nudge
+    // mailbox. n1 only (a contact): the plain nudge to their ring mailbox. At most one a minute per person (and chat, n2).
+    void nudge(const QString &key, const QString &room, const QByteArray &plain, const QString &kind = QString(), const QString &chat = QString());
     NudgeGate m_nudged;
     // Room "file" goes through the ratchet for a contact whose app says e1.
     bool fileRatchet(const QString &room, const QString &key) const;

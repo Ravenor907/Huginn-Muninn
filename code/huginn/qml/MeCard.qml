@@ -3,7 +3,7 @@ import Huginn
 
 // Your card, above the panel at the bottom left (a click on your name there): your picture and
 // name, a custom status, and Online / Away / Do not disturb / Invisible. Your name, picture, color
-// and code are in Settings › You. Up and Down move along the rows, A chooses, B or Escape closes;
+// and code are in Settings › Profile. Up and Down move along the rows, A chooses, B or Escape closes;
 // a click anywhere else closes it too.
 Item {
     id: card
@@ -30,10 +30,10 @@ Item {
     function dotColour(id) { return id === "online" ? Theme.online : id === "away" ? Theme.away : id === "dnd" ? Theme.dnd : Theme.offline }
     function statusName(s) { return s === "away" ? "Away" : s === "dnd" ? "Do not disturb" : s === "invisible" ? "Invisible" : "Online" }
 
-    // Your picture or name (or A on them): Settings › You, where the name, picture and status are changed.
+    // Your picture or name (or A on them): Settings › Profile, where the name and picture are changed.
     function editProfile() {
         close()
-        Ui.openPage("settings", { section: "you" })
+        Ui.openPage("settings", { section: "profile" })
     }
     function run(id) {
         if (id === "custom") {

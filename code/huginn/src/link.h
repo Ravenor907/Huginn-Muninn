@@ -148,7 +148,8 @@ public:
     // On a companion: mute a mirrored chat until (ms; 0 unmutes, a huge value until turned back on). Here at once, and with
     // cap l1 on the phone too (a "mute" item). "" when done, else what to tell the person.
     Q_INVOKABLE QString setMute(const QString &peer, qint64 until);
-    // On a companion: ask whether the phone is there ("ping", at most once a minute). The answer shows in phone.
+    // On a companion: ask whether the phone is there ("ping", at most once a minute). The answer shows in phone. Only
+    // while Huginn is in front and in use (inFront): never while minimized, hidden or behind a game.
     Q_INVOKABLE void ping();
     // On a companion: one that didn't send, again (the same id, so the phone never sends it twice).
     Q_INVOKABLE void retrySend(const QString &id);
@@ -220,6 +221,11 @@ public:
     static bool internetOk(const QJsonObject &msg);
     // A Refresh from a companion last taken at last (ms, 0: never) may be taken at t.
     static bool refreshDue(qint64 last, qint64 t) { return last <= 0 || t - last >= kRefreshEveryMs; }
+    // A companion checks in with its phone over the internet only while it's in use: the app active and its window
+    // shown, not minimized.
+    static bool mayCheckIn(Qt::ApplicationState state, bool shown, bool minimized) { return state == Qt::ApplicationActive && shown && !minimized; }
+    // mayCheckIn for this app now: the window with focus.
+    static bool inFront();
     // What a companion shows for a phone's {"t": "result", "ok": false, "err"}.
     static QString errText(const QString &err);
     // How many parts a file of size bytes takes (0 when it's empty or too big).

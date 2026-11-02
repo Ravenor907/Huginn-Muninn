@@ -12,7 +12,7 @@ import java.io.FilterOutputStream
 import java.io.OutputStream
 
 /**
- * Settings › Backup and first setup's Restore from a backup. The file format is [BackupFormat] (shared/docs/backup.md);
+ * Settings › Devices and backup and first setup's Restore from a backup. The file format is [BackupFormat] (shared/docs/backup.md);
  * this is the phone side: what goes in, where it's written, and putting it back. Call these off the main thread.
  */
 object Backup {
@@ -110,7 +110,7 @@ object Backup {
     }
 
     /**
-     * Settings › Backup › Restore: a copy of what's here goes into a "kept-" folder first, then [restore]. Returns
+     * Settings › Devices and backup › Restore: a copy of what's here goes into a "kept-" folder first, then [restore]. Returns
      * the kept folder's name. Then call [restart].
      */
     fun restoreKeeping(app: Muninn, o: BackupFormat.Opened): String {

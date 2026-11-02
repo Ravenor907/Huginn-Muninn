@@ -54,10 +54,11 @@ bool ringFresh(qint64 ts, qint64 now);
 QString ringContent(const QString &ringPub, const QString &callId, qint64 ts);
 bool openRingContent(const QString &content, const ChatCrypto::KeyPair &ring, QString *callId, qint64 *ts);
 
-// What a receipt's "rk", "rp", "wk", "wt" say; each half empty when absent or malformed.
+// What a receipt's "rk", "rp", "wk", "wt" (and "nk", "np", cap n2) say; each half empty when absent or malformed.
 struct Announce {
     QString rk, rp, wk;
     qint64 wt = 0;
+    QString nk, np;
 };
 Announce announceOf(const QJsonObject &r, qint64 nowS);
 bool mayUse(qint64 wt, qint64 nowS);
@@ -65,20 +66,51 @@ bool mayUse(qint64 wt, qint64 nowS);
 bool keep(qint64 t, qint64 nowS);
 bool rotateDue(qint64 newest, qint64 nowS);   // newest < 0: none yet
 
-// Cap n1 (protocol.md 23.3): a nudge. A real message (text, photo, voice or video message, file offer, group invite) to
-// a contact whose app says n1 also sends one tiny envelope {"t":"nudge","ts":...} to their ring mailbox, sealed to
-// their ring key like a ring, at most one a minute per person. A locked phone says "Muninn is locked" only then.
-extern const char kNudgeCap[];   // "n1"
+// Caps n1 and n2 (protocol.md 23.3): nudges. A real message (text, photo, voice or video message, file offer, group
+// invite) also sends one tiny sealed envelope a locked device can open without its vault, at most one a minute per
+// person (per person and chat with n2). A locked device notifies only for these.
+//  - n1: {"t":"nudge","ts":...} sealed to a contact's ring key, to their ring mailbox.
+//  - n2: the same with "from" (the sender's name), "chat" ("" for 1:1, else the group's name) and "kind", sealed to
+//    their nudge key (NudgeKey: contacts and group peers get it) and sent to their nudge mailbox; to a contact whose
+//    nudge key hasn't come yet, sealed to their ring key instead.
+extern const char kNudgeCap[];       // "n1"
+extern const char kRichNudgeCap[];   // "n2"
 constexpr qint64 kNudgeEveryMs = 60000;
+constexpr int kNudgeNameMax = 40;    // "from" and "chat" are at most this many characters
 // Whether something sent in room with plaintext plain is a real message (and so worth a nudge).
 bool nudgeCounts(const QString &room, const QByteArray &plain);
-// {"t":"nudge","ts":<ms>}: nothing else, no name, no text, no chat.
+// The kind of a real message in room: "photo", "file", "invite" or "msg" (a photo room's own kind comes from blobKind).
+QString nudgeKind(const QString &room);
+// A photo room message: "voice", "video", "file" (a small file) or "photo" (a GIF too).
+QString blobKind(int voiceMs, int videoMs, const QString &file);
+// A name in a nudge: control and format characters taken out, trimmed, at most kNudgeNameMax characters. Not a string: "".
+QString nudgeClean(const QJsonValue &v);
+// What a nudge says. An n1 nudge names nobody and is a "msg".
+struct Nudge {
+    qint64 ts = 0;
+    QString from, chat;
+    QString kind = QStringLiteral("msg");
+};
+// {"t":"nudge","ts":<ms>}: the n1 form, nothing else.
 QByteArray nudgePlain(qint64 ts);
-// Well-formed: t "nudge" and ts an integer 0 <= ts < 2^53. Other fields are ignored.
+// {"t":"nudge","ts","from","chat","kind"}: the n2 form, names cleaned as a receiver cleans them.
+QByteArray richNudgePlain(qint64 ts, const QString &from, const QString &chat, const QString &kind);
+// Well-formed: t "nudge" and ts an integer 0 <= ts < 2^53. Other fields are ignored here.
 bool nudgeOk(const QJsonObject &p);
-// The relay event's content, sealed to a ring key and padded like a ring.
+// A well-formed nudge, n1 or n2, read into n: names cleaned, an unknown or missing kind is "msg".
+bool nudgeRead(const QJsonObject &p, Nudge *n);
+// The relay event's content: n1 sealed to a ring key, padded like a ring.
 QString nudgeContent(const QString &ringPub, qint64 ts);
-bool openNudgeContent(const QString &content, const ChatCrypto::KeyPair &ring, qint64 *ts);
+// n2, sealed to a nudge key (or a ring key) the same way.
+QString richNudgeContent(const QString &pub, qint64 ts, const QString &from, const QString &chat, const QString &kind);
+// A nudge's content opened with keys (a ring key or a nudge key): true with what it says.
+bool openNudgeContent(const QString &content, const ChatCrypto::KeyPair &keys, Nudge *n);
+// A locked nudge's notification, for Settings > Notifications > Show (mode 0 nothing, 1 the name, 2 name and message):
+// one per sender and chat (with nothing, one for all); the title says who and the group ("from · chat"), the text what
+// kind came (the message itself can't be opened while locked) or how many once more came.
+QString nudgeGroupKey(int mode, const Nudge &n);
+QString nudgeTitle(int mode, const Nudge &n);
+QString nudgeText(int mode, const QString &kind, int count);
 
 // Checks shared/vectors/e1b1-vectors.json; prints what it found. Returns true when everything matches.
 bool selfTest(const QString &vectorsPath);
@@ -168,6 +200,8 @@ public:
     QList<QByteArray> nostrSecrets();
     // A ring envelope's content opened (with the current key, or the old one while it's read): true with the call id and ts.
     bool open(const QString &content, QString *callId, qint64 *ts);
+    // A nudge's content opened the same way (caps n1 and n2): true with what it says.
+    bool nudge(const QString &content, RingWire::Nudge *n);
     // Someone was blocked: a new key pair and ring mailbox, so they can't ring this device any more. The old one is read
     // for kOldKeepMs (contacts who haven't heard of the new one yet).
     void renew();
@@ -190,4 +224,26 @@ private:
     qint64 m_oldUntil = 0;   // ms; 0: no old one
     bool m_loaded = false;
     bool m_forgotten = false;
+};
+
+// Cap n2: this device's nudge key, a P-256 key pair and a Nostr secret for its nudge mailbox, kept like the ring key in
+// a file outside the vault (nudge-key.json) and erased with it. Its public half goes to contacts and group peers whose
+// app says n2 ("nk", "np"), so group members can nudge too. It only ever opens nudges: a ring sealed to it is never a
+// call, so someone who got it through a group can't ring this device. Made new with the ring key (a block).
+class NudgeKey
+{
+public:
+    explicit NudgeKey(const QString &path) : m_keys(path) {}
+    QString publicKey() { return m_keys.publicKey(); }   // "nk"
+    QString mailbox() { return m_keys.mailbox(); }       // "np"
+    QStringList mailboxes() { return m_keys.mailboxes(); }
+    QList<QByteArray> nostrSecrets() { return m_keys.nostrSecrets(); }
+    // A nudge's content opened: true with what it says. Never a ring.
+    bool nudge(const QString &content, RingWire::Nudge *n) { return m_keys.nudge(content, n); }
+    void renew() { m_keys.renew(); }
+    bool dropOld() { return m_keys.dropOld(); }
+    void forget() { m_keys.forget(); }
+
+private:
+    RingKey m_keys;
 };

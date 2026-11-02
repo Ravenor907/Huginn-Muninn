@@ -7,7 +7,7 @@ Huginn checks the vectors in `--chat-selftest` and its own round trip in `--back
 
 ## 1. What the person sees
 
-**Back up** (Settings › Backup › Back up):
+**Back up** (Settings › Devices and backup › Back up):
 
 1. What's inside: identity, contacts, chats, groups, folders and settings. Files and pictures (photos, voice and video
    messages) are in it or left out by a checkbox that shows their size.
@@ -17,7 +17,7 @@ Huginn checks the vectors in `--chat-selftest` and its own round trip in `--back
 4. "Saved to" the full path (on Android, the folder and name the picker gives), "Encrypted with your password", the
    size, and on a computer Show in folder.
 
-**Restore** (Settings › Backup › Restore from a backup, first setup's Welcome page, and Muninn's "can't open your data"
+**Restore** (Settings › Devices and backup › Restore from a backup, first setup's Welcome page, and Muninn's "can't open your data"
 screen):
 
 1. Choose file: any file, any name, from the file picker. Nothing has to be in a set folder or have a set name.

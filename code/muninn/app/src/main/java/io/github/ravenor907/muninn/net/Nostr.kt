@@ -97,6 +97,13 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     @Volatile var ring: RingKey? = null
     /** Every event for the ring mailbox (its content): never kept, never handed to [onEnvelope]. */
     var onRing: ((String) -> Unit)? = null
+    /**
+     * Cap n2: this device's nudge key (outside the vault). Its mailbox is asked for on the ring mailbox's request, and
+     * relays that ask get a sign-in as it too. Its events go only to [onNudge], never to [onRing]: it can't ring.
+     */
+    @Volatile var nudgeKey: NudgeKey? = null
+    /** Every event for the nudge mailbox (its content): never kept, never handed to [onEnvelope] or [onRing]. */
+    var onNudge: ((String) -> Unit)? = null
     private val ringSubId = "muninn-r" + UUID.randomUUID().toString().take(8)
     /** The inbox in pages (`until`), as Huginn asks: a relay that hands over a full answer is asked for the ones before it. */
     private val pageSubId = "muninn-p" + UUID.randomUUID().toString().take(8)
@@ -421,11 +428,12 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         for ((url, ws) in sockets) if (live[url] == true) { challenges[url]?.let { signIn(url, ws, it) }; subscribe(url, ws) }
     }
 
-    /** NIP-42: signs in as my mailbox (while unlocked) and as the ring mailbox (always, cap b1). */
+    /** NIP-42: signs in as my mailbox (while unlocked), and as the ring and nudge mailboxes (always, caps b1 and n2). */
     private fun signIn(url: String, ws: WebSocket, challenge: String) {
         val tags = JSONArray().put(JSONArray().put("relay").put(url)).put(JSONArray().put("challenge").put(challenge))
         secret?.let { ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", it)).toString()) }
         try { ring?.let { r -> r.nostrSecrets().forEach { ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", it)).toString()) } } } catch (_: Exception) {}
+        try { nudgeKey?.let { n -> n.nostrSecrets().forEach { ws.send(JSONArray().put("AUTH").put(event(22242, tags, "", it)).toString()) } } } catch (_: Exception) {}
     }
 
     fun disconnect() {
@@ -474,11 +482,13 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
         val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since)
         ws.send(JSONArray().put("REQ").put(subId).put(filter).toString())
-        // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other).
+        // Cap b1: the ring mailbox, on a request of its own (a relay may answer one and not the other). Cap n2: the
+        // nudge mailbox on the same request.
         try {
-            ring?.let { r ->
-                // A ring mailbox replaced after a block is still asked for, for 2 days.
-                val rf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray(r.mailboxes())).put("since", since)
+            val boxes = (ring?.mailboxes().orEmpty() + (try { nudgeKey?.mailboxes() } catch (_: Exception) { null }).orEmpty()).distinct()
+            if (boxes.isNotEmpty()) {
+                // A ring or nudge mailbox replaced after a block is still asked for, for 2 days.
+                val rf = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray(boxes)).put("since", since)
                 ws.send(JSONArray().put("REQ").put(ringSubId).put(rf).toString())
             }
         } catch (_: Exception) {}
@@ -549,7 +559,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 "AUTH" -> {
                     val challenge = a.optString(1)
                     challenges[url] = challenge
-                    if (secret == null && ring == null) return
+                    if (secret == null && ring == null && nudgeKey == null) return
                     signIn(url, webSocket, challenge)
                     subscribe(url, webSocket)
                 }
@@ -643,6 +653,17 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 val own = try { idOf(ev) == id } catch (e: Exception) { false }
                 if (own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false })
                     try { onRing?.invoke(ev.optString("content")) } catch (_: Exception) {}
+            } finally { synchronized(seen) { working.remove(id); seen.add(id); while (seen.size > 2000) seen.remove(seen.first()) } }
+            saveSoon()
+            return
+        }
+        // Cap n2: an event for the nudge mailbox is only ever a nudge. Tried with the nudge key, then dropped.
+        val n = nudgeKey
+        if (n != null && pTag(ev).let { p -> p != null && (try { p in n.mailboxes() } catch (e: Exception) { false }) }) {
+            try {
+                val own = try { idOf(ev) == id } catch (e: Exception) { false }
+                if (own && try { Schnorr.verify(Schnorr.unhex(id), Schnorr.unhex(ev.optString("pubkey")), Schnorr.unhex(ev.optString("sig"))) } catch (e: Exception) { false })
+                    try { onNudge?.invoke(ev.optString("content")) } catch (_: Exception) {}
             } finally { synchronized(seen) { working.remove(id); seen.add(id); while (seen.size > 2000) seen.remove(seen.first()) } }
             saveSoon()
             return

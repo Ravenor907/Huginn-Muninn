@@ -27,8 +27,8 @@ QtObject {
         }
         top.push({ name: "Find in chat", icon: "search", url: "find" },
                  { name: "Media and files", icon: "image", url: "media", sub: () => mediaMenu(k, name, c) })
-        if (!c.tour) top.push(Chat.isMuted(k) ? { name: "Unmute notifications", icon: "bell", url: "mute" }
-                                              : { name: "Mute notifications", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) })
+        if (!c.tour) top.push(Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
+                                              : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) })
         top.push({ name: "Details", icon: "edit", url: "edit" })
         const mid = []
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
@@ -76,7 +76,7 @@ QtObject {
         if (at > 0) items.push({ name: "Move up", url: "up" })
         if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", url: "down" })
         items.push({ name: "Pinned messages", icon: "pin", url: "pins" })
-        if (contact) items.push({ name: "Check safety code", icon: "check", detail: c.tour ? "" : Chat.isVerified(k) ? "Verified" : "Not verified", url: "check" },
+        if (contact) items.push({ name: "Compare emoji", icon: "check", detail: c.tour ? "" : Chat.isVerified(k) ? "Verified" : "Not verified", url: "check" },
                                 { name: "Introduce", icon: "people", url: "introduce" })
         // How messages reach them right now (never an address): out of the chat's header, as on Muninn.
         if (!c.tour) items.push({ name: "How messages travel", detail: routeWord(Chat.route(k)), url: "route" })
@@ -84,7 +84,7 @@ QtObject {
         if (!contact && !c.tour) items.push({ name: "Hide", icon: "close", url: "hide" })
         const end = [{ name: blocked ? "Unblock" : "Block", url: "block", danger: !blocked }]
         if (!c.tour) end.push({ name: "Delete chat", url: "deletechat", danger: true })
-        if (contact) end.push({ name: "Remove", url: "remove", danger: true })
+        if (contact) end.push({ name: "Delete contact", url: "remove", danger: true })
         const again = () => contactMore(k, n, c, back)
         Ui.pickFrom("More for " + name, [{ header: "", items: items }, { header: "", items: end }], a => {
             if (c.tour) return
@@ -113,7 +113,7 @@ QtObject {
                 if (blocked) { Chat.block(k, false); Ui.say(name + " unblocked.") }
                 else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { Chat.block(k, true); Ui.say(name + " blocked.") }, false, true)
             } else if (a === "remove")
-                Ui.sure("Remove " + name + "?", "Restore within 30 days.", "Remove", () => { if (c.removed) c.removed(); Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, false, true)
+                Ui.sure("Delete contact " + name + "?", "Restore within 30 days.", "Delete contact", () => { if (c.removed) c.removed(); Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, false, true)
         }, back)
     }
     // Folders and role: Family, Work and Folk are the roles (one at a time); the rest are folders.
@@ -160,7 +160,7 @@ QtObject {
         const items = [{ name: "For 15 minutes", url: "900000" }, { name: "For 1 hour", url: "3600000" },
                        { name: "For 8 hours", url: "28800000" }, { name: "Until I turn it back on", url: "on" }]
         const said = { "900000": " for 15 minutes", "3600000": " for an hour", "28800000": " for 8 hours", "on": "" }
-        Ui.pickFrom("Mute notifications for " + name, [{ header: "Calls show as missed, without ringing.", items: items }], a => {
+        Ui.pickFrom("Mute " + name, [{ header: "Calls show as missed, without ringing.", items: items }], a => {
             Chat.muteChat(k, a === "on" ? 8640000000000000 : Date.now() + Number(a))   // the huge one: until unmuted
             Ui.say(name + " is muted" + said[a] + ".")
             if (back) Qt.callLater(back)
@@ -189,7 +189,7 @@ QtObject {
         const c = ctx || {}
         if (!k) return
         const items = [{ name: "Message", icon: "thread", url: "message" },
-                       { name: Chat.isMuted(k) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
+                       { name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
                        { name: "Hide", icon: "close", url: "hide" },
                        { name: "Block", url: "block", danger: true }]
         if (c.hasChat) items.push({ name: "Delete chat", url: "deletechat", danger: true })
@@ -226,12 +226,12 @@ QtObject {
         const blocked = !c.tour && Chat.isBlocked(k)
         const top = [{ name: "Open", icon: "thread", url: "open" }]
         if (contact) top.push({ name: "Profile", icon: "person", url: "profile" }, { name: "Call", icon: "call", url: "call" })
-        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute notifications", icon: "bell", url: "mute" }
-                                                : { name: "Mute notifications", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
+        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
+                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
         if (contact) mid.push({ name: "Add to folder", icon: "folder", url: "folder", sub: () => addToFolderMenu(k, name) },
                               { name: "Add to group", icon: "people", url: "group", sub: () => addToGroupMenu(k, name) })
-        mid.push({ name: "Mark as read", icon: "check", url: "read" }, { name: "Copy name", url: "copy" },
+        mid.push({ name: "Mark read", icon: "check", url: "read" }, { name: "Copy name", url: "copy" },
                  { name: "Hide", icon: "close", url: "hide" },
                  { name: "More", icon: "more", url: "more", sub: () => c.near ? nearbyMenu(k, n, c) : contactMenu(k, n, c) })
         const end = [{ name: blocked ? "Unblock" : "Block", url: "block", danger: !blocked }]
@@ -305,10 +305,10 @@ QtObject {
         const canInvite = !row.readOnly && (c.tour || !!info.amAdmin || (lim.links && typeof Chat.membersInvite === "function" && !!Chat.membersInvite(g)))
         if (canInvite) top.push({ name: "Invite people", icon: "plus", url: "people" })
         if (canInvite && lim.links) top.push({ name: "Copy invite link", icon: "attach", url: "invite" })
-        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute notifications", icon: "bell", url: "mute" }
-                                                : { name: "Mute notifications", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
+        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
+                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
-        mid.push({ name: "Mark as read", icon: "check", url: "read" })
+        mid.push({ name: "Mark read", icon: "check", url: "read" })
         if (!row.readOnly) mid.push({ name: "Channels", icon: "hash", url: "channels" })
         mid.push({ name: "Group settings", icon: "gear", url: "settings" },
                  { name: "More", icon: "more", url: "more" })
@@ -599,7 +599,7 @@ QtObject {
             phone.push({ name: "Link this PC to my phone", detail: "Shows a code to scan in Muninn", url: "code" },
                        { name: "Remove " + ph.name + "'s copy", detail: "Its chats, contacts, groups and folders leave this device", url: "wipe", danger: true })
         } else {
-            if (!ph.ok) phone.push({ name: "Check the 4 emoji", detail: "Nothing comes over until they match", url: "check" })
+            if (!ph.ok) phone.push({ name: "Compare emoji", detail: "Nothing comes over until they match", url: "check" })
             phone.push({ name: "Unlink " + ph.name, detail: "Keep a read-only copy here, or remove it", url: "ph", danger: true })
         }
         // Huginn as the phone: another device mirrors this one.

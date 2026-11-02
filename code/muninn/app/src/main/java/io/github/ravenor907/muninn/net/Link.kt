@@ -178,7 +178,7 @@ object LinkWire {
  *    at most once in 10 minutes), "get" {h} (a photo or file, home Wi-Fi only), "unlink".
  *  - Only small live frames ([LinkWire.internetOk]) use the internet, to at most 2 relays; history waits for the home Wi-Fi.
  *  - A companion that had chats of its own keeps them, sealed away while it's linked: they show again on unlinking,
- *    or from Settings › Linked devices (after the lock).
+ *    or from Settings › Devices and backup (after the lock).
  */
 object Link {
     const val PREFIX = "MUNINNL1:"
@@ -520,7 +520,7 @@ object Link {
         _ownShown.value = false
     }
 
-    /** Settings › Linked devices › This device's own chats, after the lock: shown instead of the phone's. */
+    /** Settings › Devices and backup › This device's own chats, after the lock: shown instead of the phone's. */
     fun showOwn(on: Boolean) { _ownShown.value = on && _phone.value?.ok == true }
 
     // ------------------------------------------------------------------ the phone's side

@@ -836,9 +836,11 @@ void Chat::noteCaps(const QString &key, bool present, const QStringList &caps)
     m_caps.insert(key, have);
     saveRatchet(key);
     noteChanged();
-    // Caps b1 and e1: their app says so now, so my ring key and day key go to them.
-    const QString ringCap = QLatin1String(RingWire::kRingCap), wrapCap = QLatin1String(RingWire::kWrapCap);
-    if ((have.contains(ringCap) && !before.contains(ringCap)) || (have.contains(wrapCap) && !before.contains(wrapCap)))
+    // Caps b1, e1 and n2: their app says so now, so my ring key, day key and nudge key go to them.
+    const QString ringCap = QLatin1String(RingWire::kRingCap), wrapCap = QLatin1String(RingWire::kWrapCap),
+                  nudgeCap = QLatin1String(RingWire::kRichNudgeCap);
+    if ((have.contains(ringCap) && !before.contains(ringCap)) || (have.contains(wrapCap) && !before.contains(wrapCap))
+        || (have.contains(nudgeCap) && !before.contains(nudgeCap)))
         QTimer::singleShot(0, this, [this, key] { sendKeys(key); });
 }
 
@@ -887,20 +889,31 @@ void Chat::ring(const QString &key, const QJsonObject &msg)
         m_nostr->publish(k.rp, content, Nostr::kLongestDays);
 }
 
-void Chat::nudge(const QString &key, const QString &room, const QByteArray &plain)
+void Chat::nudge(const QString &key, const QString &room, const QByteArray &plain, const QString &kind, const QString &chat)
 {
-    // Cap n1 (section 23.3): their phone, while locked, says "Muninn is locked" only for a real message.
-    if (!m_peerKeys || !isContact(key) || isBlocked(key) || !hasCap(key, QLatin1String(RingWire::kNudgeCap)) || !RingWire::nudgeCounts(room, plain))
+    // Caps n1 and n2 (section 23.3): their device, while locked, notifies only for a real message.
+    if (!m_peerKeys || isBlocked(key) || !(isContact(key) || isGroupPeer(key)) || !RingWire::nudgeCounts(room, plain))
         return;
     const RingWire::Announce k = m_peerKeys->get(key);
-    if (k.rk.isEmpty() || k.rp.isEmpty())
+    const bool rich = hasCap(key, QLatin1String(RingWire::kRichNudgeCap));
+    // n2: their nudge key and nudge mailbox (a contact or group peer), else a contact's ring key and ring mailbox.
+    QString pub, box;
+    if (rich && !k.nk.isEmpty() && !k.np.isEmpty()) {
+        pub = k.nk;
+        box = k.np;
+    } else if (isContact(key) && (rich || hasCap(key, QLatin1String(RingWire::kNudgeCap))) && !k.rk.isEmpty() && !k.rp.isEmpty()) {
+        pub = k.rk;
+        box = k.rp;
+    } else {
         return;
+    }
     const qint64 t = now();
-    if (!m_nudged.take(key, t))
+    if (!m_nudged.take(rich ? key + QLatin1Char('\n') + chat : key, t))
         return;
-    const QString content = RingWire::nudgeContent(k.rk, t);
+    const QString content = rich ? RingWire::richNudgeContent(pub, t, username(), chat, kind.isEmpty() ? RingWire::nudgeKind(room) : kind)
+                                 : RingWire::nudgeContent(pub, t);
     if (!content.isEmpty())
-        m_nostr->publish(k.rp, content, Nostr::kLongestDays);
+        m_nostr->publish(box, content, Nostr::kLongestDays);
 }
 
 QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
@@ -914,6 +927,11 @@ QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
         const WrapKeys::Day d = m_wrapKeys->current(now() / 1000);
         o.insert(QStringLiteral("wk"), d.pub);
         o.insert(QStringLiteral("wt"), d.t);
+    }
+    // Cap n2: the nudge key to a contact or group peer too. It can only nudge, never ring.
+    if (m_nudgeKey && (isContact(key) || isGroupPeer(key)) && !isBlocked(key) && hasCap(key, QLatin1String(RingWire::kRichNudgeCap))) {
+        o.insert(QStringLiteral("nk"), m_nudgeKey->publicKey());
+        o.insert(QStringLiteral("np"), m_nudgeKey->mailbox());
     }
     return o;
 }
@@ -1325,12 +1343,19 @@ void Chat::block(const QString &key, bool on)
                 kept << v;
         m_nearby = kept;
         // Cap b1: they may hold my ring key, so a new one (and a new ring mailbox) goes to everyone else who may ring
-        // this device. The old ring mailbox is still read for two days (main.cpp), then dropped.
+        // this device. The old ring mailbox is still read for two days (main.cpp), then dropped. Cap n2: the nudge key
+        // is made new with it and goes to the other contacts and group peers whose app says n2.
         if (!was && m_ringKey) {
             m_ringKey->renew();
+            if (m_nudgeKey)
+                m_nudgeKey->renew();
             m_nostr->resubscribe();
+            const QString ringCap = QLatin1String(RingWire::kRingCap), nudgeCap = QLatin1String(RingWire::kRichNudgeCap);
             for (const QString &k : m_contacts.keys())
-                if (k != key && !isBlocked(k) && hasCap(k, QLatin1String(RingWire::kRingCap)))
+                if (k != key && !isBlocked(k) && (hasCap(k, ringCap) || hasCap(k, nudgeCap)))
+                    sendKeys(k, true);
+            for (const QString &k : m_gpeers.keys())
+                if (k != key && !isBlocked(k) && !isContact(k) && hasCap(k, nudgeCap))
                     sendKeys(k, true);
         }
     }
@@ -2609,7 +2634,8 @@ void Chat::attempt(const QString &key, const QString &id)
     if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= relayPieces) {
         if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step)) {
             any = true;
-            nudge(key, photo ? QStringLiteral("photo") : QStringLiteral("private"), {});
+            nudge(key, photo ? QStringLiteral("photo") : QStringLiteral("private"), {},
+                  photo ? RingWire::blobKind(m.value(QStringLiteral("voice")).toInt(), m.value(QStringLiteral("video")).toInt(), str(m, "file")) : QString());
         }
     }
     if (!any && t.count == 1)
@@ -3247,8 +3273,22 @@ QVariantList Chat::chats() const
             else
                 preview = str(last, "text");
         }
+        // How many are new (plan 2.14, the same count as Muninn's): theirs since my last message, at least 1 once
+        // it's unread or marked unread. 0 when read (asked to keep in touch shows the dot only).
+        int newCount = 0;
+        if (m_unread.contains(k) || m_markedUnread.contains(k)) {
+            for (qsizetype i = msgs.size() - 1; i >= 0; --i) {
+                const QVariantMap m = msgs.at(i).toMap();
+                if (m.value(QStringLiteral("mine")).toBool())
+                    break;
+                if (str(m, "unsent").isEmpty())
+                    ++newCount;
+            }
+            newCount = qMax(newCount, 1);
+        }
         // Not a contact: marked, so a name they chose ("Mom") never looks like one of mine.
         out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), isContact(k) ? nameOf(k) : stranger(nameOf(k))}, {QStringLiteral("last"), preview},
+                           {QStringLiteral("newCount"), newCount},
                            {QStringLiteral("time"), last.value(QStringLiteral("time"), 0)}, {QStringLiteral("route"), route(k)},
                            {QStringLiteral("unread"), m_unread.contains(k) || m_markedUnread.contains(k) || shouldAskKeep(k)}, {QStringLiteral("contact"), isContact(k)},
                            {QStringLiteral("folders"), foldersOf(k)}, {QStringLiteral("pinned"), m_pinnedChats.contains(k)},

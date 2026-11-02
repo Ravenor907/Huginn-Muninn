@@ -154,6 +154,13 @@ object KidTv {
     /** The TV's update moved on (waiting, installing, done, failed): its parents' phones are told, with the status. */
     fun updateChanged(app: Muninn) { if (_state.value.cfg != null) statusSoon(app) }
 
+    /** u1 (7.17): an "upstate" to [to], or to every parent, only those whose app says u1. */
+    fun sendUpd(app: Muninn, msg: String, to: List<String>? = null) {
+        val s = _state.value
+        if (s.cfg == null) return
+        for (k in to ?: s.parents) if (k in s.parents && TvUpd.CAP in (app.contacts.get(k)?.caps ?: emptySet())) send(app, k, msg)
+    }
+
     private val statusTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "tv-status").apply { isDaemon = true } }
     @Volatile private var statusDue: java.util.concurrent.ScheduledFuture<*>? = null
 
@@ -261,6 +268,13 @@ object KidTv {
                 if (fromKey !in s.parents) return false
                 TvUpdate.checkNow(app)
                 answer(app, listOf(fromKey), cur.v, cur.raw)
+                true
+            }
+            "upnow" -> {
+                // u1 (7.17): a parent's Update now, from anywhere. Only from a current parent; they hear each step.
+                if (s.cfg != null && fromKey !in s.parents) { tellRemoved(app, fromKey); return false }
+                if (!TvUpd.fromParent(fromKey, s.parents, s.cfg != null) || !TvUpd.isNow(o)) return false
+                TvUpdate.remoteNow(app, fromKey)
                 true
             }
             "usage" -> {

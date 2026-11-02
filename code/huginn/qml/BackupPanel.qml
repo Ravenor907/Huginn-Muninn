@@ -147,7 +147,7 @@ Item {
         const linked = !panel.erases && !!Linked.phone.key && !Linked.phone.gone
         if (linked && !copyOk) {
             Ui.sure("This PC is linked to " + (Linked.phone.name || "your phone"),
-                    "This PC is already linked to " + (Linked.phone.name || "your phone") + ". Restoring a backup here breaks both: unlink first (Settings › Linked devices), then restore.",
+                    "This PC is already linked to " + (Linked.phone.name || "your phone") + ". Restoring a backup here breaks both: unlink first (Settings › Devices and backup › Linked devices), then restore.",
                     "Restore anyway", () => panel.restoreNow(true), false, true)
             return
         }
@@ -280,7 +280,7 @@ Item {
                     Line {
                         visible: !!Linked.phone.key && !Linked.phone.gone
                         color: Theme.danger
-                        text: "This PC's own account, not your phone's. To keep your account safe, back up on your phone: in Muninn, Settings › Backup."
+                        text: "This PC's own account, not your phone's. To keep your account safe, back up on your phone: in Muninn, Settings › Devices and backup › Backup."
                     }
                     Rectangle {
                         width: parent.width

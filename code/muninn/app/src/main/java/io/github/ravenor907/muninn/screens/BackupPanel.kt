@@ -55,7 +55,7 @@ private class SaveInDownload : ActivityResultContracts.CreateDocument("applicati
 /** What every backup holds, said before saving and before restoring. */
 private const val INSIDE = "Your account (who you are to your contacts), contacts, chats, groups, folders and settings."
 
-/** Settings › Backup: Back up (one encrypted file you save where you like) and Restore from a backup. */
+/** Settings › Devices and backup: Back up (one encrypted file you save where you like) and Restore from a backup. */
 @Composable
 fun BackupPanel(app: Muninn) {
     var mode by remember { mutableStateOf("") }          // "", "backup" or "restore"
@@ -217,7 +217,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
             val where = s.device.ifEmpty { if (s.app == "huginn") "that computer" else "that phone" }
             Ui.sure(Ask("This makes a copy of you",
                 "This phone becomes the same person as $where. If both are used, messages stop working on one or both, " +
-                    "and friends see errors." + (if (s.app == "huginn") " To use both, link instead: Settings › Linked devices › Scan to link." else "") +
+                    "and friends see errors." + (if (s.app == "huginn") " To use both, link instead: Settings › Devices and backup › Scan to link." else "") +
                     " Restore only if $where won't chat again.",
                 "Restore anyway", danger = true) { replace(o, copyOk = true) })
             return
