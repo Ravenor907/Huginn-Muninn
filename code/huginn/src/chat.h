@@ -492,6 +492,8 @@ public:
     static QString code(const QString &name, const QString &chatKey, const QString &mailbox, const QString &invite = QString(), qint64 expires = 0,
                         bool once = false);
 
+    // Round 14: someone here is known to be on an app that can't nudge this device while it's locked (RingWire::cantNudge).
+    bool someoneCantNudge() const;
 Q_SIGNALS:
     void recentPicturesReady(const QVariantList &pictures);
     void changed();
@@ -650,8 +652,6 @@ private:
     void saveInvites();
     QString mailboxOf(const QString &key) const;
     bool isGroupPeer(const QString &key) const { return m_gpeers.contains(key); }
-    // Round 14: someone here is known to be on an app that can't nudge this device while it's locked (RingWire::cantNudge).
-    bool someoneCantNudge() const;
     // Sends over the internet: to their mailbox on the relays. False when they have none.
     // days: how long relays may keep it (0: this chat's message limit).
     // step: after each piece a relay took, how many have been so far.
