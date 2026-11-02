@@ -85,7 +85,7 @@ class Muninn : Application() {
         }
         // Until the chats are open, what arrives waits (on the relays, or sealed in the locked store, see Nostr).
         nostr.onEnvelope = { false }
-        // While locked: one "Unlock Muninn to see new messages", with a sound only the first time.
+        // While locked: one "Muninn is locked" notice, once until the next unlock.
         nostr.onLocked = { lockedNotice() }
         // Cap b1: the ring key lives outside the vault (app-private files, never an OS key store), so a call rings even
         // while Muninn is locked. Only "Incoming call", no name: answering opens the lock screen, and the call itself
@@ -238,21 +238,22 @@ class Muninn : Application() {
     }
 
     /**
-     * Something arrived while locked. Nothing can be opened yet, so one notification says so: with a sound the
-     * first time, then silent until Muninn is unlocked. Never during Extreme battery saver (no notifications then).
+     * Something arrived while locked. Nothing can be opened yet, so one notification says so, once until Muninn is
+     * unlocked again. Never during Extreme battery saver (no notifications then).
      */
     @Synchronized
     fun lockedNotice() {
         if (power.extreme) return
         val prefs = getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
         val alerted = prefs.getBoolean(LOCKED_ALERTED, false)
-        if (alerted && Build.VERSION.SDK_INT >= 23 && try {
-                getSystemService(NotificationManager::class.java).activeNotifications.any { it.id == LOCKED_ID }
-            } catch (_: Exception) { false }) return   // already showing
+        // Once per locked spell: shown (or dismissed) already, so nothing more until the next unlock. Relay traffic
+        // that isn't a message (receipts, a linked computer's check-ins, room presence) can't be told apart while
+        // locked, so posting again for each one would claim new messages that aren't there.
+        if (alerted) return
         val open = PendingIntent.getActivity(this, LOCKED_ID, Intent(this, MainActivity::class.java).putExtra("chat", "inbox")
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(this, if (alerted) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("Muninn").setContentText("Unlock Muninn to see new messages")
+            .setContentTitle("Muninn is locked").setContentText("Something came in. Unlock to see it")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(if (alerted) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .apply { if (alerted) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(true)
@@ -429,7 +430,7 @@ class Muninn : Application() {
     companion object {
         const val MESSAGES = "raven_messages"
         const val QUIET = "raven_quiet"
-        /** The "Unlock Muninn to see new messages" notification (the same id the inbox notice always had). */
+        /** The "Muninn is locked" notification (the same id the inbox notice always had). */
         val LOCKED_ID = "inbox".hashCode()
         private const val LOCKED_ALERTED = "lockedAlerted"
         val BUZZ = longArrayOf(0, 140, 90, 140)
