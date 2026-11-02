@@ -282,4 +282,55 @@ class VaultSafetyTest {
         assertEquals("{\"chatPriv\":\"mine\"}", v.read(secrets))
         assertFalse(v.sealedFiles().any { it.first.startsWith(VaultCore.KEPT) })
     }
+
+    /**
+     * "Forgot it?" › Erase and restore (M7-1): the backup has no lock in it, so the restored vault must not stay open.
+     * After the restart it asks for a new lock (lockNeeded), and only a real new lock clears that.
+     */
+    @Test fun forgotLockRestoreIsNeverLeftUnlocked() {
+        val first = core()
+        assertTrue(first.openDefault())
+        first.setPassword("forgotten one", pattern = true)
+        first.write(File(root, VaultCore.SECRETS), "{\"chatPriv\":\"old\"}")
+
+        // A later start: locked, and the lock is forgotten.
+        val locked = core()
+        assertFalse(locked.openDefault())
+        assertTrue(locked.hasPassword)
+        val kept = locked.startOverKeeping(needsLock = true)
+        locked.stageRestore(listOf(VaultCore.SECRETS to "{\"chatPriv\":\"backup\"}".toByteArray()))
+        kept.deleteRecursively()
+
+        // Muninn restarts: the backup is in, and a new lock is needed before anything shows.
+        val restored = core()
+        assertTrue(restored.openDefault())
+        assertEquals("{\"chatPriv\":\"backup\"}", restored.read(File(root, VaultCore.SECRETS)))
+        assertFalse(restored.hasPassword)
+        assertTrue(restored.lockNeeded)
+        // A restart before the new lock is set still asks.
+        assertTrue(core().lockNeeded)
+        // Taking the lock off doesn't count as setting one.
+        restored.setPassword(null)
+        assertTrue(restored.lockNeeded)
+
+        restored.setPassword("new pattern", pattern = true)
+        assertFalse(restored.lockNeeded)
+        assertTrue(restored.hasPassword)
+        // Locked from the next start on: nothing opens without the new lock.
+        val next = core()
+        assertFalse(next.openDefault())
+        assertTrue(next.locked.value)
+        assertFalse(next.unlock("forgotten one"))
+        assertTrue(next.unlock("new pattern"))
+        assertEquals("{\"chatPriv\":\"backup\"}", next.read(File(root, VaultCore.SECRETS)))
+    }
+
+    /** The other start over (the lock file can't be read) doesn't ask for a lock. */
+    @Test fun troubleStartOverDoesNotAskForALock() {
+        val v = core()
+        assertTrue(v.openDefault())
+        v.startOverKeeping()
+        assertFalse(v.lockNeeded)
+        assertFalse(core().lockNeeded)
+    }
 }

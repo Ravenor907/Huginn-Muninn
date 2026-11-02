@@ -252,24 +252,26 @@ Rectangle {
             else if (a.indexOf("l") === 0) openLink(linksIn(m.text)[Number(a.substring(1))])
         })
     }
-    // A chat's menu: mute it (here, and on the phone too when it keeps the account in step).
+    // A chat's menu: mute it (here, and on the phone too when it keeps the account in step). Always a menu, even while
+    // muted (Unmute is its first row), so a stray click never unmutes and a muted group's notifications can be reached.
     function chatMenu(c) {
         if (!c || kept) return
-        if (c.muted) {
-            const r = Linked.setMute(c.peer, 0)
-            Ui.say(r === "" ? c.name + " isn't muted." : r, r !== "")
-            return
-        }
-        const items = [{ name: "For 15 minutes", url: "900000" }, { name: "For 1 hour", url: "3600000" },
+        const items = c.muted ? [{ name: "Unmute", icon: "bell", url: "unmute" }]
+                    : [{ name: "For 15 minutes", url: "900000" }, { name: "For 1 hour", url: "3600000" },
                        { name: "For 8 hours", url: "28800000" }, { name: "Until I turn it back on", url: "on" }]
         // A group's menu is about its notifications: muting is one part of it (J4-5).
-        const sections = [{ header: c.group ? (Linked.phone.l1 ? "Mute, on your phone too" : "Mute on this computer") : Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }]
+        const sections = [{ header: c.muted ? "" : c.group ? (Linked.phone.l1 ? "Mute, on your phone too" : "Mute on this computer") : Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }]
         // A group: every message, or only @mentions and replies to me (on this computer).
         const key = "mirror:" + c.peer, mode = Chat.notifyMode(key)
         if (c.group) sections.push({ header: "Notifications on this computer", items: [
             { name: "Every message", url: "n:every", check: mode !== "mentions" },
             { name: "Only mentions and replies to me", url: "n:mentions", check: mode === "mentions" }] })
-        Ui.pickFrom((c.group ? "Notifications for " : "Mute ") + c.name, sections, a => {
+        Ui.pickFrom((c.group ? "Notifications for " : c.muted ? "" : "Mute ") + c.name, sections, a => {
+            if (a === "unmute") {
+                const u = Linked.setMute(c.peer, 0)
+                Ui.say(u === "" ? c.name + " isn't muted." : u, u !== "")
+                return
+            }
             if (a.indexOf("n:") === 0) {
                 Chat.setNotifyMode(key, a === "n:mentions" ? "mentions" : "")
                 Ui.say(a === "n:mentions" ? c.name + ": only mentions and replies to you." : c.name + ": every message.")

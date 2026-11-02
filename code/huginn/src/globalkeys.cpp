@@ -50,7 +50,8 @@ bool GlobalKeys::voice() const
 
 void GlobalKeys::update()
 {
-    const bool talk = m_settings->pushToTalk() && m_rooms->inRoom();
+    // Push to talk as the room uses it: off while no talk key is picked (voice activity then).
+    const bool talk = m_rooms->pushToTalk() && m_rooms->inRoom();
     // Out of the room with the key still down: let go here too (TalkKey does the same for its own presses).
     if (!talk && m_talking) {
         m_talking = false;
@@ -69,7 +70,7 @@ void GlobalKeys::key(Key k, bool down)
     }
     switch (k) {
     case Talk:
-        if (!m_settings->pushToTalk() || !m_rooms->inRoom() || down == m_talking)
+        if (!m_rooms->pushToTalk() || !m_rooms->inRoom() || down == m_talking)
             return;
         m_talking = down;
         m_rooms->setTalking(down);

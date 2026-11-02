@@ -409,6 +409,8 @@ void Vault::openWithoutLock()
         return;
     m_key = key;
     m_screenLocked = false;
+    // Restored after "Forgot it?": a new lock comes first (the lock screen asks for one, with no Skip).
+    m_lockNeeded = o.value(QStringLiteral("needsLock")).toBool();
     Q_EMIT changed();
     Q_EMIT opened();
 }
@@ -637,6 +639,7 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     old.fill(0);
     m_weak = false;
     m_screenLocked = false;
+    m_lockNeeded = false;   // the new lock is set
     Q_EMIT changed();
     if (first)
         Q_EMIT opened();
@@ -1567,8 +1570,9 @@ void Vault::openBackup(const QString &file, const QString &password)
     if (m_busy)
         return;
     forgetOpened();
-    // First setup can restore before there is a lock; otherwise Huginn must be open.
-    if (exists() && (locked() || screenLocked())) {
+    // First setup can restore before there is a lock, and the lock screen's "Forgot it?" behind one (the backup has its
+    // own password; nothing here is read). Otherwise Huginn must be open.
+    if (exists() && (locked() || screenLocked()) && !hasLock()) {
         Q_EMIT done(QStringLiteral("open"), false, QStringLiteral("Unlock Huginn first."));
         return;
     }
@@ -1630,24 +1634,11 @@ void Vault::restoreOpened()
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Unlock Huginn first."));
         return;
     }
-    // A Muninn backup: Huginn's own files made from its shared form (text, contacts, groups, folders, profile).
-    Files files;
-    if (m_openedInfo.value(QStringLiteral("app")).toString() != QLatin1String("huginn")) {
-        QByteArray shared;
-        for (const auto &e : m_opened)
-            if (e.first == kShared)
-                shared = e.second;
-        QString why;
-        if (!shared.isEmpty() && fromSharedForm)
-            files = fromSharedForm(shared, &why);
-        if (files.empty()) {
-            Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("This backup has nothing Huginn can read. Nothing changed."));
-            return;
-        }
-    } else {
-        for (const auto &e : m_opened)
-            if (!e.first.startsWith(QLatin1Char('@')))
-                files.push_back(e);
+    QString why;
+    Files files = openedFiles(&why);
+    if (files.empty()) {
+        Q_EMIT done(QStringLiteral("restore"), false, why);
+        return;
     }
     // Nothing is lost: a copy of what's here now goes next to the chat folder first.
     drainSaves(30000);
@@ -1684,6 +1675,88 @@ void Vault::restoreOpened()
     Q_EMIT done(QStringLiteral("restore"), true, QStringLiteral("Restored. What was here is kept in ") + QDir::toNativeSeparators(kept)
                                                      + QStringLiteral(". Huginn restarts to load your chats."));
     QTimer::singleShot(1500, this, [this] { restartHuginn(QStringLiteral("Restored. Close Huginn and open it again to load your chats.")); });
+}
+
+Vault::Files Vault::openedFiles(QString *why) const
+{
+    // A Muninn backup: Huginn's own files made from its shared form (text, contacts, groups, folders, profile).
+    Files files;
+    if (m_openedInfo.value(QStringLiteral("app")).toString() != QLatin1String("huginn")) {
+        QByteArray shared;
+        for (const auto &e : m_opened)
+            if (e.first == kShared)
+                shared = e.second;
+        QString ignored;
+        if (!shared.isEmpty() && fromSharedForm)
+            files = fromSharedForm(shared, &ignored);
+    } else {
+        for (const auto &e : m_opened)
+            if (!e.first.startsWith(QLatin1Char('@')))
+                files.push_back(e);
+    }
+    if (files.empty())
+        *why = QStringLiteral("This backup has nothing Huginn can read. Nothing changed.");
+    return files;
+}
+
+void Vault::restoreErasing()
+{
+    if (m_busy || m_opened.empty()) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Open the backup again first."));
+        return;
+    }
+    // Only from behind the lock: open, the usual restore keeps a copy instead (Settings › Backup).
+    if (m_restarting || !exists() || !hasLock() || !screenLocked()) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Huginn isn't locked. Use Settings › Backup instead."));
+        return;
+    }
+    QString why;
+    Files files = openedFiles(&why);
+    if (files.empty()) {
+        Q_EMIT done(QStringLiteral("restore"), false, why);
+        return;
+    }
+    // What's here can't be opened without the lock: replaced for good, under a new data key. Saves still waiting
+    // (made with the old key) never land on the restored files.
+    m_saves->dropAll(30000);
+    QByteArray fresh = random(32);
+    QString error;
+    if (!replaceAll(fresh, dataDir(), files, &error)) {
+        fresh.fill(0);
+        forgetOpened();
+        Q_EMIT done(QStringLiteral("restore"), false, error);
+        return;
+    }
+    // The backup has no lock in it: Huginn opens without one, and asks for a new one before anything shows.
+    const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(fresh.toBase64())},
+                        {QStringLiteral("needsLock"), true}};
+    const bool keyOk = writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    fresh.fill(0);
+    if (!keyOk) {
+        forgetOpened();
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Couldn't save Huginn's new key. Open the backup and try again."));
+        return;
+    }
+    for (const auto &e : files)
+        if (e.first == kSettingsEntry)
+            applySettingsBlob(e.second);
+    for (auto &e : files)
+        e.second.fill(0);
+    forgetOpened();
+    // The wrong tries and their wait belonged to the old lock.
+    settings().remove(QStringLiteral("vault"));
+    settings().remove(QStringLiteral("chatlock/strongerAsked"));
+    // As after any restore: a new day key is made and announced at the next start (see restoreOpened).
+    settings().setValue(QStringLiteral("restore/at"), QDateTime::currentMSecsSinceEpoch());
+    settings().setValue(QStringLiteral("restore/announce"), true);
+    settings().sync();
+    m_key.fill(0);
+    m_key.clear();
+    m_restarting = true;
+    m_busy = true;
+    Q_EMIT changed();
+    Q_EMIT done(QStringLiteral("restore"), true, QStringLiteral("Restored. Huginn restarts. Set a new lock next: your old one isn't in the backup."));
+    QTimer::singleShot(1500, this, [this] { restartHuginn(QStringLiteral("Restored. Close Huginn and open it again, then set a new lock.")); });
 }
 
 bool Vault::backupSelfTest()

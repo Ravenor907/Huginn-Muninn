@@ -174,8 +174,8 @@ private fun ForgotLock(app: Muninn, onBack: () -> Unit) {
             if (!restoring) Panel {
                 Text("Forgot your lock?", style = Type.big)
                 Text("Your chats are encrypted with it, so nobody can open or reset it.", style = Type.normal, modifier = Modifier.padding(top = 4.dp))
-                Text("If you made a backup, you can erase what's on this phone and put the backup back. Messages that came after the backup are lost.",
-                    style = Type.normal, modifier = Modifier.padding(top = 6.dp))
+                Text("If you made a backup, you can erase what's on this phone and put the backup back. Messages that came after the backup are lost. " +
+                    "Then you set a new lock.", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
                 MButton("Restore from a backup", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { restoring = true }
                 Text("No backup? Clear Muninn's storage in Android settings (Storage › Clear storage) to start again with a new account. " +
                     "Your contacts will need to add you again.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
@@ -190,13 +190,14 @@ private fun ForgotLock(app: Muninn, onBack: () -> Unit) {
             if (restoring) Panel {
                 RestoreFlow(app, erases = true, onCancel = { restoring = false }) { o ->
                     val files = io.github.ravenor907.muninn.net.Backup.prepare(app, o)
-                    val old = app.vault.startOverKeeping()
+                    // The lock isn't in the backup: after the restart a new one is set before any chat shows.
+                    val old = app.vault.startOverKeeping(needsLock = true)
                     io.github.ravenor907.muninn.net.Backup.restore(ctx, app.vault, files)
                     // What was here can't be opened without the lock: erased, not kept. The wrong tries go too.
                     old.deleteRecursively()
                     app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit()
                         .remove("lockFails").remove("lockAt").remove("lockWait").remove("lockBoot").commit()
-                    "Restored. Muninn is restarting."
+                    "Restored. Muninn is restarting. Set a new lock next: your old one isn't in the backup."
                 }
             }
         }
@@ -286,6 +287,26 @@ fun FirstLock(app: Muninn, done: () -> Unit) {
                 Ui.sure(Ask("Skip the lock?", "Without a lock, anyone who can use this phone can open Muninn and read your chats. " +
                     "You can set one any time in Settings › Lock and privacy.", "Skip") { skipLock(app); done() })
             }, fill = true, cancelText = "Skip") { done() }
+        }
+    }
+    ask?.let { AskDialog(it) }
+}
+
+/**
+ * Restored after "Forgot it?" (the vault's lockNeeded): the same lock step as first setup, before any chat shows.
+ * No Skip here: the person just chose to restore after forgetting their lock.
+ */
+@Composable
+fun NewLock(app: Muninn, done: () -> Unit) {
+    val ask by Ui.ask.collectAsState()
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+        Brand {}
+        Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
+            Text("Protect Muninn", style = Type.big)
+            Text("Set a new lock. Your old one isn't in the backup.", style = Type.normal)
+            Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a new backup " +
+                "(Settings › Backup) once you're in.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            LockSetup(app, onCancel = null, fill = true) { done() }
         }
     }
     ask?.let { AskDialog(it) }

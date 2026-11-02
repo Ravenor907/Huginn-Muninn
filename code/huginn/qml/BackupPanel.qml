@@ -17,6 +17,8 @@ Item {
     property string step: ""          // backup: what, password, saving, saved. restore: pick, password, opening, summary, restoring, done
     property bool sample: false
     property bool fromSetup: false
+    // The lock screen's "Forgot it?": what's here can't be opened, so it's erased, not kept (Vault.restoreErasing).
+    property bool erases: false
     property bool withFiles: true
     property var info: ({})
     property string file: ""
@@ -72,9 +74,11 @@ Item {
     readonly property var prompts: [{ key: "dpad", label: "Choose" }, { key: "a", label: "Press" }, { key: "b", label: "Back" }]
 
     // m: "backup" or "restore". setupFlag: from first setup. isSample: nothing real happens. shotStep: the tour's step.
-    function open(m, setupFlag, isSample, shotStep) {
+    // erasing: the lock screen's "Forgot it?" (restore only).
+    function open(m, setupFlag, isSample, shotStep, erasing) {
         mode = m
         fromSetup = !!setupFlag
+        erases = m === "restore" && !!erasing
         sample = !!isSample
         withFiles = true
         file = ""; wrong = false; error = ""; opened = ({}); saved = ({}); doneText = ""
@@ -140,7 +144,7 @@ Item {
         const where = panel.opened.device || (panel.opened.app === "muninn" ? "your phone" : "that device")
         const copy = panel.opened.app === "muninn" || (!!panel.opened.device && panel.opened.device !== Settings.deviceName)
         // Already linked to a phone: restoring here doesn't stop the link, it breaks both (R12).
-        const linked = !!Linked.phone.key && !Linked.phone.gone
+        const linked = !panel.erases && !!Linked.phone.key && !Linked.phone.gone
         if (linked && !copyOk) {
             Ui.sure("This PC is linked to " + (Linked.phone.name || "your phone"),
                     "This PC is already linked to " + (Linked.phone.name || "your phone") + ". Restoring a backup here breaks both: unlink first (Settings › Linked devices), then restore.",
@@ -160,6 +164,17 @@ Item {
                 Ui.confirm.otherText = "Link instead"
                 Ui.confirm.otherCallback = () => { panel.close(); if (Ui.main) Ui.main.showLinkPhone(panel.fromSetup, panel.sample) }
             }
+            return
+        }
+        if (panel.erases) {
+            Ui.sure("Erase what's here and restore?", "Huginn's chats, contacts and keys on this computer are erased for good, and the backup goes in. "
+                    + "Messages since the backup are lost. Huginn then opens without a lock. You'll set a new one next.",
+                    "Hold to erase and restore", () => {
+                if (panel.sample) { Ui.say("Practice: nothing was restored."); return }
+                panel.error = ""
+                panel.step = "restoring"
+                Vault.restoreErasing()
+            }, true, true)
             return
         }
         Ui.sure("Replace what's here?", "Everything in Huginn is replaced by the backup. A copy of what's here now is kept first.",
@@ -265,7 +280,7 @@ Item {
                     Line {
                         visible: !!Linked.phone.key && !Linked.phone.gone
                         color: Theme.danger
-                        text: "This PC's own account, not your phone's. To keep your account safe, back up on your phone: in Muninn, Settings › More › Backup."
+                        text: "This PC's own account, not your phone's. To keep your account safe, back up on your phone: in Muninn, Settings › Backup."
                     }
                     Rectangle {
                         width: parent.width
@@ -381,7 +396,7 @@ Item {
                             : panel.opened.files === "no" ? "Files and pictures: not in it." : panel.opened.files === "yes" ? "Files and pictures: in it." : ""
                         color: Theme.textMuted
                     }
-                    Line { text: "A copy of what's here now is kept first."; color: Theme.textMuted }
+                    Line { text: panel.erases ? "What's on this computer now is erased first." : "A copy of what's here now is kept first."; color: Theme.textMuted }
                 }
 
                 // ---- restore: under way, then done (Huginn restarts)
@@ -400,7 +415,7 @@ Item {
                         HButton {
                             required property string modelData
                             text: ({ next: "Next", cancel: "Cancel", save: "Choose where to save", back: "Back", show: "Show in folder", done: "Done",
-                                     choose: "Choose file", open: "Open", other: "Choose another file", restore: "Restore (replaces what's here)" })[modelData] || ""
+                                     choose: "Choose file", open: "Open", other: "Choose another file", restore: panel.erases ? "Erase and restore" : "Restore (replaces what's here)" })[modelData] || ""
                             kind: modelData === "restore" ? "danger"
                                 : ["next", "save", "choose", "open", "done"].indexOf(modelData) >= 0 ? "primary" : "normal"
                             enabled: !Vault.busy && (modelData !== "save" || (panel.strength(pw1.text) > 0 && pw1.text === pw2.text))

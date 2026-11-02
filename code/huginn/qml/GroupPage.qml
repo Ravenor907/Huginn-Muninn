@@ -118,19 +118,24 @@ Rectangle {
         add("voice", voice.length ? "VOICE" : "Voice rooms: talk here", voice)
         return out
     }
-    // The header's Call button: Call everyone (and Call some people) when there's anyone to ring, then Drop-in call for each
+    // The header's Call button: Call everyone (and Pick people) when there's anyone to ring, then Drop-in call for each
     // voice room and group call going on. Nothing applies: no button.
     readonly property var callChoices: {
         if (locked || !exists || readOnly) return []
         const out = []
         if (isTour || info.count > 1) {
             out.push({ name: "Call everyone", icon: "call", detail: "Rings every member", url: "callall" })
-            if (isTour || info.count > 2) out.push({ name: "Call some people", icon: "call", url: "callsome" })
+            if (isTour || info.count > 2) out.push({ name: "Pick people", icon: "call", detail: "Ring only some", url: "callsome" })
         }
         const rooms = channels.filter(c => c.type === "voice").map(c => ({ id: c.id, name: c.name }))
         const calls = isTour ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
         calls.forEach(c => rooms.push({ id: c.ch, name: "Group call" }))
-        rooms.forEach(r => out.push({ name: rooms.length === 1 ? "Drop-in call (no ringing)" : "Drop-in call · " + r.name, icon: "speaker", url: "join:" + r.id, room: r }))
+        // How many are in each, as Muninn's popup says it ("Drop-in call · 2 in it").
+        rooms.forEach(r => {
+            const n = isTour ? 0 : (Rooms.presence, Rooms.whoIn(gid, r.id)).length
+            const base = rooms.length === 1 ? "Drop-in call" : "Drop-in call · " + r.name
+            out.push({ name: n > 0 ? base + " · " + n + " in it" : rooms.length === 1 ? base + " (no ringing)" : base, icon: "speaker", url: "join:" + r.id, room: r })
+        })
         return out
     }
     function callMenu() {
@@ -492,7 +497,8 @@ Rectangle {
             onBack: { page.zone = "channels"; page.sel = -1 }
             glyph: page.locked || !page.exists ? "" : "#"
             title: page.locked || !page.exists ? "" : page.channel.name
-            subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only" : (page.info.name || "")
+            subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only"
+                    : (!page.isTour && (Chat.chats, Chat.groups, Chat.isMuted("g:" + page.gid)) ? "Muted · " : "") + (page.info.name || "")
             // One Call button, like a person's: Call everyone and Drop-in call (whichever apply) in its popup.
             HButton {
                 id: groupCallBtn
@@ -1009,7 +1015,7 @@ Rectangle {
     }
 
     // ============================================================= the group's one menu
-    // Short, like Muninn's: Find, Media and files, Mute and Group settings first; then Notifications, Invite people and
+    // Short, like Muninn's: Search, Media, Mute and Group settings first; then Notifications, Invite people and
     // People; the rest (Channels, the calls, Leave) under More (groupMore). A sub-page's B comes back here.
     function groupMenu() {
         if (!exists) return
@@ -1017,8 +1023,8 @@ Rectangle {
         const admin = !readOnly && !!info.amAdmin
         // Cap g3: new reports from members come first, for admins (they're also under Group settings).
         if (admin && !isTour && (info.reportsUnread || 0) > 0) top.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
-        top.push({ name: "Find in this channel", icon: "search", url: "find" },
-                 { name: "Media and files", icon: "image", url: "media" },
+        top.push({ name: "Search", icon: "search", detail: "In #" + channel.name, url: "find" },
+                 { name: "Media", icon: "image", detail: "And files", url: "media" },
                  { name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
                  { name: "Group settings", icon: "gear", url: "settings" })
         // The about box at the top of the first channel: fold it to one line, or show it all.
@@ -1040,7 +1046,7 @@ Rectangle {
         if (!exists) return
         const items = [{ name: "Channels", icon: "hash", url: "channels" }]
         if (!readOnly && (isTour || info.count > 1)) {
-            if (isTour || info.count > 2) items.push({ name: "Call some people", icon: "call", url: "callsome" })
+            if (isTour || info.count > 2) items.push({ name: "Pick people", icon: "call", detail: "Ring only some", url: "callsome" })
             items.push({ name: "Call everyone", icon: "call", detail: "Rings every member", url: "callall" })
         }
         const end = [readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true }]
@@ -1068,7 +1074,7 @@ Rectangle {
         else if (a === "notify") PeopleActions.notifyMenu("g:" + g, () => page.groupMenu())
         else if (a === "callall") {
             const n = Math.max(1, (info.count || 1) - 1)
-            Ui.sure("Ring all " + n + (n === 1 ? " person?" : " people?"), "Their phones and computers ring now. To just talk, join a voice room.",
+            Ui.sure("Ring all " + n + (n === 1 ? " person?" : " people?"), "Their phones and computers ring now. To talk without ringing anyone, use Drop-in call.",
                     "Ring everyone", () => tell(Rooms.callGroup(g, []), "Ringing everyone."), false, false)
         }
         else if (a === "invite") inviteMenu()
@@ -1106,7 +1112,7 @@ Rectangle {
         const items = [{ name: chosen.length ? "Start the call (" + chosen.length + ")" : "Start the call", icon: "call", url: "go" }]
         members.filter(m => !m.me).forEach(m => items.push({ name: m.name, url: m.key, check: chosen.indexOf(m.key) >= 0,
             detail: Rooms.needsUpdate(m.key) ? "Needs an update" : "" }))
-        Ui.pickFrom("Call some people", [{ header: "", items: items }], k => {
+        Ui.pickFrom("Pick people", [{ header: "", items: items }], k => {
             if (k === "go") {
                 if (chosen.length) tell(Rooms.callGroup(g, chosen), "Ringing " + chosen.length + (chosen.length === 1 ? " person." : " people."))
                 else { Ui.say("Choose who to ring first."); Qt.callLater(() => page.pickCallees(chosen)) }
@@ -1215,12 +1221,12 @@ Rectangle {
         const own = []
         if (admin && !c.call) {
             own.push({ name: "Rename", icon: "edit", url: "rename" })
-            // Posts in a channel go after the group's message days; lasting rules belong in About and rules (cap g3).
+            // Posts in a channel delete after the group's message days; lasting rules belong in About and rules (cap g3).
             const days = isTour ? 7 : Chat.groupLimit(g).days
-            if (!voice && c.id !== "main") own.push({ name: "Only admins post", detail: "For announcements. Posts here go after " + days + " days; lasting rules go in Group settings › About and rules", url: "ao", check: !!c.adminsOnly })
+            if (!voice && c.id !== "main") own.push({ name: "Only admins post", detail: "For announcements. Posts here delete after " + days + " days; lasting rules go in Group settings › About and rules", url: "ao", check: !!c.adminsOnly })
             // The first channel stays open to everyone: offer the rules that last first, then an admins-only channel.
             if (!voice && c.id === "main") own.push({ name: "Write the group's rules", detail: "About and rules: at the top of #" + c.name + ", kept until changed", url: "about" },
-                                                    { name: "Add #announcements", detail: "Only admins post there. Posts go after " + days + " days", url: "aomain" })
+                                                    { name: "Add #announcements", detail: "Only admins post there. Posts delete after " + days + " days", url: "aomain" })
             if (c.id !== "main") own.push({ name: voice ? "Delete voice room" : "Delete channel", url: "delete", danger: true })
         }
         Ui.pickFrom((voice ? "" : "#") + c.name, [{ header: "", items: items }, { header: "", items: own }], a => {
@@ -1389,15 +1395,37 @@ Rectangle {
             if (!admin || a === l.type) { Qt.callLater(() => page.pickGroupType(back)); return }
             const go = () => tell(Chat.setGroupLimit(g, a, l.days), "This is a " + (a === "family" ? "Family" : "Folk") + " group now.")
             if (a === "family") Ui.sure("Make it Family?", "Invite links stop. Only admins add people.", "Make it Family", go)
-            else Ui.sure("Make it Folk?", "Messages disappear after 7 days. Members can invite.", "Make it Folk", go)
+            else Ui.sure("Make it Folk?", "Messages delete after 7 days. Members can invite.", "Make it Folk", go)
         }, back)
     }
     function pickGroupLimit(back) {
-        const g = gid, l = Chat.groupLimit(g)
-        if (readOnly || !info.amAdmin || l.type !== "family") { Ui.say(limitDetail() + (l.type === "family" ? ". Ask an admin if you'd like longer." : ". Folk groups always keep 7 days. For up to 30, make a Family group: people join it in person or by a code, not a link.")); return }
-        const items = l.choices.map(d => ({ name: d + " days", check: l.days === d, url: String(d) }))
-        Ui.pickFrom("How long messages stay", [{ header: l.older.length ? "Some apps keep all until updated" : "", items: items }], a => {
-            tell(Chat.setGroupLimit(g, "family", Number(a)), a + " days.")
+        const g = gid, l = Chat.groupLimit(g), admin = !readOnly && !!info.amAdmin
+        const name = info.name || "This group"
+        // A Folk group: an admin may make it Family (the same words and choices as Muninn's), then pick the days.
+        if (l.type !== "family" && admin) {
+            Ui.sure("Keep messages longer?", "Messages in " + name + " delete after " + l.days + " days for everyone, so old chats can't leak. " + name
+                    + " is a Folk group, and Folk groups keep 7 days.\n\nTo keep up to 30 days, make it a Family group. Then invite links stop, and only admins "
+                    + "add people, face to face or by a code. Or keep it Folk, at 7 days.", "Make it Family", () => {
+                const err = Chat.setGroupLimit(g, "family", l.days)
+                if (err !== "") { Ui.say(err, true); return }
+                Qt.callLater(() => page.pickFamilyDays(g, l.choices, l.days, name + " is a Family group now", back))
+            })
+            Ui.confirm.cancelText = "Keep 7 days"
+            return
+        }
+        if (l.type !== "family") {
+            Ui.say("Messages in " + name + " delete after " + l.days + " days. Folk groups keep 7 days. An admin can make it a Family group to keep up to 30 days. "
+                   + "Then invite links stop, and only admins add people.")
+            return
+        }
+        if (!admin) { Ui.say(limitDetail() + ". Ask an admin if you'd like longer."); return }
+        pickFamilyDays(g, l.choices, l.days, l.older.length ? "Some apps keep all until updated" : "", back)
+    }
+    // A Family group's days: 7, 14 or 30 (header: a line above them, "" for none).
+    function pickFamilyDays(g, choices, now, header, back) {
+        const items = choices.map(d => ({ name: d + " days", check: now === d, url: String(d) }))
+        Ui.pickFrom("How long messages stay", [{ header: header, items: items }], a => {
+            tell(Chat.setGroupLimit(g, "family", Number(a)), "Messages now delete after " + a + " days.")
         }, back)
     }
     // A member's one menu, the same for a click, a right click, their three dots, A and LT: Profile, Message or Add as

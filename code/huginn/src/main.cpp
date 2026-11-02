@@ -782,9 +782,12 @@ int main(int argc, char *argv[])
     QObject::connect(rooms, &RoomManager::changed, system, awake);
     // Push to talk (Settings › Calls): TalkKey watches the key while Huginn is in front; GlobalKeys lets it, Mute and
     // Deafen work while a game is in front where the system allows it.
-    rooms->setPushToTalk(settings->pushToTalk());
-    QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
+    // With push to talk on but no key or controller button picked yet, the mic uses voice activity: never dead.
     auto *talkKey = new TalkKey(settings, rooms, &app);
+    const auto talkMode = [settings, rooms, talkKey] { rooms->setPushToTalk(settings->pushToTalk() && talkKey->hasKey()); };
+    talkMode();
+    QObject::connect(settings, &Settings::changed, rooms, talkMode);
+    QObject::connect(talkKey, &TalkKey::changed, rooms, talkMode);
     auto *globalKeys = new GlobalKeys(settings, rooms, talkKey, &app);
     globalKeys->inCall = [calls] { return calls->inCall(); };
     QObject::connect(calls, &CallManager::changed, globalKeys, &GlobalKeys::update);

@@ -20,7 +20,7 @@ Rectangle {
     readonly property bool vaultLocked: Vault.exists && Vault.screenLocked
     readonly property string statusText: {
         if (vaultLocked) return "Locked"
-        if (Settings.pushToTalk && inVoice) return TalkKey.hasKey ? "Push to talk: " + TalkKey.keyName : "Push to talk: pick a key"
+        if (Settings.pushToTalk && inVoice) return TalkKey.hasKey ? "Push to talk: " + keyFull : "Voice activity: no talk key yet"
         if (Ui.myCustomStatus !== "") return Ui.myCustomStatus
         return statusName(Ui.myStatus)
     }
@@ -34,12 +34,15 @@ Rectangle {
     readonly property bool muted: !tour && Ui.micMuted
     readonly property bool deafened: !tour && Ui.deafened
     readonly property bool talking: tour || Rooms.inRoom || Calls.inCall
-    // The talk key, short: "`" for Backtick.
-    readonly property string keyShort: TalkKey.key === Qt.Key_QuoteLeft ? "`" : TalkKey.keyName
-    // What push to talk does right now: no key yet, the key goes into the focused text box, or hold it.
-    readonly property string holdWords: !TalkKey.hasKey ? "Pick a talk key (Settings › Calls)"
+    // The talk key (or, with no key, the controller's talk button), and short: "`" for Backtick.
+    readonly property string keyFull: TalkKey.key !== 0 ? TalkKey.keyName : Gamepad.glyph(TalkKey.padButton)
+    readonly property string keyShort: TalkKey.key === Qt.Key_QuoteLeft ? "`" : keyFull
+    // What push to talk does right now: no key yet (voice activity until one is picked), the key goes into the focused
+    // text box, or hold it. Short for the compact line; holdTip has the whole of it.
+    readonly property string holdWords: !TalkKey.hasKey ? "Pick a key"
                                       : TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + keyShort + " goes to the box"
                                       : "Hold " + keyShort
+    readonly property string holdTip: !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls" : holdWords
     height: (voice.visible ? voice.implicitHeight : 0) + me.height
     radius: Theme.radius
     color: Theme.raised
@@ -85,10 +88,10 @@ Rectangle {
                     : panel.tour ? "Voice / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
                 color: oneLine.noted ? Theme.danger : !panel.tour && Settings.pushToTalk && Rooms.talking ? Theme.accent : Theme.online
                 font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
-                Accessible.name: "Voice connected: " + text + (!panel.tour && Settings.pushToTalk ? ". " + panel.holdWords : "")
+                Accessible.name: "Voice connected: " + text + (!panel.tour && Settings.pushToTalk ? ". " + panel.holdTip : "")
                 HoverHandler { id: roomHover }
                 TapHandler { onTapped: if (!panel.tour) Ui.openPage("g:" + Rooms.group, { voice: true }) }
-                Tip { shown: roomHover.hovered && !panel.tour && Settings.pushToTalk && !oneLine.holdShown; text: panel.holdWords }
+                Tip { shown: roomHover.hovered && !panel.tour && Settings.pushToTalk && !oneLine.holdShown; text: panel.holdTip }
             }
             // Push to talk: the key to hold, where the faces would be.
             Text {
@@ -96,9 +99,15 @@ Rectangle {
                 visible: oneLine.holdShown
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
+                // Never wider than a third of the line, so the room name, More and Leave keep their room.
+                width: Math.min(implicitWidth, Math.round(oneLine.width / 3))
+                elide: Text.ElideRight
                 text: panel.holdWords
                 color: Rooms.talking ? Theme.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+                Accessible.name: panel.holdTip
+                HoverHandler { id: holdHover }
+                Tip { shown: holdHover.hovered && panel.holdTip !== holdKey.text; text: panel.holdTip }
             }
             Row {
                 id: talkerFaces
@@ -269,9 +278,9 @@ Rectangle {
                 // so with another app in front it says so.
                 text: !panel.tour && Rooms.talking ? "Talking"
                     : !panel.tour && (Qt.platform.os === "windows" || !GlobalKeys.everywhere) && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while another app is in front"
-                    : !panel.tour && !TalkKey.hasKey ? "Push to talk: pick a key in Settings › Calls"
+                    : !panel.tour && !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls"
                     : !panel.tour && TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + TalkKey.keyName + " goes to the box"
-                    : "Push to talk: hold " + TalkKey.keyName
+                    : "Push to talk: hold " + panel.keyFull
                 color: !panel.tour && Rooms.talking ? Theme.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
             }

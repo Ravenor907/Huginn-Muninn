@@ -229,7 +229,7 @@ class Muninn : Application() {
      * and the relays are asked again for anything that had to stay with them.
      */
     private fun unlocked() {
-        getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().remove(LOCKED_ALERTED).remove(LOCKED_POSTED).apply()
+        getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().remove(LOCKED_ALERTED).apply()
         NotificationManagerCompat.from(this).cancel(LOCKED_ID)
         Thread {
             try { nostr.openHeld() } catch (_: Exception) {}
@@ -240,28 +240,25 @@ class Muninn : Application() {
     /**
      * Something arrived while locked. Nothing can be opened yet, and relay traffic that isn't a message (receipts, a
      * linked computer's check-ins, room presence) can't be told apart from one, so the notice claims nothing: "Unlock
-     * to get new messages". It buzzes once per locked spell. After that, at most once an hour, it comes back quietly
-     * (no sound), so a notice swiped away early doesn't hide messages for the whole night. Never during Extreme
-     * battery saver (no notifications then).
+     * to get new messages". It goes up and buzzes once per locked spell, and never comes back on its own until the next
+     * unlock (the owner's choice). Never during Extreme battery saver (no notifications then).
      */
     @Synchronized
     fun lockedNotice() {
         if (power.extreme) return
         val prefs = getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
-        val alerted = prefs.getBoolean(LOCKED_ALERTED, false)
-        val now = System.currentTimeMillis()
-        // Once until the next unlock: the owner asked that it never comes back on its own.
-        if (alerted) return
+        // Once until the next unlock.
+        if (prefs.getBoolean(LOCKED_ALERTED, false)) return
         val open = PendingIntent.getActivity(this, LOCKED_ID, Intent(this, MainActivity::class.java).putExtra("chat", "inbox")
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val n = NotificationCompat.Builder(this, if (alerted) QUIET else MESSAGES).setSmallIcon(R.drawable.ic_notify)
+        val n = NotificationCompat.Builder(this, MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Muninn is locked").setContentText("Unlock to get new messages")
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(if (alerted) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
-            .apply { if (alerted) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVibrate(BUZZ).setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(this).notify(LOCKED_ID, n) } catch (_: SecurityException) {}
-        prefs.edit().putBoolean(LOCKED_ALERTED, true).putLong(LOCKED_POSTED, now).apply()
+        prefs.edit().putBoolean(LOCKED_ALERTED, true).apply()
     }
 
     // ---- status: Away on its own after 10 minutes without a touch, and back to Online at the next one.
@@ -437,8 +434,6 @@ class Muninn : Application() {
         /** The "Muninn is locked" notification (the same id the inbox notice always had). */
         val LOCKED_ID = "inbox".hashCode()
         private const val LOCKED_ALERTED = "lockedAlerted"
-        /** When the locked notice last went up (ms). */
-        private const val LOCKED_POSTED = "lockedPostedAt"
         val BUZZ = longArrayOf(0, 140, 90, 140)
         /** Without a touch this long while Online, the status goes to Away. */
         const val IDLE_MS = 10 * 60_000L

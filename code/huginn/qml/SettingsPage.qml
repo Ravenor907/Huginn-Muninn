@@ -159,21 +159,26 @@ Rectangle {
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
             { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
             // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
-            { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk", note: GlobalKeys.talkNote },
-            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.hasKey ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
-              note: TalkKey.capturing ? "Press the new key. One that doesn't type, like F13 or Scroll Lock, talks while you type too"
-                    : !TalkKey.hasKey ? "Pick the key you'll hold to talk. One that doesn't type, like F13 or Scroll Lock, talks while you type too"
-                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like F13 or Scroll Lock, always talk"
-                    : "Talks even while you type", label: TalkKey.capturing ? "Press a key" : TalkKey.hasKey ? "Change" : "Pick a key" },
-            { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Settings.pushToTalk,
+            // With push to talk on and no key or controller button yet, the mic uses voice activity (never dead), and says so.
+            { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk",
+              note: Settings.pushToTalk && !TalkKey.hasKey ? "No talk key yet, so your mic uses voice activity until you pick one" : GlobalKeys.talkNote },
+            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.key !== 0 ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
+              note: TalkKey.capturing ? "Press the new key, or LB, LT, X or Y on a controller. Esc or B keeps the old one"
+                    : !TalkKey.hasKey ? "Pick the key you'll hold to talk, or a controller button. A key that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
+                    : TalkKey.key === 0 ? "A keyboard key too, if you like. One that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
+                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Insert, Pause or Scroll Lock, always talk"
+                    : "Talks even while you type", label: TalkKey.capturing ? "Cancel" : TalkKey.hasKey ? "Change" : "Pick a key" },
+            { group: "Talking", kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
+              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: "Hold it in a voice room while Huginn is in front", label: "Remove" },
+            { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
               title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
             // The bar under the slider is your microphone's level: lit while it goes out.
-            { group: "Talking", kind: "slider", key: "gateThreshold", hide: Settings.pushToTalk || Rooms.gateMode === "off",
+            { group: "Talking", kind: "slider", key: "gateThreshold", hide: Rooms.pushToTalk || Rooms.gateMode === "off",
               title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself"
                                                 : Ui.main && Ui.main.padInUse ? "A: back to Automatic" : "",
               low: "Picks up more", high: "Picks up less" },
-            { group: "Talking", kind: "button", key: "micTest", hide: Settings.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
+            { group: "Talking", kind: "button", key: "micTest", hide: Rooms.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
               note: Rooms.micTest ? "Talk: the bar lights while you'd be heard" : "Shows your level on the bar", label: Rooms.micTest ? "Stop" : "Test" },
             { group: "Talking", kind: "info", title: "Mute and deafen keys", note: GlobalKeys.keysNote },
             // Windows: the two combinations can be moved off keys a game or another app uses (still RegisterHotKey only).
@@ -739,8 +744,10 @@ Rectangle {
         if (top < rowsView.contentY) rowsView.contentY = Math.max(0, top)
         else if (bottom > rowsView.contentY + rowsView.height) rowsView.contentY = Math.min(bottom - rowsView.height, Math.max(0, rowsView.contentHeight - rowsView.height))
     }
-    onSectionChanged: { rowsView.contentY = 0; Rooms.micTest = false }
-    Component.onDestruction: Rooms.micTest = false
+    // Leaving Settings (or this part of it) stops "Pick a key", so the next key pressed elsewhere never becomes the talk key.
+    onSectionChanged: { rowsView.contentY = 0; Rooms.micTest = false; TalkKey.stopCapture() }
+    onVisibleChanged: if (!visible) TalkKey.stopCapture()
+    Component.onDestruction: { Rooms.micTest = false; TalkKey.stopCapture() }
 
     function openMain() {
         const m = items[pick]
@@ -822,6 +829,7 @@ Rectangle {
         else if (key === "deviceName") Ui.ask("This computer's name", "Your phone and nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
         else if (key === "micTest") Rooms.micTest = !Rooms.micTest
         else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
+        else if (key === "talkPad") TalkKey.clearPad()
         else if (key === "muteKey" || key === "deafenKey") {
             const which = key === "muteKey" ? 1 : 2
             if (GlobalKeys.capturing === which) GlobalKeys.stopCapture(); else GlobalKeys.capture(which)

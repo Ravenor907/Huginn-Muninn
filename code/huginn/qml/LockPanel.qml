@@ -5,7 +5,9 @@ import Huginn
 // "unlock": draw or type it. "change": Settings › Privacy and lock › Lock (already unlocked).
 // "off": Settings › Turn off the lock: the current one is drawn or typed again first.
 // "own": Settings › Linked devices › This device's own chats: the current one opens them while a phone is linked.
-// Everything Huginn keeps is locked with it; there's no way to recover it. The pattern sits in the
+// "renew": restored after "Forgot it?" (Vault.lockNeeded): a new lock, like "setup", with no way to skip it.
+// Everything Huginn keeps is locked with it; nobody can reset it. "Forgot it?" under the unlock puts a backup back
+// (BackupPanel's restore, erasing what's here, held to confirm), then a new lock is set. The pattern sits in the
 // lower half (Settings › Privacy and lock › Pattern position: Top, Middle or Lower).
 Item {
     id: panel
@@ -49,7 +51,7 @@ Item {
         if (Vault.setSecret(secret, pattern)) {
             Ui.say(pattern ? "Pattern set." : "Password set.")
             first = null; note = ""; bad = false
-            finished(mode === "setup" ? "setup" : "change")
+            finished(mode === "setup" ? "setup" : mode === "renew" ? "renew" : "change")
         } else { note = "That didn't save. Try again."; bad = true }
     }
     // Unlocking works out the key (and reads the chats) off the window's thread: a ring turns until it's done.
@@ -102,6 +104,13 @@ Item {
         saveSecret(t, false)
     }
     function focusField() { if (!usePattern) pw.forceActiveFocus() }
+    // "Forgot it?": nobody can reset the lock, so the way back is a backup (the same steps as Muninn's).
+    readonly property bool canForget: mode === "unlock" && !cancelable && !practice
+    function forgot() {
+        Ui.sure("Forgot your lock?", "Your chats are encrypted with it, so nobody can open or reset it. If you made a backup, you can erase what's on this computer "
+                + "and put the backup back. Messages that came after the backup are lost. Then you set a new lock.",
+                "Restore from a backup", () => { if (Ui.main) Ui.main.openBackup("restore", false, false, true) })
+    }
     onUsePatternChanged: if (visible) Qt.callLater(focusField)
     onVisibleChanged: if (visible) Qt.callLater(focusField)
 
@@ -120,7 +129,7 @@ Item {
         Text {
             textFormat: Text.PlainText
             anchors.horizontalCenter: parent.horizontalCenter
-            text: panel.mode === "setup" ? "SET A LOCK" : panel.mode === "change" ? "CHANGE THE LOCK"
+            text: panel.mode === "setup" ? "SET A LOCK" : panel.mode === "renew" ? "SET A NEW LOCK" : panel.mode === "change" ? "CHANGE THE LOCK"
                 : panel.mode === "off" ? "TURN OFF THE LOCK" : panel.mode === "own" ? "THIS DEVICE'S OWN CHATS" : "HUGINN"
             color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
         }
@@ -130,9 +139,10 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.lead !== "" ? panel.lead + "\n" : "") + (panel.usePattern ? "Draw your pattern" : "Type your password")
+                  : panel.mode === "renew" ? "Set a new lock. Your old one isn't in the backup. Nobody can reset it, so pick one you'll remember, and make a new backup once you're in (Settings › Backup)."
                   : panel.mode === "setup" ? (panel.usePattern ? "Keeps your chats private on this computer. Connect at least 6 dots. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Backup)."
                                                                 : "Keeps your chats private on this computer. Your chats are locked with it, so nobody can reset it: pick one you'll remember, and make a backup after setup (Settings › Backup). A few words make a good password.")
-                  : "No way to recover it."
+                  : "Nobody can reset it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
@@ -232,8 +242,21 @@ Item {
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
             visible: Gamepad.connected && panel.usePattern && !!Ui.main && Ui.main.padInUse
-            text: "D-pad moves. A starts and ends. B clears."
+            text: "D-pad moves. A starts and ends. B clears." + (panel.canForget ? " Y: Forgot it?" : "")
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
+        }
+        Text {
+            id: forgotLink
+            textFormat: Text.PlainText
+            visible: panel.canForget
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "Forgot it?"
+            color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.underline: true
+            Accessible.role: Accessible.Button
+            Accessible.name: "Forgot it? Restore from a backup"
+            Accessible.onPressAction: panel.forgot()
+            HoverHandler { cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: panel.forgot() }
         }
         HButton {
             visible: panel.cancelable || panel.mode === "change" || panel.mode === "off" || panel.mode === "own"
@@ -285,7 +308,9 @@ Item {
         if (b === "a" && !usePattern && !asks && pw.text.length && pw2.text.length === 0) { pw2.forceActiveFocus(); System.showSteamKeyboard(); return true }
         if (b === "a" && !usePattern) { if (pw.text.length) submitPassword(); else { pw.forceActiveFocus(); System.showSteamKeyboard() } return true }
         if ((b === "lb" || b === "next" || b === "prev") && !asks) { usePattern = !usePattern; first = null; note = ""; return true }
-        if (b === "b") { cancelled(); return true }
+        if (b === "y" && canForget) { forgot(); return true }
+        // A new lock after "Forgot it?" can't be skipped.
+        if (b === "b") { if (mode !== "renew") cancelled(); return true }
         return false
     }
 }

@@ -68,7 +68,7 @@ fun GroupLimitPanel(app: Muninn, g: String, s: Proto06.State, admin: Boolean) {
             MButton(Limits.typeName(t), m, if (type == t) Kind.Accent else Kind.Normal) {
                 if (type != t) Ui.sure(io.github.ravenor907.muninn.ui.Ask(
                     if (t == Limits.FAMILY) "Make it Family?" else "Make it Folk?",
-                    if (t == Limits.FAMILY) "Invite links stop. Only admins add people." else "Messages disappear after 7 days. Members can invite.",
+                    if (t == Limits.FAMILY) "Invite links stop. Only admins add people." else "Messages delete after 7 days. Members can invite.",
                     if (t == Limits.FAMILY) "Make it Family" else "Make it Folk") {
                     app.chat.groups.setLimit(g, t, days)?.let { Ui.say(it, true) } ?: Ui.say("This is a ${Limits.typeName(t)} group now.")
                 })

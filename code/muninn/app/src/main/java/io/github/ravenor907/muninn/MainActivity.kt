@@ -436,6 +436,12 @@ class MainActivity : ComponentActivity() {
             LockScreen(app) { ok -> if (ok) { uiLocked = false; app.startAsync { startNet(); suggestStronger() } } }
             return
         }
+        // Restored after "Forgot it?": a new lock first, with no Skip, before any chat shows (the old lock isn't in the backup).
+        var mustLock by remember { mutableStateOf(app.vault.lockNeeded && !ciSkip) }
+        if (mustLock) {
+            io.github.ravenor907.muninn.screens.NewLock(app) { mustLock = app.vault.lockNeeded; recents() }
+            return
+        }
         // Started in the background (no lock, or unlocked): reachable from here on (startNet runs once).
         LaunchedEffect(Unit) { startNet() }
         // A fresh phone or tablet: first setup (welcome, lock, name, permissions, people, a tour). It picks up again

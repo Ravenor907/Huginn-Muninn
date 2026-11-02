@@ -72,8 +72,13 @@ public:
     // Without a lock there is nothing to unlock with, so nothing happens.
     Q_INVOKABLE void lockScreen() { if (!hasLock()) return; m_screenLocked = true; Q_EMIT changed(); }
     // Huginn never locks on its own: only Lock now, the panic lock, or Lock and close when leaving (Main.qml) do.
+    // Restored after "Forgot it?" also counts: nothing shows until a new lock is set (lockNeeded).
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
-    bool screenLocked() const { return m_screenLocked || locked(); }
+    bool screenLocked() const { return m_screenLocked || m_lockNeeded || locked(); }
+    // Restored after "Forgot it?": open, but a new lock must be set before any chat shows (no Skip). Kept in vault.key
+    // ("needsLock", never in a backup), so a restart still asks; only setSecret() clears it.
+    Q_PROPERTY(bool lockNeeded READ lockNeeded NOTIFY changed)
+    bool lockNeeded() const { return m_lockNeeded; }
     // Erases every message, photo, voice message, contact and key, the cache and a move's state, and first setup runs
     // again. Huginn's other settings stay, except on the Windows portable build, where the whole data folder is emptied.
     Q_INVOKABLE void eraseAll();
@@ -157,6 +162,9 @@ public:
     // Keeps a copy of what's here (chat folder, next to it), then replaces everything with the backup just opened and
     // restarts Huginn to load it. On first setup (no lock yet) Huginn starts without a lock first.
     Q_INVOKABLE void restoreOpened();
+    // The lock screen's "Forgot it?": what's here can't be opened, so it's erased (not kept), the backup just opened goes
+    // in under a new data key, and Huginn restarts without a lock but with lockNeeded set. Only while locked.
+    Q_INVOKABLE void restoreErasing();
     Q_INVOKABLE void forgetOpened();
 
     using Files = std::vector<std::pair<QString, QByteArray>>;
@@ -239,6 +247,9 @@ private:
     bool m_screenLocked = false;
     bool m_busy = false;
     bool m_restarting = false;   // restored: nothing may be saved until Huginn starts again
+    bool m_lockNeeded = false;   // see lockNeeded()
+    // The files the backup just opened puts here (a Muninn backup made into Huginn's own). Empty with why when none.
+    Files openedFiles(QString *why) const;
     Files m_opened;
     QJsonObject m_openedHeader;
     QVariantMap m_openedInfo;

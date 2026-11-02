@@ -365,7 +365,7 @@ private fun LockPage(app: Muninn) {
         Text("Muninn opens with a pattern or password you choose. It locks itself after ${io.github.ravenor907.muninn.ui.AppLock.DEFAULT_AFTER / 60_000} minutes away; " +
             "you can change that in Settings › Lock and privacy.", style = Type.small)
         Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a backup after setup " +
-            "(Settings › More › Backup) to be safe.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            "(Settings › Backup) to be safe.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
         if (w.live) LockSetup(app, onCancel = null, fill = true) { Setup.hasLock = true; Setup.next() }
         else {
             Text(drawn.ifEmpty { "Draw a pattern: connect at least 6 dots." }, style = Type.normal, modifier = Modifier.padding(top = 12.dp))
@@ -565,8 +565,8 @@ private fun DonePage() {
             Box(Modifier.size(72.dp).clip(CircleShape).background(Palette.accentFill).border(2.dp, Palette.accent, CircleShape),
                 contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
             Text("You're set.", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
-            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. To keep a chat longer, tap “Keep longer” at the top of it.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
-            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › More › Backup. If you ever forget your lock, tap “Forgot it?” on the lock screen to put the backup back.",
+            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. To see how long a chat keeps messages, or keep it longer, tap the line at the top of it.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › Backup. If you ever forget your lock, tap “Forgot it?” on the lock screen to put the backup back.",
                 style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             if (practice) Text("Practice ends here and goes back to Labs.", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }

@@ -61,7 +61,9 @@ class Vault(private val context: Context) {
     /** Gets a restore ready, swapped in on the next open (see [VaultCore.stageRestore]). Must be unlocked. */
     fun stageRestore(files: List<Pair<String, ByteArray>>) = core.stageRestore(files)
     /** The lock can't be read and the person chose a backup: what's here is set aside (kept) and a new vault starts. */
-    fun startOverKeeping(): File = core.startOverKeeping()
+    fun startOverKeeping(needsLock: Boolean = false): File = core.startOverKeeping(needsLock)
+    /** Restored after "Forgot it?": a new lock must be set before anything else shows. */
+    val lockNeeded: Boolean get() = core.lockNeeded
     /** Before a restore: a copy of everything here, in a "kept-" folder (see [VaultCore.keepCopy]). */
     fun keepCopy(): File = core.keepCopy()
 

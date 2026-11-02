@@ -60,6 +60,11 @@ class VaultCore(
 
     val hasPassword: Boolean get() = lockJson()?.optString("mode") == "password"
     val usesPattern: Boolean get() = lockJson()?.optString("kind") == "pattern"
+    /**
+     * Restored after "Forgot it?": open for now, but a new lock must be set before anything else shows. Kept in the
+     * lock file (never in a backup, so a restore can't clear it), and only a new password or pattern clears it.
+     */
+    val lockNeeded: Boolean get() = lockJson()?.let { it.optString("mode") == "open" && it.optBoolean(NEEDS_LOCK) } == true
 
     /** Anything sealed (or the open key) is here: a missing lock file is then trouble, not a first run. */
     fun hasData(): Boolean {
@@ -154,16 +159,19 @@ class VaultCore(
     /** Sets, changes or (with null) removes the password. Must be unlocked. */
     fun setPassword(password: String?, pattern: Boolean = false) {
         val k = key() ?: return
-        try { store(k, password, pattern) } finally { k.fill(0) }
+        // Removing the lock while a new one is needed keeps it needed.
+        val needs = password.isNullOrEmpty() && lockNeeded
+        try { store(k, password, pattern, needs) } finally { k.fill(0) }
         if (!password.isNullOrEmpty()) weak = !Vault.LockRules.strong(password)
     }
 
-    private fun store(k: ByteArray, password: String?, pattern: Boolean = false) {
+    private fun store(k: ByteArray, password: String?, pattern: Boolean = false, needsLock: Boolean = false) {
         val o = JSONObject()
         if (password.isNullOrEmpty()) {
             // No secret to lock it with: the key in Muninn's private files, written before vault.key points to it.
             SafeFile.writeMirror(openKeyFile, k)
             o.put("mode", "open")
+            if (needsLock) o.put(NEEDS_LOCK, true)
         } else {
             val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
             // The password's lock only, stretched with scrypt (slow and memory-hungry, so guessing is too). Takes about a second.
@@ -180,9 +188,10 @@ class VaultCore(
     /**
      * Restore from backup when the lock can't be read: everything here is set aside (kept, not deleted, in a
      * "kept-" folder) and a new open vault starts, ready for [stageRestore]. Only on the person's say-so.
+     * [needsLock]: the lock was forgotten, so the new vault asks for a new lock before anything shows ([lockNeeded]).
      */
     @Synchronized
-    fun startOverKeeping(): File {
+    fun startOverKeeping(needsLock: Boolean = false): File {
         val kept = File(root, KEPT + System.currentTimeMillis())
         kept.mkdirs()
         root.listFiles()?.forEach { f ->
@@ -192,7 +201,7 @@ class VaultCore(
         for (f in listOf(openKeyFile, SafeFile.bakOf(openKeyFile))) if (f.exists() && !f.renameTo(File(kept, "open-" + f.name))) throw IOException("couldn't set the open key aside")
         unreadable.clear(); good.clear(); synchronized(pending) { pending.clear() }
         val k = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        store(k, null)
+        store(k, null, needsLock = needsLock)
         synchronized(keyLock) { dataKey = k }
         _trouble.value = null
         _locked.value = false
@@ -393,5 +402,7 @@ class VaultCore(
         /** Folders of files set aside by [startOverKeeping]. */
         const val KEPT = "kept-"
         private const val DONE = ".done"
+        /** In an open lock file: a new lock must be set first (see [lockNeeded]). */
+        private const val NEEDS_LOCK = "needsLock"
     }
 }

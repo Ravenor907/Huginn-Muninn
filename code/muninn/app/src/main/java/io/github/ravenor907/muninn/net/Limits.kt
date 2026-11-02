@@ -39,7 +39,7 @@ object Limits {
         "Only admins add people, face to face or by a code they hand over", "No invite links",
         "Each new member's safety code is checked once", "Messages stay up to 30 days (admins pick 7 to 30)",
         "Files and photos from members arrive by themselves", "Members are in your Family folder")
-        else listOf("Anyone in the group can invite, by a link or a code", "Messages disappear after 7 days",
+        else listOf("Anyone in the group can invite, by a link or a code", "Messages delete after 7 days",
         "Small files arrive by themselves, big ones ask first", "Members aren't added to your contacts")
 
     /** Family groups have no invite links: only admins add people, by a code or face to face. */
@@ -80,5 +80,5 @@ object Limits {
         if (kind.isEmpty()) s.copy(kind = "", days = 0) else s.copy(kind = kind, days = if (days <= DEFAULT) 0 else days.coerceAtMost(LONGEST))
 
     /** How the limit reads on screen. */
-    fun words(days: Int) = if (days == DEFAULT) "Messages disappear after 7 days" else "Messages disappear after $days days"
+    fun words(days: Int) = if (days == DEFAULT) "Messages delete after 7 days" else "Messages delete after $days days"
 }

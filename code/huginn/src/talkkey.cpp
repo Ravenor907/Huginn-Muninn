@@ -6,6 +6,7 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QSettings>
+#include <QStringList>
 #include <QVariant>
 #include <QWindow>
 
@@ -14,6 +15,7 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
     , m_settings(settings)
     , m_rooms(rooms)
     , m_key(firstKey())
+    , m_pad(Settings::store().value(QStringLiteral("talkPad")).toString())
 {
     qApp->installEventFilter(this);
     // A text box taking or losing the focus changes what a key that types does (the voice line says so).
@@ -24,10 +26,13 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
             Q_EMIT changed();
         }
     });
-    // Huginn in the background: the key can't be seen going up, so let go now.
+    // Huginn in the background: the key can't be seen going up, so let go now. Picking a key stops too, so the first
+    // key typed somewhere else later never becomes the talk key.
     connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState s) {
-        if (s != Qt::ApplicationActive)
+        if (s != Qt::ApplicationActive) {
             release();
+            stopCapture();
+        }
     });
     connect(m_rooms, &RoomManager::changed, this, [this] {
         if (!m_rooms->inRoom())
@@ -74,10 +79,55 @@ void TalkKey::stopCapture()
 
 void TalkKey::release()
 {
-    if (!m_down)
+    if (!m_down && !m_padDown)
         return;
     m_down = false;
+    m_padDown = false;
     m_rooms->setTalking(false);
+}
+
+void TalkKey::clearPad()
+{
+    if (m_pad.isEmpty())
+        return;
+    release();
+    m_pad.clear();
+    Settings::store().remove(QStringLiteral("talkPad"));
+    Q_EMIT changed();
+}
+
+bool TalkKey::pad(const QString &button, bool down)
+{
+    if (m_capturing) {
+        if (!down)
+            return true;
+        // B keeps the old key and button.
+        if (button == QLatin1String("b")) {
+            stopCapture();
+            return true;
+        }
+        // A, the D-pad, Start and View, the sticks, and RB and RT (the stick pointer's clicks) can't be used: wait for another.
+        static const QStringList usable{QStringLiteral("lb"), QStringLiteral("lt"), QStringLiteral("x"), QStringLiteral("y")};
+        if (!usable.contains(button))
+            return true;
+        m_pad = button;
+        Settings::store().setValue(QStringLiteral("talkPad"), button);
+        stopCapture();
+        return true;
+    }
+    if (m_pad.isEmpty() || button != m_pad || !m_settings->pushToTalk() || !m_rooms->inRoom()) {
+        // Let go of in a room that has just ended: nothing to do, but it's still the talk button's release.
+        if (!down && button == m_pad && m_padDown) {
+            release();
+            return true;
+        }
+        return false;
+    }
+    if (down == m_padDown)
+        return true;
+    m_padDown = down;
+    m_rooms->setTalking(down || m_down);
+    return true;
 }
 
 // A key that puts a character in a text box (Backtick, Space, a letter). Caps Lock, F13, Insert, Pause and the

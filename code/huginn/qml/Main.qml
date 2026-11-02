@@ -756,10 +756,11 @@ Window {
     FirstSetup { id: setup; z: 28.3 }
     // Settings › Backup and first setup's Restore from a backup (over first setup; questions show above it).
     BackupPanel { id: backupPanel; z: 28.6 }
-    function openBackup(mode, fromSetup, sample) {
+    // forgot: the lock screen's "Forgot it?" (what's here is erased, not kept, and a new lock is set after).
+    function openBackup(mode, fromSetup, sample, forgot) {
         if (backupPanel.visible || (app.touring && !sample)) return
         if (!fromSetup) app.closePanels()
-        backupPanel.open(mode, !!fromSetup, !!sample)
+        backupPanel.open(mode, !!fromSetup, !!sample, "", !!forgot)
     }
     function openSetup(practice) {
         if (app.touring || setup.visible) return
@@ -1232,7 +1233,7 @@ Window {
         app.talkWentBehind = false
         app.talkToldOnce = true
         if (!TalkKey.hasKey) return
-        Ui.say("Push to talk only hears " + TalkKey.keyName + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
+        Ui.say("Push to talk only hears " + (TalkKey.key !== 0 ? TalkKey.keyName : Gamepad.glyph(TalkKey.padButton)) + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
     }
     Connections {
         target: Rooms
@@ -1242,7 +1243,7 @@ Window {
     Connections {
         target: TalkKey
         function onTypedInstead() {
-            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like F13 or Scroll Lock (Settings › Calls).")
+            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like Insert, Pause or Scroll Lock (Settings › Calls).")
         }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen. Report a bug stays, behind its own lock
@@ -1401,12 +1402,15 @@ Window {
             app.padDown[button] = true
             app.noteInput()
             app.padInUse = true
+            // Picking the talk button (B stops), or the talk button held in a voice room: nothing else happens.
+            if (TalkKey.pad(button, true)) return
             if (app.isPointerButton(button)) { app.legend = false; stick.press(button) }
             else app.press(button)
         }
         function onReleased(button) {
             if (!app.padDown[button]) return
             delete app.padDown[button]
+            if (TalkKey.pad(button, false)) return
             if (app.isPointerButton(button)) stick.release(button)
             else app.release(button)
         }
@@ -1596,7 +1600,7 @@ Window {
             { page: "dms", ctx: "settings", file: "75-menu-settings" },
             { page: "dms", ctx: "field", file: "76-menu-text" },
             { page: "dms", ctx: "space", small: true, file: "77-menu-empty-list" },
-            // A group's one Call button, its popup open: Call everyone, Call some people and Drop-in call for each room.
+            // A group's one Call button, its popup open: Call everyone, Pick people and Drop-in call for each room.
             { page: "g:tour-crew", zone: "messages", ctx: "call", file: "78-menu-call" },
             // Settings › Backup: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
             { page: "settings", section: "backup", backup: "what", file: "80-backup" },

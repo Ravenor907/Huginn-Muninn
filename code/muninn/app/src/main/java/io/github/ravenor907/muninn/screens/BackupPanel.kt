@@ -223,7 +223,8 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
             return
         }
         Ui.sure(Ask(if (erases) "Erase what's here and restore?" else "Replace what's here?",
-            if (erases) "Muninn's chats, contacts and keys on this phone are erased for good, and the backup goes in. Messages since the backup are lost."
+            if (erases) "Muninn's chats, contacts and keys on this phone are erased for good, and the backup goes in. Messages since the backup are lost. " +
+                "Muninn then opens without a lock. You'll set a new one next."
             else "Everything on this phone is replaced by the backup. A copy of what's here now is kept first.",
             if (erases) "Erase and restore" else "Restore", danger = true, hold = true) {
             busy = true; error = ""

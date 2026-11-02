@@ -162,7 +162,8 @@ Rectangle {
     readonly property var prompts: mirror.visible ? mirror.prompts
         : finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
-        : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : []).concat([{ key: "b", label: "Back" }])
+        : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : [])
+                         .concat(lock.canForget ? [{ key: "y", label: "Forgot it?" }] : []).concat(lock.mode === "renew" ? [] : [{ key: "b", label: "Back" }])
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
@@ -233,7 +234,7 @@ Rectangle {
     function showLimitsNote() {
         if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
         Chat.dismissLimitsNote()
-        Ui.sure("Messages disappear", "After 7 days, on every device, so old chats can't leak. To keep a chat longer, put the person in Family or Work (Folders and role) and pick up to 30 days. Family groups can keep up to 30 days too.", "Got it", () => {})
+        Ui.sure("Messages delete after 7 days", "On every device, so old chats can't leak. To keep a chat longer, put the person in Family or Work (Folders and role) and pick up to 30 days. Family groups can keep up to 30 days too.", "Got it", () => {})
     }
     Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
@@ -613,7 +614,7 @@ Rectangle {
             x: Theme.px(20)
             width: parent.width - Theme.px(40)
             wrapMode: Text.WordWrap
-            text: Vault.exists ? "Locked." : "Set a lock to start."
+            text: Vault.lockNeeded ? "Set a new lock to start." : Vault.exists ? "Locked." : "Set a lock to start."
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(15)
         }
@@ -637,7 +638,7 @@ Rectangle {
             title: page.locked ? "Locked" : !page.picked ? "Chats" : page.openKey === "" ? "Nearby room" : page.openName
             // How they're reached (never an address), Active, and Verified or a changed security key.
             subtitle: page.locked || !page.picked ? "" : page.openKey === "" ? "People close by"
-                    : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active"] : []).concat(page.openMuted ? ["Muted"] : [])
+                    : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active now"] : []).concat(page.openMuted ? ["Muted"] : [])
                       .concat([page.keyWarning ? "Security key changed" : (Chat.chats, Chat.isVerified(page.openKey)) ? "Verified" : "Not verified"]).join(" · ")
             warn: !page.locked && page.picked && page.keyWarning
             accent: page.tinted && page.picked ? page.tint : "transparent"
@@ -686,7 +687,8 @@ Rectangle {
         LockPanel {
             id: lock
             visible: page.locked || page.changeLock || page.lockOff || page.ownLock
-            mode: page.ownLock && !page.locked ? "own" : page.lockOff && !page.locked ? "off" : page.changeLock && !page.locked ? "change" : Vault.exists ? "unlock" : "setup"
+            mode: page.ownLock && !page.locked ? "own" : page.lockOff && !page.locked ? "off" : page.changeLock && !page.locked ? "change"
+                : Vault.lockNeeded ? "renew" : Vault.exists ? "unlock" : "setup"
             anchors.top: convHead.bottom
             anchors.bottom: parent.bottom
             anchors.horizontalCenter: parent.horizontalCenter
@@ -703,7 +705,13 @@ Rectangle {
                     Ui.sure("Make your lock stronger?", "Your " + (Vault.usesPattern ? "pattern" : "password") + " is shorter than new ones may be. One with at least 6 "
                             + (Vault.usesPattern ? "dots" : "characters") + " is much harder to guess.", "Change it", () => { page.changeLock = true })
             }
-            onCancelled: { if (page.ownLock) page.ownLock = false; else if (page.lockOff) page.lockOff = false; else if (page.changeLock) page.changeLock = false; else Ui.closePage() }
+            onCancelled: {
+                if (Vault.lockNeeded) return   // a new lock after "Forgot it?" can't be skipped
+                if (page.ownLock) page.ownLock = false
+                else if (page.lockOff) page.lockOff = false
+                else if (page.changeLock) page.changeLock = false
+                else Ui.closePage()
+            }
         }
 
         Item {

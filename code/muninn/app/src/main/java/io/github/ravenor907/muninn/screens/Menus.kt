@@ -554,7 +554,7 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, more: Boolean, go: (St
             QuickButton(if (muted) "sound" else "mute", if (muted) "Unmute" else "Mute", on = muted) {
                 if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("${s.name} isn't muted.") } else go("mute")
             }
-            QuickButton("gear", "Details") { page("settings") }
+            QuickButton("gear", "Settings") { page("settings") }
         }
         MenuRow("clock", "Notifications") { go("notify") }
         if (!grp.readOnly && (s.isAdmin(me) || GroupLinks.canInvite(app, g))) MenuRow("plus", "Invite people") { page("add") }
@@ -568,7 +568,7 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, more: Boolean, go: (St
     if (!grp.readOnly && s.members.size > 1) MenuRow("call", "Call everyone") {
         done()
         val n = s.members.size - 1
-        Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To just talk, join a voice room.", "Ring everyone",
+        Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To talk without ringing anyone, use Drop-in call.", "Ring everyone",
             extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
             onConfirm = { RoomActivity.call(context, g, emptyList()) }))
     }

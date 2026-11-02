@@ -1,6 +1,7 @@
 // Linux: the desktop's GlobalShortcuts portal (org.freedesktop.portal.GlobalShortcuts), where there is one (see
-// globalkeys.h). Huginn asks for three shortcuts the first time it is in a voice room or a call; the desktop owns the
-// keys and says when one goes down (Activated) and up (Deactivated). Without the portal nothing here works, and
+// globalkeys.h). Huginn asks for three shortcuts the first time it is in a voice room or a call, or when a talk key is
+// picked in Settings › Calls (a new pick is offered again then); the desktop owns the keys and says when one goes down
+// (Activated) and up (Deactivated). Without the portal nothing here works, and
 // Settings says the keys work only while Huginn is in front.
 #include "../globalkeys.h"
 
@@ -28,13 +29,22 @@ const QString kRequest = QStringLiteral("org.freedesktop.portal.Request");
 using Shortcut = QPair<QString, QVariantMap>;   // (sa{sv})
 using Shortcuts = QList<Shortcut>;               // a(sa{sv})
 
-// The talk key as the shortcut spec writes keys ("grave", "F9", "space"); empty to let the desktop choose.
+// The talk key as the shortcut spec writes keys ("grave", "F9", "space", xkb's names); empty to let the desktop choose.
 QString triggerName(int k)
 {
     if (k == Qt::Key_QuoteLeft)
         return QStringLiteral("grave");
     if (k == Qt::Key_Space)
         return QStringLiteral("space");
+    // The keys Settings suggests, which type nothing.
+    if (k == Qt::Key_ScrollLock)
+        return QStringLiteral("Scroll_Lock");
+    if (k == Qt::Key_Pause)
+        return QStringLiteral("Pause");
+    if (k == Qt::Key_Insert)
+        return QStringLiteral("Insert");
+    if (k == Qt::Key_CapsLock)
+        return QStringLiteral("Caps_Lock");
     if ((k >= Qt::Key_A && k <= Qt::Key_Z) || (k >= Qt::Key_0 && k <= Qt::Key_9))
         return QString(QChar(char16_t(k))).toLower();
     if (k >= Qt::Key_F1 && k <= Qt::Key_F24)
@@ -78,10 +88,18 @@ public:
     void want(bool voice, bool talk, int qtKey) override
     {
         Q_UNUSED(talk);   // the owner ignores the talk key while push to talk is off
+        // A talk key just picked or changed (not the saved one at start): offered to the desktop now, so it works while
+        // a game is in front without binding it by hand.
+        const bool picked = m_seen && qtKey != m_key && qtKey != 0;
+        m_seen = true;
         m_voice = voice;
         m_key = qtKey;
-        if (voice && m_available)
+        if (!m_available)
+            return;
+        if (voice || picked)
             start();
+        if (picked && !m_session.isEmpty() && m_offered != m_key)
+            bind(true);
     }
     bool everywhere() const override { return m_available; }
 
@@ -108,6 +126,22 @@ private Q_SLOTS:
             fail();
             return;
         }
+        bind(false);
+    }
+    void bound(uint response, const QVariantMap &)
+    {
+        // 1: the person said no; 2: something else went wrong. Either way the keys work only in front.
+        if (response != 0)
+            fail();
+    }
+    // A new talk key offered again: a no keeps the shortcuts already bound.
+    void rebound(uint, const QVariantMap &) {}
+
+private:
+    // Asks for the three shortcuts, the talk one with the talk key as its preferred key. again: a new talk key on a
+    // session that's already bound, where a refusal changes nothing.
+    void bind(bool again)
+    {
         auto opts = [](const QString &what, const QString &key) {
             QVariantMap o{{QStringLiteral("description"), what}};
             if (!key.isEmpty())
@@ -119,21 +153,17 @@ private Q_SLOTS:
             {QStringLiteral("mute"), opts(QStringLiteral("Mute or unmute"), QStringLiteral("CTRL+SHIFT+M"))},
             {QStringLiteral("deafen"), opts(QStringLiteral("Deafen or undeafen"), QStringLiteral("CTRL+SHIFT+D"))},
         };
+        m_offered = m_key;
         const QString token = newToken();
-        listen(token, SLOT(bound(uint,QVariantMap)));
+        if (again)
+            listen(token, SLOT(rebound(uint,QVariantMap)));
+        else
+            listen(token, SLOT(bound(uint,QVariantMap)));
         QDBusMessage m = QDBusMessage::createMethodCall(kService, kPath, kIface, QStringLiteral("BindShortcuts"));
         m.setArguments({QVariant::fromValue(QDBusObjectPath(m_session)), QVariant::fromValue(list), QString(),
                         QVariantMap{{QStringLiteral("handle_token"), token}}});
-        ask(m);
+        ask(m, !again);
     }
-    void bound(uint response, const QVariantMap &)
-    {
-        // 1: the person said no; 2: something else went wrong. Either way the keys work only in front.
-        if (response != 0)
-            fail();
-    }
-
-private:
     void start()
     {
         if (m_started)
@@ -145,13 +175,14 @@ private:
         m.setArguments({QVariantMap{{QStringLiteral("handle_token"), token}, {QStringLiteral("session_handle_token"), newToken()}}});
         ask(m);
     }
-    // A call the portal turns away at once (no Response follows): the keys work only in front.
-    void ask(const QDBusMessage &m)
+    // A call the portal turns away at once (no Response follows): the keys work only in front. failOnError false: a
+    // talk key offered again that the portal turns away leaves the shortcuts already bound as they are.
+    void ask(const QDBusMessage &m, bool failOnError = true)
     {
         auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m, 10000), this);
-        connect(w, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *done) {
+        connect(w, &QDBusPendingCallWatcher::finished, this, [this, failOnError](QDBusPendingCallWatcher *done) {
             done->deleteLater();
-            if (done->isError())
+            if (done->isError() && failOnError)
                 fail();
         });
     }
@@ -172,8 +203,9 @@ private:
 
     GlobalKeys *m_owner;
     QString m_session;
-    bool m_available = false, m_started = false, m_voice = false;
+    bool m_available = false, m_started = false, m_voice = false, m_seen = false;
     int m_key = 0;
+    int m_offered = -1;   // the talk key last offered to the desktop (-1: none yet)
 };
 
 GlobalKeys::Backend *makeGlobalKeysBackend(GlobalKeys *owner)

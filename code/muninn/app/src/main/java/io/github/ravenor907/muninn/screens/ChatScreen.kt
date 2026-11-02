@@ -2215,7 +2215,28 @@ private fun GroupKeepDialog(s: Proto06.State, admin: Boolean, onSettings: () -> 
     )
 }
 
-/** A small group's "In voice: Sam, Jo · Join" line, in place of the channel chips. */
+/** Just made Family: 7, 14 or 30 days, right away. Closing it keeps [now]. */
+@Composable
+private fun GroupDaysDialog(name: String, now: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Palette.panel,
+        shape = io.github.ravenor907.muninn.ui.Corner,
+        title = { Text("$name is a Family group now", style = Type.big) },
+        text = {
+            Column {
+                Text("How long should messages stay? Everyone in it gets the same.", style = Type.normal)
+                io.github.ravenor907.muninn.net.Limits.CHOICES.forEach { d ->
+                    MButton(if (d == now) "$d days (now)" else "$d days", Modifier.fillMaxWidth().padding(top = 8.dp),
+                        if (d == io.github.ravenor907.muninn.net.Limits.LONGEST) Kind.Accent else Kind.Normal) { onPick(d) }
+                }
+            }
+        },
+        confirmButton = { MButton("Close") { onDismiss() } },
+    )
+}
+
+/** A small group's "In the drop-in call: Sam, Jo · Join" line, in place of the channel chips. */
 @Composable
 private fun InVoiceLine(names: List<String>, onJoin: () -> Unit) {
     val shown = if (names.size <= 3) names.joinToString(", ") else names.take(2).joinToString(", ") + " and ${names.size - 2} more"
@@ -2223,7 +2244,7 @@ private fun InVoiceLine(names: List<String>, onJoin: () -> Unit) {
         .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         MIcon("audio", Palette.online, 14.dp)
         Spacer(Modifier.width(6.dp))
-        Text("In voice: $shown", style = tinyStyle.copy(color = Palette.online), maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Text("In the drop-in call: $shown", style = tinyStyle.copy(color = Palette.online), maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false))
         Text(" · Join", style = tinyStyle.copy(color = Palette.accent, fontWeight = FontWeight.SemiBold), maxLines = 1)
     }
@@ -2473,11 +2494,18 @@ private fun GroupConversation(app: Muninn, g: String) {
         var keepInfo by remember { mutableStateOf(false) }
         // Only an admin can change it (a Folk group by making it Family), so for everyone else the link only explains.
         if (!grp.readOnly && !searching) KeepLine(io.github.ravenor907.muninn.net.Limits.groupDays(s), if (admin) null else "Why?") { keepInfo = true }
+        // Made Family from here: how many days, asked right away (it stays at what it was until one is picked).
+        var keepPick by remember { mutableStateOf(false) }
         if (keepInfo) GroupKeepDialog(s, admin, onSettings = { keepInfo = false; ChatNav.open = "$key/settings" }, onFamily = {
             keepInfo = false
             app.chat.groups.setLimit(g, io.github.ravenor907.muninn.net.Limits.FAMILY, io.github.ravenor907.muninn.net.Limits.groupDays(s))?.let { Ui.say(it, true) }
-                ?: run { Ui.say("${s.name} is a Family group now. Pick how many days in Group settings."); ChatNav.open = "$key/settings" }
+                ?: run { keepPick = true }
         }) { keepInfo = false }
+        if (keepPick) GroupDaysDialog(s.name, io.github.ravenor907.muninn.net.Limits.groupDays(s), onPick = { d ->
+            keepPick = false
+            app.chat.groups.setLimit(g, io.github.ravenor907.muninn.net.Limits.FAMILY, d)?.let { Ui.say(it, true) }
+                ?: Ui.say("Messages in ${s.name} now delete after $d days.")
+        }) { keepPick = false }
         // Cap g3: the group's about text (description and rules), at the top of its first channel. It never expires.
         // Paragraphs show one a line; a tap folds it to one line (kept for this run), for small screens.
         if (s.about.isNotEmpty() && ch == Proto06.MAIN) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = {
@@ -2638,7 +2666,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             // Cap g3: Report to admins, through the group (an admin's older app gets a private message, when a contact).
             // A main row, where people look for it (not among the facts in Info).
             if (!gm.mine && gm.unsent.isEmpty() && gm.from.isNotEmpty() && !grp.readOnly && s.admins.any { it != me && it != gm.from })
-                add(SheetAction("Report to admins", "info") {
+                add(SheetAction("Report to admins", "shield") {
                     Ui.sure(Ask("Report this message?", "Only the group's admins see it, and that it came from you.", "Report", onConfirm = {
                         val n = app.chat.groups.report(g, gm.id) { k, line -> app.chat.sendPrivate(k, line) }
                         if (n == 0) Ui.say("No admin can get it yet. They may need an update.", true)
