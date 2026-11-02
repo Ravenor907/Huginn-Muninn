@@ -169,9 +169,10 @@ internal fun KidPhone(app: Muninn, cfg: TvConfig, person: TvPerson?, quiet: Quie
     KidStyle {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             val tablet = LocalConfiguration.current.smallestScreenWidthDp >= io.github.ravenor907.muninn.screens.ChatNav.TABLET_SW_DP
-            val wide = tablet && maxWidth >= io.github.ravenor907.muninn.screens.ChatNav.WIDE_MIN
+            val full = maxWidth
+            val wide = tablet && full >= io.github.ravenor907.muninn.screens.ChatNav.WIDE_MIN
             if (wide) Row(Modifier.fillMaxSize()) {
-                Box(Modifier.width(minOf(400.dp, maxWidth * 0.4f)).fillMaxHeight().background(Palette.panelLow)) {
+                Box(Modifier.width(minOf(400.dp, full * 0.4f)).fillMaxHeight().background(Palette.panelLow)) {
                     KidHome(app, cfg, quiet, person?.k, onParent)
                 }
                 Box(Modifier.width(1.dp).fillMaxHeight().background(Palette.hairline))
