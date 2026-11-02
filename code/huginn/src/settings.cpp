@@ -117,11 +117,17 @@ QString Settings::defaultDeviceName()
     QString host = QSysInfo::machineHostName();
     if (host.isEmpty() || host == QLatin1String("localhost"))
         host = QStringLiteral("handheld");
+    // A short tag from this machine (the same after an erase, so a phone that asks "Replace ...?" finds the old entry),
+    // so two family PCs or two handhelds called "steamdeck" never show the same name: "Huginn on Windows 3F2A".
+    QByteArray id = QSysInfo::machineUniqueId();
+    if (id.isEmpty())
+        id = host.toUtf8();
+    const QString tag = QString::fromLatin1(QCryptographicHash::hash(id, QCryptographicHash::Sha256).toHex().right(4)).toUpper();
     // Windows makes up names like DESKTOP-7KQ2M1B: nobody knows their computer by that.
     for (const char *made : {"DESKTOP-", "LAPTOP-", "WIN-"})
         if (host.startsWith(QLatin1String(made), Qt::CaseInsensitive))
             host = QStringLiteral("Windows");
-    return QStringLiteral("Huginn on %1").arg(host);
+    return QStringLiteral("Huginn on %1 %2").arg(host, tag);
 }
 
 QString Settings::deviceName() const

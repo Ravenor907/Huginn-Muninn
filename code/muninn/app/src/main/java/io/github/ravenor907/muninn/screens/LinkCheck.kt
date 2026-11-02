@@ -213,7 +213,21 @@ fun LinkCheck() {
     if (LinkUi.companionOpen) return
     val d = companions.firstOrNull { !it.ok } ?: phone?.takeIf { !it.ok }
     val done = LinkUi.linked
-    if (d == null && done == null) return
+    val replace by Link.replace.collectAsState()
+    // A computer linked again after "Erase and link my phone again" (protocol.md 15): after the emoji and "Linked".
+    if (d == null && done == null) {
+        replace?.let { r ->
+            AlertDialog(onDismissRequest = { Link.answerReplace(false) }, containerColor = Palette.panel,
+                title = { Text("Replace ${r.oldName}?", style = Type.big) },
+                text = {
+                    Text("${r.newName} was erased and linked again. If it's the same computer as ${r.oldName}, replace the old entry. "
+                        + "If they're two computers, keep both.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState()))
+                },
+                confirmButton = { MButton("Replace", kind = Kind.Accent) { Link.answerReplace(true) } },
+                dismissButton = { MButton("Keep both") { Link.answerReplace(false) } })
+        }
+        return
+    }
     val companion = d != null && phone?.key == d.key
     Dialog(onDismissRequest = { if (d != null) Link.unlink(d.key); LinkUi.linked = null },
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnClickOutside = false)) {

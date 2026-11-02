@@ -108,15 +108,16 @@ Item {
     readonly property bool canForget: mode === "unlock" && !cancelable && !practice
     // On a PC linked to a phone the easier way back is to erase it and link the phone again (the chats come back from
     // the phone): a backup here holds this PC's own account, not the phone's chats (as the Backup screen says), so a
-    // restore comes second. The phone swaps its old entry for this PC when it links again (Muninn's Link.link).
+    // restore comes second. The next link tells the phone it's a relink, and the phone asks whether to replace its old
+    // entry for this PC (protocol.md 15).
     function forgot() {
         const restore = () => { if (Ui.main) Ui.main.openBackup("restore", false, false, true) }
         if (Linked.linkedWhileLocked()) {
             Ui.sure("Forgot your lock?", "Your chats are encrypted with it, so nobody can open or reset it.\n\nThis PC is linked to your phone. "
                     + "A backup here holds this PC's own account, not your phone's chats, and restoring it can break the link.\n\nThe easier way: "
-                    + "erase this PC and link your phone again. Your chats come back from your phone, and it replaces its old entry for this PC. "
+                    + "erase this PC and link your phone again. Your chats come back from your phone, and it asks to replace its old entry for this PC (if it still lists the old one, remove it in Linked devices). "
                     + "Anything only on this PC is erased. Huginn closes; open it again to link.",
-                    "Erase and link my phone again", () => { Vault.eraseAll(); if (Ui.main) Ui.main.quitNow() }, true, true)
+                    "Erase and link my phone again", () => { Vault.eraseForRelink(); if (Ui.main) Ui.main.quitNow() }, true, true)
             Ui.confirm.otherText = "Restore from a backup"
             Ui.confirm.otherCallback = restore
             return

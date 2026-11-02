@@ -689,8 +689,15 @@ void Link::confirm(const QString &key)
     if (m_phone.key == key && !m_phone.ok) {
         m_phone.ok = true;
         save();
-        // "f": the first one after the emoji, which the phone takes even inside the 10 minutes.
-        sendTo(m_phone, syncFrame(true));
+        // "f": the first one after the emoji, which the phone takes even inside the 10 minutes. After "Erase and link my
+        // phone again" it also says "relink", once, so the phone asks whether to replace this PC's old entry.
+        QJsonObject first = syncFrame(true);
+        QSettings s = Settings::store();
+        if (s.value(QStringLiteral("link/relink"), false).toBool()) {
+            first.insert(QStringLiteral("relink"), true);
+            s.remove(QStringLiteral("link/relink"));
+        }
+        sendTo(m_phone, first);
     }
 }
 

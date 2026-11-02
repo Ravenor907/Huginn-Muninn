@@ -732,6 +732,16 @@ void Vault::eraseAll()
     Q_EMIT changed();
 }
 
+void Vault::eraseForRelink()
+{
+    eraseAll();
+    // Only yes/no, beside the vault (gone above), and after the portable build emptied its settings. Link::confirm
+    // reads it once and removes it; a plain eraseAll removes it too (the "link" group).
+    QSettings s = Settings::store();
+    s.setValue(QStringLiteral("link/relink"), true);
+    s.sync();
+}
+
 namespace
 {
 // What kind of file it is, for Labs › Performance check's counts: "chats", "photos", "ratchet" (never a name).

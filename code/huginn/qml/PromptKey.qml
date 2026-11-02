@@ -40,7 +40,7 @@ Item {
                 id: glyph
                 anchors.centerIn: parent
                 // A held pair, like "lb+up": LB ▲.
-                text: root.key.split("+").map(k => k === "up" ? "▲" : k === "down" ? "▼" : Gamepad.glyph(k)).join(" ")
+                text: root.key.split("+").map(k => k === "up" ? "▲" : k === "down" ? "▼" : /^p[1-4]$/.test(k) ? k.toUpperCase() : Gamepad.glyph(k)).join(" ")
                 color: root.tone.fg
                 font.family: Theme.body
                 font.pixelSize: Theme.fs(13)

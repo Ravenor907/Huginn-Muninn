@@ -82,6 +82,9 @@ public:
     // Erases every message, photo, voice message, contact and key, the cache and a move's state, and first setup runs
     // again. Huginn's other settings stay, except on the Windows portable build, where the whole data folder is emptied.
     Q_INVOKABLE void eraseAll();
+    // Unlock › Forgot it? › "Erase and link my phone again": eraseAll, then a yes/no note (outside the vault) that the
+    // next link's first "sync" says "relink", so the phone offers to replace this PC's old entry (protocol.md 15).
+    Q_INVOKABLE void eraseForRelink();
 
     // Encrypted files in Huginn's data folder. read() returns empty when missing, locked or damaged.
     // A file that is there but couldn't be read (damaged, or held by another program for longer than a few short

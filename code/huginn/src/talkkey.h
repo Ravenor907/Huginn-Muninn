@@ -5,6 +5,7 @@
 
 class Settings;
 class RoomManager;
+class QTimer;
 
 // The push to talk key (Settings › Calls). Watches the keyboard while Huginn is in front: holding the
 // key in a voice room lets the microphone send (RoomManager::setTalking). While a text box has the focus a key that
@@ -28,6 +29,10 @@ class TalkKey : public QObject
     Q_PROPERTY(bool padAway READ padAway NOTIFY changed)
     // Something can talk right now: a keyboard key, or the controller button with a controller connected.
     Q_PROPERTY(bool canTalk READ canTalk NOTIFY changed)
+    // The controller with the only talk button went away (or slept) during a voice room: push to talk stays on and the
+    // mic is muted (Main.qml), never an open mic mid-room. Voice activity only at join time. Ends with the room or the
+    // controller coming back.
+    Q_PROPERTY(bool padGone READ padGone NOTIFY changed)
     // The controller's talk button ("rb", "" for none), and its name to show ("RB").
     Q_PROPERTY(QString padButton READ padButton NOTIFY changed)
     Q_PROPERTY(QString padName READ padName NOTIFY changed)
@@ -44,6 +49,7 @@ public:
     bool hasKey() const { return m_key != 0 || !m_pad.isEmpty(); }
     bool padAway() const { return m_key == 0 && !m_pad.isEmpty() && !m_padConnected; }
     bool canTalk() const { return m_key != 0 || (!m_pad.isEmpty() && m_padConnected); }
+    bool padGone() const { return m_padGone; }
     // A controller connected or not (main.cpp follows Gamepad).
     void setPadConnected(bool connected);
     QString padButton() const { return m_pad; }
@@ -70,6 +76,9 @@ Q_SIGNALS:
     void padPicked(const QString &button);
     // A controller button that can't talk was pressed while picking ("x", "a"...): Settings says why.
     void padRefused(const QString &button);
+    // The talk button's controller went away mid-room (Main.qml mutes the mic and says so), or came back.
+    void controllerGone();
+    void controllerBack();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -85,8 +94,13 @@ private:
     bool m_down = false;
     QString m_pad;            // the controller's talk button, "" for none
     bool m_padDown = false;   // it's held, talking
-    bool m_padTook = false;
-    bool m_padConnected = false;   // its press talked, so its release is taken here too (even after the room ended)
+    bool m_padTook = false;        // its press talked, so its release is taken here too (even after the room ended)
+    bool m_padConnected = false;
+    bool m_padGone = false;        // padGone()
+    // LB as the talk button: the mic opens about 150 ms after the press, and not at all while that hold is LB with Up
+    // or Down (mute and deafen), so muting never sends a blip of sound first.
+    QTimer *m_padWait = nullptr;
+    bool m_padHushed = false;
     bool m_toldTyped = false;
     bool m_inBox = false;
 };

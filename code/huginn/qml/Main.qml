@@ -558,7 +558,8 @@ Window {
             if (c.key !== k) rest.push(c)
             else if (k === "lt" && !hasX) rest.push({ key: "x", label: c.label })
         }
-        return [{ key: k, label: "Talk" }].concat(rest)
+        // A back paddle's pill is short ("P1"), so the label says what it is.
+        return [{ key: k, label: /^p[1-4]$/.test(k) ? "Talk (back paddle)" : "Talk" }].concat(rest)
     }
 
     // ------------------------------------------------------------- overlays
@@ -1262,8 +1263,13 @@ Window {
     Connections {
         target: Rooms
         function onChanged() {
-            if (!Rooms.inRoom) { app.talkWentBehind = false; app.talkToldOnce = false; return }
-            if (app.touring || !Settings.pushToTalk || TalkKey.canTalk || Rooms.room === "") return
+            if (!Rooms.inRoom) {
+                app.talkWentBehind = false; app.talkToldOnce = false
+                // Muted only because the controller went away: the next call or room starts as before.
+                if (app.padMutedMic) { app.padMutedMic = false; Settings.micMuted = false }
+                return
+            }
+            if (app.touring || !Settings.pushToTalk || TalkKey.canTalk || TalkKey.padGone || Rooms.room === "") return
             const id = Rooms.group + "/" + Rooms.room
             if (app.talkNoKeyTold[id]) return
             app.talkNoKeyTold[id] = true
@@ -1273,9 +1279,21 @@ Window {
                 Ui.say("No talk key yet: using voice activity. Pick a key in Settings › Calls.")
         }
     }
+    // The controller with the talk button went away (or slept) mid-room: push to talk stays on and the mic is muted,
+    // never an open mic. It comes back unmuted only if this muted it.
+    property bool padMutedMic: false
     // The talk key typed into a text box during a voice room (once a run): say how to talk while typing.
     Connections {
         target: TalkKey
+        function onControllerGone() {
+            if (!Ui.micMuted) { Ui.toggleMic(); app.padMutedMic = true }
+            app.sayOutOfSight("Huginn", "Controller gone: mic muted. Connect it again to talk.", true)
+        }
+        function onControllerBack() {
+            if (app.padMutedMic && Rooms.inRoom && Ui.micMuted) Ui.toggleMic()
+            app.padMutedMic = false
+            Ui.say("Controller back: hold " + Gamepad.glyph(TalkKey.padButton) + " to talk.")
+        }
         function onTypedInstead() {
             Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like Insert, Pause or Scroll Lock (Settings › Calls).")
         }

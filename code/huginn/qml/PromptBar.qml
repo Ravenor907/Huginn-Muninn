@@ -54,9 +54,10 @@ Rectangle {
     readonly property var briefs: ({ "Next section": "Next", "Hold to record": "Record", "Group menu": "Options",
                                      "Mute mic": "Mute", "Unmute mic": "Unmute", "Search, Transfers": "Search",
                                      "Reply in the thread": "Reply", "Answer with video": "Video", "Let go: send": "Send",
-                                     "Older or newer": "Scroll", "Pattern or password": "Lock" })
+                                     "Older or newer": "Scroll", "Pattern or password": "Lock",
+                                     "Talk (back paddle)": "Talk" })
     function need(p, brief) {
-        const glyph = p.key.split("+").map(k => k === "up" ? "▲" : k === "down" ? "▼" : Gamepad.glyph(k)).join(" ")
+        const glyph = p.key.split("+").map(k => k === "up" ? "▲" : k === "down" ? "▼" : /^p[1-4]$/.test(k) ? k.toUpperCase() : Gamepad.glyph(k)).join(" ")
         const label = brief && briefs[p.label] !== undefined ? briefs[p.label] : p.label
         return Math.max(Theme.px(27), Math.ceil(glyphMetrics.advanceWidth(glyph)) + Theme.px(14)) + Theme.px(8)
              + Math.ceil(labelMetrics.advanceWidth(label)) + 1

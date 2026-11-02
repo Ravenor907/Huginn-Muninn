@@ -1647,6 +1647,20 @@ takes nothing (`send`, `sync`, `get`) from that companion, and the companion sho
 match" the companion sends `{"t": "sync", "f": true}`. A pair linked without this check stays linked. While a phone's chats are mirrored
 anywhere, it says "Mirrored to [name]".
 
+**Linking again after an erase.** A companion erased by "Erase and link my phone again" (Huginn: Unlock › Forgot
+it?) comes back with a new key, so the phone sees a new device. The companion keeps a yes/no note through the erase
+and puts `"relink": true` beside `caps` in its first `sync` after "They match" (the one with `"f": true`), once; a phone
+that doesn't know the field ignores it. Only then does the phone look for the old entry (a checked companion with the
+same name, else the only other checked one) and ask "Replace [old name]?" with Replace (unlinks the old entry) or
+Keep both. A matching name alone never drops a companion: two computers may share one. Huginn's default name ends
+with a short tag from the machine ("Huginn on Windows 3F2A"), the same after an erase, so names rarely match by
+chance.
+
+**The linked note on the companion.** Huginn keeps a plain yes/no "linked to a phone" note in its settings, outside
+the vault, so the lock screen's Forgot it? can offer "Erase and link my phone again" before the vault is open. It
+holds only yes/no (no key, name or address), is set while a phone is linked, is removed on Unlink and on erase, and is
+written again from the vault after every restore.
+
 **From the phone:**
 - `{"t": "chat", "peer", "n", "msgs": [item, ...], "d", "pg": i, "pgs": n}`: one page of a chat's history, over the LAN
   route only. On "They match" and on every `sync` it takes, the phone sends every message it still keeps for each 1:1 chat with a contact (within the

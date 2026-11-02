@@ -7,6 +7,7 @@
 #include <QKeySequence>
 #include <QSettings>
 #include <QStringList>
+#include <QTimer>
 #include <QVariant>
 #include <QWindow>
 
@@ -18,6 +19,13 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
     , m_pad(Settings::store().value(QStringLiteral("talkPad")).toString())
 {
     qApp->installEventFilter(this);
+    m_padWait = new QTimer(this);
+    m_padWait->setSingleShot(true);
+    m_padWait->setInterval(150);
+    connect(m_padWait, &QTimer::timeout, this, [this] {
+        if (m_padDown && !m_padHushed)
+            m_rooms->setTalking(true);
+    });
     // A text box taking or losing the focus changes what a key that types does (the voice line says so).
     connect(qApp, &QGuiApplication::focusObjectChanged, this, [this] {
         const bool now = boxFocused();
@@ -35,8 +43,14 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
         }
     });
     connect(m_rooms, &RoomManager::changed, this, [this] {
-        if (!m_rooms->inRoom())
+        if (!m_rooms->inRoom()) {
             release();
+            // The next room decides afresh: voice activity at join time if there's still no controller.
+            if (m_padGone) {
+                m_padGone = false;
+                Q_EMIT changed();
+            }
+        }
     });
 }
 
@@ -108,7 +122,22 @@ void TalkKey::setPadConnected(bool connected)
         m_padTook = false;
         m_rooms->setTalking(m_down);
     }
+    // Gone (or asleep) mid-room while it held the only talk button: push to talk stays on (main.cpp) and the mic is
+    // muted, so whatever is said off-mic never goes out. Set before changed(), so push to talk never drops for a moment.
+    bool gone = false;
+    bool back = false;
+    if (!connected && m_key == 0 && !m_pad.isEmpty() && m_rooms->inRoom() && m_rooms->pushToTalk()) {
+        m_padGone = true;
+        gone = true;
+    } else if (connected && m_padGone) {
+        m_padGone = false;
+        back = true;
+    }
     Q_EMIT changed();
+    if (gone)
+        Q_EMIT controllerGone();
+    if (back)
+        Q_EMIT controllerBack();
 }
 
 void TalkKey::clearKey()
@@ -165,6 +194,14 @@ bool TalkKey::pad(const QString &button, bool down)
         }
         return true;
     }
+    // LB held as the talk button, then Up or Down (mute or deafen, Main.qml): the mic stays closed for the rest of this
+    // hold. The press still goes on to do its job.
+    if (m_padDown && m_pad == QLatin1String("lb") && (button == QLatin1String("up") || button == QLatin1String("down"))) {
+        m_padHushed = true;
+        m_padWait->stop();
+        m_rooms->setTalking(m_down);
+        return false;
+    }
     // A press: the talk button talks only in a voice room with push to talk on; anywhere else it does its usual job.
     if (m_pad.isEmpty() || button != m_pad)
         return false;
@@ -175,7 +212,11 @@ bool TalkKey::pad(const QString &button, bool down)
     m_padTook = true;
     if (!m_padDown) {
         m_padDown = true;
-        m_rooms->setTalking(true);
+        m_padHushed = false;
+        if (m_pad == QLatin1String("lb"))
+            m_padWait->start();
+        else
+            m_rooms->setTalking(true);
     }
     return true;
 }

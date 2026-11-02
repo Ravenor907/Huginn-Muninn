@@ -334,10 +334,13 @@ Item {
         }
     }
 
-    // The controller's buttons here. X pastes while the clipboard has text; LT then shows the more words.
+    // The controller's buttons here. X pastes while the clipboard has text; LT then shows the more words, or Down when
+    // LT is the talk button in a voice room (it only talks there).
     readonly property bool canPaste: visible && (multiLine ? area.canPaste : field.canPaste)
+    readonly property bool ltTalks: TalkKey.padButton === "lt" && Settings.pushToTalk && Rooms.inRoom
+    readonly property string moreKey: !canPaste ? "x" : ltTalks ? "down" : "lt"
     readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }, { key: "y", label: "Keyboard" }].concat(
-        canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: canPaste ? "lt" : "x", label: moreLabel }] : [])
+        canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: moreKey, label: moreLabel }] : [])
     function handleButton(b) {
         switch (b) {
         case "a": case "start": accept(); return true
@@ -347,7 +350,8 @@ Item {
             if (canPaste) { const f = multiLine ? area : field; f.forceActiveFocus(); f.paste() }
             else if (moreLabel.length) moreOpen = !moreOpen
             return true
-        case "lt": if (moreLabel.length) moreOpen = !moreOpen; return true
+        case "lt": if (moreLabel.length && moreKey !== "down") moreOpen = !moreOpen; return true
+        case "down": if (moreLabel.length && moreKey === "down") moreOpen = !moreOpen; return true
         case "left": case "right":
             if (choices.length) {
                 const i = Math.max(0, choices.findIndex(c => c.value === choice))

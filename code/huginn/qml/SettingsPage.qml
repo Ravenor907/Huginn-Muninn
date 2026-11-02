@@ -749,19 +749,24 @@ Rectangle {
         else if (bottom > rowsView.contentY + rowsView.height) rowsView.contentY = Math.min(bottom - rowsView.height, Math.max(0, rowsView.contentHeight - rowsView.height))
     }
     // "Pick a key": a back paddle has no other job, and with LT talking X opens the options instead. Y and LB have other
-    // jobs, so they say what they give up in a voice room. Back paddles may need mapping in Steam Input to reach Huginn.
-    // A handheld's controller button only works with Huginn in front, and a Linux desktop may ask to confirm a key.
-    readonly property string pickNote: "Press the new key, or on a controller " + Gamepad.glyph("lt") + " or a back paddle ("
-        + Gamepad.glyph("x") + " then opens the options instead of " + Gamepad.glyph("lt") + "). If a back paddle does nothing, set it up in Steam Input first. "
-        + Gamepad.glyph("y") + " or " + Gamepad.glyph("lb") + " work too, but in a voice room they only talk. Esc or " + Gamepad.glyph("b") + " keeps the old one"
-        + (System.handheld || System.gameMode ? ". The controller button works while Huginn is in front; in a game, voice activity is better" : "")
-        + (Qt.platform.os === "linux" && GlobalKeys.everywhere && !System.gameMode ? ". Your desktop may ask to confirm a key" : "")
+    // jobs, so they say what they give up in a voice room. Back paddles may need mapping in Steam Input to reach Huginn
+    // (said only in game mode). The controller part shows only while one is connected, so a keyboard-only PC reads one
+    // line. A handheld's controller button only works with Huginn in front, and a Linux desktop may ask to confirm a key.
+    readonly property string pickNote: Gamepad.connected
+        ? "Press the new key, or on a controller " + Gamepad.glyph("lt") + " or a back paddle ("
+          + Gamepad.glyph("x") + " then opens the options instead of " + Gamepad.glyph("lt") + "). "
+          + (System.gameMode ? "If a back paddle does nothing, set it up in Steam Input first. " : "")
+          + Gamepad.glyph("y") + " or " + Gamepad.glyph("lb") + " work too, but in a voice room they only talk. Esc or " + Gamepad.glyph("b") + " keeps the old one"
+          + (System.handheld || System.gameMode ? ". The controller button works while Huginn is in front; in a game, voice activity is better" : "")
+          + (Qt.platform.os === "linux" && GlobalKeys.everywhere && !System.gameMode ? ". Your desktop may ask to confirm a key" : "")
+        : "Press the new key. Esc keeps the old one"
+          + (Qt.platform.os === "linux" && GlobalKeys.everywhere && !System.gameMode ? ". Your desktop may ask to confirm a key" : "")
     // The controller talk button's note: what it gives up in a voice room, when it has another job.
     function padNote(b) {
         const g = Gamepad.glyph(b), lt = Gamepad.glyph("lt"), x = Gamepad.glyph("x")
         const away = TalkKey.padAway ? ". No controller connected, so voice activity until one is" : ""
         if (b === "y") return g + " also opens the keyboard, records and calls. In a voice room it only talks. A back paddle has no other job" + away
-        if (b === "lb") return g + " also changes section. In a voice room it only talks, and " + g + " with Up or Down still mutes and deafens" + away
+        if (b === "lb") return g + " also switches sections and channels. In a voice room it only talks, and " + g + " with Up or Down still mutes and deafens without opening the mic" + away
         if (b === "x") return g + " opens the options, so it shouldn't talk. Remove it and pick " + lt + " or a back paddle" + away
         if (b === "lt") return "In a voice room it only talks, and " + x + " opens the options instead" + away
         return "Hold it in a voice room while Huginn is in front" + away
@@ -772,7 +777,7 @@ Rectangle {
         function onPadPicked(button) {
             const g = Gamepad.glyph(button)
             if (button === "y") Ui.say(g + " also opens the keyboard: in a voice room it only talks. A back paddle has no other job.")
-            else if (button === "lb") Ui.say(g + " also changes section: in a voice room it only talks. " + g + " with Up or Down still mutes and deafens.")
+            else if (button === "lb") Ui.say(g + " also switches sections and channels: in a voice room it only talks. " + g + " with Up or Down still mutes and deafens, without opening the mic.")
         }
         // A button that can't talk, pressed while picking: why not.
         function onPadRefused(button) {

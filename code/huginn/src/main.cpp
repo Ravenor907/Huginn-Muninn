@@ -783,11 +783,14 @@ int main(int argc, char *argv[])
     // Push to talk (Settings › Calls): TalkKey watches the key while Huginn is in front; GlobalKeys lets it, Mute and
     // Deafen work while a game is in front where the system allows it.
     // With push to talk on but no key or controller button picked yet, the mic uses voice activity: never dead.
-    // A controller talk button with no controller connected can't be pressed, so that's voice activity too.
+    // A controller talk button with no controller connected can't be pressed, so that's voice activity too, but only
+    // at join time: a controller that goes away mid-room keeps push to talk on, with the mic muted (TalkKey::padGone).
     auto *talkKey = new TalkKey(settings, rooms, &app);
     talkKey->setPadConnected(gamepad->connected());
     QObject::connect(gamepad, &Gamepad::connectedChanged, talkKey, [talkKey, gamepad] { talkKey->setPadConnected(gamepad->connected()); });
-    const auto talkMode = [settings, rooms, talkKey] { rooms->setPushToTalk(settings->pushToTalk() && talkKey->canTalk()); };
+    const auto talkMode = [settings, rooms, talkKey] {
+        rooms->setPushToTalk(settings->pushToTalk() && (talkKey->canTalk() || talkKey->padGone()));
+    };
     talkMode();
     QObject::connect(settings, &Settings::changed, rooms, talkMode);
     QObject::connect(talkKey, &TalkKey::changed, rooms, talkMode);
