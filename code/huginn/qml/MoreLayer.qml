@@ -13,7 +13,7 @@ import Huginn
 // held 5 seconds).
 // Y goes to the next tab.
 Item {
-    id: layer
+    id: more
     property string where: ""
     property string title: ""
     property bool tour: false
@@ -73,7 +73,7 @@ Item {
     // In game mode the system's window can't be driven with the controller: Huginn's own list, pictures only.
     function pickPictures() {
         if (Ui.ownPicker()) {
-            Ui.pickFiles(paths => layer.sendPictures(paths, false), "pictures")
+            Ui.pickFiles(paths => more.sendPictures(paths, false), "pictures")
             return
         }
         const paths = Chat.pickPictures()
@@ -94,18 +94,18 @@ Item {
     Connections {
         target: Chat
         function onRecentPicturesReady(pics) {
-            if (!layer.wantPictures) return
-            layer.wantPictures = false
+            if (!more.wantPictures) return
+            more.wantPictures = false
             if (!pics.length) { Ui.say("No pictures in your Pictures folder.", true); return }
             Ui.pickFrom("Send a picture", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
                 Ui.pickFrom("Send this picture", [{ header: "", items: [
                     { name: "Send", url: "normal" },
                     { name: "High quality", detail: "Best on the same Wi-Fi", url: "hd" }] }],
-                    q => layer.sendPictures([path], q === "hd")))
+                    q => more.sendPictures([path], q === "hd")))
         }
     }
     function sendVideoFile() {
-        if (Ui.ownPicker()) { Ui.pickFiles(paths => layer.sendVideoPath(paths[0]), "videos", true); return }
+        if (Ui.ownPicker()) { Ui.pickFiles(paths => more.sendVideoPath(paths[0]), "videos", true); return }
         sendVideoPath(Videos.pickFile())
     }
     function sendVideoPath(path) {
@@ -138,7 +138,7 @@ Item {
         Ui.pickFrom(clips.length === 1 ? "Send this video" : "Send " + clips.length + " videos", [{ header: "", items: [
             { name: "As a file", detail: "Saved on their device, full quality", url: "file", icon: "attach" },
             { name: "As a video message", detail: "Plays in the chat", url: "message", icon: "play" }] }],
-            a => { if (a === "message") layer.sendClips(clips); else if (a === "file") PeopleActions.sendFiles(layer.where, clipUrls) })
+            a => { if (a === "message") more.sendClips(clips); else if (a === "file") PeopleActions.sendFiles(more.where, clipUrls) })
     }
     function newPoll() { pollDlg.open("Poll for " + title) }
     function viewPhotos(list, i) { photos = list; photoAt = i }
@@ -194,7 +194,7 @@ Item {
         const view = sharedTab === "links" ? linkList : tileGrid
         const item = view.itemAtIndex(i)
         sharedSel = i
-        if (item) Ui.menuAt(item, Math.min(item.width / 2, Theme.px(140)), item.height / 2, () => layer.itemMenu(i))
+        if (item) Ui.menuAt(item, Math.min(item.width / 2, Theme.px(140)), item.height / 2, () => more.itemMenu(i))
         else itemMenu(i)
     }
     function itemMenu(i) {
@@ -206,8 +206,8 @@ Item {
                 { name: "Open", icon: "attach", url: "open" },
                 { name: "Show in chat", icon: "thread", url: "show" },
                 { name: "Copy link", icon: "attach", url: "copy" },
-                { name: "Forward", icon: "forward", url: "forward", sub: () => { if (!layer.tour) PeopleActions.forwardMenu(it.url) } }] }],
-                a => layer.runItem(it, a))
+                { name: "Forward", icon: "forward", url: "forward", sub: () => { if (!more.tour) PeopleActions.forwardMenu(it.url) } }] }],
+                a => more.runItem(it, a))
             return
         }
         const here = it.here !== false, kind = kindOf(it)
@@ -216,10 +216,10 @@ Item {
                                icon: sharedTab === "voice" || it.video > 0 ? "play" : "image", url: "open" })
         items.push({ name: "Show in chat", icon: "thread", url: "show" })
         if (here) items.push({ name: "Save", icon: "save", detail: "To " + saveWhere(it), url: "save" },
-                             { name: "Forward", icon: "forward", url: "forward", sub: () => { if (!layer.tour) PeopleActions.forwardMedia(it, kind) } })
+                             { name: "Forward", icon: "forward", url: "forward", sub: () => { if (!more.tour) PeopleActions.forwardMedia(it, kind) } })
         Ui.pickFrom(kind.charAt(0).toUpperCase() + kind.slice(1) + " from " + (it.name || "someone"),
                     [{ header: here ? "" : "Not on this device", items: items }, { header: "", items: [{ name: "Delete", url: "delete", danger: true }] }],
-                    a => layer.runItem(it, a))
+                    a => more.runItem(it, a))
     }
     // Where Save puts it: pictures beside Save to Pictures', videos and voice beside received files.
     function saveWhere(it) { return sharedTab === "voice" || it.video > 0 ? (Transfer.saveName || "Downloads") + " › Huginn" : "Pictures › Huginn" }
@@ -289,16 +289,16 @@ Item {
     // ------------------------------------------------------------- the Shared page
     Rectangle {
         anchors.fill: parent
-        visible: layer.sharedOpen
+        visible: more.sharedOpen
         color: Theme.ground
         MouseArea { anchors.fill: parent }
         PageHeader {
             id: sharedHead
             width: parent.width
             carved: false
-            title: layer.title !== "" ? "Shared with " + layer.title : "Shared"
-            subtitle: layer.sharedData.media.length + " photos and videos · " + layer.sharedData.links.length + " links · " + layer.sharedVoices.length + " voice messages"
-            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: layer.sharedOpen = false }
+            title: more.title !== "" ? "Shared with " + more.title : "Shared"
+            subtitle: more.sharedData.media.length + " photos and videos · " + more.sharedData.links.length + " links · " + more.sharedVoices.length + " voice messages"
+            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: more.sharedOpen = false }
         }
         Segmented {
             id: sharedTabs
@@ -306,38 +306,38 @@ Item {
             x: Theme.px(20)
             width: Math.min(implicitWidth, parent.width - Theme.px(40))
             options: [{ value: "media", label: "Photos and videos" }, { value: "links", label: "Links" }, { value: "voice", label: "Voice" }]
-            value: layer.sharedTab
-            onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1; layer.sharedShown = layer.pageSize }
+            value: more.sharedTab
+            onPicked: v => { more.sharedTab = v; more.sharedSel = -1; more.sharedShown = more.pageSize }
         }
         // Photos and videos, or voice messages: square tiles, as many across as fit.
         GridView {
             id: tileGrid
             readonly property int columns: Math.max(1, Math.floor(width / Theme.px(150)))
-            visible: layer.sharedTab !== "links"
+            visible: more.sharedTab !== "links"
             anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true
             cellWidth: Math.floor(width / columns); cellHeight: cellWidth
-            model: layer.sharedTab === "voice" ? layer.sharedVoices.slice(0, layer.sharedShown)
-                 : layer.sharedTab === "media" ? layer.sharedData.media.slice(0, layer.sharedShown) : []
-            currentIndex: layer.sharedSel
-            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedCount()) layer.sharedShown += layer.pageSize
+            model: more.sharedTab === "voice" ? more.sharedVoices.slice(0, more.sharedShown)
+                 : more.sharedTab === "media" ? more.sharedData.media.slice(0, more.sharedShown) : []
+            currentIndex: more.sharedSel
+            onAtYEndChanged: if (atYEnd && more.sharedShown < more.sharedCount()) more.sharedShown += more.pageSize
             delegate: Rectangle {
                 id: tile
                 required property var modelData
                 required property int index
-                readonly property bool voice: layer.sharedTab === "voice"
+                readonly property bool voice: more.sharedTab === "voice"
                 readonly property bool here: modelData.here !== false
                 readonly property bool video: !voice && modelData.video > 0
                 readonly property bool photo: !voice && !video && here
                 readonly property bool playingThis: voice && Voice.playing !== "" && Voice.playing === modelData.photo
                 width: tileGrid.cellWidth - Theme.px(6); height: width
                 radius: Theme.radius; color: tileHover.hovered ? Theme.raised : Theme.groundDeep; clip: true
-                border.color: Theme.accent; border.width: index === layer.sharedSel ? Theme.focusWidth : 0
+                border.color: Theme.accent; border.width: index === more.sharedSel ? Theme.focusWidth : 0
                 Image {
                     anchors.fill: parent
-                    visible: tile.photo && !layer.tour
+                    visible: tile.photo && !more.tour
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     // A small cached copy, loaded only for the tiles in view.
@@ -345,7 +345,7 @@ Item {
                 }
                 // A video, a voice message, one not on this device (or a tour photo): what it is, in the middle.
                 Column {
-                    visible: !tile.photo || layer.tour
+                    visible: !tile.photo || more.tour
                     anchors.centerIn: parent
                     width: parent.width - Theme.px(12)
                     spacing: Theme.px(4)
@@ -386,30 +386,30 @@ Item {
                 Accessible.role: Accessible.Button
                 Accessible.name: (tile.voice ? "Voice message from " : tile.video ? "Video from " : tile.modelData.gif ? "GIF from " : "Photo from ")
                                  + (tile.modelData.name || "someone") + (tile.here ? "" : ", not on this device")
-                Accessible.onPressAction: { layer.sharedSel = tile.index; layer.openSharedItem(tile.index) }
+                Accessible.onPressAction: { more.sharedSel = tile.index; more.openSharedItem(tile.index) }
                 HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onTapped: (point, button) => {
-                        layer.sharedSel = tile.index
-                        if (button === Qt.RightButton) Ui.menuAt(tile, point.position.x, point.position.y, () => layer.itemMenu(tile.index))
-                        else layer.openSharedItem(tile.index)
+                        more.sharedSel = tile.index
+                        if (button === Qt.RightButton) Ui.menuAt(tile, point.position.x, point.position.y, () => more.itemMenu(tile.index))
+                        else more.openSharedItem(tile.index)
                     }
-                    onLongPressed: { layer.sharedSel = tile.index; Ui.menuAt(tile, point.position.x, point.position.y, () => layer.itemMenu(tile.index)) }
+                    onLongPressed: { more.sharedSel = tile.index; Ui.menuAt(tile, point.position.x, point.position.y, () => more.itemMenu(tile.index)) }
                 }
             }
         }
         ListView {
             id: linkList
-            visible: layer.sharedTab === "links"
+            visible: more.sharedTab === "links"
             anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true
             spacing: Theme.px(8)
-            model: layer.sharedData.links.slice(0, layer.sharedShown)
-            currentIndex: layer.sharedSel
-            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedData.links.length) layer.sharedShown += layer.pageSize
+            model: more.sharedData.links.slice(0, more.sharedShown)
+            currentIndex: more.sharedSel
+            onAtYEndChanged: if (atYEnd && more.sharedShown < more.sharedData.links.length) more.sharedShown += more.pageSize
             delegate: Rectangle {
                 id: linkRow
                 required property var modelData
@@ -417,7 +417,7 @@ Item {
                 width: linkList.width
                 height: Math.max(Theme.px(64), linkCol.implicitHeight) + Theme.px(16)
                 radius: Theme.radius; color: Theme.panel
-                border.color: linkRow.index === layer.sharedSel ? Theme.accent : Theme.line; border.width: linkRow.index === layer.sharedSel ? Theme.focusWidth : 1
+                border.color: linkRow.index === more.sharedSel ? Theme.accent : Theme.line; border.width: linkRow.index === more.sharedSel ? Theme.focusWidth : 1
                 Image {
                     id: linkThumb
                     visible: linkRow.modelData.thumb !== ""
@@ -438,19 +438,19 @@ Item {
                 TapHandler {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onTapped: (point, button) => {
-                        layer.sharedSel = linkRow.index
-                        if (button === Qt.RightButton) Ui.menuAt(linkRow, point.position.x, point.position.y, () => layer.itemMenu(linkRow.index))
-                        else layer.openSharedItem(linkRow.index)
+                        more.sharedSel = linkRow.index
+                        if (button === Qt.RightButton) Ui.menuAt(linkRow, point.position.x, point.position.y, () => more.itemMenu(linkRow.index))
+                        else more.openSharedItem(linkRow.index)
                     }
-                    onLongPressed: { layer.sharedSel = linkRow.index; Ui.menuAt(linkRow, point.position.x, point.position.y, () => layer.itemMenu(linkRow.index)) }
+                    onLongPressed: { more.sharedSel = linkRow.index; Ui.menuAt(linkRow, point.position.x, point.position.y, () => more.itemMenu(linkRow.index)) }
                 }
             }
         }
         Text {
             textFormat: Text.PlainText
             anchors.centerIn: parent
-            visible: layer.sharedCount() === 0
-            text: layer.sharedTab === "media" ? "No photos or videos yet." : layer.sharedTab === "links" ? "No links yet." : "No voice messages yet."
+            visible: more.sharedCount() === 0
+            text: more.sharedTab === "media" ? "No photos or videos yet." : more.sharedTab === "links" ? "No links yet." : "No voice messages yet."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(16)
         }
     }
@@ -459,17 +459,17 @@ Item {
     PhotoViewer {
         id: viewer
         anchors.fill: parent
-        tour: layer.tour
-        photos: layer.photos
-        at: layer.photoAt
-        onAtChanged: layer.photoAt = at
-        onClosed: layer.photos = []
+        tour: more.tour
+        photos: more.photos
+        at: more.photoAt
+        onAtChanged: more.photoAt = at
+        onClosed: more.photos = []
     }
 
     // ------------------------------------------------------------- a video message playing
     Rectangle {
         anchors.fill: parent
-        visible: layer.videoId !== ""
+        visible: more.videoId !== ""
         color: "black"
         MouseArea { anchors.fill: parent; onClicked: Videos.togglePause() }
         VideoOutput {
@@ -481,7 +481,7 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(18)
             spacing: Theme.px(14)
-            HButton { text: "Back"; onClicked: layer.closeVideo() }
+            HButton { text: "Back"; onClicked: more.closeVideo() }
             HButton { text: Videos.paused ? "Play" : "Pause"; kind: "accent"; onClicked: Videos.togglePause() }
             Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
@@ -494,7 +494,7 @@ Item {
     // ------------------------------------------------------------- recording a video message
     Rectangle {
         anchors.fill: parent
-        visible: layer.camera
+        visible: more.camera
         color: "black"
         MouseArea { anchors.fill: parent }
         VideoOutput {
@@ -515,7 +515,7 @@ Item {
             anchors.top: parent.top; anchors.topMargin: Theme.px(16)
             text: Videos.reviewing ? "Your video message · " + Voice.length(Videos.reviewMs) + " · it's only sent if you choose Send"
                 : Videos.recording ? "Recording " + Voice.length(Videos.elapsed) + " of 1:00"
-                : "Video message for " + layer.title + " · up to a minute"
+                : "Video message for " + more.title + " · up to a minute"
             color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(16)
             style: Text.Outline; styleColor: "black"
         }
@@ -528,11 +528,11 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(18)
             spacing: Theme.px(14)
-            HButton { visible: !Videos.reviewing; text: "Cancel"; onClicked: layer.closeCamera() }
+            HButton { visible: !Videos.reviewing; text: "Cancel"; onClicked: more.closeCamera() }
             HButton { visible: !Videos.reviewing; text: Videos.recording ? "Stop" : "Record"; kind: Videos.recording ? "danger" : "accent"; onClicked: Videos.recording ? Videos.stopRecording() : Videos.record() }
-            HButton { visible: Videos.reviewing; text: "Discard"; kind: "danger"; onClicked: layer.closeCamera() }
+            HButton { visible: Videos.reviewing; text: "Discard"; kind: "danger"; onClicked: more.closeCamera() }
             HButton { visible: Videos.reviewing; text: Videos.playing === "review" && !Videos.paused ? "Pause" : "Watch again"; onClicked: Videos.playing === "review" && !Videos.paused ? Videos.togglePause() : Videos.play("review", reviewOut) }
-            HButton { visible: Videos.reviewing; text: "Send"; kind: "accent"; onClicked: layer.sendRecorded() }
+            HButton { visible: Videos.reviewing; text: "Send"; kind: "accent"; onClicked: more.sendRecorded() }
         }
         Text {
             textFormat: Text.PlainText
@@ -546,14 +546,14 @@ Item {
     PollDialog {
         id: pollDlg
         onSend: (q, answers, multi) => {
-            const r = Chat.sendPoll(layer.where, q, answers, multi)
+            const r = Chat.sendPoll(more.where, q, answers, multi)
             Ui.say(r !== "" ? r : "Poll sent.", r !== "")
         }
     }
 
     Connections {
         target: Videos
-        function onChanged() { if (Videos.error !== "" && (layer.camera || layer.videoId !== "")) { Ui.say(Videos.error, true) } }
+        function onChanged() { if (Videos.error !== "" && (more.camera || more.videoId !== "")) { Ui.say(Videos.error, true) } }
     }
     // A voice message from the Shared page stops when it closes.
     onSharedOpenChanged: if (!sharedOpen && Voice.playing !== "") Voice.stop()
