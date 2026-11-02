@@ -215,7 +215,7 @@ class KidPhoneTest {
         val words = KidUi.TABS + KidUi.FILTERS + KidUi.CARD_ACTIONS
         for ((id, label) in words) for (w in KidUi.NEVER)
             assertFalse("$id offers $w", Regex("\\b$w\\b", RegexOption.IGNORE_CASE).containsMatchIn("$id $label"))
-        for ((_, label) in words) assertFalse(label, label.contains('—') || label.contains('–'))
+        for ((_, label) in words) assertFalse(label, label.contains('\u2014') || label.contains('\u2013'))
         // The screens themselves: no Add someone, scanner, + button, code, Share nearby or Settings anywhere in them.
         val src = source("KidPhone.kt")
         for (bad in listOf("AddSomeone", "QrScan", "addMode", "\"add\"", "\"plus\"", "\"qr\"", "Share nearby", "TransferScreen",
