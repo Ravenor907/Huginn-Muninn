@@ -94,6 +94,10 @@ class VideoWireTest {
         val e = VideoWire.encodeReport(VideoWire.Report(7, camera = true, jitterMs = 80, kbps = 812, rttMs = 45))
         assertEquals(8, e.size)
         assertEquals(VideoWire.Report(7, true, false, 80, 812, 45), VideoWire.decodeReport(e))
+        // Cap c3: bit 2, not watching the screen share.
+        val paused = VideoWire.encodeReport(VideoWire.Report(screenPaused = true))
+        assertEquals(4, paused[1].toInt())
+        assertEquals(true, VideoWire.decodeReport(paused)?.screenPaused)
         val rc = VideoWire.RateControl()
         rc.setCap(700); assertEquals(420, rc.kbps)
         rc.onReport(12, 1000); assertEquals(315, rc.kbps)

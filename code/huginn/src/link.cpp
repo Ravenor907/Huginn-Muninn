@@ -2343,11 +2343,11 @@ bool Link::selfTest(const QJsonObject &v)
         check(!ok && !ok2 && ok3 && t.del && t.ts == 7, "l1: bad items are dropped, a tombstone reads back");
         // Cap l2: a mute item, until turned back on, until a time, or over.
         bool ok4 = false;
-        const Item forever = readItem(QJsonObject{{QStringLiteral("k"), QStringLiteral("mute")}, {QStringLiteral("id"), QStringLiteral("g:x")}, {QStringLiteral("ts"), 1.0},
+        const Item always = readItem(QJsonObject{{QStringLiteral("k"), QStringLiteral("mute")}, {QStringLiteral("id"), QStringLiteral("g:x")}, {QStringLiteral("ts"), 1.0},
                                                   {QStringLiteral("v"), QJsonObject{{QStringLiteral("f"), true}}}}, &ok4);
         const Item soon{QStringLiteral("mute"), QStringLiteral("a"), 1, false, QJsonObject{{QStringLiteral("u"), double(now() + 60000)}}};
         const Item over{QStringLiteral("mute"), QStringLiteral("a"), 1, false, QJsonObject{{QStringLiteral("u"), 5.0}}};
-        check(ok4 && muteUntil(forever) == kMuteForever && muteUntil(soon) > now() && muteUntil(over) == 0
+        check(ok4 && muteUntil(always) == kMuteForever && muteUntil(soon) > now() && muteUntil(over) == 0
                   && muteUntil(Item{QStringLiteral("mute"), QStringLiteral("a"), 2, true, {}}) == 0, "l2: mute items");
         check(saysL1(QStringLiteral("l1")) && saysL1(QStringLiteral("r1 l1 m1")) && !saysL1(QStringLiteral("l10")) && !saysL1(QString()), "l1: the caps token");
         const QJsonObject small{{QStringLiteral("t"), QStringLiteral("acct")}, {QStringLiteral("items"), QJsonArray{contact("a", 1, "").json()}}};

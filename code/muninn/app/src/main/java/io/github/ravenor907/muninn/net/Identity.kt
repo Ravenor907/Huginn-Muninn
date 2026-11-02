@@ -201,6 +201,28 @@ class Identity(context: Context, private val vault: Vault) {
         get() = prefs.getString("patternPos", null)?.takeIf { it in setOf("top", "middle", "lower") } ?: "lower"
         set(v) = prefs.edit().putString("patternPos", v).apply()
 
+    // ---- voice rooms
+    /** Tapping a voice room shows the join sheet first (mic on or off, where the sound goes). Off: joins as last time. */
+    var roomAsk: Boolean
+        get() = prefs.getBoolean("roomAsk", true)
+        set(v) = prefs.edit().putBoolean("roomAsk", v).apply()
+    /** The join sheet's last choice: join with the mic off. */
+    var roomMuted: Boolean
+        get() = prefs.getBoolean("roomMuted", false)
+        set(v) = prefs.edit().putBoolean("roomMuted", v).apply()
+
+    // ---- notifications
+    /** Other names that count as an @mention of me in groups (a nickname like "tay"), comma separated. */
+    var mentionNames: String
+        get() = prefs.getString("mentionNames", null) ?: ""
+        set(v) = prefs.edit().putString("mentionNames", v.trim().take(80)).apply()
+
+    // ---- files
+    /** Where received files are saved: a folder picked with Android's folder picker (its tree URI), "" for Download/Muninn. */
+    var saveFolder: String
+        get() = prefs.getString("saveFolder", null) ?: ""
+        set(v) = prefs.edit().putString("saveFolder", v).apply()
+
     // ---- privacy
     /** Let people see when their messages were read. Delivered always shows. */
     var readReceipts: Boolean

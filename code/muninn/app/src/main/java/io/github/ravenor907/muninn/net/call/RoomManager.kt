@@ -17,6 +17,7 @@ import io.github.ravenor907.muninn.net.Proto06
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -44,10 +45,15 @@ object RoomManager {
     /** One person in the room. [state]: "live", "connecting" or "reconnecting". Never an address. */
     data class Person(val key: String, val name: String, val me: Boolean, val speaking: Boolean = false, val muted: Boolean = false, val state: String = "live")
 
-    /** The room this phone is in, for the screens. */
+    /**
+     * The room this phone is in, for the screens. [muted]: my own Mute; [deafened]: Deafen (nobody heard, mic off);
+     * [held]: why the room is paused ("On a phone call"), else ""; [listenOnly]: no microphone permission;
+     * [stillHere]: alone for a while, asking before leaving.
+     */
     data class Ui(
         val g: String, val ch: String, val title: String, val groupName: String, val people: List<Person>, val muted: Boolean,
         val speaker: Boolean, val since: Long, val connected: Int, val groupCall: Boolean, val note: String,
+        val deafened: Boolean = false, val held: String = "", val listenOnly: Boolean = false, val stillHere: Boolean = false,
     )
 
     /** Someone in the room sharing their screen (5.8.7), and its picture's size and turn. */
@@ -55,7 +61,7 @@ object RoomManager {
 
     private val _screen = MutableStateFlow<Screen?>(null)
     val screen: StateFlow<Screen?> = _screen.asStateFlow()
-    private val screenView = RemoteVideo("muninn-screen-dec", { sharerMedia()?.requestKeyframe(VideoWire.SCREEN) }) { w, h, r ->
+    private val screenView = RemoteVideo("muninn-screen-dec", { if (watching) sharerMedia()?.requestKeyframe(VideoWire.SCREEN) }) { w, h, r ->
         _screen.value = _screen.value?.copy(width = w, height = h, rotation = r)
     }
     @Volatile private var sharer = ""
@@ -77,7 +83,42 @@ object RoomManager {
         screenView.stop()
         sharer = next
         _screen.value = if (next.isEmpty()) null else Screen(next, nameOf(g, next))
-        if (next.isNotEmpty()) { screenView.start(); sharerMedia()?.requestKeyframe(VideoWire.SCREEN) }
+        if (next.isNotEmpty() && watching) { screenView.start(); sharerMedia()?.requestKeyframe(VideoWire.SCREEN) }
+    }
+
+    /**
+     * The room screen is on show (or in picture-in-picture) with the phone's screen on. Not watching: the shared
+     * screen isn't decoded, and a sharer with cap c3 stops sending it to this phone (5.8.7).
+     */
+    @Volatile private var watching = false
+    fun setWatching(on: Boolean) = exec.execute {
+        if (watching == on) return@execute
+        watching = on
+        for ((k, p) in peers) if (pausesScreen(k)) p.s.mediaNow?.pauseScreen(!on)
+        if (on) { if (sharer.isNotEmpty()) { screenView.start(); sharerMedia()?.requestKeyframe(VideoWire.SCREEN) } }
+        else screenView.stop()
+    }
+
+    /** Cap c3: [k]'s app stops sending its screen share to someone not watching it. */
+    private fun pausesScreen(k: String): Boolean = try { app?.chat?.contacts?.get(k)?.caps?.contains(SCREEN_PAUSE_CAP) == true } catch (e: Exception) { false }
+    const val SCREEN_PAUSE_CAP = "c3"
+    /** What the room says while a phone call has the sound. */
+    const val ON_CALL = "On a phone call"
+
+    private var proximityLock: android.os.PowerManager.WakeLock? = null
+
+    /** On the earpiece in a room: the screen goes dark against the cheek. */
+    private fun proximity(c: Context, on: Boolean) {
+        try {
+            if (on) {
+                if (proximityLock == null) {
+                    val pm = c.getSystemService(android.os.PowerManager::class.java)
+                    if (pm.isWakeLockLevelSupported(android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK))
+                        proximityLock = pm.newWakeLock(android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "muninn:room")
+                }
+                proximityLock?.takeIf { !it.isHeld }?.acquire(4 * 60 * 60_000L)
+            } else proximityLock?.takeIf { it.isHeld }?.release(android.os.PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY)
+        } catch (_: Exception) {}
     }
 
     /** A group call ringing this phone. */
@@ -109,8 +150,20 @@ object RoomManager {
     @Volatile private var g = ""
     @Volatile private var ch = ""
     @Volatile private var muted = false
+    @Volatile private var deafened = false
+    /** Why the room is paused (another app, usually a phone call, has the sound), else "". */
+    @Volatile private var held = ""
+    /** Joined without the microphone permission: listening only. */
+    @Volatile private var listenOnly = false
     @Volatile private var speakerOn = true
     @Volatile private var mySpeaking = false
+    /** Alone in the room since (0: someone else is here); [stillHere] once asked whether to stay. */
+    private var aloneSince = 0L
+    private var stillHere = false
+    private var askedAt = 0L
+
+    /** What goes out from my microphone: nothing while muted, deafened or paused for a phone call. */
+    private fun micOff(): Boolean = muted || deafened || held.isNotEmpty() || listenOnly
     private var joinedAt = 0L
     private var note = ""
     private var gen = 0
@@ -121,6 +174,16 @@ object RoomManager {
 
     fun init(app: Muninn) {
         this.app = app
+        // Left the group (or it went away) while in its room: out of the room at once, not at the next check.
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
+            try { app.chat.groups.all.collect { if (g.isNotEmpty()) exec.execute { if (g.isNotEmpty() && state(g) == null) doLeave("You left the group, so you left its voice room") } } }
+            catch (_: Exception) {}
+        }
+        // Proximity on the earpiece: the screen goes dark against the cheek (the speaker or a headset keeps it on).
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
+            combine(AudioRoute.current, _room) { out, r -> r != null && out?.kind == AudioRoute.Kind.EARPIECE }.distinctUntilChanged()
+                .collect { proximity(app, it) }
+        }
         // Who is in a room ages out (25 minutes, or 20 s and 60 s for an app with heartbeats): a screen showing it looks
         // again every 5 s, only while one is showing it.
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
@@ -159,6 +222,9 @@ object RoomManager {
     /** Every 10 s in a room: vjoin to members with v2; someone with v2 quiet for 60 s whose call isn't up leaves the room. */
     private fun heartbeat() {
         if (g.isEmpty()) return
+        // Left the group: out of its room.
+        if (state(g) == null) { doLeave("You left the group, so you left its voice room"); return }
+        if (alone()) return
         // Cap g2: timed out or banned while in the room: out of it; anyone else timed out or banned leaves it here.
         app?.chat?.groups?.myStatus(g)?.takeIf { it.isNotEmpty() }?.let { doLeave(it); return }
         val out = peers.keys.filter { barred(g, it) }
@@ -194,10 +260,45 @@ object RoomManager {
         for (k in members(g)) if (!onlyUnconnected || !peers.containsKey(k)) sendRoom("vjoin", k, g, ch)
     }
 
+    /**
+     * Alone in the room for [RoomLogic.ALONE_MS]: "Still here?" (the room screen and a notification); no answer
+     * within [RoomLogic.ASK_MS] leaves. True when it left.
+     */
+    private fun alone(): Boolean {
+        val mine = me()
+        val nobody = peers.isEmpty() && presenceTable.inRoom(g, ch, now()).none { it != mine }
+        if (!nobody) {
+            aloneSince = 0L
+            if (stillHere) { stillHere = false; app?.let { RoomRinger.stillHereGone(it) }; publish() }
+            return false
+        }
+        val t = now()
+        if (aloneSince == 0L) aloneSince = t
+        if (!stillHere && t - aloneSince >= RoomLogic.ALONE_MS) {
+            stillHere = true; askedAt = t
+            publish()
+            app?.let { a -> _room.value?.let { RoomRinger.stillHere(a, it) } }
+        } else if (stillHere && t - askedAt >= RoomLogic.ASK_MS) {
+            doLeave("Nobody else came, so you left the voice room")
+            return true
+        }
+        return false
+    }
+
+    /** "I'm still here": the alone timer starts over. */
+    fun stay() = exec.execute {
+        aloneSince = now(); askedAt = 0L
+        if (stillHere) { stillHere = false; app?.let { RoomRinger.stillHereGone(it) }; publish() }
+    }
+
     // ------------------------------------------------------------------ actions (from the screens)
 
-    /** Joins (g, ch). Null when joining, otherwise what to tell the person. Needs the microphone permission. */
-    fun join(group: String, room: String): String? {
+    /**
+     * Joins (g, ch). Null when joining, otherwise what to tell the person. [startMuted]: the join sheet's mic off;
+     * [output]: its sound choice ([AudioRoute.AUTOMATIC] or an output id); [listen]: no microphone permission, so
+     * listening only.
+     */
+    fun join(group: String, room: String, startMuted: Boolean = false, output: String = AudioRoute.AUTOMATIC, listen: Boolean = false): String? {
         if (app == null) return "Unlock Muninn first."
         if (Opus.loadError != null) return "Calling isn't working on this phone."
         if (CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true) return "Hang up the call first."
@@ -209,11 +310,11 @@ object RoomManager {
         if (!RoomLogic.isGroupCall(room) && st.channel(room)?.t != "voice") return "That isn't a voice room."
         if (g == group && ch == room) return null
         busy = true
-        exec.execute { doJoin(group, room) }
+        exec.execute { doJoin(group, room, startMuted, output, listen) }
         return null
     }
 
-    private fun doJoin(group: String, room: String) {
+    private fun doJoin(group: String, room: String, startMuted: Boolean = false, output: String = AudioRoute.AUTOMATIC, listen: Boolean = false) {
         if (g.isNotEmpty()) doLeave("")
         val a = app ?: return
         if (_ring.value?.let { it.g == group && it.ch == room } == true) stopRing()
@@ -221,7 +322,10 @@ object RoomManager {
         g = group; ch = room; joinedAt = now(); note = ""
         busy = true
         rung.clear(); declined.clear(); speaking.clear(); mySpeaking = false
-        if (!RoomAudio.start(a, speakerOn)) note = "The microphone isn't available"
+        muted = startMuted || listen; deafened = false; held = ""; listenOnly = listen
+        aloneSince = 0L; stillHere = false; askedAt = 0L
+        if (!RoomAudio.start(a, mic = !listen)) note = "The microphone isn't available"
+        if (output != AudioRoute.AUTOMATIC) AudioRoute.choose(output)
         announce(false)
         val my = gen
         for (ms in listOf(4_000L, 12_000L)) timers += exec.schedule(Runnable { if (my == gen) announce(true) }, ms, TimeUnit.MILLISECONDS)
@@ -237,7 +341,16 @@ object RoomManager {
         publish()
     }
 
-    fun leave() = exec.execute { doLeave("") }
+    fun leave() = exec.execute { if (g.isEmpty()) { _room.value = null; _screen.value = null } else doLeave("") }
+
+    /** Test builds only (the CI screenshots): a made-up room with a shared screen. No sound, nothing sent. */
+    fun demo(title: String, group: String) {
+        _room.value = Ui("", "", title, group, listOf(Person("me", "You", true),
+            Person("demo-sam", "Sam", false, speaking = true), Person("demo-jordan", "Jordan", false, muted = true),
+            Person("demo-alex", "Alex", false, state = "reconnecting")), muted = false, speaker = false, since = now() - 754_000L,
+            connected = 3, groupCall = false, note = "")
+        _screen.value = Screen("demo-sam", "Sam", 1920, 1080, 0)
+    }
 
     private fun doLeave(why: String) {
         if (g.isEmpty()) return
@@ -252,6 +365,8 @@ object RoomManager {
         for (p in all) p.s.hangup()
         RoomAudio.stop()
         medias.clear(); speaking.clear()
+        deafened = false; held = ""; listenOnly = false; stillHere = false
+        app?.let { RoomRinger.stillHereGone(it) }
         screenView.stop(); sharer = ""; _screen.value = null
         RoomVideo.reset()
         busy = false
@@ -261,10 +376,45 @@ object RoomManager {
         bumpPresence()
     }
 
+    /** Mute: my microphone off. Unmuting while deafened undeafens too. Listening only can't unmute (no microphone). */
     fun setMuted(on: Boolean) = exec.execute {
-        muted = on
-        for (p in peers.values) p.s.setMuted(on)
+        muted = on || listenOnly
+        if (!on) deafened = false
+        micToPeers()
         publish()
+    }
+
+    /** Deafen: nobody in the room is heard here, and my microphone is off; others see me muted. */
+    fun setDeafened(on: Boolean) = exec.execute {
+        deafened = on
+        micToPeers()
+        publish()
+    }
+
+    /** The microphone permission was just allowed while listening only: the microphone starts, unmuted. */
+    fun micAllowed() = exec.execute {
+        val a = app ?: return@execute
+        if (g.isEmpty() || !listenOnly) return@execute
+        if (!RoomAudio.startMic(a)) { note = "The microphone isn't available"; publish(); return@execute }
+        listenOnly = false; muted = false; note = ""
+        micToPeers()
+        publish()
+        RoomService.start(a)   // the microphone joins the service's types
+    }
+
+    /** Another app took the sound ([why], e.g. a phone call) or gave it back (""): the room pauses and resumes. */
+    private fun hold(why: String) = exec.execute {
+        if (g.isEmpty() || held == why) return@execute
+        held = why
+        if (why.isEmpty()) RoomAudio.resume()
+        micToPeers()
+        publish()
+    }
+
+    /** Tells each pair whether my microphone is off now (they show me muted). */
+    private fun micToPeers() {
+        val off = micOff()
+        for (p in peers.values) if (p.s.muted != off) p.s.setMuted(off)
     }
 
     fun setSpeaker(on: Boolean) = exec.execute { speakerOn = on; RoomAudio.route(on); publish() }
@@ -334,7 +484,7 @@ object RoomManager {
         val keys = presenceTable.inRoom(group, room, now()).toMutableList()
         if (mine) peers.keys.forEach { if (it !in keys) keys += it }
         val out = ArrayList<Person>()
-        if (mine) out += Person(me(), "You", true, speaking = mySpeaking && !muted, muted = muted)
+        if (mine) out += Person(me(), "You", true, speaking = mySpeaking && !micOff(), muted = micOff())
         val t = now()
         for (k in keys) if (k != me()) {
             val s = if (mine) peers[k]?.s else null
@@ -357,7 +507,7 @@ object RoomManager {
         if (g.isEmpty()) { _room.value = null; return }
         val st = state(g)
         val people = ArrayList<Person>()
-        people += Person(me(), "You", true, speaking = mySpeaking && !muted, muted = muted)
+        people += Person(me(), "You", true, speaking = mySpeaking && !micOff(), muted = micOff())
         var connected = 0
         for ((k, p) in peers) {
             val s = p.s
@@ -371,7 +521,8 @@ object RoomManager {
         for (k in presenceTable.inRoom(g, ch, now())) if (k != me() && peers[k] == null && beats(k)) people += Person(k, nameOf(g, k), false, state = "reconnecting")
         val sorted = listOf(people.first()) + people.drop(1).sortedBy { it.name.lowercase() }
         val title = if (RoomLogic.isGroupCall(ch)) "Group call" else st?.channel(ch)?.n ?: "Voice room"
-        _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note)
+        _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note,
+            deafened, held, listenOnly, stillHere)
         // Group video goes to the people in the room whose call is up.
         app?.let { a -> RoomVideo.peers(a, peers.mapNotNull { (k, p) -> p.s.mediaNow?.let { k to it } }.toMap(), sorted.size) }
         bumpPresence()
@@ -392,15 +543,15 @@ object RoomManager {
                     // Screen share (5.8.7): Muninn shows it; sharing is Huginn's.
                     override fun onPeerVideo(camera: Boolean, screen: Boolean) { exec.execute { pickSharer() }; RoomVideo.peerCamera(s.peerKey, camera) }
                     override fun onVideoFrame(stream: Int, data: ByteArray, key: Boolean, rotation: Int) {
-                        if (stream == VideoWire.SCREEN && s.peerKey == sharer) screenView.frame(data, key, rotation)
+                        if (stream == VideoWire.SCREEN && s.peerKey == sharer && watching) screenView.frame(data, key, rotation)
                         // Group video: each person's camera, peer to peer.
                         if (stream == VideoWire.CAMERA) RoomVideo.frame(s.peerKey, data, key, rotation)
                     }
                     override fun onKeyframeWanted(stream: Int) { if (stream == VideoWire.CAMERA) RoomVideo.keyWanted(s.peerKey) }
-                }).also { it.externalAudio = true; it.muted = muted; medias[s.callId] = it }
+                }).also { it.externalAudio = true; it.muted = micOff(); if (!watching && pausesScreen(s.peerKey)) it.pauseScreen(true); medias[s.callId] = it }
             override fun changed(s: CallSession) {
                 // Muted before the pair's call was up: tell them once it is.
-                if (s.phase == CallSession.Phase.LIVE && muted && !mutedSent.contains(s.callId)) {
+                if (s.phase == CallSession.Phase.LIVE && micOff() && !mutedSent.contains(s.callId)) {
                     mutedSent += s.callId
                     send(s.peerKey, CallLogic.mute(s.callId, true))
                 }
@@ -423,7 +574,7 @@ object RoomManager {
         val s = newSession(CallCrypto.newCallId(), key, true, retries)
         s.extra = JSONObject().put("g", g).put("ch", ch)
         s.startOutgoing()
-        if (muted) s.setMuted(true)
+        if (micOff()) s.setMuted(true)
         publish()
     }
 
@@ -545,7 +696,7 @@ object RoomManager {
             drop(from)
         }
         val ns = newSession(call, from, false, cur?.retries ?: 0)
-        if (muted) ns.setMuted(true)
+        if (micOff()) ns.setMuted(true)
         ns.startIncoming(s)
         ns.answer()   // no ringing inside a room (6.3 step 3)
         publish()
@@ -564,15 +715,56 @@ object RoomManager {
         @Volatile private var running = false
         private var oldMode = AudioManager.MODE_NORMAL
         private var audio: AudioManager? = null
+        private var focus: android.media.AudioFocusRequest? = null
+        private var modeWatch: Any? = null   // an AudioManager.OnModeChangedListener (Android 12 and newer)
+
+        /** A phone call (its ring or the call itself) has the sound now. */
+        private fun phoneCall(m: Int?) = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_RINGTONE ||
+            (Build.VERSION.SDK_INT >= 30 && m == AudioManager.MODE_CALL_SCREENING)
+
+        /**
+         * The room asks Android for the sound like a call. A phone call (or another app for a moment) takes it: the room
+         * pauses, mic and sound, and comes back when it's given back. Another app taking it for good (music) is let be,
+         * unless it's a phone call.
+         */
+        private val focusChange = AudioManager.OnAudioFocusChangeListener { change ->
+            val m = audio?.mode
+            when (change) {
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> hold(if (phoneCall(m)) ON_CALL else "Paused while another app plays")
+                AudioManager.AUDIOFOCUS_LOSS -> { if (phoneCall(m)) hold(ON_CALL) }
+                AudioManager.AUDIOFOCUS_GAIN -> hold("")
+                else -> {}
+            }
+            Unit
+        }
 
         @SuppressLint("MissingPermission")
-        fun start(c: Context, speaker: Boolean): Boolean {
+        fun start(c: Context, mic: Boolean = true): Boolean {
             stop()
             val am = c.getSystemService(AudioManager::class.java) ?: return false
             audio = am
             oldMode = am.mode
             am.mode = AudioManager.MODE_IN_COMMUNICATION
-            AudioRoute.start(am, speaker)
+            AudioRoute.start(am, speaker = true)
+            val req = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .setOnAudioFocusChangeListener(focusChange, android.os.Handler(android.os.Looper.getMainLooper()))
+                .build()
+            focus = req
+            try { am.requestAudioFocus(req) } catch (_: Exception) {}
+            // Android 12 and newer also say when a phone call starts and ends, in case the focus change doesn't come.
+            if (Build.VERSION.SDK_INT >= 31) try {
+                val l = AudioManager.OnModeChangedListener { m ->
+                    when {
+                        phoneCall(m) -> hold(ON_CALL)
+                        m == AudioManager.MODE_NORMAL && held == ON_CALL -> hold("")
+                        else -> {}
+                    }
+                }
+                am.addOnModeChangedListener(c.mainExecutor, l)
+                modeWatch = l
+            } catch (_: Exception) {}
             running = true
             val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val t = try {
@@ -587,6 +779,13 @@ object RoomManager {
             } catch (e: Exception) { null }
             track = t
             if (t != null) player = Thread({ playLoop(t) }, "muninn-room-play").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
+            return if (mic) startMic(c) else true
+        }
+
+        /** The microphone, its echo canceller and noise removal (also later, once listening only gets the permission). */
+        @SuppressLint("MissingPermission")
+        fun startMic(c: Context): Boolean {
+            if (!running || record != null) return record != null
             val minIn = AudioRecord.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val rec = try {
                 AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, Opus.RATE, AudioFormat.CHANNEL_IN_MONO,
@@ -598,6 +797,14 @@ object RoomManager {
             if (NoiseSuppressor.isAvailable()) ns = try { NoiseSuppressor.create(rec.audioSessionId)?.apply { enabled = CallManager.noiseRemoval(c) } } catch (e: Exception) { null }
             mic = Thread({ captureLoop(rec) }, "muninn-room-mic").apply { priority = Thread.MAX_PRIORITY; isDaemon = true; start() }
             return true
+        }
+
+        /** The phone call ended: Android reset the call audio, so the room's mode, route and focus go back. */
+        fun resume() {
+            val am = audio ?: return
+            try { am.mode = AudioManager.MODE_IN_COMMUNICATION } catch (_: Exception) {}
+            AudioRoute.reapply()
+            focus?.let { try { am.requestAudioFocus(it) } catch (_: Exception) {} }
         }
 
         /** Speaker on, or the usual order (Bluetooth, wired, earpiece). Any device: [AudioRoute.choose]. */
@@ -616,9 +823,10 @@ object RoomManager {
                     var got = 0
                     while (got < Opus.FRAME && running) { val n = rec.read(pcm, got, Opus.FRAME - got); if (n <= 0) break; got += n }
                     if (got < Opus.FRAME) continue
-                    val talking = !muted && me.feed(pcm, Opus.FRAME, System.currentTimeMillis())
+                    val off = micOff()
+                    val talking = !off && me.feed(pcm, Opus.FRAME, System.currentTimeMillis())
                     if (talking != mySpeaking) { mySpeaking = talking; exec.execute { publish() } }
-                    if (muted || medias.isEmpty()) continue   // pings go on; no audio while muted (5.5)
+                    if (off || medias.isEmpty()) continue   // pings go on; no audio while muted, deafened or on a phone call (5.5)
                     val opus = enc.encode(pcm) ?: continue
                     for (m in medias.values) m.sendOpus(opus)
                 }
@@ -658,6 +866,8 @@ object RoomManager {
                     // Peers that left: their decoders go.
                     decoders.keys.filter { !medias.containsKey(it) }.forEach { decoders.remove(it)?.close(); talk.remove(it) }
                     for (i in 0 until Opus.FRAME) out[i] = mix[i].coerceIn(-32768, 32767).toShort()
+                    // Deafened or on a phone call: nothing heard (the decoders keep going, so it comes back smoothly).
+                    if (deafened || held.isNotEmpty()) out.fill(0)
                     t.write(out, 0, Opus.FRAME)   // blocking: the audio clock paces this loop
                 }
             } catch (_: Exception) {
@@ -676,11 +886,14 @@ object RoomManager {
             try { aec?.release(); ns?.release() } catch (_: Exception) {}
             record = null; track = null; aec = null; ns = null
             audio?.let { am ->
+                if (Build.VERSION.SDK_INT >= 31) (modeWatch as? AudioManager.OnModeChangedListener)?.let { try { am.removeOnModeChangedListener(it) } catch (_: Exception) {} }
+                focus?.let { try { am.abandonAudioFocusRequest(it) } catch (_: Exception) {} }
                 try {
                     AudioRoute.stop()
                     am.mode = oldMode
                 } catch (_: Exception) {}
             }
+            modeWatch = null; focus = null
             audio = null
         }
     }

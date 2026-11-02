@@ -40,7 +40,7 @@ package io.github.ravenor907.muninn.net
 object PowerLogic {
     enum class Radio { FULL, LOW, OFF }
 
-    enum class Why { OPEN, CALL, KIDS_TV, PLUGGED, ALWAYS, TALKING, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN, EXTREME }
+    enum class Why { OPEN, CALL, ROOM, KIDS_TV, PLUGGED, ALWAYS, TALKING, BACKGROUND, SCREEN_OFF, BATTERY_SAVER, DOZE, EVERY_15, EVERY_HOUR, ONLY_OPEN, EXTREME }
 
     /** Settings › Notifications › Check for messages. */
     enum class Check(val key: String, val title: String) {
@@ -58,6 +58,8 @@ object PowerLogic {
         val foreground: Boolean = false,
         val screenOn: Boolean = false,
         val inCall: Boolean = false,
+        /** In a voice room or group call: every relay, but the other radios rest with the screen off. */
+        val inRoom: Boolean = false,
         val kidsTv: Boolean = false,
         val plugged: Boolean = false,
         /** The person switched Muninn's own "Battery saver" off. */
@@ -227,6 +229,9 @@ object PowerLogic {
         val (ping, pingWhy) = awayPing(i)
         return when {
             i.inCall -> full(Why.CALL)
+            // A voice room: every relay checked quickly so the sound keeps flowing; with the screen off, Bluetooth and
+            // Wi-Fi discovery rest as they would without the room (rooms use neither).
+            i.inRoom -> if (i.screenOn) full(Why.ROOM) else Plan(Why.ROOM, null, FAST_PING_MS, if (scan) Radio.LOW else Radio.OFF, wifiAway)
             i.kidsTv -> full(Why.KIDS_TV)
             i.foreground -> Plan(Why.OPEN, OPEN_RELAYS, FAST_PING_MS, Radio.FULL, wifiOpen)
             // Fully manual: nothing at all until Muninn is opened again, charging or not, sharing or not.
@@ -263,11 +268,12 @@ object PowerLogic {
     }
 
     /** What happens once the screen goes off: the line Settings shows (Settings itself is always "open"). */
-    fun whenAway(i: Inputs): Plan = plan(i.copy(foreground = false, screenOn = false, inCall = false, talking = false))
+    fun whenAway(i: Inputs): Plan = plan(i.copy(foreground = false, screenOn = false, inCall = false, inRoom = false, talking = false))
 
     fun label(w: Why): String = when (w) {
         Why.OPEN -> "Fully connected while Muninn is open"
         Why.CALL -> "In a call: fully connected"
+        Why.ROOM -> "In a voice room: connected for the sound, lighter with the screen off"
         Why.KIDS_TV -> "Kids' TV: always fully connected so calls ring at once"
         Why.PLUGGED -> "Charging: fully connected"
         Why.ALWAYS -> "Always fully connected"

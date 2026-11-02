@@ -49,6 +49,7 @@ class Power(private val app: Muninn) {
     /** The battery's last step ([NetLogic.batteryStep]); -2 until the first report. */
     private var batteryStep = -2
     @Volatile private var inCall = false
+    @Volatile private var inRoom = false
     @Volatile private var onWifi = false
     private var applied: PowerLogic.Plan? = null
     private var waiting: PowerLogic.Plan? = null
@@ -328,8 +329,8 @@ class Power(private val app: Muninn) {
     /** Called once the vault is open: calls are known from now on, and Bluetooth, Nearby and Wi-Fi exist. */
     fun ready() {
         scope.launch {
-            combine(io.github.ravenor907.muninn.net.call.CallManager.call, io.github.ravenor907.muninn.net.call.RoomManager.room) { c, r -> c != null || r != null }
-                .collect { inCall = it; refresh() }
+            combine(io.github.ravenor907.muninn.net.call.CallManager.call, io.github.ravenor907.muninn.net.call.RoomManager.room) { c, r -> (c != null) to (r != null) }
+                .collect { (c, r) -> inCall = c; inRoom = r; refresh() }
         }
         // Sharing files: a transfer or Direct connect keeps Wi-Fi discovery at full (and the Files tab, while open).
         scope.launch {
@@ -364,7 +365,7 @@ class Power(private val app: Muninn) {
         val quiet = if ((quietOn && PowerLogic.inQuiet(quietFrom, quietTo, hour)) || (followDnd && dndOn())) quietMode else null
         val idle = (System.currentTimeMillis() - prefs.getLong("lastActivity", System.currentTimeMillis())).coerceAtLeast(0)
         return PowerLogic.Inputs(
-            foreground = started > 0, screenOn = pm.isInteractive, inCall = inCall, kidsTv = kids, plugged = plugged,
+            foreground = started > 0, screenOn = pm.isInteractive, inCall = inCall, inRoom = inRoom, kidsTv = kids, plugged = plugged,
             alwaysFull = !saver, batterySaver = pm.isPowerSaveMode, doze = pm.isDeviceIdleMode,
             unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
             battery = percent, lowBatterySave = lowBatterySave, quiet = quiet, closeBy = closeBy, sharing = sharing || (filesOpen.value && started > 0),

@@ -404,7 +404,7 @@ class CallMedia(
             val span = maxOf(1L, now - lastReport)
             val due = audioDue + videoDue; val lost = audioLost + videoLost
             val rep = VideoWire.Report(if (due > 0) (lost * 100 / due).coerceIn(0, 100) else 0, sending[0], sending[1], jitter.targetMs.toInt(),
-                (bytesIn * 8 / span).toInt(), rttMs)
+                (bytesIn * 8 / span).toInt(), rttMs, screenPaused)
             audioDue = 0; audioLost = 0; videoDue = 0; videoLost = 0; bytesIn = 0
             rep
         }
@@ -471,6 +471,17 @@ class CallMedia(
             level >= 0 && scale > 0 && level * 100 / scale < 20 && !plugged
         }
     } catch (e: Exception) { false }
+
+    /** Not watching the peer's screen share (cap c3, 5.8.7): said in every report, and at once when it changes. */
+    @Volatile var screenPaused = false; private set
+
+    /** Watching the peer's screen share or not; only for a peer with cap c3 (others don't know report bit 2). */
+    fun pauseScreen(on: Boolean) {
+        if (screenPaused == on) return
+        screenPaused = on
+        if (c2 && gotFirst) post { sendReport() }
+        if (!on) requestKeyframe(VideoWire.SCREEN)
+    }
 
     /** What this side says it sends (in every report, so the other side shows or hides the picture). */
     fun setVideoSending(stream: Int, on: Boolean) {

@@ -499,4 +499,19 @@ class PowerLogicTest {
         assertNull(PowerLogic.extremeRestore(null))
         assertNull(PowerLogic.extremeRestore("x"))
     }
+
+    @Test
+    fun aVoiceRoomKeepsEveryRelayButRestsTheOtherRadiosWithTheScreenOff() {
+        val on = PowerLogic.plan(phoneAway.copy(screenOn = true, inRoom = true))
+        assertEquals(Why.ROOM, on.why)
+        assertEquals(Radio.FULL, on.radio)
+        val off = PowerLogic.plan(phoneAway.copy(inRoom = true))
+        assertEquals(Why.ROOM, off.why)
+        assertNull(off.relays)
+        assertEquals(PowerLogic.FAST_PING_MS, off.pingMs)
+        assertEquals(Radio.OFF, off.radio)
+        assertEquals(Radio.OFF, off.wifi)
+        // A 1:1 call still wins.
+        assertEquals(Why.CALL, PowerLogic.plan(phoneAway.copy(inRoom = true, inCall = true)).why)
+    }
 }

@@ -20,7 +20,7 @@ import io.github.ravenor907.muninn.ui.Panic
 
 /**
  * Keeps a voice room or group call alive with the screen off or Muninn in the background: a microphone
- * foreground service with Android's call-style notification (leave from it).
+ * foreground service with Android's call-style notification (Mute, Deafen and Leave from it, the lock screen too).
  */
 class RoomService : Service() {
     private var foreground = false
@@ -30,12 +30,14 @@ class RoomService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val ui = RoomManager.room.value
-        val title = ui?.let { "${it.title} ${it.groupName} ${it.connected}" } ?: ""
+        val title = ui?.let { "${it.title} ${it.groupName} ${it.connected} ${it.muted} ${it.deafened} ${it.held} ${it.listenOnly}" } ?: ""
         if (intent?.action == UPDATE && foreground && title == lastTitle) return START_NOT_STICKY
         lastTitle = title
         val n = RoomRinger.ongoing(this, ui)
+        // Listening only (no microphone permission): Android refuses the microphone type, so just the call type.
+        val mic = ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
         val types = when {
-            Build.VERSION.SDK_INT >= 30 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            Build.VERSION.SDK_INT >= 30 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or (if (mic) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0)
             Build.VERSION.SDK_INT >= 29 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
             else -> 0
         }
@@ -64,18 +66,25 @@ class RoomService : Service() {
     }
 }
 
-/** Decline a group call from its ringing notification, leave a room from the ongoing one. */
+/** Decline a group call from its ringing notification; mute, deafen or leave a room from the ongoing one. */
 class RoomActions : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val r = RoomManager.room.value
         when (intent.action) {
             DECLINE -> RoomManager.declineRing()
             LEAVE -> RoomManager.leave()
+            MUTE -> if (r != null) RoomManager.setMuted(!r.muted)
+            DEAFEN -> if (r != null) RoomManager.setDeafened(!r.deafened)
+            STAY -> { RoomManager.stay(); RoomRinger.stillHereGone(context) }
         }
     }
 
     companion object {
         const val DECLINE = "io.github.ravenor907.muninn.room.DECLINE"
         const val LEAVE = "io.github.ravenor907.muninn.room.LEAVE"
+        const val MUTE = "io.github.ravenor907.muninn.room.MUTE"
+        const val DEAFEN = "io.github.ravenor907.muninn.room.DEAFEN"
+        const val STAY = "io.github.ravenor907.muninn.room.STAY"
     }
 }
 
@@ -83,6 +92,7 @@ class RoomActions : BroadcastReceiver() {
 object RoomRinger {
     const val RING_ID = 0x4351
     const val ONGOING_ID = 0x4352
+    const val STILL_HERE_ID = 0x4353
 
     private fun shown(c: Context, text: String): String? {
         val preview = try { (c.applicationContext as Muninn).identity.showPreview } catch (e: Exception) { false }
@@ -118,22 +128,68 @@ object RoomRinger {
         Ringer.sound(c, false)
     }
 
+    /** What the ongoing notification says: who's there, and Muted, Deafened or On a phone call. */
+    private fun text(ui: RoomManager.Ui?): String {
+        if (ui == null) return ""
+        val who = if (ui.connected == 0) "Waiting for others" else "${ui.connected + 1} people"
+        val me = when {
+            ui.held.isNotEmpty() -> ui.held
+            ui.deafened -> "Deafened"
+            ui.listenOnly -> "Listening only"
+            ui.muted -> "Muted"
+            else -> ""
+        }
+        return if (me.isEmpty()) who else "$who · $me"
+    }
+
+    /** Mute and Deafen (Leave is the call style's own red button). Listening only has no microphone to unmute. */
+    private fun NotificationCompat.Builder.roomActions(c: Context, ui: RoomManager.Ui?): NotificationCompat.Builder {
+        if (ui == null) return this
+        if (!ui.listenOnly) addAction(NotificationCompat.Action.Builder(R.drawable.ic_notify, if (ui.muted) "Unmute" else "Mute", action(c, RoomActions.MUTE)).build())
+        addAction(NotificationCompat.Action.Builder(R.drawable.ic_notify, if (ui.deafened) "Undeafen" else "Deafen", action(c, RoomActions.DEAFEN)).build())
+        return this
+    }
+
     fun ongoing(c: Context, ui: RoomManager.Ui?): android.app.Notification {
         Ringer.channels(c)
         val title = ui?.let { shown(c, if (it.groupName.isNotEmpty()) "${it.title} · ${it.groupName}" else it.title) } ?: "Muninn voice room"
         val person = Person.Builder().setName(title).setImportant(true).build()
+        // The lock screen hides a private notification's actions: this public copy names nothing but keeps Mute,
+        // Deafen and Leave there.
+        val public = NotificationCompat.Builder(c, Ringer.CALLS).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Muninn voice room").setContentText(text(ui))
+            .setCategory(NotificationCompat.CATEGORY_CALL).setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
+            .setContentIntent(screen(c, RoomActivity.SHOW))
+            .roomActions(c, ui)
+            .addAction(NotificationCompat.Action.Builder(R.drawable.ic_notify, "Leave", action(c, RoomActions.LEAVE)).build())
+            .build()
         val b = NotificationCompat.Builder(c, Ringer.CALLS).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(title)
-            .setContentText(when {
-                ui == null -> ""
-                ui.connected == 0 -> "Waiting for others"
-                else -> "${ui.connected + 1} people"
-            })
+            .setContentText(text(ui))
             .setCategory(NotificationCompat.CATEGORY_CALL).setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(public)
             .setContentIntent(screen(c, RoomActivity.SHOW))
             .setStyle(NotificationCompat.CallStyle.forOngoingCall(person, action(c, RoomActions.LEAVE)))
+            .roomActions(c, ui)
         if (ui != null) b.setUsesChronometer(true).setWhen(ui.since)
         return b.build()
     }
+
+    /** Alone in the room for a while: "Still here?", with I'm here and Leave. */
+    fun stillHere(c: Context, ui: RoomManager.Ui) {
+        val title = shown(c, ui.title) ?: "Voice room"
+        val n = NotificationCompat.Builder(c, Muninn.MESSAGES).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Still here?")
+            .setContentText("You're the only one in $title. Muninn leaves in ${RoomLogic.ASK_MS / 60_000} minutes.")
+            .setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setAutoCancel(true)
+            .setContentIntent(screen(c, RoomActivity.SHOW))
+            .addAction(NotificationCompat.Action.Builder(R.drawable.ic_notify, "I'm here", action(c, RoomActions.STAY)).build())
+            .addAction(NotificationCompat.Action.Builder(R.drawable.ic_notify, "Leave", action(c, RoomActions.LEAVE)).build())
+            .setTimeoutAfter(RoomLogic.ASK_MS)
+            .build()
+        try { NotificationManagerCompat.from(c).notify(STILL_HERE_ID, n) } catch (_: SecurityException) {}
+    }
+
+    fun stillHereGone(c: Context) { try { NotificationManagerCompat.from(c).cancel(STILL_HERE_ID) } catch (_: Exception) {} }
 }

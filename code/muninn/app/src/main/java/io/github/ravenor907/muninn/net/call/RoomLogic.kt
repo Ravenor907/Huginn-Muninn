@@ -29,6 +29,9 @@ object RoomLogic {
     const val HEARTBEAT_MS = 10_000L
     const val QUIET_MS = 20_000L
     const val GONE_MS = 60_000L
+    /** Alone in a room this long: "Still here?"; no answer within [ASK_MS] leaves it (this phone only, nothing on the wire). */
+    const val ALONE_MS = 10 * 60_000L
+    const val ASK_MS = 5 * 60_000L
 
     /** How someone counts who was last heard from [quietMs] ago: 0 gone, 1 in, 2 reconnecting. [beats]: their app has v2. */
     fun heard(quietMs: Long, beats: Boolean): Int = when {

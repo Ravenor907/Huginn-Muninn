@@ -19,7 +19,7 @@ class P1Test {
     @Test
     fun capAndRooms() {
         assertTrue(ProfileWire.CAP in Proto06.caps(Proto06.CAPS))
-        assertEquals("p1", Proto06.CAPS.split(' ').last())
+        assertTrue("p1" in Proto06.CAPS.split(' '))
         assertTrue("profile" in ChatWire.RATCHET_ROOMS)
         assertTrue("profile" in ChatWire.SEEN_ROOMS)
         val l = v.getJSONObject("limits")

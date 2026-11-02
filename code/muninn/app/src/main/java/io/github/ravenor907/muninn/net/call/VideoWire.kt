@@ -58,13 +58,17 @@ object VideoWire {
 
     // ------------------------------------------------------------------ report and nack
 
-    /** Receiver report, 8 bytes (type 4). */
-    data class Report(val lossPct: Int = 0, val camera: Boolean = false, val screen: Boolean = false, val jitterMs: Int = 0, val kbps: Int = 0, val rttMs: Int = 0)
+    /**
+     * Receiver report, 8 bytes (type 4). [screenPaused]: flag bit 2, "not watching your screen share" (cap c3,
+     * 5.8.7), sent only to a peer whose caps say c3.
+     */
+    data class Report(val lossPct: Int = 0, val camera: Boolean = false, val screen: Boolean = false, val jitterMs: Int = 0, val kbps: Int = 0, val rttMs: Int = 0,
+                      val screenPaused: Boolean = false)
 
     private fun c(v: Int, hi: Int) = v.coerceIn(0, hi)
 
     fun encodeReport(r: Report): ByteArray = byteArrayOf(
-        c(r.lossPct, 100).toByte(), ((if (r.camera) 1 else 0) or (if (r.screen) 2 else 0)).toByte(),
+        c(r.lossPct, 100).toByte(), ((if (r.camera) 1 else 0) or (if (r.screen) 2 else 0) or (if (r.screenPaused) 4 else 0)).toByte(),
         (c(r.jitterMs, 65535) shr 8).toByte(), c(r.jitterMs, 65535).toByte(),
         (c(r.kbps, 65535) shr 8).toByte(), c(r.kbps, 65535).toByte(),
         (c(r.rttMs, 65535) shr 8).toByte(), c(r.rttMs, 65535).toByte(),
@@ -74,7 +78,7 @@ object VideoWire {
         if (p.size < 8 || (p[0].toInt() and 0xFF) > 100) return null
         fun u16(at: Int) = ((p[at].toInt() and 0xFF) shl 8) or (p[at + 1].toInt() and 0xFF)
         val f = p[1].toInt() and 0xFF
-        return Report(p[0].toInt() and 0xFF, f and 1 != 0, f and 2 != 0, u16(2), u16(4), u16(6))
+        return Report(p[0].toInt() and 0xFF, f and 1 != 0, f and 2 != 0, u16(2), u16(4), u16(6), f and 4 != 0)
     }
 
     /** Resend request (type 6): these fragments of one frame; no indexes means the whole frame. [first]: not on the wire. */

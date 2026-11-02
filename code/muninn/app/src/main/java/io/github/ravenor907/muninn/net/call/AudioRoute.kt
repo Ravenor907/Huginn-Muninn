@@ -13,10 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Where a call or voice room sounds: the phone's earpiece, its speaker, wired headphones, or a Bluetooth device,
  * picked by name on the call screen ("Audio"). One call or room at a time, so one route for the whole app.
- * [automatic] means the usual order: Bluetooth, then wired, then the earpiece; in a video call the speaker takes
- * the earpiece's place, since the phone is held out in front. A device that goes away mid-call
- * (headphones unplugged, a headset switched off) drops the choice back to automatic, and a newly connected one
- * shows up in the list at once.
+ * [automatic] means the usual order: Bluetooth, then wired or USB, then the earpiece; in a video call or a voice
+ * room the speaker takes the earpiece's place. A device that goes away mid-call (headphones unplugged, a headset
+ * switched off) drops the choice back to automatic, so a room goes to the speaker, and a newly connected one is
+ * listed and, while nothing was chosen, used at once.
  */
 object AudioRoute {
     /** One place the sound can go. [id]: what [choose] takes ("earpiece", "speaker", or a device's own id). */
@@ -43,8 +43,8 @@ object AudioRoute {
     }
 
     /**
-     * A call or room took the audio: route it and follow devices. [speaker]: start on the speaker whatever is
-     * connected, as a voice room does. [video]: a video call, so the speaker unless a headset is connected.
+     * A call or room took the audio: route it and follow devices. [speaker]: a voice room, so the speaker unless a
+     * headset is connected. [video]: a video call, likewise.
      */
     fun start(audio: AudioManager, speaker: Boolean = false, video: Boolean = false) {
         am = audio
@@ -78,9 +78,14 @@ object AudioRoute {
     /** The person picked [id] on the call screen ([AUTOMATIC]: the usual order). */
     fun choose(id: String) {
         chosen = id
-        preferSpeaker = false
         apply()
     }
+
+    /** Routes again (a phone call ended and Android reset the call audio). */
+    fun reapply() { if (am != null) apply() }
+
+    /** What is connected now, without taking the audio (the join sheet, before a room starts). */
+    fun preview(audio: AudioManager): List<Output> = list(audio)
 
     /** True while the sound comes out of the phone's own speaker (no proximity sensor then). */
     val onSpeaker: Boolean get() = _current.value?.kind == Kind.SPEAKER
@@ -88,13 +93,13 @@ object AudioRoute {
     private fun refresh() {
         if (am == null) return
         // The chosen device went away: the usual order picks the next best one.
-        if (chosen != AUTOMATIC && list().none { it.id == chosen }) chosen = AUTOMATIC
+        if (chosen != AUTOMATIC && list(am ?: return).none { it.id == chosen }) chosen = AUTOMATIC
         apply()
     }
 
     private fun apply() {
         val a = am ?: return
-        val all = list()
+        val all = list(a)
         _outputs.value = all
         val pick = pickOutput(all, chosen, preferSpeaker, video)
         try {
@@ -113,8 +118,7 @@ object AudioRoute {
         _current.value = pick
     }
 
-    private fun list(): List<Output> {
-        val a = am ?: return emptyList()
+    private fun list(a: AudioManager): List<Output> {
         val out = mutableListOf<Output>()
         if (Build.VERSION.SDK_INT >= 31) {
             for (d in a.availableCommunicationDevices) {
@@ -155,14 +159,13 @@ object AudioRoute {
 }
 
 /**
- * Where the sound goes: the person's choice while it's connected; else the speaker for a voice room; else a
- * Bluetooth headset, then wired headphones, then the earpiece, or for a video call the speaker before the earpiece.
+ * Where the sound goes: the person's choice while it's connected; else a Bluetooth headset, then wired or USB
+ * headphones, then for a voice room ([room]) or a video call the speaker, then the earpiece.
  */
-fun pickOutput(all: List<AudioRoute.Output>, chosen: String, preferSpeaker: Boolean, video: Boolean): AudioRoute.Output? {
+fun pickOutput(all: List<AudioRoute.Output>, chosen: String, room: Boolean, video: Boolean): AudioRoute.Output? {
     fun kind(k: AudioRoute.Kind) = all.firstOrNull { it.kind == k }
     return all.firstOrNull { it.id == chosen }
-        ?: (if (preferSpeaker) kind(AudioRoute.Kind.SPEAKER) else null)
         ?: kind(AudioRoute.Kind.BLUETOOTH) ?: kind(AudioRoute.Kind.WIRED)
-        ?: (if (video) kind(AudioRoute.Kind.SPEAKER) else null)
+        ?: (if (room || video) kind(AudioRoute.Kind.SPEAKER) else null)
         ?: kind(AudioRoute.Kind.EARPIECE) ?: all.firstOrNull()
 }
