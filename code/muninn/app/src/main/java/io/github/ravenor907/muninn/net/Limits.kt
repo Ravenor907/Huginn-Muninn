@@ -33,7 +33,7 @@ object Limits {
     fun groupType(s: Proto06.State) = if (s.kind == FAMILY) FAMILY else FOLK
     fun typeName(type: String) = if (type == FAMILY) "Family" else "Folk"
     fun typeLine(type: String) = if (type == FAMILY) "Your closest, most trusted people. Invite only, checked in person, kept longer."
-        else "Friends and acquaintances. Easy to join, light to keep."
+        else "Friends. Anyone can invite. Messages are kept 7 days."
     /** "What's the difference?" */
     fun typeRules(type: String): List<String> = if (type == FAMILY) listOf(
         "Only admins add people, face to face or by a code they hand over", "No invite links",

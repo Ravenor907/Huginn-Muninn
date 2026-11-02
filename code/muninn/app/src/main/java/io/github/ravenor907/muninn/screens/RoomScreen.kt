@@ -176,7 +176,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
         // Wraps onto a second line when the four buttons don't fit (a small phone, large text or a long Bluetooth name).
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton(if (r.muted) "Unmute" else "Mute", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { RoomManager.setMuted(!r.muted) }
+            MButton(if (r.muted) "Unmute mic" else "Mute mic", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { RoomManager.setMuted(!r.muted) }
             // Where the sound goes: the phone, its speaker, headphones or a Bluetooth device.
             val out by AudioRoute.current.collectAsState()
             var picking by remember { mutableStateOf(false) }

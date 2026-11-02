@@ -56,6 +56,7 @@ qt_add_executable(huginn
     src/main.cpp
     src/settings.cpp src/settings.h
     src/talkkey.cpp src/talkkey.h
+    src/globalkeys.cpp src/globalkeys.h
     src/system.cpp src/system.h
     src/gamepad.cpp src/gamepad.h
     src/transfer.cpp src/transfer.h
@@ -152,6 +153,7 @@ if(WIN32)
         src/platform/qrcode_qrencode.cpp
         src/platform/keepawake_windows.cpp
         src/platform/direct_windows.cpp
+        src/platform/globalkeys_windows.cpp
     )
     # Huginn.exe: a windowed app (no console), with the raven icon and version details.
     set_target_properties(huginn PROPERTIES WIN32_EXECUTABLE TRUE OUTPUT_NAME Huginn)
@@ -199,6 +201,7 @@ else()
         src/platform/notify_linux.cpp
         src/platform/chime_linux.cpp
         src/platform/qrcode_prison.cpp
+        src/platform/globalkeys_linux.cpp
         src/direct.cpp
     )
 endif()

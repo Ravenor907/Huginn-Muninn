@@ -223,6 +223,10 @@ class LinkTest {
         listOf("msg", "send", "hello", "unlink", "result", "sync", "setme", "me").forEach { assertTrue(it, LinkWire.internetOk(f(it))) }
         listOf("chat", "get", "part").forEach { assertFalse(it, LinkWire.internetOk(f(it))) }
         assertFalse(LinkWire.internetOk(f("me").put("pic", "AAAA")))
+        // Cap l2 (15.2): ping, pong and read are small live frames; the caps token and the device name.
+        listOf("ping", "pong", "read").forEach { assertTrue(it, LinkWire.internetOk(f(it))) }
+        assertTrue(LinkWire.saysL2("l1 l2") && !LinkWire.saysL2("l1") && !LinkWire.saysL2("l20"))
+        assertEquals("Raven PC", LinkWire.deviceName("  Raven \n PC "))
         // Refresh at most once in 10 minutes.
         assertTrue(LinkWire.syncDue(0L, 1L))
         assertFalse(LinkWire.syncDue(1000L, 1000L + LinkWire.REFRESH_EVERY_MS - 1))

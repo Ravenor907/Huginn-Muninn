@@ -68,7 +68,8 @@ fun BackupPanel(app: Muninn) {
             }
             else -> {
                 Text("One file with everything, locked with a password you choose.", style = Type.normal)
-                Text("Save it anywhere. It restores in Huginn or Muninn.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                Text("Save it anywhere. It restores on a new phone or computer instead of this one. To use a computer as well, link it.",
+                    style = Type.small, modifier = Modifier.padding(top = 4.dp))
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     MButton("Back up", Modifier.weight(1f), Kind.Accent) { mode = "backup" }
                     MButton("Restore from a backup", Modifier.weight(1f)) { mode = "restore" }
@@ -207,7 +208,16 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, onCancel: () -> Unit, re
         }
     }
 
-    fun replace(o: BackupFormat.Opened) {
+    fun replace(o: BackupFormat.Opened, copyOk: Boolean = false) {
+        // A backup from a computer makes this phone the same person as that computer: said first, with its own confirm.
+        val s = BackupFormat.summary(o)
+        if (!copyOk && s.app == "huginn") {
+            Ui.sure(Ask("This makes a copy of you",
+                "This phone becomes the same person as ${s.device.ifEmpty { "that computer" }}. If both are used, messages stop working on one or both, " +
+                    "and friends see errors. To use both, link instead: Settings › Linked devices › Scan to link. Restore only if that computer won't chat again.",
+                "Restore anyway", danger = true) { replace(o, copyOk = true) })
+            return
+        }
         Ui.sure(Ask("Replace what's here?", "Everything on this phone is replaced by the backup. A copy of what's here now is kept first.",
             "Restore", danger = true, hold = true) {
             busy = true; error = ""

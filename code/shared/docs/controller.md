@@ -66,7 +66,7 @@ In Settings › About, A on the raven ten times turns Labs mode on or off. Labs 
 list's menu): the D-pad moves between Include screenshot, the text and Send, A uses the highlighted one, B closes.
 Labs reports (on the Labs computer, in the same menu): Up and Down pick a report, A replies, X deletes, B closes.
 
-Link your phone (first open, and Settings › Linked devices › Link my phone) shows a QR code for Muninn to scan, then
+Link your phone (first open, and Settings › Linked devices › Link this PC to my phone) shows a QR code for Muninn to scan, then
 the 4 emoji to compare, then Linked: the D-pad moves between the buttons, A presses the highlighted one, and B goes
 back (Skip on first open, Later while the emoji wait, Done once linked).
 

@@ -11,8 +11,9 @@ import java.security.PrivateKey
 /**
  * Cap g2 (shared/docs/protocol.md section 26), the parts with no Android in them, checked against
  * shared/vectors/g2-vectors.json in ModTest (shared/tools/g2_ref.py is the reference; Huginn's twin is ModWire):
- *  - group timeouts and bans: records an admin signs, like a group state, with their own domain
- *    {"a": "ban" | "unban" | "timeout" | "untimeout", "g", "k" (who), "by" (the admin), "ts", ["until"], "sig"}.
+ *  - group timeouts, bans and removed messages: records an admin signs, like a group state, with their own domain
+ *    {"a": "ban" | "unban" | "timeout" | "untimeout" | "remove", "g", "k" (who), "by" (the admin), "ts", ["until"],
+ *    ["m" (the message, only for "remove")], "sig"}.
  *    [Groups] keeps them, sends them in room "group" (t "mod") and drops posts from whoever they name.
  *  - the per-person volume (0 to 200 %) applied to someone's decoded sound before mixing.
  */
@@ -31,7 +32,7 @@ object ModLogic {
     /** What the menus offer: 10 minutes, 1 hour, 1 day, 1 week. */
     val TIMEOUTS = listOf(10 * MINUTE, 60 * MINUTE, DAY, 7 * DAY)
     val TIMEOUT_NAMES = listOf("10 minutes", "1 hour", "1 day", "1 week")
-    private val ACTIONS = setOf("ban", "unban", "timeout", "untimeout")
+    private val ACTIONS = setOf("ban", "unban", "timeout", "untimeout", "remove")
     private const val MAX_SAFE = 1L shl 53
 
     /** A JSON whole number (not a fraction, not true or false), or null. */
@@ -47,7 +48,8 @@ object ModLogic {
     /** "" when [r] is well-formed, otherwise why not. Does not check the signature. */
     fun check(r: JSONObject): String {
         val a = r.opt("a") as? String ?: return "fields"
-        val want = if (a == "timeout") setOf("a", "g", "k", "by", "ts", "sig", "until") else setOf("a", "g", "k", "by", "ts", "sig")
+        val base = setOf("a", "g", "k", "by", "ts", "sig")
+        val want = if (a == "timeout") base + "until" else if (a == "remove") base + "m" else base
         if (r.keys().asSequence().toSet() != want) return "fields"
         if (a !in ACTIONS) return "action"
         val g = r.opt("g") as? String ?: return "group id"
@@ -63,6 +65,7 @@ object ModLogic {
             val u = whole(r.opt("until")) ?: return "until"
             if (u <= ts || u > ts + LONGEST) return "until"
         }
+        if (a == "remove" && !Proto06.isLogicalId(r.opt("m") as? String ?: "")) return "m"
         return ""
     }
 
@@ -88,6 +91,9 @@ object ModLogic {
         return "ok"
     }
 
+    /** A "remove": an admin's Delete for everyone of message "m" (never kept in a slot). */
+    fun isRemove(r: JSONObject?): Boolean = r?.optString("a") == "remove"
+
     /** "ban" for ban and unban, "timeout" for timeout and untimeout: each slot keeps its newest record per person. */
     fun slot(r: JSONObject): String = if (r.optString("a") == "ban" || r.optString("a") == "unban") "ban" else "timeout"
 
@@ -104,6 +110,12 @@ object ModLogic {
     fun make(priv: PrivateKey, action: String, g: String, who: String, by: String, ts: Long, until: Long = 0): JSONObject {
         val r = JSONObject().put("a", action).put("g", g).put("k", who).put("by", by).put("ts", ts)
         if (action == "timeout") r.put("until", until)
+        return r.put("sig", Proto06.sign(priv, DOMAIN, Proto06.canon(r)))
+    }
+
+    /** A signed "remove" of message [msg], which [author] wrote. */
+    fun makeRemove(priv: PrivateKey, g: String, author: String, by: String, ts: Long, msg: String): JSONObject {
+        val r = JSONObject().put("a", "remove").put("g", g).put("k", author).put("by", by).put("ts", ts).put("m", msg)
         return r.put("sig", Proto06.sign(priv, DOMAIN, Proto06.canon(r)))
     }
 

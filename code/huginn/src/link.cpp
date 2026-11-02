@@ -108,6 +108,19 @@ Link::Link(Chat *chat, QObject *parent)
         fetchNext();
     });
     m_fetchTimer.start();
+    // Cap l2: chats read here go to the phone a moment later, together ("read", the newest time each).
+    m_readSoon.setSingleShot(true);
+    m_readSoon.setInterval(1500);
+    connect(&m_readSoon, &QTimer::timeout, this, [this] {
+        const QSet<QString> owed = std::exchange(m_readOwed, {});
+        if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone)
+            return;
+        for (const QString &peer : owed) {
+            const Mirror c = m_mirror.value(peer);
+            if (c.readAt > 0)
+                sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("read")}, {QStringLiteral("peer"), peer}, {QStringLiteral("upTo"), double(c.readAt)}});
+        }
+    });
 }
 
 void Link::ensureLoaded() const
@@ -121,7 +134,7 @@ void Link::ensureLoaded() const
     const QJsonObject o = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("link.json"))).object();
     auto dev = [](const QJsonObject &d) {
         return Device{jstr(d, "k"), jstr(d, "p"), jstr(d, "n"), d.value(QStringLiteral("ok")).toBool(true), d.value(QStringLiteral("l")).toBool(),
-                      d.value(QStringLiteral("gone")).toBool()};
+                      d.value(QStringLiteral("gone")).toBool(), d.value(QStringLiteral("l2")).toBool()};
     };
     for (const QJsonValue &v : o.value(QStringLiteral("companions")).toArray())
         m_companions << dev(v.toObject());
@@ -159,6 +172,8 @@ void Link::ensureLoaded() const
         Mirror m{jstr(c, "peer"), jstr(c, "n"), {}, daysOf(c, Limits::kDefault)};
         for (const QJsonValue &v : c.value(QStringLiteral("msgs")).toArray())
             m.msgs << mOf(v.toObject());
+        // Read up to: kept from before this was saved, everything counts as read.
+        m.readAt = c.contains(QStringLiteral("r")) ? qint64(c.value(QStringLiteral("r")).toDouble()) : m.msgs.isEmpty() ? 0 : m.msgs.last().time;
         if (!m.peer.isEmpty())
             m_mirror.insert(m.peer, m);
     }
@@ -172,6 +187,8 @@ void Link::save()
             j.insert(QStringLiteral("l"), true);
         if (d.gone)
             j.insert(QStringLiteral("gone"), true);
+        if (d.l2)
+            j.insert(QStringLiteral("l2"), true);
         return j;
     };
     QJsonArray c;
@@ -240,7 +257,8 @@ void Link::saveMirror()
                 j.insert(QStringLiteral("fn"), x.from);
             a.append(j);
         }
-        o.insert(m.peer, QJsonObject{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("d"), m.days}, {QStringLiteral("msgs"), a}});
+        o.insert(m.peer, QJsonObject{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("d"), m.days}, {QStringLiteral("msgs"), a},
+                                     {QStringLiteral("r"), double(m.readAt)}});
     }
     m_chat->m_vault->write(QStringLiteral("mirror.json"), compact(o));
     Q_EMIT changed();
@@ -266,7 +284,9 @@ bool Link::internetOk(const QJsonObject &msg)
     if (t == QLatin1String("acct"))
         return acctInternetOk(msg);
     return t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("hello") || t == QLatin1String("unlink")
-        || t == QLatin1String("result") || t == QLatin1String("sync") || t == QLatin1String("setme");
+        || t == QLatin1String("result") || t == QLatin1String("sync") || t == QLatin1String("setme")
+        // Cap l2 (15.2).
+        || t == QLatin1String("ping") || t == QLatin1String("pong") || t == QLatin1String("read");
 }
 
 QString Link::errText(const QString &err)
@@ -302,7 +322,34 @@ QVariantMap Link::phone() const
     if (m_phone.key.isEmpty())
         return {};
     return {{QStringLiteral("key"), m_phone.key}, {QStringLiteral("name"), m_phone.name}, {QStringLiteral("ok"), m_phone.ok},
-            {QStringLiteral("gone"), m_phone.gone}, {QStringLiteral("l1"), m_phone.l1}};
+            {QStringLiteral("gone"), m_phone.gone}, {QStringLiteral("l1"), m_phone.l1}, {QStringLiteral("l2"), m_phone.l2},
+            {QStringLiteral("heard"), double(m_heardAt)}, {QStringLiteral("asked"), double(m_pingAt)},
+            {QStringLiteral("answered"), m_pingAt > 0 && m_pongAt >= m_pingAt}, {QStringLiteral("lan"), lanHere(m_phone.key)},
+            {QStringLiteral("home"), home()}};
+}
+
+namespace
+{
+int unreadIn(const QList<Link::M> &msgs, qint64 readAt)
+{
+    int n = 0;
+    for (const Link::M &x : msgs)
+        if (!x.mine && x.time > readAt)
+            n++;
+    return n;
+}
+}
+
+int Link::unread() const
+{
+    ensureLoaded();
+    if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone)
+        return 0;
+    int n = 0;
+    for (const Mirror &m : std::as_const(m_mirror))
+        if (!m_chat->isMuted(QStringLiteral("mirror:") + m.peer))
+            n += unreadIn(m.msgs, m.readAt);
+    return n;
 }
 
 QVariantList Link::companions() const
@@ -448,6 +495,9 @@ void Link::forgetPhone()
     m_mePic.clear();
     m_pending.clear();
     m_askedAt = 0;
+    m_heardAt = m_pingAt = m_pongAt = 0;
+    m_readOwed.clear();
+    m_freshPages.clear();
     m_acct.clear();
     m_acctFresh = false;
     saveAcct();
@@ -549,7 +599,23 @@ QVariantList Link::mirror() const
         const M *l = m->msgs.isEmpty() ? nullptr : &m->msgs.last();
         out << QVariantMap{{QStringLiteral("peer"), m->peer}, {QStringLiteral("name"), name},
                            {QStringLiteral("last"), !l ? QString() : (l->mine ? QStringLiteral("You: ") : l->from.isEmpty() ? QString() : l->from + QStringLiteral(": ")) + l->text.left(80)},
-                           {QStringLiteral("time"), double(last(m))}, {QStringLiteral("role"), role}, {QStringLiteral("folders"), folders.join(QStringLiteral(", "))}};
+                           {QStringLiteral("time"), double(last(m))}, {QStringLiteral("role"), role}, {QStringLiteral("folders"), folders.join(QStringLiteral(", "))},
+                           {QStringLiteral("unread"), unreadIn(m->msgs, m->readAt)}, {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + m->peer)},
+                           {QStringLiteral("group"), m->peer.startsWith(QLatin1String("g:"))}};
+    }
+    // Cap l1: a group on the phone with nothing here yet (just joined, or no messages) still shows, at the end.
+    if (m_phone.l1) {
+        for (const Item &i : std::as_const(m_acct)) {
+            const QString peer = QStringLiteral("g:") + i.id;
+            if (i.k != QLatin1String("group") || i.del || !jstr(i.v, "gone").isEmpty() || m_mirror.contains(peer))
+                continue;
+            const QString r = jstr(i.v, "role");
+            out << QVariantMap{{QStringLiteral("peer"), peer}, {QStringLiteral("name"), jstr(i.v, "n").trimmed().isEmpty() ? QStringLiteral("Group") : jstr(i.v, "n").left(40)},
+                                 {QStringLiteral("last"), QString()}, {QStringLiteral("time"), 0.0},
+                                 {QStringLiteral("role"), r == QLatin1String("owner") ? QStringLiteral("Owner") : r == QLatin1String("admin") ? QStringLiteral("Admin") : QStringLiteral("Member")},
+                                 {QStringLiteral("folders"), QString()}, {QStringLiteral("unread"), 0},
+                                 {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + peer)}, {QStringLiteral("group"), true}};
+        }
     }
     return out;
 }
@@ -646,7 +712,8 @@ QString Link::newCode()
     const qint64 t = now();
     m_tokens.removeIf([t](const QHash<QString, qint64>::iterator it) { return it.value() < t; });
     m_tokens.insert(m_token, m_tokenUntil);
-    QString name = m_chat->username();
+    // The phone lists this computer by its device name (Settings), not the chat name.
+    const QString name = myDeviceName();
     const QJsonObject o{{QStringLiteral("k"), m_chat->myKey()}, {QStringLiteral("p"), m_chat->mailbox()}, {QStringLiteral("n"), name.left(40)},
                         {QStringLiteral("i"), m_token}};
     m_code = QString::fromLatin1(kPrefix) + QString::fromLatin1(compact(o).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
@@ -655,6 +722,12 @@ QString Link::newCode()
 }
 
 bool Link::codeDue(qint64 t, qint64 until) { return t > until - kRefreshMs; }
+
+QString Link::myDeviceName() const
+{
+    const QString n = (deviceName ? deviceName() : QString()).simplified().left(40);
+    return n.isEmpty() ? m_chat->username().left(40) : n;
+}
 
 QString Link::freshCode()
 {
@@ -694,7 +767,7 @@ QString Link::link(const QString &text, bool confirmed)
     if (!m_chat->ready())
         return QStringLiteral("Unlock Huginn first.");
     if (text.indexOf(QString::fromLatin1(kPrefix)) < 0)
-        return QStringLiteral("That isn't a link code. On the other device: Settings › Linked devices › Link my phone.");
+        return QStringLiteral("That isn't a link code. On the other device: Settings › Linked devices › Link this PC to my phone.");
     const QJsonObject o = readCode(text);
     if (o.isEmpty())
         return QStringLiteral("That link code is damaged.");
@@ -1209,6 +1282,8 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     // A phone unlinked with its copy kept here is linked no more: only a hello (linking it again) is taken from it.
     const bool samePhone = !m_phone.key.isEmpty() && m_phone.key == from;
     const bool ph = samePhone && !m_phone.gone;
+    if (ph)
+        m_heardAt = now();   // cap l2: the phone is there (shown as its status)
     if (t == QLatin1String("hello") && !comp) {
         // Pairing: a phone answers my link code with its token, in time and only once.
         const QString token = jstr(p, "i");
@@ -1263,7 +1338,43 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     }
     if (!okHere && (comp || ph))
         return t == QLatin1String("chat") || t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("sync")
-            || t == QLatin1String("me") || t == QLatin1String("setme") || t == QLatin1String("acct");
+            || t == QLatin1String("me") || t == QLatin1String("setme") || t == QLatin1String("acct") || t == QLatin1String("ping")
+            || t == QLatin1String("pong") || t == QLatin1String("read");
+    if (ph && t == QLatin1String("pong")) {
+        // Cap l2: the phone answered a "ping": it's there, and it takes "read".
+        m_pongAt = now();
+        if (!m_phone.l2) {
+            m_phone.l2 = true;
+            save();
+        } else {
+            Q_EMIT changed();
+        }
+        return true;
+    }
+    if (ph && t == QLatin1String("read")) {
+        // Cap l2: read on the phone up to then: read here too.
+        const QString peer = jstr(p, "peer");
+        const qint64 upTo = qint64(p.value(QStringLiteral("upTo")).toDouble());
+        auto it = m_mirror.find(peer);
+        if (it != m_mirror.end() && upTo > it->readAt) {
+            it->readAt = upTo;
+            saveMirror();
+        }
+        return true;
+    }
+    if (comp && t == QLatin1String("ping")) {
+        // Huginn as the phone: answer, and take the companion's device name.
+        const QString dn = jstr(p, "dn").simplified().left(40);
+        for (Device &d : m_companions)
+            if (d.key == from && !dn.isEmpty() && d.name != dn) {
+                d.name = dn;
+                save();
+            }
+        for (const Device &d : std::as_const(m_companions))
+            if (d.key == from)
+                sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("pong")}});
+        return true;
+    }
     if (ph && t == QLatin1String("acct")) {
         // Cap l1: the phone's account (all of it, or what changed).
         takeAcct(p);
@@ -1351,6 +1462,15 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         if (c.name.isEmpty())
             c.name = QStringLiteral("Someone");
         merge(c.msgs, page);
+        // A chat that's new here from this sync: its history counts as read (only what comes after is unread).
+        if (!known || m_freshPages.contains(peer)) {
+            if (!c.msgs.isEmpty())
+                c.readAt = qMax(c.readAt, c.msgs.last().time);
+            if (p.value(QStringLiteral("pg")).toInt() < p.value(QStringLiteral("pgs")).toInt(1) - 1)
+                m_freshPages.insert(peer);
+            else
+                m_freshPages.remove(peer);
+        }
         for (const M &x : std::as_const(page))
             want(x);
         saveMirror();
@@ -1384,8 +1504,9 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         saveMirror();
         want(x);
         fetchNext();
+        // Who wrote it, in a group ("Sam in gaming server"). Muted here or on the phone: notifyFor stays quiet.
         if (!x.mine)
-            Q_EMIT m_chat->arrived(c.name, x.text.left(60), QStringLiteral("mirror:") + peer);
+            Q_EMIT m_chat->arrived(x.from.isEmpty() ? c.name : x.from + QStringLiteral(" in ") + c.name, x.text.left(60), QStringLiteral("mirror:") + peer);
         return true;
     }
     if (ph && t == QLatin1String("part")) {
@@ -1480,7 +1601,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
 
 // ------------------------------------------------------------------ the companion's side
 
-QString Link::send(const QString &peer, const QString &text)
+QString Link::send(const QString &peer, const QString &text, const QString &re)
 {
     ensureLoaded();
     const QString t = text.trimmed();
@@ -1491,7 +1612,7 @@ QString Link::send(const QString &peer, const QString &text)
     if (t.isEmpty())
         return QStringLiteral("Write something first.");
     // Shown at once as pending, until the phone answers or its copy comes back.
-    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, t.left(Chat::kMax), QString(), now()};
+    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, t.left(Chat::kMax), QString(), re.left(200), now()};
     m_pending << p;
     while (m_pending.size() > 50)
         m_pending.removeFirst();
@@ -1502,14 +1623,17 @@ QString Link::send(const QString &peer, const QString &text)
 
 void Link::sendPending(const Pending &p)
 {
-    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("send")}, {QStringLiteral("peer"), p.peer}, {QStringLiteral("text"), p.text},
-                                {QStringLiteral("id"), p.id}});
-    // No answer in a minute: "Didn't send", with Retry.
+    QJsonObject frame{{QStringLiteral("t"), QStringLiteral("send")}, {QStringLiteral("peer"), p.peer}, {QStringLiteral("text"), p.text},
+                      {QStringLiteral("id"), p.id}};
+    if (!p.re.isEmpty())
+        frame.insert(QStringLiteral("re"), p.re);
+    sendTo(m_phone, frame);
+    // No answer in a minute: "Phone didn't answer", with Retry (it still goes if the phone takes it later; never twice).
     const QString id = p.id;
     QTimer::singleShot(int(kEchoMs + 500), this, [this, id] {
         for (Pending &x : m_pending)
             if (x.id == id && x.err.isEmpty() && now() - x.time >= kEchoMs) {
-                x.err = QStringLiteral("Didn't send");
+                x.err = QStringLiteral("Phone didn't answer");
                 Q_EMIT changed();
             }
     });
@@ -1572,6 +1696,18 @@ QByteArray picOf(const QJsonObject &v)
     const auto d = QByteArray::fromBase64Encoding(jstr(v, "pic").toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
     return d.decodingStatus == QByteArray::Base64DecodingStatus::Ok && Profile::pictureOk(d.decoded) ? d.decoded : QByteArray();
 }
+// Until turned back on, as Chat::muteChat takes it (the largest JavaScript date).
+constexpr qint64 kMuteForever = 8640000000000000LL;
+// A "mute" item: when it ends (ms), kMuteForever for "f", 0 when it's a tombstone or already over.
+qint64 muteUntil(const Link::Item &i)
+{
+    if (i.del)
+        return 0;
+    if (i.v.value(QStringLiteral("f")).toBool())
+        return kMuteForever;
+    const double u = i.v.value(QStringLiteral("u")).toDouble();
+    return u > double(now()) && u < double(kMuteForever) ? qint64(u) : 0;
+}
 }
 
 QJsonObject Link::Item::json() const
@@ -1586,7 +1722,8 @@ QJsonObject Link::Item::json() const
 
 Link::Item Link::readItem(const QJsonObject &o, bool *ok)
 {
-    static const QStringList kinds{QStringLiteral("me"), QStringLiteral("pic"), QStringLiteral("contact"), QStringLiteral("group"), QStringLiteral("folder")};
+    static const QStringList kinds{QStringLiteral("me"), QStringLiteral("pic"), QStringLiteral("contact"), QStringLiteral("group"), QStringLiteral("folder"),
+                                   QStringLiteral("mute")};
     Item i;
     i.k = jstr(o, "k");
     i.id = jstr(o, "id");
@@ -1660,7 +1797,7 @@ bool Link::saysL1(const QString &caps)
 QJsonObject Link::syncFrame(bool first) const
 {
     // "caps": "l1" asks the phone for its whole account too; an old phone ignores it and links the old way.
-    QJsonObject o{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap)}};
+    QJsonObject o{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2")}};
     if (first)
         o.insert(QStringLiteral("f"), true);
     return o;
@@ -1739,6 +1876,8 @@ void Link::takeAcct(const QJsonObject &p)
                 setMyPicture(m_mePic);
         } else if (i.k == QLatin1String("pic")) {
             pics = true;
+        } else if (i.k == QLatin1String("mute")) {
+            m_chat->muteChat(QStringLiteral("mirror:") + i.id, muteUntil(i));
         }
     }
     // The last page of a full set and the phone has no picture: neither has this device (no leftover old one).
@@ -1923,6 +2062,73 @@ QString Link::putInFolder(const QString &id, const QString &key, bool on)
     return changeItem(QStringLiteral("folder"), id, false, v);
 }
 
+// ------------------------------------------------------------------ cap l2: read state, mute, the phone's status (section 15.2)
+
+bool Link::startChat(const QString &peer)
+{
+    ensureLoaded();
+    if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone || peer.isEmpty())
+        return false;
+    if (m_mirror.contains(peer))
+        return true;
+    const Item i = m_acct.value(QStringLiteral("contact|") + peer);
+    if (i.del || i.v.isEmpty())
+        return false;
+    const QString n = jstr(i.v, "n").simplified().left(40);
+    Mirror m;
+    m.peer = peer;
+    m.name = n.isEmpty() ? QStringLiteral("Someone") : n;
+    m_mirror.insert(peer, m);
+    saveMirror();
+    return true;
+}
+
+void Link::markRead(const QString &peer)
+{
+    ensureLoaded();
+    auto it = m_mirror.find(peer);
+    if (it == m_mirror.end() || it->msgs.isEmpty() || it->msgs.last().time <= it->readAt)
+        return;
+    it->readAt = it->msgs.last().time;
+    saveMirror();
+    // The phone marks it read too (an older phone ignores "read").
+    if (!m_phone.key.isEmpty() && m_phone.ok && !m_phone.gone) {
+        m_readOwed.insert(peer);
+        m_readSoon.start();
+    }
+}
+
+QString Link::setMute(const QString &peer, qint64 until)
+{
+    ensureLoaded();
+    if (m_phone.key.isEmpty() || peer.isEmpty())
+        return QStringLiteral("No phone is linked.");
+    m_chat->muteChat(QStringLiteral("mirror:") + peer, until);
+    Q_EMIT changed();
+    // Cap l1: on the phone too. Without it, only here.
+    if (!acctOn())
+        return QString();
+    const bool off = until <= now();
+    return changeItem(QStringLiteral("mute"), peer, off,
+                      until >= kMuteForever ? QJsonObject{{QStringLiteral("f"), true}} : QJsonObject{{QStringLiteral("u"), double(until)}});
+}
+
+void Link::ping()
+{
+    ensureLoaded();
+    if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone)
+        return;
+    const qint64 t = now();
+    if (m_pingAt > 0 && t - m_pingAt < 60000)
+        return;
+    m_pingAt = t;
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2")},
+                                {QStringLiteral("dn"), myDeviceName()}});
+    Q_EMIT changed();
+    // No answer in 20 seconds: the status says so.
+    QTimer::singleShot(20500, this, [this] { Q_EMIT changed(); });
+}
+
 void Link::unlinkPhone(bool keep)
 {
     ensureLoaded();
@@ -2067,6 +2273,7 @@ bool Link::selfTest(const QJsonObject &v)
         check(internetOk(f("msg")) && internetOk(f("send")) && internetOk(f("hello")) && internetOk(f("unlink")) && internetOk(f("result"))
                   && internetOk(f("me")), "small live frames may use the internet");
         check(!internetOk(f("chat")) && !internetOk(f("get")) && !internetOk(f("part")), "history and media never use the internet");
+        check(internetOk(f("ping")) && internetOk(f("pong")) && internetOk(f("read")), "l2: ping, pong and read are small live frames");
         QJsonObject me = f("me");
         me.insert(QStringLiteral("pic"), QStringLiteral("AAAA"));
         check(!internetOk(me), "a me with its picture never uses the internet");
@@ -2134,6 +2341,14 @@ bool Link::selfTest(const QJsonObject &v)
         bool ok3 = false;
         const Item t = readItem(Item{QStringLiteral("contact"), QStringLiteral("z"), 7, true, {}}.json(), &ok3);
         check(!ok && !ok2 && ok3 && t.del && t.ts == 7, "l1: bad items are dropped, a tombstone reads back");
+        // Cap l2: a mute item, until turned back on, until a time, or over.
+        bool ok4 = false;
+        const Item forever = readItem(QJsonObject{{QStringLiteral("k"), QStringLiteral("mute")}, {QStringLiteral("id"), QStringLiteral("g:x")}, {QStringLiteral("ts"), 1.0},
+                                                  {QStringLiteral("v"), QJsonObject{{QStringLiteral("f"), true}}}}, &ok4);
+        const Item soon{QStringLiteral("mute"), QStringLiteral("a"), 1, false, QJsonObject{{QStringLiteral("u"), double(now() + 60000)}}};
+        const Item over{QStringLiteral("mute"), QStringLiteral("a"), 1, false, QJsonObject{{QStringLiteral("u"), 5.0}}};
+        check(ok4 && muteUntil(forever) == kMuteForever && muteUntil(soon) > now() && muteUntil(over) == 0
+                  && muteUntil(Item{QStringLiteral("mute"), QStringLiteral("a"), 2, true, {}}) == 0, "l2: mute items");
         check(saysL1(QStringLiteral("l1")) && saysL1(QStringLiteral("r1 l1 m1")) && !saysL1(QStringLiteral("l10")) && !saysL1(QString()), "l1: the caps token");
         const QJsonObject small{{QStringLiteral("t"), QStringLiteral("acct")}, {QStringLiteral("items"), QJsonArray{contact("a", 1, "").json()}}};
         QJsonObject full = small;

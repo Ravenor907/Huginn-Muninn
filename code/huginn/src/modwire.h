@@ -7,8 +7,9 @@
 
 // Cap g2 (shared/docs/protocol.md section 26), the deterministic parts, kept apart from Chat so the self-tests can
 // check them against shared/vectors/g2-vectors.json (shared/tools/g2_ref.py is the reference):
-//  - group timeouts and bans: records an admin signs, like a group state, with their own domain
-//    {"a": "ban" | "unban" | "timeout" | "untimeout", "g", "k" (who), "by" (the admin), "ts", ["until"], "sig"}
+//  - group timeouts, bans and removed messages: records an admin signs, like a group state, with their own domain
+//    {"a": "ban" | "unban" | "timeout" | "untimeout" | "remove", "g", "k" (who), "by" (the admin), "ts", ["until"],
+//     ["m" (the message, only for "remove")], "sig"}
 //  - the per-person volume (0 to 200 %) both apps apply to someone's decoded sound before mixing.
 // Muninn's twin is net/Mod.kt.
 namespace ModWire
@@ -36,6 +37,9 @@ bool banned(const QJsonObject &rec);
 bool timedOut(const QJsonObject &rec, qint64 nowMs);
 // An unsigned record (sign it with GroupWire::sign and kDomain). until only for "timeout".
 QJsonObject make(const QString &action, const QString &g, const QString &who, const QString &by, qint64 ts, qint64 until = 0);
+// An unsigned "remove": an admin's "Delete for everyone" of msg, a message author wrote. Not kept in a slot.
+QJsonObject makeRemove(const QString &g, const QString &author, const QString &by, qint64 ts, const QString &msg);
+bool isRemove(const QJsonObject &r);
 
 // Whole numbers 0 to 200; anything else is 100.
 int clampVolume(const QJsonValue &v);
@@ -46,7 +50,7 @@ qint16 gain(qint16 sample, int pct);
 void applyGain(qint16 *pcm, int n, int pct);
 
 // Checks shared/vectors/g2-vectors.json (with chat-vectors.json next to it for nothing more than the path): records,
-// forged and tampered ones refused, order, timeout expiry, volume and gain. Prints what it found.
+// forged and tampered ones refused, order, timeout expiry, volume and gain, and cap g3's about text. Prints what it found.
 bool selfTest(const QString &vectorsPath);
 // The volume part on its own (for --call-selftest).
 bool volumeSelfTest(const QString &vectorsPath);

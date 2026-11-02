@@ -5,7 +5,7 @@ import Huginn
 // whole window, on the season's own ground: the raven, a big QR code of the link code (a new one comes a minute
 // before the old one runs out) and where to scan it in Muninn. When the phone takes it the same screen asks
 // "Do these match?" with the 4 emoji, then says "Linked". Shown once on first open (after the lock is set,
-// when nothing is linked) and from Settings › Linked devices › Link my phone. The D-pad moves between the
+// when nothing is linked) and from Settings › Linked devices › Link this PC to my phone. The D-pad moves between the
 // buttons, A presses one, B goes back (Skip on first open, Later while the emoji wait, Done once linked).
 // It never shows over the lock: it closes when Huginn locks.
 Item {
@@ -59,8 +59,8 @@ Item {
     // For a phone without a camera: the code as text, to paste in Muninn.
     function copyInstead() {
         if (tour || shownCode === "") return
-        Chat.copyText(shownCode)
-        Ui.note("Link code copied", "Paste it in Muninn: Settings › Linked devices › Scan to link. Works once, for 10 minutes.")
+        Chat.copyText(shownCode, true)
+        Ui.note("Link code copied", "Paste it in Muninn: Settings › Linked devices › Scan to link. Works once, for 10 minutes. It's cleared from the clipboard in a minute.")
     }
     function handleButton(b) {
         if (b === "left" || b === "up") focusIndex = Math.max(0, focusAt - 1)

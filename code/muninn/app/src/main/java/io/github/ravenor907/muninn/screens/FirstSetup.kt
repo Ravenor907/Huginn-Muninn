@@ -320,7 +320,7 @@ private fun WelcomePage(app: Muninn) {
         Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(96.dp))
             Text("Welcome to Muninn", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
-            Text("Private messages, calls and files with family. No phone number, no account.", style = Type.normal,
+            Text("Private messages, calls and files with family and friends. No phone number, no account.", style = Type.normal,
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             Text("Have a backup from Huginn or Muninn?", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 24.dp))
             MButton("Restore from a backup", Modifier.padding(top = 8.dp)) { restoring = true }
@@ -427,13 +427,20 @@ private fun PeoplePage(app: Muninn) {
     val code = remember { w.myCode() }
     var scanning by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf("") }
+    // A group's invite scanned or pasted here, or opened from a link during setup: the same Join card as + › Add someone.
+    var invite by remember { mutableStateOf(if (w.live) GroupLinks.parse(app, ChatNav.incoming) else null) }
+    var pasted by remember { mutableStateOf("") }
     Page(skip = "Later", next = "Done") {
         Title("Add people")
         Text("Both people need Muninn. Scan each other's code, or share a link.", style = Type.small)
         BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 14.dp), contentAlignment = Alignment.Center) {
             val side = minOf(maxWidth - 20.dp, 280.dp).coerceAtLeast(120.dp)
             when {
-                scanning -> QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 320.dp))) { scanned -> note = added(app, scanned); scanning = false }
+                scanning -> QrScanner(Modifier.fillMaxWidth().height(minOf(maxWidth, 320.dp))) { scanned ->
+                    invite = GroupLinks.parse(app, Contacts.unlink(scanned)).takeIf { !io.github.ravenor907.muninn.net.Link.isCode(scanned) }
+                    note = if (invite != null) "" else added(app, scanned)
+                    scanning = false
+                }
                 w.live -> Qr(Contacts.link(code), side)
                 else -> PracticeQr(side)
             }
@@ -452,6 +459,18 @@ private fun PeoplePage(app: Muninn) {
                 else { scanning = !scanning; note = "" }
             }
         }
+        invite?.let { p -> Panel(Modifier.padding(top = 12.dp)) {
+            Text("You're invited to ${p.name.ifBlank { "a group" }}", style = Type.normal.copy(color = Palette.text))
+            JoinCard(app, p) { invite = null; ChatNav.incoming = "" }
+        } }
+        // No camera needed: a code or invite link from another app on this phone.
+        Field(pasted, { pasted = it }, "Paste a code or invite link", Modifier.padding(top = 12.dp), single = false)
+        if (pasted.isNotBlank()) MButton("Add", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) {
+            if (!w.live) { note = "Practice: their code would add them here."; pasted = ""; return@MButton }
+            val p = GroupLinks.parse(app, Contacts.unlink(pasted.trim()))
+            if (p != null && !io.github.ravenor907.muninn.net.Link.isCode(pasted)) { invite = p; note = "" } else note = added(app, pasted.trim())
+            pasted = ""
+        }
         if (note.isNotEmpty()) Line(note, Palette.text)
     }
 }
@@ -460,7 +479,6 @@ private fun PeoplePage(app: Muninn) {
 private fun added(app: Muninn, scanned: String): String {
     val text = Contacts.unlink(scanned)
     if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) return "That's a link code. Use Settings › Linked devices."
-    if (GroupLinks.parse(app, text) != null) return "That's a group invite. Open it from + › Add someone."
     val found = Contacts.parse(text) ?: return "That isn't a Muninn code."
     if (Contacts.expires(text) in 1 until System.currentTimeMillis()) return "That code has ended. Ask for a new one."
     if (found.chatKey == app.identity.publicKey) return "That's your own code."
@@ -490,7 +508,7 @@ private fun DonePage() {
             Box(Modifier.size(72.dp).clip(CircleShape).background(Palette.accentFill).border(2.dp, Palette.accent, CircleShape),
                 contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
             Text("You're set.", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
-            Text("Messages, photos and calls delete after 7 days.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. Family groups can keep them longer.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             if (practice) Text("Practice ends here and goes back to Labs.", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
     }

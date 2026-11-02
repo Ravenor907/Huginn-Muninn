@@ -4,8 +4,11 @@
 
 #include "platform/qrcode.h"
 
+#include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QPainter>
+#include <QStandardPaths>
 #include <QUrl>
 
 Transfer::Transfer(Settings *settings, QObject *parent)
@@ -18,6 +21,26 @@ Transfer::Transfer(Settings *settings, QObject *parent)
 QString Transfer::saveName() const
 {
     return System::displayPath(QUrl::fromLocalFile(m_settings->transferFolder()));
+}
+
+bool Transfer::customSave() const
+{
+    const QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    return QDir(m_settings->transferFolder()) != QDir(downloads);
+}
+
+bool Transfer::pickSaveFolder()
+{
+    const QString dir = QFileDialog::getExistingDirectory(nullptr, QStringLiteral("Save files to"), m_settings->transferFolder());
+    if (dir.isEmpty())
+        return false;
+    m_settings->setTransferFolder(dir);
+    return true;
+}
+
+void Transfer::resetSaveFolder()
+{
+    m_settings->setTransferFolder(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
 }
 
 void Transfer::share(const QVariantList &urls)

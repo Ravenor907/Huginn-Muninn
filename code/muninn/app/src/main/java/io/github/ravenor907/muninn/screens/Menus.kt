@@ -286,7 +286,7 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
     }
     val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
     val muteRow: @Composable () -> Unit = {
-        MenuRow("mute", if (muted) "Unmute" else "Mute") {
+        MenuRow("mute", if (muted) "Unmute notifications" else "Mute notifications") {
             if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
         }
     }
@@ -316,6 +316,21 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         // No Block for a TV this phone looks after: Disconnect TV is how it goes.
         return
     }
+    // In a group: Add as contact (someone I'm not in touch with yet) and, for admins, Make admin, at the top.
+    if (inGroup != null && !inGroup.readOnly && inGroup.state.has(key)) {
+        val s = inGroup.state
+        val me = app.identity.publicKey
+        if (contact == null) MenuRow("plus", "Add as contact") {
+            done(); app.chat.askToAdd(inGroup.g, key, name, s.member(key)?.p.orEmpty()); Ui.say("Asked $name.")
+        }
+        if (s.isAdmin(me) && key != s.owner) {
+            if (s.isAdmin(key)) { if (s.owner == me) MenuRow("people", "Remove admin") {
+                done(); app.chat.groups.setAdmin(inGroup.g, key, false)?.let { Ui.say(it, true) } ?: Ui.say("$name isn't an admin.")
+            } } else MenuRow("people", "Make admin") {
+                done(); app.chat.groups.setAdmin(inGroup.g, key, true)?.let { Ui.say(it, true) } ?: Ui.say("$name is an admin.")
+            }
+        }
+    }
     if (contact != null || app.chat.conversations.value[key].orEmpty().isNotEmpty()) {
         MenuRow("search", "Search") { open("search") }
         MenuRow("image", "Media") { open("media") }
@@ -338,18 +353,12 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         val s = inGroup.state
         val me = app.identity.publicKey
         val g = inGroup.g
-        if (s.isAdmin(me) && key != s.owner && s.has(key)) {
-            if (s.isAdmin(key)) MenuRow("people", "Remove admin") {
-                done(); app.chat.groups.setAdmin(g, key, false)?.let { Ui.say(it, true) } ?: Ui.say("$name isn't an admin.")
-            } else MenuRow("people", "Make admin") {
-                done(); app.chat.groups.setAdmin(g, key, true)?.let { Ui.say(it, true) } ?: Ui.say("$name is an admin.")
-            }
-        }
         if (s.owner == me && s.has(key)) MenuRow("shield", "Make owner") {
             done()
             Ui.sure(Ask("Make $name the owner?", "You stay an admin.", "Make owner", onConfirm = { app.chat.groups.handOver(g, key)?.let { Ui.say(it, true) } }))
         }
-        if (s.isAdmin(me) && key != s.owner && s.has(key)) MenuRow("close", "Remove from group", danger = true) {
+        // Their own section: Timeout and Ban (ModRows) and Remove from group, apart from the rest.
+        if (s.isAdmin(me) && key != s.owner && s.has(key) && (!s.isAdmin(key) || s.owner == me)) MenuRow("close", "Remove $name from group…", danger = true) {
             done()
             Ui.sure(Ask("Remove $name from ${s.name}?", "Their phone says they were removed.", "Remove", danger = true,
                 onConfirm = { app.chat.groups.remove(g, key)?.let { Ui.say(it, true) } }))
@@ -415,7 +424,7 @@ private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     MenuRow("back", "Back") { back() }
 }
 
-/** A group's menu: Call, People, Add people, Group settings, Mute, Notifications, then Leave. */
+/** A group's menu: Invite people, People, Search, Media, Files, Group settings, Mute, Notifications, then Call everyone (it asks) and Leave. */
 @Composable
 private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, onNotify: () -> Unit, done: () -> Unit) {
     val all by app.chat.groups.all.collectAsState()
@@ -428,14 +437,8 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, on
     val me = app.identity.publicKey
     MenuTitle(s.name)
     fun go(page: String) { done(); if (ChatNav.wide) ChatNav.space = g; ChatNav.open = "$key/$page" }
-    if (!grp.readOnly && s.members.size > 1) MenuRow("call", "Call") {
-        done()
-        Ui.sure(Ask("Call ${s.name}?", "Rings everyone who can join.", "Call everyone",
-            extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
-            onConfirm = { RoomActivity.call(context, g, emptyList()) }))
-    }
+    if (!grp.readOnly && (s.isAdmin(me) || GroupLinks.canInvite(app, g))) MenuRow("plus", "Invite people") { go("add") }
     MenuRow("people", "People", value = "${s.members.size}") { go("people") }
-    if (!grp.readOnly && (s.isAdmin(me) || GroupLinks.canInvite(app, g))) MenuRow("plus", "Add people") { go("add") }
     MenuRow("search", "Search") { done(); ChatNav.action = "search"; ChatNav.openGroup(g) }
     MenuRow("image", "Media") { done(); ChatNav.action = "media"; ChatNav.openGroup(g) }
     // Cap f2: everything sent and received in the group, and who can send files.
@@ -443,10 +446,18 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, on
     MenuRow("gear", "Group settings") { go("settings") }
     MoveRows(app, key)
     val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
-    MenuRow("mute", if (muted) "Unmute" else "Mute") {
+    MenuRow("mute", if (muted) "Unmute notifications" else "Mute notifications") {
         if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("${s.name} isn't muted.") } else onMute()
     }
     MenuRow("clock", "Notifications") { onNotify() }
+    // Rings every member, so it sits low and asks first. To just talk, there are voice rooms.
+    if (!grp.readOnly && s.members.size > 1) MenuRow("call", "Call everyone") {
+        done()
+        val n = s.members.size - 1
+        Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To just talk, join a voice room.", "Ring everyone",
+            extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
+            onConfirm = { RoomActivity.call(context, g, emptyList()) }))
+    }
     if (!grp.readOnly) MenuRow("close", "Leave", danger = true) {
         done()
         if (s.owner == me && s.members.size > 1) Ui.say("You own ${s.name}. Make someone else owner first.", true)
@@ -543,7 +554,7 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 NavRow("Check emoji code", if (app.chat.isVerified(key)) "Checked" else "Not checked yet", icon = "shield") { checkEmoji(app, key, name) }
                 if (contact != null) {
                     var fast by remember(key) { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.trusted(key)) }
-                    ToggleRow("Direct calls", "Faster. They see your address", fast) {
+                    ToggleRow("Direct calls and files", "Faster, and big files go straight. They see your address", fast) {
                         io.github.ravenor907.muninn.net.call.CallManager.setTrusted(key, it); fast = it
                     }
                     NavRow("Introduce", "To another contact", icon = "people") { introducing = true }

@@ -66,6 +66,9 @@ public:
     // A video file from this computer: picked, then checked and sent. "" when sent.
     Q_INVOKABLE QString pickFile() const;
     Q_INVOKABLE QString sendFile(const QString &where, const QString &path);
+    // It can go as a video message: an MP4 of at most kMaxPieces pieces and a minute. Anything bigger or longer goes
+    // as a file instead (drag and drop, Video file), never refused.
+    Q_INVOKABLE bool fitsMessage(const QString &path) const;
 
 Q_SIGNALS:
     void changed();

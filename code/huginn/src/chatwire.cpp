@@ -10,7 +10,7 @@
 #include <set>
 
 const char ChatWire::kCap[] = "r1";
-const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2";
+const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2 g3 f3";
 
 namespace
 {
@@ -47,8 +47,8 @@ QStringList ChatWire::capsOf(const QJsonObject &o, bool *present)
         *present = v.isString();
     QStringList out;
     for (const QString &t : v.toString().split(QLatin1Char(' '), Qt::SkipEmptyParts))
-        // Muninn sends 20 tokens: keep up to 32.
-        if (t.size() <= 8 && !out.contains(t) && out.size() < 32)
+        // Muninn sends over 32 tokens: keep up to 48.
+        if (t.size() <= 8 && !out.contains(t) && out.size() < 48)
             out << t;
     return out;
 }

@@ -31,6 +31,7 @@
 #include <QJsonObject>
 #include "settings.h"
 #include "talkkey.h"
+#include "globalkeys.h"
 #include "system.h"
 #include "transfer.h"
 #include "fall.h"
@@ -486,7 +487,7 @@ int main(int argc, char *argv[])
     cs->onCanCall = [chat](const QString &k) { return chat->canCall(k); };
     cs->onLanHost = [chat](const QString &k) { return chat->lanHost(k); };
     cs->onWarmUp = [nostr](const QString &) { nostr->warmSenders(); };
-    cs->onShowPreview = [chat] { return chat->showPreview(); };
+    cs->onShowPreview = [chat] { return chat->showName(); };   // Settings › Notifications › Show: Name only names the caller too
     // Trusted for direct calls by default: anyone in a folder called "Family" (shared/docs/protocol.md 5.8.1).
     cs->onInFamily = [chat](const QString &k) {
         const QStringList in = chat->foldersOf(k);
@@ -585,6 +586,8 @@ int main(int argc, char *argv[])
             profile->setMyPicture(img);
     };
     QObject::connect(linked, &Link::picturesChanged, profile, [linked, profile] { profile->setLinkedPictures(linked->contactPictures()); });
+    // The phone lists this computer by its device name (Settings › Linked devices), kept up to date by "ping".
+    linked->deviceName = [settings] { return settings->deviceName(); };
     QObject::connect(profile, &Profile::changed, linked, [linked] { linked->sendMe(false); });
     // Labs mode: bug reports, and the channel back to Stable before the stable release is installed.
     auto *labs = new Labs(chat, vault, settings, &app);
@@ -632,7 +635,7 @@ int main(int argc, char *argv[])
         ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
-    QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault, linked](const QString &name, const QString &text, const QString &key) {
+    QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault, linked, system](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
         // A muted chat makes no sound, nor someone nearby put away with Hide; an archived one comes back to the list.
         // Reduce notifications: one per chat until it's opened (a group: mentions and replies only, when set so).
@@ -643,9 +646,22 @@ int main(int argc, char *argv[])
         if (!Settings::hushed() && Settings::messageSoundOn())
             sound->play();
         if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
+            // Settings › Notifications › Show: the name and a short preview, the name only, or nothing. Locked: nothing.
             // While a linked phone's chats are shown, this device's own sealed chats never show who or what.
-            const bool preview = chat->showPreview() && !vault->screenLocked();
-            Platform::notify(preview ? name : QStringLiteral("Huginn"), preview ? text : QStringLiteral("New message"));
+            const int mode = vault->screenLocked() ? 0 : chat->previewMode();
+            QString shortText = text.simplified();
+            if (shortText.size() > 100)
+                shortText = shortText.left(99) + QStringLiteral("…");
+            const QString title = mode >= 1 ? name : QStringLiteral("Huginn");
+            const QString body = mode == 2 ? shortText : QStringLiteral("New message");
+            // A click opens that chat (a group's "g:<group>:<channel>"; an invite opens the chat list).
+            const QString where = key.startsWith(QLatin1String("invite:")) ? QString() : key;
+            auto open = [chat, where] { Q_EMIT chat->showChat(where); };
+            // No system notification here (or, in game mode, none that shows over the game): a banner in the window.
+            auto fallback = [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); };
+            Platform::notify(title, body, 6000, open, fallback);
+            if (system->gameMode())
+                fallback();
         }
     });
     // Calls live in their chats: each one that ends goes into that chat's timeline. A missed one raises a
@@ -654,9 +670,11 @@ int main(int argc, char *argv[])
     auto missedNote = [chat, vault](const QString &where, const QString &who, const QString &text) {
         if (Settings::silenced())
             return;
-        const bool hide = vault->screenLocked() || !chat->showPreview();
-        Platform::notify(hide ? QStringLiteral("Huginn") : QStringLiteral("Missed call"), hide ? QStringLiteral("Missed call") : text.isEmpty() ? who : text, 15000,
-                         [chat, where] { Q_EMIT chat->showChat(where); });
+        const bool hide = vault->screenLocked() || !chat->showName();
+        const QString title = hide ? QStringLiteral("Huginn") : QStringLiteral("Missed call");
+        const QString body = hide ? QStringLiteral("Missed call") : text.isEmpty() ? who : text;
+        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); },
+                         [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); });
     };
     QObject::connect(calls, &CallManager::logged, chat, [chat, calls, missedNote](const QString &key, bool out, const QString &result, int seconds) {
         const bool missed = result == QLatin1String("missed") || result == QLatin1String("internetOff");
@@ -680,6 +698,27 @@ int main(int argc, char *argv[])
         if (missed && !(chat->isMuted(QStringLiteral("g:") + g) && !chat->isRightAway(QStringLiteral("g:") + g)))
             missedNote(QStringLiteral("g:") + g, QString(), text);
     });
+    // A big file waiting for Accept or Decline: the message sound and a system notification, as a message gets (it
+    // waits up to a day). A click opens its chat. Who and what show only as a message preview would.
+    QObject::connect(files, &FileLink::offered, chat, [chat, vault, sound, system](const QString &, const QString &where, const QString &text) {
+        if (Settings::silenced())
+            return;
+        if (!Settings::hushed() && Settings::messageSoundOn())
+            sound->play();
+        if (QGuiApplication::applicationState() == Qt::ApplicationActive && !system->gameMode())
+            return;   // the toast says it
+        const bool hide = vault->screenLocked() || chat->previewMode() == 0;
+        const QString title = hide ? QStringLiteral("Huginn") : QStringLiteral("File waiting");
+        const QString body = hide ? QStringLiteral("A file is waiting for you") : text;
+        auto fallback = [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); };
+        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); }, fallback);
+        if (system->gameMode())
+            fallback();
+    });
+    // Windows: the tray icon from the start, with Open, Mute notifications, Lock and close and Quit (Main.qml answers).
+    if (!quiet)
+        Platform::setUpTray([] { return Settings::silenced(); }, [vault] { return vault->hasLock() && !vault->screenLocked(); },
+                            [chat](const QString &what) { Q_EMIT chat->trayAction(what); });
     auto *direct = new Direct(&app);
     // A linked phone's photos, voice and files come over the home Wi-Fi only, never over Direct connect's hotspot.
     linked->homeWifi = [direct] { return !direct->on(); };
@@ -723,10 +762,14 @@ int main(int argc, char *argv[])
     QObject::connect(localSend, &LocalSend::progressChanged, system, awake);
     QObject::connect(calls, &CallManager::changed, system, awake);
     QObject::connect(rooms, &RoomManager::changed, system, awake);
-    // Push to talk (Settings › Calls): the key is watched only while Huginn is in front.
+    // Push to talk (Settings › Calls): TalkKey watches the key while Huginn is in front; GlobalKeys lets it, Mute and
+    // Deafen work while a game is in front where the system allows it.
     rooms->setPushToTalk(settings->pushToTalk());
     QObject::connect(settings, &Settings::changed, rooms, [settings, rooms] { rooms->setPushToTalk(settings->pushToTalk()); });
     auto *talkKey = new TalkKey(settings, rooms, &app);
+    auto *globalKeys = new GlobalKeys(settings, rooms, talkKey, &app);
+    globalKeys->inCall = [calls] { return calls->inCall(); };
+    QObject::connect(calls, &CallManager::changed, globalKeys, &GlobalKeys::update);
 
     qmlRegisterType<LiveList>("Huginn", 1, 0, "LiveList");
     qmlRegisterType<Fall>("Huginn", 1, 0, "Fall");
@@ -750,6 +793,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Mover", mover);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "TalkKey", talkKey);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "GlobalKeys", globalKeys);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Profile", profile);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Labs", labs);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "AppStorage", appStorage);

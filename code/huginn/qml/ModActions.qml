@@ -8,20 +8,22 @@ import Huginn
 // The same as Muninn's.
 QtObject {
     function isTimeout(g, k) { return g !== "" && Mod.timedOutUntil(g, k) > 0 }
-    // g: the group ("" outside one), k: their key. tour: how it looks, without asking anything.
-    function items(g, k, tour) {
+    // g: the group ("" outside one), k: their key. tour: how it looks, without asking anything. name: theirs, for
+    // "Timeout Alex…" and "Ban Alex…" (rows about the person carry person: true, for their own section).
+    function items(g, k, tour, name) {
         const out = []
         if (!k) return out
         const muted = !tour && Mod.mutedForMe(k)
         out.push({ name: muted ? "Unmute for me" : "Mute for me", icon: muted ? "mic" : "micoff", url: "mod:mute",
                    detail: muted ? "Their voice is off here" : "Only you stop hearing them" })
         if (muted) out.push({ name: "Fold their messages", url: "mod:fold", check: Mod.hidesMessages(k) })
-        out.push({ name: "Volume", icon: "speaker", detail: (tour ? 100 : Mod.volume(k)) + "%", url: "mod:volume" })
+        out.push({ name: "Volume (just for you)", icon: "speaker", detail: (tour ? 100 : Mod.volume(k)) + "%", url: "mod:volume" })
         if (g !== "" && (tour || Mod.canModerate(g, k))) {
             const until = tour ? 0 : Mod.timedOutUntil(g, k)
-            if (until > 0) out.push({ name: "Cancel timeout", url: "mod:untimeout" })
-            else out.push({ name: "Timeout", detail: "They can read but not post", url: "mod:timeout" })
-            out.push({ name: "Ban", detail: "Removes them, and they can't rejoin", url: "mod:ban", danger: true })
+            const who = name ? " " + name : ""
+            if (until > 0) out.push({ name: "Cancel timeout" + (name ? " for " + name : ""), url: "mod:untimeout", person: true })
+            else out.push({ name: "Timeout" + who + "…", detail: "They can read but not post", url: "mod:timeout", person: true })
+            out.push({ name: "Ban" + who + "…", detail: "Removes them, and they can't rejoin", url: "mod:ban", danger: true, person: true })
         }
         return out
     }

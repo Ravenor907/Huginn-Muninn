@@ -71,6 +71,45 @@ bool AudioDsp::Speaking::frame(double levelDb)
     return m_on;
 }
 
+double AudioDsp::Gate::threshold() const
+{
+    if (!m_auto)
+        return m_manual;
+    const double t = floorDb() + 15;
+    return t < -45 ? -45 : t > kMaxDb ? kMaxDb : t;
+}
+
+bool AudioDsp::Gate::frame(double levelDb)
+{
+    // The steady sound: the quietest frame in 2 s blocks (100 frames), this block's and the last one's.
+    if (levelDb < m_blockMin)
+        m_blockMin = levelDb;
+    if (++m_blockFrames >= 100) {
+        m_lastMin = m_blockMin;
+        m_blockMin = 0;
+        m_blockFrames = 0;
+    }
+    const double t = threshold();
+    if (levelDb > t || (m_open && levelDb > t - 6)) {
+        m_open = true;
+        m_hold = 20;   // 400 ms of frames
+    } else if (m_hold > 0) {
+        --m_hold;
+    } else {
+        m_open = false;
+    }
+    return m_open;
+}
+
+void AudioDsp::Gate::reset()
+{
+    m_open = false;
+    m_hold = 0;
+    m_lastMin = -70;
+    m_blockMin = 0;
+    m_blockFrames = 0;
+}
+
 void AudioDsp::tone(qint16 *pcm, int n, double hz, double amplitude, qint64 *phase)
 {
     for (int i = 0; i < n; ++i) {
@@ -139,6 +178,46 @@ bool AudioDsp::selfTest()
     while (s.frame(-80) && held < 100)
         ++held;
     check(!one && two && held == 14, "speaking after 2 loud frames, held 300 ms");
+
+    // Voice activity, set by hand.
+    Gate g;
+    g.setAutomatic(false);
+    check(g.threshold() == Gate::kDefaultDb, "voice activity: -40 dBFS unless changed");
+    g.setThreshold(-90);
+    const bool lowest = g.threshold() == Gate::kMinDb;
+    g.setThreshold(0);
+    check(lowest && g.threshold() == Gate::kMaxDb, "the threshold stays within -60 to -20 dBFS");
+    g.setThreshold(Gate::kDefaultDb);
+    bool leaked = false;
+    for (int i = 0; i < 250; ++i)
+        leaked = g.frame(-50) || leaked;
+    check(!leaked, "game sound under the threshold never opens it");
+    check(g.frame(-25), "a word opens it on its first frame");
+    bool stays = true;
+    for (int i = 0; i < 10; ++i)
+        stays = g.frame(-44) && stays;
+    check(stays, "a softer sound just under the threshold keeps it open");
+    int hold = 0;
+    while (g.frame(-80) && hold < 100)
+        ++hold;
+    check(hold == 20 && !g.open(), "held 400 ms after the voice stops, then closed");
+
+    // Automatic (the default).
+    Gate a;
+    check(a.automatic() && a.threshold() == -45, "automatic: -45 dBFS to start");
+    for (int i = 0; i < 100; ++i)
+        a.frame(-75);
+    check(a.threshold() == -45 && a.frame(-35), "automatic: a normal voice in a quiet room opens it");
+    for (int i = 0; i < 30; ++i)
+        a.frame(-75);
+    int leakedLate = 0;
+    for (int i = 0; i < 300; ++i)
+        if (a.frame(-35) && i >= 200)
+            ++leakedLate;
+    check(leakedLate == 0 && a.threshold() >= -21, "automatic: steady game sound raises it and stops going out within 4 s");
+    check(a.frame(-12), "automatic: talking over the game still opens it");
+    a.reset();
+    check(!a.open() && a.threshold() == -45, "reset: back to a quiet room");
     std::printf("audio helpers: %s\n", g_fail ? "FAILED" : "all good");
     return g_fail == 0;
 }

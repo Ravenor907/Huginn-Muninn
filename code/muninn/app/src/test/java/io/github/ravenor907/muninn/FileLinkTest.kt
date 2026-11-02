@@ -87,6 +87,20 @@ class FileLinkTest {
         assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(io.github.ravenor907.muninn.net.FileText.RELAY_MAX))
         assertEquals(FileLink.ASK_ANSWER_MS, FileLink.answerMs(io.github.ravenor907.muninn.net.FileText.RELAY_MAX + 1))
         assertEquals(FileLink.ASK_ANSWER_MS, FileLink.answerMs(60 * mb))
+        // Cap f3: a day between two apps that both say it.
+        assertEquals(FileLink.LONG_ANSWER_MS, FileLink.answerMs(60 * mb, true))
+        assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(1 * mb, true))
+    }
+
+    /** Cap f3: a receiver that kept 300 pieces says so in its first ack, and the sender goes on from 300. */
+    @Test fun resumeGoesOnFromTheKeptPart() {
+        val r = FileLink.Receiver(500)
+        r.preload(300)
+        val (below, bits) = r.ack()
+        assertEquals(300, below)
+        val s = FileLink.Sender(500)
+        s.ack(below, bits)
+        assertEquals(300, s.due(0).first())
     }
 
     /** An older sender (no [FileLink.ASK_CAP]) gives up after 2 minutes: its big files arrive as before, without asking. */

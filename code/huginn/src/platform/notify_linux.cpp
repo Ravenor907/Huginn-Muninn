@@ -93,9 +93,16 @@ void notify(const QString &title, const QString &body, int timeoutMs)
     notify(title, body, timeoutMs, nullptr);
 }
 
-void notify(const QString &title, const QString &body, int timeoutMs, std::function<void()> onClick)
+void notify(const QString &title, const QString &body, int timeoutMs, std::function<void()> onClick, std::function<void()> onFailed)
 {
-    NotifyClicks *c = onClick ? clicks() : nullptr;
+    // No session bus, or nobody on it shows notifications (some full-screen sessions run without a notification
+    // service; the Flatpak may talk to org.freedesktop.Notifications): said in the window instead.
+    if (!QDBusConnection::sessionBus().isConnected()) {
+        if (onFailed)
+            onFailed();
+        return;
+    }
+    NotifyClicks *c = onClick || onFailed ? clicks() : nullptr;
     const QStringList actions = onClick ? QStringList{QStringLiteral("default"), QStringLiteral("Open")} : QStringList();
     // Never waits for the desktop: its answer (the notification's id, for a click) comes back later.
     const QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(
@@ -105,10 +112,15 @@ void notify(const QString &title, const QString &body, int timeoutMs, std::funct
     if (!c)
         return;
     auto *w = new QDBusPendingCallWatcher(call, c);
-    QObject::connect(w, &QDBusPendingCallWatcher::finished, c, [c, onClick = std::move(onClick)](QDBusPendingCallWatcher *w) mutable {
+    QObject::connect(w, &QDBusPendingCallWatcher::finished, c, [c, onClick = std::move(onClick), onFailed = std::move(onFailed)](QDBusPendingCallWatcher *w) mutable {
         w->deleteLater();
         const QDBusMessage r = w->reply();
-        if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
+        if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty()) {
+            if (onFailed)
+                onFailed();
+            return;
+        }
+        if (!onClick)
             return;
         if (c->pending.size() > 50)
             c->pending.clear();
@@ -135,6 +147,9 @@ uint notifyCall(uint replaces, const QString &title, const QString &body, std::f
     c->calls.insert(id, std::move(onAction));
     return id;
 }
+
+// Linux has no tray icon of Huginn's own: the desktop's notifications and the window do the job.
+void setUpTray(std::function<bool()>, std::function<bool()>, std::function<void(const QString &)>) {}
 
 void closeNotification(uint id)
 {

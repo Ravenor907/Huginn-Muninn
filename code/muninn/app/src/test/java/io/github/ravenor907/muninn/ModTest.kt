@@ -65,6 +65,31 @@ class ModTest {
     }
 
     @Test
+    fun removeForEveryoneRecord() {
+        val rm = rec("remove")
+        assertTrue(ModLogic.isRemove(rm))
+        assertFalse(ModLogic.banned(rm))
+        assertFalse(ModLogic.timedOut(rm, rm.getLong("ts")))
+        assertTrue(Proto06.isLogicalId(rm.getString("m")))
+        // Moved to another message after signing: refused.
+        assertEquals("bad signature", ModLogic.accept(state, JSONObject(rm.toString()).put("m", "f".repeat(32))))
+    }
+
+    /** Cap g3 (section 28): the group's about text and "only admins post" in its state, taken or refused for the reference's reason. */
+    @Test
+    fun aboutTextInTheState() {
+        val about = v.getJSONObject("g3")
+        assertTrue(about.length() >= 11)
+        for (k in about.keys()) {
+            val c = about.getJSONObject(k)
+            val got = try { Proto06.check(Proto06.parseState(c.getJSONObject("state"))); "" } catch (e: IllegalArgumentException) { e.message ?: "" }
+            assertEquals(k, c.getString("verdict"), got)
+        }
+        assertEquals("No spam. Be kind.", Proto06.parseState(about.getJSONObject("short").getJSONObject("state")).about)
+        assertTrue(Proto06.parseState(about.getJSONObject("adminsPost").getJSONObject("state")).channels.last().ao)
+    }
+
+    @Test
     fun orderAndTimeoutExpiry() {
         val order = v.getJSONArray("order")
         for (i in 0 until order.length()) {

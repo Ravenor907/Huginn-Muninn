@@ -67,6 +67,14 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
         Q_EMIT presenceChanged();
     });
     m_presenceTick.start();
+    // Voice activity (Settings › Calls): automatic unless changed.
+    const QString gate = Settings::saved(QStringLiteral("voiceActivity"), QStringLiteral("auto")).toString();
+    m_gateOff = gate == QLatin1String("off");
+    m_gate.setAutomatic(gate != QLatin1String("manual") && !m_gateOff);
+    m_gate.setThreshold(Settings::saved(QStringLiteral("voiceThreshold"), AudioDsp::Gate::kDefaultDb).toDouble());
+    m_testEnd.setSingleShot(true);
+    m_testEnd.setInterval(60000);
+    connect(&m_testEnd, &QTimer::timeout, this, [this] { setMicTest(false); });
     m_clear.setSingleShot(true);
     m_clear.setInterval(3000);
     connect(&m_clear, &QTimer::timeout, this, [this] {
@@ -91,7 +99,90 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
 
 RoomManager::~RoomManager()
 {
+    setMicTest(false);
     leave();
+}
+
+// ------------------------------------------------------------------ voice activity and the mic test
+
+QString RoomManager::gateMode() const
+{
+    return m_gateOff ? QStringLiteral("off") : m_gate.automatic() ? QStringLiteral("auto") : QStringLiteral("manual");
+}
+
+void RoomManager::setGateMode(const QString &mode)
+{
+    const QString m = mode == QLatin1String("manual") || mode == QLatin1String("off") ? mode : QStringLiteral("auto");
+    if (m == gateMode())
+        return;
+    // Going to manual from automatic starts from where automatic was.
+    if (m == QLatin1String("manual") && m_gate.automatic() && !m_gateOff)
+        setGateThreshold(gateThreshold());
+    m_gateOff = m == QLatin1String("off");
+    m_gate.setAutomatic(m == QLatin1String("auto"));
+    Settings::store().setValue(QStringLiteral("voiceActivity"), m);
+    Q_EMIT gateChanged();
+    Q_EMIT levelChanged();
+}
+
+void RoomManager::setGateThreshold(int db)
+{
+    m_gate.setThreshold(db);
+    Settings::store().setValue(QStringLiteral("voiceThreshold"), qRound(m_gate.threshold()));
+    if (m_gate.automatic()) {
+        m_gate.setAutomatic(false);
+        m_gateOff = false;
+        Settings::store().setValue(QStringLiteral("voiceActivity"), QStringLiteral("manual"));
+        Q_EMIT gateChanged();
+    }
+    Q_EMIT levelChanged();
+}
+
+// One microphone frame: its level for the meter, and whether it goes out (push to talk, or voice activity).
+bool RoomManager::gateFrame(const qint16 *frame)
+{
+    const double level = AudioDsp::levelDb(frame, AudioDsp::kFrame);
+    const bool gateOpen = m_gate.frame(level);
+    const bool send = m_ptt ? m_talking : (m_gateOff || gateOpen);
+    m_level = level;
+    if (send != m_sendingNow || ++m_levelFrames >= 4) {
+        m_levelFrames = 0;
+        m_sendingNow = send;
+        Q_EMIT levelChanged();
+    }
+    return send;
+}
+
+void RoomManager::setMicTest(bool on)
+{
+    on = on && !inRoom();
+    if (on == (m_test != nullptr))
+        return;
+    if (on) {
+        m_gate.reset();
+        m_test = new AudioIO(this);
+        m_test->pull = [](qint16 *pcm) { std::fill(pcm, pcm + AudioDsp::kFrame, qint16(0)); };
+        connect(m_test, &AudioIO::captured, this, [this](const QByteArray &pcm) {
+            if (pcm.size() == AudioDsp::kFrame * 2)
+                gateFrame(reinterpret_cast<const qint16 *>(pcm.constData()));
+        });
+        if (!m_test->start()) {
+            m_test->deleteLater();
+            m_test = nullptr;
+            Q_EMIT finished(QStringLiteral("The microphone isn't available"));
+        } else {
+            m_testEnd.start();
+        }
+    } else {
+        m_testEnd.stop();
+        m_test->stop();
+        m_test->deleteLater();
+        m_test = nullptr;
+        m_level = -100;
+        m_sendingNow = false;
+    }
+    Q_EMIT gateChanged();
+    Q_EMIT levelChanged();
 }
 
 QString RoomManager::me() const { return m_signal->myKey(); }
@@ -295,6 +386,8 @@ QString RoomManager::join(const QString &g, const QString &ch)
     m_rung.clear();
     m_declined.clear();
     m_mySpeaking.reset();
+    setMicTest(false);
+    m_gate.reset();
     // Muted or deafened in your card before joining: the room starts that way.
     m_deaf = Settings::savedDeafened();
     m_muted = Settings::savedMicMuted() || m_deaf;
@@ -320,6 +413,7 @@ QString RoomManager::join(const QString &g, const QString &ch)
     ++m_serial;
     Q_EMIT presenceChanged();
     Q_EMIT changed();
+    Q_EMIT gateChanged();
     return QString();
 }
 
@@ -364,9 +458,13 @@ void RoomManager::leave()
     if (m_endText.isEmpty())
         m_endText = QStringLiteral("You left");
     m_clear.start();
+    m_level = -100;
+    m_sendingNow = false;
     ++m_serial;
     Q_EMIT presenceChanged();
     Q_EMIT changed();
+    Q_EMIT gateChanged();
+    Q_EMIT levelChanged();
     // A group call (not a voice channel) goes into the group's timeline.
     if (wasCall)
         Q_EMIT logged(g, seconds > 0 ? QStringLiteral("Group call · %1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'))
@@ -581,9 +679,10 @@ void RoomManager::onMic(const QByteArray &pcm)
     if (pcm.size() != AudioDsp::kFrame * 2)
         return;
     const qint16 *frame = reinterpret_cast<const qint16 *>(pcm.constData());
-    // Push to talk with the key up: silence goes out instead (no mute message on every press).
+    // Push to talk with the key up, or voice activity under the threshold: silence goes out instead (no mute message
+    // on every press).
     static const qint16 silence[AudioDsp::kFrame] = {};
-    const bool held = !m_ptt || m_talking;
+    const bool held = gateFrame(frame);
     if (!held)
         frame = silence;
     const bool was = m_mySpeaking.on();
@@ -943,7 +1042,7 @@ QString RoomManager::startShare(const std::function<void(VideoSender *)> &aim, c
         for (const Peer &p : std::as_const(m_peers))
             if (p.s && p.s->media() && p.s->media()->profile(VideoWire::Screen).capKbps == VideoWire::screenProfile(false).capKbps)
                 allFree = false;
-        return VideoWire::screenProfile(allFree);
+        return VideoWire::screenProfile(allFree, m_shareSmooth);
     };
     m_share->setProfile(profile());
     if (!m_share->start()) {
@@ -972,6 +1071,14 @@ QString RoomManager::startShare(const std::function<void(VideoSender *)> &aim, c
     m_shareRate.start();
     Q_EMIT changed();
     return QString();
+}
+
+void RoomManager::setShareSmooth(bool on)
+{
+    if (on == m_shareSmooth)
+        return;
+    m_shareSmooth = on;
+    Q_EMIT changed();   // a share in progress takes it at its next second (m_shareRate)
 }
 
 void RoomManager::stopShare()

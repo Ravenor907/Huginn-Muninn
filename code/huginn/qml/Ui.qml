@@ -51,7 +51,8 @@ QtObject {
 
     // Mute and Deafen, like Discord: they work any time. In a call or voice room they change it now; either way the
     // choice is kept (Settings), and the next call or room starts with it. Deafen mutes too; undeafening gives the mic
-    // back only if Deafen was what muted it.
+    // back only if Deafen was what muted it. toggleMic() and toggleDeaf() are the one-press toggles for every input
+    // (the voice card, Ctrl+Shift+M and D, GlobalKeys, a controller button): call them, not Rooms or Calls directly.
     readonly property bool micMuted: Rooms.inRoom ? Rooms.muted : Calls.inCall ? Calls.muted : (Settings.micMuted || Settings.deafened)
     readonly property bool deafened: Rooms.inRoom ? Rooms.deafened : Settings.deafened
     function keepVoiceState() {

@@ -184,11 +184,14 @@ Rectangle {
     function phoneMenu(p) {
         const said = r => { if (r !== "") Ui.say(r, true) }
         Ui.pickFrom(p.name, [{ header: "On your phone", items: [
+            { name: "Message", url: "msg" },
             { name: "Nickname", url: "nick" },
             { name: "Folders", url: "folders" },
             { name: p.blocked ? "Unblock" : "Block", url: "block", danger: !p.blocked },
             { name: "Remove", url: "remove", danger: true }] }], a => {
-            if (a === "nick") Ui.ask("Nickname for " + p.name, "Your phone shows it too", p.nick || "", "Save", t => said(Linked.renameContact(p.key, t)))
+            // A chat through the phone, even with no messages yet.
+            if (a === "msg") { if (Linked.startChat(p.key)) Ui.openPage("dms", { mirror: p.key }); else Ui.say("Not a contact on your phone.", true) }
+            else if (a === "nick") Ui.ask("Nickname for " + p.name, "Your phone shows it too", p.nick || "", "Save", t => said(Linked.renameContact(p.key, t)))
             else if (a === "folders") phoneFolders(p)
             else if (a === "block") said(Linked.blockContact(p.key, !p.blocked))
             else if (a === "remove") Ui.sure("Remove " + p.name + "?", "From your phone too.", "Remove", () => said(Linked.removeContact(p.key)), false, true)

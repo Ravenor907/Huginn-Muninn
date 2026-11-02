@@ -43,6 +43,7 @@ import io.github.ravenor907.muninn.net.Received
 import io.github.ravenor907.muninn.net.Sharing
 import io.github.ravenor907.muninn.ui.Bar
 import io.github.ravenor907.muninn.ui.Corner
+import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
 import io.github.ravenor907.muninn.ui.Line
 import io.github.ravenor907.muninn.ui.MButton
@@ -128,6 +129,11 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                     MButton("Close") { link.dismiss(f.id) }
                 }
                 failed && link.canRetry(f.id) -> {
+                    // Too big to go without Direct: one tap turns it on here and asks them to do the same.
+                    if (link.needsDirect(f.id) && link.host?.isContact(f.peer) == true) {
+                        val on = io.github.ravenor907.muninn.net.call.CallManager.trusted(f.peer)
+                        MButton(if (on) "Ask $who" else "Allow direct", kind = Kind.Accent) { allowDirect(context, f.peer, who) }
+                    }
                     MButton("Retry", kind = Kind.Accent, icon = "refresh") {
                         val g = link.retryGroup(f.id)
                         link.takeRetry(f.id)?.let { (p, file, n) -> resend(p, file, n, g) }
@@ -138,6 +144,22 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
             }
         }
     }
+}
+
+/**
+ * A file too big to go without Direct: Direct calls and files with them on here (it shares this phone's internet address
+ * with them), and a message asks them to turn it on too. Retry once they have.
+ */
+internal fun allowDirect(context: Context, peer: String, who: String) {
+    val app = context.applicationContext as? Muninn ?: return
+    val ask = {
+        if (!io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)) io.github.ravenor907.muninn.net.call.CallManager.setTrusted(peer, true)
+        app.chat.sendPrivate(peer, "Can you turn on Direct calls and files for me? It's in the menu for my name. Then big files go straight between us.")
+        Ui.say("Direct is on here, and $who was asked to turn it on too. Retry once they have.")
+    }
+    if (io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)) { ask(); return }
+    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Allow direct with $who?",
+        "Big files go straight between your devices. Both of you turn this on. It shares your internet address with $who.", "Allow and ask") { ask() })
 }
 
 /** Retry for a card: a person's file again, or one member's copy of a group's file. */
@@ -229,7 +251,10 @@ internal fun ChatFilesScreen(app: Muninn, where: String) {
     val grp = if (g.isEmpty()) null else groups[g]
     val title = grp?.state?.name ?: app.chat.nameOf(where)
     var rules by remember { mutableStateOf(false) }
-    val shown = remember(files, where) { app.chat.filesIn(where) }
+    // Typing in the box shows only the files whose name has it.
+    var filter by remember(where) { mutableStateOf("") }
+    val all = remember(files, where) { app.chat.filesIn(where) }
+    val shown = remember(all, filter) { filter.trim().let { q -> if (q.isEmpty()) all else all.filter { it.name.contains(q, ignoreCase = true) } } }
     Column(Modifier.fillMaxSize()) {
         PageBar("Files · $title", "Back to $title") { ChatNav.open = where }
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
@@ -244,8 +269,9 @@ internal fun ChatFilesScreen(app: Muninn, where: String) {
                         if (admin) MButton("Change", Modifier.padding(top = 8.dp), icon = "edit") { rules = true }
                     }
                 }
-                if (shown.isEmpty()) Text("No files here yet. Send one with the clip beside the message box.", style = Type.normal.copy(color = Palette.textMuted),
-                    modifier = Modifier.padding(top = 16.dp))
+                if (all.isNotEmpty()) Field(filter, { filter = it }, "Find a file by name", Modifier.padding(top = 10.dp))
+                if (shown.isEmpty()) Text(if (all.isEmpty()) "No files here yet. Send one with the clip beside the message box." else "No file names have that.",
+                    style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 16.dp))
             }
             items(shown, key = { it.time.toString() + it.name + it.uri }) { f -> SharedFileRow(app, context, f) }
             item { Spacer(Modifier.height(24.dp)) }

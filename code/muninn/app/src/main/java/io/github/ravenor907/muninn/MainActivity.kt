@@ -427,8 +427,9 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(setupEnded) {
             val e = setupEnded ?: return@LaunchedEffect
             io.github.ravenor907.muninn.screens.Setup.ended = null
-            // Practice goes back to Labs (in Settings); Start a chat opens Add someone.
-            if (e.practice) show("settings") else { show("chat"); if (e.startChat) ChatNav.open = "add" }
+            // Practice goes back to Labs (in Settings); Start a chat opens Add someone, and so does an invite opened from a
+            // link during setup that wasn't taken there (the tour doesn't lose it).
+            if (e.practice) show("settings") else { show("chat"); if (e.startChat || ChatNav.incoming.isNotEmpty()) ChatNav.open = "add" }
         }
         if (setupRun != null && setupRun.step != io.github.ravenor907.muninn.screens.SetupFlow.Step.TOUR) {
             io.github.ravenor907.muninn.screens.FirstSetup(app); return

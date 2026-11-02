@@ -40,6 +40,7 @@ MAX_QUICK = 24
 MAX_QUICK_TEXT = 80
 MAX_TV_CONTACTS = 50
 MAX_STATE_BYTES = 24 * 1024
+MAX_ABOUT = 500             # cap g3: a group's about text, in characters (code points)
 MAX_TVCONFIG_BYTES = 16 * 1024
 MAX_AHEAD = 1000             # a group state at most this many versions ahead of the current one (cap s1)
 
@@ -115,10 +116,15 @@ def check_state(s):
     # Cap d1 (section 16): "kind" and "days" may be there too, only for a Family or Work group.
     # Cap j1 (section 17.1): "mi" (members can invite) may be there too, only ever true.
     # Cap f2 (section 27.3): the group's file rules, "fs" and "fm", each left out when not set.
-    if not need <= set(s) <= need | {"kind", "days", "mi", "fs", "fm"}: raise ValueError("fields")
+    # Cap g3 (section 28): the group's about text, "about", left out when there is none.
+    if not need <= set(s) <= need | {"kind", "days", "mi", "fs", "fm", "about"}: raise ValueError("fields")
     if "mi" in s and s["mi"] is not True: raise ValueError("mi")
     if "fs" in s and s["fs"] not in ("admins", "nobody"): raise ValueError("fs")
     if "fm" in s and (type(s["fm"]) is not int or not 1 <= s["fm"] <= 4096): raise ValueError("fm")
+    if "about" in s:
+        t = s["about"]
+        if not isinstance(t, str) or not t.strip() or len(t) > MAX_ABOUT or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in t):
+            raise ValueError("about")
     if "kind" in s and s["kind"] not in ("family", "work"): raise ValueError("kind")
     if "days" in s:
         d = s["days"]
@@ -142,7 +148,9 @@ def check_state(s):
     if len(set(ids)) != len(ids) or not 1 <= len(ids) <= MAX_CHANNELS: raise ValueError("channels")
     if s["channels"][0] != {"id": "main", "n": s["channels"][0]["n"], "t": "text"}: raise ValueError("main channel first")
     for c in s["channels"]:
-        if set(c) != {"id", "n", "t"} or c["t"] not in ("text", "voice"): raise ValueError("channel fields")
+        # Cap g3 (section 28.2): "ao" (only admins post) on a text channel, only ever true.
+        if set(c) - {"ao"} != {"id", "n", "t"} or c["t"] not in ("text", "voice"): raise ValueError("channel fields")
+        if "ao" in c and (c["ao"] is not True or c["t"] != "text"): raise ValueError("channel fields")
         if c["id"] != "main" and len(b64url_d(c["id"])) != 8: raise ValueError("channel id")
         check_text(c["n"], MAX_CHANNEL_NAME)
     if len(canon(s).encode()) > MAX_STATE_BYTES: raise ValueError("too big")

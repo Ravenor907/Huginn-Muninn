@@ -42,12 +42,20 @@ Rectangle {
         Text {
             textFormat: Text.PlainText
             anchors.left: sharingIcon.right; anchors.leftMargin: Theme.px(10)
-            anchors.right: stopShare.left; anchors.rightMargin: Theme.px(10)
+            anchors.right: shareQuality.left; anchors.rightMargin: Theme.px(10)
             anchors.verticalCenter: parent.verticalCenter
             elide: Text.ElideRight
-            text: "You're sharing: " + Rooms.shareTitle
+            text: "You're sharing: " + Rooms.shareTitle + " (no sound)"
             color: Theme.text
             font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+        }
+        // Smooth (30 frames a second, smaller) or Sharp (full size, for text): changes the share within a second.
+        HButton {
+            id: shareQuality
+            anchors.right: stopShare.left; anchors.rightMargin: Theme.px(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: Rooms.shareSmooth ? "Smooth" : "Sharp"; fontSize: 13; implicitHeight: Theme.px(32)
+            onClicked: Rooms.shareSmooth = !Rooms.shareSmooth
         }
         HButton {
             id: stopShare
@@ -79,12 +87,13 @@ Rectangle {
         function open() {
             windows = Rooms.shareWindows()
             screens = Rooms.shareScreens()
-            mode = windows.length ? "window" : "screen"
-            at = 0
+            pickMode(windows.length ? "window" : "screen")
             visible = true
             forceActiveFocus()
         }
         function close() { visible = false }
+        // A game is usually a window: windows start Smooth, full screens Sharp (Y or the buttons change it).
+        function pickMode(m) { mode = m; at = 0; Rooms.shareSmooth = m === "window" }
         function choose(i) {
             const why = mode === "window" ? Rooms.shareWindow(list[i].i) : Rooms.shareScreen(list[i].i)
             if (why !== "") { Ui.say(why, true); return }
@@ -95,9 +104,10 @@ Rectangle {
             switch (b) {
             case "a": case "start": if (list.length) choose(at); return true
             case "b": close(); return true
-            case "lb": case "rb": case "x": case "y":
-                if (windows.length) { mode = mode === "window" ? "screen" : "window"; at = 0 }
+            case "lb": case "rb": case "x":
+                if (windows.length) pickMode(mode === "window" ? "screen" : "window")
                 return true
+            case "y": Rooms.shareSmooth = !Rooms.shareSmooth; return true
             case "left": at = Math.max(0, at - 1); return true
             case "right": at = Math.min(list.length - 1, at + 1); return true
             case "up": at = Math.max(0, at - cols); return true
@@ -137,12 +147,19 @@ Rectangle {
                 HButton {
                     visible: picker.windows.length > 0
                     text: "An app window"; kind: picker.mode === "window" ? "accent" : "normal"; implicitHeight: Theme.px(36)
-                    onClicked: { picker.mode = "window"; picker.at = 0 }
+                    onClicked: picker.pickMode("window")
                 }
                 HButton {
                     text: "A full screen"; kind: picker.mode === "screen" ? "accent" : "normal"; implicitHeight: Theme.px(36)
-                    onClicked: { picker.mode = "screen"; picker.at = 0 }
+                    onClicked: picker.pickMode("screen")
                 }
+            }
+            Row {
+                anchors.right: parent.right; anchors.rightMargin: Theme.px(20)
+                anchors.verticalCenter: modes.verticalCenter
+                spacing: Theme.px(6)
+                HButton { text: "Smooth"; kind: Rooms.shareSmooth ? "accent" : "normal"; implicitHeight: Theme.px(36); onClicked: Rooms.shareSmooth = true }
+                HButton { text: "Sharp"; kind: Rooms.shareSmooth ? "normal" : "accent"; implicitHeight: Theme.px(36); onClicked: Rooms.shareSmooth = false }
             }
             // Two lists, one per kind, so each picture's source always matches its row.
             GridView {
@@ -265,7 +282,11 @@ Rectangle {
                     anchors.right: pickButtons.left; anchors.rightMargin: Theme.px(10)
                     anchors.verticalCenter: parent.verticalCenter
                     elide: Text.ElideRight
-                    text: picker.mode === "window" ? "Only that window is shared, even when another is in front." : "Everything on that screen is shared."
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    text: (picker.mode === "window" ? "Only that window is shared. " : "Everything on that screen is shared. ")
+                          + (Rooms.shareSmooth ? "Smooth: 30 frames a second, smaller." : "Sharp: full size, up to 10 frames a second.")
+                          + " Game sound isn't shared."
                     color: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(12)
                 }
@@ -377,12 +398,21 @@ Rectangle {
                     name: modelData.name
                     opacity: modelData.state === "live" ? (modelData.muted ? 0.55 : 1) : 0.4
                 }
-                // A click or right click: Mute for me, Volume, and for admins Timeout and Ban (cap g2).
+                // A click or right click: Mute for me, Volume, and for admins Timeout and Ban (cap g2). A finger: a tap shows
+                // their profile and a long press opens that menu, as in the voice panel.
                 HoverHandler { cursorShape: modelData.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
                 TapHandler {
                     id: personTap
+                    acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     onTapped: (point, button) => { if (!modelData.me) Ui.menuAt(personTap.parent, point.position.x, point.position.y,
+                        () => PeopleActions.memberMenu({ key: modelData.key, name: modelData.name, contact: Chat.isContact(modelData.key) }, { group: Rooms.group })) }
+                }
+                TapHandler {
+                    id: personTouch
+                    acceptedDevices: PointerDevice.TouchScreen
+                    onTapped: if (!modelData.me) Ui.showProfile(modelData.key, modelData.name, {})
+                    onLongPressed: { if (!modelData.me) Ui.menuAt(personTouch.parent, point.position.x, point.position.y,
                         () => PeopleActions.memberMenu({ key: modelData.key, name: modelData.name, contact: Chat.isContact(modelData.key) }, { group: Rooms.group })) }
                 }
                 Rectangle {
@@ -403,7 +433,7 @@ Rectangle {
         anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
         anchors.verticalCenter: parent.verticalCenter
         spacing: Theme.px(8)
-        HButton { text: Rooms.muted ? "Unmute" : "Mute"; kind: Rooms.muted ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Ui.toggleMic() }
+        HButton { text: Rooms.muted ? "Unmute mic" : "Mute mic"; kind: Rooms.muted ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Ui.toggleMic() }
         HButton { text: Rooms.deafened ? "Undeafen" : "Deafen"; kind: Rooms.deafened ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Ui.toggleDeaf() }
         HButton { visible: Rooms.canShare; text: Rooms.sharing ? "Stop sharing" : "Share screen"; kind: Rooms.sharing ? "accent" : "normal"; implicitHeight: Theme.px(44); onClicked: Rooms.toggleShare() }
         HButton { visible: Rooms.sharerName !== ""; text: bar.screenShown ? "Hide screen" : "Show screen"; implicitHeight: Theme.px(44); onClicked: bar.screenShown = !bar.screenShown }

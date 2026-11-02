@@ -296,6 +296,15 @@ QString VideoMsg::pickFile() const
                                         QStringLiteral("Videos (*.mp4 *.m4v *.mov)"));
 }
 
+bool VideoMsg::fitsMessage(const QString &path) const
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly) || f.size() > qint64(Photos::kMaxPieces) * Photos::kPiece)
+        return false;
+    const QByteArray mp4 = f.readAll();
+    return MoreWire::isVideo(mp4) && MoreWire::mp4Ms(mp4) <= MoreWire::kVideoMaxMs + 500;
+}
+
 QString VideoMsg::sendFile(const QString &where, const QString &path)
 {
     QFile f(path);

@@ -48,6 +48,8 @@ public:
     Q_INVOKABLE QString cancelTimeout(const QString &g, const QString &key);
     Q_INVOKABLE QString ban(const QString &g, const QString &key);
     Q_INVOKABLE QString unban(const QString &g, const QString &key);
+    // Delete for everyone (26.2 "remove"): an admin blanks someone's message on every member's app with g2.
+    Q_INVOKABLE QString removeForEveryone(const QString &g, const QString &msgId, const QString &author);
     // For the group's settings: [{key, name}] and [{key, name, until, left}].
     Q_INVOKABLE QVariantList bannedList(const QString &g) const;
     Q_INVOKABLE QVariantList timeoutList(const QString &g) const;
@@ -83,6 +85,8 @@ private:
     // Signs a record, keeps it and sends it to everyone with g2 (and to who, when they aren't in the state anymore).
     QString act(const QString &g, const QString &key, const QString &action, qint64 until);
     bool take(const QString &g, const QJsonObject &rec, bool announce);
+    // A "remove" taken: the message blanked here ("Removed by an admin"), or never shown when it comes later.
+    void blank(const QString &g, const QJsonObject &rec);
     QJsonObject record(const QString &g, const QString &key, const QString &slot) const;
     QString whenText(qint64 ms) const;
     QString leftText(qint64 ms) const;

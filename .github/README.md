@@ -44,7 +44,7 @@ One identity across all of them. Link devices, or move everything to a new one.
 ## Install
 
 Android: open Muninn.apk on the device and install it.  
-Windows: unzip Huginn-Windows.zip anywhere, run Huginn.exe.  
+Windows: unzip Huginn-Windows.zip anywhere, run Huginn.exe. The first time, SmartScreen may say "Windows protected your PC" (Huginn.exe has no paid code-signing certificate): choose **More info**, then **Run anyway**. Check the download first with [releases.md](../code/shared/docs/releases.md). Everything Huginn keeps is in the `data` folder beside Huginn.exe: keep the data folder when you update by hand.  
 Linux:
 
 ```

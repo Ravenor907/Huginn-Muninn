@@ -71,7 +71,7 @@ internal fun ColumnScope.ModRows(app: Muninn, g: String, key: String, name: Stri
     val p = sound[key] ?: io.github.ravenor907.muninn.net.PeopleSound.Person()
     val admin = g.isNotEmpty() && app.chat.groups.canModerate(g, key)
     if (danger) {
-        if (admin) MenuRow("close", "Ban", danger = true) {
+        if (admin) MenuRow("close", "Ban $name…", danger = true) {
             done()
             io.github.ravenor907.muninn.ui.Ui.sure(io.github.ravenor907.muninn.ui.Ask("Ban $name?",
                 "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban", danger = true,
@@ -84,10 +84,10 @@ internal fun ColumnScope.ModRows(app: Muninn, g: String, key: String, name: Stri
         io.github.ravenor907.muninn.ui.Ui.say(if (p.muted) "$name isn't muted for you." else "$name is muted for you.")
     }
     if (p.muted) MenuRow("hide", "Fold their messages", value = if (!p.show) "On" else "Off") { app.chat.sound.setHides(key, p.show) }
-    MenuRow("audio", "Volume", value = "${p.volume}%") { go("volume") }
+    MenuRow("audio", "Volume (just for you)", value = "${p.volume}%") { go("volume") }
     if (admin) {
         if (app.chat.groups.timedOutUntil(g, key) > 0) MenuRow("clock", "Cancel timeout") { done(); tell(app.chat.groups.cancelTimeout(g, key), "$name can post again.") }
-        else MenuRow("clock", "Timeout") { go("timeout") }
+        else MenuRow("clock", "Timeout $name…") { go("timeout") }
     }
 }
 
@@ -182,14 +182,14 @@ internal fun PersonModDialog(app: Muninn, g: String, key: String, name: String, 
                     say(if (p.muted) "$name isn't muted for you." else "$name is muted for you.", false)
                 }
                 if (p.muted) MenuRow("hide", "Fold their messages", value = if (!p.show) "On" else "Off") { app.chat.sound.setHides(key, p.show) }
-                MenuRow("audio", "Volume", value = "${p.volume}%") { page = "volume" }
+                MenuRow("audio", "Volume (just for you)", value = "${p.volume}%") { page = "volume" }
                 if (admin) {
                     if (app.chat.groups.timedOutUntil(g, key) > 0) MenuRow("clock", "Cancel timeout") {
                         val err = app.chat.groups.cancelTimeout(g, key)
                         if (err != null) say(err, true) else say("$name can post again.", false)
                         done()
-                    } else MenuRow("clock", "Timeout") { page = "timeout" }
-                    MenuRow("close", "Ban", danger = true) { page = "ban" }
+                    } else MenuRow("clock", "Timeout $name…") { page = "timeout" }
+                    MenuRow("close", "Ban $name…", danger = true) { page = "ban" }
                 }
             }
         },

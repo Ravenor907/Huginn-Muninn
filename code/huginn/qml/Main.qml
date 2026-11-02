@@ -74,12 +74,12 @@ Window {
                                        { id: "tour-folk", name: "Folk", unread: 3 }]
     readonly property var groupList: touring ? tourGroups : Vault.screenLocked ? [] : Chat.groups
     readonly property var railItems: [
-        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
+        { id: "dms", kind: "raven", label: "Chats", badge: Vault.screenLocked ? 0 : Chat.unreadCount + Linked.unread + Chat.requests.length + Chat.groupInvites.filter(i => !i.waiting).length }
     // A group: its @mentions of me as a number, and a dot for anything else unread (like Discord).
     ].concat(groupList.map(g => ({ id: "g:" + g.id, kind: "group", label: g.name, letter: g.letter || String(g.name || "?").trim().charAt(0).toUpperCase() || "?",
                                    badge: g.mentions || 0, unread: g.unread || 0 })))
      .concat([
-        { id: "newgroup", kind: "add", label: "New group", action: true },
+        { id: "newgroup", kind: "add", label: "New group or join one", action: true },
         { id: "contacts", kind: "icon", icon: "person", label: "Contacts", bottom: true },
         { id: "files", kind: "icon", icon: "folder", label: "Files", bottom: true, badge: LocalSend.request.active ? 1 : 0 },
         { id: "settings", kind: "icon", icon: "gear", label: "Settings", bottom: true },
@@ -115,20 +115,36 @@ Window {
         if (!e) return
         railIndex = index
         if (e.id === "exit") { rail.openPowerMenu(); return }
-        if (e.id === "newgroup") { newGroup(); return }
+        if (e.id === "newgroup") { plusMenu(); return }
         openPage(e.id, {})
+    }
+    // The rail's +: New group, Join a group (an invite link or code), or Add someone.
+    function plusMenu() {
+        const later = f => Qt.callLater(() => { const p = page(); if (p && typeof p[f] === "function") p[f]() })
+        Ui.pickFrom("Groups", [{ header: "", items: [{ name: "New group", icon: "people", url: "group" },
+                                               { name: "Join a group", icon: "qr", url: "join" },
+                                               { name: "Add someone", icon: "plus", url: "add" }] }], a => {
+            if (app.touring) return
+            if (a === "group") newGroup()
+            else if (a === "join") { openPage("dms", {}); later("joinGroup") }
+            else if (a === "add") { openPage("dms", {}); later("addSomeone") }
+        })
     }
     function newGroup() {
         if (!Vault.exists) { Ui.say("Set a lock first.", true); openPage("dms", {}); return }
         if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); openPage("dms", {}); return }
         // Two types: Folk and Family, each a card with its one line; "What's the difference?" shows the rules.
         const types = Chat.groupTypes()
-        Ui.askWith("New group", "Everyone in it sees the name", "", "Make the group",
+        // While a phone is linked, a group made here belongs to this PC's own account: said in the box.
+        const own = !!Linked.phone.key && !Linked.phone.gone
+        Ui.askWith("New group", own ? "This PC's own account, not your phone's. Everyone in it sees the name" : "Everyone in it sees the name", "", "Make the group",
                    types.map(t => ({ value: t.type, label: t.name, detail: t.line })), "folk",
                    "Type", (t, type) => {
             const g = Chat.createGroup(t, type)
             if (g === "") { Ui.say(Chat.saveFailed() ? "Couldn't save. Try again." : Chat.ready ? "Give the group a name." : "Unlock Huginn first.", true); return }
-            Ui.say("Made " + t + ".")
+            // Made: how long its messages are kept, said once here (the group page doesn't say it again).
+            const keep = Chat.keepNoteOnce("g:" + g)
+            Ui.say("Made " + t + "." + (keep !== "" ? " " + keep : ""))
             openPage("g:" + g, {})
         })
         prompt.moreLabel = "What's the difference?"
@@ -166,14 +182,56 @@ Window {
     // Every Exit goes through here (the window's X, Exit, B or Esc at the top), so a transfer is never cut off by
     // surprise. Huginn never locks on its own: closing asks. Lock and close (A) quits, and Huginn opens locked next
     // time; Minimize (X) keeps it running out of sight, still getting messages and calls; Stay (B).
-    function requestExit() {
-        const busy = LocalSend.busy
+    // fromX: the window's X (or Alt+F4). It asks once with "Don't ask again", and then does what was picked
+    // (Settings › Look › Window › Close button changes it). A transfer going still asks.
+    function requestExit(fromX) {
+        // A chat file on its way counts too: Wait for it closes once it's done.
+        const files = FileLink.runningCount > 0
+        const busy = LocalSend.busy || files
         const locks = Vault.hasLock && !Vault.screenLocked
-        const why = busy ? LocalSend.status + " Closing now stops it partway." : "Minimized, messages and calls still arrive."
-        Ui.sure("Leave Huginn?", why, locks ? "Lock and close" : "Close", () => { if (locks) Vault.lockScreen(); app.quitNow() }, busy, busy)
-        confirm.otherText = "Minimize"
-        confirm.otherCallback = () => System.minimize(app)
+        const lockAndQuit = () => { if (locks) Vault.lockScreen(); app.quitNow() }
+        if (fromX && !busy && Settings.closeAction === "minimize") { System.minimize(app); return }
+        if (fromX && !busy && Settings.closeAction === "quit") { lockAndQuit(); return }
+        const why = files ? FileLink.closeWarning : busy ? LocalSend.status + " Closing now stops it partway." : "Minimize keeps messages and calls coming."
+        Ui.sure("Leave Huginn?", why, files ? "Close anyway" : locks ? "Lock and close" : "Close", () => {
+            if (fromX && confirm.remember) Settings.closeAction = "quit"
+            lockAndQuit()
+        }, busy, busy)
+        confirm.otherText = files ? "Wait for it" : "Minimize"
+        confirm.otherCallback = files ? () => app.waitThen(locks ? "lock" : "quit") : () => {
+            if (fromX && confirm.remember) Settings.closeAction = "minimize"
+            System.minimize(app)
+        }
         confirm.cancelText = "Stay"
+        if (fromX && !busy) confirm.rememberText = "Don't ask again"
+    }
+    // Wait for it: what to do once no chat file is on its way any more ("quit", "lock" or "restart" to update).
+    property string afterFiles: ""
+    function waitThen(what) {
+        afterFiles = what
+        Ui.say(what === "restart" ? "Huginn restarts to update when the file is done." : "Huginn closes when the file is done.")
+    }
+    Connections {
+        target: FileLink
+        function onChanged() {
+            if (app.afterFiles === "" || FileLink.runningCount > 0) return
+            const what = app.afterFiles
+            app.afterFiles = ""
+            if (what === "restart") Updater.restartToUpdate()
+            else { if (what === "lock" && Vault.hasLock && !Vault.screenLocked) Vault.lockScreen(); app.quitNow() }
+        }
+    }
+    // Restart now (the update bar, Settings › About): a file on its way asks first, and the update can wait for it.
+    function restartForUpdate() {
+        const files = FileLink.runningCount > 0
+        if (!files && !LocalSend.busy) { Updater.restartToUpdate(); return }
+        Ui.sure("Restart to update?", files ? FileLink.closeWarning : LocalSend.status + " Restarting now stops it partway.", "Restart anyway",
+                () => Updater.restartToUpdate(), false, true)
+        if (files) {
+            confirm.otherText = "Wait for it"
+            confirm.otherCallback = () => app.waitThen("restart")
+        }
+        confirm.cancelText = "Later"
     }
     // Answered: Huginn closes (the window's close question isn't asked again).
     property bool quitting: false
@@ -182,7 +240,7 @@ Window {
     onClosing: close => {
         if (app.quitting || app.touring || Updater.installing) return
         close.accepted = false
-        app.requestExit()
+        app.requestExit(true)
     }
 
     // The slim bar along the top: HUGINN, search (Ctrl+K) and the shortcuts (Ctrl+/).
@@ -260,6 +318,7 @@ Window {
         tour: app.tourVoice
         roomBar: roomBar
         cardOpen: meCard.visible
+        compact: app.height < Theme.px(620)
         onMeClicked: meCard.toggle()
         visible: app.pageList
         anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
@@ -360,13 +419,18 @@ Window {
             if (linkPhone.visible && !prompt.visible && !confirm.visible) return linkPhone.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (backupPanel.visible && !prompt.visible && !confirm.visible) return backupPanel.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (setup.visible && !prompt.visible && !confirm.visible) return setup.prompts.concat([{ key: "back", label: "Hide buttons" }])
+            if (prompt.visible && !confirm.visible) return prompt.prompts.concat([{ key: "back", label: "Hide buttons" }])
             const lb = [{ key: "lb", label: "Next section" }]
             // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
             const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
+            // In voice: hold LB, then Up or Down.
+            const voice = app.inVoice ? [{ key: "lb+up", label: Ui.micMuted ? "Unmute mic" : "Mute mic" },
+                                         { key: "lb+down", label: Ui.deafened ? "Undeafen" : "Deafen" }] : []
             if (app.focusZone === "rail")
-                return lb.concat([{ key: "a", label: "Open" }, { key: "b", label: "Exit" }], hide)
+                return lb.concat([{ key: "a", label: "Open" }, { key: "lt", label: "Options" }, { key: "b", label: "Exit" }],
+                                 app.railIndex === 0 ? [{ key: "up", label: "Search, Transfers" }] : [], voice, hide)
             const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts.filter(x => x.key !== "back" && x.key !== "start") : []
-            return lb.concat(p, hide)
+            return lb.concat(p, voice, hide)
         }
         // A tap on a chip is a whole press: LB here can't be held, so it just goes to the next section.
         onPrompt: k => k === "lb" && !app.overlay() ? app.stepSection(1) : app.press(k)
@@ -396,12 +460,31 @@ Window {
     onHeightChanged: keepRect.restart()
     Shortcut { sequence: "Ctrl+/"; context: Qt.ApplicationShortcut; enabled: app.keysOn
                onActivated: shortcutsPanel.visible ? shortcutsPanel.close() : shortcutsPanel.open() }
+    // Alt+Up and Alt+Down: the chat above or below in the list (direct chats, then groups), like Discord.
+    Shortcut { sequence: "Alt+Up"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.overlay(); onActivated: app.stepChat(-1) }
+    Shortcut { sequence: "Alt+Down"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.overlay(); onActivated: app.stepChat(1) }
+    function stepChat(dir) {
+        if (Vault.screenLocked) return
+        const list = Chat.chats.map(c => c.key).concat(Chat.groups.map(g => "g:" + g.id))
+        if (!list.length) return
+        const here = pageName.startsWith("g:") ? pageName : pageName === "dms" ? Chat.openChat : ""
+        const i = list.indexOf(here)
+        const next = list[i < 0 ? (dir > 0 ? 0 : list.length - 1) : (i + dir + list.length) % list.length]
+        if (next.startsWith("g:")) openPage(next, { zone: "messages" })
+        else openPage("dms", { open: next })
+    }
     Shortcut { sequence: "Ctrl+Shift+L"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("list") }
     Shortcut { sequence: "Ctrl+Shift+U"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("members") }
     // Panic lock from the keyboard (a controller holds L3 and R3).
     Shortcut { sequence: "Ctrl+Shift+Q"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Vault.panicLock; onActivated: Vault.panic() }
     Shortcut { sequence: "Ctrl+Shift+M"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: Ui.toggleMic() }
     Shortcut { sequence: "Ctrl+Shift+D"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: Ui.toggleDeaf() }
+    // The same two while a game is in front (GlobalKeys: in a voice room or a call, where the system allows it).
+    Connections {
+        target: GlobalKeys
+        function onMutePressed() { Ui.toggleMic() }
+        function onDeafenPressed() { Ui.toggleDeaf() }
+    }
     Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.leave() }
     Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(1) }
     Shortcut { sequence: "Ctrl+-"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(-1) }
@@ -437,10 +520,12 @@ Window {
             let items = []
             if (e.id === "dms") items = [{ name: "Open", icon: "thread", url: "open" }, { name: "New chat", icon: "plus", url: "chat" },
                                          { name: "New group", icon: "people", url: "group" }, { name: "New folder", icon: "folder", url: "folder" }]
-            else if (e.id === "newgroup") items = [{ name: "New group", icon: "people", url: "group" }, { name: "Join with a code", icon: "qr", url: "chat" }]
+            else if (e.id === "newgroup") items = [{ name: "New group", icon: "people", url: "group" }, { name: "Join a group", icon: "qr", url: "join" },
+                                                   { name: "Add someone", icon: "plus", url: "chat" }]
             else if (e.id === "contacts") items = [{ name: "Open", icon: "person", url: "open" }, { name: "Add someone", icon: "plus", url: "chat" },
                                                    { name: "One-time link", icon: "attach", url: "once" }]
-            else if (e.id === "files") items = [{ name: "Open", icon: "folder", url: "open" }, { name: "Look again", icon: "search", url: "look" }]
+            else if (e.id === "files") items = [{ name: "Open", icon: "folder", url: "open" }, { name: "Transfers", icon: "down", url: "transfers" },
+                                                { name: "Look again", icon: "search", url: "look" }]
             else if (e.id === "settings") items = [{ name: "Look", icon: "image", url: "s:look" }, { name: "Notifications", icon: "bell", url: "s:notify" },
                                                    { name: "Privacy and lock", icon: "lock", url: "s:privacy" }, { name: "Devices", icon: "phone", url: "s:devices" },
                                                    { name: "Keyboard shortcuts", icon: "keyboard", url: "keys" }]
@@ -450,11 +535,13 @@ Window {
                 if (a === "open") openPage(e.id, {})
                 else if (a === "group") newGroup()
                 else if (a === "chat") { openPage("dms", {}); later("addSomeone") }
+                else if (a === "join") { openPage("dms", {}); later("joinGroup") }
                 else if (a === "folder") { openPage("dms", {}); later("newFolder") }
                 else if (a === "once") PeopleActions.inviteLink()
                 else if (a === "look") { openPage("files", {}); LocalSend.refresh() }
                 else if (a.indexOf("s:") === 0) openPage("settings", { section: a.substring(2) })
                 else if (a === "keys") shortcutsPanel.open()
+                else if (a === "transfers") transfersPanel.open(false)
                 else if (a === "lock" || a === "exit") rail.runMenu(a)
             })
         }, !!viaKey)
@@ -466,7 +553,7 @@ Window {
         const left = rail.width + Theme.px(140)
         if (what === "person") {
             at(left, Theme.px(160), () => PeopleActions.personMenu("tour", "Mira", { tour: true }))
-            ctxMenu.openSubNamed("Mute")
+            ctxMenu.openSubNamed("Mute notifications")
         } else if (what === "group") {
             const r = rail.spotRect("g:tour-crew")
             at(r ? r.x + r.width / 2 : Theme.px(36), r ? r.y + r.height / 2 : Theme.px(140), () => PeopleActions.groupRowMenu("tour-crew", "Gaming Crew", { tour: true }))
@@ -580,7 +667,9 @@ Window {
     // The tour's stops on the real screen, in window coordinates ({x, y, width, height}), or null when not on show.
     function tourSpot(id) {
         const left = rail.visible ? rail.width : 0, top = topBar.height
-        if (id === "groups" || id === "settings") return rail.spotRect(id)
+        if (id === "groups" || id === "settings" || id === "newgroup") return rail.spotRect(id)
+        // The top bar: search (Ctrl+K) and Transfers.
+        if (id === "search") return { x: Math.round(app.width / 4), y: 0, width: Math.round(app.width / 2), height: topBar.height }
         if (id === "chats") return app.pageList ? { x: left, y: top, width: app.pageListEdge, height: Math.max(0, pageLoader.height - Ui.dock) } : null
         if (id === "add") return app.pageList ? { x: left + app.pageListEdge - Theme.px(80), y: top, width: Theme.px(80), height: Theme.headerHeight } : null
         if (id === "attach") return { x: left + (app.pageList ? app.pageListEdge : 0), y: pageLoader.y + pageLoader.height - Theme.px(60), width: Theme.px(60), height: Theme.px(60) }
@@ -641,13 +730,19 @@ Window {
         onClicked: (x, y) => { if (app.focusZone === "rail" && x > rail.width) app.focusZone = "content" }
     }
 
-    // A checked update waiting: a slim bar along the top; Huginn installs it only on Restart now.
+    // A checked update waiting: a slim bar along the top; Huginn installs it only on Restart now. Later puts the bar
+    // away until the next timed check (or the next start); Settings › About still has Restart now.
+    property bool updateLater: false
+    Connections {
+        target: Updater
+        function onRemind() { app.updateLater = false }
+    }
     Rectangle {
         id: updateBar
         anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter
         anchors.topMargin: Theme.px(8)
         z: 55
-        visible: Updater.ready && !Updater.installing && !app.touring
+        visible: Updater.ready && !Updater.installing && !app.touring && !app.updateLater
         width: barRow.implicitWidth + Theme.px(24); height: barRow.implicitHeight + Theme.px(12)
         color: Theme.panel
         border.color: Theme.accent; border.width: Math.max(1, Theme.px(1))
@@ -658,11 +753,14 @@ Window {
             Text {
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Huginn " + Updater.latest + " is ready"
+                width: Math.min(implicitWidth, app.width - Theme.px(280))
+                elide: Text.ElideRight
+                text: "Huginn " + Updater.latest + " is ready. Restart now installs it."
                 color: Theme.text
                 font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
-            HButton { text: "Restart now"; kind: "primary"; onClicked: Updater.restartToUpdate() }
+            HButton { text: "Later"; kind: "plain"; onClicked: { app.updateLater = true; Ui.say("Restart now is in Settings › About.") } }
+            HButton { text: "Restart now"; kind: "primary"; onClicked: app.restartForUpdate() }
         }
     }
 
@@ -695,6 +793,70 @@ Window {
                 text: "Try again"; kind: "primary"
                 onClicked: if (!Vault.tryReadAgain()) Ui.say("Still can't read them. Close other programs using Huginn's folder, then try again.", true)
             }
+        }
+    }
+
+    // A message or missed call the system couldn't show as a notification (no notification service, or a game in front
+    // in game mode): the newest one waits here, under the top bar, until it's opened or closed.
+    Rectangle {
+        id: newsBanner
+        property string title: ""
+        property string body: ""
+        property string where: ""
+        function show(t, b, w) { title = t; body = b; where = w; visible = true }
+        function hide() { visible = false }
+        visible: false
+        anchors.top: topBar.bottom; anchors.topMargin: Theme.px(8)
+        anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
+        z: 54
+        width: Math.min(app.width - Theme.px(24), Theme.px(380))
+        height: newsCol.implicitHeight + Theme.px(20)
+        radius: Theme.radius
+        color: Theme.panel
+        border.color: Theme.accent; border.width: Math.max(1, Theme.px(1))
+        Accessible.role: Accessible.AlertMessage
+        Accessible.name: title + ". " + body
+        Column {
+            id: newsCol
+            x: Theme.px(14); y: Theme.px(10)
+            width: parent.width - Theme.px(28) - newsClose.width
+            spacing: Theme.px(2)
+            Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                elide: Text.ElideRight
+                text: newsBanner.title
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold
+            }
+            Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                elide: Text.ElideRight
+                maximumLineCount: 2
+                wrapMode: Text.Wrap
+                text: newsBanner.body
+                color: Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(14)
+            }
+        }
+        // A click on the words opens that chat.
+        MouseArea {
+            anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+            anchors.right: newsClose.left
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+                const w = newsBanner.where
+                newsBanner.hide()
+                if (!app.touring) Chat.showChat(w)
+            }
+        }
+        HButton {
+            id: newsClose
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Close"; kind: "plain"
+            onClicked: newsBanner.hide()
         }
     }
 
@@ -787,20 +949,44 @@ Window {
             app.lastActive = seen
             app.clock = t
         }
-        // A missed call's notification was clicked: its chat (a contact's key, or "g:<group>").
+        // A notification was clicked: its chat (a contact's key, "g:<group>" or "g:<group>:<channel>"; "" the chat list).
         function onShowChat(where) {
-            if (Vault.screenLocked) { app.openPage("dms", {}); return }
-            if (where.startsWith("g:")) app.openPage(where, {})
-            else app.openPage("dms", { open: where })
+            if (newsBanner.visible && newsBanner.where === where) newsBanner.hide()
+            if (Vault.screenLocked || where === "") { app.openPage("dms", {}); return }
+            if (where.startsWith("g:")) {
+                const parts = where.split(":")
+                app.openPage("g:" + parts[1], parts.length > 2 ? { channel: parts.slice(2).join(":"), zone: "messages" } : {})
+            } else app.openPage("dms", { open: where })
+        }
+        // The system couldn't show a notification: the banner at the top of the window says it instead.
+        function onBanner(title, body, where) { newsBanner.show(title, body, where) }
+        // The tray icon's menu (Windows).
+        function onTrayAction(what) {
+            if (what === "mute") {
+                Ui.setMyStatus(Ui.myStatus === "dnd" ? "online" : "dnd")
+                app.autoAway = false
+                return
+            }
+            // A transfer going: Huginn comes up and asks first, as the X does.
+            if (LocalSend.busy || FileLink.runningCount > 0) {
+                if (app.visibility === Window.Minimized || app.visibility === Window.Hidden) app.visibility = app.fullNow ? Window.FullScreen : Window.Windowed
+                app.raise(); app.requestActivate()
+                app.requestExit(false)
+                return
+            }
+            if (what === "lock" && Vault.hasLock && !Vault.screenLocked) Vault.lockScreen()
+            app.quitNow()
         }
         function onArrived(name, text, key) {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // Muted, hidden or reduced (Chat.notifyFor): no toast either.
             if (!Chat.alerted(key)) return
             // An @mention always says so (without the text unless previews are on).
+            // Settings › Notifications › Show: Name and message, Name only, or Nothing.
             const mention = name.indexOf(" mentioned you in ") > 0
             const hidden = Vault.screenLocked
-            Ui.say(Chat.showPreview && !hidden ? name + ": " + text : mention && !hidden ? name + "." : "New message.")
+            const mode = hidden ? 0 : Chat.previewMode
+            Ui.say(mode === 2 ? name + ": " + text : mode === 1 || mention && !hidden ? name + "." : "New message.")
         }
     }
     // Calls: how a call ended, as a toast.
@@ -876,12 +1062,31 @@ Window {
 
     function railButton(b) {
         switch (b) {
-        case "up": railIndex = Math.max(0, railIndex - 1); break
+        // Up past Chats: the top bar's Search, Transfers and Keyboard shortcuts.
+        case "up": if (railIndex === 0) topBarMenu(); else railIndex = railIndex - 1; break
         case "down": railIndex = Math.min(railItems.length - 1, railIndex + 1); break
         case "a": case "right": openRail(railIndex); break
         case "b": requestExit(); break
         case "start": openPage("settings", {}); break
+        // LT (or X): the rail button's own menu, as a right click opens it.
+        case "lt": case "x": menuKey(); break
         }
+    }
+    function topBarMenu() {
+        Ui.pickFrom("Top bar", [{ header: "", items: [{ name: "Go to a chat", icon: "search", url: "search" },
+                                                      { name: "Transfers", icon: "down", url: "transfers" },
+                                                      { name: "Keyboard shortcuts", icon: "keyboard", url: "keys" }] }], a => {
+            if (app.touring) return
+            if (a === "search") switcher.open()
+            else if (a === "transfers") transfersPanel.open(false)
+            else if (a === "keys") shortcutsPanel.open()
+        })
+    }
+    // In a voice room or call: hold LB, then Up mutes and Down deafens (from any page).
+    readonly property bool inVoice: Rooms.inRoom || Calls.inCall
+    function voiceKey(b) {
+        if (b === "lb+up") { Ui.toggleMic(); Ui.say(Ui.micMuted ? "Muted." : "Unmuted.") }
+        else { Ui.toggleDeaf(); Ui.say(Ui.deafened ? "Deafened." : "Undeafened.") }
     }
     // LB on its own goes to the next section when it's let go; held, the D-pad's left and right
     // go back and forward instead (and it doesn't move on when let go).
@@ -891,6 +1096,8 @@ Window {
         // Select (View) shows or hides the button legend; any other button hides it and does its job.
         if (b === "back") { legend = !legend; return }
         legend = false
+        // A tap on the legend's Mute or Deafen chip.
+        if (b === "lb+up" || b === "lb+down") { if (inVoice) voiceKey(b); return }
         const o = overlay()
         if (o) { if (o.handleButton) o.handleButton(b); return }
         const p = page()
@@ -898,6 +1105,7 @@ Window {
         const pageShoulders = p && p.ownsShoulders && focusZone === "content"
         if (b === "lb" && !pageShoulders) { lbHeld = true; lbUsed = false; return }
         if (lbHeld && (b === "left" || b === "right")) { lbUsed = true; stepSection(b === "left" ? -1 : 1); return }
+        if (lbHeld && inVoice && (b === "up" || b === "down")) { lbUsed = true; voiceKey("lb+" + b); return }
         // Tab and Shift+Tab on the keyboard.
         if ((b === "next" || b === "prev") && !pageShoulders) { stepSection(b === "prev" ? -1 : 1); return }
         if (focusZone === "rail") { railButton(b); return }
@@ -923,19 +1131,27 @@ Window {
     // The right stick's buttons belong to the pointer: RB and R3 click, RT right-clicks.
     // L3 goes along too, so R3 doesn't click when both are held for the panic lock.
     function isPointerButton(b) { return b === "rb" || b === "rt" || b === "rs" || b === "ls" }
+    // The controller reaches Huginn even while a game is in front: only presses made with Huginn active and
+    // focused count. A press that counted still gets its release.
+    readonly property bool padLive: Qt.application.state === Qt.ApplicationActive && app.active
+    property var padDown: ({})
     Connections {
         target: Gamepad
         function onPressed(button) {
+            if (!app.padLive) return
+            app.padDown[button] = true
             app.noteInput()
             app.padInUse = true
             if (app.isPointerButton(button)) { app.legend = false; stick.press(button) }
             else app.press(button)
         }
         function onReleased(button) {
+            if (!app.padDown[button]) return
+            delete app.padDown[button]
             if (app.isPointerButton(button)) stick.release(button)
             else app.release(button)
         }
-        function onConnectedChanged() { if (!Gamepad.connected) { app.lbHeld = false; app.legend = false; app.padInUse = false; stick.hide(true) } }
+        function onConnectedChanged() { if (!Gamepad.connected) { app.padDown = ({}); app.lbHeld = false; app.legend = false; app.padInUse = false; stick.hide(true) } }
     }
 
     // ------------------------------------------------------------- left stick: scroll
@@ -974,7 +1190,7 @@ Window {
         readonly property real dead: 0.2
         interval: System.batterySaving ? 33 : 16   // Battery saver: 30 a second
         repeat: true
-        running: Math.abs(Gamepad.stickY) > dead
+        running: app.padLive && Math.abs(Gamepad.stickY) > dead
         // Slow near the middle, quick pushed all the way.
         onTriggered: {
             const v = Gamepad.stickY
@@ -1017,6 +1233,8 @@ Window {
                 event.accepted = true
                 return
             }
+            // Esc on the rail does nothing from the keyboard (only B on a controller asks to leave).
+            if (event.key === Qt.Key_Escape && app.focusZone === "rail" && !app.overlay()) { app.padInUse = false; event.accepted = true; return }
             // In a call, Space mutes (a controller's X still turns the camera on and off).
             const b = event.key === Qt.Key_Space && callPage.visible && !incomingCall.visible ? "a" : map[event.key]
             if (b) { if (!app.touring) app.padInUse = false; app.press(b); event.accepted = true }
@@ -1126,6 +1344,8 @@ Window {
             { page: "settings", section: "backup", restore: "pick", file: "83-restore-choose" },
             { page: "settings", section: "backup", restore: "password", file: "84-restore-password" },
             { page: "settings", section: "backup", restore: "summary", file: "85-restore-summary" },
+            // The handheld's layout (a 7 inch 1080p screen at its fit: 914 by 514 design px) in a voice room.
+            { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, file: "86-handheld-voice" },
             { page: "dms", setup: "welcome", file: "60-setup-welcome" },
             { page: "dms", setup: "lock", file: "61-setup-lock" },
             { page: "dms", setup: "name", file: "62-setup-name" },
@@ -1156,7 +1376,8 @@ Window {
             const textSize = s.textSize || savedText
             Qt.callLater(() => { Settings.theme = theme; Settings.season = season; Settings.density = density; Settings.uiSize = size; Settings.textSize = textSize })
             // A portrait window: the one-column layout.
-            if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 } else { app.width = 1920; app.height = 1080 }
+            if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 }
+            else if (s.handheld) { app.width = 914; app.height = 514 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
             Settings.labs = s.labs ? true : savedLabs
             const args = { tour: true }

@@ -7,7 +7,7 @@ import Huginn
 // Chats (the raven) sits on top, then the groups (round initials; the one on screen is a
 // gold square with a gold pill beside it, one with something unread a short pill, and its
 // @mentions of me a number) and + for a new group. Contacts, Files, Settings (the valknut)
-// and the power button sit at the foot, always on show; the power button opens a small menu: Lock
+// and the power button sit at the foot (a short window scrolls the whole rail); the power button opens a small menu: Lock
 // Huginn (when a lock is set) and Close Huginn.
 // Pointing at one names it. LB steps through them (Main.qml); the D-pad moves the rail focus.
 Rectangle {
@@ -50,8 +50,8 @@ Rectangle {
     // groupAt says which group, if any, is under a point of the window.
     property string dropGroup: ""
     function groupAt(wx, wy) {
-        const p = rail.mapFromItem(null, wx, wy)
-        if (!visible || p.x < 0 || p.x > rail.width || p.y < groupView.y || p.y > groupView.y + groupView.height) return ""
+        const p = groupView.mapFromItem(null, wx, wy)
+        if (!visible || p.x < 0 || p.x > groupView.width || p.y < 0 || p.y > groupView.height) return ""
         for (let i = 0; i < groupRep.count; ++i) {
             const b = groupRep.itemAt(i)
             if (!b || b.entry.kind !== "group") continue
@@ -67,7 +67,7 @@ Rectangle {
         if (!visible) return null
         if (what === "groups") {
             const p = rail.mapToItem(null, 0, 0)
-            const bottom = groupView.y + Math.max(Theme.px(48), Math.min(groupView.height, groupCol.implicitHeight))
+            const bottom = groupView.mapToItem(rail, 0, 0).y + Math.max(Theme.px(48), Math.min(groupView.height, groupCol.implicitHeight))
             return { x: p.x, y: p.y, width: rail.width, height: bottom }
         }
         for (const rep of [groupRep, bottomRep]) {
@@ -95,91 +95,126 @@ Rectangle {
     onFocusIndexChanged: Qt.callLater(showFocused)
     function showFocused() {
         const at = groupItems.findIndex(e => e.idx === focusIndex)
-        if (at < 0) return
-        const y = at * (Theme.px(48) + groupCol.spacing)
-        if (y < groupView.contentY) groupView.contentY = y
-        else if (y + Theme.px(48) > groupView.contentY + groupView.height)
-            groupView.contentY = Math.min(Math.max(0, groupView.contentHeight - groupView.height), y + Theme.px(48) - groupView.height)
-    }
-
-    Column {
-        id: top
-        anchors.top: parent.top
-        anchors.topMargin: Theme.px(4)
-        width: parent.width
-        spacing: Theme.px(8)
-        Repeater {
-            model: rail.ravenItems
-            RailButton { entry: modelData }
+        if (at >= 0) {
+            const y = at * (Theme.px(48) + groupCol.spacing)
+            if (y < groupView.contentY) groupView.contentY = y
+            else if (y + Theme.px(48) > groupView.contentY + groupView.height)
+                groupView.contentY = Math.min(Math.max(0, groupView.contentHeight - groupView.height), y + Theme.px(48) - groupView.height)
         }
-        Rectangle {
-            visible: rail.groupItems.length > 0
-            anchors.horizontalCenter: parent.horizontalCenter
-            width: Theme.px(32); height: 2
-            color: Theme.seam
+        // A short window: the whole rail scrolls to the focused button too.
+        if (!whole.interactive) return
+        for (const rep of [ravenRep, groupRep, bottomRep]) {
+            for (let i = 0; i < rep.count; ++i) {
+                const b = rep.itemAt(i)
+                if (!b || b.entry.idx !== focusIndex) continue
+                const by = b.mapToItem(body, 0, 0).y
+                if (by < whole.contentY) whole.contentY = Math.max(0, by)
+                else if (by + b.height > whole.contentY + whole.height)
+                    whole.contentY = Math.min(whole.contentHeight - whole.height, by + b.height - whole.height)
+                return
+            }
         }
     }
 
-    // Groups and + scroll when there are many.
+    // A short window (a handheld, or in a voice room) never squeezes the groups away: the whole rail scrolls
+    // instead, with at least two groups on show between Chats and the foot.
+    readonly property real groupsMin: Math.min(groupCol.implicitHeight, Theme.px(48) * 2 + groupCol.spacing)
     Flickable {
-        id: groupView
-        anchors.top: top.bottom
-        anchors.topMargin: Theme.px(8)
-        anchors.bottom: bottomCol.top
-        anchors.bottomMargin: Theme.px(10)
-        width: parent.width
+        id: whole
+        anchors.fill: parent
         contentWidth: width
-        contentHeight: groupCol.implicitHeight
-        clip: true
+        contentHeight: Math.max(height, body.need)
+        interactive: contentHeight > height + 1
+        onInteractiveChanged: if (!interactive) contentY = 0
+        clip: interactive
         boundsBehavior: Flickable.StopAtBounds
-        Column {
-            id: groupCol
-            width: groupView.width
-            spacing: Theme.px(8)
-            // Locked: the groups are behind the lock, not gone. Says so where they show.
-            Item {
-                id: lockedHint
-                visible: Vault.exists && Vault.screenLocked && System.tourDir.length === 0
-                width: groupCol.width
-                height: visible ? hintCol.implicitHeight + Theme.px(8) : 0
-                Accessible.role: Accessible.StaticText
-                Accessible.name: "Unlock to see your groups"
-                Column {
-                    id: hintCol
+        Item {
+            id: body
+            readonly property real need: Theme.px(4) + top.implicitHeight + Theme.px(8) + rail.groupsMin + Theme.px(10) + bottomCol.implicitHeight + Theme.px(8)
+            width: whole.width
+            height: whole.contentHeight
+
+            Column {
+                id: top
+                anchors.top: parent.top
+                anchors.topMargin: Theme.px(4)
+                width: parent.width
+                spacing: Theme.px(8)
+                Repeater {
+                    id: ravenRep
+                    model: rail.ravenItems
+                    RailButton { entry: modelData }
+                }
+                Rectangle {
+                    visible: rail.groupItems.length > 0
                     anchors.horizontalCenter: parent.horizontalCenter
-                    width: parent.width - Theme.px(8)
-                    spacing: Theme.px(4)
-                    Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "lock"; size: Theme.px(18); color: Theme.textMuted }
-                    Text {
-                        textFormat: Text.PlainText
-                        width: parent.width
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.Wrap
-                        text: "Unlock to see your groups"
-                        color: Theme.textMuted
-                        font.family: Theme.body; font.pixelSize: Theme.fs(11)
+                    width: Theme.px(32); height: 2
+                    color: Theme.seam
+                }
+            }
+
+            // Groups and + scroll when there are many.
+            Flickable {
+                id: groupView
+                anchors.top: top.bottom
+                anchors.topMargin: Theme.px(8)
+                anchors.bottom: bottomCol.top
+                anchors.bottomMargin: Theme.px(10)
+                width: parent.width
+                contentWidth: width
+                contentHeight: groupCol.implicitHeight
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: groupCol
+                    width: groupView.width
+                    spacing: Theme.px(8)
+                    // Locked: the groups are behind the lock, not gone. Says so where they show.
+                    Item {
+                        id: lockedHint
+                        visible: Vault.exists && Vault.screenLocked && System.tourDir.length === 0
+                        width: groupCol.width
+                        height: visible ? hintCol.implicitHeight + Theme.px(8) : 0
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: "Unlock to see your groups"
+                        Column {
+                            id: hintCol
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: parent.width - Theme.px(8)
+                            spacing: Theme.px(4)
+                            Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "lock"; size: Theme.px(18); color: Theme.textMuted }
+                            Text {
+                                textFormat: Text.PlainText
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.Wrap
+                                text: "Unlock to see your groups"
+                                color: Theme.textMuted
+                                font.family: Theme.body; font.pixelSize: Theme.fs(11)
+                            }
+                        }
+                        TapHandler { onTapped: rail.activated(0) }   // Chats, where the lock screen is
+                    }
+                    Repeater {
+                        id: groupRep
+                        model: rail.groupItems
+                        RailButton { entry: modelData }
                     }
                 }
-                TapHandler { onTapped: rail.activated(0) }   // Chats, where the lock screen is
             }
-            Repeater {
-                id: groupRep
-                model: rail.groupItems
-                RailButton { entry: modelData }
+            Column {
+                id: bottomCol
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Theme.px(8)
+                width: parent.width
+                spacing: Theme.px(8)
+                Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: Theme.px(30); height: 2; color: Theme.seam }
+                Repeater {
+                    id: bottomRep
+                    model: rail.bottomItems
+                    RailButton { entry: modelData }
+                }
             }
-        }
-    }
-    Column {
-        id: bottomCol
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: Theme.px(8)
-        width: parent.width
-        spacing: Theme.px(8)
-        Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: Theme.px(30); height: 2; color: Theme.seam }
-        Repeater {
-            id: bottomRep
-            model: rail.bottomItems
-            RailButton { entry: modelData }
         }
     }
 
@@ -189,7 +224,7 @@ Rectangle {
         visible: rail.menuOpen
         z: 60
         x: rail.width - Theme.px(4)
-        y: Math.max(Theme.px(8), bottomCol.y + bottomCol.height - height - Theme.px(4))
+        y: Math.max(Theme.px(8), bottomCol.y - whole.contentY + bottomCol.height - height - Theme.px(4))
         width: Theme.px(180)
         height: menuCol.implicitHeight + Theme.px(12)
         radius: Theme.radius

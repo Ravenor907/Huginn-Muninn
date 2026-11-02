@@ -23,6 +23,8 @@ class Settings : public QObject
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY changed)
     // Huginn opens in a window unless this is on; F11 switches too.
     Q_PROPERTY(bool fullScreen READ fullScreen WRITE setFullScreen NOTIFY changed)
+    // Settings › Look › Window › Close button: "ask" (Leave Huginn?), "minimize" or "quit" (remembered with Don't ask again).
+    Q_PROPERTY(QString closeAction READ closeAction WRITE setCloseAction NOTIFY changed)
     // Settings › Look › Handheld mode: "auto" (System decides at start), "on" or "off".
     Q_PROPERTY(QString handheldMode READ handheldMode WRITE setHandheldMode NOTIFY changed)
     // Settings › Look › Battery saver: "auto" (on while on battery), "on" or "off". On: nothing moves by itself, things
@@ -117,6 +119,11 @@ public:
     bool colorBlind() const { return colorVision() != QLatin1String("typical"); }
     bool reduceMotion() const { return value("reduceMotion", false).toBool(); }
     bool fullScreen() const { return value("fullScreen", false).toBool(); }
+    QString closeAction() const
+    {
+        const QString v = value("closeAction", "ask").toString();
+        return v == QLatin1String("minimize") || v == QLatin1String("quit") ? v : QStringLiteral("ask");
+    }
     QString handheldMode() const
     {
         const QString v = value("handheldMode", "auto").toString();
@@ -249,6 +256,7 @@ public:
     void setColorBlind(bool v) { setColorVision(v ? QStringLiteral("deutan") : QStringLiteral("typical")); }
     void setReduceMotion(bool v) { set("reduceMotion", v); }
     void setFullScreen(bool v) { set("fullScreen", v); }
+    void setCloseAction(const QString &v) { set("closeAction", v == QLatin1String("minimize") || v == QLatin1String("quit") ? v : QStringLiteral("ask")); }
     void setHandheldMode(const QString &v) { set("handheldMode", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
     void setBatterySaver(const QString &v) { set("batterySaver", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
     void setWindowRect(const QRect &r) { if (r.width() >= 320 && r.height() >= 240) set("windowRect", r); }

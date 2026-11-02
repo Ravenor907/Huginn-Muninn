@@ -286,6 +286,52 @@ QString Moderation::unban(const QString &g, const QString &key)
     return act(g, key, QStringLiteral("unban"), 0);
 }
 
+QString Moderation::removeForEveryone(const QString &g, const QString &msgId, const QString &author)
+{
+    ensureLoaded();
+    if (!m_loaded)
+        return QStringLiteral("Unlock Huginn first.");
+    if (!GroupWire::isLogicalId(msgId) || !canModerate(g, author))
+        return QStringLiteral("Only the group's admins can do that.");
+    const QJsonObject state = m_chat->m_groups.value(g).state;
+    bool ok = false;
+    const QJsonObject rec = GroupWire::sign(m_chat->m_priv, QLatin1String(ModWire::kDomain),
+                                            ModWire::makeRemove(g, author, m_chat->myKey(), now(), msgId), &ok);
+    if (!ok || ModWire::accept(&state, rec) != QLatin1String("ok"))
+        return QStringLiteral("That couldn't be signed.");
+    blank(g, rec);
+    for (const QString &k : GroupWire::keysOf(state))
+        if (k != m_chat->myKey() && hasG2(k))
+            m_chat->sendControl(g, k, QJsonObject{{QStringLiteral("t"), QStringLiteral("mod")}, {QStringLiteral("list"), QJsonArray{rec}}});
+    return QString();
+}
+
+void Moderation::blank(const QString &g, const QJsonObject &rec)
+{
+    const QString author = jstr(rec, "k"), id = jstr(rec, "m"), me = m_chat->myKey();
+    bool found = false;
+    m_chat->updateGroupMessage(g, id, [&](QVariantMap &m) {
+        const bool mine = m.value(QStringLiteral("mine")).toBool();
+        if (mine ? author != me : m.value(QStringLiteral("from")).toString() != author)
+            return;
+        found = true;
+        const QString photo = m.value(QStringLiteral("photo")).toString();
+        if (!photo.isEmpty())
+            m_chat->m_vault->remove(QStringLiteral("photos/") + photo);
+        m.insert(QStringLiteral("text"), QString());
+        m.insert(QStringLiteral("photo"), QString());
+        m.insert(QStringLiteral("voice"), 0);
+        m.insert(QStringLiteral("unsent"), QStringLiteral("an admin"));
+        m.insert(QStringLiteral("removed"), true);
+    });
+    // Still on its way: a later copy from its author never shows.
+    if (!found && !m_chat->gmsgKnown(id)) {
+        if (m_chat->m_unsentBy.size() > 2000)
+            m_chat->m_unsentBy.clear();
+        m_chat->m_unsentBy.insert(id, author);
+    }
+}
+
 QVariantList Moderation::bannedList(const QString &g) const
 {
     ensureLoaded();
@@ -379,7 +425,11 @@ bool Moderation::receive(const QString &g, const QString &from, const QJsonObjec
     const QJsonObject state = m_chat->m_groups.value(g).state;
     for (const QJsonValue &v : list) {
         const QJsonObject rec = v.toObject();
-        if (jstr(rec, "g") == g && ModWire::accept(&state, rec) == QLatin1String("ok"))
+        if (jstr(rec, "g") != g || ModWire::accept(&state, rec) != QLatin1String("ok"))
+            continue;
+        if (ModWire::isRemove(rec))
+            blank(g, rec);
+        else
             take(g, rec, true);
     }
     return true;

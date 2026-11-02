@@ -71,11 +71,13 @@ Rectangle {
     readonly property bool tinted: Theme.validColor(chatColor)
     // The conversation header's buttons for a controller (Up from the first message): Call, Video and the menu.
     property int headSel: 0
-    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(tour ? [] : ["mute"]).concat(["find", "menu"])
+    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(tour ? [] : ["mute"]).concat(["find"]).concat(tour ? [] : ["files"]).concat(["menu"])
     // The open chat is muted (its header's bell, struck through).
     readonly property bool openMuted: openKey !== "" && !tour && !locked && (Chat.chats, Chat.isMuted(openKey))
     // Find in this chat (the search icon or Ctrl+F).
     function openFind() { if (picked && !locked) { zone = "messages"; sel = -1; finder.open() } }
+    // This chat's Files: everything sent and received here.
+    function openFilesHere() { if (openKey !== "" && !locked && !tour) PeopleActions.openFiles(openKey, openName) }
 
     function setArgs(a) {
         tour = !!a.tour
@@ -87,6 +89,7 @@ Rectangle {
         if (a.folders) { zone = "list"; row = Math.max(0, entries.findIndex(e => e.kind === "folder")) }
         if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
         if (a.add) Qt.callLater(addSomeone)   // Contacts › +
+        if (a.mirror) { const p = a.mirror; Qt.callLater(() => mirror.open(p)) }   // Contacts › a phone contact › Message
         // A contact's menu › Chat › Pinned messages or Shared.
         if (a.open && a.show === "pins") Qt.callLater(openPins)
         if (a.open && a.show === "shared") Qt.callLater(() => page.more.openShared())
@@ -104,7 +107,8 @@ Rectangle {
         // A linked phone (this device as its companion): its chats in their own section at the top, then this device's own.
         if (Linked.phone.key && !tour) {
             const phoneChats = Linked.phone.ok ? Linked.mirror : []
-            phoneChats.forEach((c, i) => out.push({ kind: "mirror", peer: c.peer, name: c.name, label: i === 0 ? "From your phone" : "" }))
+            phoneChats.forEach((c, i) => out.push({ kind: "mirror", peer: c.peer, name: c.name, label: i === 0 ? "From your phone" : "",
+                                                    unread: (c.unread || 0) > 0 && !c.muted, muted: !!c.muted }))
             if (!phoneChats.length) out.push({ kind: "mirror", peer: "", name: Linked.phone.name + "'s chats", tag: "Phone", label: "From your phone" })
         }
         Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, tag: i.waiting ? "Waiting" : "Invite" }))
@@ -162,8 +166,8 @@ Rectangle {
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu"
-                                                                                  : headButtons[headSel] === "mute" ? (openMuted ? "Unmute" : "Mute")
-                                                                                  : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
+                                                                                  : headButtons[headSel] === "mute" ? (openMuted ? "Unmute notifications" : "Mute notifications")
+                                                                                  : headButtons[headSel] === "find" ? "Find" : headButtons[headSel] === "files" ? "Files" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
@@ -211,6 +215,8 @@ Rectangle {
         if (openKey !== "") { Chat.markRead(openKey); if (!tour && Chat.isContact(openKey)) Chat.probeCaps(openKey) }
         if (openKey !== "" && !tour) Calls.prepare(openKey)   // the relay login is ready before Call is pressed
         Chat.openChat = openKey
+        // The first time this chat opens: how long its messages are kept (said once).
+        if (openKey !== "" && !tour && !locked) { const keep = Chat.keepNoteOnce(openKey); if (keep !== "") Ui.say(keep) }
     }
     // Read only counts when someone is actually looking: not while a game is in front.
     onMessagesChanged: if (openKey !== "" && !locked && Qt.application.state === Qt.ApplicationActive) Chat.markRead(openKey)
@@ -661,7 +667,7 @@ Rectangle {
                 border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "mute" ? Theme.focusWidth : 0
                 border.color: Theme.text
                 Accessible.role: Accessible.Button
-                Accessible.name: page.openMuted ? "Unmute " + page.openName : "Mute " + page.openName
+                Accessible.name: page.openMuted ? "Unmute notifications for " + page.openName : "Mute notifications for " + page.openName
                 Accessible.onPressAction: page.muteOpen()
                 Icon { anchors.centerIn: parent; name: page.openMuted ? "belloff" : "bell"; size: Theme.px(18); color: page.openMuted ? Theme.accent : muteHover.hovered ? Theme.text : Theme.textMuted }
                 HoverHandler { id: muteHover; cursorShape: Qt.PointingHandCursor }
@@ -682,6 +688,22 @@ Rectangle {
                 Icon { anchors.centerIn: parent; name: "search"; size: Theme.px(18); color: findHover.hovered || finder.visible ? Theme.text : Theme.textMuted }
                 HoverHandler { id: findHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: page.openFind() }
+            }
+            // This chat's Files, one click away.
+            Rectangle {
+                visible: !page.locked && page.openKey !== "" && !page.tour
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: filesHover.hovered ? Theme.raised : "transparent"
+                border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "files" ? Theme.focusWidth : 0
+                border.color: Theme.text
+                Accessible.role: Accessible.Button
+                Accessible.name: "Files in this chat"
+                Accessible.onPressAction: page.openFilesHere()
+                Icon { anchors.centerIn: parent; name: "file"; size: Theme.px(18); color: filesHover.hovered ? Theme.text : Theme.textMuted }
+                HoverHandler { id: filesHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.openFilesHere() }
             }
             MoreButton {
                 visible: !page.locked && page.openKey !== ""
@@ -1301,13 +1323,17 @@ Rectangle {
                    t => { Chat.sendPrivate(k, t, re); page.replyId = "" }, false, true)
         }
     }
-    // The + beside the title: add someone, show my code, or copy a one-time link.
+    // The + beside the title: add someone, join a group, show my code, or copy a one-time link.
     function addMenu() {
         if (locked) return
-        Ui.pickFrom("Add", [{ header: "", items: [{ name: "Add someone", icon: "plus", url: "add" },
+        // While a phone is linked these are this PC's own account (its own code and contacts), not the phone's.
+        const own = !!Linked.phone.key && !Linked.phone.gone
+        Ui.pickFrom("Add", [{ header: own ? "This PC's own account, not your phone's. Add people on your phone." : "", items: [{ name: "Add someone", icon: "plus", url: "add" },
+                                                   { name: "Join a group", icon: "people", url: "join" },
                                                    { name: "My code", icon: "qr", url: "code" },
                                                    { name: "One-time link", icon: "attach", url: "once" }] }], a => {
             if (a === "add") addSomeone()
+            else if (a === "join") joinGroup()
             else if (a === "code") { Chat.newLink(); showCode = true }
             else if (a === "once") PeopleActions.inviteLink()
         })
@@ -1327,24 +1353,12 @@ Rectangle {
             else if (a === "labs") Ui.main.openLabsReports()
         })
     }
-    function addSomeone() {
-        Ui.ask("Add someone", "Paste their code or link", "", "Add", t => {
-            // A group's code or invite link (cap j1 links work the same way): its name and size, then Join or Not now.
-            const gc = Chat.parseGroupCode(t)
-            if (gc && gc.name && !gc.mine && !gc.member && !gc.expired) {
-                const n = gc.count || gc.members || 0
-                Ui.sure("Join " + gc.name + "?", (n ? n + (n === 1 ? " member. " : " members. ") : "") + "They see your name.",
-                        "Join", () => { const r = Chat.joinWithCode(t); Ui.say(r === "" ? "Asked to join " + gc.name + "." : r, r !== "") }, false, false)
-                Ui.confirm.cancelText = "Not now"
-                return
-            }
-            if (t.indexOf("MUNINNG1:") >= 0) {
-                const gc = Chat.parseGroupCode(t)
-                const r = Chat.joinWithCode(t)
-                if (r === "") Ui.say("Asked to join " + gc.name + ".")
-                else Ui.say(r, true)
-                return
-            }
+    // Join a group: the same paste box, for a group's invite link or code (a person's code works here too).
+    function joinGroup() { Ui.ask("Join a group", "Paste the invite link or code", "", "Join", t => takePaste(t)) }
+    function addSomeone() { Ui.ask("Add someone or join a group", "Paste a code or invite link", "", "Add", t => takePaste(t)) }
+    function takePaste(t) {
+            // A group's code or invite link: its name and size, then Join or Not now.
+            if (PeopleActions.joinGroup(t, null)) return
             const c = Chat.parseCode(t)
             if (!c.key) { Ui.say("That code didn't work.", true); return }
             if (c.mine) { Ui.say("That's your own code.", true); return }
@@ -1365,7 +1379,6 @@ Rectangle {
                     if (a === "same") { Chat.addContact(t, r.key); openKey = c.key; picked = true; zone = "messages" }
                     else { Chat.addContact(t); PeopleActions.added(t, c.key); added() }
                 })
-        })
     }
     // ------------------------------------------------------------- right-click menus (Ui.menuAt)
     // A row's right-click menu, at p in item: a person's (PeopleActions.personMenu), a folder's, or Open and the list's own.
@@ -1381,6 +1394,12 @@ Rectangle {
             return
         }
         if (e.kind === "folder") { folderOptions(e); return }
+        // A chat from the phone: open it, or mute it (on the phone too).
+        if (e.kind === "mirror" && e.peer) {
+            const c = Linked.mirror.find(x => x.peer === e.peer)
+            if (c) { mirror.open(e.peer); mirror.chatMenu(c) }
+            return
+        }
         spaceMenu(true)
     }
     // The empty space under the rows (a row there has its own menu).
@@ -1445,7 +1464,7 @@ Rectangle {
         case "a": {
             const w = headButtons[Math.min(headSel, n - 1)]
             zone = "messages"
-            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else if (w === "mute") muteOpen(); else chatMenu()
+            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else if (w === "files") openFilesHere(); else if (w === "mute") muteOpen(); else chatMenu()
             return true
         }
         case "down": case "b": zone = "messages"; return true
@@ -1507,7 +1526,7 @@ Rectangle {
     // First open, after the lock is set: what people see as your name (prefilled; Skip keeps it), then Link your phone.
     function askFirstName() {
         const next = () => { if (!Linked.phone.key && Linked.companions.length === 0 && Ui.main) Ui.main.showLinkPhone(true) }
-        Ui.ask("What should people call you?", "Not your real one. Change it any time in Settings › You.", Chat.username, "Continue",
+        Ui.ask("What should people call you?", "A nickname is fine. Change it any time in Settings › You.", Chat.username, "Continue",
                t => { Chat.username = t; Qt.callLater(next) }, false, false)
         if (Ui.prompt) { Ui.prompt.cancelText = "Skip"; Ui.prompt.cancelCallback = () => Qt.callLater(next) }
     }
@@ -1609,7 +1628,8 @@ Rectangle {
         case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
         case "ginvite":
             if (e.waiting) {
-                Ui.sure("Waiting for " + e.fromName, "Stop waiting to join " + e.name + "?", "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
+                Ui.sure("Waiting for " + e.fromName, "You're in " + e.name + " as soon as " + e.fromName + " has the app open. If it takes a while, ask them to open it.",
+                        "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)
                 return
             }
             Ui.sure(e.fromName + " invited you to " + e.name, "Everyone there sees your name.", "Join",
@@ -1687,7 +1707,7 @@ Rectangle {
             else if (a === "thread") openThread(m.id)
             else if (a === "pin") togglePin(m.id)
             else if (a === "edit") startEdit(m)
-            else if (a === "copy") { Chat.copyText(m.text); Ui.say("Copied.") }
+            else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
             else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
             else if (a === "forward") PeopleActions.forwardMenu(m.text)
             else if (a === "folder") { if (!FileLink.showInFolder(m.saved)) Ui.say("That file isn't there anymore.", true) }

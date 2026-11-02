@@ -16,7 +16,7 @@ Rectangle {
 
     readonly property bool ended: Calls.state === "ended"
     readonly property bool videoUp: Calls.peerCamera && !ended
-    readonly property var prompts: ended ? [] : [{ key: "a", label: Calls.muted ? "Unmute" : "Mute" }, { key: "y", label: "Output" }]
+    readonly property var prompts: ended ? [] : [{ key: "a", label: Calls.muted ? "Unmute mic" : "Mute mic" }, { key: "y", label: "Output" }]
                                                .concat(Calls.videoPossible ? [{ key: "x", label: Calls.cameraOn ? "Camera off" : "Camera on" }] : [])
                                                .concat([{ key: "b", label: hangArmed ? "Hang up now" : "End call" }])
     readonly property string status: ended ? "" : Calls.muted ? "You're muted" : ""
@@ -103,7 +103,7 @@ Rectangle {
             HButton {
                 id: muteBtn
                 width: buttonRow.squeezed ? buttonRow.share : implicitWidth
-                text: Calls.muted ? "Unmute" : "Mute"
+                text: Calls.muted ? "Unmute mic" : "Mute mic"
                 kind: Calls.muted ? "accent" : "normal"
                 onClicked: Ui.toggleMic()
             }

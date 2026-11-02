@@ -24,6 +24,12 @@ public:
     QStringList shared() const { return m_shared; }
     Q_INVOKABLE void clearShared() { m_shared.clear(); Q_EMIT itemsChanged(); }
     Q_INVOKABLE void share(const QVariantList &urls);
+    // Settings › Files › Save files to: chat files and LocalSend's go in <it>/Huginn/<chat>. Downloads at first.
+    // Pick: the folder dialog, starting where it is now (false when nothing was picked). Reset: Downloads again.
+    Q_PROPERTY(bool customSave READ customSave NOTIFY stateChanged)
+    bool customSave() const;
+    Q_INVOKABLE bool pickSaveFolder();
+    Q_INVOKABLE void resetSaveFolder();
 
 Q_SIGNALS:
     void stateChanged();

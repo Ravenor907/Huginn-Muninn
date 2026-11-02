@@ -113,8 +113,13 @@ void Updater::periodicCheck()
 {
     // "Check for updates automatically" off, a check or download already going, an update waiting for Restart now,
     // or installing: nothing to do now.
-    if (!m_periodic || (m_settings && !m_settings->autoUpdate()) || m_busy || m_installing || !m_readyPath.isEmpty() || m_goingBack)
+    if (!m_periodic || (m_settings && !m_settings->autoUpdate()) || m_busy || m_installing || m_goingBack)
         return;
+    // An update already waits for Restart now: the update bar comes back if it was put away with Later.
+    if (!m_readyPath.isEmpty()) {
+        Q_EMIT remind();
+        return;
+    }
     fetch(false, true);
 }
 
@@ -616,7 +621,7 @@ void Updater::checkThenInstall(const QString &path, const QString &tag, const QS
         m_auto = false;
         m_busy = false;
         m_readyPath = path;
-        m_status = QStringLiteral("Huginn %1 is ready. It installs when you restart.").arg(version);
+        m_status = QStringLiteral("Huginn %1 is ready. Press Restart now to install it.").arg(version);
         Q_EMIT changed();
         return;
     }

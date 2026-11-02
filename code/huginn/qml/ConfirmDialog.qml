@@ -20,6 +20,9 @@ Item {
     property var otherCallback: null
     // Only the answer button (a note to read, like a copied code): B closes it too.
     property bool single: false
+    // A "Don't ask again" switch under the message (Y on a controller), set after open(); remember is what it says.
+    property string rememberText: ""
+    property bool remember: false
     property real held: 0
 
     visible: false
@@ -30,6 +33,7 @@ Item {
         callback = cb || null; hold = !!needsHold; danger = !!isDanger
         cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"; single = false
         otherText = ""; otherCallback = null
+        rememberText = ""; remember = false
         held = 0; visible = true
     }
     function confirm() {
@@ -112,6 +116,26 @@ Item {
                     font.pixelSize: Theme.fs(14)
                     lineHeight: 1.15
                 }
+                Row {
+                    visible: dlg.rememberText !== ""
+                    spacing: Theme.px(10)
+                    topPadding: Theme.px(6)
+                    ToggleSwitch {
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: dlg.remember
+                        Accessible.name: dlg.rememberText
+                        onToggled: dlg.remember = !dlg.remember
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: (Ui.main && Ui.main.padInUse ? "Y: " : "") + dlg.rememberText
+                        color: Theme.text
+                        font.family: Theme.body
+                        font.pixelSize: Theme.fs(14)
+                        TapHandler { onTapped: dlg.remember = !dlg.remember }
+                    }
+                }
             }
         }
         Rectangle {
@@ -141,7 +165,7 @@ Item {
                 }
                 HButton {
                     id: go
-                    text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : dlg.confirmText
+                    text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : (Ui.main && Ui.main.padInUse ? "A: " : "") + dlg.confirmText
                     kind: dlg.danger ? "danger" : "primary"
                     TapHandler {
                         onPressedChanged: pressed ? dlg.startHold() : dlg.stopHold()
@@ -163,6 +187,7 @@ Item {
         if (b === "a") startHold()
         else if (b === "b") cancel()
         else if (b === "x" && !single && otherText !== "") other()
+        else if (b === "y" && rememberText !== "") remember = !remember
         else if ((b === "up" || b === "down") && scroller.interactive)
             scroller.contentY = Math.max(0, Math.min(scroller.contentHeight - scroller.height, scroller.contentY + (b === "up" ? -1 : 1) * Theme.px(60)))
         return true

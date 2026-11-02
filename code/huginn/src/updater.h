@@ -106,6 +106,8 @@ public:
 Q_SIGNALS:
     void changed();
     void aboutToRestart();
+    // The timed check found the ready update still waiting (the update bar shows again).
+    void remind();
     // Something to say on screen at once (the update went in but Huginn couldn't start again, or it failed).
     void notice(const QString &text);
 

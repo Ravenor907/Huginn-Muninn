@@ -134,7 +134,20 @@ Item {
         step = "opening"
         Vault.openBackup(file, pwOpen.text)
     }
-    function restoreNow() {
+    // A backup made on a phone (or another computer) makes this computer the same person as that device. Said first,
+    // with its own confirm, and Link offered instead: both in use at once breaks messages on one or both.
+    function restoreNow(copyOk) {
+        const where = panel.opened.device || (panel.opened.app === "muninn" ? "your phone" : "that device")
+        const copy = panel.opened.app === "muninn" || (!!panel.opened.device && panel.opened.device !== Settings.deviceName)
+        if (copy && !copyOk) {
+            Ui.sure("This makes a copy of you",
+                    "This computer becomes the same person as " + where + ". If both are used, messages stop working on one or both, and friends see errors. "
+                    + "To use both, link this PC to your phone instead. Restore only if " + where + " won't chat again.",
+                    "Restore anyway", () => panel.restoreNow(true), false, true)
+            Ui.confirm.otherText = "Link instead"
+            Ui.confirm.otherCallback = () => { panel.close(); if (Ui.main) Ui.main.showLinkPhone(panel.fromSetup, panel.sample) }
+            return
+        }
         Ui.sure("Replace what's here?", "Everything in Huginn is replaced by the backup. A copy of what's here now is kept first.",
                 "Hold to restore", () => {
             if (panel.sample) { Ui.say("Practice: nothing was restored."); return }

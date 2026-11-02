@@ -23,7 +23,7 @@ QtObject {
         items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (contact) items.push({ name: "Folders and role", icon: "folder", url: "folders" }, { name: "What they can do", icon: "shield", url: "can" })
         items.push({ name: "Chat", icon: "pin", url: "chat" })
-        if (!c.tour) items.push({ name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: "bell", url: "mute" })
+        if (!c.tour) items.push({ name: Chat.isMuted(k) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" })
         if (contact) items.push({ name: "Check safety code", icon: "check", url: "check" }, { name: "Introduce", icon: "people", url: "introduce" })
         // Someone nearby who isn't a contact: Hide takes them off the Nearby list for good.
         if (!contact && !c.tour) items.push({ name: "Hide", icon: "close", url: "hide" })
@@ -126,7 +126,7 @@ QtObject {
         const items = [{ name: "For 15 minutes", url: "900000" }, { name: "For 1 hour", url: "3600000" },
                        { name: "For 8 hours", url: "28800000" }, { name: "Until I turn it back on", url: "on" }]
         const said = { "900000": " for 15 minutes", "3600000": " for an hour", "28800000": " for 8 hours", "on": "" }
-        Ui.pickFrom("Mute " + name, [{ header: "Calls show as missed, without ringing.", items: items }], a => {
+        Ui.pickFrom("Mute notifications for " + name, [{ header: "Calls show as missed, without ringing.", items: items }], a => {
             Chat.muteChat(k, a === "on" ? 8640000000000000 : Date.now() + Number(a))   // the huge one: until unmuted
             Ui.say(name + " is muted" + said[a] + ".")
             if (back) Qt.callLater(back)
@@ -155,7 +155,7 @@ QtObject {
         const c = ctx || {}
         if (!k) return
         const items = [{ name: "Message", icon: "thread", url: "message" },
-                       { name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
+                       { name: Chat.isMuted(k) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
                        { name: "Hide", icon: "close", url: "hide" },
                        { name: "Block", url: "block", danger: true }]
         if (c.hasChat) items.push({ name: "Delete chat", url: "deletechat", danger: true })
@@ -192,8 +192,8 @@ QtObject {
         const blocked = !c.tour && Chat.isBlocked(k)
         const top = [{ name: "Open", icon: "thread", url: "open" }]
         if (contact) top.push({ name: "Profile", icon: "person", url: "profile" }, { name: "Call", icon: "call", url: "call" })
-        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
-                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
+        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute notifications", icon: "bell", url: "mute" }
+                                                : { name: "Mute notifications", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
         if (contact) mid.push({ name: "Add to folder", icon: "folder", url: "folder", sub: () => addToFolderMenu(k, name) },
                               { name: "Add to group", icon: "people", url: "group", sub: () => addToGroupMenu(k, name) })
@@ -256,8 +256,8 @@ QtObject {
             Ui.say(r === "" ? "Invite sent to " + name + "." : r, r !== "")
         })
     }
-    // A group's right-click menu (its rail button): Open, Mute, Notifications, Mark as read, Copy invite (admins of a Folk
-    // group), Group settings, Leave. ctx: { tour }.
+    // A group's right-click menu (its rail button): Open, Invite people and Copy invite link, Mute notifications,
+    // Notifications, Mark as read, Channels, Group settings, Leave. ctx: { tour }.
     function groupRowMenu(g, n, ctx) {
         const c = ctx || {}
         if (!g) return
@@ -265,25 +265,29 @@ QtObject {
         const info = c.tour ? { amAdmin: true } : Chat.groupInfo(g)
         const row = c.tour ? {} : (Chat.groups.find(x => x.id === g) || {})
         const name = n || info.name || "Group"
-        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
-                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
+        const lim = c.tour ? { links: true } : Chat.groupLimit(g)
+        const top = [{ name: "Open", icon: "hash", url: "open" }]
+        if (!row.readOnly) top.push({ name: "Invite people", icon: "plus", url: "people" })
+        if (info.amAdmin && lim.links && !row.readOnly) top.push({ name: "Copy invite link", icon: "attach", url: "invite" })
+        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute notifications", icon: "bell", url: "mute" }
+                                                : { name: "Mute notifications", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
         mid.push({ name: "Mark as read", icon: "check", url: "read" })
-        const lim = c.tour ? { links: true } : Chat.groupLimit(g)
-        if (info.amAdmin && lim.links && !row.readOnly) mid.push({ name: "Copy invite", icon: "attach", url: "invite" })
+        if (!row.readOnly) mid.push({ name: "Channels", icon: "hash", url: "channels" })
         mid.push({ name: "Group settings", icon: "gear", url: "settings" })
         const end = [row.readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true }]
-        Ui.pickFrom(name, [{ header: "", items: [{ name: "Open", icon: "hash", url: "open" }] }, { header: "", items: mid }, { header: "", items: end }], a => {
+        const onPage = f => { Ui.openPage(k, {}); Qt.callLater(() => { const p = Ui.main ? Ui.main.page() : null; if (p && typeof p[f] === "function") p[f]() }) }
+        Ui.pickFrom(name, [{ header: "", items: top }, { header: "", items: mid }, { header: "", items: end }], a => {
             if (c.tour) return
             if (a === "open") Ui.openPage(k, {})
             else if (a === "mute") muteMenu(k, name)
             else if (a === "notify") notifyMenu(k)
             else if (a === "read") (info.channels || []).forEach(ch => Chat.markGroupRead(g, ch.id))
             else if (a === "invite") copyInvite(g)
-            else if (a === "settings") {
-                Ui.openPage(k, {})
-                Qt.callLater(() => { const p = Ui.main ? Ui.main.page() : null; if (p && p.settingsMenu) p.settingsMenu() })
-            } else if (a === "leave") {
+            else if (a === "people") onPage("addMenu")
+            else if (a === "channels") onPage("channelsMenu")
+            else if (a === "settings") onPage("settingsMenu")
+            else if (a === "leave") {
                 if (info.amOwner && (row.count || 0) > 1) { Ui.say("Make someone else owner first.", true); return }
                 Ui.sure("Leave " + name + "?", "Only an invite brings you back.", "Leave", () => { const r = Chat.leaveGroup(g); Ui.say(r === "" ? "You left the group." : r, r !== "") }, false, true)
             } else if (a === "forget")
@@ -293,33 +297,38 @@ QtObject {
     // An invite to copy: a link good for a day, or the group's code (good for an hour) where links don't work.
     function copyInvite(g) {
         const r = Chat.createGroupLink(g, 86400000, 0) || {}
-        if (r.link) { Chat.copyText(r.link); Ui.say("Invite link copied. Works for a day."); return }
+        const name = (Chat.groupInfo(g) || {}).name || ""
+        if (r.link) { Chat.copyText(inviteText(name, r.link)); Ui.say("Invite link copied, with how to join. Works for a day."); return }
         const code = Chat.groupCode(g)
-        if (code !== "") { Chat.copyText(code); Ui.say("Group code copied. Works for an hour."); return }
+        if (code !== "") { Chat.copyText(inviteText(name, code)); Ui.say("Group code copied, with how to join. Works for an hour."); return }
         Ui.say(r.error ? r.error : "Couldn't make an invite.", true)
     }
-    // A group member's right-click menu: Profile, Message, the people controls (ModActions: Mute for me, Volume, and for
-    // admins Timeout and Ban; Volume and Timeout open beside it), and More (GroupPage.memberMenu, everything else).
+    // A group member's right-click menu. In a group page it is the member's one menu (GroupPage.memberMenu, the same as
+    // a click). Elsewhere: Profile, Message and the people controls (ModActions: Mute for me, Volume, and for admins
+    // Timeout and Ban; Volume and Timeout open beside it).
     // who: { key, name, me, contact }; ctx: { group (its id, "" outside one), host (GroupPage), member (their entry there), tour }.
     function memberMenu(who, ctx) {
         const c = ctx || {}
         if (!who || !who.key) return
         const me = !!who.me, g = c.group || ""
+        if (!me && c.member && c.host && typeof c.host.memberMenu === "function") { c.host.memberMenu(c.member); return }
         const name = who.name || (c.tour ? "" : Chat.nameOf(who.key)) || "Someone"
         const items = [{ name: "Profile", icon: "person", url: "profile" }]
         if (!me && (who.contact || c.tour)) items.push({ name: "Message", icon: "thread", url: "message" })
-        const controls = me ? [] : ModActions.items(g, who.key, !!c.tour).map(x =>
+        if (!me && !who.contact && !c.tour && g !== "") items.push({ name: "Add as contact", icon: "plus", url: "add" })
+        const controls = me ? [] : ModActions.items(g, who.key, !!c.tour, name).map(x =>
             x.url === "mod:volume" ? Object.assign({}, x, { sub: () => ModActions.volumeMenu(who.key, name, null, !!c.tour) })
             : x.url === "mod:timeout" && !c.tour ? Object.assign({}, x, { sub: () => ModActions.timeoutMenu(g, who.key, name, null) }) : x)
         const more = !me && c.host && typeof c.host.memberMenu === "function"
             ? [{ name: "More", icon: "more", url: "more", sub: () => c.host.memberMenu(c.member || who) }] : []
-        Ui.pickFrom(name, [{ header: "", items: items }, { header: "", items: controls.filter(x => !x.danger) },
-                           { header: "", items: more.concat(controls.filter(x => !!x.danger)) }], a => {
+        Ui.pickFrom(name, [{ header: "", items: items }, { header: "", items: controls.filter(x => !x.person) },
+                           { header: controls.some(x => !!x.person) ? name : "", items: more.concat(controls.filter(x => !!x.person)) }], a => {
             if (a === "profile") {
                 if (c.host && typeof c.host.showMember === "function") c.host.showMember(me ? "me" : who.key, name)
                 else Ui.showProfile(me ? "me" : who.key, name, c.tour ? { tour: true } : {})
             } else if (c.tour) return
             else if (a === "message") Ui.openPage("dms", { open: who.key })
+            else if (a === "add") askToAdd(g, { key: who.key, name: name })
             else if (a === "more" && c.host) c.host.memberMenu(c.member || who)
             else ModActions.handle(a, g, who.key, name, null)
         })
@@ -376,6 +385,38 @@ QtObject {
         if (r === "") Ui.say("Asked " + m.name + ".")
         else Ui.say(r, true)
     }
+    // A group's code or invite link (cap j1 links work the same way): its name and size, then Join or Not now. False
+    // when t isn't a group invite (then it may be a person's code). done(name) after asking to join.
+    function joinGroup(t, done) {
+        const gc = Chat.parseGroupCode(t) || {}
+        if (!gc.name && t.indexOf("MUNINNG1:") < 0) return false
+        if (gc.expired) { Ui.say("That invite expired. Ask for a new one.", true); return true }
+        if (gc.mine || gc.member) { Ui.say("You're already in " + (gc.name || "that group") + ".", true); return true }
+        const go = () => {
+            const r = Chat.joinWithCode(t)
+            if (r !== "") { Ui.say(r, true); return }
+            Ui.say(joinWaitText(gc.name || "the group", gc.adminName || ""))
+            if (done) done(gc.name || "")
+        }
+        if (!gc.name) { go(); return true }
+        const n = gc.count || gc.members || 0
+        // While a phone is linked, this joins as this PC's own account, not the phone's: said plainly.
+        const own = !!Linked.phone.key && !Linked.phone.gone
+        Ui.sure(own ? "Join " + gc.name + " as this PC's own account?" : "Join " + gc.name + "?",
+                (n ? n + (n === 1 ? " member. " : " members. ") : "") + (own ? "They see this PC's own account, not your phone's. To join as you, open the invite on your phone." : "They see your name."),
+                "Join", go, false, false)
+        Ui.confirm.cancelText = "Not now"
+        return true
+    }
+    // What an invite to a group is copied as: the link or code with a one-line how-to, the same as Muninn's.
+    function inviteText(group, link) {
+        return "Join " + (group || "my group") + " on Huginn or Muninn. Open the app, choose + then Join a group, and paste this: " + link
+    }
+    // Joining waits for the person who invited you: their app lets you in when it's open.
+    function joinWaitText(group, inviter) {
+        const who = inviter || "the person who invited you"
+        return "Asked to join " + group + ". You're in as soon as " + who + " has the app open. If it takes a while, ask them to open it."
+    }
     // A link that works for one person: copied, for any app or email.
     function inviteLink() {
         const link = Trust.inviteLink(24)
@@ -402,6 +443,19 @@ QtObject {
         const r = FileLink.sendTo(where, urls)
         if (r !== "") Ui.say(r, true)
         else Ui.say(urls.length === 1 ? "Sending the file. Transfers shows how it goes." : "Sending " + urls.length + " files. Transfers shows how they go.")
+    }
+    // A file too big to go without Direct (Transfers, a chat's file card): Direct calls and files with them on here (it
+    // shares this device's internet address with them), and a message asks them to turn it on too. Retry once they have.
+    function allowDirect(k) {
+        const name = Chat.nameOf(k)
+        const ask = () => {
+            if (!Calls.trusted(k)) Calls.setTrusted(k, true)
+            Chat.sendPrivate(k, "Can you turn on Direct calls and files for me? It's in the menu for my name. Then big files go straight between us.")
+            Ui.say("Direct is on here, and " + name + " was asked to turn it on too. Retry once they have.")
+        }
+        if (Calls.trusted(k)) { ask(); return }
+        Ui.sure("Allow direct with " + name + "?", "Big files go straight between your devices. Both of you turn this on. It shares your internet address with " + name + ".",
+                "Allow and ask", ask)
     }
     // Send to someone: files picked first (Files), then who gets them: people, groups, and LocalSend devices nearby.
     function sendPicker(urls) {
@@ -465,35 +519,36 @@ QtObject {
         if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
         const ph = Linked.phone
         const phone = []
-        if (!ph.key) phone.push({ name: "Link my phone", detail: "Scan a code with Muninn", url: "code" })
+        if (!ph.key) phone.push({ name: "Link this PC to my phone", detail: "Shows a code to scan in Muninn", url: "code" })
         else if (ph.gone) {
             // Unlinked with a copy kept: link again, or take the copy off.
-            phone.push({ name: "Link my phone", detail: "Scan a code with Muninn", url: "code" },
+            phone.push({ name: "Link this PC to my phone", detail: "Shows a code to scan in Muninn", url: "code" },
                        { name: "Remove " + ph.name + "'s copy", detail: "Its chats and contacts leave this device", url: "wipe", danger: true })
         } else {
             if (!ph.ok) phone.push({ name: "Check the 4 emoji", detail: "Nothing comes over until they match", url: "check" })
             phone.push({ name: "Unlink " + ph.name, detail: "Its chats leave this device", url: "ph", danger: true })
         }
         // Huginn as the phone: another device mirrors this one.
-        const others = [{ name: "Link a device", detail: "Paste the code it shows", url: "link" }]
+        // The other way round, rarely wanted: another device shows this PC's chats.
+        const others = [{ name: "Show this PC's chats on another device", detail: "Paste the code that device shows", url: "link" }]
         Linked.companions.forEach(c => others.push({ name: "Unlink " + c.name, url: "u:" + c.key, danger: true }))
         // Cap x1: everything moves here instead, and the old device is locked out.
         const move = [{ name: "Move here", detail: "The old device is locked out", url: "movehere" },
                       { name: "Move from this device", detail: "Paste the new device's code", url: "moveaway" }]
         Ui.pickFrom("Linked devices", [{ header: "Your phone", items: phone },
-                                       { header: "Mirror this device", items: others },
+                                       { header: "Other ways", items: others },
                                        { header: "Move to another device", items: move }], a => {
             if (a === "movehere") {
                 const code = Mover.showCode()
                 if (code === "") { Ui.say("Join your home Wi-Fi first.", true); return }
-                Chat.copyText(code)
-                Ui.note("Move code copied", "Paste it on the old device, on the same Wi-Fi.\n\n" + code)
+                Chat.copyText(code, true)
+                Ui.note("Move code copied", "Paste it on the old device, on the same Wi-Fi. It's cleared from the clipboard in a minute.\n\n" + code)
             } else if (a === "moveaway") {
                 Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t))
             } else if (a === "code" || a === "check") {
                 if (Ui.main) Ui.main.showLinkPhone(false)
             } else if (a === "link") {
-                Ui.ask("Link a device", "Paste the code it shows", "", "Link", t => {
+                Ui.ask("Show this PC's chats on another device", "Paste the code that device shows. To link to your phone, use Link this PC to my phone.", "", "Link", t => {
                     const r = Linked.link(t)
                     Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
                 })

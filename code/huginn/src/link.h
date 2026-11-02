@@ -34,11 +34,16 @@ class Chat;
 class Link : public QObject
 {
     Q_OBJECT
-    // On a companion: the phone it mirrors, {key, name, ok}, or empty.
+    // On a companion: the phone it mirrors, {key, name, ok, gone, l1, l2}, or empty. Cap l2 (15.2) adds how it's doing:
+    // heard (ms: the last frame from it this run, 0 none), asked (ms: the last "ping" sent), answered (a "pong" came after
+    // it), lan (it's found on this Wi-Fi now), home (this device is on its usual Wi-Fi). Never an address.
     Q_PROPERTY(QVariantMap phone READ phone NOTIFY changed)
+    // On a companion: unread messages in the phone's chats, all together (each chat's are in mirror).
+    Q_PROPERTY(int unread READ unread NOTIFY changed)
     // On the phone: the devices that mirror it, [{key, name, ok}] (ok: the 4 emoji were checked).
     Q_PROPERTY(QVariantList companions READ companions NOTIFY changed)
-    // On a companion: the phone's chats, newest first: [{peer, name, last, time}].
+    // On a companion: the phone's chats, newest first: [{peer, name, last, time, role, folders, unread, muted, group}].
+    // Cap l1: groups the account has with no messages here yet (just joined) are listed too.
     Q_PROPERTY(QVariantList mirror READ mirror NOTIFY changed)
     // The link code being shown here (empty until newCode), and when it stops working (ms).
     Q_PROPERTY(QString code READ code NOTIFY changed)
@@ -68,6 +73,7 @@ public:
     explicit Link(Chat *chat, QObject *parent = nullptr);
 
     QVariantMap phone() const;
+    int unread() const;
     QVariantList companions() const;
     QVariantList mirror() const;
     QString code() const { return m_code; }
@@ -113,7 +119,18 @@ public:
     Q_INVOKABLE QString saveMedia(const QString &peer, const QString &id) const;
     // On a companion: send through the phone. It shows at once as pending until the phone answers ("result") or its copy
     // comes back; no answer in a minute: "Didn't send". "" when it went, else what to tell the person.
-    Q_INVOKABLE QString send(const QString &peer, const QString &text);
+    // re: the message this one answers (optional; a phone without it sends it as a plain message).
+    Q_INVOKABLE QString send(const QString &peer, const QString &text, const QString &re = QString());
+    // On a companion: a phone contact's chat with no messages here yet, so it can be written to (Contacts › Message).
+    // False when it isn't a contact on the phone.
+    Q_INVOKABLE bool startChat(const QString &peer);
+    // On a companion: a mirrored chat was read here (on screen). Its unread count goes, and the phone hears of it ("read").
+    Q_INVOKABLE void markRead(const QString &peer);
+    // On a companion: mute a mirrored chat until (ms; 0 unmutes, a huge value until turned back on). Here at once, and with
+    // cap l1 on the phone too (a "mute" item). "" when done, else what to tell the person.
+    Q_INVOKABLE QString setMute(const QString &peer, qint64 until);
+    // On a companion: ask whether the phone is there ("ping", at most once a minute). The answer shows in phone.
+    Q_INVOKABLE void ping();
     // On a companion: one that didn't send, again (the same id, so the phone never sends it twice).
     Q_INVOKABLE void retrySend(const QString &id);
     // On a companion: ask the phone for every chat again (Refresh), at most once in 10 minutes. What to tell the person.
@@ -136,6 +153,8 @@ public:
     void prune(qint64 now);
     // Set by main.cpp: true while this device is on its usual Wi-Fi (not its own Direct connect hotspot).
     std::function<bool()> homeWifi;
+    // Set by main.cpp: this computer's device name (Settings), for the phone's list of linked devices.
+    std::function<QString()> deviceName;
     // Set by main.cpp, on the phone's side: my profile for "me" ({n, st, cs, pic (base64 JPEG, omitted when none)}),
     // and what a companion's "setme" changes here (name, status, custom status; an empty one stays as it is).
     std::function<QJsonObject()> myProfile;
@@ -218,11 +237,13 @@ private:
         bool ok = true;                     // the 4 emoji were checked (true when stored without "ok")
         bool l1 = false;                    // the phone sends its whole account (cap l1, 15.1)
         bool gone = false;                  // unlinked, its copy kept here read only
+        bool l2 = false;                    // cap l2 (15.2): on the phone, a companion that takes "read"; on a companion, a phone that answered "ping"
     };
     struct Mirror {
         QString peer, name;
         QList<M> msgs;
         int days = 7;                       // the phone's limit for this chat (Limits::kDefault)
+        qint64 readAt = 0;                  // read here (or on the phone, cap l2) up to this message time
     };
     void ensureLoaded() const;
     void save();
@@ -237,9 +258,14 @@ private:
     QSet<QString> m_owed, m_meOwed;             // companions whose history, or "me" picture, waits for the home Wi-Fi
     QHash<QString, qint64> m_synced;            // per companion: when its history was last asked for or sent
     qint64 m_askedAt = 0;                       // the companion's side: when Refresh last asked
+    qint64 m_heardAt = 0, m_pingAt = 0, m_pongAt = 0;   // the companion's side, cap l2: the phone last heard, pinged, answered
+    QSet<QString> m_readOwed;                   // the companion's side: chats whose "read" goes to the phone soon
+    QSet<QString> m_freshPages;                 // the companion's side: chats new from this sync's pages (their history counts as read)
+    QTimer m_readSoon;
+    QString myDeviceName() const;
     // The companion's side: sent through the phone, not answered yet (err: why it didn't send; "" while waiting).
     struct Pending {
-        QString id, peer, text, err;
+        QString id, peer, text, err, re;
         qint64 time = 0;
     };
     QList<Pending> m_pending;

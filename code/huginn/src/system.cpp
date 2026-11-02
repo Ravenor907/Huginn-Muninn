@@ -680,6 +680,9 @@ void System::openSteamUrl(const QString &url)
 }
 
 QString System::dataDir() { return Portable::dataDir(); }
+QString System::dataFolder() const { return QDir::toNativeSeparators(Portable::dataDir()); }
+bool System::portable() const { return Portable::on(); }
+bool System::openDataFolder() const { return QDesktopServices::openUrl(QUrl::fromLocalFile(Portable::dataDir())); }
 QString System::cacheDir() { return Portable::cacheDir(); }
 
 bool System::startsFullScreen() const

@@ -97,7 +97,8 @@ Item {
     Timer {
         interval: System.batterySaving ? 33 : 16   // Battery saver: 30 a second
         repeat: true
-        running: pointer.host !== null && Math.hypot(Gamepad.rightX, Gamepad.rightY) > pointer.dead
+        // Only while Huginn is in front (a game's stick moves never reach the pointer).
+        running: pointer.host !== null && Qt.application.state === Qt.ApplicationActive && Math.hypot(Gamepad.rightX, Gamepad.rightY) > pointer.dead
         onTriggered: {
             const rx = Gamepad.rightX, ry = Gamepad.rightY
             const m = Math.hypot(rx, ry)

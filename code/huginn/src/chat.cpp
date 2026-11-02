@@ -2190,13 +2190,18 @@ void Chat::copyLink() const
     copyText(myLink());
 }
 
-// Messages, codes and links copied from Chat: kept out of Windows clipboard history and cloud clipboard, and out of
-// KDE's clipboard history, and cleared after a minute if they're still there.
-void Chat::copyText(const QString &text) const
+// Copied from Huginn. Invites, links and names stay until something else is copied. Secrets (message text, link and
+// move codes) are kept out of Windows clipboard history and cloud clipboard and out of KDE's clipboard history, and
+// cleared after a minute if they're still there (the toast says so).
+void Chat::copyText(const QString &text, bool secret) const
 {
     auto *c = QGuiApplication::clipboard();
     if (!c)
         return;
+    if (!secret) {
+        c->setText(text);
+        return;
+    }
     auto *data = new QMimeData;
     data->setText(text);
     const QByteArray no(4, 0);   // a DWORD 0

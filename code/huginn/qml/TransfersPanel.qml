@@ -78,6 +78,9 @@ Item {
             if (!t.mine) out.push({ label: "Open", act: "open", kind: "accent" })
             out.push({ label: "Folder", act: "folder", kind: "normal" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "failed" && FileLink.canRetry(t.id)) {
+            // Too big to go without Direct: one tap turns it on here and asks them to do the same.
+            if (FileLink.needsDirect(t.id) && Chat.isContact(t.peer))
+                out.push({ label: Calls.trusted(t.peer) ? "Ask " + Chat.nameOf(t.peer) : "Allow direct", act: "direct", kind: "primary" })
             out.push({ label: "Retry", act: "retry", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "done" || t.state === "failed") {
             out.push({ label: "Close", act: "close", kind: "normal" })
@@ -96,6 +99,7 @@ Item {
         else if (a === "close") FileLink.dismiss(t.id)
         else if (a === "open") { if (!FileLink.openFile(t.path)) Ui.say("Nothing on this computer opens this kind of file, or it was moved.", true) }
         else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It isn't there any more.", true) }
+        else if (a === "direct") PeopleActions.allowDirect(t.peer)
         else if (a === "lsout") LocalSend.cancelSend()
         else if (a === "lsin") LocalSend.cancelReceive()
     }
@@ -210,6 +214,16 @@ Item {
                         border.width: panel.sel === index ? Theme.focusWidth : 1
                         Accessible.role: Accessible.StaticText
                         Accessible.name: t.name + ", " + panel.line(t) + ", " + panel.whoLine(t)
+                        // A right click: the row's buttons as a menu.
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: (point, button) => {
+                                panel.sel = row.index
+                                const t = row.t, list = row.buttons
+                                if (list.length) Ui.menuAt(row, point.position.x, point.position.y, () =>
+                                    Ui.pickFrom(t.name, [{ header: "", items: list.map(a => ({ name: a.label, url: a.act })) }], a => panel.run(t, a)))
+                            }
+                        }
                         Rectangle {
                             anchors.left: parent.left; anchors.bottom: parent.bottom
                             anchors.leftMargin: 1; anchors.bottomMargin: 1
@@ -249,6 +263,14 @@ Item {
                                 text: panel.line(row.t)
                                 color: row.failed ? Theme.danger : Theme.textMuted
                                 font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                            }
+                            Text {
+                                textFormat: Text.PlainText
+                                visible: row.failed && !panel.tour && !row.t.local && FileLink.needsDirect(row.t.id)
+                                width: parent.width; wrapMode: Text.Wrap
+                                text: "Big files go straight between your devices when you both turn on Direct calls and files."
+                                color: Theme.textMuted
+                                font.family: Theme.body; font.pixelSize: Theme.fs(12)
                             }
                             Text {
                                 textFormat: Text.PlainText

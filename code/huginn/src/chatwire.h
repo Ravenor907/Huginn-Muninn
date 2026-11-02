@@ -25,7 +25,7 @@ extern const char kCap[];   // "r1"
 // no k1 or k2 (managing a kids' TV is Muninn only), or peers would try it and fail. t1: takes a
 // kids' TV card (7.6), so a parent can invite someone on Huginn to talk with the kids. v1: voice
 // rooms and group calls (section 6).
-extern const char kCaps[];  // "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2" (v2: room heartbeats, see RoomWire) (a1: animated GIFs, see Photos) (g2: group timeouts and bans, see ModWire) (f2: file sharing, see Sharing)
+extern const char kCaps[];  // "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2 f3" (v2: room heartbeats, see RoomWire) (a1: animated GIFs, see Photos) (g2: group timeouts and bans, see ModWire) (f2: file sharing, see Sharing) (f3: resume and long waits, see FileLink)
 
 // The ratchet is for private-room and group payloads to a contact (or group peer) that said it
 // can read it.

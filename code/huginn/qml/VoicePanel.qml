@@ -10,6 +10,9 @@ Rectangle {
     id: panel
     property bool tour: false              // the screenshot tour shows how it looks
     property var roomBar: null             // shows someone's shared screen above the conversation
+    property bool compact: false           // a short window: the "With" line goes (the faces say it)
+    // Its buttons: at least 44 px to touch in Handheld mode, and never smaller than their words.
+    readonly property int smallButton: Math.max(Theme.touch ? Theme.tapMin : Theme.px(28), Math.round(Theme.fs(12) * 1.3) + Theme.px(8))
     property bool cardOpen: false          // your card is up (Main.qml), so the name stays lit
     signal meClicked()
     // What the small panel says under your name.
@@ -76,7 +79,7 @@ Rectangle {
             HButton {
                 id: leaveBtn
                 anchors.verticalCenter: parent.verticalCenter
-                implicitHeight: Theme.px(28)
+                implicitHeight: panel.smallButton
                 fontSize: 12
                 kind: "danger"
                 text: "Leave"
@@ -116,19 +119,25 @@ Rectangle {
                         opacity: who.p.state === "live" ? (who.p.muted ? 0.55 : 1) : 0.4
                     }
                     HoverHandler { cursorShape: who.p.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
-                    TapHandler { onTapped: if (!who.p.me && !panel.tour) Ui.showProfile(who.p.key, who.p.name, {}) }
-                    // A right click: Mute for me, Volume, and for admins Timeout and Ban (cap g2).
+                    function menuAt(x, y) {
+                        if (!who.p.me && !panel.tour) Ui.menuAt(who, x, y,
+                            () => PeopleActions.memberMenu({ key: who.p.key, name: who.p.name, contact: Chat.isContact(who.p.key) }, { group: Rooms.group }))
+                    }
+                    // A tap: their profile. A right click or a long press: Mute for me, Volume, and for admins Timeout and Ban (cap g2).
                     TapHandler {
-                        id: whoMenu
+                        onTapped: if (!who.p.me && !panel.tour) Ui.showProfile(who.p.key, who.p.name, {})
+                        onLongPressed: who.menuAt(point.position.x, point.position.y)
+                    }
+                    TapHandler {
                         acceptedButtons: Qt.RightButton
-                        onTapped: (point, button) => { if (!who.p.me && !panel.tour) Ui.menuAt(whoMenu.parent, point.position.x, point.position.y,
-                            () => PeopleActions.memberMenu({ key: who.p.key, name: who.p.name, contact: Chat.isContact(who.p.key) }, { group: Rooms.group })) }
+                        onTapped: (point, button) => who.menuAt(point.position.x, point.position.y)
                     }
                 }
             }
         }
         Text {
             textFormat: Text.PlainText
+            visible: !panel.compact
             width: parent.width
             elide: Text.ElideRight
             text: panel.others.length === 0 ? "Nobody else here yet"
@@ -163,13 +172,13 @@ Rectangle {
             spacing: Theme.px(6)
             HButton {
                 visible: Rooms.canShare || panel.tour
-                implicitHeight: Theme.px(28); fontSize: 12
+                implicitHeight: panel.smallButton; fontSize: 12
                 text: Rooms.sharing ? "Stop sharing" : "Share screen"
                 onClicked: if (!panel.tour) Rooms.toggleShare()
             }
             HButton {
                 visible: !panel.tour && Rooms.sharerName !== "" && !!panel.roomBar
-                implicitHeight: Theme.px(28); fontSize: 12
+                implicitHeight: panel.smallButton; fontSize: 12
                 text: panel.roomBar && panel.roomBar.screenShown ? "Hide their screen" : "Watch their screen"
                 onClicked: panel.roomBar.screenShown = !panel.roomBar.screenShown
             }
@@ -182,7 +191,7 @@ Rectangle {
         id: me
         anchors.bottom: parent.bottom
         width: parent.width
-        height: Math.max(Theme.px(52), meWords.implicitHeight + Theme.px(16))
+        height: Math.max(Theme.px(52), meWords.implicitHeight + Theme.px(16), meButtons.implicitHeight + Theme.px(8))
         Rectangle {
             id: meTile
             anchors.left: parent.left; anchors.leftMargin: Theme.px(4)
@@ -232,7 +241,7 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Theme.px(2)
             PanelButton {
-                icon: panel.muted ? "micoff" : "mic"; label: (panel.muted ? "Unmute" : "Mute") + " (Ctrl+Shift+M)"; lit: panel.muted
+                icon: panel.muted ? "micoff" : "mic"; label: (panel.muted ? "Unmute mic" : "Mute mic") + " (Ctrl+Shift+M)"; lit: panel.muted
                 onClicked: if (!panel.tour) Ui.toggleMic()
             }
             PanelButton {
@@ -249,7 +258,7 @@ Rectangle {
         property bool lit: false
         property bool enabled: true
         signal clicked()
-        width: Theme.px(32); height: width
+        width: Theme.touch ? Theme.tapMin : Theme.px(32); height: width
         radius: Theme.radius
         opacity: enabled ? 1 : 0.4
         color: lit ? Theme.dangerFill : pbHover.hovered && enabled ? Theme.tile : "transparent"

@@ -46,6 +46,40 @@ private:
     bool m_on = false;
 };
 
+// Voice activity (Settings › Calls): a noise gate. The microphone sends while the 20 ms level is over the
+// threshold, and silence goes out otherwise, so a game's sound from the speakers doesn't leak between words.
+//  - Opens on the first frame over the threshold; stays open while the level is within 6 dB under it, and for
+//    400 ms after it drops below that, so the ends of words aren't cut.
+//  - Manual: the threshold picked (-60 to -20 dBFS, -40 unless changed).
+//  - Automatic (the default): 15 dB over the steady sound around you (the quietest 20 ms in the last 2 to 4 s),
+//    never under -45 or over -20 dBFS. A game's music or a fan raises it within 2 to 4 s.
+class Gate
+{
+public:
+    static constexpr double kMinDb = -60;
+    static constexpr double kMaxDb = -20;
+    static constexpr double kDefaultDb = -40;
+    void setThreshold(double db) { m_manual = db < kMinDb ? kMinDb : db > kMaxDb ? kMaxDb : db; }
+    void setAutomatic(bool on) { m_auto = on; }
+    bool automatic() const { return m_auto; }
+    // The threshold in use now (dBFS): the manual one, or the automatic one.
+    double threshold() const;
+    double floorDb() const { return m_blockMin < m_lastMin ? m_blockMin : m_lastMin; }
+    // One 20 ms frame's level; true while the frame should be sent.
+    bool frame(double levelDb);
+    bool open() const { return m_open; }
+    void reset();
+
+private:
+    double m_manual = kDefaultDb;
+    bool m_auto = true;
+    bool m_open = false;
+    int m_hold = 0;            // frames left to hold open
+    double m_lastMin = -70;    // the quietest frame of the last 2 s block (quiet, until one is heard)
+    double m_blockMin = 0;     // and of the block so far
+    int m_blockFrames = 0;
+};
+
 // A test tone, for the loopback self-test: amplitude 0..1 of full scale.
 void tone(qint16 *pcm, int n, double hz, double amplitude, qint64 *phaseSamples);
 // Rough frequency of a frame from its zero crossings.

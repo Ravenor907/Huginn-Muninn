@@ -201,6 +201,9 @@ QStringList unpack(const QString &zipPath, const QString &staging, QString *why)
         const QString rel = p.mid(prefix.size());
         if (rel.isEmpty() || rel.endsWith(kAside, Qt::CaseInsensitive))
             continue;
+        // The data folder beside Huginn.exe is never replaced: an update keeps the identity, chats and settings.
+        if (rel.compare(QLatin1String("data"), Qt::CaseInsensitive) == 0 || rel.startsWith(QLatin1String("data/"), Qt::CaseInsensitive))
+            continue;
         const QByteArray data = zip.fileData(e.filePath);
         if (data.size() != e.size) {
             *why = QStringLiteral("The update is damaged (%1). Try again.").arg(rel);

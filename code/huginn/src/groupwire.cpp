@@ -16,6 +16,7 @@
 
 const char GroupWire::kDomain[] = "huginn-muninn group v1";
 const char GroupWire::kCodePrefix[] = "MUNINNG1:";
+const char GroupWire::kAboutCap[] = "g3";
 
 namespace
 {
@@ -299,6 +300,13 @@ QString GroupWire::checkState(const QJsonObject &s)
     base.remove(QStringLiteral("fm"));
     if (const QString rules = Sharing::checkRules(s); !rules.isEmpty())
         return rules;
+    // Cap g3 (28): the group's about text, left out when there is none.
+    base.remove(QStringLiteral("about"));
+    if (s.contains(QStringLiteral("about"))) {
+        const QJsonValue t = s.value(QStringLiteral("about"));
+        if (!t.isString() || t.toString().trimmed().isEmpty() || !goodText(t.toString()) || length(t.toString()) > kMaxAbout)
+            return QStringLiteral("about");
+    }
     if (!sameFields(base, {QStringLiteral("g"), QStringLiteral("v"), QStringLiteral("owner"), QStringLiteral("by"), QStringLiteral("name"),
                            QStringLiteral("admins"), QStringLiteral("members"), QStringLiteral("channels"), QStringLiteral("ts"), QStringLiteral("sig")}))
         return QStringLiteral("fields");
@@ -381,7 +389,12 @@ QString GroupWire::checkState(const QJsonObject &s)
     for (int i = 0; i < int(channels.size()); ++i) {
         const QJsonObject c = channels.at(i).toObject();
         const QString t = c.value(QStringLiteral("t")).toString();
-        if (!sameFields(c, {QStringLiteral("id"), QStringLiteral("n"), QStringLiteral("t")}) || (t != QLatin1String("text") && t != QLatin1String("voice")))
+        // Cap g3 (28.2): "ao" (only admins post) on a text channel, only ever true.
+        QJsonObject plain = c;
+        plain.remove(QStringLiteral("ao"));
+        if (!sameFields(plain, {QStringLiteral("id"), QStringLiteral("n"), QStringLiteral("t")}) || (t != QLatin1String("text") && t != QLatin1String("voice")))
+            return QStringLiteral("channel fields");
+        if (c.contains(QStringLiteral("ao")) && (c.value(QStringLiteral("ao")) != QJsonValue(true) || t != QLatin1String("text")))
             return QStringLiteral("channel fields");
         const QString id = c.value(QStringLiteral("id")).toString();
         if (id != QLatin1String("main") && !isChannelId(id))

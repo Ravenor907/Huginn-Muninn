@@ -172,7 +172,7 @@ fun ProfileScreen(app: Muninn) {
 
     Section("More")
     ProfileRow("My code", "For someone to scan") { SettingsNav.goChat = "code" }
-    ProfileRow("Linked devices", "Tablet or second phone") { SettingsNav.folder = "link" }
+    ProfileRow("Linked devices", "Computer or tablet") { SettingsNav.folder = "link" }
     Spacer(Modifier.height(8.dp))
 }
 

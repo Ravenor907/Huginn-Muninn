@@ -305,8 +305,11 @@ VideoWire::Profile VideoWire::cameraProfile(bool freePath)
     return freePath ? Profile{1280, 720, 30, 2000} : Profile{640, 480, 24, 700};
 }
 
-VideoWire::Profile VideoWire::screenProfile(bool freePath)
+VideoWire::Profile VideoWire::screenProfile(bool freePath, bool smooth)
 {
+    // Smooth: the camera's sizes and frame rates, which the encoder already keeps up with.
+    if (smooth)
+        return freePath ? Profile{1280, 720, 30, 2500} : Profile{854, 480, 24, 800};
     return freePath ? Profile{1920, 1080, 10, 2500} : Profile{1280, 720, 8, 800};
 }
 
@@ -475,6 +478,9 @@ bool VideoWire::selfTest()
         check(rc.kbps() == 700, "a clean network climbs back to the cap and stops there");
         check(cameraProfile(false).height == 480 && cameraProfile(false).capKbps <= 700 && cameraProfile(true).height == 720,
               "480p over the relay, 720p on Wi-Fi or direct");
+        check(screenProfile(true, true).fps == 30 && screenProfile(true, true).height == 720 && screenProfile(false, true).height == 480
+                  && screenProfile(true, true).capKbps == screenProfile(true).capKbps && screenProfile(false, true).capKbps == screenProfile(false).capKbps,
+              "screen share Smooth: 30 fps at 720p (480p over the relay), the same bitrate caps as Sharp");
     }
     std::printf("video wire: %s\n", g_fail ? "FAILED" : "all good");
     return g_fail == 0;

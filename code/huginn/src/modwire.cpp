@@ -28,7 +28,8 @@ bool isWhole(const QJsonValue &v)
 
 bool isAction(const QString &a)
 {
-    return a == QLatin1String("ban") || a == QLatin1String("unban") || a == QLatin1String("timeout") || a == QLatin1String("untimeout");
+    return a == QLatin1String("ban") || a == QLatin1String("unban") || a == QLatin1String("timeout") || a == QLatin1String("untimeout")
+        || a == QLatin1String("remove");
 }
 
 QString s(const QJsonObject &o, const char *k) { return o.value(QLatin1String(k)).toString(); }
@@ -40,6 +41,8 @@ QString ModWire::check(const QJsonObject &r)
     QSet<QString> want{QStringLiteral("a"), QStringLiteral("g"), QStringLiteral("k"), QStringLiteral("by"), QStringLiteral("ts"), QStringLiteral("sig")};
     if (a == QLatin1String("timeout"))
         want.insert(QStringLiteral("until"));
+    if (a == QLatin1String("remove"))
+        want.insert(QStringLiteral("m"));
     const QStringList keys = r.keys();
     if (QSet<QString>(keys.cbegin(), keys.cend()) != want)
         return QStringLiteral("fields");
@@ -62,6 +65,8 @@ QString ModWire::check(const QJsonObject &r)
         if (!isWhole(u) || u.toInteger() <= ts.toInteger() || u.toInteger() > ts.toInteger() + kLongest)
             return QStringLiteral("until");
     }
+    if (a == QLatin1String("remove") && !GroupWire::isLogicalId(s(r, "m")))
+        return QStringLiteral("m");
     return QString();
 }
 
@@ -111,6 +116,15 @@ QJsonObject ModWire::make(const QString &action, const QString &g, const QString
         r.insert(QStringLiteral("until"), until);
     return r;
 }
+
+QJsonObject ModWire::makeRemove(const QString &g, const QString &author, const QString &by, qint64 ts, const QString &msg)
+{
+    QJsonObject r = make(QStringLiteral("remove"), g, author, by, ts);
+    r.insert(QStringLiteral("m"), msg);
+    return r;
+}
+
+bool ModWire::isRemove(const QJsonObject &r) { return s(r, "a") == QLatin1String("remove"); }
 
 int ModWire::clampVolume(int pct) { return std::clamp(pct, kVolumeMin, kVolumeMax); }
 
@@ -270,6 +284,24 @@ bool ModWire::selfTest(const QString &vectorsPath)
         check(d > 0 && d <= kLongest, QStringLiteral("timeout %1").arg(d));
     const QJsonArray offered = v.value(QStringLiteral("limits")).toObject().value(QStringLiteral("timeouts")).toArray();
     check(offered.size() == 4 && offered.at(0).toInteger() == kTimeouts[0] && offered.at(3).toInteger() == kTimeouts[3], QStringLiteral("timeouts offered"));
+    // A removed message: the record names it, and it is never a ban or a timeout.
+    {
+        const QJsonObject rm = records.value(QStringLiteral("remove")).toObject().value(QStringLiteral("record")).toObject();
+        check(isRemove(rm) && !banned(rm) && !timedOut(rm, rm.value(QStringLiteral("ts")).toInteger()) && GroupWire::isLogicalId(s(rm, "m")),
+              QStringLiteral("remove"));
+        QJsonObject other = rm;
+        other.insert(QStringLiteral("m"), QString(32, QLatin1Char('f')));
+        check(accept(&state, other) == QLatin1String("bad signature"), QStringLiteral("a remove moved to another message"));
+    }
+    // Cap g3 (protocol 28): the group's about text and "only admins post" in the state, taken or refused for the same
+    // reason as the reference.
+    const QJsonObject about = v.value(QStringLiteral("g3")).toObject();
+    check(about.size() >= 11, QStringLiteral("g3 vectors"));
+    for (const QString &k : about.keys()) {
+        const QJsonObject c = about.value(k).toObject();
+        const QString got = GroupWire::checkState(c.value(QStringLiteral("state")).toObject());
+        check(got == c.value(QStringLiteral("verdict")).toString(), QStringLiteral("g3 ") + k + QStringLiteral(": ") + got);
+    }
     volumeChecks(v, check);
     std::printf("g2 self-test: %d passed, %d failed\n", pass, fail);
     return fail == 0 && pass > 0;

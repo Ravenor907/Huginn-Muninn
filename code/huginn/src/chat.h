@@ -63,6 +63,9 @@ class Chat : public QObject
     Q_PROPERTY(bool keepNearby READ keepNearby WRITE setKeepNearby NOTIFY changed)
     Q_PROPERTY(bool readReceipts READ readReceipts WRITE setReadReceipts NOTIFY changed)
     Q_PROPERTY(bool showPreview READ showPreview WRITE setShowPreview NOTIFY changed)
+    // Settings › Notifications › Show: 2 the name and a short preview, 1 the name only, 0 nothing ("New message").
+    // A saved Show message text carries over (on: 2, off: 0); a new install shows the name only.
+    Q_PROPERTY(int previewMode READ previewMode WRITE setPreviewMode NOTIFY changed)
     // Settings › Notifications › Reduce notifications: one per chat until it's opened, instead of one per message.
     Q_PROPERTY(bool reduceNotifications READ reduceNotifications WRITE setReduceNotifications NOTIFY changed)
     Q_PROPERTY(qint64 deleteAfter READ deleteAfter WRITE setDeleteAfter NOTIFY changed)
@@ -109,10 +112,21 @@ public:
     void setKeepNearby(bool v);
     bool readReceipts() const { return m_settings.value(QStringLiteral("chat/readReceipts"), true).toBool(); }
     void setReadReceipts(bool v) { m_settings.setValue(QStringLiteral("chat/readReceipts"), v); Q_EMIT changed(); }
-    bool showPreview() const { return m_settings.value(QStringLiteral("chat/showPreview"), false).toBool(); }
+    bool showPreview() const { return previewMode() == 2; }
+    // Who it's from may show (Name only, or Name and message).
+    bool showName() const { return previewMode() >= 1; }
+    int previewMode() const
+    {
+        if (m_settings.contains(QStringLiteral("chat/previewMode")))
+            return qBound(0, m_settings.value(QStringLiteral("chat/previewMode")).toInt(), 2);
+        if (m_settings.contains(QStringLiteral("chat/showPreview")))
+            return m_settings.value(QStringLiteral("chat/showPreview")).toBool() ? 2 : 0;
+        return 1;
+    }
+    void setPreviewMode(int v) { m_settings.setValue(QStringLiteral("chat/previewMode"), qBound(0, v, 2)); Q_EMIT changed(); }
     bool reduceNotifications() const { return m_settings.value(QStringLiteral("chat/reduceNotifications"), false).toBool(); }
     void setReduceNotifications(bool v) { m_settings.setValue(QStringLiteral("chat/reduceNotifications"), v); Q_EMIT changed(); }
-    void setShowPreview(bool v) { m_settings.setValue(QStringLiteral("chat/showPreview"), v); Q_EMIT changed(); }
+    void setShowPreview(bool v) { setPreviewMode(v ? 2 : 0); }
     qint64 deleteAfter() const { return m_settings.value(QStringLiteral("chat/deleteAfter"), 0).toLongLong(); }
     void setDeleteAfter(qint64 v) { m_settings.setValue(QStringLiteral("chat/deleteAfter"), v); prune(); Q_EMIT changed(); }
     int internet() const;
@@ -349,7 +363,8 @@ public:
     Q_INVOKABLE void retryGroup(const QString &g, const QString &id);
     Q_INVOKABLE QString inviteToGroup(const QString &g, const QString &key);
     Q_INVOKABLE QString groupCode(const QString &g);              // a code good for an hour, or ""
-    Q_INVOKABLE void copyText(const QString &text) const;
+    // secret: cleared from the clipboard after a minute and kept out of clipboard history (message text, codes).
+    Q_INVOKABLE void copyText(const QString &text, bool secret = false) const;
     Q_INVOKABLE QVariantMap parseGroupCode(const QString &text) const;
     Q_INVOKABLE QString joinWithCode(const QString &text);
     Q_INVOKABLE QString acceptGroupInvite(const QString &g);
@@ -358,6 +373,11 @@ public:
     Q_INVOKABLE QString addChannel(const QString &g, const QString &name, bool voice);
     Q_INVOKABLE QString renameChannel(const QString &g, const QString &ch, const QString &name);
     Q_INVOKABLE QString removeChannel(const QString &g, const QString &ch);
+    // Cap g3 (protocol 28): the group's about text ("" takes it away), a text channel's "Only admins post", and a report
+    // of someone's message to the group's admins (how many it went to).
+    Q_INVOKABLE QString setGroupAbout(const QString &g, const QString &text);
+    Q_INVOKABLE QString setChannelAdminsOnly(const QString &g, const QString &ch, bool on);
+    Q_INVOKABLE int reportToAdmins(const QString &g, const QString &msgId);
     Q_INVOKABLE QString setAdmin(const QString &g, const QString &key, bool on);
     Q_INVOKABLE QString removeMember(const QString &g, const QString &key);
     Q_INVOKABLE QString handOver(const QString &g, const QString &key);
@@ -402,6 +422,25 @@ public:
     // "Messages now disappear after 7 days", once on the chat list for someone who had chats already.
     Q_INVOKABLE bool limitsNote() const;
     Q_INVOKABLE void dismissLimitsNote();
+    // The first time a chat ("<key>") or group ("g:<group>") is made or opened: how long its messages are kept, once
+    // ("" every time after, and for an empty key). Only says; nothing changes.
+    Q_INVOKABLE QString keepNoteOnce(const QString &where)
+    {
+        if (where.isEmpty())
+            return {};
+        QStringList told = m_settings.value(QStringLiteral("chat/keepTold")).toStringList();
+        if (told.contains(where))
+            return {};
+        told << where;
+        while (told.size() > 500)
+            told.removeFirst();
+        m_settings.setValue(QStringLiteral("chat/keepTold"), told);
+        const int days = where.startsWith(QLatin1String("g:")) ? groupDays(where.mid(2)) : chatDays(where);
+        if (days <= 0)
+            return {};
+        return days == 1 ? QStringLiteral("Messages here are kept for 1 day, then they go from every device.")
+                         : QStringLiteral("Messages here are kept for %1 days, then they go from every device.").arg(days);
+    }
     // Before a backup: nothing past a chat's limit goes in it.
     void pruneNow() { prune(); }
     // Moving to another device (cap x1, move.cpp): nothing is sealed, sent or taken in while true.
@@ -442,6 +481,11 @@ Q_SIGNALS:
     void uploadsChanged();
     // Open this chat on screen (a missed call's notification was clicked): a contact's key or "g:<group>".
     void showChat(const QString &where);
+    // A system notification couldn't be shown (no notification service, as in some full-screen sessions): Main.qml
+    // shows it as a banner in the window instead. where: as showChat's ("" when it opens nothing).
+    void banner(const QString &title, const QString &body, const QString &where);
+    // The tray icon's menu (Windows): "mute" (Do not disturb on or off), "lock" (Lock and close) or "quit".
+    void trayAction(const QString &what);
 
 private:
     // Caps i1 and f1 and linked devices (trust.cpp, filelink.cpp, link.cpp): rooms intro, file and

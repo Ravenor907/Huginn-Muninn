@@ -13,8 +13,11 @@ import org.json.JSONObject
  */
 object LinkAccount {
     const val CAP = "l1"
-    /** me {n, st, cs}; pic {pic: base64 JPEG} for "me" or a contact key; contact {n, nn, p, vf, bl}; group {n, role, gone, st}; folder {n, k}. */
-    val KINDS = setOf("me", "pic", "contact", "group", "folder")
+    /**
+     * me {n, st, cs}; pic {pic: base64 JPEG} for "me" or a contact key; contact {n, nn, p, vf, bl}; group {n, role, gone, st}; folder {n, k};
+     * mute {f: true (until turned back on) or u: when it ends, ms} for a contact key or "g:" + group id.
+     */
+    val KINDS = setOf("me", "pic", "contact", "group", "folder", "mute")
     /** A tombstone is kept this long, then dropped. */
     const val TOMB_MS = 30 * 86_400_000L
     /** An "acct" page over the home Wi-Fi, at most (the LAN takes up to 512 KB for room "link"). */

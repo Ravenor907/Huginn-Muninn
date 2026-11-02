@@ -115,7 +115,7 @@ object Proto06 {
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
     // Tokens Huginn reads come first and the Kids' TV ones last: a Huginn may keep only the first 16.
-    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1"
+    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3"
     /** Cap j1: group invite links and "Members can invite" (section 17). */
     const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
@@ -123,7 +123,8 @@ object Proto06 {
     // ------------------------------------------------------------------ group state (3.2, 3.3)
 
     data class Member(val k: String, val n: String, val p: String)
-    data class Channel(val id: String, val n: String, val t: String)
+    /** [ao] (cap g3, section 28.2): only admins post in this text channel. */
+    data class Channel(val id: String, val n: String, val t: String, val ao: Boolean = false)
 
     data class State(
         val g: String, val v: Long, val owner: String, val by: String, val name: String,
@@ -134,17 +135,20 @@ object Proto06 {
         val mi: Boolean = false,
         /** Cap f2 (section 27.3): who may send files ("admins", "nobody"; "" everyone) and the size limit in MB (0: none). */
         val fs: String = "", val fm: Int = 0,
+        /** Cap g3 (section 28): the group's about text (description and rules), "" when there is none. */
+        val about: String = "",
     ) {
         private fun tree(withSig: Boolean): Map<String, Any> = LinkedHashMap<String, Any>().apply {
             put("g", g); put("v", v); put("owner", owner); put("by", by); put("name", name); put("admins", admins)
             put("members", members.map { mapOf("k" to it.k, "n" to it.n, "p" to it.p) })
-            put("channels", channels.map { mapOf("id" to it.id, "n" to it.n, "t" to it.t) })
+            put("channels", channels.map { c -> LinkedHashMap<String, Any>().apply { put("id", c.id); put("n", c.n); put("t", c.t); if (c.ao) put("ao", true) } })
             put("ts", ts)
             if (kind.isNotEmpty()) put("kind", kind)
             if (days > 0) put("days", days)
             if (mi) put("mi", true)
             if (fs.isNotEmpty()) put("fs", fs)
             if (fm > 0) put("fm", fm)
+            if (about.isNotEmpty()) put("about", about)
             if (withSig) put("sig", sig)
         }
         fun canonUnsigned() = canon(tree(false))
@@ -177,11 +181,22 @@ object Proto06 {
     private val LINK_FIELDS = setOf("mi")
     /** Cap f2: the group's file rules (section 27.3). */
     private val FILE_FIELDS = setOf("fs", "fm")
+    /** Cap g3: the group's about text (section 28). */
+    private val ABOUT_FIELDS = setOf("about")
+    /** Cap g3: the most characters (code points) in a group's about text. */
+    const val MAX_ABOUT = 500
+    /** Cap g3: their app takes a state with "about" (section 28). */
+    const val G3 = "g3"
+
+    /** Throws [Refused] ("about") unless [t] is a group's about text: 1 to 500 characters, not blank, no control characters. */
+    fun checkAbout(t: String) {
+        if (t.isBlank() || t.any { it.code < 0x20 || it.code == 0x7F } || t.codePointCount(0, t.length) > MAX_ABOUT) throw Refused("about")
+    }
 
     /** Reads a state exactly as it came. Throws [Refused] on wrong fields or types (shape and limits: [check]). */
     fun parseState(o: JSONObject): State {
         val have = o.keys().asSequence().toSet()
-        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS + LINK_FIELDS + FILE_FIELDS).containsAll(have)) throw Refused("fields")
+        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS + LINK_FIELDS + FILE_FIELDS + ABOUT_FIELDS).containsAll(have)) throw Refused("fields")
         // Only ever true: off is left out, so a group that never turned it on keeps exactly the state apps without j1 take.
         if (o.has("mi") && o.opt("mi") != true) throw Refused("mi")
         val admins = arr(o, "admins").let { a -> (0 until a.length()).map { a.opt(it) as? String ?: throw Refused("admins") } }
@@ -192,16 +207,18 @@ object Proto06 {
         } }
         val channels = arr(o, "channels").let { a -> (0 until a.length()).map {
             val c = a.opt(it) as? JSONObject ?: throw Refused("channel fields")
-            fields(c, setOf("id", "n", "t"), "channel fields")
-            Channel(str(c, "id"), str(c, "n"), str(c, "t"))
+            if (c.has("ao") && c.opt("ao") != true) throw Refused("channel fields")
+            fields(c, if (c.has("ao")) setOf("id", "n", "t", "ao") else setOf("id", "n", "t"), "channel fields")
+            Channel(str(c, "id"), str(c, "n"), str(c, "t"), c.has("ao"))
         } }
         val kind = if (o.has("kind")) str(o, "kind").also { if (it.isEmpty()) throw Refused("kind") } else ""
         val days = if (o.has("days")) int(o, "days").also { if (it !in 1..Limits.LONGEST) throw Refused("days") }.toInt() else 0
         val fs = if (o.has("fs")) str(o, "fs") else null
         val fm = if (o.has("fm")) int(o, "fm") else null
         Sharing.checkRules(fs, fm).let { if (it.isNotEmpty()) throw Refused(it) }
+        val about = if (o.has("about")) (o.opt("about") as? String ?: throw Refused("about")).also { checkAbout(it) } else ""
         return State(str(o, "g"), int(o, "v"), str(o, "owner"), str(o, "by"), str(o, "name"), admins, members, channels, int(o, "ts"), str(o, "sig"),
-            kind, days, o.has("mi"), fs.orEmpty(), (fm ?: 0L).toInt())
+            kind, days, o.has("mi"), fs.orEmpty(), (fm ?: 0L).toInt(), about)
     }
 
     /** Shape and limits (reference check_state); throws [Refused]. Does not check the signature. */
@@ -223,15 +240,16 @@ object Proto06 {
         if (s.by !in s.admins) throw Refused("signer not admin in the new state")
         val ids = s.channels.map { it.id }
         if (ids.toSet().size != ids.size || ids.size !in 1..MAX_CHANNELS) throw Refused("channels")
-        if (s.channels[0].id != MAIN || s.channels[0].t != "text") throw Refused("main channel first")
+        if (s.channels[0].id != MAIN || s.channels[0].t != "text" || s.channels[0].ao) throw Refused("main channel first")
         for (c in s.channels) {
-            if (c.t != "text" && c.t != "voice") throw Refused("channel fields")
+            if ((c.t != "text" && c.t != "voice") || (c.ao && c.t != "text")) throw Refused("channel fields")
             if (c.id != MAIN && lenB64url(c.id) != 8) throw Refused("channel id")
             checkText(c.n, MAX_CHANNEL_NAME)
         }
         if (s.kind.isNotEmpty() && s.kind !in Limits.KINDS) throw Refused("kind")
         if (s.days != 0 && (s.kind.isEmpty() || s.days !in Limits.DEFAULT..Limits.LONGEST)) throw Refused("days")
         Sharing.checkRules(s.fs.ifEmpty { null }, s.fm.takeIf { it != 0 }?.toLong()).let { if (it.isNotEmpty()) throw Refused(it) }
+        if (s.about.isNotEmpty()) checkAbout(s.about)
         if (s.canonSigned().toByteArray(Charsets.UTF_8).size > MAX_STATE_BYTES) throw Refused("too big")
     }
 

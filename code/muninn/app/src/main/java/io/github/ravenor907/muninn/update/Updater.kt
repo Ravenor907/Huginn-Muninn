@@ -180,6 +180,12 @@ class Updater(private val context: Context, private val identity: Identity) {
                     _state.value = _state.value.copy(busy = false, status = VERSION_NOT_SIGNED)
                     return@execute
                 }
+                // A chat file on its way: installing closes Muninn and would stop it, so the update waits for it.
+                val waitUntil = System.currentTimeMillis() + 6 * 3_600_000L
+                while (io.github.ravenor907.muninn.net.FileLink.movingCount() > 0 && System.currentTimeMillis() < waitUntil) {
+                    _state.value = _state.value.copy(busy = true, status = "Installs when the file on its way is done")
+                    Thread.sleep(2000)
+                }
                 _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
                 main.post { if (installer?.invoke(out) != true) install(out) }
             } catch (e: Exception) {

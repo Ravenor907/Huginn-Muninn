@@ -208,7 +208,7 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
             // Wraps onto two lines when four don't fit (a small phone at a large size).
             androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Round(if (c.muted) CallIcons.micOff else CallIcons.mic, if (c.muted) "Unmute" else "Mute", if (c.muted) Palette.accent else Palette.coolTint,
+                Round(if (c.muted) CallIcons.micOff else CallIcons.mic, if (c.muted) "Unmute mic" else "Mute mic", if (c.muted) Palette.accent else Palette.coolTint,
                     if (c.muted) Palette.ground else Palette.text, 68.dp, on = c.muted) { CallManager.setMuted(!c.muted) }
                 AudioButton { CallManager.setOutput(it) }
                 if (c.video) Round(if (video.cameraOn) CallIcons.camera else CallIcons.cameraOff, if (video.cameraOn) "Camera off" else "Camera",

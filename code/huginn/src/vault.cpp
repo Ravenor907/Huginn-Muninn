@@ -1186,6 +1186,10 @@ QString Vault::settingsEntry() { return kSettingsEntry; }
 
 QString Vault::backupFolder() const
 {
+    // The folder a backup was last saved in or restored from, while it's still there; Documents at first.
+    const QString last = Settings::saved(QStringLiteral("backupFolder"), QString()).toString();
+    if (!last.isEmpty() && QFileInfo(last).isDir())
+        return last;
     QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
     if (dir.isEmpty())
         dir = QDir::homePath() + QStringLiteral("/Documents");
@@ -1467,14 +1471,18 @@ QString Vault::pickBackupSave(const QString &name) const
         return {};
     if (QFileInfo(f).suffix().isEmpty())
         f += QStringLiteral(".hmbak");
+    Settings::store().setValue(QStringLiteral("backupFolder"), QFileInfo(f).absolutePath());
     return f;
 }
 
 QString Vault::pickBackupOpen() const
 {
     // Any file, any name: a backup made in Muninn and copied over keeps whatever name it was given.
-    return QFileDialog::getOpenFileName(nullptr, QStringLiteral("Choose the backup file"), backupFolder(),
-                                        QStringLiteral("All files (*);;Backups (*.hmbak *.mbk)"));
+    const QString f = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Choose the backup file"), backupFolder(),
+                                                   QStringLiteral("All files (*);;Backups (*.hmbak *.mbk)"));
+    if (!f.isEmpty())
+        Settings::store().setValue(QStringLiteral("backupFolder"), QFileInfo(f).absolutePath());
+    return f;
 }
 
 void Vault::backupTo(const QString &path, const QString &password, bool withFiles)

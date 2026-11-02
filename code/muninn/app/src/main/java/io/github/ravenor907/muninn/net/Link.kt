@@ -99,8 +99,16 @@ object LinkWire {
         // Cap l1 (15.1): a small change without a picture; the full account only on the home Wi-Fi.
         "acct" -> LinkAccount.internetOk(o)
         "msg", "send", "hello", "unlink", "result", "sync", "setme" -> true
+        // Cap l2 (15.2): small live frames too.
+        "ping", "pong", "read" -> true
         else -> false
     }
+
+    /** Cap l2 (15.2): read state both ways, ping and pong, the companion's device name. */
+    const val L2 = "l2"
+    fun saysL2(caps: String) = caps.split(' ').any { it == L2 }
+    /** A device name from a "ping" ("dn"): one line, at most 40 characters. */
+    fun deviceName(s: String) = s.trim().replace(Regex("\\s+"), " ").take(40)
 
     /** A Refresh last taken at [last] (ms, 0: never) may be taken at [now]. */
     fun syncDue(last: Long, now: Long): Boolean = last <= 0L || now - last >= REFRESH_EVERY_MS
@@ -180,7 +188,8 @@ object Link {
     /** A device linked to this one: on the phone, a companion; on the companion, the phone. */
     /** [ok]: both screens showed the same 4 emoji and the person said so (nothing is mirrored before). */
     /** [l1]: on the phone, the companion's "sync" said "caps": "l1": it takes the whole account (15.1). */
-    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = false, val l1: Boolean = false)
+    /** [l2]: on the phone, the companion's "ping" said "caps": "l2": it takes "read" frames (15.2). */
+    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = false, val l1: Boolean = false, val l2: Boolean = false)
     /** A photo, voice message, video or file on the phone: its SHA-256 (hex), size, kind and name. */
     data class Media(val h: String, val s: Long, val k: String, val nm: String)
     /** One mirrored message on the companion. [f]: its photo or file, fetched on the home Wi-Fi. */
@@ -228,8 +237,14 @@ object Link {
         fun applyAccount(item: LinkAccount.Item) {}
         /** Cap l1: the group chats, "g:" + group id to (name, items as in "chat" pages, with "fn" the sender's name), oldest first. */
         fun groupChats(): Map<String, Pair<String, List<JSONObject>>> = emptyMap()
-        /** Cap l1: post [text] in group [g] (its main channel) as me. False when I can't post there. */
-        fun sendToGroup(g: String, text: String): Boolean = false
+        /** Cap l1: post [text] in group [g] (its main channel) as me, answering message [re] when not empty. False when I can't post there. */
+        fun sendToGroup(g: String, text: String, re: String = ""): Boolean = false
+        /** The same as [sendAsMeId], answering message [re] when not empty. */
+        fun sendAsMeReply(peer: String, text: String, re: String): String? = sendAsMeId(peer, text)
+        /** Cap l1: how many days group [g] keeps its messages (section 16). */
+        fun groupDays(g: String): Int = Limits.DEFAULT
+        /** Cap l2: a companion read chat [peer] ("g:" + id for a group) up to [upTo] (ms): read here too, its notification goes. */
+        fun readUpTo(peer: String, upTo: Long) {}
     }
 
     @Volatile var host: Host? = null
@@ -479,14 +494,20 @@ object Link {
             // Cap l1: the group chats too, to the companions that take the whole account.
             val l1 = lan.filter { it.l1 }
             if (l1.isNotEmpty()) for ((peer, chat) in h.groupChats()) {
-                val pages = LinkWire.pages(chat.second)
-                pages.forEachIndexed { i, pg ->
-                    val json = JSONObject().put("t", "chat").put("peer", peer).put("n", chat.first).put("msgs", JSONArray(pg))
-                        .put("d", Limits.DEFAULT).put("pg", i).put("pgs", pages.size).toString()
-                    l1.forEach { d -> if (!h.sendLan(d, json)) owed.add(d.key) }
-                }
+                sendGroupPages(h, l1, peer, chat.first, chat.second)
             }
             saveHashes()
+        }
+    }
+
+    /** Cap l1: one group's messages ([peer] "g:" + id) in "chat" pages, home Wi-Fi only, with the group's own limit. */
+    private fun sendGroupPages(h: Host, to: List<Device>, peer: String, name: String, items: List<JSONObject>) {
+        val pages = LinkWire.pages(items)
+        val days = h.groupDays(peer.removePrefix("g:"))
+        pages.forEachIndexed { i, pg ->
+            val json = JSONObject().put("t", "chat").put("peer", peer).put("n", name).put("msgs", JSONArray(pg))
+                .put("d", days).put("pg", i).put("pgs", pages.size).toString()
+            to.forEach { d -> if (!h.sendLan(d, json)) owed.add(d.key) }
         }
     }
 
@@ -667,7 +688,27 @@ object Link {
             ph != null && t == "part" -> if (lan) takePart(p)
             // Not checked here yet: a "send" is answered, so the companion doesn't wait for nothing.
             comp != null && !comp.ok && t == "send" -> answerSend(h, comp, p.optString("id"), false, "confirm")
-            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct") -> {}
+            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct" || t == "ping" || t == "read") -> {}
+            // Cap l2 (15.2): the companion asks whether this phone is there, says it takes "read" and gives its device name.
+            comp != null && t == "ping" -> {
+                val dn = LinkWire.deviceName(p.optString("dn"))
+                val l2 = LinkWire.saysL2(p.optString("caps"))
+                if ((l2 && !comp.l2) || (dn.isNotEmpty() && dn != comp.name)) {
+                    val c = comp.copy(l2 = comp.l2 || l2, name = dn.ifEmpty { comp.name })
+                    _companions.value = _companions.value.map { if (it.key == c.key) c else it }
+                    save()
+                }
+                h.send(comp, JSONObject().put("t", "pong").toString())
+            }
+            // Cap l2: read on the companion, so read here too (receipts go from here, the notification goes).
+            comp != null && t == "read" -> {
+                val peer = p.optString("peer")
+                val upTo = p.optLong("upTo")
+                if (peer.isNotEmpty() && upTo > 0L) {
+                    readSent[peer] = maxOf(readSent[peer] ?: 0L, upTo)   // not sent back as a "read" of its own
+                    later { h.readUpTo(peer, upTo) }
+                }
+            }
             // Cap l1: a companion's account changes. The later one wins per item; what won here goes to the other companions.
             comp != null && t == "acct" -> if (comp.l1) later { takeAccount(h, comp, p) }
             // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
@@ -679,6 +720,7 @@ object Link {
             comp != null && t == "send" -> {
                 val text = p.optString("text").trim()
                 val id = p.optString("id")
+                val re = p.optString("re").take(200)   // optional: the message this one answers
                 // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice. Always
                 // answered ("result"), so the companion shows what happened.
                 later {
@@ -688,13 +730,13 @@ object Link {
                         // Cap l1: a group chat ("g:" + its id), posted as the same member.
                         comp.l1 && peer.startsWith("g:") -> when {
                             !firstSend(id) -> answerSend(h, comp, id, true, "")
-                            h.sendToGroup(peer.removePrefix("g:"), text.take(LinkWire.TEXT_MAX)) -> answerSend(h, comp, id, true, "")
+                            h.sendToGroup(peer.removePrefix("g:"), text.take(LinkWire.TEXT_MAX), re) -> answerSend(h, comp, id, true, "")
                             else -> answerSend(h, comp, id, false, "not in group")
                         }
                         !h.isContactHere(peer) -> answerSend(h, comp, id, false, "not a contact")
                         !firstSend(id) -> answerSend(h, comp, id, true, "")
                         else -> {
-                            val mid = h.sendAsMeId(p.optString("peer"), text.take(LinkWire.TEXT_MAX))
+                            val mid = if (re.isEmpty()) h.sendAsMeId(peer, text.take(LinkWire.TEXT_MAX)) else h.sendAsMeReply(peer, text.take(LinkWire.TEXT_MAX), re)
                             if (mid == null) answerSend(h, comp, id, false, "not a contact") else answerSend(h, comp, id, true, "", mid)
                         }
                     }
@@ -727,8 +769,8 @@ object Link {
     /** Companions whose full account (or a picture in it) waits for the home Wi-Fi. */
     private val acctOwed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var acctSoon = false
-    /** Per group: the newest message time already sent to the companions (live group messages, l1 only). */
-    private val groupSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** Per group: the message ids already sent to the companions or noted at the first look (live group messages, l1 only). */
+    private val groupSent = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
 
     private fun acctNow(h: Host): Map<String, LinkAccount.Item> = acct ?: LinkAccount.load(h.read(ACCOUNT)).also { acct = it }
 
@@ -813,22 +855,65 @@ object Link {
         if (won.any { it.k == "me" }) sendMe(true)
     }
 
-    /** Cap l1: group [g]'s messages changed. The new ones (after the last sent) go to the companions as "msg". */
-    fun onGroupMessages(g: String, name: String, items: List<JSONObject>) {
+    /**
+     * Cap l1: group messages changed ([all]: every group's messages now, oldest first; [item]: one as a companion shows it).
+     * Messages not sent before (by id, so a late older one goes too) go to the companions: up to [LIVE_BURST] as "msg", more
+     * as "chat" pages on the home Wi-Fi (else the companion is owed its history). The first look this run only notes what's
+     * there, except a group that showed up since (just joined): its history goes in pages.
+     */
+    fun <T> onGroupMessages(all: Map<String, List<T>>, name: (String) -> String, id: (T) -> String, item: (T) -> JSONObject) {
         val h = host ?: return
         val to = _companions.value.filter { it.ok && it.l1 }
-        val newest = items.maxOfOrNull { it.optLong("t") } ?: return
-        val last = groupSent.put(g, newest)
-        // The first look at a group only sets where it stands: its history goes in the pages.
-        if (last == null || to.isEmpty()) return
-        val fresh = items.filter { it.optLong("t") > last }
-        if (fresh.isEmpty()) return
-        later {
-            for (m in fresh) {
-                val json = JSONObject().put("t", "msg").put("peer", "g:$g").put("n", name).put("m", m).put("d", Limits.DEFAULT).toString()
-                to.forEach { h.send(it, json) }
+        val first = !groupsPrimed
+        groupsPrimed = true
+        for ((g, msgs) in all) {
+            val ids = msgs.map(id)
+            val seen = groupSent[g]
+            val known = seen ?: java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+            val fresh = msgs.filter { id(it) !in known }
+            known.addAll(ids)
+            if (known.size > 1000) known.retainAll(ids.toSet())
+            groupSent[g] = known
+            if (to.isEmpty() || fresh.isEmpty() || (seen == null && first)) continue
+            val peer = "g:$g"
+            val n = name(g)
+            later {
+                val days = h.groupDays(g)
+                if (seen == null || fresh.size > LIVE_BURST) {
+                    // Just joined, or a burst (back online after a while): pages on the home Wi-Fi.
+                    val lan = to.filter { h.onLan(it.key) }
+                    if (lan.isNotEmpty()) sendGroupPages(h, lan, peer, n, (if (seen == null) msgs else fresh).map(item))
+                    (to - lan.toSet()).forEach { owed.add(it.key) }
+                    if (seen == null) return@later
+                }
+                for (m in fresh.takeLast(LIVE_BURST)) {
+                    val json = JSONObject().put("t", "msg").put("peer", peer).put("n", n).put("m", item(m)).put("d", days).toString()
+                    to.forEach { h.send(it, json) }
+                }
             }
         }
+    }
+    /** Group messages at once as "msg"; more than this go in pages (and the newest of them as "msg" too). */
+    private const val LIVE_BURST = 20
+    @Volatile private var groupsPrimed = false
+
+    /** Cap l2: per chat, the newest time a "read" was sent or taken, so each goes once and none echoes back. */
+    private val readSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val readSoon = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** Cap l2: chat [peer] ("g:" + id for a group) was read on this phone up to [upTo]: the companions hear of it (a moment later). */
+    fun onRead(peer: String, upTo: Long) {
+        if (host == null || upTo <= 0L || upTo <= (readSent[peer] ?: 0L)) return
+        if (_companions.value.none { it.ok && it.l2 }) return
+        if (readSoon.put(peer, upTo) != null) return   // already on its way: the newest time goes
+        clock.schedule({
+            val t = readSoon.remove(peer) ?: return@schedule
+            val h = host ?: return@schedule
+            if (t <= (readSent[peer] ?: 0L)) return@schedule
+            readSent[peer] = t
+            val json = JSONObject().put("t", "read").put("peer", peer).put("upTo", t).toString()
+            _companions.value.filter { it.ok && it.l2 }.forEach { h.send(it, json) }
+        }, 2000L, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     /** Ids of companions' "send" already sent (kept two days, on disk), so none goes out twice. */
@@ -954,8 +1039,9 @@ object Link {
 
     // ------------------------------------------------------------------ storage
 
-    private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name).put("ok", d.ok).apply { if (d.l1) put("l", true) }
-    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", false), o.optBoolean("l", false))
+    private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name).put("ok", d.ok)
+        .apply { if (d.l1) put("l", true); if (d.l2) put("l2", true) }
+    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", false), o.optBoolean("l", false), o.optBoolean("l2", false))
     private fun mOf(o: JSONObject) = M(o.optString("id"), o.optString("x").take(LinkWire.TEXT_MAX), o.optBoolean("me"), o.optLong("t"), LinkWire.media(o.optJSONObject("f")))
     private fun msgsOf(a: JSONArray?) = if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let { o -> mOf(o) } }
     private fun daysOf(o: JSONObject) = o.optInt("d", Limits.DEFAULT).coerceIn(Limits.DEFAULT, Limits.LONGEST)

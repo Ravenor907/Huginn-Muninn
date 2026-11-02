@@ -48,8 +48,10 @@ Rectangle {
     readonly property int fallShown: Theme.fallCount(Ui.main ? Ui.main.width : 1600, Ui.main ? Ui.main.height : 900)
     // Look › Amount and Size: where the slider sits (0 to 100) and what a position sets.
     // Gradient: 0 (flat) to 200%, the slider's 0 to 100.
-    function fallPos(key) { return key === "seasonGradient" ? Settings.seasonGradient / 2 : key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
+    // Calls › Input sensitivity: -60 to -20 dBFS on the slider's 0 to 100.
+    function fallPos(key) { return key === "gateThreshold" ? (Rooms.gateThreshold + 60) * 2.5 : key === "seasonGradient" ? Settings.seasonGradient / 2 : key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
     function setFall(key, v) {
+        if (key === "gateThreshold") { Rooms.gateThreshold = Math.round(v / 2.5) - 60; return }
         if (key === "seasonGradient") Settings.seasonGradient = Math.round(v) * 2
         else if (key === "fallCount") Settings.fallCount = Theme.fallCountAt(v)
         else Settings.fallSize = Theme.fallSizeAt(v)
@@ -57,6 +59,7 @@ Rectangle {
     // One notch left or right: on to the next number the slider gives (near 1 several positions give
     // the same one). A puts it back: Amount follows the window again, Size goes to 60%.
     function stepFall(key, dir) {
+        if (key === "gateThreshold") { Rooms.gateThreshold = dir === 0 ? -40 : Rooms.gateThreshold + dir; return }
         if (key === "seasonGradient") { Settings.seasonGradient = dir === 0 ? 100 : Math.max(0, Math.min(200, Settings.seasonGradient + dir * 10)); return }
         if (dir === 0) {
             if (key === "fallCount") Settings.fallCount = 0
@@ -86,7 +89,9 @@ Rectangle {
             { kind: "button", key: "myCode", title: "My code", label: "Show" }
         ]
         case "notify": return [
-            { kind: "toggle", key: "showPreview", chat: true, title: "Show message text", note: "Off: only “New message”" },
+            // What a notification shows: who it's from and a short preview, who it's from, or only "New message".
+            { kind: "segmented", key: "previewMode", chat: true, title: "Show in notifications",
+              options: [{ value: "2", label: "Name and message" }, { value: "1", label: "Name only" }, { value: "0", label: "Nothing" }] },
             { kind: "toggle", key: "reduceNotifications", chat: true, title: "Reduce notifications", note: "One per chat until you open it" },
             { kind: "toggle", key: "messageSound", title: "Message sound" },
             // The same as Do not disturb on your status card.
@@ -105,7 +110,8 @@ Rectangle {
             { group: "Theme", kind: "grounds", key: "seasonGround", hide: !Theme.tinted, title: "Background" },
             { group: "Theme", kind: "slider", key: "seasonGradient", hide: !Theme.seasonal || Theme.flatGround,
               title: "Gradient: " + (Settings.seasonGradient === 0 ? "Flat" : Settings.seasonGradient + "%"), low: "Flat", high: "Strong" },
-            { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: !Theme.seasonal, title: "Animation", note: "Less motion holds it still",
+            { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: !Theme.seasonal, title: "Animation",
+              note: Settings.reduceMotion ? "Held still by Less motion" : System.batterySaving ? "Paused by Battery saver" : Perf.animationsOff ? "Held still on this computer" : "Less motion and Battery saver hold it still",
               options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }] },
             { group: "Theme", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
               title: "Amount: " + page.fallShown + (Theme.snow ? (page.fallShown === 1 ? " flake" : " flakes") : (page.fallShown === 1 ? " leaf" : " leaves")),
@@ -125,6 +131,9 @@ Rectangle {
             { group: "Accessibility", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
             { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Less motion" },
             { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode || System.handheld },
+            // The window's X: Leave Huginn? (with Don't ask again), or what was picked there.
+            { group: "Window", kind: "segmented", key: "closeAction", title: "Close button", hide: System.gameMode,
+              options: [{ value: "ask", label: "Ask" }, { value: "minimize", label: "Minimize" }, { value: "quit", label: "Close" }] },
             // Full screen, controller hints, the on-screen keyboard, bigger touch targets and lighter animation.
             { group: "Window", kind: "segmented", key: "handheldMode", title: "Handheld mode",
               note: "Detected: " + (System.handheldModel !== "" ? System.handheldModel : System.handheldDetected ? "a handheld" : "not a handheld"),
@@ -140,18 +149,30 @@ Rectangle {
         case "calls": return [
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
             { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
-            { kind: "toggle", key: "pushToTalk", title: "Push to talk", note: "Voice rooms: hold a key" },
-            { kind: "button", key: "talkKey", title: "Talk key: " + TalkKey.keyName, note: TalkKey.capturing ? "Press the new key" : "", label: TalkKey.capturing ? "Press a key" : "Change" },
+            // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
+            { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk", note: GlobalKeys.talkNote },
+            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: "Talk key: " + TalkKey.keyName,
+              note: TalkKey.capturing ? "Press the new key" : "", label: TalkKey.capturing ? "Press a key" : "Change" },
+            { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Settings.pushToTalk,
+              title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
+              options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
+            // The bar under the slider is your microphone's level: lit while it goes out.
+            { group: "Talking", kind: "slider", key: "gateThreshold", hide: Settings.pushToTalk || Rooms.gateMode === "off",
+              title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself" : "",
+              low: "Picks up more", high: "Picks up less" },
+            { group: "Talking", kind: "button", key: "micTest", hide: Settings.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
+              note: Rooms.micTest ? "Talk: the bar lights while you'd be heard" : "Shows your level on the bar", label: Rooms.micTest ? "Stop" : "Test" },
+            { group: "Talking", kind: "info", title: "Mute and deafen keys", note: GlobalKeys.keysNote },
             { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
             { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" }
-        ]
+        ].filter(r => !r.hide)
         case "privacy": return [
             { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
               note: "Locks your chats. Can't be recovered.", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
             { group: "Lock", kind: "segmented", key: "lockPosition", title: "Pattern position",
               options: [{ value: "top", label: "Top" }, { value: "middle", label: "Middle" }, { value: "lower", label: "Lower" }] },
             { group: "Lock", kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw" },
-            { group: "Lock", kind: "info", hide: Vault.exists && !Vault.hasLock, title: "When it locks", note: "Locks when you choose. Closing asks first." },
+            { group: "Lock", kind: "info", hide: Vault.exists && !Vault.hasLock, title: "When it locks", note: "Only when you choose: Lock, or Lock and close" },
             { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
             { group: "Lock", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" },
             // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
@@ -170,11 +191,21 @@ Rectangle {
         case "devices": return [
             { kind: "button", key: "linked", title: "Linked devices", note: !Linked.phone.key ? "" : (Linked.phone.gone ? "Copy kept from " + Linked.phone.name : "Linked to " + Linked.phone.name), label: "Open" },
             { kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" },
+            { kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
+            { kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Save in Downloads again", label: "Reset" },
             { kind: "button", key: "deviceName", title: "This computer's name", note: Settings.deviceName, label: "Change" }
-        ]
+        ].filter(r => !r.hide)
         case "controller": return [
             { kind: "info", title: "Show the buttons", note: "Press View (Select)" },
-            { kind: "info", title: "Pointer", note: "Right stick moves, RB clicks" },
+            { kind: "info", title: "Move and pick", note: "D-pad moves, A picks, B goes back" },
+            { kind: "info", title: "Sections", note: "LB goes to the next one. Hold LB with Left or Right to step" },
+            { kind: "info", title: "Options", note: "LT opens the options for what's picked" },
+            { kind: "info", title: "Settings", note: "Menu (Start)" },
+            { kind: "info", title: "Scroll", note: "Left stick" },
+            { kind: "info", title: "Pointer", note: "Right stick moves, RB or R3 clicks, RT right-clicks" },
+            { kind: "info", title: "Search and Transfers", note: "Up from the top of a list or the rail" },
+            { kind: "info", title: "In voice", note: "Hold LB: Up mutes, Down deafens" },
+            { kind: "info", title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
             { kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
         ]
         case "backup": return [
@@ -189,6 +220,9 @@ Rectangle {
             { kind: "button", key: "check", title: Updater.status,
               label: Updater.ready ? "Restart now" : Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
             { kind: "toggle", key: "autoUpdate", title: "Update automatically" },
+            // Where everything Huginn keeps is (the portable build's data folder beside Huginn.exe).
+            { kind: "button", key: "dataFolder", title: "Your data: " + System.dataFolder,
+              note: System.portable ? "Keep the data folder when you update by hand" : "", label: "Open folder" },
             { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" },
             { group: "Labs", kind: "segmented", key: "updateChannel", hide: !Settings.labs, title: "Update channel",
               options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
@@ -418,7 +452,7 @@ Rectangle {
             anchors.rightMargin: Theme.px(16)
             y: rowItem.stacked ? Theme.px(10) : (parent.height - implicitHeight) / 2
             spacing: Theme.px(2)
-            Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.title || ""; color: rowItem.danger ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
+            Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.Wrap; text: rowItem.r.title || ""; color: rowItem.danger ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
             Text { textFormat: Text.PlainText; visible: !!rowItem.r.note; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.note || ""; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
         }
         Item {
@@ -468,6 +502,9 @@ Rectangle {
                 low: rowItem.r.low || ""
                 high: rowItem.r.high || ""
                 focused: rowItem.focused
+                // Calls › Input sensitivity: the microphone's level behind the track, in a room or while testing.
+                meter: rowItem.r.key === "gateThreshold" && Rooms.micLive ? Math.max(0, Math.min(1, (Rooms.micLevel + 60) / 40)) : -1
+                meterLit: Rooms.gateOpen
                 onMoved: v => page.setFall(rowItem.r.key, v)
                 onNudged: dir => page.stepFall(rowItem.r.key, dir)
             }
@@ -679,7 +716,8 @@ Rectangle {
         if (top < rowsView.contentY) rowsView.contentY = Math.max(0, top)
         else if (bottom > rowsView.contentY + rowsView.height) rowsView.contentY = Math.min(bottom - rowsView.height, Math.max(0, rowsView.contentHeight - rowsView.height))
     }
-    onSectionChanged: rowsView.contentY = 0
+    onSectionChanged: { rowsView.contentY = 0; Rooms.micTest = false }
+    Component.onDestruction: Rooms.micTest = false
 
     function openMain() {
         const m = items[pick]
@@ -691,6 +729,7 @@ Rectangle {
 
     // Anything that closes or restarts Huginn checks first that it won't cut off a job.
     function running() {
+        if (FileLink.runningCount > 0) return FileLink.closeWarning
         if (LocalSend.busy) return LocalSend.status + " Closing now stops it partway."
         return ""
     }
@@ -726,6 +765,7 @@ Rectangle {
     }
     // A choice in a row of choices.
     function pickSegment(r, v) {
+        if (r.rooms) { Rooms[r.key] = v; return }
         if (r.chat) Chat[r.key] = Number(v)
         else Settings[r.key] = v
     }
@@ -742,7 +782,7 @@ Rectangle {
 
     function press(key) {
         const job = running()
-        if (key === "chatName") Ui.ask("Your name", "Not your real one", Ui.myName, "Save", t => Ui.setMyName(t))
+        if (key === "chatName") Ui.ask("Your name", "A nickname is fine", Ui.myName, "Save", t => Ui.setMyName(t))
         else if (key === "picture") { if (Ui.phoneIsMe) Ui.say("Your picture comes from your phone while it's linked. Change it there."); else if (Ui.profile) Ui.profile.pickPicture() }
         else if (key === "myCode") {
             if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
@@ -755,7 +795,10 @@ Rectangle {
         else if (key === "linked") PeopleActions.linkedDevices()
         else if (key === "quietFrom" || key === "quietTo") pickHour(key)
         else if (key === "micDevice" || key === "speakerDevice") pickDevice(key)
+        else if (key === "saveFolder") { if (Transfer.pickSaveFolder()) Ui.say("Received files now go in " + Transfer.saveName + "/Huginn.") }
+        else if (key === "saveFolderReset") { Transfer.resetSaveFolder(); Ui.say("Received files go in Downloads/Huginn again.") }
         else if (key === "deviceName") Ui.ask("This computer's name", "Nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
+        else if (key === "micTest") Rooms.micTest = !Rooms.micTest
         else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
         else if (key === "resetPanels") { Ui.resetPanels(); Ui.say("Panels reset.") }
         else if (key === "shortcuts") Ui.main.showShortcuts()
@@ -773,13 +816,14 @@ Rectangle {
         else if (key === "storage") Ui.main.openAppStorage()
         else if (key === "perf") Ui.main.openPerf()
         else if (key === "practice") Ui.main.openSetup(true)
+        else if (key === "dataFolder") { if (!System.openDataFolder()) Ui.say("Couldn't open the folder.", true) }
         else if (key === "goStable") {
             if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
             Ui.sure("Go back to stable?", "Installs the latest stable Huginn, then restarts. Labs mode turns off." + (job ? " " + job : ""),
                     "Go back", () => Updater.goBackToStable(), false, true)
         }
         else if (key === "check") {
-            if (Updater.ready) Updater.restartToUpdate()
+            if (Updater.ready) Ui.main.restartForUpdate()
             else if (!Updater.available) Updater.check()
             else if (job) Ui.sure("Update now?", job, "Update anyway", () => Updater.install(), true, true)
             else Updater.install()
@@ -858,6 +902,9 @@ Rectangle {
         property string low: ""
         property string high: ""
         property bool focused: false
+        // A level bar behind the track, 0 to 1 (-1: none); lit while the sound goes out.
+        property real meter: -1
+        property bool meterLit: false
         signal moved(real value)
         signal nudged(int dir)
         readonly property bool ends: low.length > 0 || high.length > 0
@@ -873,6 +920,14 @@ Rectangle {
             let v = from + f * (to - from)
             v = Math.round(v / stepSize) * stepSize
             moved(Math.max(from, Math.min(to, v)))
+        }
+        Rectangle {
+            visible: sl.meter >= 0
+            y: sl.trackY - height / 2; x: knob.width / 2
+            width: (parent.width - knob.width) * Math.max(0, sl.meter); height: Theme.px(10)
+            radius: Theme.radiusSmall
+            color: sl.meterLit ? Theme.success : Theme.textFaint
+            opacity: 0.6
         }
         Rectangle { y: sl.trackY - height / 2; x: knob.width / 2; width: parent.width - knob.width; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.lineMuted }
         Rectangle { y: sl.trackY - height / 2; x: knob.width / 2; width: (parent.width - knob.width) * sl.frac; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.accent }

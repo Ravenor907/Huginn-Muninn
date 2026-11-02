@@ -38,36 +38,43 @@
   </header>
 
   <div class="panel" id="found">
-    <h2>Someone shared their Muninn code</h2>
+    <h2 id="title">Someone shared their Muninn code</h2>
+    <p id="invite" class="hidden"></p>
     <p>Muninn is a free private messenger for Android: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Huginn, does the same on desktops and handhelds (.exe or Flatpak), and the two talk to each other.</p>
     <a class="btn" id="open" href="#">I have Muninn: open it</a>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="android">
     <h2>Don't have Muninn yet?</h2>
     <p>Get it on this phone, then come back to this page.</p>
     <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">Download Muninn for Android</a>
     <ol>
-      <li>Open the downloaded file. If Android asks, allow installs from your browser.</li>
-      <li>Open Muninn and set your pattern or password.</li>
-      <li>Come back here and tap <b>I have Muninn: open it</b>. The code works for an hour from when it was shared.</li>
+      <li>Open the downloaded file. If Android asks, allow installs from your browser. Play Protect may say it doesn't know this app: tap <b>More details</b>, then <b>Install anyway</b>. Muninn updates itself after this.</li>
+      <li>Open Muninn and finish setting up.</li>
+      <li>Come back here and tap <b>I have Muninn: open it</b>. <span id="expiry">The code works for an hour from when it was shared.</span></li>
     </ol>
     <p class="small">No internet? Ask them to tap <b>Share the app</b> in Muninn: it sends Muninn itself by Quick Share or Bluetooth.</p>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="desktop">
     <h2>On a computer or handheld?</h2>
-    <p>Huginn is the companion of Muninn, for desktops and handhelds: get the .exe or the Flatpak. Install it, tap <b>Add someone</b> and paste the code below.</p>
+    <p>Huginn is the companion of Muninn, for desktops and handhelds: get it for Windows or as a Flatpak.</p>
+    <ol>
+      <li>Download Huginn below and open it.</li>
+      <li id="deskstep">Open Huginn, then <b>+</b> and <b>Add someone</b>, then paste the code below.</li>
+    </ol>
     <div class="row">
-      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip">Huginn .exe</a>
-      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak">Huginn Flatpak</a>
+      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip">Huginn for Windows (.zip)</a>
+      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak">Huginn for Linux (Flatpak)</a>
     </div>
-    <p class="small">.exe: unzip it anywhere and run Huginn.exe, nothing to install. Flatpak: open it to install.</p>
+    <p class="small">Windows: unzip it anywhere and run Huginn.exe, nothing to install. Flatpak: open it to install.</p>
+    <p class="small">The first time, Windows may say "Windows protected your PC", because Huginn.exe has no paid code-signing certificate. Choose <b>More info</b>, then <b>Run anyway</b>. To check the download really came from this project, see <a href="https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md" style="color:var(--accent)">how to check a download</a>.</p>
+    <p class="small">Updating by hand? Keep the <b>data</b> folder beside Huginn.exe: it holds your identity, contacts and chats.</p>
   </div>
 
   <div class="panel" id="manual">
     <h2>Or add them by hand</h2>
-    <p>In Muninn or Huginn, tap <b>Add someone</b> and paste this code (or this whole link):</p>
+    <p id="byhand">In Muninn or Huginn, tap <b>+</b> and <b>Add someone</b>, and paste this code (or this whole link):</p>
     <code id="code"></code>
     <button class="btn plain" id="copy">Copy code</button>
   </div>
@@ -90,8 +97,34 @@
   } else {
     document.getElementById("code").textContent = code;
     var body = group ? code : code.slice("MUNINN1:".length);
+    var android = /Android/i.test(navigator.userAgent);
+    var $ = function (id) { return document.getElementById(id); };
+    if (group) {
+      // The invite's own fields (base64url JSON after "MUNINNG1:"): the group's name and when it stops working.
+      var info = {};
+      try {
+        var b = code.slice("MUNINNG1:".length).replace(/[^A-Za-z0-9_-].*$/, "").replace(/-/g, "+").replace(/_/g, "/");
+        info = JSON.parse(decodeURIComponent(escape(atob(b + "===".slice((b.length + 3) % 4)))));
+      } catch (e) { info = {}; }
+      var name = typeof info.gn === "string" && info.gn ? info.gn : "";
+      $("title").textContent = name ? "You're invited to join " + name : "You're invited to join a group";
+      var when = typeof info.x === "number" ? info.x * 1000 : 0;
+      var expiry = !when ? "" : when - Date.now() > 50 * 365 * 86400000 ? "This invite never expires."
+        : when <= Date.now() ? "This invite has expired. Ask for a new one."
+        : "This invite works until " + new Date(when).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + ".";
+      $("invite").textContent = "It's a group invite for Muninn and Huginn." + (expiry ? " " + expiry : "");
+      $("invite").classList.remove("hidden");
+      $("expiry").textContent = expiry;
+      $("deskstep").innerHTML = "Open Huginn, then <b>+</b> and <b>Join a group</b>, then paste the code below.";
+      $("byhand").innerHTML = "In Muninn or Huginn, tap <b>+</b> and <b>Join a group</b>, and paste this code (or this whole link):";
+    }
+    if (!android) {
+      // A computer or handheld: Huginn first, and no button that only opens the Android app.
+      $("open").classList.add("hidden");
+      $("found").parentNode.insertBefore($("desktop"), $("android"));
+    }
     var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
-    document.getElementById("open").href = /Android/i.test(navigator.userAgent)
+    document.getElementById("open").href = android
       ? "intent://add/" + encodeURIComponent(body) + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
       : "muninn://add/" + body;
     document.getElementById("copy").onclick = function () {

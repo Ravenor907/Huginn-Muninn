@@ -239,7 +239,8 @@ Item {
         Item {
             id: head
             x: Theme.px(24); y: Theme.px(20)
-            width: parent.width - Theme.px(48); height: Theme.px(28)
+            // As tall as the title at any text size.
+            width: parent.width - Theme.px(48); height: Math.max(Theme.px(28), title.implicitHeight)
             Text {
                 textFormat: Text.PlainText
                 id: title

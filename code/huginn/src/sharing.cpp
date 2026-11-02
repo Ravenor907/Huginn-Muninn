@@ -181,7 +181,7 @@ QString Sharing::declineText(const QString &why)
         return QStringLiteral("Not enough space on their device.");
     if (why == QLatin1String("no"))
         return QStringLiteral("They declined.");
-    return QStringLiteral("They declined, or Direct calls is off on their side.");
+    return QStringLiteral("They declined, or Direct calls and files is off on their side.");
 }
 
 bool Sharing::selfTest()

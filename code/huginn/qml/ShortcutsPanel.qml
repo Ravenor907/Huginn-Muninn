@@ -19,6 +19,7 @@ Item {
     readonly property var columns: [
         [{ title: "GETTING AROUND", keys: [
             ["Go to a chat", "Ctrl+K"],
+            ["Chat above or below", "Alt+Up/Down"],
             ["Next or previous section", "Tab"],
             ["Hide the list", "Ctrl+Shift+L"],
             ["Hide members", "Ctrl+Shift+U"],
@@ -31,11 +32,12 @@ Item {
             ["New line", "Shift+Enter"],
             ["Edit your last message", "Up"],
             ["Stop replying or editing", "Esc"],
+            ["Mark the chat as read", "Esc"],
             ["Paste a picture to send it", "Ctrl+V"],
             ["Mention someone in a group", "@name"],
             ["Find in this chat", "Ctrl+F"] ] }],
         [{ title: "CALLS AND VOICE", keys: [
-            ["Mute", "Ctrl+Shift+M"],
+            ["Mute mic", "Ctrl+Shift+M"],
             ["Deafen", "Ctrl+Shift+D"],
             ["Leave", "Ctrl+Shift+H"],
             [Settings.pushToTalk ? "Push to talk" : "Push to talk (Settings › Calls)", "hold " + TalkKey.keyName],

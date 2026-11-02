@@ -531,13 +531,15 @@ jobs:
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
           Copy-Item "$($crt.FullName)/*.dll" $out
           Copy-Item LICENSE "$out/LICENSE.txt"
+          # First run (SmartScreen), how to check the download, and keeping the data folder when updating by hand.
+          Copy-Item code/huginn/packaging/windows/README.txt "$out/README.txt"
       - name: Tidy the folder (Huginn.exe on top, everything else in lib/)
         run: |
           d=dist/Huginn
           mkdir -p "$d/lib"
           for f in "$d"/* "$d"/.[!.]*; do
             [ -e "$f" ] || continue
-            case "$(basename "$f")" in lib|LICENSE.txt|Huginn.exe) ;; *) mv "$f" "$d/lib/" ;; esac
+            case "$(basename "$f")" in lib|LICENSE.txt|README.txt|Huginn.exe) ;; *) mv "$f" "$d/lib/" ;; esac
           done
           # Nothing that is only for developers or debuggers: symbols, import libraries, QML type info.
           find "$d" -type f \( -iname '*.pdb' -o -iname '*.ilk' -o -iname '*.lib' -o -iname '*.exp' -o -iname '*.qmltypes' \
@@ -573,7 +575,7 @@ jobs:
           } > "$d/lib/lib.manifest"
           echo "lib.manifest lists $(grep -c '<file ' "$d/lib/lib.manifest") DLLs"
           top=$(ls -A "$d" | tr '\n' ' ')
-          [ "$top" = "Huginn.exe LICENSE.txt lib " ] || { echo "::error title=Zip layout::The top of the folder must be Huginn.exe, LICENSE.txt and lib/, not: $top"; exit 1; }
+          [ "$top" = "Huginn.exe LICENSE.txt README.txt lib " ] || { echo "::error title=Zip layout::The top of the folder must be Huginn.exe, LICENSE.txt, README.txt and lib/, not: $top"; exit 1; }
           # Huginn's own QML is compiled into Huginn.exe: no copy of it loose, and no source text inside.
           loose=$(grep -rl --include='*.qml' -E '^import Huginn|Huginn\.' "$d" || true)
           [ -z "$loose" ] || { echo "::error title=Loose QML::$loose"; exit 1; }

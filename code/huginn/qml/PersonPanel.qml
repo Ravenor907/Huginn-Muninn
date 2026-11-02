@@ -43,7 +43,7 @@ Item {
         { id: "calls", label: "Calls and video", toggle: true },
         { id: "files", label: "Send me files", toggle: true },
         { id: "active", label: "See when I'm active", toggle: true },
-        { id: "direct", label: "Direct calls (shares your address)", toggle: true },
+        { id: "direct", label: "Direct calls and files (shares your address)", toggle: true },
         { id: "days", label: "Message days", value: tour ? "7 days" : (revision, Chat.chats, Chat.chatDays(key)) + " days" }
     ] : [
         { id: "nick", label: "Nickname", value: nick !== "" ? nick : "None" },

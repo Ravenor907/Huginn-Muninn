@@ -1,7 +1,10 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import Huginn
 
-// A chat's or group's Files (its menu › Files): everything sent and received there, newest first, with where it is.
+// A chat's or group's Files (the header's file icon, or its menu › Files): everything sent and received there, newest
+// first, with where it is. Typing in the box at the top shows only the files whose name has it; a right click on a
+// file opens the same choices as a menu.
 // Open uses this computer's app for that kind of file (only when asked), Show in folder opens its folder, and Delete
 // takes a received file off the disk (a sent one only leaves the list; the original stays). Esc, B or a click outside
 // closes it; Up and Down pick a file, Left and Right a button, A presses it.
@@ -16,8 +19,11 @@ Item {
     property int button: 0
     property int revision: 0
 
-    function open(w, t, isTour) { where = w; title = t; tour = !!isTour; sel = -1; button = 0; revision++; visible = true; view.contentY = 0 }
-    function close() { visible = false }
+    function open(w, t, isTour) {
+        where = w; title = t; tour = !!isTour; sel = -1; button = 0; revision++; filterField.text = ""; visible = true; view.contentY = 0
+        if (!tour) Qt.callLater(() => filterField.forceActiveFocus())
+    }
+    function close() { visible = false; if (Ui.main) Ui.main.restoreFocus() }
 
     readonly property var samples: [
         { name: "Raid plan.pdf", size: 2400000, mine: true, there: true, folder: "Documents", path: "", icon: "file", time: Date.now() - 3600000 },
@@ -26,6 +32,9 @@ Item {
         { name: "Old notes.txt", size: 1200, mine: false, there: false, folder: "Downloads/Huginn/Gaming Crew", path: "", icon: "file", time: Date.now() - 5 * 86400000 }
     ]
     readonly property var files: !visible ? [] : tour ? samples : (revision, FileLink.transfers, FileLink.filesIn(where))
+    // The files whose name has what's typed in the box (all of them when it's empty).
+    readonly property string filter: filterField.text.trim().toLowerCase()
+    readonly property var shown: filter === "" ? files : files.filter(f => String(f.name).toLowerCase().indexOf(filter) >= 0)
     readonly property string saveText: tour ? "Downloads/Huginn/" + title : where === "" ? "" : FileLink.folderText(where)
 
     function acts(f) {
@@ -50,20 +59,26 @@ Item {
             }, false, true)
         }
     }
+    // A right click on a file: its choices as a menu.
+    function rowMenu(f) {
+        const list = acts(f)
+        if (!list.length) return
+        Ui.pickFrom(f.name, [{ header: "", items: list.map(a => ({ name: a.label, url: a.act })) }], a => panel.run(f, a))
+    }
     function when(ms) {
         const d = new Date(ms)
         return d.toLocaleDateString(Qt.locale(), Locale.ShortFormat) + " " + d.toLocaleTimeString(Qt.locale(), Locale.ShortFormat)
     }
 
     function handleButton(b) {
-        const n = files.length
+        const n = shown.length
         if (b === "b") { close(); return true }
         if (b === "up") { sel = n ? Math.max(0, sel - 1) : -1; button = 0; return true }
         if (b === "down") { sel = n ? Math.min(n - 1, sel + 1) : -1; button = 0; return true }
-        const list = sel >= 0 ? acts(files[sel]) : []
+        const list = sel >= 0 ? acts(shown[sel]) : []
         if (b === "left") { button = Math.max(0, button - 1); return true }
         if (b === "right") { button = Math.min(Math.max(0, list.length - 1), button + 1); return true }
-        if (b === "a" && list.length) { run(files[sel], list[Math.min(button, list.length - 1)].act); return true }
+        if (b === "a" && list.length) { run(shown[sel], list[Math.min(button, list.length - 1)].act); return true }
         return true
     }
 
@@ -108,8 +123,28 @@ Item {
                 textFormat: Text.PlainText
                 width: parent.width; elide: Text.ElideMiddle
                 visible: panel.saveText !== ""
-                text: "Received files are saved in " + panel.saveText
+                text: "Received files are saved in " + panel.saveText + ". Settings › Devices › Save files to changes it."
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+            }
+            TextField {
+                id: filterField
+                FieldMenu {}   // right click: Cut, Copy, Paste, Select all
+                width: parent.width
+                height: Math.max(Theme.px(38), implicitHeight)
+                leftPadding: Theme.px(12)
+                color: Theme.text
+                placeholderText: "Find a file by name"
+                placeholderTextColor: Theme.textMuted
+                font.family: Theme.body
+                font.pixelSize: Theme.fs(15)
+                background: Rectangle { radius: Theme.radius; color: Theme.ground; border.color: filterField.activeFocus ? Theme.accent : Theme.line }
+                onTextChanged: { panel.sel = -1; panel.button = 0 }
+                Keys.onPressed: event => {
+                    if (event.key === Qt.Key_Down) { panel.handleButton("down"); event.accepted = true }
+                    else if (event.key === Qt.Key_Up) { panel.handleButton("up"); event.accepted = true }
+                    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { panel.handleButton("a"); event.accepted = true }
+                    else if (event.key === Qt.Key_Escape) { panel.close(); event.accepted = true }
+                }
             }
         }
         Flickable {
@@ -126,14 +161,14 @@ Item {
                 spacing: Theme.px(8)
                 Text {
                     textFormat: Text.PlainText
-                    visible: panel.files.length === 0
+                    visible: panel.shown.length === 0
                     width: parent.width; wrapMode: Text.Wrap
                     topPadding: Theme.px(12)
-                    text: "No files here yet. Send one with the clip beside the message box."
+                    text: panel.files.length ? "No file names have that." : "No files here yet. Send one with the clip beside the message box."
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
                 Repeater {
-                    model: panel.files
+                    model: panel.shown
                     delegate: Rectangle {
                         id: row
                         required property var modelData
@@ -148,6 +183,10 @@ Item {
                         border.width: panel.sel === index ? Theme.focusWidth : 1
                         Accessible.role: Accessible.StaticText
                         Accessible.name: f.name + ", " + (f.mine ? "sent" : "received")
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: (point, button) => { panel.sel = row.index; Ui.menuAt(row, point.position.x, point.position.y, () => panel.rowMenu(row.f)) }
+                        }
                         Rectangle {
                             id: badge
                             anchors.left: parent.left; anchors.leftMargin: Theme.px(10)

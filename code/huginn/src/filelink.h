@@ -42,6 +42,9 @@ class FileLink : public QObject
     Q_PROPERTY(QVariantList transfers READ transfers NOTIFY changed)
     // Running or waiting for an answer here: the Transfers button's count.
     Q_PROPERTY(int activeCount READ activeCount NOTIFY changed)
+    // Moving or about to (closing would cut it off), and what closing now would stop, in words ("" when nothing).
+    Q_PROPERTY(int runningCount READ runningCount NOTIFY changed)
+    Q_PROPERTY(QString closeWarning READ closeWarning NOTIFY changed)
 
 public:
     static const char kCap[];                   // "f1"
@@ -50,17 +53,24 @@ public:
     static constexpr int kRtoMs = 500;
     static constexpr int kPunchMs = 20000;
     static constexpr int kIdleMs = 30000;
+    // Cap f3 (27.7): resume and long waits. Silence ends a transfer only after kLongIdleMs; after kQuietMs of it each
+    // side sends one packet a second (a probe or an ack) until the other is heard again.
+    static const char kResumeCap[];             // "f3"
+    static constexpr int kLongIdleMs = 120000;
+    static constexpr int kQuietMs = 2000;
     static constexpr qint64 kMaxBytes = 4LL * 1024 * 1024 * 1024;
     // From someone trusted, a file smaller than this arrives by itself; a bigger one asks Accept or Decline first.
     static constexpr qint64 kAutoBytes = 50LL * 1024 * 1024;
     // How long an offer waits for an answer: longer for a file the other side asks about first.
     static constexpr int kAnswerMs = 120000;
     static constexpr int kAskAnswerMs = 10 * 60000;
+    // Cap f3: a big file waits a day for Accept or Decline (both apps say f3).
+    static constexpr int kLongAnswerMs = 24 * 3600000;
     static const qint64 kRelayMax;              // the largest file the relays take (Photos' 130 pieces)
     // A file small enough for the relays goes that way when no answer comes this soon (their device may be off).
     static constexpr int kRelayAfterMs = 30000;
     // How long an offer of a file of this size waits: a bigger one as long as the other side may ask first.
-    static int answerMs(qint64 size) { return size <= kRelayMax ? kRelayAfterMs : kAskAnswerMs; }
+    static int answerMs(qint64 size, bool long_ = false) { return size <= kRelayMax ? kRelayAfterMs : long_ ? kLongAnswerMs : kAskAnswerMs; }
 
     // What a file on its way says, the same words as Muninn's FileText (checked in selfTest).
     static int percent(qint64 done, qint64 size);
@@ -103,6 +113,9 @@ public:
         bool take(int i);                       // true when it's new
         void ack(int *below, quint64 *bits) const;
         bool done() const { return m_have == m_n; }
+        // Cap f3: the first `below` pieces are already on disk from a try that stopped.
+        void preload(int below);
+        int below() const { return m_below; }
     private:
         int m_n, m_have = 0, m_below = 0;
         QBitArray m_got;
@@ -148,6 +161,12 @@ public:
     // A transfer of mine or theirs is for this chat (their key, or "g:<group>").
     bool expects(const QString &peer, const QString &id) const;
     int activeCount() const;
+    int runningCount() const;
+    QString closeWarning() const;
+    // Cap f3: their app keeps a stopped file and goes on from there, and waits a day for a big file's answer.
+    bool hasF3(const QString &peer) const { return resumes && resumes(peer); }
+    // A failed file of mine that needs Direct calls with them (no shared Wi-Fi, too big for the relays).
+    Q_INVOKABLE bool needsDirect(const QString &id) const;
     Q_INVOKABLE void cancel(const QString &id);
     // A big file waiting ("asking"): take it now, or say no (the sender hears so and it's gone here).
     Q_INVOKABLE void accept(const QString &id);
@@ -174,8 +193,9 @@ public:
     Q_INVOKABLE bool showInFolder(const QString &path) const;
 
     // A file of mine that can't go at all: its card says why (wifi: only the same Wi-Fi can take it).
+    // direct: it would go with Direct calls and files on for each other (its card offers that).
     void addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path = {}, bool wifi = false,
-                   const QString &id = {}, const QString &group = {});
+                   const QString &id = {}, const QString &group = {}, bool direct = false);
     // A file of theirs coming over the internet route: have of n pieces. Done: its message is in (or half of it was
     // let go); a card for the same file that couldn't come straight goes too.
     void relayIn(const QString &msgId, const QString &peer, const QString &name, int have, int n);
@@ -202,6 +222,7 @@ public:
     // shown or sent; empty when they aren't here. Their app understands the "lan" candidate and group files with f2.
     std::function<QString(const QString &peer)> lanHost;
     std::function<bool(const QString &peer)> hasF2;
+    std::function<bool(const QString &peer)> resumes;
     std::function<QString(const QString &g, const QString &from, qint64 size)> groupRefusal;
     std::function<bool(const QString &g, qint64 size)> groupArrives;
     std::function<QString(const QString &g)> groupName;
@@ -219,6 +240,8 @@ public:
 Q_SIGNALS:
     void changed();
     void notice(const QString &text);
+    // A file that asks Accept or Decline first: worth a system notification (id: its card; where: its chat).
+    void offered(const QString &id, const QString &where, const QString &text);
 
 private:
     struct Xfer;
@@ -245,6 +268,8 @@ private:
     // A chat's folder: Downloads/Huginn/<its name> (the save folder itself in the self-test).
     QString folderOf(const QString &peer, const QString &group) const;
     QString shownFolder(const QString &dir) const;
+    // Where saved files go: Settings' "Save files to" (Downloads unless changed); saveDir in the self-test.
+    QString base() const;
     QString chatOf(const QString &peer, const QString &group) const;
     QString lanOf(const QString &peer) const { return lanHost ? lanHost(peer) : QString(); }
     // A card of theirs that was refused before it began (group rules, no space): it says why.
@@ -256,6 +281,15 @@ private:
     void logFile(const QString &where, const QString &name, qint64 size, const QString &path, bool mine);
     void loadLog();
     void saveLog();
+    // Cap f3: a file of theirs that stopped part way, kept to go on from (this run): by card id.
+    struct Partial { QString peer, sha, path, folder, name, group; qint64 size = 0; int below = 0; };
+    QHash<QString, Partial> m_partial;
+    void dropPartial(const QString &id);
+    // The kept part this file of theirs goes on from (its card id), or "".
+    QString partialFor(const Xfer *x) const;
+    // A file of mine already hashed (path: size, last change, sha): Retry doesn't read it all again.
+    struct Hashed { qint64 size = 0, changed = 0; QString sha; };
+    QHash<QString, Hashed> m_hashed;
     QList<QVariantMap> m_log;
     bool m_logLoaded = false;
 

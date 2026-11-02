@@ -39,6 +39,10 @@ class System : public QObject
     Q_PROPERTY(bool handheldDetected READ handheldDetected NOTIFY handheldChanged)
     Q_PROPERTY(QString version READ version CONSTANT)
     Q_PROPERTY(QString tourDir READ tourDir CONSTANT)
+    // Settings › About › Your data: the folder Huginn keeps everything in, as the system writes it.
+    Q_PROPERTY(QString dataFolder READ dataFolder CONSTANT)
+    // The Windows portable build (its data folder sits beside Huginn.exe).
+    Q_PROPERTY(bool portable READ portable CONSTANT)
     // Running on battery (UPower on Linux, the Flatpak too; GetSystemPowerStatus on Windows). False when not known.
     Q_PROPERTY(bool onBattery READ onBattery NOTIFY powerChanged)
     // Settings › Look › Battery saver is on now (On, or Automatic on battery): nothing moves by itself (Theme.motion),
@@ -110,6 +114,10 @@ public:
     Q_INVOKABLE QString sizeText(double bytes) const { return formatSize(qint64(bytes)); }
     Q_INVOKABLE void grab(QQuickWindow *window, const QString &name);
     Q_INVOKABLE void tourFinished();
+    QString dataFolder() const;
+    bool portable() const;
+    // Opens the data folder in the file manager. False when it couldn't.
+    Q_INVOKABLE bool openDataFolder() const;
 
     static int s_qmlWarnings;
     // Where Huginn keeps its own files (the vault and chats, keys, tls, crash.log) and what can be made again (update

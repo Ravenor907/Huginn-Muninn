@@ -82,27 +82,35 @@ Item {
     function sendVideoFile() {
         const path = Videos.pickFile()
         if (path === "") return
+        // Too big or too long for a video message: it goes as a file instead.
+        if (!Videos.fitsMessage(path)) { PeopleActions.sendFiles(where, [path]); return }
         const r = Videos.sendFile(where, path)
         Ui.say(r !== "" ? r : "Sending the video message.", r !== "" && r.indexOf("need") < 0)
     }
-    // Dropped files: pictures go in the chat (several as an album), MP4 videos as video messages, anything
-    // else as a file, by the best route (the same as Send file).
+    function sendClips(paths) {
+        let sent = 0
+        paths.forEach(p => { const r = Videos.sendFile(where, p); if (r !== "") Ui.say(r, true); else sent++ })
+        if (sent) Ui.say(sent === 1 ? "Sending the video message." : "Sending " + sent + " video messages.")
+    }
+    // Dropped files: pictures go in the chat (several as an album), anything else as a file, by the best route (the
+    // same as Send file). A video goes as a file too; a short MP4 that fits a video message asks which.
     function dropFiles(urls) {
-        const pics = [], others = []
-        let videos = 0
+        const pics = [], others = [], clips = [], clipUrls = []
         for (let i = 0; i < urls.length; i++) {
             const path = Chat.localPath(urls[i])
             if (path === "") continue
             if (Chat.isPicture(path)) pics.push(path)
-            else if (/\.(mp4|m4v|mov)$/i.test(path)) {
-                const r = Videos.sendFile(where, path)
-                if (r !== "") Ui.say(r, true); else videos++
-            } else others.push(urls[i])
+            else if (/\.(mp4|m4v|mov)$/i.test(path) && Videos.fitsMessage(path)) { clips.push(path); clipUrls.push(urls[i]) }
+            else others.push(urls[i])
         }
         if (pics.length) sendPictures(pics, false)
-        if (videos) Ui.say(videos === 1 ? "Sending the video message." : "Sending " + videos + " video messages.")
         // Caps f1 and f2: anything else as a file, to the person or to everyone in the group.
         if (others.length) PeopleActions.sendFiles(where, others)
+        if (!clips.length) return
+        Ui.pickFrom(clips.length === 1 ? "Send this video" : "Send " + clips.length + " videos", [{ header: "", items: [
+            { name: "As a file", detail: "Saved on their device, full quality", url: "file", icon: "attach" },
+            { name: "As a video message", detail: "Plays in the chat", url: "message", icon: "play" }] }],
+            a => { if (a === "message") layer.sendClips(clips); else if (a === "file") PeopleActions.sendFiles(layer.where, clipUrls) })
     }
     function newPoll() { pollDlg.open("Poll for " + title) }
     function viewPhotos(list, i) { photos = list; photoAt = i }

@@ -66,6 +66,21 @@ class RoomManager : public QObject
     // Huginn asks what to share first (an app window or a full screen). False on Wayland and in the Flatpak, where the
     // desktop's own picker does the choosing.
     Q_PROPERTY(bool sharePicker READ sharePicker CONSTANT)
+    // Screen share quality: Smooth (30 frames a second at a lower size, for games and video) or Sharp (full size,
+    // up to 10 a second, for text). Changes a share in progress within a second.
+    Q_PROPERTY(bool shareSmooth READ shareSmooth WRITE setShareSmooth NOTIFY changed)
+    // Voice activity (Settings › Calls), while push to talk is off: "auto" (the default), "manual" or "off" (always
+    // sending). See AudioDsp::Gate.
+    Q_PROPERTY(QString gateMode READ gateMode WRITE setGateMode NOTIFY gateChanged)
+    // The threshold in dBFS (-60 to -20): the manual one, or the automatic one as it moves. Setting it goes to manual.
+    Q_PROPERTY(int gateThreshold READ gateThreshold WRITE setGateThreshold NOTIFY levelChanged)
+    // The microphone's level (dBFS, -100 silent) and whether it is going out, about 12 times a second, while micLive.
+    Q_PROPERTY(double micLevel READ micLevel NOTIFY levelChanged)
+    Q_PROPERTY(bool gateOpen READ gateOpen NOTIFY levelChanged)
+    // Settings › Calls › Test: the microphone on (nothing is sent anywhere) to see the level. Stops on joining a room
+    // and after a minute.
+    Q_PROPERTY(bool micTest READ micTest WRITE setMicTest NOTIFY gateChanged)
+    Q_PROPERTY(bool micLive READ micLive NOTIFY gateChanged)   // in a room or testing: micLevel moves
 
 public:
     using LoginFetcher = std::function<void(std::function<void(const TurnLogin &, const QString &)>)>;
@@ -111,6 +126,17 @@ public:
     QString sharerName() const;
     QString shareTitle() const { return m_share ? m_shareTitle : QString(); }
     bool sharePicker() const;
+    bool shareSmooth() const { return m_shareSmooth; }
+    void setShareSmooth(bool on);
+    QString gateMode() const;
+    void setGateMode(const QString &mode);
+    int gateThreshold() const { return qRound(m_gate.threshold()); }
+    void setGateThreshold(int db);
+    double micLevel() const { return m_level; }
+    bool gateOpen() const { return m_sendingNow; }
+    bool micTest() const { return m_test != nullptr; }
+    void setMicTest(bool on);
+    bool micLive() const { return inRoom() || m_test; }
 
     // "" when joined, otherwise what to tell the person.
     Q_INVOKABLE QString join(const QString &g, const QString &ch);
@@ -156,6 +182,8 @@ Q_SIGNALS:
     void logged(const QString &g, const QString &text, bool missed);
     // Share was pressed: the picker opens (RoomBar.qml).
     void pickShare();
+    void gateChanged();
+    void levelChanged();
 
 private:
     struct Peer {
@@ -195,6 +223,15 @@ private:
     int m_serial = 0;
     AudioIO *m_audio = nullptr;
     AudioDsp::Speaking m_mySpeaking;
+    // Voice activity, and the level shown in Settings.
+    AudioDsp::Gate m_gate;
+    bool m_gateOff = false;
+    double m_level = -100;
+    bool m_sendingNow = false;
+    int m_levelFrames = 0;
+    AudioIO *m_test = nullptr;
+    QTimer m_testEnd;
+    bool gateFrame(const qint16 *frame);
     QElapsedTimer m_clock;
     QTimer m_announce, m_ticker, m_presenceTick, m_clear, m_ringer;
     // Cap v2 (6.8): vjoin every 10 s to members with v2 while in a room; whose app has it; when each was last offered.
@@ -219,4 +256,5 @@ private:
     QString m_sharer;
     QPointer<QVideoSink> m_screenSink;
     QTimer m_shareRate;
+    bool m_shareSmooth = true;
 };

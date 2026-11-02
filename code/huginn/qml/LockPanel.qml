@@ -12,7 +12,8 @@ Item {
     property string mode: Vault.exists ? "unlock" : "setup"
     // Unlocking, or turning the lock off: the current pattern or password is asked for.
     readonly property bool asks: mode === "unlock" || mode === "off" || mode === "own"
-    property bool usePattern: asks ? Vault.usesPattern : true
+    // Setting one: a password (a passphrase) with a mouse and keyboard; the pattern with a controller or on a handheld.
+    property bool usePattern: asks ? Vault.usesPattern : (System.handheld || System.gameMode || (!!Ui.main && Ui.main.padInUse))
     property var first: null
     property string note: ""
     property bool bad: false
@@ -23,6 +24,10 @@ Item {
     property string lead: ""
     // First setup's practice (Labs › Replay first setup): a pattern or password is checked as usual but never saved.
     property bool practice: false
+    // A short window: no raven, so the pattern keeps its room.
+    property bool compact: false
+    // The least height that still gives the pattern 200 px (a page that scrolls uses it).
+    readonly property real minHeight: intro.implicitHeight + Theme.px(200) + foot.implicitHeight
     signal finished(string how)   // "setup", "unlock", "change", "off" or "own": what just finished
     signal cancelled()
 
@@ -102,8 +107,9 @@ Item {
         id: intro
         width: parent.width
         spacing: Theme.px(10)
-        topPadding: Theme.px(28)
+        topPadding: Theme.px(panel.compact ? 8 : 28)
         Image {
+            visible: !panel.compact
             anchors.horizontalCenter: parent.horizontalCenter
             source: "assets/raven-gold.png"
             width: Theme.px(56); height: width
@@ -122,7 +128,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.lead !== "" ? panel.lead + "\n" : "") + (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : panel.mode === "setup" ? "It protects your messages. No way to recover it. You can turn it off later in Settings." : "No way to recover it."
+                  : panel.mode === "setup" ? "Keeps your chats private on this computer. It can't be recovered, so pick one you'll remember. A few words make a good password." : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {
@@ -271,6 +277,8 @@ Item {
 
     function handleButton(b) {
         if (usePattern && pad.handleButton(b)) return true
+        // Setting one: A in the first field goes on to the second.
+        if (b === "a" && !usePattern && !asks && pw.text.length && pw2.text.length === 0) { pw2.forceActiveFocus(); System.showSteamKeyboard(); return true }
         if (b === "a" && !usePattern) { if (pw.text.length) submitPassword(); else { pw.forceActiveFocus(); System.showSteamKeyboard() } return true }
         if ((b === "lb" || b === "next" || b === "prev") && !asks) { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "b") { cancelled(); return true }

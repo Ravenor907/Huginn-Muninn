@@ -65,6 +65,21 @@ QStringList without(QStringList l, const QString &k)
     l.removeAll(k);
     return l;
 }
+// Cap g3 (protocol 28): a state with an about text or an admin-only channel, which apps without g3 refuse.
+bool usesG3(const QJsonObject &s)
+{
+    if (s.contains(QStringLiteral("about")))
+        return true;
+    for (const QJsonValue &c : s.value(QStringLiteral("channels")).toArray())
+        if (c.toObject().contains(QStringLiteral("ao")))
+            return true;
+    return false;
+}
+// Cap g3 (28.2): channel ch of state s takes posts only from admins, and key isn't one.
+bool adminsOnlyFor(const QJsonObject &s, const QString &ch, const QString &key)
+{
+    return GroupWire::channel(s, ch).value(QStringLiteral("ao")).toBool() && !GroupWire::isAdmin(s, key);
+}
 }
 
 // ------------------------------------------------------------------ lists for the screen
@@ -180,6 +195,7 @@ QVariantMap Chat::groupInfo(const QString &g) const
         const QString id = c.value(QStringLiteral("id")).toString();
         channels << QVariantMap{{QStringLiteral("id"), id}, {QStringLiteral("name"), c.value(QStringLiteral("n")).toString()},
                                 {QStringLiteral("type"), c.value(QStringLiteral("t")).toString()}, {QStringLiteral("unread"), it->unread.value(id)},
+                                {QStringLiteral("adminsOnly"), c.value(QStringLiteral("ao")).toBool()},   // cap g3 (28.2)
                                 {QStringLiteral("mentions"), it->unread.value(id) > 0 ? unreadMentions(it->messages, id, it->unread.value(id), username()) : 0}};
     }
     return {{QStringLiteral("g"), g},
@@ -192,6 +208,7 @@ QVariantMap Chat::groupInfo(const QString &g) const
             {QStringLiteral("left"), it->left},
             {QStringLiteral("count"), int(members.size())},
             {QStringLiteral("type"), Limits::groupType(s)},   // "folk" or "family" (16.2)
+            {QStringLiteral("about"), s.value(QStringLiteral("about")).toString()},   // cap g3 (28.1)
             {QStringLiteral("members"), members},
             {QStringLiteral("channels"), channels}};
 }
@@ -229,7 +246,7 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
             // Muted for me with Hide messages: folded as "Muted, tap to show" (cap g2's menus, only here).
             if (m_mod && m_mod->foldMessages(str(m, "from")))
                 m.insert(QStringLiteral("folded"), true);
-            if (!str(m, "unsent").isEmpty())
+            if (!str(m, "unsent").isEmpty() && !m.value(QStringLiteral("removed")).toBool())
                 m.insert(QStringLiteral("unsent"), shown);
         }
         out << m;
@@ -251,7 +268,10 @@ QString Chat::createGroup(const QString &name, const QString &kind)
     QJsonObject s{{QStringLiteral("g"), g}, {QStringLiteral("v"), 1}, {QStringLiteral("owner"), me}, {QStringLiteral("by"), me},
                   {QStringLiteral("name"), n}, {QStringLiteral("ts"), now()},
                   {QStringLiteral("channels"), QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("main")}, {QStringLiteral("n"), QStringLiteral("general")},
-                                                                      {QStringLiteral("t"), QStringLiteral("text")}}}}};
+                                                                      {QStringLiteral("t"), QStringLiteral("text")}},
+                                                          // A voice room from the start, as Muninn makes it.
+                                                          QJsonObject{{QStringLiteral("id"), GroupWire::newChannelId()}, {QStringLiteral("n"), QStringLiteral("Voice")},
+                                                                      {QStringLiteral("t"), QStringLiteral("voice")}}}}};
     s = GroupWire::withAdmins(s, {me});
     s = GroupWire::withMembers(s, {GroupWire::member(me, username(), mailbox())});
     // Cap d1 (16.2): Folk (no "kind", members can invite) or Family ("kind":"family", only admins add people).
@@ -273,7 +293,7 @@ QString Chat::createGroup(const QString &name, const QString &kind)
         m_saveFailed = true;
         return QString();
     }
-    groupNote(g, QStringLiteral("You made %1. Add people from the group's menu (its three dots): Add people.").arg(n));
+    groupNote(g, QStringLiteral("You made %1. Invite people from the group's menu (its three dots). Talk in the Voice room; add channels and voice rooms from Channels.").arg(n));
     Q_EMIT changed();
     return g;
 }
@@ -384,6 +404,41 @@ QString Chat::change(const QString &g, const QJsonObject &op)
             return QString();
         channels.removeAt(i);
         next.insert(QStringLiteral("channels"), channels);
+    } else if (what == QLatin1String("about") || what == QLatin1String("ao")) {
+        // Cap g3 (28.1, 28.2): the about text, or a text channel's "Only admins post".
+        if (what == QLatin1String("about")) {
+            const QString t = GroupWire::cleanName(op.value(QStringLiteral("about")).toString(), GroupWire::kMaxAbout).trimmed();
+            if (t == cur.value(QStringLiteral("about")).toString())
+                return QString();
+            if (t.isEmpty())
+                next.remove(QStringLiteral("about"));
+            else
+                next.insert(QStringLiteral("about"), t);
+        } else {
+            const int i = channelAt(op.value(QStringLiteral("id")).toString());
+            if (i < 0)
+                return QStringLiteral("That channel isn't there anymore.");
+            QJsonObject c = channels.at(i).toObject();
+            const bool on = op.value(QStringLiteral("on")).toBool();
+            if (on && (c.value(QStringLiteral("id")).toString() == QLatin1String("main") || c.value(QStringLiteral("t")).toString() != QLatin1String("text")))
+                return QStringLiteral("Only a text channel other than the first can be admin-only.");
+            if (on == c.value(QStringLiteral("ao")).toBool())
+                return QString();
+            if (on)
+                c.insert(QStringLiteral("ao"), true);
+            else
+                c.remove(QStringLiteral("ao"));
+            channels.replace(i, c);
+            next.insert(QStringLiteral("channels"), channels);
+        }
+        if (usesG3(next)) {
+            QStringList old;
+            for (const QJsonObject &m : std::as_const(members))
+                if (m.value(QStringLiteral("k")).toString() != me && !hasCap(m.value(QStringLiteral("k")).toString(), QLatin1String(GroupWire::kAboutCap)))
+                    old << m.value(QStringLiteral("n")).toString();
+            if (!old.isEmpty())
+                return QStringLiteral("Everyone needs an update first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
+        }
     } else if (what == QLatin1String("admin")) {
         if (!GroupWire::isMember(cur, k))
             return QStringLiteral("They aren't in the group anymore.");
@@ -458,6 +513,9 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         // Cap f2 (27.3): an app without f2 refuses a state with file rules.
         if (Sharing::hasRules(cur) && !hasCap(k, QLatin1String(Sharing::kCap)))
             return QStringLiteral("They need an update to join, because this group has file rules.");
+        // Cap g3 (28.4): an app without g3 refuses a state with "about" or "ao".
+        if (usesG3(cur) && !hasCap(k, QLatin1String(GroupWire::kAboutCap)))
+            return QStringLiteral("They need an update to join, because this group has an about text or admin-only channels.");
         // An app without d1 refuses a Family or Work group's state.
         if (cur.contains(QStringLiteral("kind")) && !hasD1(k))
             return QStringLiteral("They need an update to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
@@ -469,6 +527,47 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         return QStringLiteral("Huginn can't do that.");
     }
     return commit(g, next, op);
+}
+
+QString Chat::setGroupAbout(const QString &g, const QString &text)
+{
+    return change(g, {{QStringLiteral("op"), QStringLiteral("about")}, {QStringLiteral("about"), text}});
+}
+
+QString Chat::setChannelAdminsOnly(const QString &g, const QString &ch, bool on)
+{
+    return change(g, {{QStringLiteral("op"), QStringLiteral("ao")}, {QStringLiteral("id"), ch}, {QStringLiteral("on"), on}});
+}
+
+int Chat::reportToAdmins(const QString &g, const QString &msgId)
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->state.isEmpty() || it->removed || it->left || !GroupWire::isLogicalId(msgId))
+        return 0;
+    QVariantMap m;
+    for (const QVariant &v : it->messages)
+        if (str(v.toMap(), "id") == msgId)
+            m = v.toMap();
+    const QString author = str(m, "from");
+    if (m.isEmpty() || author.isEmpty() || m.value(QStringLiteral("mine")).toBool())
+        return 0;
+    const QString text = GroupWire::clip(str(m, "text"), 500), me = myKey();
+    int sent = 0;
+    for (const QString &a : GroupWire::adminsOf(it->state)) {
+        if (a == me || a == author)
+            continue;
+        // Cap g3 (28.3): through the group, contact or not; an admin's older app gets it in a private message.
+        if (hasCap(a, QLatin1String(GroupWire::kAboutCap)))
+            sendControl(g, a, {{QStringLiteral("t"), QStringLiteral("report")}, {QStringLiteral("msg"), msgId}, {QStringLiteral("k"), author},
+                               {QStringLiteral("text"), text}});
+        else if (isContact(a))
+            sendPrivate(a, QStringLiteral("Report from %1: %2 wrote: %3")
+                               .arg(groupName(g), memberName(g, author), text.isEmpty() ? QStringLiteral("(a photo or file)") : text));
+        else
+            continue;
+        ++sent;
+    }
+    return sent;
 }
 
 QString Chat::renameGroup(const QString &g, const QString &name) { return change(g, {{QStringLiteral("op"), QStringLiteral("rename")}, {QStringLiteral("name"), name}}); }
@@ -847,6 +946,11 @@ void Chat::sendGroupWith(const QString &g, const QString &ch, const QString &tex
         Q_EMIT notice(m_mod->postBlock(g));
         return;
     }
+    // Cap g3 (28.2): only admins post in this channel.
+    if (adminsOnlyFor(it->state, ch, myKey())) {
+        Q_EMIT notice(QStringLiteral("Only admins post here."));
+        return;
+    }
     const QJsonObject s = it->state;
     const QJsonObject c = GroupWire::channel(s, ch);
     const QString channel = c.value(QStringLiteral("t")).toString() == QLatin1String("text") ? ch : QStringLiteral("main");
@@ -992,6 +1096,11 @@ QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArra
     // Cap g2: no photos, voice messages or files while timed out or banned.
     if (m_mod && !m_mod->postBlock(g).isEmpty()) {
         Q_EMIT notice(m_mod->postBlock(g));
+        return QString();
+    }
+    // Cap g3 (28.2): only admins post in this channel.
+    if (adminsOnlyFor(it->state, ch, myKey())) {
+        Q_EMIT notice(QStringLiteral("Only admins post here."));
         return QString();
     }
     const QJsonObject s = it->state;
@@ -1425,6 +1534,15 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
             return 400;
         if (member && !git->removed && !git->left && !(m_mod && m_mod->barred(g, fromKey)))
             takeGroupVote(g, fromKey, p);
+    } else if (t == QLatin1String("report")) {
+        // Cap g3 (28.3): a member's report, to an admin; shown here only.
+        const QString text = p.value(QStringLiteral("text")).toString(), about = p.value(QStringLiteral("k")).toString();
+        if (!GroupWire::isLogicalId(p.value(QStringLiteral("msg")).toString()) || GroupWire::length(text) > 500 || about.isEmpty())
+            return 400;
+        if (!member || !GroupWire::isAdmin(git->state, myKey()))
+            return 403;
+        groupNote(g, QStringLiteral("Report from %1: %2 wrote: %3")
+                         .arg(memberName(g, fromKey), memberName(g, about), text.isEmpty() ? QStringLiteral("(a photo or file)") : text));
     } else if (t == QLatin1String("unsend")) {
         const QString gone = p.value(QStringLiteral("msg")).toString();
         if (have && GroupWire::isLogicalId(gone)) {
@@ -1488,8 +1606,9 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
         saveGroupsSoon();
         return 200;
     }
-    // Cap g2: someone timed out or banned. Dropped, and answered so their app stops sending it again.
-    if (m_mod && m_mod->barred(g, from)) {
+    // Cap g2: someone timed out or banned, or (cap g3, 28.2) not an admin in an admin-only channel. Dropped, and
+    // answered so their app stops sending it again.
+    if ((m_mod && m_mod->barred(g, from)) || adminsOnlyFor(gr.state, ch, from)) {
         groupReceipt(g, from, {id}, QStringLiteral("delivered"));
         return 200;
     }
@@ -1541,7 +1660,9 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     if (git == m_groups.cend() || git->state.isEmpty() || git->removed || git->left || !GroupWire::isMember(git->state, fromKey))
         return 403;
     // Cap g2: no photos, voice messages or files from someone timed out or banned (never opened or kept).
-    if (gmsgKnown(gid) || m_unsentBy.value(gid) == fromKey || (m_mod && m_mod->barred(g, fromKey))) {
+    // Cap g3 (28.2): nor from someone who isn't an admin, into an admin-only channel.
+    if (gmsgKnown(gid) || m_unsentBy.value(gid) == fromKey || (m_mod && m_mod->barred(g, fromKey))
+        || adminsOnlyFor(git->state, o.value(QStringLiteral("ch")).toString(), fromKey)) {
         groupReceipt(g, fromKey, {gid}, QStringLiteral("delivered"));
         return 200;
     }

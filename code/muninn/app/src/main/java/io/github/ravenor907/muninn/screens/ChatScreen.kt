@@ -498,6 +498,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     val gmsgs by app.chat.groups.messages.collectAsState()
     val gunread by app.chat.groups.unreadGroups.collectAsState()
     val ginvites by app.chat.groups.pending.collectAsState()
+    val waitingJoins by app.chat.groups.waitingJoins.collectAsState()
+    // Linked devices (section 15): which computers or tablets show this phone's chats.
+    val mirroredTo by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
     val folders by app.chat.folders.all.collectAsState()
     val topOrder by app.chat.folders.top.collectAsState()
     val trashed by app.chat.trash.all.collectAsState()
@@ -646,6 +649,14 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
 
     Box(Modifier.fillMaxSize().frosted()) {
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
+            // A join by a code or link: the admin's app lets me in when it's next online.
+            items(waitingJoins, key = { "w|" + it.g }) { w ->
+                Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
+                    Text("Joining ${w.name.ifBlank { "a group" }}", style = Type.big)
+                    Text("Waiting for ${w.inviter.ifBlank { "the person who invited you" }} to let you in. Their app does it when it's next open.", style = Type.small)
+                    MButton("Stop waiting", Modifier.padding(top = 8.dp)) { app.chat.groups.stopWaiting(w.g) }
+                }
+            }
             item {
                 // Search, and the chat list's three-dot menu beside it.
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 2.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -658,6 +669,9 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 }
                 // Permissions still missing, the message limits note and mirrored chats: one row, one sheet.
                 FinishRow(app, onAllowNearby, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+                mirroredTo.filter { it.ok }.takeIf { it.isNotEmpty() }?.let { on ->
+                    Text("Mirrored to ${on.joinToString(", ") { it.name }}", style = Type.small, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
+                }
                 if (app.power.extreme) Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
                     ExtremeBanner("Battery") { SettingsNav.goSettings = "battery" }
                 }
@@ -719,7 +733,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
         }
         // Add someone: a round gold button at the bottom left, above the tabs.
         Box(Modifier.align(Alignment.BottomStart).padding(16.dp).size(56.dp).tourSpot("plus").clip(CircleShape).background(Palette.gold)
-            .clickable(role = Role.Button) { ChatNav.open = "add" }.semantics { contentDescription = "Add someone" },
+            .clickable(role = Role.Button) { ChatNav.open = "add" }.semantics { contentDescription = "Add someone, join a group or make one" },
             contentAlignment = Alignment.Center) { MIcon("plus", Palette.onGold, 26.dp) }
     }
     FolderDialogs(app, editingFolder) { editingFolder = null }
@@ -1042,6 +1056,8 @@ private fun Conversation(app: Muninn, key: String) {
                 if (callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key))
                     IconAction("video", "Video call $name", Palette.text) { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) }
             }
+            // This chat's Files, one tap away.
+            IconAction("file", "Files with $name", Palette.text) { ChatNav.open = "files/$key" }
             MuteAction(app, key, name)
         }, onMenu = { ChatNav.menuGroup = ""; ChatNav.hold = key })
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
@@ -1356,7 +1372,7 @@ private fun AddSomeone(app: Muninn) {
     val invite = GroupLinks.parse(app, text)
     BackHandler(enabled = text.isNotEmpty() || mode.isNotEmpty()) { if (text.isNotEmpty()) text = "" else mode = "" }
     Column(Modifier.fillMaxSize().imePadding()) {
-        PageBar("Add someone")
+        PageBar(if (mode == "join") "Join a group" else "Add someone")
         // Scrolls, so everything stays reachable with larger size and text settings or the keyboard up.
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
             when {
@@ -1370,7 +1386,8 @@ private fun AddSomeone(app: Muninn) {
                     }
                     Text("Point at their code.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
                 }
-                text.isBlank() -> Field(text, { text = it }, "Paste a code or link", Modifier.padding(vertical = 12.dp), single = false)
+                text.isBlank() -> Field(text, { text = it }, if (mode == "join") "Paste the invite link or code" else "Paste a code or invite link",
+                    Modifier.padding(vertical = 12.dp), single = false)
                 invite != null -> Panel(Modifier.padding(top = 12.dp)) { JoinCard(app, invite) { text = ""; if (!invite.expired) ChatNav.open = "" } }
                 io.github.ravenor907.muninn.net.Link.isCode(text) -> MButton("Link this device", Modifier.fillMaxWidth().padding(top = 12.dp), Kind.Accent, icon = "link") {
                     LinkUi.take(text)?.let { Ui.say(it, true) } ?: run { text = ""; ChatNav.open = "" }
@@ -1408,6 +1425,7 @@ private fun AddSomeone(app: Muninn) {
             io.github.ravenor907.muninn.ui.Framed {
                 io.github.ravenor907.muninn.ui.NavRow("My code", icon = "qr") { ChatNav.open = "code" }
                 if (mode.isEmpty() && text.isBlank()) io.github.ravenor907.muninn.ui.NavRow("Paste a code or link", icon = "copy") { mode = "paste" }
+                if (mode != "join" && text.isBlank()) io.github.ravenor907.muninn.ui.NavRow("Join a group", icon = "people") { mode = "join" }
                 io.github.ravenor907.muninn.ui.NavRow("New group", icon = "people") { ChatNav.open = "newgroup" }
                 if (hasNfc) io.github.ravenor907.muninn.ui.NavRow("Tap phones together", icon = "phone") { ChatNav.open = "tap" }
             }
@@ -1550,7 +1568,8 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                             name(); quoted()
                             // The time (and receipt) sits inline after the text, on its last line.
                             Row(verticalAlignment = Alignment.Bottom) {
-                                if (m.unsent.isNotEmpty()) Text(if (m.mine) "Message deleted by you" else "Message deleted by ${theirName ?: m.unsent}",
+                                if (m.unsent.isNotEmpty()) Text(if (m.unsent == io.github.ravenor907.muninn.net.Groups.REMOVED) "Removed by an admin"
+                                    else if (m.mine) "Message deleted by you" else "Message deleted by ${theirName ?: m.unsent}",
                                     style = bodyStyle.copy(color = Palette.textFaint, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
                                     modifier = Modifier.weight(1f, fill = false))
                                 else Text(m.text, style = bodyStyle, modifier = Modifier.weight(1f, fill = false))
@@ -1726,7 +1745,7 @@ private fun MuteAction(app: Muninn, key: String, name: String) {
     val flags by app.chat.flags.all.collectAsState()
     var asking by remember(key) { mutableStateOf(false) }
     val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
-    IconAction(if (muted) "mute" else "sound", if (muted) "Unmute $name" else "Mute $name", if (muted) Palette.accent else Palette.text) {
+    IconAction(if (muted) "mute" else "sound", if (muted) "Unmute notifications for $name" else "Mute notifications for $name", if (muted) Palette.accent else Palette.text) {
         if (muted) { app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else asking = true
     }
     if (asking) MuteDialog(app, key, name) { asking = false }
@@ -1742,7 +1761,7 @@ internal fun MuteDialog(app: Muninn, key: String, name: String, done: () -> Unit
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
-        title = { Text("Mute $name", style = Type.big) },
+        title = { Text("Mute notifications for $name", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Calls show as missed, without ringing.", style = Type.small, modifier = Modifier.padding(bottom = 8.dp))
@@ -1972,25 +1991,37 @@ private fun NewGroup(app: Muninn) {
     }
 }
 
-/** Phones: a group's channels as chips under its top bar; a voice room's chip joins it (and says who's in). */
+/**
+ * Phones: a group's channels as chips under its top bar; a voice room's chip joins it (and says how many of 8 are in).
+ * [onEdit] (admins): hold a chip to rename, delete or (a text channel) make it admin-only; with null, add a voice room.
+ */
 @Composable
-private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> Unit, onVoice: (String) -> Unit) {
+private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> Unit, onEdit: ((Proto06.Channel?) -> Unit)?, onVoice: (String) -> Unit) {
     RoomManager.presence.collectAsState().value   // re-reads who is in which room when it changes
     val room by RoomManager.room.collectAsState()
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         s.channels.forEach { c ->
-            if (c.t == "text") Chip("# ${c.n}", c.id == current) { onText(c.id) }
+            val edit = onEdit?.let { e -> { e(c) } }
+            if (c.t == "text") Chip("# ${c.n}", c.id == current, onLong = edit) { onText(c.id) }
             else {
                 val n = RoomManager.whoIn(s.g, c.id).size
-                Chip(if (n > 0) "${c.n} · $n" else c.n, room?.let { it.g == s.g && it.ch == c.id } == true, icon = "audio") { onVoice(c.id) }
+                Chip(if (n > 0) "${c.n} · $n/${io.github.ravenor907.muninn.net.call.RoomLogic.MAX_PEOPLE}" else c.n, room?.let { it.g == s.g && it.ch == c.id } == true,
+                    icon = "audio", onLong = edit) { onVoice(c.id) }
             }
+        }
+        // No voice room yet: say what they're for (an admin adds one from here).
+        if (s.channels.none { it.t == "voice" }) Chip("Voice rooms: talk here", false, icon = "audio") {
+            if (onEdit != null) onEdit(null) else Ui.say("An admin adds voice rooms.")
         }
         RoomManager.groupCalls(s.g).forEach { (id, who) ->
             Chip("Voice room · ${who.size}", room?.let { it.g == s.g && it.ch == id } == true, icon = "call") { onVoice(id) }
         }
     }
 }
+
+/** [ChannelDialog] for a new voice room (an admin's tap on "Voice rooms: talk here"). */
+private val NEW_VOICE = Proto06.Channel("", "", "voice")
 
 /** Who's in a voice room or group call, under its row: small faces, ringed while they talk. */
 @Composable
@@ -2057,7 +2088,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     var text by remember(ch) { mutableStateOf("") }
     val list = rememberLazyListState()
     LaunchedEffect(g) { app.chat.pruneSoon() }
-    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groups.markRead(g); app.chat.flags.read(Folders.groupKey(g)); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
+    LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groupRead(g); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     val context = LocalContext.current
     // While it's on screen, new messages here just buzz; its old notification goes.
     DisposableEffect(key) {
@@ -2081,6 +2112,8 @@ private fun GroupConversation(app: Muninn, g: String) {
     var replyTo by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
     var editing by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
     var sheetFor by remember { mutableStateOf<Groups.GMsg?>(null) }
+    // An admin's hold on a channel chip: its dialog (NEW_VOICE: a new voice room).
+    var editChannel by remember { mutableStateOf<Proto06.Channel?>(null) }
     // Cap g2: messages from someone muted for me are folded ("Muted, tap to show") until tapped.
     val sound by app.chat.sound.all.collectAsState()
     var unfolded by remember(g) { mutableStateOf(setOf<String>()) }
@@ -2187,7 +2220,12 @@ private fun GroupConversation(app: Muninn, g: String) {
         // Tablets list the channels in their own column.
         RoomManager.presence.collectAsState().value
         val calls = RoomManager.groupCalls(g)
-        if (!ChatNav.wide && (s.channels.size > 1 || calls.isNotEmpty())) ChannelChips(s, ch, { ChatNav.channel[g] = it }) { RoomActivity.join(context, g, it) }
+        val admin = !grp.readOnly && s.isAdmin(me)
+        if (!ChatNav.wide) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
+        // Cap g3: the group's about text (description and rules), at the top of its first channel. It never expires.
+        if (s.about.isNotEmpty() && ch == Proto06.MAIN) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp)) {
+            Text(s.about, style = Type.normal.copy(color = Palette.textSoft), modifier = Modifier.semantics { contentDescription = "About this group: ${s.about}" })
+        }
         inRoom?.let { r -> Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = { RoomActivity.show(context) }) {
             Text("In ${r.title}${if (r.groupName.isNotEmpty()) " · ${r.groupName}" else ""}", style = Type.big)
             Text(if (r.muted) "You're muted · tap to open" else "Tap to open", style = Type.small)
@@ -2269,7 +2307,8 @@ private fun GroupConversation(app: Muninn, g: String) {
         }
         val banner: (@Composable () -> Unit)? = editing?.let { e -> { ComposeBanner("Editing your message", e.text, "edit") { editing = null; text = "" } } }
             ?: replyTo?.let { r -> { ComposeBanner("Replying to ${whoOf(r)}", groupPreview(app, r).substringAfter(": "), "reply") { replyTo = null } } }
-        if (!grp.readOnly) Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
+        val adminsOnlyHere = s.channel(ch)?.ao == true && !s.isAdmin(me)
+        if (!grp.readOnly) Composer(text, { text = it }, if (editing != null) "Edit your message" else if (adminsOnlyHere) "Only admins post here" else "Message #$chName", banner = banner, onPhoto = {
             attaching = true
         }, onImage = { uri -> scope.launch {
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
@@ -2280,12 +2319,13 @@ private fun GroupConversation(app: Muninn, g: String) {
         )) {
             val e = editing
             if (e != null) { app.chat.groups.editText(g, e.id, text)?.let { Ui.say(it, true) }; editing = null }
-            else if (!app.chat.sendGroupText(g, ch, text, replyTo?.id ?: "")) { if (app.chat.groups.myStatus(g).isEmpty()) Ui.say("Too long to send.", true) }
+            else if (!app.chat.sendGroupText(g, ch, text, replyTo?.id ?: "")) { if (app.chat.groups.myStatus(g).isEmpty() && !adminsOnlyHere) Ui.say("Too long to send.", true) }
             else replyTo = null
             text = ""
         }
     }
     }
+    editChannel?.let { c -> ChannelDialog(app, g, c.takeIf { it !== NEW_VOICE }, startVoice = true) { editChannel = null } }
     sheetFor?.let { gm ->
         val actions = buildList {
             if (!grp.readOnly && gm.unsent.isEmpty()) add(SheetAction("Reply", "reply") { editing = null; replyTo = gm })
@@ -2318,17 +2358,32 @@ private fun GroupConversation(app: Muninn, g: String) {
                     app.chat.sound.setMuted(gm.from, p?.muted != true)
                     Ui.say(if (p?.muted == true) "$who isn't muted for you." else "$who is muted for you.")
                 })
-                add(SheetAction("Volume", "audio", folder = who) { ModNav.page = "volume"; ChatNav.menuGroup = g; ChatNav.hold = gm.from })
+                add(SheetAction("Volume (just for you)", "audio", folder = who) { ModNav.page = "volume"; ChatNav.menuGroup = g; ChatNav.hold = gm.from })
                 if (app.chat.groups.canModerate(g, gm.from)) {
                     if (app.chat.groups.timedOutUntil(g, gm.from) > 0) add(SheetAction("Cancel timeout", "clock", folder = who) {
                         app.chat.groups.cancelTimeout(g, gm.from)?.let { Ui.say(it, true) } ?: Ui.say("$who can post again.")
-                    }) else add(SheetAction("Timeout", "clock", folder = who) { ModNav.page = "timeout"; ChatNav.menuGroup = g; ChatNav.hold = gm.from })
-                    add(SheetAction("Ban", "close", folder = who) {
+                    }) else add(SheetAction("Timeout $who…", "clock", folder = who) { ModNav.page = "timeout"; ChatNav.menuGroup = g; ChatNav.hold = gm.from })
+                    add(SheetAction("Ban $who…", "close", folder = who) {
                         Ui.sure(Ask("Ban $who?", "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban", danger = true,
                             onConfirm = { app.chat.groups.ban(g, gm.from)?.let { Ui.say(it, true) } ?: Ui.say("$who is banned.") }))
                     })
                 }
             }
+            // Cap g3: Report to admins, through the group (an admin's older app gets a private message, when a contact).
+            if (!gm.mine && gm.unsent.isEmpty() && gm.from.isNotEmpty() && !grp.readOnly && s.admins.any { it != me && it != gm.from })
+                add(SheetAction("Report to admins", "info", folder = "Message") {
+                    Ui.sure(Ask("Report this message?", "Only the group's admins see it.", "Report", onConfirm = {
+                        val n = app.chat.groups.report(g, gm.id) { k, line -> app.chat.sendPrivate(k, line) }
+                        if (n == 0) Ui.say("No admin can get it yet. They may need an update.", true)
+                        else Ui.say(if (n == 1) "Sent to 1 admin." else "Sent to $n admins.")
+                    }))
+                })
+            // Cap g2: an admin's Delete for everyone on someone else's message (a signed "remove", 26.2).
+            if (!gm.mine && gm.unsent.isEmpty() && gm.from.isNotEmpty() && app.chat.groups.canModerate(g, gm.from))
+                add(SheetAction("Delete for everyone", "delete", danger = true) {
+                    Ui.sure(Ask("Delete for everyone?", "It shows as Removed by an admin on every member's phone.", "Delete", danger = true,
+                        onConfirm = { app.chat.groups.removeForEveryone(g, gm.id, gm.from)?.let { Ui.say(it, true) } ?: Ui.say("Removed for everyone.") }))
+                })
             add(SheetAction("Delete for me", "delete", danger = true) {
                 Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
                     onConfirm = { app.chat.groups.deleteMessage(g, gm.id) }))
@@ -2361,12 +2416,14 @@ fun ChannelColumn(app: Muninn, g: String) {
             s.channels.filter { it.t == "text" }.forEach { c ->
                 ChannelRow(c.n, voice = false, on = here && c.id == current) { ChatNav.channel[g] = c.id; ChatNav.open = Folders.groupKey(g) }
             }
-            if (voice.isNotEmpty() || calls.isNotEmpty()) {
-                Text("VOICE", style = labelStyle.copy(fontSize = 12.sp), modifier = Modifier.padding(start = 8.dp, top = 18.dp, bottom = 6.dp).semantics { heading() })
-                voice.forEach { c ->
-                    ChannelRow(c.n, voice = true, on = room?.let { it.g == g && it.ch == c.id } == true) { RoomActivity.join(context, g, c.id) }
-                    RoomFaces(RoomManager.whoIn(g, c.id))
-                }
+            Text("VOICE", style = labelStyle.copy(fontSize = 12.sp), modifier = Modifier.padding(start = 8.dp, top = 18.dp, bottom = 6.dp).semantics { heading() })
+            // No voice room yet: say what they're for.
+            if (voice.isEmpty() && calls.isEmpty()) Text("Voice rooms: talk here", style = Type.small, modifier = Modifier.padding(start = 8.dp, bottom = 6.dp))
+            voice.forEach { c ->
+                val who = RoomManager.whoIn(g, c.id)
+                ChannelRow(if (who.isNotEmpty()) "${c.n} · ${who.size}/${io.github.ravenor907.muninn.net.call.RoomLogic.MAX_PEOPLE}" else c.n, voice = true,
+                    on = room?.let { it.g == g && it.ch == c.id } == true) { RoomActivity.join(context, g, c.id) }
+                RoomFaces(who)
             }
             calls.forEach { (id, who) ->
                 ChannelRow("Voice room", voice = true, on = room?.let { it.g == g && it.ch == id } == true) { RoomActivity.join(context, g, id) }
@@ -2409,6 +2466,7 @@ private fun GroupSettings(app: Muninn, g: String) {
     val me = app.identity.publicKey
     val admin = s.isAdmin(me) && !grp.readOnly
     var name by remember(g) { mutableStateOf(s.name) }
+    var about by remember(g) { mutableStateOf(s.about) }
     var channel by remember { mutableStateOf<Proto06.Channel?>(null) }
     var addingChannel by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().imePadding()) {
@@ -2421,6 +2479,16 @@ private fun GroupSettings(app: Muninn, g: String) {
                         app.chat.groups.rename(g, name)?.let { Ui.say(it, true) } ?: Ui.say("Renamed to ${name.trim()}.")
                     }
                 } else Text(s.name, style = Type.big, modifier = Modifier.padding(vertical = 10.dp))
+            }
+            // Cap g3: the about text (description and rules), shown at the top of the first channel. It never expires.
+            if (admin || s.about.isNotEmpty()) io.github.ravenor907.muninn.ui.Framed("About and rules") {
+                if (admin) {
+                    Field(about, { about = it.take(Proto06.MAX_ABOUT) }, "Description or rules", Modifier.padding(top = 8.dp), single = false)
+                    Text("Everyone sees it. Up to ${Proto06.MAX_ABOUT} characters, kept until changed.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                    MButton("Save", Modifier.fillMaxWidth().padding(vertical = 8.dp), enabled = about.trim() != s.about) {
+                        app.chat.groups.setAbout(g, about)?.let { Ui.say(it, true) } ?: Ui.say(if (about.isBlank()) "Removed." else "Saved. Everyone sees it.")
+                    }
+                } else Text(s.about, style = Type.normal, modifier = Modifier.padding(vertical = 10.dp))
             }
             io.github.ravenor907.muninn.ui.Framed("Type") { GroupLimitPanel(app, g, s, admin) }
             // Family: only admins add people, so there's no switch.
@@ -2436,7 +2504,7 @@ private fun GroupSettings(app: Muninn, g: String) {
             }
             if (admin || s.channels.size > 1) io.github.ravenor907.muninn.ui.Framed("Channels") {
                 s.channels.forEach { c ->
-                    Line(if (c.t == "voice") c.n else "# ${c.n}", if (c.t == "voice") "Voice room" else "", icon = if (c.t == "voice") "audio" else "chat", enabled = admin) { channel = c }
+                    Line(if (c.t == "voice") c.n else "# ${c.n}", if (c.t == "voice") "Voice room" else if (c.ao) "Only admins post" else "", icon = if (c.t == "voice") "audio" else "chat", enabled = admin) { channel = c }
                 }
                 if (admin && s.channels.size < Proto06.MAX_CHANNELS) MButton("Add a channel", Modifier.fillMaxWidth().padding(vertical = 8.dp), icon = "plus") { addingChannel = true }
             }
@@ -2549,11 +2617,11 @@ private fun GroupCodeDialog(app: Muninn, g: String, s: Proto06.State, code: Stri
                 Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Qr(code, 220.dp) }
                 MButton("Share", Modifier.fillMaxWidth(), Kind.Accent, icon = "send") {
                     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, "Join ${s.name} on Muninn. Open Muninn, tap + › Add someone and paste this (it works for an hour):\n$code"), "Share the group code"))
+                        .putExtra(Intent.EXTRA_TEXT, GroupLinks.inviteText(s.name, code)), "Share the group code"))
                 }
                 MButton("Copy", Modifier.fillMaxWidth().padding(top = 8.dp), icon = "copy") {
-                    io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn group code", code)
-                    Ui.say("Group code copied.")
+                    io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn group code", GroupLinks.inviteText(s.name, code), sensitive = false)
+                    Ui.say("Group code copied, with how to join.")
                 }
                 MButton("Stop this group's codes", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
                     done()
@@ -2568,9 +2636,10 @@ private fun GroupCodeDialog(app: Muninn, g: String, s: Proto06.State, code: Stri
 
 @Composable
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: () -> Unit) {
+private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, startVoice: Boolean = false, done: () -> Unit) {
     var name by remember { mutableStateOf(edit?.n ?: "") }
-    var voice by remember { mutableStateOf(edit?.t == "voice") }
+    var voice by remember { mutableStateOf(edit?.t == "voice" || (edit == null && startVoice)) }
+    var adminsOnly by remember { mutableStateOf(edit?.ao == true) }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
@@ -2582,11 +2651,16 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
                     MButton("Text", Modifier.weight(1f), if (!voice) Kind.Accent else Kind.Normal) { voice = false }
                     MButton("Voice room", Modifier.weight(1f), if (voice) Kind.Accent else Kind.Normal) { voice = true }
                 }
+                // Cap g3: for #rules or #announcements.
+                if (edit != null && edit.t == "text" && edit.id != Proto06.MAIN)
+                    io.github.ravenor907.muninn.ui.ToggleRow("Only admins post", "For rules or announcements", adminsOnly) { adminsOnly = it }
             }
         },
         confirmButton = {
             MButton(if (edit == null) "Add" else "Save", kind = Kind.Accent, enabled = name.isNotBlank()) {
-                val err = if (edit == null) app.chat.groups.addChannel(g, name, voice) else app.chat.groups.renameChannel(g, edit.id, name)
+                var err = if (edit == null) app.chat.groups.addChannel(g, name, voice)
+                    else if (name.trim() != edit.n) app.chat.groups.renameChannel(g, edit.id, name) else null
+                if (err == null && edit != null && adminsOnly != edit.ao) err = app.chat.groups.setAdminsOnly(g, edit.id, adminsOnly)
                 if (err != null) Ui.say(err, true)
                 done()
             }
@@ -2594,7 +2668,7 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, done: 
         dismissButton = {
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton("Cancel") { done() }
-                if (edit != null && edit.id != Proto06.MAIN) MButton("Remove", kind = Kind.Danger) {
+                if (edit != null && edit.id != Proto06.MAIN) MButton("Delete", kind = Kind.Danger) {
                     done()
                     Ui.sure(Ask("Remove ${edit.n}?", "Its messages move to the main channel.", "Remove", danger = true,
                         onConfirm = { app.chat.groups.removeChannel(g, edit.id)?.let { Ui.say(it, true) } }))

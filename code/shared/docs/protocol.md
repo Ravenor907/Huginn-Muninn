@@ -79,6 +79,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `l1` | the whole account on a linked companion (section 15.1). Not in envelope `caps`: it goes in room `link`, in the companion's `sync`. Muninn as the phone, Huginn as the companion. |
 | `g2` | group timeouts and bans (section 26): signed records in room `group` (`t:"mod"`), and posts from someone timed out or banned dropped. Muninn and Huginn. |
 | `f2` | file sharing (section 27): the `lan` candidate, group files (`g` on an offer), the group's file rules (`fs` and `fm` in the state), `why` on a decline, and the Hold packet. Muninn and Huginn. |
+| `f3` | resume and long waits (27.7): a stopped file goes on from the pieces the receiver kept, 2 minutes of silence before a transfer stops (with a packet a second while quiet), and a big file's offer waits a day. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -223,7 +224,8 @@ A state is well-formed only if all of these hold (reference `check_state`):
 - `admins` sorted, unique, every admin is a member, `owner` is an admin, `by` is an admin.
 - `channels`: 1 to 20, unique ids, the first is `{"id":"main","t":"text"}` (its name may change and it can't
   be removed), every other id is 8 bytes; `t` is `text` or `voice`; `n` 1 to 32 characters. Array order is
-  display order.
+  display order. A text channel other than `main` may also have `"ao": true` (cap `g3`, 28.2).
+- `about` may be there too (cap `g3`, 28.1).
 - canonical size at most 24 KB (50 members with long names is about 15 KB).
 
 ### 3.3 Accepting a state
@@ -1575,12 +1577,13 @@ is v1. Receivers take both (23.1).
   Decline sends `decline`); so does any file while the receiver's Data saver says wait. From a sender without `e1` (it
   gives up after 120 s) a big file is taken as before, without asking.
 - The sender waits 30 s for an answer to a file of 2 MB or less, then sends it as in 14.2 (it arrives when they're
-  back); a bigger file waits 10 minutes. A `decline` to an offer, no candidates, or no path after probing does the same
+  back); a bigger file waits 10 minutes (a day between two `f3` apps, 27.7). A `decline` to an offer, no candidates, or no path after probing does the same
   for a small file. A `decline` while the file is on its way means the receiver stopped it.
 - Pieces are 1100 bytes (the last one shorter). Both sides probe every candidate of the other until an authentic probe
   comes back (20 s at most); the address it came from is used. The sender keeps at most 96 pieces unconfirmed and sends a
   piece again 500 ms after it last went. The receiver acks at least every 40 ms or 16 new pieces, checks the SHA-256 at
-  the end, says done, and saves the file in Downloads. 30 s with nothing heard ends it.
+  the end, says done, and saves the file in Downloads. 30 s with nothing heard ends it (120 s between two `f3` apps,
+  27.7).
 
 ### 14.2 Small files over the relays
 
@@ -1606,8 +1609,8 @@ traffic MUST stay off the relays except for small live frames:
   phone remembers which companions it owes history or its picture and sends them when the companion is on the home Wi-Fi
   again (at least every 30 s it looks, or when the device shows up there). The companion says "History comes over on
   home Wi-Fi".
-- Only small live frames may use the internet: `msg`, `send`, `hello`, `unlink`, `result`, `sync`, `setme`, and `me`
-  without `pic`. They also go on Bluetooth and the LAN, but to **at most 2 relays** (open ones first), never all of them,
+- Only small live frames may use the internet: `msg`, `send`, `hello`, `unlink`, `result`, `sync`, `setme`, `me`
+  without `pic`, and with cap `l2` (15.2) `ping`, `pong` and `read`. They also go on Bluetooth and the LAN, but to **at most 2 relays** (open ones first), never all of them,
   and they wait for a relay in an outbox of their own (at most 40) that never pushes out a real message (real messages
   are sent first when a relay comes back, and keep their own cap of 200). A `me` sent away from the home Wi-Fi drops
   `pic` and says `"pk": true`: the companion keeps the picture it has until the full `me` comes over the LAN.
@@ -1662,16 +1665,18 @@ characters; for media it stays the word ("Photo", "Voice message", "Video messag
 well-formed (or `s` over 100 MB) is ignored and the item shows as words. `d` is the chat's message limit in days
 (section 16): the companion deletes older messages, and their files, too.
 
-**From the companion:** `{"t": "send", "peer", "text", "id"}` (the phone sends `text` to its contact `peer` as its own
-message, each `id` once, and always answers with `result`), `{"t": "sync", "f"}` (all chats again, see Routes),
+**From the companion:** `{"t": "send", "peer", "text", "id", "re"}` (the phone sends `text` to its contact `peer` as its own
+message, each `id` once, and always answers with `result`; `re`, optional, is the id of the message it answers, and a
+phone that doesn't know it sends a plain message), `{"t": "sync", "f"}` (all chats again, see Routes),
 `{"t": "get", "h"}`
 (below), `{"t": "setme", "n", "st", "cs"}` (the person changed their name, status or custom status on the companion: the
 phone is the account, so it takes them as its own, read as in `me`, and sends `me` to every checked companion; a blank
 `n` or `st` leaves that one as it is; a picture is changed only on the phone), `{"t": "unlink"}`.
 
 **Sending through the phone.** The companion shows a `send` at once in the chat as "Sending". The phone's `result` (or
-its `msg` copy of the message) ends that; `ok` false shows why. With no answer within 60 s it shows "Didn't send · Retry",
-and Retry sends the same `id` again (so the phone never sends it twice).
+its `msg` copy of the message) ends that; `ok` false shows why. With no answer within 60 s it shows "Phone didn't answer ·
+Retry" (the `send` still waits for the phone, which takes it when it's back), and Retry sends the same `id` again (so the
+phone never sends it twice).
 
 **Media, on the home Wi-Fi only.** The companion asks for a file it doesn't have with `{"t": "get", "h"}`, one file at a
 time, and the phone answers with `{"t": "part", "h", "i", "n", "b": base64}`: the file in parts of 192 KB (196608 bytes,
@@ -1716,6 +1721,7 @@ phone side; Huginn as a phone and Muninn as a companion leave `l1` out and link 
 | `contact` | the chat key | `{n: their name, nn: my nickname for them (omitted when none), p: mailbox, vf: verified, bl: blocked}` |
 | `group` | the group id | `{n: name, role: "owner" \| "admin" \| "member", gone: "" \| "left" \| "removed" (omitted when ""), st: the signed group state (3.2)}` |
 | `folder` | the folder id | `{n: name (at most 24 characters), k: [chat keys and "g:" + group id]}` (section 4) |
+| `mute` | a chat key or `"g:"` + group id | `{f: true}` (until turned back on) or `{u: ms}` (until then); unmuted: a tombstone |
 
 Unknown kinds and items without a good `id`, `ts` or `v` are dropped.
 
@@ -1749,11 +1755,37 @@ which is why the first full set is taken whole.
 last 500 messages each, in `chat` pages, and new ones as `msg`), each item with `"fn"`: the name of who wrote it. A
 `send` with `peer` `"g:"` + id from an `l1` companion is posted in that group's main channel as the phone's own
 message (the same member), each `id` once, answered with `result` (`err` `"not in group"` when it can't be posted).
+Each `chat` page and `msg` of a group carries the group's own limit in `d` (16.2). Live group messages go by message id
+(each once, a late older one too): up to 20 at a time as `msg`; a bigger burst also goes as `chat` pages over the home
+Wi-Fi (or is owed until then). A group that appears while the phone runs (just joined) has its history sent in pages.
+The companion lists every group of the account that isn't `gone`, with or without messages.
 
 **Unlinking.** The companion asks: keep a copy or remove it. Keeping sends `unlink` and leaves the chats, contacts,
 groups and folders on the companion, read only (nothing is sent, fetched or taken from that phone until it's linked
 again, which then replaces the copy). Removing takes everything that came from the phone off the companion. A phone
 that unlinks the companion removes it all, as in section 15.
+
+### 15.2 Read state, mute and the phone's status (cap `l2`)
+
+Small live frames in room `link`, between a checked pair; Huginn takes the companion side and Muninn the phone side.
+
+**The gate.** The companion sends `{"t": "ping", "caps": "l1 l2", "dn": its device name}` when the phone's chats are
+opened and at most once a minute while they're on screen (its `sync` says `"caps": "l1 l2"` too). A phone with `l2`
+marks that companion, keeps `dn` (one line, at most 40 characters) as its name in its list of linked devices, and
+answers `{"t": "pong"}`. A phone without it ignores both, and nothing below is sent to the companion. The companion
+treats the phone as `l2` from the first `pong`, and shows its status in plain words: online (a `pong` or any frame in the
+last 2 minutes, and whether it's found on this Wi-Fi), when it was last heard, or "isn't answering" 20 s after a `ping`
+with no `pong` (messages sent meanwhile wait for it). An address is never shown. Answering over the internet but not
+found on the home Wi-Fi, the companion says history and photos can't come and why (on Windows, its firewall).
+
+**Read state.** `{"t": "read", "peer", "upTo": ms}` goes both ways: the chat (`"g:"` + id for a group) was read up to
+that message time. The companion keeps an unread count per mirrored chat (messages not `me` after the time read; history
+that comes with a new chat counts as read) and sends `read` a moment after a chat is on screen. The phone marks the chat
+read (sending receipts as usual) and clears its notification, only when nothing newer came in; it sends `read` to `l2`
+companions a moment after a chat is read on it, never back for a `read` it just took.
+
+**Mute.** A `mute` item (15.1) carries a chat's mute either way: the companion stops sounds and notifications for it,
+and the phone mutes it in its own chat flags. A companion without `l1` mutes only on itself.
 
 ## 16. Message limits (cap `d1`)
 
@@ -2429,7 +2461,7 @@ decoder failure leaves the first frame or the word "GIF". It moves in the chat, 
 With Less motion (or the system's animations off) it holds its first frame with a play button. It stops when it's
 off screen or the app is in the background. The chat list and notifications say "GIF".
 
-## 26. Mute for me, volume, timeouts and bans (cap `g2`)
+## 26. Mute for me, volume, timeouts, bans and removed messages (cap `g2`)
 
 `code/shared/tools/g2_ref.py` is the reference and writes `code/shared/vectors/g2-vectors.json`; Huginn checks it in
 `--chat-selftest` (all of it) and `--call-selftest` (the volume), Muninn in `ModTest`. Huginn `ModWire` and
@@ -2460,8 +2492,9 @@ An admin's timeout or ban is a signed object (2.2) with the domain `huginn-munin
  "ts": 1762000000000, "until": 1762000600000, "sig": "<base64 DER>"}
 ```
 
-- `a`: `ban`, `unban`, `timeout` or `untimeout`. Exactly the fields `a`, `g`, `k`, `by`, `ts`, `sig`, plus `until`
-  only for `timeout`.
+- `a`: `ban`, `unban`, `timeout`, `untimeout` or `remove`. Exactly the fields `a`, `g`, `k`, `by`, `ts`, `sig`, plus
+  `until` only for `timeout` and `m` only for `remove`.
+- `m` (only `remove`): the id (2.3, 32 lowercase hex) of a message `k` wrote in `g`.
 - `g` a group id, `k` and `by` 1 to 200 characters and different, `ts` an integer above 0 (the admin's clock, ms).
 - `until` (ms): `ts < until <= ts + 7 days + 1 minute`. The apps offer 10 minutes, 1 hour, 1 day and 1 week.
 
@@ -2471,6 +2504,11 @@ Taking one (reference `mod_accept`, vectors `records`, `refuse`, `admins`), agai
 2. `sig` verifies with `by`.
 3. The receiver has group `g`, and `by` is in its `admins`.
 4. `k` isn't the owner; if `k` is an admin, `by` is the owner (as for removing an admin, 3.4).
+
+A `remove` is an admin's **Delete for everyone** of someone else's message. It isn't kept in a slot: the message `m`,
+when its author is `k`, is blanked on every app with `g2` (text, photo, voice message and file gone) and shows as
+"Removed by an admin". When `m` hasn't arrived yet, a later copy from `k` is never shown. It is sent once, like an
+unsend, and not again after a `sync`.
 
 Each `(g, k)` has two slots, `ban` (ban, unban) and `timeout` (timeout, untimeout), each keeping the record with the
 highest `ts` it took; the same or a lower `ts` changes nothing (vectors `order`). Someone is **banned** while their
@@ -2506,7 +2544,8 @@ out (with the time left and Cancel), for admins.
 
 ### 26.4 Apps without `g2`
 
-Nothing changes for them: the state is untouched, so they take it as before, and they get no `mod` messages. Their
+Nothing changes for them: the state is untouched, so they take it as before, and they get no `mod` messages (a
+message an admin removed stays on their screen). Their
 posts during a timeout or a ban are still dropped by every app with `g2`. An admin whose app lacks `g2` can add a
 banned person back; the apps with `g2` go on dropping that person's posts until an admin with `g2` unbans them.
 
@@ -2579,9 +2618,71 @@ so an app without `f2` keeps the line open too.
   all). Data saver still asks.
 - The ask shows who sent it, the name, size and kind, and where it goes, with Accept, Decline and Always from this
   person.
-- Files are saved in `Downloads/Huginn/<chat name>` (Huginn) and `Download/Muninn/<chat name>` through MediaStore
+- Files are saved in `Downloads/Huginn/<chat name>` (Huginn; Settings › Devices › Save files to picks another folder
+  for `Downloads`) and `Download/Muninn/<chat name>` through MediaStore
   (Muninn), never a hidden app folder. The chat name is made safe: no folders, `..`, control characters, characters
   Windows refuses, trailing dots or spaces, or reserved names (`CON`, `NUL`, `COM1`...). A received file is never
   opened by itself; on a Kids' TV an app installs only after a parent approves it (7.15).
 - Each chat's Files lists what was sent and received there (on the device only, kept as long as the longest a chat
   keeps messages), with Open, Show in folder and Delete.
+
+### 27.7 Resume and long waits (cap `f3`)
+
+Only between two apps whose caps both include `f3`; with anyone else, 14.1 and 27.5 as before. Nothing new goes on
+the wire: the ack (14.1) already says which pieces are in.
+
+- **Silence.** A transfer stops after 120 s with nothing authentic heard (not 30 s). After 2 s of silence each side
+  sends one packet a second (the sender a probe, the receiver an ack) and no data, until it hears the other again;
+  its row says "Waiting for Ana to come back".
+- **Keeping what came.** When a file of theirs stops for silence, the receiver keeps the part file and how many pieces
+  from the start are in, for this run (Close on its row, or quitting, deletes it). The sender's row says Retry goes on
+  from there.
+- **Going on.** Retry sends a new `offer` (a new id and keys) for the same file. A receiver with a kept part from the
+  same sender with the same `sha`, `size` and `g` takes it without asking again (Data saver still asks), writes into
+  the kept part, and its acks say from the first one that everything below the kept count is in. The sender marks
+  those pieces confirmed and never sends a confirmed piece as a new one. The SHA-256 is checked over the whole file at
+  the end, as before.
+- **Long waits.** A file that asks first (bigger than 2 MB) waits 24 hours for Accept or Decline on both sides. The
+  sender asks a STUN server again every minute from the transfer's socket while it waits, so its candidates still
+  work. The receiver shows a system notification for it, as for a message.
+
+
+## 28. The group's about text, admin-only channels and reports (cap `g3`)
+
+`code/shared/tools/proto06_ref.py` (`check_state`) is the reference; `code/shared/tools/g2_ref.py` writes the cases to
+`code/shared/vectors/g2-vectors.json` (`g3`), which Huginn checks in `--chat-selftest` and Muninn in `ModTest`.
+
+### 28.1 About
+
+One optional field in the signed state (3.2), changed only by an admin's next state (`op` hint `"about"`):
+
+- `about`: text, 1 to 500 characters (code points), not only spaces, no control characters (so one paragraph). Left
+  out when there is none. It never expires: it is part of the state, not a message.
+
+The apps show it at the top of the group's first channel and in Group settings, where admins edit it.
+
+### 28.2 Only admins post
+
+A text channel may carry `"ao": true`: only admins post there (for #rules or #announcements). It is only ever
+`true` (off is left out), never on a voice room and never on `main`. Every app with `g3` drops a `gmsg` or `gphoto`
+in that channel from someone who isn't an admin in its current state (answering `greceipt` `delivered`), and its
+composer says "Only admins post here." Changed by an admin's next state (`op` hint `"ao"`).
+
+### 28.3 Report to admins
+
+Room `group`, `t:"report"`, from a member to each admin of the current state whose caps include `g3`, contact or not:
+
+| field | |
+|---|---|
+| `msg` | the reported message's id (2.3) |
+| `k` | its author's chat key |
+| `text` | what it said, at most 500 characters (`""` for a photo or file) |
+
+An admin's app shows it in the group, only to itself: "Report from Raven: Moose wrote: ...". From someone not in the
+state, or to someone who isn't an admin, it is dropped (403).
+
+### 28.4 Apps without `g3`
+
+An app without `g3` refuses a state with `about` or `ao` ("exactly these fields"), so an admin's app sets them only
+when every other member's caps include `g3`, and adds someone to a group that has them only when theirs do. It
+answers 400 to `report`, so reports go only to admins with `g3`.

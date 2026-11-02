@@ -278,12 +278,20 @@ Item {
         }
     }
 
+    // The controller's buttons here. X pastes while the clipboard has text; LT then shows the more words.
+    readonly property bool canPaste: visible && field.canPaste
+    readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }, { key: "y", label: "Keyboard" }].concat(
+        canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: canPaste ? "lt" : "x", label: moreLabel }] : [])
     function handleButton(b) {
         switch (b) {
         case "a": case "start": accept(); return true
         case "b": cancel(); return true
         case "y": field.forceActiveFocus(); System.showSteamKeyboard(); return true
-        case "x": if (moreLabel.length) moreOpen = !moreOpen; return true
+        case "x":
+            if (canPaste) { field.forceActiveFocus(); field.paste() }
+            else if (moreLabel.length) moreOpen = !moreOpen
+            return true
+        case "lt": if (moreLabel.length) moreOpen = !moreOpen; return true
         case "left": case "right":
             if (choices.length) {
                 const i = Math.max(0, choices.findIndex(c => c.value === choice))

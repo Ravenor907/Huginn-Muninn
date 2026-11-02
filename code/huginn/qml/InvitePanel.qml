@@ -41,7 +41,14 @@ Item {
         else link = r.link || ""
         revision++
     }
-    function openCreate() { mode = "create"; editing = false; make() }
+    // Opening it again shows my newest link nobody used yet (with no use limit) instead of making another.
+    function openCreate() {
+        mode = "create"; editing = false
+        const spare = has("groupLinks") ? (Chat.groupLinks(gid) || []).filter(l => l.mine && l.link && !(l.uses > 0) && !(l.max > 0)
+                                                                          && (!l.x || l.x - Date.now() > 3600000)) : []
+        if (spare.length) { link = spare.sort((a, b) => (b.x || Infinity) - (a.x || Infinity))[0].link; revision++ }
+        else make()
+    }
     function openList() { mode = "list"; revision++ }
     function close() { mode = ""; if (Ui.main) Ui.main.restoreFocus() }
     function timeLeft(ms) {
@@ -111,7 +118,7 @@ Item {
                         id: copyBtn
                         anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                         kind: "primary"; text: "Copy"
-                        onClicked: { if (panel.link !== "") { Chat.copyText(panel.link); Ui.say("Invite link copied.") } }
+                        onClicked: { if (panel.link !== "") { Chat.copyText(PeopleActions.inviteText(panel.groupName, panel.link)); Ui.say("Invite link copied, with how to join.") } }
                     }
                 }
                 Text {

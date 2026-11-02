@@ -20,19 +20,25 @@ Item {
     property int stop: 0
     property int focusIndex: 0
     property bool codeShown: false
+    property int addedCount: 0        // people added on Add people (its footer says Next, or Skip while none)
     property int tick: 0
     readonly property bool pad: !!Ui.main && Ui.main.padInUse
     readonly property string sample: "PRACTICE-SAMPLE-CODE"
+    // A short window (a handheld): the raven and the progress marks go, so the pattern keeps its room.
+    readonly property bool shortWindow: height < Theme.px(600)
 
     // The stops of the tour, one sentence each. spot: what Main.tourSpot() finds on the real screen.
     readonly property var stops: [
-        { spot: "groups", text: setup.pad ? "The rail: Chats, then your groups. LB steps through them." : "The rail: Chats, then your groups." },
+        { spot: "groups", text: Linked.phone.key && !setup.practice ? "The rail: Chats, then this PC's own groups. Your phone's chats are under From your phone in Chats."
+                                : setup.pad ? "The rail: Chats, then your groups. LB steps through them." : "The rail: Chats, then your groups." },
         { spot: "chats", text: "Your chats are listed here." },
         { spot: "add", text: "The + adds someone or shows your code." },
         { spot: "chats", text: setup.pad ? "LT opens the options for what's picked." : "Right-click a chat or a message for its options." },
         { spot: "attach", text: "In a chat, the clip beside the message box sends a file." },
-        { spot: "card", text: setup.pad ? "Your card: mute, deafen and your profile." : "Your card: mute, deafen and your profile. Ctrl+Shift+M mutes." },
-        { spot: "settings", text: setup.pad ? "The valknut opens Settings. Menu does too." : "The valknut opens Settings." }
+        { spot: "card", text: setup.pad ? "Your card and profile. In voice, hold LB: Up mutes, Down deafens." : "Your card: mute, deafen and your profile. Ctrl+Shift+M mutes." },
+        { spot: "newgroup", text: "The + under your groups makes a new group for family or friends." },
+        { spot: setup.pad ? "" : "search", text: setup.pad ? "Lost? Press View to show the buttons." : "Ctrl+K jumps to any chat. Transfers shows files on their way." },
+        { spot: "settings", text: setup.pad ? "The knot icon at the bottom opens Settings. Menu does too." : "The knot icon at the bottom opens Settings." }
     ]
     readonly property var spot: touring && Ui.main ? (tick, width, height, Ui.main.tourSpot(stops[Math.min(stop, stops.length - 1)].spot)) : null
     Timer { interval: 300; repeat: true; running: setup.visible && setup.touring; onTriggered: setup.tick++ }
@@ -41,12 +47,14 @@ Item {
     readonly property var order: {
         const lockSet = step === "lock" && Vault.exists && !practice
         switch (step) {
-        case "welcome": return [{ id: "restore", label: "Restore from a backup" }, { id: "skipAll", label: "Skip setup" }, { id: "next", label: "Start" }]
+        // Linking to a phone first (most people who install Huginn already use Muninn), or starting new here.
+        case "welcome": return [{ id: "restore", label: "Restore from a backup" }, { id: "skipAll", label: "Skip setup" }, { id: "newHere", label: "New here" },
+                                { id: "linkFirst", label: "Link to my phone" }]
         case "lock": return lockSet ? [{ id: "back", label: "Back" }, { id: "next", label: "Next" }] : [{ id: "back", label: "Back" }, { id: "skipLock", label: "Skip" }]
         case "name": return [{ id: "nameField", label: "Type" }, { id: "picture", label: "Add a picture" }, { id: "back", label: "Back" }, { id: "next", label: "Skip" }, { id: "saveName", label: "Next" }]
-        case "link": return [{ id: "linkNow", label: "Show the code" }, { id: "back", label: "Back" }, { id: "next", label: "Skip" }]
+        case "link": return [{ id: "linkNow", label: "Show the code" }, { id: "back", label: "Back" }, { id: "next", label: Linked.phone.key && !practice ? "Next" : "Skip" }]
         case "people": return (codeShown ? [{ id: "copyLink", label: "Copy link" }] : [{ id: "showCode", label: "Show my code" }])
-                               .concat([{ id: "pasteField", label: "Type" }, { id: "addCode", label: "Add" }, { id: "back", label: "Back" }, { id: "next", label: "Later" }, { id: "next2", label: "Next" }])
+                               .concat([{ id: "pasteField", label: "Type" }, { id: "addCode", label: "Add" }, { id: "back", label: "Back" }, { id: "next2", label: addedCount > 0 ? "Next" : "Skip" }])
         case "tour": return [{ id: "skipTour", label: "Skip tour" }, { id: "nextStop", label: stop < stops.length - 1 ? "Next" : "Got it" }]
         case "done": return [{ id: "back", label: "Back" }, { id: "finish", label: ribbon ? "Back to Labs" : "Start a chat" }]
         }
@@ -58,14 +66,14 @@ Item {
     // Where the focus starts on each page: its main button.
     function primaryIndex() {
         const ids = order.map(o => o.id)
-        for (const p of ["next", "saveName", "linkNow", "showCode", "nextStop", "finish", "skipLock"])
+        for (const p of ["linkFirst", "next", "saveName", "linkNow", "showCode", "nextStop", "finish", "skipLock"])
             if (ids.indexOf(p) >= 0 && (p !== "next" || step === "welcome" || step === "lock")) return ids.indexOf(p)
         return 0
     }
 
     readonly property var prompts: {
         if (step === "lock" && !(Vault.exists && !practice))
-            return [{ key: "x", label: "Skip" }, { key: "b", label: "Back" }]
+            return [{ key: "lb", label: lockPanel.usePattern ? "Password" : "Pattern" }, { key: "x", label: "Skip" }, { key: "b", label: "Back" }]
         const a = order.length ? order[focusAt].label : ""
         const b = index > 0 ? (touring && stop > 0 ? "Previous" : "Back") : ribbon ? "Leave" : ""
         return [{ key: "dpad", label: "Choose" }, { key: "a", label: a }].concat(b !== "" ? [{ key: "b", label: b }] : [])
@@ -77,13 +85,14 @@ Item {
         ribbon = !!isPractice && !shotStep
         const s = ["welcome"]
         if (practice || !Vault.exists) s.push("lock")
-        s.push("name")
+        // Link comes before the name: a linked phone's name and picture are used here, so they aren't asked for.
         if (practice || (!Linked.phone.key && Linked.companions.length === 0)) s.push("link")
-        s.push("people", "tour", "done")
+        s.push("name", "people", "tour", "done")
         steps = s
         index = shotStep ? Math.max(0, s.indexOf(shotStep)) : 0
         stop = shotStop || 0
         codeShown = false
+        addedCount = 0
         nameInput.text = practice ? (Ui.myName || "Raven") : Chat.username
         pasteInput.text = ""
         visible = true
@@ -97,7 +106,19 @@ Item {
         if (Ui.main) Ui.main.restoreFocus()
     }
     function next() {
+        // Linked: the phone gives the name and picture, and Add people would add to this PC's own account. Both go.
+        if (step === "link" && Linked.phone.key && !practice) steps = steps.filter(s => s !== "name" && s !== "people")
         if (index < steps.length - 1) { index++; stop = 0; enter() }
+    }
+    // Welcome: New here leaves Link out; Link to my phone puts it back if it was.
+    function newHere() { steps = steps.filter(s => s !== "link"); next() }
+    function linkFirst() {
+        if (steps.indexOf("link") < 0 && !Linked.phone.key) {
+            const s = steps.slice()
+            s.splice(s.indexOf("name"), 0, "link")
+            steps = s
+        }
+        next()
     }
     function back() {
         if (touring && stop > 0) { stop--; return }
@@ -151,8 +172,9 @@ Item {
     function addCode() {
         const t = pasteInput.text.trim()
         if (t === "") { pasteInput.forceActiveFocus(); return }
-        if (practice) { Ui.say("Practice: their code would add them here."); pasteInput.text = ""; return }
-        if (t.indexOf("MUNINNG1:") >= 0 || (Chat.parseGroupCode(t) || {}).name) { Ui.say("That's a group invite. Open it from + in Chats.", true); return }
+        if (practice) { Ui.say("Practice: their code would add them here."); pasteInput.text = ""; addedCount++; return }
+        // A group invite: the same Join confirm as in Chats.
+        if (PeopleActions.joinGroup(t, () => { pasteInput.text = ""; addedCount++ })) return
         const c = Chat.parseCode(t)
         if (!c.key) { Ui.say("That code didn't work.", true); return }
         if (c.mine) { Ui.say("That's your own code.", true); return }
@@ -162,10 +184,13 @@ Item {
         PeopleActions.added(t, c.key)
         Ui.say(c.name + " added.")
         pasteInput.text = ""
+        addedCount++
     }
     function run(id) {
         switch (id) {
         case "next": case "next2": next(); break
+        case "newHere": newHere(); break
+        case "linkFirst": linkFirst(); break
         case "back": back(); break
         case "skipAll": finish(false); break
         // A backup from Huginn or Muninn instead of starting fresh (practice: nothing is opened).
@@ -226,7 +251,7 @@ Item {
             width: parent.width - Theme.px(48)
             height: Math.max(0, foot.y - y - Theme.px(8))
             contentWidth: width
-            contentHeight: setup.step === "lock" ? height : setup.pageHeight
+            contentHeight: setup.step === "lock" ? lockPage.height : setup.pageHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
 
@@ -244,8 +269,15 @@ Item {
                     sourceSize.width: 256; sourceSize.height: 256
                 }
                 Title { text: "WELCOME TO HUGINN" }
-                Line { text: "Private messages, calls and files with family. No phone number, no account." }
-                Line { text: "Have a backup from Huginn or Muninn?"; topPadding: Theme.px(8) }
+                Line { text: "Private messages, calls and files with family and friends. No phone number, no account." }
+                // Windows asks once about its firewall when Huginn first listens on the network.
+                Line {
+                    visible: Qt.platform.os === "windows"
+                    text: "If Windows asks about its firewall, allow Private networks. Nearby and direct calls and files on your home Wi-Fi need it. Public networks can stay off."
+                    font.pixelSize: Theme.fs(13)
+                }
+                Line { text: "Already use Muninn on your phone? Link this computer to it and your chats come here too."; topPadding: Theme.px(8) }
+                Line { text: "Restoring a backup makes this computer your only device. To use it with your phone, link instead."; font.pixelSize: Theme.fs(13) }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Restore from a backup"; focused: setup.lit("restore"); onClicked: setup.run("restore") }
             }
 
@@ -254,12 +286,14 @@ Item {
                 id: lockPage
                 visible: setup.step === "lock"
                 width: body.width
-                height: body.height
+                // Never so short that the pattern gets small: the page scrolls instead.
+                height: Math.max(body.height, lockPanel.visible ? lockPanel.minHeight : 0)
                 LockPanel {
                     id: lockPanel
                     visible: !(Vault.exists && !setup.practice)
                     anchors.fill: parent
                     mode: "setup"
+                    compact: setup.shortWindow
                     practice: setup.practice
                     onFinished: setup.next()
                     onCancelled: setup.back()
@@ -281,8 +315,8 @@ Item {
                 width: body.width
                 spacing: Theme.px(12)
                 topPadding: Theme.px(12)
-                Title { text: "WHAT SHOULD PEOPLE CALL YOU?" }
-                Line { text: "Not your real one. Change it any time in Settings › You." }
+                Title { text: "WHAT'S YOUR NAME?" }
+                Line { text: "Any name your friends will recognize. A nickname is fine. Change it any time in Settings › You." }
                 Field { id: nameInput; focusId: "nameField"; placeholder: "A name"; onEnter: setup.saveName() }
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -352,7 +386,7 @@ Item {
                     focused: setup.lit(setup.codeShown ? "copyLink" : "showCode")
                     onClicked: setup.run(setup.codeShown ? "copyLink" : "showCode")
                 }
-                Field { id: pasteInput; focusId: "pasteField"; placeholder: "Paste their code or link"; onEnter: setup.addCode() }
+                Field { id: pasteInput; focusId: "pasteField"; placeholder: "Paste a code or invite link"; onEnter: setup.addCode() }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Add"; focused: setup.lit("addCode"); onClicked: setup.run("addCode") }
             }
 
@@ -371,7 +405,10 @@ Item {
                     Icon { anchors.centerIn: parent; name: "check"; size: Theme.px(32); lineWidth: 2.2; color: Theme.accent }
                 }
                 Title { text: "YOU'RE SET" }
-                Line { text: "Messages disappear after 7 days, on every device." }
+                // How long messages are kept, said kindly: a privacy choice, not a fault.
+                Line { text: "Messages are kept for 7 days, then they go from every device, so nothing piles up for anyone to find. Family groups can keep them longer, up to 30 days. Files you save stay on this computer." }
+                Line { visible: System.portable; text: "Everything is in the data folder beside Huginn.exe. Keep the data folder when you update by hand." }
+                Line { visible: !!Linked.phone.key && !setup.practice; text: "Your phone's chats are under From your phone in Chats." }
                 Line { visible: setup.ribbon; text: "Practice ends here and goes back to Labs." }
             }
         }
@@ -384,6 +421,7 @@ Item {
             width: parent.width - Theme.px(48)
             spacing: Theme.px(12)
             Row {
+                visible: !setup.shortWindow
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Theme.px(6)
                 Accessible.role: Accessible.StaticText
@@ -406,7 +444,7 @@ Item {
                         required property var modelData
                         text: modelData.label
                         kind: modelData.id === "next" && setup.step !== "welcome" && setup.step !== "lock" ? "normal"
-                            : ["next", "next2", "saveName", "finish"].indexOf(modelData.id) >= 0 ? "primary" : "plain"
+                            : ["next", "next2", "saveName", "finish", "linkFirst"].indexOf(modelData.id) >= 0 ? "primary" : modelData.id === "newHere" ? "normal" : "plain"
                         focused: setup.lit(modelData.id)
                         onClicked: setup.run(modelData.id)
                     }
@@ -418,13 +456,13 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.Wrap
                 visible: text !== ""
-                text: setup.step === "lock" && lockPanel.visible ? "" : setup.pad ? "D-pad moves. A picks. B goes back." : ""
+                text: setup.step === "lock" && lockPanel.visible ? "" : setup.pad ? "D-pad moves. A picks. B goes back. View shows the buttons." : ""
                 color: Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
         }
     }
-    readonly property var footIds: ["skipAll", "back", "skipLock", "next", "next2", "saveName", "finish"]
+    readonly property var footIds: ["skipAll", "back", "skipLock", "next", "next2", "saveName", "finish", "newHere", "linkFirst"]
     readonly property real pageHeight: step === "welcome" ? welcomePage.implicitHeight : step === "lock" ? Theme.px(540)
                                      : step === "name" ? namePage.implicitHeight : step === "link" ? linkPage.implicitHeight
                                      : step === "people" ? peoplePage.implicitHeight : step === "done" ? donePage.implicitHeight : 0

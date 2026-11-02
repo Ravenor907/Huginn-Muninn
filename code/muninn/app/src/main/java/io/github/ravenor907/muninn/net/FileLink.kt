@@ -39,12 +39,21 @@ object FileLink {
     const val RTO_MS = 500L
     const val PUNCH_MS = 20_000L
     const val IDLE_MS = 30_000L
+    /**
+     * Cap f3 (27.7): resume and long waits. Silence ends a transfer only after [LONG_IDLE_MS]; after [QUIET_MS] of it each
+     * side sends one packet a second (a probe or an ack) until it hears the other again.
+     */
+    const val RESUME_CAP = "f3"
+    const val LONG_IDLE_MS = 120_000L
+    const val QUIET_MS = 2_000L
     const val MAX_BYTES = 4L * 1024 * 1024 * 1024
     /** From someone trusted, a file smaller than this arrives by itself; a bigger one asks Accept or Decline first. */
     const val AUTO_BYTES = 50L * 1024 * 1024
     /** How long an offer waits for an answer: longer for a file the other phone asks about first. */
     const val ANSWER_MS = 120_000L
     const val ASK_ANSWER_MS = 10 * 60_000L
+    /** Cap f3: a big file waits a day for Accept or Decline (both apps say f3). */
+    const val LONG_ANSWER_MS = 24 * 3_600_000L
 
     /**
      * A sender whose app says this cap waits [ASK_ANSWER_MS] for a big file, so the receiver may ask first. An older
@@ -66,7 +75,7 @@ object FileLink {
      * that way (it arrives when they're back); a bigger one waits as long as the other side may ask first (Data
      * saver, or a big file).
      */
-    fun answerMs(size: Long): Long = if (size <= FileText.RELAY_MAX) RELAY_AFTER_MS else ASK_ANSWER_MS
+    fun answerMs(size: Long, long: Boolean = false): Long = if (size <= FileText.RELAY_MAX) RELAY_AFTER_MS else if (long) LONG_ANSWER_MS else ASK_ANSWER_MS
 
     const val PROBE: Byte = 1
     const val DATA: Byte = 2
@@ -90,7 +99,11 @@ object FileLink {
             for ((i, t) in sentAt) if (!acked[i] && now - t >= rto) out += i
             out.sort()
             var inflight = sentAt.count { !acked[it.key] }
-            while (next < pieces && inflight < WINDOW) { out += next; next++; inflight++ }
+            while (next < pieces && inflight < WINDOW) {
+                // Cap f3: pieces the receiver already had from an earlier try are acked before they go.
+                if (acked[next]) { next++; continue }
+                out += next; next++; inflight++
+            }
             out.forEach { sentAt[it] = now }
             return out
         }
@@ -108,6 +121,8 @@ object FileLink {
         val done get() = got.cardinality() == pieces
         /** True when it's new. */
         @Synchronized fun take(i: Int): Boolean { if (i !in 0 until pieces || got[i]) return false; got.set(i); return true }
+        /** Cap f3: the first [below] pieces are already on disk from a try that stopped. */
+        @Synchronized fun preload(below: Int) { got.set(0, below.coerceIn(0, pieces)) }
         /** Everything below the first gap, and which of the 64 after it are in. */
         @Synchronized fun ack(): Pair<Int, Long> {
             val below = got.nextClearBit(0).coerceAtMost(pieces)
@@ -196,6 +211,8 @@ object FileLink {
     private val started = ConcurrentHashMap<String, Long>()
     private val pausedAt = ConcurrentHashMap<String, Long>()
     private val pausedFor = ConcurrentHashMap<String, Long>()
+    /** Cap f3: bytes already there when it began (a resumed file), left out of the speed. */
+    private val base = ConcurrentHashMap<String, Long>()
 
     /** What a card keeps from before (its chat, route, folder, when it began) and what it shows now (paused, pace). */
     @Synchronized private fun put(p: Progress) {
@@ -206,7 +223,7 @@ object FileLink {
         val held = p.id in heldIds
         val since = started[p.id]
         val pace = if (merged.state == "sending" && since != null && !paused && !held)
-            FileText.pace(merged.done, merged.size, System.currentTimeMillis() - since - (pausedFor[p.id] ?: 0L)) else ""
+            (base[p.id] ?: 0L).let { b -> FileText.pace(merged.done - b, merged.size - b, System.currentTimeMillis() - since - (pausedFor[p.id] ?: 0L)) } else ""
         _all.value = _all.value + (p.id to merged.copy(paused = paused, held = held, pace = pace))
     }
     private fun refresh(id: String) { _all.value[id]?.let { put(it) } }
@@ -249,6 +266,10 @@ object FileLink {
         fun saveIn(name: String, file: File, folder: String): Saved? = save(name, file)
         /** The chat's Files list: a file sent or received there. */
         fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) {}
+        /** Cap f3 (27.7): their app keeps a stopped file to go on from, and waits a day for a big file's answer. */
+        fun resumes(peer: String): Boolean = false
+        /** A file that asks Accept or Decline first: a notification, as a message gets ([where]: its chat). */
+        fun offered(where: String, from: String, text: String) {}
     }
 
     @Volatile var host: Host? = null
@@ -264,6 +285,14 @@ object FileLink {
     /** Mine, while it can be sent again (Retry): who to, the file and its name, and its group. */
     private val again = ConcurrentHashMap<String, Triple<String, File, String>>()
     private val againGroup = ConcurrentHashMap<String, String>()
+    /** Cap f3: a file of theirs that stopped part way, kept to go on from (this run): by its card's id. */
+    private class Partial(val peer: String, val sha: String, val size: Long, val group: String, val file: File, val below: Int)
+    private val partials = ConcurrentHashMap<String, Partial>()
+    private fun partialFor(peer: String, sha: String, size: Long, group: String): String? =
+        if (host?.resumes(peer) != true) null
+        else partials.entries.firstOrNull { (_, p) -> p.peer == peer && p.sha == sha && p.size == size && p.group == group && p.file.isFile }?.key
+    /** A file of mine already hashed (path, size, last change): Retry doesn't read it all again. */
+    private val hashed = ConcurrentHashMap<String, Triple<Long, Long, String>>()
 
     /** The chat's name for a card: the person, or the group. */
     fun chatOf(p: Progress): String = if (p.group.isEmpty()) host?.nameOf(p.peer) ?: "Someone" else host?.groupName(p.group) ?: "Group"
@@ -275,11 +304,21 @@ object FileLink {
         return id
     }
 
-    /** A file of mine that can't go at all: its card says why, and so does a notice (never silent). */
-    fun failed(peer: String, name: String, size: Long, why: String, id: String = Proto06.newLogicalId(), group: String = "") {
+    /**
+     * A file of mine that can't go at all: its card says why, and so does a notice (never silent). [direct]: it would go
+     * with Direct calls and files on for each other (its card offers that). [retry]: the file, kept for Retry.
+     */
+    fun failed(peer: String, name: String, size: Long, why: String, id: String = Proto06.newLogicalId(), group: String = "",
+               direct: Boolean = false, retry: File? = null) {
+        if (direct) directIds.add(id)
+        if (retry != null) { again[id] = Triple(peer, retry, name); if (group.isNotEmpty()) againGroup[id] = group }
         put(Progress(id, peer, name, size, true, "failed", note = why, group = group))
         host?.notice("$name didn't go. $why")
     }
+
+    /** Failed cards of mine that need Direct calls and files with them (no shared Wi-Fi, too big for the relays). */
+    private val directIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    fun needsDirect(id: String) = id in directIds && _all.value[id]?.state == "failed"
 
     /** A file of mine that went as a message over the internet route: its card follows the message ([relayed]). */
     fun relayOut(msgId: String, peer: String, name: String, size: Long) {
@@ -298,6 +337,9 @@ object FileLink {
     }
 
     fun isStopped(id: String) = id in stopped
+
+    /** Files moving straight now (closing or updating Muninn would stop them). */
+    fun movingCount() = _all.value.values.count { !it.relay && (it.state == "connecting" || it.state == "sending") }
 
     /** A transfer of mine or theirs is with [peer] (their answers come in even when they aren't a contact). */
     fun expects(peer: String, id: String) = outs[id]?.peer == peer || ins[id]?.peer == peer
@@ -331,6 +373,8 @@ object FileLink {
     fun dismiss(id: String) {
         val p = _all.value[id] ?: return
         if (FileText.running(p.state)) return
+        partials.remove(id)?.file?.delete()   // closing a stopped file of theirs lets go of what came of it
+        directIds.remove(id)
         again.remove(id)?.second?.delete()
         againGroup.remove(id)
         _all.value = _all.value - id
@@ -352,6 +396,7 @@ object FileLink {
     fun takeRetry(id: String): Triple<String, File, String>? {
         if (!canRetry(id)) return null
         val t = again.remove(id) ?: return null
+        directIds.remove(id)
         _all.value = _all.value - id
         return t.takeIf { it.second.isFile }
     }
@@ -420,7 +465,9 @@ object FileLink {
         put(Progress(id, peer, name, size, true, "connecting", group = group, route = if (lanOnly) Sharing.routeLabel("direct") else ""))
         work.execute {
             try {
-                val sha = sha256(file)
+                val known = hashed[file.absolutePath]
+                val sha = known?.takeIf { it.first == size && it.second == file.lastModified() }?.third
+                    ?: sha256(file).also { hashed[file.absolutePath] = Triple(size, file.lastModified(), it) }
                 if (id in stopped) return@execute
                 val sock = DatagramSocket()
                 // Close by without trust: only the "lan" candidate, and no STUN server is asked.
@@ -439,12 +486,22 @@ object FileLink {
                 put(Progress(id, peer, name, size, true, "offered", group = group))
                 // Nothing back in time: a small file goes over the internet route (it arrives when they're back); a
                 // bigger one waits as long as the other phone may ask first.
-                val until = System.currentTimeMillis() + answerMs(size)
-                while (System.currentTimeMillis() < until && _all.value[id]?.state == "offered" && id !in stopped) Thread.sleep(250)
+                val long = h.resumes(peer)
+                val until = System.currentTimeMillis() + answerMs(size, long)
+                // Cap f3: a big file may wait a day. A STUN ask a minute keeps this socket's way through the router
+                // open, so the address in the offer still works when they accept.
+                var lastStun = System.currentTimeMillis()
+                while (System.currentTimeMillis() < until && _all.value[id]?.state == "offered" && id !in stopped) {
+                    Thread.sleep(250)
+                    if (long && !lanOnly && size > FileText.RELAY_MAX && System.currentTimeMillis() - lastStun >= 60_000L) {
+                        lastStun = System.currentTimeMillis()
+                        if (_all.value[id]?.state == "offered") stunKeep(sock)
+                    }
+                }
                 if (id in stopped) { outs.remove(id)?.sock?.close(); return@execute }
                 if (_all.value[id]?.state == "offered") {
                     outs.remove(id)?.sock?.close()
-                    fallBack(id, peer, file, name, "They're offline. Try again when they're back.", group)
+                    fallBack(id, peer, file, name, if (long && size > FileText.RELAY_MAX) "Not accepted within a day. Try again." else "They're offline. Try again when they're back.", group)
                 }
             } catch (e: Exception) { if (id !in stopped) fail(id, "That file couldn't be sent.") }
         }
@@ -500,14 +557,22 @@ object FileLink {
                 // Someone in one of my Family groups, "Always from this person", or a group's own file the group lets
                 // through (16.2): no asking first, whatever the size (Data saver still waits).
                 val free = h.alwaysFrom(from) || (if (g.isEmpty()) h.allArrive(from) else h.groupArrives(g, size))
-                val waits = h.waitsForAsk(from) && !free
+                // Cap f3: the rest of a file already accepted (it stopped part way) doesn't ask again.
+                val resuming = partialFor(from, inc.sha, size, g) != null
+                val waits = h.waitsForAsk(from) && !free && !resuming
                 val routeShown = if (!trust) Sharing.routeLabel("direct") else ""
                 when {
                     arrivesByItself(inc.size, h.mayDownload(), waits) -> accept(id)
                     asksFirst(inc.size, waits) -> {
-                        put(Progress(id, from, inc.name, inc.size, false, "asking", note = "Wants to send you this. Accept or decline", group = g,
+                        // Cap f3: it waits a day (their app waits as long).
+                        val day = h.resumes(from)
+                        put(Progress(id, from, inc.name, inc.size, false, "asking",
+                            note = if (day) "Wants to send you this. Waits a day for your answer" else "Wants to send you this. Accept or decline", group = g,
                             folder = "Download/$folder", route = routeShown))
-                        h.notice("${h.nameOf(from)} wants to send you ${inc.name}. Accept or decline it in Transfers.")
+                        val text = "${h.nameOf(from)} wants to send you ${inc.name} (${FileText.size(inc.size)}). Accept or decline it in the chat or Transfers."
+                        h.notice(text)
+                        h.offered(if (g.isEmpty()) from else "g:$g", from, text)
+                        expireAsk(id, if (day) LONG_ANSWER_MS else ASK_ANSWER_MS)
                     }
                     else -> put(Progress(id, from, inc.name, inc.size, false, "waiting", note = "On mobile data: tap to download", group = g,
                         folder = "Download/$folder", route = routeShown))
@@ -531,13 +596,26 @@ object FileLink {
                     // over the internet route.
                     val why = p.optString("why")
                     if (why.isNotEmpty()) fail(id, Sharing.declineText(why))
-                    else fallBack(id, it.peer, it.file, it.name, if (it.lanOnly) "Couldn't reach them on this Wi-Fi." else Sharing.declineText(""), it.group)
+                    else if (!it.lanOnly) { directIds.add(id); fallBack(id, it.peer, it.file, it.name, Sharing.declineText(""), it.group) }
+                    else fallBack(id, it.peer, it.file, it.name, "Couldn't reach them on this Wi-Fi.", it.group)
                 } else {
                     // Stopped on their side while it was on its way.
                     _all.value[id]?.let { p -> put(p.copy(state = "failed", note = "They stopped it")) }
                     stopped.add(id)
                     it.sock.close()
                 }
+            }
+        }
+    }
+
+    /** An ask nobody answered in time: its card says so (the sender gave up by then too). */
+    private fun expireAsk(id: String, ms: Long) {
+        work.execute {
+            val until = System.currentTimeMillis() + ms
+            while (System.currentTimeMillis() < until && _all.value[id]?.state == "asking") Thread.sleep(1000)
+            if (_all.value[id]?.state == "asking") {
+                ins.remove(id)
+                _all.value[id]?.let { put(it.copy(state = "failed", note = "Not taken in time. Ask them to send it again.")) }
             }
         }
     }
@@ -584,7 +662,7 @@ object FileLink {
 
     private fun ended(id: String) {
         movingIds.remove(id); pausedIds.remove(id); heldIds.remove(id); resumed.remove(id)
-        started.remove(id); pausedAt.remove(id); pausedFor.remove(id)
+        started.remove(id); pausedAt.remove(id); pausedFor.remove(id); base.remove(id)
     }
 
     /** Hold (27.5): [on] paused, else going on. */
@@ -613,6 +691,10 @@ object FileLink {
             var lastHeard = System.currentTimeMillis()
             var lastKeep = 0L
             var sent = 0L
+            var firstAck = true
+            var quiet = false
+            val f3 = host?.resumes(o.peer) == true
+            val who = host?.nameOf(o.peer) ?: "They"
             movingIds.add(id)
             started[id] = System.currentTimeMillis()
             RandomAccessFile(o.file, "r").use { raf ->
@@ -621,9 +703,20 @@ object FileLink {
                 while (!s.done) {
                     if (id in stopped) return
                     val now = System.currentTimeMillis()
-                    if (now - lastHeard > IDLE_MS) { fail(id, "They went offline. Try again."); return }
+                    if (now - lastHeard > (if (f3) LONG_IDLE_MS else IDLE_MS)) {
+                        fail(id, if (f3) "$who went offline at ${FileText.percent(sent, o.size)}%. Retry goes on from there." else "They went offline. Try again.")
+                        return
+                    }
+                    // Cap f3: quiet for a moment, a probe a second instead of data until they're heard again.
+                    if (f3 && (now - lastHeard > QUIET_MS) != quiet) {
+                        quiet = !quiet
+                        put(Progress(id, o.peer, o.name, o.size, true, "sending", sent, note = if (quiet) "Waiting for $who to come back" else "", route = route, group = o.group))
+                    }
                     if (resumed.remove(id)) repeat(3) { hold(sock, key, id, 0, seq++, false, peer) }
                     when {
+                        quiet && id !in pausedIds -> if (now - lastKeep >= 1000) {
+                            val pk = seal(key, id, PROBE, 0, seq++, byteArrayOf(1)); sock.send(DatagramPacket(pk, pk.size, peer)); lastKeep = now
+                        }
                         // Paused here: Hold every second, no data. Held by them: a probe a second, no data.
                         id in pausedIds -> if (now - lastKeep >= 1000) { hold(sock, key, id, 0, seq++, true, peer); lastKeep = now }
                         id in heldIds -> if (now - lastKeep >= 1000) {
@@ -655,7 +748,9 @@ object FileLink {
                                 val below = bb.int
                                 s.ack(below, bb.long)
                                 sent = minOf(o.size, below.toLong() * CHUNK)
-                                put(Progress(id, o.peer, o.name, o.size, true, "sending", sent, route = route, group = o.group))
+                                // Cap f3: what they already had (a resumed file) doesn't count in the speed.
+                                if (firstAck) { firstAck = false; base[id] = sent }
+                                put(Progress(id, o.peer, o.name, o.size, true, "sending", sent, note = if (quiet) "Waiting for $who to come back" else "", route = route, group = o.group))
                             }
                             if (t == DONE) { s.ack(n, 0); break }
                         }
@@ -671,7 +766,12 @@ object FileLink {
 
     private fun runReceiver(id: String, inc: In, key: ByteArray, sock: DatagramSocket) {
         val h = host ?: return
-        val tmp = File(h.cacheDir(), "incoming-$id")
+        // Cap f3: the same file from the same person stopped part way before. It goes on from there.
+        val kept = partialFor(inc.peer, inc.sha, inc.size, inc.group)?.let { k -> partials.remove(k)?.also { _all.value = _all.value - k } }
+        val tmp = kept?.file ?: File(h.cacheDir(), "incoming-$id")
+        val f3 = h.resumes(inc.peer)
+        val who = h.nameOf(inc.peer)
+        var keep = false
         try {
             val peer = punch(sock, key, id, 1, inc.theirCands) ?: run {
                 fail(id, if (inc.lanOnly) "Couldn't reach them on this Wi-Fi. Ask them to send it again." else "Couldn't connect straight to them. It may come another way.")
@@ -680,21 +780,41 @@ object FileLink {
             val route = Sharing.routeLabel(if (inc.lan != null && peer == inc.lan) "direct" else "internet")
             val n = pieces(inc.size)
             val r = Receiver(n)
+            // Cap f3: what an earlier try left is in; the first ack tells the sender to go on from there.
+            val from = if (kept != null) { r.preload(kept.below); minOf(inc.size, kept.below.toLong() * CHUNK) } else 0L
+            base[id] = from
             var seq = 1000L
             sock.soTimeout = 50
             val buf = ByteArray(2048)
             var lastHeard = System.currentTimeMillis()
             var lastAck = 0L
             var fresh = 0
+            var quiet = false
             movingIds.add(id)
             started[id] = System.currentTimeMillis()
-            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", route = route, group = inc.group))
+            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", from, route = route, group = inc.group))
             RandomAccessFile(tmp, "rw").use { raf ->
                 raf.setLength(inc.size)
                 while (!r.done) {
                     if (id in stopped) return
                     val now = System.currentTimeMillis()
-                    if (now - lastHeard > IDLE_MS) { fail(id, "They went offline. Ask them to send it again."); return }
+                    if (now - lastHeard > (if (f3) LONG_IDLE_MS else IDLE_MS)) {
+                        if (f3) {
+                            // Kept: when they send it again it goes on from here.
+                            val below = r.ack().first
+                            partials[id] = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, below)
+                            keep = true
+                            fail(id, "$who went offline at ${FileText.percent(minOf(inc.size, below.toLong() * CHUNK), inc.size)}%. It goes on from there when they send it again.")
+                        } else fail(id, "They went offline. Ask them to send it again.")
+                        return
+                    }
+                    // Cap f3: quiet for a moment, an ack a second until they're heard again.
+                    if (f3 && (now - lastHeard > QUIET_MS) != quiet) {
+                        quiet = !quiet
+                        val (below, _) = r.ack()
+                        put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", minOf(inc.size, below.toLong() * CHUNK),
+                            note = if (quiet) "Waiting for $who to come back" else "", route = route, group = inc.group))
+                    }
                     try {
                         val dp = DatagramPacket(buf, buf.size)
                         sock.receive(dp)
@@ -713,12 +833,13 @@ object FileLink {
                     if (id in pausedIds) {
                         // Paused here: Hold every second instead of acks.
                         if (t - lastAck >= 1000) { hold(sock, key, id, 1, seq++, true, peer); lastAck = t }
-                    } else if (fresh >= 16 || t - lastAck >= (if (id in heldIds) 1000L else 40L)) {
+                    } else if (fresh >= 16 || t - lastAck >= (if (id in heldIds || quiet) 1000L else 40L)) {
                         val (below, bits) = r.ack()
                         val pk = seal(key, id, ACK, 1, seq++, ByteBuffer.allocate(12).putInt(below).putLong(bits).array())
                         sock.send(DatagramPacket(pk, pk.size, peer))
                         lastAck = t; fresh = 0
-                        put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", minOf(inc.size, below.toLong() * CHUNK), route = route, group = inc.group))
+                        put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", minOf(inc.size, below.toLong() * CHUNK),
+                            note = if (quiet) "Waiting for $who to come back" else "", route = route, group = inc.group))
                     }
                 }
             }
@@ -732,7 +853,7 @@ object FileLink {
             put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = "Download/$folder"))
             h.logFile(if (inc.group.isEmpty()) inc.peer else "g:${inc.group}", saved.name, inc.size, saved.uri, false)
             h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in Download/$folder")
-        } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally { ins.remove(id); sock.close(); tmp.delete(); ended(id) }
+        } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally { ins.remove(id); sock.close(); if (!keep) tmp.delete(); ended(id) }
     }
 
     /**
@@ -774,6 +895,13 @@ object FileLink {
         } catch (_: Exception) {}
         return out
     }
+
+    /** Cap f3: a STUN ask from [sock] that keeps its way through the router open. Only sent; the answer is ignored. */
+    private fun stunKeep(sock: DatagramSocket) = try {
+        val (server, port) = Stun.SERVERS.first()
+        val req = Stun.encode(Stun.type(Stun.BINDING, Stun.REQUEST), Stun.newTid(), emptyList(), fingerprint = true)
+        sock.send(DatagramPacket(req, req.size, InetSocketAddress(InetAddress.getByName(server), port)))
+    } catch (_: Exception) {}
 
     /** Asks each server in [Stun.SERVERS] in turn until one answers. */
     private fun stun(sock: DatagramSocket): InetSocketAddress? {

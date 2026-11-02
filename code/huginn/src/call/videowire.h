@@ -126,7 +126,9 @@ struct Profile {
     int width, height, fps, capKbps;
 };
 Profile cameraProfile(bool freePath);
-Profile screenProfile(bool freePath);
+// Screen share: Sharp (the default here) is full size at up to 10 frames a second, for text; Smooth is 30 a second
+// at 720p (24 at 480p over the relay), for games and video, at the same bitrate cap.
+Profile screenProfile(bool freePath, bool smooth = false);
 
 bool selfTest();
 }

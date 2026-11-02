@@ -54,6 +54,8 @@ class Groups(
         fun hasG2(k: String): Boolean = false
         /** Their app said "f2": group files and the group's file rules (section 27). */
         fun hasF2(k: String): Boolean = false
+        /** Their app said "g3": the group's about text, admin-only channels and reports (section 28). */
+        fun hasG3(k: String): Boolean = false
     }
 
     /**
@@ -127,6 +129,11 @@ class Groups(
             // Cap f2: a = who may send files ("everyone", "admins", "nobody"), b = the size limit in MB ("0": none).
             "files" -> s.copy(fs = Sharing.whoMaySend(a).takeIf { it != Sharing.EVERYONE }.orEmpty(),
                 fm = (b.toIntOrNull() ?: 0).takeIf { it in 1..Sharing.MAX_LIMIT_MB } ?: 0).takeIf { it != s }
+            // Cap g3: b = the about text ("" takes it away).
+            "about" -> s.copy(about = b).takeIf { it != s }
+            // Cap g3: a = a text channel other than main, b = "on" when only admins post there.
+            "ao" -> s.channel(a)?.takeIf { it.id != MAIN && it.t == "text" && it.ao != (b == "on") }
+                ?.let { s.copy(channels = s.channels.map { ch -> if (ch.id == a) ch.copy(ao = b == "on") else ch }) }
             else -> null
         }
     }
@@ -151,6 +158,12 @@ class Groups(
     private val invites = ArrayList<Invite>()
     /** Groups I asked to join, and the admin I asked: the first state is taken only from them (3.3 step 2). */
     private val joining = HashMap<String, String>()
+    /** A join by a code or link waiting on the admin's app: what the chat list shows. */
+    data class Waiting(val g: String, val name: String, val inviter: String)
+    /** Names of the groups I asked to join by a code or link (only on this phone, for the waiting row). */
+    private val joinNames = HashMap<String, Pair<String, String>>()
+    private val _waiting = MutableStateFlow<List<Waiting>>(emptyList())
+    val waitingJoins: StateFlow<List<Waiting>> = _waiting.asStateFlow()
     private val last = HashMap<String, Change>()
     private val deleted = HashMap<String, Long>()
     /** Unsent before it got here: message id to who unsent it and when. Only a later copy from that very sender is dropped. */
@@ -221,7 +234,8 @@ class Groups(
         val g = Proto06.newGroupId()
         // Folk (members can invite) or Family (only admins add people), section 16.2.
         val s = Limits.withType(State(g, 1, me, me, n, listOf(me), listOf(Member(me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox))),
-            listOf(Channel(MAIN, "general", "text")), now()), if (kind == Limits.FAMILY) Limits.FAMILY else Limits.FOLK, days, true).signedBy(keys.private, me)
+            // A voice room from the start, as Huginn makes it.
+            listOf(Channel(MAIN, "general", "text"), Channel(Proto06.newChannelId(), "Voice", "voice")), now()), if (kind == Limits.FAMILY) Limits.FAMILY else Limits.FOLK, days, true).signedBy(keys.private, me)
         Proto06.check(s)
         groups[g] = Group(s)
         g
@@ -249,6 +263,45 @@ class Groups(
 
     /** Cap f2: who may send files in the group and the size limit (an admin's signed change, section 27.3). */
     fun setFiles(g: String, who: String, mb: Int) = change(g, Change("files", Sharing.whoMaySend(who), mb.coerceIn(0, Sharing.MAX_LIMIT_MB).toString()))
+
+    /** Cap g3: the group's about text, 500 characters at most, one paragraph ("" takes it away). */
+    fun setAbout(g: String, text: String) = change(g, Change("about", "", clean(text.replace(Regex("\\s+"), " "), Proto06.MAX_ABOUT).trim()))
+    /** Cap g3: only admins post in text channel [ch] (not the first one). */
+    fun setAdminsOnly(g: String, ch: String, on: Boolean) = change(g, Change("ao", ch, if (on) "on" else ""))
+
+    /** Cap g3 (28.2): channel [ch] of [s] takes posts only from admins, and [k] isn't one. */
+    private fun adminsOnlyFor(s: State, ch: String, k: String) = s.channel(ch)?.ao == true && !s.isAdmin(k)
+    private fun usesG3(s: State) = s.about.isNotEmpty() || s.channels.any { it.ao }
+
+    /**
+     * Cap g3 (28.3): reports message [msgId] to the group's admins, through the group, contact or not (an admin whose app
+     * lacks g3 gets it in a private message by [viaPrivate], when they're a contact). How many it went to.
+     */
+    fun report(g: String, msgId: String, viaPrivate: (String, String) -> Unit): Int {
+        val privates = ArrayList<Pair<String, String>>()
+        val sent = act {
+            val grp = groups[g] ?: return@act 0
+            if (grp.readOnly) return@act 0
+            val m = chats[g]?.firstOrNull { it.id == msgId && !it.mine && it.from.isNotEmpty() } ?: return@act 0
+            val s = grp.state
+            val text = m.text.take(500)
+            var n = 0
+            for (a in s.admins) {
+                if (a == me || a == m.from) continue
+                if (host.hasG3(a)) {
+                    val id = Proto06.newLogicalId()
+                    out(a, "group", JSONObject().put("t", "report").put("g", g).put("id", id).put("msg", msgId).put("k", m.from).put("text", text).toString(), id, g)
+                } else if (host.isContact(a)) {
+                    privates.add(a to "Report from ${s.name}: ${nameIn(s, m.from, m.name)} wrote: ${text.ifEmpty { "(a photo or file)" }}")
+                } else continue
+                n++
+            }
+            n
+        }
+        // Outside the lock: a private message goes through Chat.
+        privates.forEach { (k, line) -> viaPrivate(k, line) }
+        return sent
+    }
 
     /** Cap f2: empty when a file of [size] from [from] is welcome in group [g], else why not (every member's app checks). */
     fun fileRefusal(g: String, from: String, size: Long): String = synchronized(lock) {
@@ -278,6 +331,13 @@ class Groups(
         // An app without f2 refuses a state with file rules (section 27.3).
         if ((c.op == "join" || c.op == "add") && (cur.fs.isNotEmpty() || cur.fm > 0) && !host.hasF2(c.a))
             return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} the latest Muninn or Huginn to join, because ${cur.name} has file rules."
+        // An app without g3 refuses a state with an about text or an admin-only channel (section 28.4).
+        if ((c.op == "join" || c.op == "add") && usesG3(cur) && !host.hasG3(c.a))
+            return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} the latest Muninn or Huginn to join, because ${cur.name} has an about text or admin-only channels."
+        if ((c.op == "about" && c.b.isNotEmpty()) || (c.op == "ao" && c.b == "on")) {
+            val old = cur.members.filter { it.k != me && !host.hasG3(it.k) }
+            if (old.isNotEmpty()) return "Everyone needs the latest Muninn or Huginn first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
+        }
         if (c.op == "files" && (c.a != Sharing.EVERYONE || (c.b.toIntOrNull() ?: 0) > 0)) {
             val old = cur.members.filter { it.k != me && !host.hasF2(it.k) }
             if (old.isNotEmpty()) return "Everyone needs the latest Muninn or Huginn first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
@@ -364,14 +424,19 @@ class Groups(
 
     /** Joins with a group code (the admin needn't be a contact). Null when asked, else why not. */
     fun joinByCode(c: Proto06.Code): String? = act {
-        if (c.x * 1000 < now()) return@act "That group code has expired (they last an hour). Ask for a new one."
+        if (c.x * 1000 < now()) return@act "That invite has ended. Ask for a new one."
         if (c.a == me) return@act "That's your own group code."
         if (groups[c.g]?.let { !it.readOnly && it.state.has(me) } == true) return@act "You're already in ${c.gn}."
         if (!host.isContact(c.a)) host.peer(c.a, c.an.ifBlank { "Admin" }, c.p)
         joining[c.g] = c.a
+        joinNames[c.g] = c.gn to c.an
         sendJoin(c.g, c.a, c.i)
         null
     }
+
+
+    /** Stops waiting to join [g] (a later state from that admin is no longer taken as joining). */
+    fun stopWaiting(g: String) = act { joining.remove(g); joinNames.remove(g); Unit }
 
     private fun sendJoin(g: String, admin: String, inv: String) {
         val id = Proto06.newLogicalId()
@@ -457,6 +522,8 @@ class Groups(
         // Cap g2: timed out or banned here, nothing goes out (no text, photos, voice or files).
         statusLocked(g).takeIf { it.isNotEmpty() }?.let { host.notice(it); return null }
         val s = grp.state
+        // Cap g3: only admins post in this channel.
+        if (adminsOnlyFor(s, ch, me)) { host.notice("Only admins post here."); return null }
         return s to (if (s.channel(ch)?.t == "text") ch else MAIN)
     }
 
@@ -598,6 +665,30 @@ class Groups(
         return null
     }
 
+    /** Cap g2: an admin's Delete for everyone of [msgId], which [author] wrote (a signed "remove", 26.2). Null when done. */
+    fun removeForEveryone(g: String, msgId: String, author: String): String? = act {
+        val grp = groups[g] ?: return@act "That group isn't here any more."
+        val s = grp.state
+        if (grp.readOnly || !Proto06.isLogicalId(msgId) || author.isEmpty() || author == me || author == s.owner || !s.isAdmin(me)
+            || (s.isAdmin(author) && s.owner != me)) return@act "Only the group's admins can do that."
+        val rec = try { ModLogic.makeRemove(keys.private, g, author, me, now(), msgId) } catch (e: Exception) { return@act "That couldn't be signed." }
+        if (ModLogic.accept(s, rec) != "ok") return@act "That couldn't be signed."
+        blankLocked(g, rec)
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "mod").put("g", g).put("id", id).put("list", JSONArray().put(rec)).toString()
+        s.members.map { it.k }.filter { it != me && host.hasG2(it) }.forEach { out(it, "group", plain, id, g) }
+        null
+    }
+
+    /** A "remove" taken: the message shows as "Removed by an admin", or never shows when it comes later. */
+    private fun blankLocked(g: String, rec: JSONObject) {
+        val author = rec.getString("k"); val msg = rec.getString("m")
+        val m = chats[g]?.firstOrNull { it.id == msg && (if (it.mine) author == me else it.from == author) }
+        if (m == null) { unsentBy[msg] = author to now(); held[g]?.removeAll { it.from == author && it.plain.optString("id") == msg }; return }
+        if (m.photo.isNotEmpty()) host.deleteBlob(m.photo)
+        edit(g, msg) { it.copy(text = "", photo = "", voice = 0, unsent = REMOVED) }
+    }
+
     /** Keeps [rec] (already checked) when it's newer in its slot. Tells me when it names me. */
     private fun takeMod(g: String, rec: JSONObject, announce: Boolean): Boolean {
         val k = rec.getString("k"); val slot = ModLogic.slot(rec)
@@ -675,6 +766,8 @@ class Groups(
             "vote" -> grp != null && !grp.readOnly && grp.state.has(from)
             // Cap g2: timeouts and bans, each checked against the current state (an admin signed it).
             "mod" -> grp != null && inGroup
+            // Cap g3: a member's report, only to an admin.
+            "report" -> grp != null && !grp.readOnly && grp.state.has(from) && grp.state.isAdmin(me)
             else -> return 400
         }
         if (!allowed) return 403
@@ -788,13 +881,23 @@ class Groups(
                 if (!Rich.ok("group", p)) return 400
                 if (!barredLocked(g, from)) takeChange(grp!!, from, fromName, p)
             }
+            "report" -> {
+                val msg = p.optString("msg"); val k = p.optString("k"); val text = p.opt("text") as? String ?: return 400
+                if (!Proto06.isLogicalId(msg) || k.isEmpty() || Proto06.chars(text) > 500) return 400
+                val s = grp!!.state
+                // Shown only on this admin's phone, like a notification.
+                val line = "Report from ${nameIn(s, from, fromName)}: ${nameIn(s, k, modNames[k] ?: "Someone")} wrote: ${text.ifEmpty { "(a photo or file)" }}"
+                host.notice(line)
+                host.arrived(g, "Report in ${s.name}", line)
+            }
             "mod" -> {
                 val a = p.optJSONArray("list") ?: return 400
                 if (a.length() < 1 || a.length() > ModLogic.MAX_LIST) return 400
                 val s = grp!!.state
                 for (i in 0 until a.length()) {
                     val rec = a.optJSONObject(i) ?: continue
-                    if (rec.optString("g") == g && ModLogic.accept(s, rec) == "ok") takeMod(g, rec, announce = true)
+                    if (rec.optString("g") != g || ModLogic.accept(s, rec) != "ok") continue
+                    if (ModLogic.isRemove(rec)) blankLocked(g, rec) else takeMod(g, rec, announce = true)
                 }
             }
             "vote" -> {
@@ -996,7 +1099,8 @@ class Groups(
             return 200
         }
         // Cap g2: someone timed out or banned. Dropped, and answered so their app stops sending it again.
-        if (barredLocked(g, from)) { receipt(from, g, listOf(id), "delivered"); return 200 }
+        // Cap g3: not an admin, in an admin-only channel: likewise.
+        if (barredLocked(g, from) || adminsOnlyFor(s, ch, from)) { receipt(from, g, listOf(id), "delivered"); return 200 }
         val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN   // a removed channel's messages show in main
         if (sv < s.v) sendStateBack(g, from) else if (sv > s.v) askSync(g, from, s.v)
         val name = nameIn(s, from, fromName)
@@ -1015,7 +1119,8 @@ class Groups(
                      videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false): Boolean = act {
         val grp = groups[g]
         if (grp == null || grp.readOnly || !grp.state.has(from) || !Proto06.isLogicalId(gid)) return@act false
-        if (deleted.containsKey(gid) || unsentBy[gid]?.first == from || chats[g]?.any { it.id == gid } == true || barredLocked(g, from)) {
+        if (deleted.containsKey(gid) || unsentBy[gid]?.first == from || chats[g]?.any { it.id == gid } == true || barredLocked(g, from)
+            || adminsOnlyFor(grp.state, ch, from)) {
             receipt(from, g, listOf(gid), "delivered"); return@act false
         }
         val s = grp.state
@@ -1221,6 +1326,9 @@ class Groups(
         _invites.value = invites.toList()
         _links.value = groups.keys.associateWith { g -> linkLists[g].orEmpty().filter { (it.x == 0L || it.x > now()) && (it.max == 0 || it.uses < it.max) } }
         _unread.value = unread.toSet()
+        joinNames.keys.retainAll(joining.keys)
+        _waiting.value = joinNames.filterKeys { groups[it]?.let { grp -> !grp.readOnly && grp.state.has(me) } != true }
+            .map { (g, n) -> Waiting(g, n.first, n.second) }
     }
 
     // ------------------------------------------------------------------ storage
@@ -1335,6 +1443,8 @@ class Groups(
     }
 
     companion object {
+        /** [GMsg.unsent] of a message an admin removed for everyone (no name holds a control character). */
+        const val REMOVED = "\u0001admin"
         const val FILE = "groups.json"
         const val CHATS = "gchats.json"
         const val OUTS = "gouts.json"

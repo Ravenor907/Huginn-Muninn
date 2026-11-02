@@ -357,7 +357,7 @@ Rectangle {
             visible: (!msg.m.photo || !!msg.m.unsent) && !(msg.m.pollView && !msg.m.unsent)
             width: parent.width; wrapMode: Text.Wrap
             textFormat: Text.PlainText
-            text: msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
+            text: msg.m.removed ? "Removed by an admin" : msg.m.unsent ? (msg.m.mine ? "Message deleted by you" : "Message deleted by " + msg.m.unsent) : (msg.m.text || "")
             font.italic: !!msg.m.unsent
             lineHeight: 1.2
             color: msg.m.unsent ? Theme.textMuted : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.ms(16)
@@ -420,7 +420,11 @@ Rectangle {
     }
     HoverHandler { id: msgHover }
     // A click (a mouse or the right stick's pointer) picks it and opens a photo; a right click opens
-    // the options. A finger has no right click, so a tap opens them.
+    // the options. A finger: a tap does the same as a click, a long press opens the options.
+    function clickOpen() {
+        if (msg.m.mine && msg.m.failed && msg.host && msg.host.openKey) Chat.retry(msg.host.openKey, msg.m.id)
+        else if (msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album) msg.host.viewing = msg.m.photo
+    }
     TapHandler {
         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
         acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -430,12 +434,12 @@ Rectangle {
             msg.chosen()
             if (msg.folded && button !== Qt.RightButton) { msg.unfold(); return }
             if (button === Qt.RightButton) Ui.menuAt(msg, point.position.x, point.position.y, () => msg.options())
-            else if (msg.m.mine && msg.m.failed && msg.host && msg.host.openKey) Chat.retry(msg.host.openKey, msg.m.id)
-            else if (msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album) host.viewing = msg.m.photo
+            else msg.clickOpen()
         }
     }
     TapHandler {
         acceptedDevices: PointerDevice.TouchScreen
-        onTapped: (point, button) => { msg.chosen(); if (msg.folded) msg.unfold(); else Ui.menuAt(msg, point.position.x, point.position.y, () => msg.options()) }
+        onTapped: { msg.chosen(); if (msg.folded) msg.unfold(); else msg.clickOpen() }
+        onLongPressed: { msg.chosen(); Ui.menuAt(msg, point.position.x, point.position.y, () => msg.options()) }
     }
 }

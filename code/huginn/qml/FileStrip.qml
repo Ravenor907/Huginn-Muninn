@@ -37,6 +37,8 @@ Column {
         } else if (t.state === "done" && !t.mine && t.path) {
             out.push({ label: "Open", act: "open", kind: "accent" }, { label: "Folder", act: "folder", kind: "normal" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "failed" && FileLink.canRetry(t.id)) {
+            if (FileLink.needsDirect(t.id) && Chat.isContact(t.peer))
+                out.push({ label: Calls.trusted(t.peer) ? "Ask " + Chat.nameOf(t.peer) : "Allow direct", act: "direct", kind: "primary" })
             out.push({ label: "Retry", act: "retry", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "done" || t.state === "failed") {
             out.push({ label: "Close", act: "close", kind: "normal" })
@@ -53,6 +55,7 @@ Column {
         else if (a === "open") { if (!FileLink.openFile(t.path)) Ui.say("Nothing on this computer opens this kind of file.", true) }
         else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It's in " + t.folder + ".", true) }
         else if (a === "retry") FileLink.retry(t.id)
+        else if (a === "direct") PeopleActions.allowDirect(t.peer)
         else if (a === "close") FileLink.dismiss(t.id)
     }
     // The line under a card's name: size, kind, what it's doing, its route and pace.

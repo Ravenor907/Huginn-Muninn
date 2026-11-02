@@ -267,6 +267,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val folders = Folders({ vault.read(File(context.filesDir, "folders.json")) }, { vault.write(File(context.filesDir, "folders.json"), it) })
     /** Muted, archived and marked unread: on this phone only. */
     val flags = ChatFlags({ vault.read(File(context.filesDir, "chatflags.json")) }, { vault.write(File(context.filesDir, "chatflags.json"), it) })
+    /** The mutes a linked computer last heard of (cap l1 "mute" items): only a change in them sends the account. */
+    @Volatile private var lastMuted: Map<String, Long>? = null
     /** Mute for me and volume per person (cap g2's menus, section 26.1): on this phone only. */
     val sound = PeopleSound({ vault.read(File(context.filesDir, "mod.json")) }, { vault.write(File(context.filesDir, "mod.json"), it) }).also { PeopleSound.current = it }
     /** Contacts removed from the list, kept 30 days so they can come back: local only. */
@@ -328,6 +330,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 catch (e: Exception) { t.discard(); null }
             } catch (e: Exception) { null }
             override fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) = this@Chat.logFile(where, name, size, uri, mine)
+            // Cap f3 (27.7): resume and long waits.
+            override fun resumes(peer: String) = FileLink.RESUME_CAP in capsOf(peer) || envCaps[peer]?.contains(FileLink.RESUME_CAP) == true
+            // A big file waiting for Accept or Decline: a notification as a message gets (it waits up to a day).
+            override fun offered(where: String, from: String, text: String) { arrivals.tryEmit(Triple(this@Chat.nameOf(from), text, where)) }
         }
         Link.host = object : Link.Host {
             override fun myKey() = id.publicKey
@@ -398,6 +404,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     out["group|$g"] = JSONObject().put("n", st.name).put("role", role).put("st", st.json()).apply { if (grp.gone.isNotEmpty()) put("gone", grp.gone) }
                 }
                 for (f in folders.all.value) out["folder|${f.id}"] = JSONObject().put("n", f.name).put("k", JSONArray(f.keys))
+                // Muted chats (a contact's key, or "g:" + group id): "f" until turned back on, else "u" when it ends (ms).
+                val now = System.currentTimeMillis()
+                for ((k, until) in flags.all.value.muted) if (until > now)
+                    out["mute|$k"] = if (until == ChatFlags.FOREVER) JSONObject().put("f", true) else JSONObject().put("u", until)
                 return out
             }
             override fun applyAccount(item: LinkAccount.Item) {
@@ -416,6 +426,12 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                         val a = v.optJSONArray("k")
                         folders.putWhole(item.id, v.optString("n"), if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() })
                     }
+                    // Muted (or unmuted) on a linked computer.
+                    "mute" -> flags.mute(item.id, when {
+                        item.del || v == null -> 0L
+                        v.optBoolean("f") -> ChatFlags.FOREVER
+                        else -> v.optLong("u").takeIf { it > System.currentTimeMillis() } ?: 0L
+                    })
                 }
             }
             override fun groupChats(): Map<String, Pair<String, List<JSONObject>>> {
@@ -425,7 +441,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     if (msgs.isEmpty()) null else "g:$g" to (grp.state.name to msgs.map { linkGroupItem(it) })
                 }.toMap()
             }
-            override fun sendToGroup(g: String, text: String): Boolean = groups.sendText(g, "", text)
+            override fun sendToGroup(g: String, text: String, re: String): Boolean = groups.sendText(g, "", text, re)
+            override fun sendAsMeReply(peer: String, text: String, re: String): String? = if (!isContact(peer)) null else sendPrivate(peer, text, re)
+            override fun groupDays(g: String) = this@Chat.groupDays(g)
+            // Cap l2: read on a linked computer. Only when nothing newer came in since, so nothing unseen is marked read.
+            override fun readUpTo(peer: String, upTo: Long) {
+                if (peer.startsWith("g:")) {
+                    val g = peer.removePrefix("g:")
+                    val newest = groups.messages.value[g].orEmpty().filter { !it.mine }.maxOfOrNull { it.time } ?: 0L
+                    if (newest > upTo) return
+                    groups.markRead(g)
+                    flags.read(Folders.groupKey(g))
+                } else {
+                    val newest = _private.value[peer].orEmpty().filter { !it.mine }.maxOfOrNull { it.time } ?: 0L
+                    if (newest > upTo) return
+                    markRead(peer)
+                }
+                recalls.tryEmit(peer)   // its notification goes
+            }
         }
         Link.load()
         // Cap l1: anything in the account changed, a linked computer hears of it (a moment later, once for many changes).
@@ -435,8 +468,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         retryScope.launch { groups.messages.collect { m ->
             if (Link.companions.value.none { it.ok && it.l1 }) return@collect
             val names = groups.all.value
-            m.forEach { (g, l) -> Link.onGroupMessages(g, names[g]?.state?.name ?: "Group", l.sortedBy { it.time }.takeLast(20).map { linkGroupItem(it) }) }
+            Link.onGroupMessages(m.mapValues { (_, l) -> l.sortedBy { it.time }.takeLast(500) }, { g -> names[g]?.state?.name ?: "Group" }, { it.id }, { linkGroupItem(it) })
         } }
+        // Cap l1: a mute changed here, a linked computer mutes too.
+        retryScope.launch { flags.all.collect { s -> if (s.muted != lastMuted) { lastMuted = s.muted; Link.accountChanged() } } }
         outbox.sweep()
         net.extraRoute = { method, path, body, ip ->
             when {
@@ -1496,7 +1531,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // No straight path (not trusted, say): the card made while it was copied in goes, and the message's own card
         // ("Sending 42%") takes over. It was still "Getting ready", which dismiss() leaves alone, so it stayed there.
         val size = file.length()
-        relayFile(peerKey, file, clean)?.let { FileLink.failed(peerKey, clean, size, it, cardId) } ?: FileLink.handedOff(cardId)
+        // Too big to go without Direct: its card offers to turn it on and ask them, and Retry sends it again.
+        relayFile(peerKey, file, clean)?.let {
+            FileLink.failed(peerKey, clean, size, it, cardId, direct = size > FileText.RELAY_MAX && !io.github.ravenor907.muninn.net.call.CallManager.trusted(peerKey),
+                retry = file.takeIf { f -> f.isFile })
+        } ?: FileLink.handedOff(cardId)
         return null
     }
 
@@ -1538,7 +1577,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val size = file.length()
         if (isContact(k)) relayFile(k, file, name)?.let { FileLink.failed(k, name, size, it, card, g) } ?: FileLink.handedOff(card)
         else {
-            FileLink.failed(k, name, size, "Can't reach ${nameOf(k)} straight. Files in a group go when you're on the same Wi-Fi, or with Direct calls on for each other.", card, g)
+            FileLink.failed(k, name, size, "Can't reach ${nameOf(k)} straight. Files in a group go when you're on the same Wi-Fi, or with Direct calls and files on for each other.", card, g)
             file.delete()
         }
     }
@@ -1832,6 +1871,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun markRead(peerKey: String) {
         _unread.update { it - peerKey }
         flags.read(peerKey)
+        // Cap l2: a linked computer shows it read too.
+        _private.value[peerKey].orEmpty().filter { !it.mine }.maxOfOrNull { it.time }?.let { Link.onRead(peerKey, it) }
         if (!id.readReceipts) return
         var fresh = emptyList<Msg>()
         edit { map ->
@@ -2547,6 +2588,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun hasJ1(k: String) = Proto06.J1 in capsOf(k) || envCaps[k]?.contains(Proto06.J1) == true
         override fun hasG2(k: String) = ModLogic.CAP in capsOf(k) || envCaps[k]?.contains(ModLogic.CAP) == true
         override fun hasF2(k: String) = this@Chat.hasF2(k)
+        override fun hasG3(k: String) = Proto06.G3 in capsOf(k) || envCaps[k]?.contains(Proto06.G3) == true
         override fun typeChanged(g: String, type: String) { if (type == Limits.FAMILY) bg { familySync() } }
     }
 
@@ -2877,6 +2919,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun chatDays(peerKey: String) = Limits.pairDays(myDays(peerKey), hasD1(peerKey), contacts.get(peerKey)?.days?.takeIf { it > 0 })
 
     fun groupDays(g: String) = groups.group(g)?.let { Limits.groupDays(it.state) } ?: Limits.DEFAULT
+
+    /** Group [g] is on screen: read, and (cap l2) a linked computer shows it read too. */
+    fun groupRead(g: String) {
+        groups.markRead(g)
+        flags.read(Folders.groupKey(g))
+        groups.messages.value[g].orEmpty().filter { !it.mine }.maxOfOrNull { it.time }?.let { Link.onRead("g:$g", it) }
+    }
 
     /** My choice for a Family or Work contact (7 to 30). They learn it at once from an empty receipt. */
     fun setKeep(peerKey: String, days: Int) {

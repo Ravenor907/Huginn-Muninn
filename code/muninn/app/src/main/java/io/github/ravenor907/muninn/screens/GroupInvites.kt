@@ -97,6 +97,14 @@ object GroupLinks {
 
     // ---- words
 
+    /** What an invite is copied or shared as: the link or code with a one-line how-to, the same as Huginn's. */
+    fun inviteText(group: String, link: String) =
+        "Join ${group.ifBlank { "my group" }} on Huginn or Muninn. Open the app, choose + then Join a group, and paste this: $link"
+
+    /** Joining waits for the person who invited you: their app lets you in when it's open. */
+    fun waitText(group: String, inviter: String) =
+        "Asked to join $group. Waiting for ${inviter.ifBlank { "the person who invited you" }} to let you in: their app does it when it's next open. If it takes a while, ask them to open it."
+
     fun left(expires: Long): String {
         if (expires <= 0) return "never ends"
         val ms = expires - System.currentTimeMillis()
@@ -139,12 +147,12 @@ fun InviteLinkDialog(app: Muninn, g: String, groupName: String, done: () -> Unit
                         (if (l.max > 0) ", ${l.max} ${if (l.max == 1) "use" else "uses"})." else ")."), style = Type.normal)
                     Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) { Qr(l.text, 220.dp) }
                     MButton("Copy", Modifier.fillMaxWidth(), icon = "copy") {
-                        io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn invite link", l.text)
-                        Ui.say("Invite link copied.")
+                        io.github.ravenor907.muninn.ui.Clip.copy(context, "Muninn invite link", GroupLinks.inviteText(groupName, l.text), sensitive = false)
+                        Ui.say("Invite link copied, with how to join.")
                     }
                     MButton("Share", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent, icon = "send") {
                         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                            .putExtra(Intent.EXTRA_TEXT, "Join $groupName on Muninn. Open Muninn, tap + › Add someone, and scan or paste this:\n${l.text}"), "Share the invite link"))
+                            .putExtra(Intent.EXTRA_TEXT, GroupLinks.inviteText(groupName, l.text)), "Share the invite link"))
                     }
                 }
             }
@@ -210,7 +218,7 @@ fun JoinCard(app: Muninn, p: GroupLinks.Preview, onDone: () -> Unit) {
             MButton("Join", Modifier.weight(1f), Kind.Accent) {
                 val err = GroupLinks.join(app, p)
                 if (err != null) Ui.say(err, true)
-                else { Ui.say("Asked to join ${p.name}."); onDone() }
+                else { Ui.say(GroupLinks.waitText(p.name, p.by)); onDone() }
             }
         }
     }

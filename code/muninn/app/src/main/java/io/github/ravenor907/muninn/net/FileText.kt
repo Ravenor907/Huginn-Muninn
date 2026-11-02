@@ -16,7 +16,7 @@ object FileText {
         "offered" -> "Waiting for $who to accept"
         "asking" -> "Wants to send you this"
         "waiting" -> "On mobile data. Download it?"
-        "sending" -> if (!mine && note.isNotEmpty()) note else (if (mine) "Sending " else "Receiving ") + percent(done, size) + "%"
+        "sending" -> if (note.isNotEmpty()) note else (if (mine) "Sending " else "Receiving ") + percent(done, size) + "%"
         "done" -> if (mine) "Sent · Saved in their Downloads" else "Saved to Downloads"
         "failed" -> note.ifEmpty { "Didn't go through" }
         else -> note
@@ -37,7 +37,7 @@ object FileText {
         else -> "Sending"
     }
 
-    fun tooBig(): String = "Too big for the internet route: up to ${size(RELAY_MAX)}. Send it on the same Wi-Fi, or turn on Direct calls for each other."
+    fun tooBig(): String = "Too big to go without Direct: up to ${size(RELAY_MAX)}. Turn on Direct calls and files with each other, or send it on the same Wi-Fi."
 
     /** "2.1 MB/s · 12 s left"; empty until a second has passed and something moved. */
     fun pace(done: Long, total: Long, ms: Long): String {
