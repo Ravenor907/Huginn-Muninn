@@ -205,7 +205,7 @@ internal fun MediaViewer(app: Muninn, m: Chat.Msg, a: MediaActions?, close: () -
     val bytes = remember(m.id) { app.chat.photo(m.photo) }
     var forwarding by remember(m.id) { mutableStateOf(false) }
     if (forwarding) ForwardMedia(app, m) { forwarding = false }
-    val bar: (@Composable () -> Unit)? = if (a != null) @Composable { MediaActionRow(m, bytes, a, { forwarding = true }, close) } else null
+    val bar: (@Composable () -> Unit)? = if (a != null) ({ MediaActionRow(m, bytes, a, { forwarding = true }, close) }) else null
     when {
         m.video > 0 -> VideoPlayer(bytes, close, bottom = bar)
         m.voice > 0 -> Column(Modifier.fillMaxSize().background(Color.Black)) {

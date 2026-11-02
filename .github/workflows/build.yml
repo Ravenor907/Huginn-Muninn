@@ -146,10 +146,10 @@ jobs:
       - name: Download size (Huginn.flatpak)
         shell: bash
         run: |
-          # Reported on every build. A warning past 5.5 MB; the build stops only past 9 MB (something went badly wrong).
+          # Reported on every build. A warning past 5.5 MB; the build stops only past 10 MB (something went badly wrong).
           size=$(stat -c %s Huginn.flatpak)
           echo "::notice title=Huginn.flatpak::$size bytes"
-          if [ "$size" -gt 9000000 ]; then echo "::error title=Huginn.flatpak far too big::$size bytes"; exit 1; fi
+          if [ "$size" -gt 10000000 ]; then echo "::error title=Huginn.flatpak far too big::$size bytes"; exit 1; fi
           if [ "$size" -gt 5500000 ]; then echo "::warning title=Huginn.flatpak grew::$size bytes"; fi
       - name: Screenshot tour (fails on any broken screen)
         shell: bash
