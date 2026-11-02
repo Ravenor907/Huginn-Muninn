@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -214,8 +215,8 @@ internal fun ItemMenu(app: Muninn, key: String, onChats: () -> Unit, onLock: () 
             when {
                 key == "list" -> ListMenu(app, onLock, { page = "folder" }, done)
                 page == "notify" -> NotifyMenu(app, key) { page = "" }
-                key.startsWith("g:") -> GroupMenu(app, key.removePrefix("g:"), { page = "mute" }, { page = "notify" }, done)
-                else -> PersonMenu(app, key, onChats, { page = it }, done)
+                key.startsWith("g:") -> GroupMenu(app, key.removePrefix("g:"), page == "more", { page = it }, done)
+                else -> PersonMenu(app, key, onChats, page == "more", { page = it }, done)
             }
         }
     }
@@ -264,118 +265,167 @@ private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -
 }
 
 /**
- * A person's menu: Search, Media, Start a group, Mute, Notifications, Person details, then Hide (someone nearby who
- * isn't a contact), Block, Delete chat and Delete contact. A Kids' TV has its own sections, then Search, Media, Mute,
- * Notifications and Delete chat too.
+ * A person's menu, short enough for one screen: a row of round buttons (Search, Media, Mute, Details), then
+ * Notifications, Mark unread and Start a group, then More. More ([more]) has the rest: Move up and down, Hide (someone
+ * nearby who isn't a contact), then the red ones, Block, Delete chat and Delete contact. A Kids' TV has the same shape,
+ * with its first sections in the list and the rest under More. From a group's People page, the group's actions too.
  */
 @Composable
-private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit, go: (String) -> Unit, done: () -> Unit) {
+private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit, more: Boolean, go: (String) -> Unit, done: () -> Unit) {
     @Suppress("UNUSED_VARIABLE") val everyone by app.chat.contacts.all.collectAsState()
     val flags by app.chat.flags.all.collectAsState()
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val contact = app.chat.contacts.contact(key)
     val name = app.chat.nameOf(key)
     val inGroup = ChatNav.menuGroup.takeIf { it.isNotEmpty() }?.let { app.chat.groups.group(it) }
-    MenuTitle(name) { io.github.ravenor907.muninn.ui.Avatar(key, name, 40.dp, showDot = true) }
+    val tv = tvs[key]?.disconnecting == false
+    val hasChat = tv || contact != null || app.chat.conversations.value[key].orEmpty().isNotEmpty()
+    if (more) MenuTitle("More for $name") else MenuTitle(name) { io.github.ravenor907.muninn.ui.Avatar(key, name, 40.dp, showDot = true) }
     fun open(action: String) { done(); ChatNav.space = ""; ChatNav.action = action; ChatNav.open = key; onChats() }
-    val block: @Composable () -> Unit = {
-        MenuRow("close", "Block", danger = true) {
-            done()
-            Ui.sure(Ask("Block $name?", "They aren't told.", "Block", danger = true, onConfirm = { app.chat.block(key); Ui.say("$name blocked.") }))
-        }
-    }
     val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
-    val muteRow: @Composable () -> Unit = {
-        MenuRow("mute", if (muted) "Unmute notifications" else "Mute notifications") {
-            if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
-        }
-    }
     // Delete chat: the messages go from this phone; the person stays (a Kids' TV's settings too).
-    val deleteChat: @Composable (Boolean) -> Unit = { tv ->
+    val deleteChat: @Composable () -> Unit = {
         MenuRow("delete", "Delete chat", danger = true) {
             done()
             Ui.sure(Ask("Delete chat with $name?", if (tv) "Its messages go from this phone. TV settings stay." else "Its messages go from this phone.",
                 "Delete chat", danger = true, onConfirm = { app.chat.deleteChat(key); if (ChatNav.open == key) ChatNav.open = ""; Ui.say("Chat deleted.") }))
         }
     }
-    if (tvs[key]?.disconnecting == false) {
-        // A Kids' TV this phone looks after.
-        val rows = tvRows()
-        rows.filter { it.first != "disconnect" }.forEach { (id, label) ->
-            MenuRow(tvIcon(id), label) { done(); openTvSection(key, id); onChats() }
+    if (!more) QuickRow {
+        if (hasChat) {
+            QuickButton("search", "Search") { open("search") }
+            QuickButton("image", "Media") { open("media") }
         }
-        MenuRow("search", "Search") { open("search") }
-        MenuRow("image", "Media") { open("media") }
-        muteRow()
-        MenuRow("clock", "Notifications") { go("notify") }
-        MenuRow("user", "Person details") { done(); openDetails(key); onChats() }
-        deleteChat(true)
-        rows.firstOrNull { it.first == "disconnect" }?.let { (id, label) ->
+        QuickButton(if (muted) "sound" else "mute", if (muted) "Unmute" else "Mute", on = muted) {
+            if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
+        }
+        QuickButton("user", "Details") { done(); ChatNav.space = ""; openDetails(key); onChats() }
+    }
+    if (tv) {
+        // A Kids' TV this phone looks after: its first sections here, the rest under More, Disconnect TV last.
+        val rows = tvRows().filter { it.first != "disconnect" }
+        val section: @Composable (Pair<String, String>) -> Unit = { (id, label) -> MenuRow(tvIcon(id), label) { done(); openTvSection(key, id); onChats() } }
+        if (!more) {
+            rows.take(TV_FIRST).forEach { section(it) }
+            MenuRow("clock", "Notifications") { go("notify") }
+            MoreRow { go("more") }
+            return
+        }
+        rows.drop(TV_FIRST).forEach { section(it) }
+        MenuGap()
+        deleteChat()
+        tvRows().firstOrNull { it.first == "disconnect" }?.let { (id, label) ->
             MenuRow(tvIcon(id), label, danger = true) { done(); openTvSection(key, id); onChats() }
         }
         // No Block for a TV this phone looks after: Disconnect TV is how it goes.
+        MenuRow("back", "Back") { go("") }
         return
     }
-    // In a group: Add as contact (someone I'm not in touch with yet) and, for admins, Make admin, at the top.
-    if (inGroup != null && !inGroup.readOnly && inGroup.state.has(key)) {
-        val s = inGroup.state
-        val me = app.identity.publicKey
-        if (contact == null) MenuRow("plus", "Add as contact") {
-            done(); app.chat.askToAdd(inGroup.g, key, name, s.member(key)?.p.orEmpty()); Ui.say("Asked $name.")
+    val member = inGroup != null && !inGroup.readOnly && inGroup.state.has(key)
+    if (!more) {
+        // In a group: Add as contact (someone I'm not in touch with yet).
+        if (member && contact == null) MenuRow("plus", "Add as contact") {
+            done(); app.chat.askToAdd(inGroup!!.g, key, name, inGroup.state.member(key)?.p.orEmpty()); Ui.say("Asked $name.")
         }
-        if (s.isAdmin(me) && key != s.owner) {
-            if (s.isAdmin(key)) { if (s.owner == me) MenuRow("people", "Remove admin") {
-                done(); app.chat.groups.setAdmin(inGroup.g, key, false)?.let { Ui.say(it, true) } ?: Ui.say("$name isn't an admin.")
-            } } else MenuRow("people", "Make admin") {
-                done(); app.chat.groups.setAdmin(inGroup.g, key, true)?.let { Ui.say(it, true) } ?: Ui.say("$name is an admin.")
-            }
-        }
+        MenuRow("clock", "Notifications") { go("notify") }
+        if (inGroup == null) MarkUnreadRow(app, key, done)
+        // The New group picker with them already picked; there, Call them rings everyone picked.
+        if (inGroup == null && contact != null && !contact.groupOnly) StartGroupRow(key, onChats, done)
+        // In a group: Mute for me and Volume for everyone, Timeout for admins (cap g2).
+        if (inGroup != null) ModRows(app, inGroup.g, key, name, danger = false, go = go, done = done)
+        MoreRow { go("more") }
+        return
     }
-    if (contact != null || app.chat.conversations.value[key].orEmpty().isNotEmpty()) {
-        MenuRow("search", "Search") { open("search") }
-        MenuRow("image", "Media") { open("media") }
-        // Cap f2: everything sent and received in this chat.
-        MenuRow("file", "Files") { done(); ChatNav.space = ""; ChatNav.open = "files/$key"; onChats() }
-    }
-    // The New group picker with them already picked; there, Call them rings everyone picked.
-    if (contact != null && !contact.groupOnly) MenuRow("people", "Start a group") {
-        done(); ChatNav.space = ""; ChatNav.groupWith = setOf(key); ChatNav.open = "newgroup"; onChats()
-    }
-    muteRow()
-    MenuRow("clock", "Notifications") { go("notify") }
-    if (inGroup == null) MarkUnreadRow(app, key, done)
-    MenuRow("user", "Person details") { done(); ChatNav.space = ""; openDetails(key); onChats() }
     if (inGroup == null) MoveRows(app, key)
-    // In a group: Mute for me and Volume for everyone, Timeout for admins (cap g2).
-    if (inGroup != null) ModRows(app, inGroup.g, key, name, danger = false, go = go, done = done)
+    if (inGroup != null && contact != null && !contact.groupOnly) StartGroupRow(key, onChats, done)
     // From a group's People page: what its admins can do.
-    if (inGroup != null && !inGroup.readOnly) {
-        val s = inGroup.state
+    if (member) {
+        val s = inGroup!!.state
         val me = app.identity.publicKey
         val g = inGroup.g
-        if (s.owner == me && s.has(key)) MenuRow("shield", "Make owner") {
+        if (s.isAdmin(me) && key != s.owner) {
+            if (s.isAdmin(key)) { if (s.owner == me) MenuRow("people", "Remove admin") {
+                done(); app.chat.groups.setAdmin(g, key, false)?.let { Ui.say(it, true) } ?: Ui.say("$name isn't an admin.")
+            } } else MenuRow("people", "Make admin") {
+                done(); app.chat.groups.setAdmin(g, key, true)?.let { Ui.say(it, true) } ?: Ui.say("$name is an admin.")
+            }
+        }
+        if (s.owner == me) MenuRow("shield", "Make owner") {
             done()
             Ui.sure(Ask("Make $name the owner?", "You stay an admin.", "Make owner", onConfirm = { app.chat.groups.handOver(g, key)?.let { Ui.say(it, true) } }))
         }
-        // Their own section: Timeout and Ban (ModRows) and Remove from group, apart from the rest.
-        if (s.isAdmin(me) && key != s.owner && s.has(key) && (!s.isAdmin(key) || s.owner == me)) MenuRow("close", "Remove $name from group…", danger = true) {
-            done()
-            Ui.sure(Ask("Remove $name from ${s.name}?", "Their phone says they were removed.", "Remove", danger = true,
-                onConfirm = { app.chat.groups.remove(g, key)?.let { Ui.say(it, true) } }))
-        }
-        ModRows(app, g, key, name, danger = true, go = go, done = done)
     }
     // Someone nearby who isn't a contact: Hide takes them off the Nearby list for good, with no notifications.
     if (contact == null && inGroup == null) MenuRow("hide", "Hide") {
         done(); app.chat.flags.hide(key, true); if (ChatNav.open == key) ChatNav.open = ""; Ui.say("$name is hidden.")
     }
-    block()
-    if (inGroup == null) deleteChat(false)
+    // The red ones, last, apart from the rest.
+    MenuGap()
+    if (inGroup != null && !inGroup.readOnly) {
+        val s = inGroup.state
+        val me = app.identity.publicKey
+        if (s.isAdmin(me) && key != s.owner && s.has(key) && (!s.isAdmin(key) || s.owner == me)) MenuRow("close", "Remove $name from group…", danger = true) {
+            done()
+            Ui.sure(Ask("Remove $name from ${s.name}?", "Their phone says they were removed.", "Remove", danger = true,
+                onConfirm = { app.chat.groups.remove(inGroup.g, key)?.let { Ui.say(it, true) } }))
+        }
+        ModRows(app, inGroup.g, key, name, danger = true, go = go, done = done)
+    }
+    MenuRow("close", "Block", danger = true) {
+        done()
+        Ui.sure(Ask("Block $name?", "They aren't told.", "Block", danger = true, onConfirm = { app.chat.block(key); Ui.say("$name blocked.") }))
+    }
+    if (inGroup == null) deleteChat()
     if (contact != null) MenuRow("delete", "Delete contact", danger = true) {
         done()
         Ui.sure(Ask("Delete ${contact.shown}?", TRASH_NOTE, "Delete", danger = true,
             onConfirm = { app.chat.trashContact(key); if (ChatNav.open == key) ChatNav.open = ""; Ui.say("${contact.shown} is in Trash.") }))
     }
+    MenuRow("back", "Back") { go("") }
+}
+
+/** How many Kids' TV sections show on its menu's first page; the rest are under More. */
+private const val TV_FIRST = 3
+
+/** Start a group, with [key] already picked. */
+@Composable
+private fun StartGroupRow(key: String, onChats: () -> Unit, done: () -> Unit) {
+    MenuRow("people", "Start a group") {
+        done(); ChatNav.space = ""; ChatNav.groupWith = setOf(key); ChatNav.open = "newgroup"; onChats()
+    }
+}
+
+/** The top of a person's or group's menu: up to four round buttons, side by side. */
+@Composable
+private fun QuickRow(content: @Composable RowScope.() -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), content = content)
+    MenuGap()
+}
+
+/** One round button: an icon in a circle, with a short word under it. [on]: filled, like Mute while muted. */
+@Composable
+private fun RowScope.QuickButton(icon: String, label: String, on: Boolean = false, onClick: () -> Unit) {
+    Column(Modifier.weight(1f).clip(Corner).clickable(role = Role.Button, onClick = onClick).padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(48.dp).clip(CircleShape).background(if (on) Palette.accentFill else Palette.raised)
+            .border(1.dp, if (on) Palette.accent else Palette.lineMuted, CircleShape), contentAlignment = Alignment.Center) {
+            MIcon(icon, Palette.accent, 22.dp)
+        }
+        Text(label, style = Type.small.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** A thin line between parts of a menu. */
+@Composable
+private fun MenuGap() {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp).height(1.dp).background(Palette.hairline))
+}
+
+/** The last row of a menu's first page: More opens the rest in the same sheet. */
+@Composable
+private fun MoreRow(onClick: () -> Unit) {
+    MenuRow("more", "More", onClick = onClick)
 }
 
 /** Move up and Move down on the chat list, for anyone who can't drag (keys, switch access, TalkBack). Nothing when it isn't listed. */
@@ -433,9 +483,13 @@ private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     MenuRow("back", "Back") { back() }
 }
 
-/** A group's menu: Invite people, People, Search, Media, Files, Group settings, Mute, Notifications, then Call everyone (it asks) and Leave. */
+/**
+ * A group's menu, like a person's: round buttons (Search, Media, Mute, Details for Group settings), then
+ * Notifications, Invite people and People, then More. More ([more]) has Move up and down, Call everyone (it asks) and,
+ * last in red, Leave (or Delete, once left).
+ */
 @Composable
-private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, onNotify: () -> Unit, done: () -> Unit) {
+private fun ColumnScope.GroupMenu(app: Muninn, g: String, more: Boolean, go: (String) -> Unit, done: () -> Unit) {
     val all by app.chat.groups.all.collectAsState()
     val flags by app.chat.flags.all.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -444,22 +498,27 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, on
     val s = grp.state
     val key = Folders.groupKey(g)
     val me = app.identity.publicKey
-    MenuTitle(s.name)
-    fun go(page: String) { done(); if (ChatNav.wide) ChatNav.space = g; ChatNav.open = "$key/$page" }
-    if (!grp.readOnly && (s.isAdmin(me) || GroupLinks.canInvite(app, g))) MenuRow("plus", "Invite people") { go("add") }
-    MenuRow("people", "People", value = "${s.members.size}") { go("people") }
-    MenuRow("search", "Search") { done(); ChatNav.action = "search"; ChatNav.openGroup(g) }
-    MenuRow("image", "Media") { done(); ChatNav.action = "media"; ChatNav.openGroup(g) }
-    // Cap f2: everything sent and received in the group, and who can send files.
-    MenuRow("file", "Files") { done(); ChatNav.openGroup(g); ChatNav.open = "files/g:$g" }
-    MenuRow("gear", "Group settings") { go("settings") }
-    MoveRows(app, key)
-    val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
-    MenuRow("mute", if (muted) "Unmute notifications" else "Mute notifications") {
-        if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("${s.name} isn't muted.") } else onMute()
+    fun page(p: String) { done(); if (ChatNav.wide) ChatNav.space = g; ChatNav.open = "$key/$p" }
+    if (!more) {
+        MenuTitle(s.name)
+        val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
+        QuickRow {
+            QuickButton("search", "Search") { done(); ChatNav.action = "search"; ChatNav.openGroup(g) }
+            QuickButton("image", "Media") { done(); ChatNav.action = "media"; ChatNav.openGroup(g) }
+            QuickButton(if (muted) "sound" else "mute", if (muted) "Unmute" else "Mute", on = muted) {
+                if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("${s.name} isn't muted.") } else go("mute")
+            }
+            QuickButton("gear", "Details") { page("settings") }
+        }
+        MenuRow("clock", "Notifications") { go("notify") }
+        if (!grp.readOnly && (s.isAdmin(me) || GroupLinks.canInvite(app, g))) MenuRow("plus", "Invite people") { page("add") }
+        MenuRow("people", "People", value = "${s.members.size}") { page("people") }
+        MoreRow { go("more") }
+        return
     }
-    MenuRow("clock", "Notifications") { onNotify() }
-    // Rings every member, so it sits low and asks first. To just talk, there are voice rooms.
+    MenuTitle("More for ${s.name}")
+    MoveRows(app, key)
+    // Rings every member, so it sits under More and asks first. To just talk, there are voice rooms.
     if (!grp.readOnly && s.members.size > 1) MenuRow("call", "Call everyone") {
         done()
         val n = s.members.size - 1
@@ -467,6 +526,7 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, on
             extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
             onConfirm = { RoomActivity.call(context, g, emptyList()) }))
     }
+    MenuGap()
     if (!grp.readOnly) MenuRow("close", "Leave", danger = true) {
         done()
         if (s.owner == me && s.members.size > 1) Ui.say("You own ${s.name}. Make someone else owner first.", true)
@@ -489,6 +549,7 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, onMute: () -> Unit, on
         Ui.sure(Ask("Delete ${s.name}?", "This can't be undone.", "Delete", danger = true,
             onConfirm = { if (app.chat.deleteGroup(g)) { ChatNav.open = ""; ChatNav.space = "" } }))
     }
+    MenuRow("back", "Back") { go("") }
 }
 
 /**

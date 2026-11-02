@@ -322,10 +322,15 @@ internal fun albumsOf(msgs: List<Chat.Msg>): Pair<Set<String>, Map<String, List<
     return hidden to albums
 }
 
-/** Videos, photos and links shared in a chat, newest first: the "Shared" page of a chat's menu. */
+/**
+ * Media and files, from a chat's menu: two tabs. Media has videos, photos, links and voice shared in the chat, newest
+ * first; Files ([files], when given) has the chat's files. [startFiles]: opens on Files.
+ */
 @Composable
-internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, onOpen: (Chat.Msg) -> Unit, close: () -> Unit) {
+internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, onOpen: (Chat.Msg) -> Unit,
+                         files: (@Composable (Modifier) -> Unit)? = null, startFiles: Boolean = false, close: () -> Unit) {
     BackHandler { close() }
+    var part by remember { mutableStateOf(if (startFiles && files != null) "files" else "media") }
     var tab by remember { mutableStateOf("media") }
     val media = remember(msgs) { msgs.filter { it.photo.isNotEmpty() && it.unsent.isEmpty() && it.voice == 0 }.reversed() }
     val links = remember(msgs) { msgs.filter { it.unsent.isEmpty() && (it.preview != null || More.firstLink(it.text) != null) }.reversed() }
@@ -338,59 +343,66 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
             MButton("Back", icon = "back") { close() }
             Text(title, style = Type.big, modifier = Modifier.padding(start = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton("Photos and videos (${media.size})", kind = if (tab == "media") Kind.Accent else Kind.Normal) { tab = "media" }
-            MButton("Links (${links.size})", kind = if (tab == "links") Kind.Accent else Kind.Normal) { tab = "links" }
-            MButton("Voice (${voices.size})", kind = if (tab == "voice") Kind.Accent else Kind.Normal) { tab = "voice" }
+        if (files != null) Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            MButton("Media", Modifier.weight(1f), kind = if (part == "media") Kind.Accent else Kind.Normal, icon = "image") { part = "media" }
+            MButton("Files", Modifier.weight(1f), kind = if (part == "files") Kind.Accent else Kind.Normal, icon = "file") { part = "files" }
         }
-        val total = when (tab) { "media" -> media.size; "links" -> links.size; else -> voices.size }
-        if (tab == "media") {
-            val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-            val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 9 } }
-            LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
-            if (media.isEmpty()) Text("No photos or videos yet.", style = Type.normal, modifier = Modifier.padding(12.dp))
-            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(androidx.compose.foundation.lazy.grid.GridCells.Fixed(3), Modifier.weight(1f).padding(10.dp), state = grid) {
-                items(media.take(shown).size, key = { media[it].id }) { i ->
-                    val m = media[i]
-                    val bmp by produceState<ImageBitmap?>(null, m.id) {
-                        value = withContext(Dispatchers.IO) {
-                            if (m.video > 0) videoFrame(bytes(m))
-                            else bytes(m)?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(context, "${m.id}:360:${b.size}") { decode(b, 360) } }
+        if (part == "files" && files != null) files(Modifier.weight(1f).fillMaxWidth())
+        else {
+            Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Photos and videos (${media.size})", kind = if (tab == "media") Kind.Accent else Kind.Normal) { tab = "media" }
+                MButton("Links (${links.size})", kind = if (tab == "links") Kind.Accent else Kind.Normal) { tab = "links" }
+                MButton("Voice (${voices.size})", kind = if (tab == "voice") Kind.Accent else Kind.Normal) { tab = "voice" }
+            }
+            val total = when (tab) { "media" -> media.size; "links" -> links.size; else -> voices.size }
+            if (tab == "media") {
+                val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+                val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 9 } }
+                LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
+                if (media.isEmpty()) Text("No photos or videos yet.", style = Type.normal, modifier = Modifier.padding(12.dp))
+                androidx.compose.foundation.lazy.grid.LazyVerticalGrid(androidx.compose.foundation.lazy.grid.GridCells.Fixed(3), Modifier.weight(1f).padding(10.dp), state = grid) {
+                    items(media.take(shown).size, key = { media[it].id }) { i ->
+                        val m = media[i]
+                        val bmp by produceState<ImageBitmap?>(null, m.id) {
+                            value = withContext(Dispatchers.IO) {
+                                if (m.video > 0) videoFrame(bytes(m))
+                                else bytes(m)?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(context, "${m.id}:360:${b.size}") { decode(b, 360) } }
+                            }
+                        }
+                        Box(Modifier.aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
+                            .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
+                            bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else if (m.gif) "GIF" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
+                            if (m.video > 0) MIcon("play", Color.White, 22.dp, filled = true)
+                            // A GIF holds still here (its first frame); it moves once opened.
+                            if (m.gif) Text("GIF", style = Type.small.copy(color = Color.White), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
+                                .clip(RoundedCornerShape(4.dp)).background(Color(0x99000000)).padding(horizontal = 4.dp))
                         }
                     }
-                    Box(Modifier.aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
-                        .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
-                        bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else if (m.gif) "GIF" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-                        if (m.video > 0) MIcon("play", Color.White, 22.dp, filled = true)
-                        // A GIF holds still here (its first frame); it moves once opened.
-                        if (m.gif) Text("GIF", style = Type.small.copy(color = Color.White), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
-                            .clip(RoundedCornerShape(4.dp)).background(Color(0x99000000)).padding(horizontal = 4.dp))
-                    }
                 }
-            }
-        } else {
-            val list = androidx.compose.foundation.lazy.rememberLazyListState()
-            val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 5 } }
-            LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
-            androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).padding(12.dp), state = list) {
-                if (tab == "links") {
-                    if (links.isEmpty()) item { Text("No links yet.", style = Type.normal) }
-                    items(links.take(shown).size, key = { links[it].id }) { i ->
-                        val m = links[i]
-                        val lp = m.preview
-                        if (lp != null) PreviewCard(lp)
-                        else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
-                            Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
-                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
-                            }))
-                        } }
-                    }
-                } else {
-                    if (voices.isEmpty()) item { Text("No voice messages yet.", style = Type.normal) }
-                    items(voices.take(shown).size, key = { voices[it].id }) { i ->
-                        val m = voices[i]
-                        VoiceNote(m, { bytes(m) }, io.github.ravenor907.muninn.net.Voice.length(m.voice) + " · " + (if (m.mine) "You" else m.name), Type.small)
-                        Spacer(Modifier.width(1.dp).height(8.dp))
+            } else {
+                val list = androidx.compose.foundation.lazy.rememberLazyListState()
+                val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 5 } }
+                LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).padding(12.dp), state = list) {
+                    if (tab == "links") {
+                        if (links.isEmpty()) item { Text("No links yet.", style = Type.normal) }
+                        items(links.take(shown).size, key = { links[it].id }) { i ->
+                            val m = links[i]
+                            val lp = m.preview
+                            if (lp != null) PreviewCard(lp)
+                            else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
+                                Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                                }))
+                            } }
+                        }
+                    } else {
+                        if (voices.isEmpty()) item { Text("No voice messages yet.", style = Type.normal) }
+                        items(voices.take(shown).size, key = { voices[it].id }) { i ->
+                            val m = voices[i]
+                            VoiceNote(m, { bytes(m) }, io.github.ravenor907.muninn.net.Voice.length(m.voice) + " · " + (if (m.mine) "You" else m.name), Type.small)
+                            Spacer(Modifier.width(1.dp).height(8.dp))
+                        }
                     }
                 }
             }

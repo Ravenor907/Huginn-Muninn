@@ -237,13 +237,25 @@ internal fun TransfersScreen(app: Muninn) {
 private fun TransferViewTitle(t: LocalSend.Transfer): String =
     (if (t.sending) "To " else "From ") + "LocalSend · " + t.peer.ifEmpty { "a device nearby" }
 
-/**
- * A chat's Files (its three dots › Files): everything sent and received there, newest first, with Open, Folder and
- * Delete (a received file goes from Downloads too; a sent one only leaves the list). A group's page starts with who
- * can send files and the size limit, which admins change. [where]: their key or "g:<group>".
- */
+/** A chat's Files as a page of its own, with Back to the chat. The menu opens them as a tab of Media and files. */
 @Composable
 internal fun ChatFilesScreen(app: Muninn, where: String) {
+    val groups by app.chat.groups.all.collectAsState()
+    val g = if (where.startsWith("g:")) where.removePrefix("g:") else ""
+    val title = (if (g.isEmpty()) null else groups[g])?.state?.name ?: app.chat.nameOf(where)
+    Column(Modifier.fillMaxSize()) {
+        PageBar("Files · $title", "Back to $title") { ChatNav.open = where }
+        ChatFilesList(app, where, Modifier.fillMaxSize())
+    }
+}
+
+/**
+ * A chat's Files (the Files tab of Media and files): everything sent and received there, newest first, with Open,
+ * Folder and Delete (a received file goes from Downloads too; a sent one only leaves the list). A group's list starts
+ * with who can send files and the size limit, which admins change. [where]: their key or "g:<group>".
+ */
+@Composable
+internal fun ChatFilesList(app: Muninn, where: String, modifier: Modifier) {
     val context = LocalContext.current
     val files by app.chat.sharedFiles.collectAsState()
     val groups by app.chat.groups.all.collectAsState()
@@ -255,27 +267,24 @@ internal fun ChatFilesScreen(app: Muninn, where: String) {
     var filter by remember(where) { mutableStateOf("") }
     val all = remember(files, where) { app.chat.filesIn(where) }
     val shown = remember(all, filter) { filter.trim().let { q -> if (q.isEmpty()) all else all.filter { it.name.contains(q, ignoreCase = true) } } }
-    Column(Modifier.fillMaxSize()) {
-        PageBar("Files · $title", "Back to $title") { ChatNav.open = where }
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-            item {
-                Text("Received files are saved in ${Received.shown(Sharing.folderFor("Muninn", title))}.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
-                if (grp != null) {
-                    val admin = !grp.readOnly && grp.state.isAdmin(app.identity.publicKey)
-                    Panel(Modifier.padding(top = 10.dp)) {
-                        Text("Who can send files", style = Type.big)
-                        Text(Sharing.rulesLine(grp.state.fs, grp.state.fm), style = Type.normal, modifier = Modifier.padding(top = 4.dp))
-                        Text("Every member's app follows this.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
-                        if (admin) MButton("Change", Modifier.padding(top = 8.dp), icon = "edit") { rules = true }
-                    }
+    LazyColumn(modifier.padding(horizontal = 12.dp)) {
+        item {
+            Text("Received files are saved in ${Received.shown(Sharing.folderFor("Muninn", title))}.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+            if (grp != null) {
+                val admin = !grp.readOnly && grp.state.isAdmin(app.identity.publicKey)
+                Panel(Modifier.padding(top = 10.dp)) {
+                    Text("Who can send files", style = Type.big)
+                    Text(Sharing.rulesLine(grp.state.fs, grp.state.fm), style = Type.normal, modifier = Modifier.padding(top = 4.dp))
+                    Text("Every member's app follows this.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
+                    if (admin) MButton("Change", Modifier.padding(top = 8.dp), icon = "edit") { rules = true }
                 }
-                if (all.isNotEmpty()) Field(filter, { filter = it }, "Find a file by name", Modifier.padding(top = 10.dp))
-                if (shown.isEmpty()) Text(if (all.isEmpty()) "No files here yet. Send one with the clip beside the message box." else "No file names have that.",
-                    style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 16.dp))
             }
-            items(shown, key = { it.time.toString() + it.name + it.uri }) { f -> SharedFileRow(app, context, f) }
-            item { Spacer(Modifier.height(24.dp)) }
+            if (all.isNotEmpty()) Field(filter, { filter = it }, "Find a file by name", Modifier.padding(top = 10.dp))
+            if (shown.isEmpty()) Text(if (all.isEmpty()) "No files here yet. Send one with the clip beside the message box." else "No file names have that.",
+                style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 16.dp))
         }
+        items(shown, key = { it.time.toString() + it.name + it.uri }) { f -> SharedFileRow(app, context, f) }
+        item { Spacer(Modifier.height(24.dp)) }
     }
     if (rules && grp != null) FileRulesDialog(app, g, grp.state.fs, grp.state.fm) { rules = false }
 }

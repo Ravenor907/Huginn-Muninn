@@ -1396,7 +1396,7 @@ Window {
             { page: "dms", changeLock: true, file: "29-lock" },
             // A small window (1024 by 768): the squeezed layouts, as on a laptop or handheld screen.
             { page: "settings", section: "look", small: true, file: "30-small-window" },
-            // A contact's menu › Edit, the other sub-page.
+            // A contact's menu › Details, the other sub-page.
             { page: "dms", zone: "messages", person: true, personPage: "edit", file: "31-edit" },
             { page: "files", filesMenu: true, file: "32-files-menu" },
             // Labs mode: its group in About, Report a bug, and Labs reports.

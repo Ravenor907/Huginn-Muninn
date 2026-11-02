@@ -65,19 +65,17 @@ Rectangle {
     readonly property var threadMsgs: threadRoot === "" ? [] : messages.filter(m => m.id === threadRoot || m.re === threadRoot)
     readonly property bool theyType: openKey !== "" && !locked && Chat.typing[openKey] !== undefined
     readonly property bool theyActive: openKey !== "" && !locked && Chat.active[openKey] !== undefined
-    // The open chat's own color (a contact's menu › Edit › Chat color), else the accent.
+    // The open chat's own color (a contact's menu › Details › Chat color), else the accent.
     readonly property string chatColor: openKey === "" || tour || locked ? "" : (Chat.chats, Chat.chatColor(openKey))
     readonly property color tint: Theme.chatAccent(chatColor)
     readonly property bool tinted: Theme.validColor(chatColor)
     // The conversation header's buttons for a controller (Up from the first message): Call, Video and the menu.
     property int headSel: 0
-    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(tour ? [] : ["mute"]).concat(["find"]).concat(tour ? [] : ["files"]).concat(["menu"])
+    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(tour ? [] : ["mute"]).concat(["find"]).concat(["menu"])
     // The open chat is muted (its header's bell, struck through).
     readonly property bool openMuted: openKey !== "" && !tour && !locked && (Chat.chats, Chat.isMuted(openKey))
     // Find in this chat (the search icon or Ctrl+F).
     function openFind() { if (picked && !locked) { zone = "messages"; sel = -1; finder.open() } }
-    // This chat's Files: everything sent and received here.
-    function openFilesHere() { if (openKey !== "" && !locked && !tour) PeopleActions.openFiles(openKey, openName) }
 
     function setArgs(a) {
         tour = !!a.tour
@@ -90,7 +88,8 @@ Rectangle {
         if (a.open) { openKey = a.open; picked = true; zone = "messages" }   // from a contact's menu › Message
         if (a.add) Qt.callLater(addSomeone)   // Contacts › +
         if (a.mirror) { const p = a.mirror; Qt.callLater(() => mirror.open(p)) }   // Contacts › a phone contact › Message
-        // A contact's menu › Chat › Pinned messages or Shared.
+        // A contact's menu › Find in chat, Media and files › Media, or More › Pinned messages.
+        if (a.open && a.show === "find") Qt.callLater(openFind)
         if (a.open && a.show === "pins") Qt.callLater(openPins)
         if (a.open && a.show === "shared") Qt.callLater(() => page.more.openShared())
     }
@@ -169,7 +168,7 @@ Rectangle {
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu"
                                                                                   : headButtons[headSel] === "mute" ? (openMuted ? "Unmute notifications" : "Mute notifications")
-                                                                                  : headButtons[headSel] === "find" ? "Find" : headButtons[headSel] === "files" ? "Files" : "Call" }, { key: "b", label: "Back" }]
+                                                                                  : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
@@ -690,22 +689,6 @@ Rectangle {
                 Icon { anchors.centerIn: parent; name: "search"; size: Theme.px(18); color: findHover.hovered || finder.visible ? Theme.text : Theme.textMuted }
                 HoverHandler { id: findHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: page.openFind() }
-            }
-            // This chat's Files, one click away.
-            Rectangle {
-                visible: !page.locked && page.openKey !== "" && !page.tour
-                anchors.verticalCenter: parent.verticalCenter
-                width: Theme.px(28); height: width
-                radius: Theme.radius
-                color: filesHover.hovered ? Theme.raised : "transparent"
-                border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "files" ? Theme.focusWidth : 0
-                border.color: Theme.text
-                Accessible.role: Accessible.Button
-                Accessible.name: "Files in this chat"
-                Accessible.onPressAction: page.openFilesHere()
-                Icon { anchors.centerIn: parent; name: "file"; size: Theme.px(18); color: filesHover.hovered ? Theme.text : Theme.textMuted }
-                HoverHandler { id: filesHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: page.openFilesHere() }
             }
             MoreButton {
                 visible: !page.locked && page.openKey !== ""
@@ -1448,7 +1431,7 @@ Rectangle {
     function chatMenu() {
         if (openKey === "") return
         const k = openKey, e = entries.find(x => x.kind === "chat" && x.key === k)
-        PeopleActions.contactMenu(k, openName, { tour: tour, section: e ? e.section : "", keys: e ? sectionKeys(e.section) : [], removed: () => page.closeChatWith(k) })
+        PeopleActions.contactMenu(k, openName, { tour: tour, inChat: true, section: e ? e.section : "", keys: e ? sectionKeys(e.section) : [], removed: () => page.closeChatWith(k) })
     }
     function closeChatWith(k) { if (openKey === k) { openKey = ""; picked = false; zone = "list" } }
     // The header's bell: mute the open chat (asks how long), or unmute it.
@@ -1472,7 +1455,7 @@ Rectangle {
         case "a": {
             const w = headButtons[Math.min(headSel, n - 1)]
             zone = "messages"
-            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else if (w === "files") openFilesHere(); else if (w === "mute") muteOpen(); else chatMenu()
+            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else if (w === "mute") muteOpen(); else chatMenu()
             return true
         }
         case "down": case "b": zone = "messages"; return true

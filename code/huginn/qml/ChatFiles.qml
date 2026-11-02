@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import Huginn
 
-// A chat's or group's Files (the header's file icon, or its menu › Files): everything sent and received there, newest
+// A chat's or group's Files (its menu › Media and files › Files): everything sent and received there, newest
 // first, with where it is. Typing in the box at the top shows only the files whose name has it; a right click on a
 // file opens the same choices as a menu.
 // Open uses this computer's app for that kind of file (only when asked), Show in folder opens its folder, and Delete

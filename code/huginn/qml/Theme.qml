@@ -260,7 +260,7 @@ QtObject {
     readonly property string accentKey: safeAccent(accentHex[Settings.accent] || validColor(Settings.accent) ? Settings.accent : "gold")
     readonly property color accentBase: accents[accentKey] || (validColor(accentKey) ? accentKey : accents.gold)
     readonly property color accent: mono ? (hc ? "#FFFFFF" : accents.iron) : light ? Qt.darker(accentBase, 1.7) : accentBase
-    // A chat's own color (a contact's menu › Edit › Chat color, one of the accent swatches as "#RRGGBB"), drawn
+    // A chat's own color (a contact's menu › Details › Chat color, one of the accent swatches as "#RRGGBB"), drawn
     // like the accent; the accent itself when the chat has none. Color vision: the nearest safe accent.
     readonly property var chatSwatches: ["", "#C2A25E", "#A9B4BE", "#B07A5A", "#6FAE8C", "#6E9CC8", "#A58BC6", "#CF6F54"]
     function chatAccent(c) {

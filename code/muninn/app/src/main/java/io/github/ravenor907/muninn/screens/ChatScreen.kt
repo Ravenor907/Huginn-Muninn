@@ -174,7 +174,7 @@ object ChatNav {
     var trashed by mutableStateOf(0)
     /** Set when [hold] was opened from a group's People page: that group's id, for its admin actions. */
     var menuGroup by mutableStateOf("")
-    /** What an opened conversation does first: "search" or "media" (from its menu), "" nothing. */
+    /** What an opened conversation does first: "search", "media" or "files" (from its menu), "" nothing. */
     var action by mutableStateOf("")
     /** Where Back goes from a person's details or a Kids' TV section. */
     var back by mutableStateOf("")
@@ -934,6 +934,7 @@ private fun Conversation(app: Muninn, key: String) {
     var camera by remember { mutableStateOf("") }
     var polling by remember { mutableStateOf(false) }
     var shared by remember { mutableStateOf(false) }
+    var sharedFiles by remember { mutableStateOf(false) }
     // Cap m1: the message being answered or edited, the one held for its sheet, search and the photos page.
     var replyTo by remember { mutableStateOf<Chat.Msg?>(null) }
     var editing by remember { mutableStateOf<Chat.Msg?>(null) }
@@ -1027,7 +1028,7 @@ private fun Conversation(app: Muninn, key: String) {
     // Search or Media picked in this person's menu.
     val action = ChatNav.action
     LaunchedEffect(action) {
-        when (action) { "search" -> { searching = true; matchAt = 0 }; "media" -> shared = true }
+        when (action) { "search" -> { searching = true; matchAt = 0 }; "media" -> { sharedFiles = false; shared = true }; "files" -> { sharedFiles = true; shared = true } }
         if (action.isNotEmpty()) ChatNav.action = ""
     }
     viewing?.let { v ->
@@ -1041,7 +1042,8 @@ private fun Conversation(app: Muninn, key: String) {
         return
     }
     if (shared) {
-        SharedMedia("Shared · $name", msgs, { app.chat.photo(it.photo) }, { viewing = it }) { shared = false }
+        SharedMedia("Media and files · $name", msgs, { app.chat.photo(it.photo) }, { viewing = it },
+            files = { mod -> ChatFilesList(app, key, mod) }, startFiles = sharedFiles) { shared = false }
         return
     }
     if (searching) BackHandler { searching = false; query = "" }
@@ -1068,8 +1070,6 @@ private fun Conversation(app: Muninn, key: String) {
                 if (callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key))
                     IconAction("video", "Video call $name", Palette.text) { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) }
             }
-            // This chat's Files, one tap away.
-            IconAction("file", "Files with $name", Palette.text) { ChatNav.open = "files/$key" }
             MuteAction(app, key, name)
         }, onMenu = { ChatNav.menuGroup = ""; ChatNav.hold = key })
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
@@ -2126,6 +2126,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     var camera by remember { mutableStateOf("") }
     var polling by remember { mutableStateOf(false) }
     var shared by remember { mutableStateOf(false) }
+    var sharedFiles by remember { mutableStateOf(false) }
     // Cap m1: answering, editing, and the message held for its sheet.
     var replyTo by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
     var editing by remember(ch) { mutableStateOf<Groups.GMsg?>(null) }
@@ -2159,7 +2160,8 @@ private fun GroupConversation(app: Muninn, g: String) {
     LaunchedEffect(action) {
         when (action) {
             "search" -> { searching = true; matchAt = 0 }
-            "media" -> shared = true
+            "media" -> { sharedFiles = false; shared = true }
+            "files" -> { sharedFiles = true; shared = true }
         }
         if (action.isNotEmpty()) ChatNav.action = ""
     }
@@ -2221,7 +2223,8 @@ private fun GroupConversation(app: Muninn, g: String) {
         return
     }
     if (shared) {
-        SharedMedia("Shared · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it }) { shared = false }
+        SharedMedia("Media and files · ${s.name}", chats[g].orEmpty().map { asMsg(app, it) }, { app.chat.photo(it.photo) }, { viewing = it },
+            files = { mod -> ChatFilesList(app, "g:$g", mod) }, startFiles = sharedFiles) { shared = false }
         return
     }
     val otherMembers = s.members.filter { it.k != app.identity.publicKey }

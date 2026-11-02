@@ -911,40 +911,56 @@ Rectangle {
     }
 
     // ============================================================= the group's one menu
-    // Invite people · Add people · People · Find · Channels · Notifications · Group settings, then the calls
-    // (Call everyone asks first) and Leave. The bigger ones open a sub-page; B there comes back here.
+    // Short, like Muninn's: Find, Media and files, Mute and Group settings first; then Notifications, Invite people and
+    // People; the rest (Channels, the calls, Leave) under More (groupMore). A sub-page's B comes back here.
     function groupMenu() {
         if (!exists) return
-        const items = []
+        const top = []
         const admin = !readOnly && !!info.amAdmin
         // Cap g3: new reports from members come first, for admins (they're also under Group settings).
-        if (admin && !isTour && (info.reportsUnread || 0) > 0) items.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
+        if (admin && !isTour && (info.reportsUnread || 0) > 0) top.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
+        top.push({ name: "Find in this channel", icon: "search", url: "find" },
+                 { name: "Media and files", icon: "image", url: "media" },
+                 { name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
+                 { name: "Group settings", icon: "gear", url: "settings" })
+        const items = [{ name: "Notifications", icon: "bell", url: "notify" }]
         // One Invite people: the link panel (with From contacts and Active links in it for admins); a Family group's admins
         // get From contacts or a code. Hidden for whoever can't invite.
         if (isTour || (!family && (canInvite || admin)) || (family && admin))
             items.push({ name: "Invite people", icon: "plus", detail: family ? "From contacts or a code" : admin ? "A link, a code or contacts" : "A link or code", url: "invite" })
+        items.push({ name: "People", icon: "people", url: "people" })
         // Family: each member's safety code is checked once.
         const unchecked = family && !readOnly && !isTour ? members.filter(m => !m.me && !m.checked).length : 0
         if (unchecked) items.push({ name: "Check safety codes", icon: "check", detail: unchecked + " to check", url: "check" })
-        items.push({ name: "People", icon: "people", url: "people" })
-        items.push({ name: "Find in this channel", icon: "search", url: "find" })
-        items.push({ name: "Channels", icon: "hash", url: "channels" })
-        items.push({ name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
-                   { name: "Notifications", icon: "bell", url: "notify" })
-        items.push({ name: "Group settings", icon: "gear", url: "settings" })
-        const calls = []
+        items.push({ name: "More", icon: "more", url: "more" })
+        Ui.pickFrom(info.name || "Group", [{ header: "", items: top }, { header: "", items: items }], a => groupAction(a))
+    }
+    // The rest of the group's menu: Channels, the calls (Call everyone asks first), then Leave in red.
+    function groupMore() {
+        if (!exists) return
+        const items = [{ name: "Channels", icon: "hash", url: "channels" }]
         if (!readOnly && (isTour || info.count > 1)) {
-            if (isTour || info.count > 2) calls.push({ name: "Call some people", icon: "call", url: "callsome" })
-            calls.push({ name: "Call everyone", icon: "call", detail: "Rings every member", url: "callall" })
+            if (isTour || info.count > 2) items.push({ name: "Call some people", icon: "call", url: "callsome" })
+            items.push({ name: "Call everyone", icon: "call", detail: "Rings every member", url: "callall" })
         }
         const end = [readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true }]
-        Ui.pickFrom(info.name || "Group", [{ header: "", items: items }, { header: "", items: calls }, { header: "", items: end }], a => groupAction(a))
+        Ui.pickFrom("More for " + (info.name || "Group"), [{ header: "", items: items }, { header: "", items: end }], a => groupAction(a), () => page.groupMenu())
+    }
+    // Media and files: what was shared in this channel, or the group's Files.
+    function mediaMenu() {
+        Ui.pickFrom("Media and files", [{ header: "", items: [{ name: "Media", detail: "Shared in #" + channel.name, icon: "image", url: "shared" },
+                                                             { name: "Files", icon: "file", url: "files" }] }], a => {
+            if (a === "shared") more.openShared()
+            else if (!isTour) PeopleActions.openFiles("g:" + gid, info.name)
+        }, () => page.groupMenu())
     }
     function groupAction(a) {
         const g = gid
         if (a === "people") { peopleMenu(); return }
         if (a === "check") { checkMenu(); return }
         if (a === "find") { openFind(); return }
+        if (a === "more") { groupMore(); return }
+        if (a === "media") { mediaMenu(); return }
         if (isTour) return
         if (a === "reports") { reportsMenu(() => page.groupMenu()); return }
         if (a === "mute") PeopleActions.muteMenu("g:" + g, info.name || "Group", () => page.groupMenu())
