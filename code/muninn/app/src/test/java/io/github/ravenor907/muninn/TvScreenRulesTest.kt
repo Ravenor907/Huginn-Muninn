@@ -57,7 +57,7 @@ class TvScreenRulesTest {
     fun theParentMenuHasEveryPartOnceWithDisconnectLast() {
         // One page per Kids' Device (settings plan 2.10): its parts, then More with the rarely used ones, Disconnect last.
         val ids = ParentTvMenu.items.map { it.first }
-        assertEquals(listOf("people", "parents", "chatting", "sound", "quick", "quiet", "lock", "apps", "updates", "more"), ids)
+        assertEquals(listOf("people", "parents", "chatting", "sound", "quick", "quiet", "lock", "havamal", "apps", "updates", "more"), ids)
         assertEquals(listOf("names", "keep", "permissions", "storage", "disconnect"), ParentTvMenu.more.map { it.first })
         val all = ids + ParentTvMenu.more.map { it.first }
         assertEquals(all.distinct(), all)
