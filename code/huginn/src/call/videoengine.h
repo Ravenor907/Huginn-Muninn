@@ -19,7 +19,7 @@
 class QCamera;
 class QMediaCaptureSession;
 class QScreenCapture;
-class QScreen;
+#include <QScreen>
 class QWindowCapture;
 
 // Cameras, the screen and the pictures of video calls and screen share (shared/docs/protocol.md 5.8.5

@@ -388,7 +388,7 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
  * The colors what falls is drawn in, for a Color vision [kind] and the look ([light]: Light): the leaves' and seeds'
  * gradients and edges ([ColorVision.leafInk]) and the snow's color. Made once per change, so nothing is built per frame.
  */
-private class Inks(kind: String, light: Boolean) {
+private class Inks(private val kind: String, private val light: Boolean) {
     private fun ink(c: Long) = Color(ColorVision.leafInk(c, kind, light))
     val brushes = Scene.TINTS.map { (a, b, c) ->
         Brush.radialGradient(0f to ink(a), 0.55f to ink(b), 1f to ink(c), center = Offset(14f, -2f), radius = 26f)

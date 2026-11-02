@@ -65,6 +65,7 @@ qt_add_executable(huginn
     src/appstorage.cpp src/appstorage.h
     src/perfcheck.cpp src/perfcheck.h src/busy.h
     src/fall.cpp src/fall.h
+    src/icons.cpp src/icons.h
     src/localsend.cpp src/localsend.h
     src/chat.cpp src/chat.h
     src/direct.h

@@ -249,8 +249,8 @@ object Palette {
     private val snowTint get() = tinted && snow
     private val autumnTint get() = tinted && !snow
     /** Color vision, and which of its sets: 0 on a dark ground, 1 on Light, 2 in high contrast. */
-    val vision get() = Access.colorVision
-    private val tone get() = ColorVision.tone(light, hc)
+    val vision: String get() = Access.colorVision
+    private val tone: Int get() = ColorVision.tone(light, hc)
     /** The Seasonal background picked in Settings, or null for the season's own. */
     private val customGround: Color? get() = if (tinted) parse(Seasons.ground(Access.seasonGround).ifEmpty { null }) else null
 
@@ -329,13 +329,13 @@ object Palette {
     /** Section headings. */
     val section get() = pick(0xFFC8CDD3, 0xFFC8CDD3, 0xFF4F5862, 0xFFB08A5E, 0xFFFFFFFF, 0xFF8FB0D4)
     // Color vision: a danger color that suits it (never told from success by red against green alone).
-    private val dangerSet get() = ColorVision.danger(vision, tone)
-    val danger get() = dangerSet?.let { Color(it[0]) } ?: pick(0xFFD9A79E, 0xFFD9A79E, 0xFFA23B2C, 0xFFE0A89E, 0xFFFFB4A8, 0xFFF0A8A0)
-    val dangerLine get() = dangerSet?.let { Color(it[1]) } ?: if (light) Color(0xFFD9A79E) else Color(0xFF5A3A34)
-    val dangerFill get() = dangerSet?.let { Color(it[2]) } ?: if (light) Color(0xFFF5E2DD) else Color(0xFF1E1716)
+    private val dangerSet: LongArray? get() = ColorVision.danger(vision, tone)
+    val danger: Color get() = dangerSet?.let { Color(it[0]) } ?: pick(0xFFD9A79E, 0xFFD9A79E, 0xFFA23B2C, 0xFFE0A89E, 0xFFFFB4A8, 0xFFF0A8A0)
+    val dangerLine: Color get() = dangerSet?.let { Color(it[1]) } ?: if (light) Color(0xFFD9A79E) else Color(0xFF5A3A34)
+    val dangerFill: Color get() = dangerSet?.let { Color(it[2]) } ?: if (light) Color(0xFFF5E2DD) else Color(0xFF1E1716)
     /** The call screen's answer (green) and hang-up (red) buttons; Color vision's own pair. */
-    val answer get() = ColorVision.calls(vision)?.let { Color(it.first) } ?: Color(0xFF3E8A55)
-    val hangUp get() = ColorVision.calls(vision)?.let { Color(it.second) } ?: Color(0xFFC4553F)
+    val answer: Color get() = ColorVision.calls(vision)?.let { Color(it.first) } ?: Color(0xFF3E8A55)
+    val hangUp: Color get() = ColorVision.calls(vision)?.let { Color(it.second) } ?: Color(0xFFC4553F)
 
     // Chat ("Quiet" look): the accent marks the few things you act on (new chat, play, record, unread). These
     // were gold before the accent could be picked; they follow it now.

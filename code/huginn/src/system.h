@@ -10,7 +10,7 @@
 #include <QVariantMap>
 
 class QQuickWindow;
-class QScreen;
+#include <QScreen>
 class Settings;
 
 // Small helpers QML needs: the Steam keyboard, Game Mode detection, the Size setting, files

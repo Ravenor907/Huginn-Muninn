@@ -34,6 +34,7 @@
 #include "system.h"
 #include "transfer.h"
 #include "fall.h"
+#include "icons.h"
 #include "livelist.h"
 #include "updater.h"
 #include "labs.h"
@@ -764,6 +765,8 @@ int main(int argc, char *argv[])
     engine.addImageProvider(QStringLiteral("thumb"), new ThumbProvider(vault->anyThreadReader()));
     engine.addImageProvider(QStringLiteral("profile"), new ProfileImageProvider(profile));
     engine.addImageProvider(QStringLiteral("ground"), new GroundProvider);
+    // Icon.qml: each icon drawn once per name, size and color, then shared.
+    engine.addImageProvider(QStringLiteral("icon"), new IconProvider);
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] {
         Platform::startFailed(QStringLiteral("the main screen didn't load"));
         QCoreApplication::exit(2);

@@ -710,11 +710,13 @@ class Groups(
                 } else {
                     val why = changeLocked(g, Change("join", from, n, mb))
                     if (why != null) host.notice(why)
-                    else sendMods(g, from)   // cap g2: so their app knows who is timed out
-                    // Cap j1: one more use, counted only here (this admin is the link's only counter).
-                    else if (lnk != null && groups[g]?.state?.has(from) == true) {
-                        links.replaceAll { if (it.i == lnk.i) it.copy(uses = it.uses + 1) else it }
-                        sendLinks(g)
+                    else {
+                        sendMods(g, from)   // cap g2: so their app knows who is timed out
+                        // Cap j1: one more use, counted only here (this admin is the link's only counter).
+                        if (lnk != null && groups[g]?.state?.has(from) == true) {
+                            links.replaceAll { if (it.i == lnk.i) it.copy(uses = it.uses + 1) else it }
+                            sendLinks(g)
+                        }
                     }
                 }
             }

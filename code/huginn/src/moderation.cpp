@@ -55,8 +55,8 @@ void Moderation::ensureLoaded() const
     for (auto g = groups.begin(); g != groups.end(); ++g) {
         const QJsonObject who = g.value().toObject();
         for (auto k = who.begin(); k != who.end(); ++k) {
-            const QJsonObject slots = k.value().toObject();
-            for (auto s = slots.begin(); s != slots.end(); ++s) {
+            const QJsonObject bySlot = k.value().toObject();
+            for (auto s = bySlot.begin(); s != bySlot.end(); ++s) {
                 const QJsonObject rec = s.value().toObject();
                 // Kept as they were taken; checked again for shape (the signature was checked when it came).
                 if (ModWire::check(rec).isEmpty() && ModWire::slot(rec) == s.key() && jstr(rec, "g") == g.key() && jstr(rec, "k") == k.key())
@@ -86,11 +86,11 @@ void Moderation::save()
     for (auto g = m_records.cbegin(); g != m_records.cend(); ++g) {
         QJsonObject who;
         for (auto k = g->cbegin(); k != g->cend(); ++k) {
-            QJsonObject slots;
+            QJsonObject bySlot;
             for (auto s = k->cbegin(); s != k->cend(); ++s)
-                slots.insert(s.key(), s.value());
-            if (!slots.isEmpty())
-                who.insert(k.key(), slots);
+                bySlot.insert(s.key(), s.value());
+            if (!bySlot.isEmpty())
+                who.insert(k.key(), bySlot);
         }
         if (!who.isEmpty())
             groups.insert(g.key(), who);
