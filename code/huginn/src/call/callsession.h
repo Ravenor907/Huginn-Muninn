@@ -77,7 +77,8 @@ public:
     bool wasAnswered() const { return m_answered; }
     qint64 activeMs() const { return m_activeClock.isValid() ? m_activeClock.elapsed() : 0; }
     // What to tell the person when it ended: "Call ended", "No answer", "Declined", "Busy",
-    // "Can't connect", "Call dropped", "Their app can't take this call".
+    // "Can't connect" (or "Can't connect: <why the relay failed>"), "Call dropped",
+    // "Their app can't take this call".
     QString endText() const { return m_endText; }
     CallMedia *media() const { return m_media; }
     bool relayUp() const;
@@ -93,8 +94,9 @@ public:
     // Both trust each other: the Direct path is tried (5.8.2).
     bool directTried() const { return m_directOn; }
 
-    // Set by main.cpp: someone's volume here in percent (cap g2: 0 to 200, 0 while muted for me). Every call's media asks it.
-    static std::function<int(const QString &key)> gainFor;
+    // Set by main.cpp: someone's volume here in percent (cap g2: 0 to 200; 0 while muted for me, in a voice room only,
+    // as in Muninn: a 1:1 call always uses just the volume). Every call's media asks it.
+    static std::function<int(const QString &key, bool room)> gainFor;
     bool useDevices = true;   // false: no microphone or speaker (self-test, voice rooms)
     QJsonObject offerExtra;   // added to the offer: a voice room's "g" and "ch" (section 6)
     std::function<QString(const QString &)> lanHostOverride;   // self-test: where the peer's "Wi-Fi" is
@@ -132,6 +134,7 @@ private:
     void sendAnswer();
     bool startMedia();
     void finish(const QString &text);
+    QString cantConnect() const;           // "Can't connect", with the relay's reason when it failed
     QString lanHost() const;
     QJsonObject signedPart(const QString &t);
     bool shareDirect() const;              // put this side's internet addresses in what it sends
@@ -147,6 +150,7 @@ private:
     QPointer<TurnClient> m_turn;
     bool m_relayDone = false;     // allocated or given up
     int m_relayTries = 0, m_restarts = 0;
+    QString m_relayWhy;           // why the relay last failed ("" once it works); never an address
     QElapsedTimer m_restarted;
     QUdpSocket *m_lan = nullptr;  // until the media takes it
     QList<QByteArray> m_early;    // media datagrams that came before the media did

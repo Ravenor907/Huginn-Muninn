@@ -99,8 +99,8 @@ QString Chat::sendPhotos(const QString &where, const QStringList &paths, bool hd
 
 QString Chat::sendVideo(const QString &where, const QByteArray &mp4, int ms)
 {
-    if (!MoreWire::isVideo(mp4) || mp4.size() > qsizetype(Photos::kMaxPieces) * Photos::kPiece)
-        return QStringLiteral("That video is too big to send.");
+    if (!MoreWire::isVideo(mp4) || mp4.size() > Photos::kVideoSendBytes)
+        return QStringLiteral("That video is too big to send. Videos can be up to 2 MB.");
     const int length = qBound(1, ms, MoreWire::kVideoMaxMs);
     const QVariantMap extra{{QStringLiteral("video"), length}};
     QString g, ch;

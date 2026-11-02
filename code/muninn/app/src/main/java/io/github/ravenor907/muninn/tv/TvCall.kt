@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,9 +38,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.ravenor907.muninn.R
+import io.github.ravenor907.muninn.net.call.CallLogic
 import io.github.ravenor907.muninn.net.call.CallManager
+import io.github.ravenor907.muninn.net.call.CallVideo
 import io.github.ravenor907.muninn.net.call.CallSession.Phase
 import io.github.ravenor907.muninn.screens.CallActivity
+import io.github.ravenor907.muninn.screens.VideoPicture
 import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.Palette
 import kotlinx.coroutines.CoroutineScope
@@ -52,27 +56,40 @@ import kotlinx.coroutines.launch
  * A call on the Kids' TV, made for the remote: one big focused button (Answer when it rings, Hang up
  * during the call), Back declines a ring. [askParent]: Answer was pressed with the microphone off, so it says "Ask a parent". A big muted icon shows while the call is muted. The microphone
  * level and noise removal are set from a parent's phone. Shown by CallActivity in kids' mode.
+ * When the caller's camera is on, it fills the screen and the name, status and button sit in a band along the
+ * bottom; the TV never sends a camera of its own.
  */
 @Composable
 fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.Muninn, onAnswer: () -> Unit, onClose: () -> Unit,
                  askParent: Boolean = false) {
     val c by CallManager.call.collectAsState()
+    val video by CallVideo.state.collectAsState()
     val context = LocalContext.current
     val mic = remember { TvAudio.hasMic(context) }
     val call = c
     BackHandler { if (call?.phase == Phase.INCOMING) CallManager.decline() else onClose() }
     Box(Modifier.fillMaxSize().background(Palette.ground), contentAlignment = Alignment.Center) {
         if (call == null) { Text("Call ended", style = tvTitle(34.sp)); return@Box }
+        // The caller's camera, full screen behind the controls (the same surface path as the phone's call screen).
+        val showVideo = CallLogic.showRemote(call.video, video.peerCamera, call.phase == Phase.ENDED)
+        if (showVideo) VideoPicture({ CallVideo.remoteSurface(it) }, video.width, video.height, video.rotation, Modifier.fillMaxSize(), "Their camera")
         // Centred when it fits; on a 540 dp tall TV screen it scrolls, and the focused button comes into view.
+        // Over their camera: a band along the bottom, so the picture keeps most of the screen.
         Column(horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 48.dp, vertical = 32.dp)) {
-            val initial = call.name.trim().let { if (it.isEmpty()) "?" else String(Character.toChars(it.codePointAt(0))).uppercase() }
-            Box(Modifier.size(170.dp).clip(CircleShape).background(if (call.peerSpeaking) Palette.gold else Palette.goldTint), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(150.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
-                    Text(initial, style = tvText(64.sp, Palette.goldBright, FontWeight.SemiBold))
+            modifier = (if (showVideo) Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.ground.copy(alpha = 0.72f))
+                else Modifier.align(Alignment.Center))
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                .padding(horizontal = 48.dp, vertical = if (showVideo) 20.dp else 32.dp)) {
+            // No video coming: who it is, big.
+            if (!showVideo) {
+                val initial = call.name.trim().let { if (it.isEmpty()) "?" else String(Character.toChars(it.codePointAt(0))).uppercase() }
+                Box(Modifier.size(170.dp).clip(CircleShape).background(if (call.peerSpeaking) Palette.gold else Palette.goldTint), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(150.dp).clip(CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
+                        Text(initial, style = tvText(64.sp, Palette.goldBright, FontWeight.SemiBold))
+                    }
                 }
             }
-            Text(call.name, style = tvTitle(44.sp), modifier = Modifier.padding(top = 22.dp))
+            Text(call.name, style = tvTitle(if (showVideo) 34.sp else 44.sp), modifier = Modifier.padding(top = if (showVideo) 0.dp else 22.dp))
             Text(status(call), style = tvText(26.sp, Palette.textSoft), modifier = Modifier.padding(top = 8.dp))
             if (call.phase != Phase.ENDED) when {
                 !mic -> TvProblemLine("mic", TvWords.NO_MIC)
@@ -85,7 +102,7 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
                 call.note.isNotEmpty() -> Text(call.note, style = tvText(22.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
             }
             val first = remember { FocusRequester() }
-            Row(Modifier.padding(top = 36.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(Modifier.padding(top = if (showVideo) 20.dp else 36.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 when (call.phase) {
                     Phase.INCOMING -> {
                         Box(Modifier.width(260.dp)) { BigButton("Answer", icon = "call", requester = first, onClick = onAnswer) }
@@ -95,7 +112,7 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
                     else -> Box(Modifier.width(300.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
                 }
             }
-            LaunchedEffect(call.phase == Phase.INCOMING, call.phase == Phase.ENDED) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+            LaunchedEffect(call.phase == Phase.INCOMING, call.phase == Phase.ENDED, showVideo) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
         }
     }
 }
@@ -116,6 +133,7 @@ private fun status(c: CallManager.Ui): String {
             "busy" -> "They're on another call"
             "noanswer" -> "No answer"
             "nopath", "error" -> "The call couldn't connect"
+            "dropped" -> "The call dropped"
             "missed" -> "Missed call"
             else -> "Call ended"
         }

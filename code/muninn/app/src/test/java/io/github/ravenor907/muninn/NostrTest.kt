@@ -53,4 +53,15 @@ class NostrTest {
         assertEquals(listOf(all[3], all[0]), Nostr.pickRelays(all, setOf(all[3]), 2))
         assertEquals(listOf(all[2], all[4]), Nostr.pickRelays(all, setOf(all[4], all[2]), 2))
     }
+
+    /** A queued linked-device frame goes out again on a relay that reconnects, as in Huginn's nostr.cpp. */
+    @Test
+    fun queuedLinkFrameResentOnReconnect() {
+        val all = Nostr.DEFAULT_RELAYS
+        val to = listOf(all[0], all[1])
+        assertTrue(Nostr.resendLow(all[0], to, setOf(all[0])))                 // one of its relays
+        assertTrue(Nostr.resendLow(all[3], to, setOf(all[3])))                 // its relays are all down: any relay takes it
+        assertFalse(Nostr.resendLow(all[3], to, setOf(all[3], all[1])))        // one of its own relays is open
+        assertTrue(Nostr.resendLow(all[4], emptyList(), setOf(all[4], all[0]))) // meant for every relay
+    }
 }

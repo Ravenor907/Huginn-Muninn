@@ -27,6 +27,7 @@
 #include "platform/singleinstance.h"
 #include "platform/winstart.h"
 #include "platform/winupdate.h"
+#include <QNetworkInformation>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include "settings.h"
@@ -538,10 +539,10 @@ int main(int argc, char *argv[])
     // Mute for me, volume, group timeouts and bans (cap g2).
     auto *mod = new Moderation(chat, &app);
     chat->setModeration(mod);
-    CallSession::gainFor = [mod](const QString &k) { return mod->gainFor(k); };
+    CallSession::gainFor = [mod](const QString &k, bool room) { return mod->gainFor(k, room); };
     rooms->barred = [mod](const QString &g, const QString &k) { return mod->barred(g, k); };
     rooms->joinBlock = [mod](const QString &g) { return mod->postBlock(g); };
-    // A muted chat or group: its calls don't ring (kept as missed in that chat, without a notification).
+    // A muted chat: its calls ring silently (shown, without a sound or a notification). A muted group's call is a missed-call line.
     calls->hushedFor = [chat](const QString &k) { return chat->isMuted(k) && !chat->isRightAway(k); };
     rooms->hushedFor = [chat](const QString &g) {
         const QString k = QStringLiteral("g:") + g;
@@ -632,6 +633,14 @@ int main(int argc, char *argv[])
         QObject::connect(nostr, &Nostr::publicKeyChanged, nostr, [nostr] { nostr->resubscribe(); });
         nostr->setKeepAlive(true);
         nostr->connectRelays();
+        // The network came back (a hotel login done, Wi-Fi rejoined): the relays reconnect now, not on the next retry.
+        if (QNetworkInformation::loadBackendByFeatures(QNetworkInformation::Feature::Reachability)) {
+            QObject::connect(QNetworkInformation::instance(), &QNetworkInformation::reachabilityChanged, nostr,
+                             [nostr](QNetworkInformation::Reachability r) {
+                                 if (r == QNetworkInformation::Reachability::Online)
+                                     nostr->reconnectNow();
+                             });
+        }
         ble->start();
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.

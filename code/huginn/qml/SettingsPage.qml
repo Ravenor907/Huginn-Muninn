@@ -175,7 +175,7 @@ Rectangle {
             { group: "Talking", kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
               title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: page.padNote(TalkKey.padButton), label: "Remove" },
             { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
-              title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
+              title: "Voice activity", note: "Voice rooms only. Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
             // The bar under the slider is your microphone's level: lit while it goes out.
             { group: "Talking", kind: "slider", key: "gateThreshold", hide: Rooms.pushToTalk || Rooms.gateMode === "off",

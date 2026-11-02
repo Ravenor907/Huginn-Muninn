@@ -1513,7 +1513,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** A video message (cap m2): an MP4 of at most a minute. Null when sent, else what to say. */
     fun sendVideo(peerKey: String, mp4: ByteArray, ms: Int): String? {
         if (!mayHave(peerKey, More.CAP)) return "${nameOf(peerKey)} needs a newer Muninn to get video messages."
-        if (!More.isVideo(mp4) || mp4.size > Photos.MAX_PIECES * Photos.PIECE) return "That video is too big to send."
+        if (!More.isVideo(mp4) || !Videos.fits(mp4.size)) return "That video is too big to send. Videos can be up to 2 MB."
         sendBlob(peerKey, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))
         return null
     }
@@ -2695,7 +2695,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** A video message to everyone in [g] whose app plays it (cap m2). Null when sent, else what to say. */
     fun sendGroupVideo(g: String, ch: String, mp4: ByteArray, ms: Int): String? {
-        if (!More.isVideo(mp4) || mp4.size > Photos.MAX_PIECES * Photos.PIECE) return "That video is too big to send."
+        if (!More.isVideo(mp4) || !Videos.fits(mp4.size)) return "That video is too big to send. Videos can be up to 2 MB."
         val s = groups.group(g)?.state ?: return "That group isn't here any more."
         val older = s.members.filter { it.k != id.publicKey && !hasM2(it.k) }
         if (!sendGroupBlob(g, ch, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))) return "That video didn't send."

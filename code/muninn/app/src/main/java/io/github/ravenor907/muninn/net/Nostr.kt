@@ -72,8 +72,11 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     private val eoseAt = ConcurrentHashMap<String, Long>()
     /** Relays whose inbox request finished at least once on the socket open now. */
     private val subscribed = ConcurrentHashMap<String, Boolean>()
-    /** Something was handed over and not taken (locked with the store full): don't move [eoseAt] on until it's read. */
-    @Volatile private var refused = false
+    /**
+     * Relays that handed over something not taken (locked with the store full): their [eoseAt] doesn't move on until
+     * it's read. Per relay, so one held envelope doesn't freeze every relay's cursor.
+     */
+    private val refused: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
     /** Relay-side pings: per socket, how many were counted already; per relay, the total and the time connected. */
     private val pingsSeen = ConcurrentHashMap<WebSocket, Int>()
     private val relayPings = ConcurrentHashMap<String, Int>()
@@ -412,7 +415,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /** Asks every open relay for the inbox again: after unlocking, so what came while locked is read now. */
     fun resubscribe() {
-        refused = false
+        refused.clear()
         synchronized(seen) { announced.clear() }
         // A relay that asked for a sign-in while locked gets one now, as the mailbox the vault holds the key of.
         for ((url, ws) in sockets) if (live[url] == true) { challenges[url]?.let { signIn(url, ws, it) }; subscribe(url, ws) }
@@ -448,16 +451,17 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
 
     /**
      * The network changed (Android's callback): [run] reconnects at once the first time, then, while the network keeps
-     * changing, after a wait that grows up to [NetBackoff.CAP_MS]. Only the newest one waiting runs.
+     * changing, after a wait that grows up to [NetBackoff.CAP_MS]. Only the newest one waiting runs. In a call or a
+     * voice room ([inCall]) it always runs at once.
      */
-    fun networkChanged(run: () -> Unit) {
+    fun networkChanged(inCall: Boolean = false, run: () -> Unit) {
         val now = android.os.SystemClock.elapsedRealtime()
         val n = synchronized(netChanges) {
             netChanges.addLast(now)
             while (netChanges.isNotEmpty() && now - netChanges.first() > NetBackoff.WINDOW_MS) netChanges.removeFirst()
             netChanges.size
         }
-        val wait = NetBackoff.waitMs(n)
+        val wait = NetBackoff.waitMs(n, inCall)
         netPending?.cancel(false)
         if (wait <= 0L) { netPending = null; run(); return }
         netPending = timer.schedule(Runnable { try { run() } catch (_: Exception) {} }, wait, TimeUnit.MILLISECONDS)
@@ -501,8 +505,10 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 recent.filter { now - it.first <= RECENT_MS }.forEach { (_, m) -> if (m !in again) again.add(m) }
             }
             burst[url]?.let { m -> synchronized(m) { m.forEach { if (it !in again) again.add(it) }; m.clear() } }
-            // Real messages first; a linked device's frames after them, only those meant for this relay.
-            synchronized(lowOutbox) { lowOutbox.forEach { (to, m) -> if (url in to && m !in again) again.add(m) } }
+            // Real messages first; a linked device's frames after them: those meant for this relay, and ones whose
+            // relays are all down (as Huginn does), so a queued frame goes out on whichever relay comes back.
+            val liveNow = live.keys.toSet()
+            synchronized(lowOutbox) { lowOutbox.forEach { (to, m) -> if (resendLow(url, to, liveNow) && m !in again) again.add(m) } }
             if (again.isNotEmpty()) send(url, again)
         }
 
@@ -512,6 +518,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             when (a.optString(0)) {
                 "EOSE" -> {
                     val sub = a.optString(1)
+                    // A page EOSE when no page was asked for (a late answer to one a new request replaced): ignored, so
+                    // it never moves the cursor before the inbox request's own EOSE.
+                    if (sub == pageSubId && !paging.asked(url, page = true)) return
                     if (sub == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
                     else if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) {
                         if (sub == subId) subscribed[url] = true
@@ -524,7 +533,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                     // Everything this relay held for me has been handed over (and the inbox request is still open):
                     // next time ask only for what's newer. Not while something had to stay on the relays (locked, with the
                     // locked store full): it must come again after unlocking. Nor while older pages are still coming.
-                    if (sockets[url] === webSocket && subscribed[url] == true && !refused && !paging.paging(url)) {
+                    if (sockets[url] === webSocket && NetLogic.cursorMoves(url, subscribed[url] == true, refused, paging.paging(url))) {
                         eoseAt[url] = System.currentTimeMillis() / 1000
                         saveSoon()
                     }
@@ -534,7 +543,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 "EVENT" -> a.optJSONObject(2)?.let { ev ->
                     val sub = a.optString(1)
                     if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) paging.stored(url, sub == pageSubId, ev.optLong("created_at"))
-                    awake { handle(ev) }
+                    awake { handle(ev, url) }
                 }
                 // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
                 "AUTH" -> {
@@ -622,7 +631,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Events left on the relays while locked (the store was full): handled once, not once per relay. */
     private val announced = HashSet<String>()
 
-    private fun handle(ev: JSONObject) {
+    /** [url]: the relay it came from (marked [refused] when it isn't taken). */
+    private fun handle(ev: JSONObject, url: String) {
         val id = ev.optString("id")
         // The same event comes from every relay at once: only one copy is handled at a time.
         synchronized(seen) { if (id.isEmpty() || seen.contains(id) || !working.add(id)) return }
@@ -639,7 +649,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         }
         val locked = secretHex() == null
         // Already said once that it's waiting on the relays (the store was full): not again for every relay.
-        if (locked && synchronized(seen) { id in announced }) { synchronized(seen) { working.remove(id) }; return }
+        if (locked && synchronized(seen) { id in announced }) { refused.add(url); synchronized(seen) { working.remove(id) }; return }
         try {
             // Only trust what the event's own signature covers. A broken event (keys or signature that aren't hex) is
             // dropped, never thrown up into the socket, and one whose id is its own is never looked at again.
@@ -650,8 +660,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 // Kept sealed until unlocking, and counted as read here, so the relays don't send it again.
                 val kept = hold(ev.optString("content"))
                 try { onLocked?.invoke() } catch (_: Exception) {}
-                if (!kept) { synchronized(seen) { announced.add(id) }; refused = true; return }
-            } else if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused = true; return }
+                if (!kept) { synchronized(seen) { announced.add(id) }; refused.add(url); return }
+            } else if ((try { onEnvelope?.invoke(ev.optString("content")) } catch (e: Exception) { true }) != true) { refused.add(url); return }
         } finally { synchronized(seen) { working.remove(id) } }
         synchronized(seen) {
             seen.add(id)
@@ -805,6 +815,13 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         const val BLUR_S = 600L
         /** A linked device's frames waiting for a relay, at most (apart from real messages). */
         const val LOW_OUTBOX = 40
+
+        /**
+         * [url] (re)connected: a linked device's queued frame meant for [to] goes to it when it's one of them, when
+         * [to] is every relay (empty), or when none of the others is open ([live]): the same rule as Huginn.
+         */
+        fun resendLow(url: String, to: List<String>, live: Set<String>): Boolean =
+            to.isEmpty() || url in to || to.none { it != url && it in live }
 
         /** The relays an event limited to [n] goes to: the open ones first (in list order), then the rest. [n] <= 0: all. */
         fun pickRelays(all: List<String>, live: Set<String>, n: Int): List<String> {

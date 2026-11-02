@@ -74,6 +74,9 @@ object NetBackoff {
 
     /** Wait before reconnecting, with [changes] network changes (this one included) within the last [WINDOW_MS]. */
     fun waitMs(changes: Int): Long = if (changes <= 1) 0L else minOf(CAP_MS, 1000L shl minOf(changes - 2, 5))
+
+    /** The same, but in a call or a voice room ([inCall]) every change reconnects at once: its signals can't wait. */
+    fun waitMs(changes: Int, inCall: Boolean): Long = if (inCall) 0L else waitMs(changes)
 }
 
 /**
@@ -111,6 +114,9 @@ class InboxPaging(private val full: Int = PAGE_FULL) {
         pages.remove(url)
         return null
     }
+
+    /** An EOSE counts: always on the inbox request; on the page request only while a page was asked for (`until` set). */
+    @Synchronized fun asked(url: String, page: Boolean): Boolean = !page || (pages[url]?.until ?: 0L) != 0L
 
     /** A page request is going on this relay (its cursor waits). */
     @Synchronized fun paging(url: String): Boolean = (pages[url]?.until ?: 0L) != 0L

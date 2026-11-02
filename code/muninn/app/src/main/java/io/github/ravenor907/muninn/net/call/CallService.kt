@@ -157,8 +157,11 @@ object Ringer {
     private fun action(c: Context, action: String) = PendingIntent.getBroadcast(c, action.hashCode(),
         Intent(c, CallActions::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
-    /** [name] empty: a call that rang while Muninn is locked (cap b1), shown as "Incoming call" with no name. */
-    fun ring(c: Context, callId: String, name: String, key: String) {
+    /**
+     * [name] empty: a call that rang while Muninn is locked (cap b1), shown as "Incoming call" with no name.
+     * [silent]: their chat is muted, so the call screen and notification show without sound or vibration.
+     */
+    fun ring(c: Context, callId: String, name: String, key: String, silent: Boolean = false) {
         channels(c)
         val who = if (name.isEmpty()) null else shown(c, name)
         // "Incoming call", with the name when Settings › Notifications shows names (never while panic-locked).
@@ -171,6 +174,7 @@ object Ringer {
             .setFullScreenIntent(screen(c, CallActivity.SHOW), true)
             .setStyle(NotificationCompat.CallStyle.forIncomingCall(person, action(c, CallActions.DECLINE), screen(c, CallActivity.ANSWER)))
             .setTimeoutAfter(CallLogic.RING_MS + 2_000)
+            .setSilent(silent)
             .build()
         try { NotificationManagerCompat.from(c).notify(RING_ID, n) } catch (_: SecurityException) {}
         // Allowed to show over other apps (a Kids' TV, or a phone that said yes): open the call screen straight
@@ -178,7 +182,7 @@ object Ringer {
         if (android.provider.Settings.canDrawOverlays(c)) try {
             c.startActivity(Intent(c, CallActivity::class.java).setAction(CallActivity.SHOW).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         } catch (_: Exception) {}
-        sound(c, true)
+        if (!silent) sound(c, true)
     }
 
     fun ongoing(c: Context, ui: CallManager.Ui): android.app.Notification {

@@ -327,8 +327,11 @@ object CallVideo {
         if (session === s) return
         detach()
         session = s
-        if (s != null) update { State(possible = false, cameraOn = wantCamera && Vp8.available) }
+        if (s != null) update { State(possible = false, cameraOn = wantCamera && cameraHere()) }
     }
+
+    /** This device may film: VP8, and not a Kids' TV (a TV shows the caller's camera but never sends its own). */
+    private fun cameraHere() = CallLogic.sendsCamera(Vp8.available, io.github.ravenor907.muninn.tv.TvMic.active)
 
     /** The session's media exists and both sides said what they can (call this when the call connects). */
     fun ready(s: CallSession) {
@@ -336,13 +339,13 @@ object CallVideo {
         val m = s.mediaNow ?: return
         readyFor = s
         val possible = s.videoBoth
-        update { it.copy(possible = possible, cameraOn = it.cameraOn && possible, peerCamera = m.peerSending(VideoWire.CAMERA)) }
+        update { it.copy(possible = possible, cameraOn = it.cameraOn && possible && cameraHere(), peerCamera = m.peerSending(VideoWire.CAMERA)) }
         if (possible && _state.value.cameraOn) { m.setVideoSending(VideoWire.CAMERA, true); rebind() }
         if (possible) remote.start()
     }
 
     /** Before the call connects: start with the camera on (answering a video call with video). */
-    fun want(s: CallSession, on: Boolean) { if (s === session) update { it.copy(cameraOn = on && Vp8.available) } }
+    fun want(s: CallSession, on: Boolean) { if (s === session) update { it.copy(cameraOn = on && cameraHere()) } }
 
     fun detach() {
         session?.mediaNow?.setVideoSending(VideoWire.CAMERA, false)
@@ -377,7 +380,7 @@ object CallVideo {
 
     fun setCamera(on: Boolean) {
         val s = session ?: return
-        if (on && !_state.value.possible) return
+        if (on && (!_state.value.possible || !cameraHere())) return
         update { it.copy(cameraOn = on) }
         s.mediaNow?.setVideoSending(VideoWire.CAMERA, on)
         if (on) s.mediaNow?.videoStarted()

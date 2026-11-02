@@ -214,7 +214,14 @@ QString FileLink::relayText(const QString &state, bool failed, double fraction)
 
 QString FileLink::tooBig()
 {
-    return QStringLiteral("Too big to go without Direct: up to %1. Turn on Direct calls and files with each other, or send it on the same Wi-Fi.").arg(sizeText(kRelayMax));
+    return QStringLiteral("Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Direct is on.");
+}
+
+QString FileLink::bigWhy(const QString &why, qint64 size)
+{
+    const bool noDirect = why == QLatin1String("Couldn't connect straight to them. Try on the same Wi-Fi.")
+        || why == QLatin1String("No internet connection that can go direct. Try on the same Wi-Fi.");
+    return size > kRelayMax && noDirect ? tooBig() : why;
 }
 
 QString FileLink::sizeText(qint64 b)
@@ -1615,7 +1622,7 @@ void FileLink::fallBack(Xfer *x, const QString &why)
     // A group's file goes over the relays only to a contact (into the chat with them).
     const bool groupOk = x->group.isEmpty() || (isContact && isContact(x->peer));
     if (!x->mine || x->moving || x->size > kRelayMax || !relay || !groupOk || !f.open(QIODevice::ReadOnly)) {
-        fail(x, why);
+        fail(x, x->mine ? bigWhy(why, x->size) : why);
         return;
     }
     const QString id = x->id, peer = x->peer, name = x->name, path = x->path;
@@ -2204,7 +2211,12 @@ bool FileLink::selfTest(const QJsonObject &v, const QByteArray &shared)
         check(relayText(QStringLiteral("sending"), true, 0.5) == QStringLiteral("Not sent · Tap to retry"), QStringLiteral("relay: failed"));
         check(relayText(QStringLiteral("sent"), false, 1) == QStringLiteral("Sent · Arrives when they're online"), QStringLiteral("relay: sent"));
         check(relayText(QStringLiteral("delivered"), false, -1) == QStringLiteral("Sent · Saved in their Downloads"), QStringLiteral("relay: delivered"));
-        check(tooBig().contains(QLatin1String("2.0 MB")), QStringLiteral("too big names the limit"));
+        check(tooBig() == QLatin1String("Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Direct is on."),
+              QStringLiteral("too big says it plainly"));
+        check(bigWhy(QStringLiteral("Couldn't connect straight to them. Try on the same Wi-Fi."), kRelayMax + 1) == tooBig()
+                  && bigWhy(QStringLiteral("Couldn't connect straight to them. Try on the same Wi-Fi."), kRelayMax) != tooBig()
+                  && bigWhy(QStringLiteral("Not accepted within a day. Try again."), kRelayMax + 1) != tooBig(),
+              QStringLiteral("a big file that can't go direct says it plainly"));
         const qint64 mb = 1024 * 1024;
         check(paceText(0, 100, 5000).isEmpty() && paceText(10, 100, 500).isEmpty(), QStringLiteral("pace: too early"));
         check(paceText(10 * mb, 50 * mb, 5000) == QStringLiteral("2.0 MB/s · 20 s left"), QStringLiteral("pace: ") + paceText(10 * mb, 50 * mb, 5000));

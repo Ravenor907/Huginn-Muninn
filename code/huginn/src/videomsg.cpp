@@ -299,7 +299,7 @@ QString VideoMsg::pickFile() const
 bool VideoMsg::fitsMessage(const QString &path) const
 {
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly) || f.size() > qint64(Photos::kMaxPieces) * Photos::kPiece)
+    if (!f.open(QIODevice::ReadOnly) || f.size() > Photos::kVideoSendBytes)
         return false;
     const QByteArray mp4 = f.readAll();
     return MoreWire::isVideo(mp4) && MoreWire::mp4Ms(mp4) <= MoreWire::kVideoMaxMs + 500;
@@ -308,11 +308,11 @@ bool VideoMsg::fitsMessage(const QString &path) const
 QString VideoMsg::sendFile(const QString &where, const QString &path)
 {
     QFile f(path);
-    const qint64 max = qint64(Photos::kMaxPieces) * Photos::kPiece;
+    const qint64 max = Photos::kVideoSendBytes;
     if (!f.open(QIODevice::ReadOnly))
         return QStringLiteral("That video couldn't be opened.");
     if (f.size() > max)
-        return QStringLiteral("That video is too big: video messages are up to about 3 MB (2 MB over the internet).");
+        return QStringLiteral("That video is too big: video messages are up to 2 MB.");
     const QByteArray mp4 = f.readAll();
     if (!MoreWire::isVideo(mp4))
         return QStringLiteral("Only MP4 videos can be sent as video messages.");

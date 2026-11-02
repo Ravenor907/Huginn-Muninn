@@ -5,6 +5,8 @@ import java.io.DataInputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -28,6 +30,8 @@ import javax.net.ssl.SSLSocketFactory
 class TurnClient(
     private val login: TurnCreds.Login,
     private val resolve: (String) -> InetAddress?,
+    /** The IPv6 address of a name, tried when its IPv4 address didn't work. */
+    private val resolve6: (String) -> InetAddress? = { lookup6(it) },
     private val onData: (peer: InetSocketAddress, data: ByteArray) -> Unit,
 ) : Closeable {
     /** One TURN server address from the Worker's list. */
@@ -91,16 +95,32 @@ class TurnClient(
         // Each name is looked up once; a name that can't be looked up isn't asked again in this call.
         val ips = HashMap<String, InetAddress?>()
         var unresolved = false
-        for (s in order(login.urls.mapNotNull(::parseUrl))) {
+        val servers = order(login.urls.mapNotNull(::parseUrl))
+        val v4Failed = ArrayList<Server>()
+        for (s in servers) {
             if (closed) return false
             val ip = ips.getOrPut(s.host) { try { resolve(s.host) } catch (e: Exception) { null } }
             if (ip == null) { unresolved = true; continue }
-            try {
-                if (allocate(s, ip)) { lastProblem = ""; return true }
-            } catch (e: Exception) { /* next server */ }
-            link?.close(); link = null; reader = null
+            if (tryAllocate(s, ip)) { lastProblem = ""; return true }
+            if (ip is Inet4Address) v4Failed += s
+        }
+        // Nothing worked over IPv4 (a network whose IPv4 is broken): the same servers over their IPv6 addresses.
+        val ips6 = HashMap<String, InetAddress?>()
+        for (s in v4Failed) {
+            if (closed) return false
+            val ip6 = ips6.getOrPut(s.host) { try { resolve6(s.host) } catch (e: Exception) { null } } ?: continue
+            if (tryAllocate(s, ip6)) { lastProblem = ""; return true }
         }
         lastProblem = if (unresolved && ips.values.all { it == null }) CANT_REACH else ""
+        return false
+    }
+
+    /** One server at one address; false (and the link closed) if it didn't allocate. */
+    private fun tryAllocate(s: Server, ip: InetAddress): Boolean {
+        try {
+            if (allocate(s, ip)) return true
+        } catch (e: Exception) { /* next server */ }
+        link?.close(); link = null; reader = null
         return false
     }
 
@@ -308,6 +328,12 @@ class TurnClient(
                 } catch (e: Exception) {}
             }
             return null
+        }
+
+        /** The IPv6 address of [host] (one lookup), or null. An IP literal has no other address: null. */
+        fun lookup6(host: String): InetAddress? {
+            if (host.all { it.isDigit() || it == '.' } || host.contains(':')) return null
+            return try { InetAddress.getAllByName(host).firstOrNull { it is Inet6Address } } catch (e: Exception) { null }
         }
     }
 }

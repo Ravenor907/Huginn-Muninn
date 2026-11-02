@@ -12,7 +12,13 @@ object Videos {
     const val AUDIO_BITRATE = 32_000
     const val SIDE = 480
 
-    /** Null unless it's an MP4 of a size we send. */
+    /** The most a video message we send may be: always small enough for the relays (no straight path needed). */
+    const val SEND_MAX = Photos.INTERNET_PIECES * Photos.PIECE
+
+    /** A video of [size] bytes fits in one message. */
+    fun fits(size: Int): Boolean = size in 1..SEND_MAX
+
+    /** Null unless it's an MP4 of a size we take (an older app may have sent one up to [Photos.MAX_PIECES] pieces). */
     fun join(parts: List<ByteArray>): ByteArray? {
         val out = ByteArrayOutputStream()
         parts.forEach { out.write(it) }

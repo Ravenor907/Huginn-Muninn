@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn
 
+import io.github.ravenor907.muninn.net.Limits
 import io.github.ravenor907.muninn.net.NetLogic
 import io.github.ravenor907.muninn.net.PowerLogic
 import org.junit.Assert.assertEquals
@@ -77,11 +78,24 @@ class NetLogicTest {
     }
 
     @Test
+    fun refusedHoldsOnlyThatRelaysCursor() {
+        val refused = setOf("wss://a")
+        assertFalse(NetLogic.cursorMoves("wss://a", true, refused, false))   // it held something back
+        assertTrue(NetLogic.cursorMoves("wss://b", true, refused, false))    // the others move on
+        assertFalse(NetLogic.cursorMoves("wss://b", false, refused, false))  // inbox request not finished
+        assertFalse(NetLogic.cursorMoves("wss://b", true, refused, true))    // older pages still coming
+    }
+
+    @Test
     fun asksRelaysOnlyForWhatsNew() {
         val now = 1_761_500_000L
-        assertEquals(now - 2 * 86_400, NetLogic.since(0, now))                  // never finished: two days back
+        val most = (Limits.LONGEST + 1) * 86_400L
+        assertEquals(31 * 86_400L, NetLogic.SINCE_MAX_S)
+        assertEquals(now - most, NetLogic.since(0, now))                         // never finished: the longest limit back
         assertEquals(now - 600 - 1_200, NetLogic.since(now - 600, now))         // 20 minutes before the last finish
-        assertEquals(now - 2 * 86_400, NetLogic.since(now - 30 * 86_400, now))  // never more than two days
+        // Offline for more than two days: still asked from 20 minutes before the last finish.
+        assertEquals(now - 5 * 86_400 - 1_200, NetLogic.since(now - 5 * 86_400, now))
+        assertEquals(now - most, NetLogic.since(now - 40 * 86_400, now))        // never more than the longest limit
         assertTrue(NetLogic.since(now, now) <= now - 600)                       // always past the 10-minute blur
         assertEquals(0, NetLogic.since(0, 100))
     }

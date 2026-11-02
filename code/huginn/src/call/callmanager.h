@@ -116,8 +116,8 @@ public:
 
     // Set by main.cpp: true while this device is in a voice room (1:1 offers then get busy, 6.6).
     std::function<bool()> busyElsewhere;
-    // Set by main.cpp: their chat is muted (and not "Always right away"). A call from them doesn't ring: it is kept as a
-    // missed call in their chat, without a sound or a notification.
+    // Set by main.cpp: their chat is muted (and not "Always right away"). A call from them rings silently: it shows here
+    // and can be answered, without a sound or a notification (unanswered, it is a missed call in their chat).
     std::function<bool(const QString &key)> hushedFor;
     // Cap b1 (shared/docs/protocol.md section 23): a ring envelope opened while Huginn is locked. It rings with
     // "Incoming call" and no name (nothing else is known). Answer or Decline on the notification is kept, and the

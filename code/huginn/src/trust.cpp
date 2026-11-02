@@ -558,7 +558,7 @@ void Chat::sendLink(const QString &key, const QJsonObject &msg, const QString &m
         post(base, json);
     const QString to = mailbox.isEmpty() ? mailboxOf(key) : mailbox;
     if (!to.isEmpty())
-        m_nostr->publishTo(to, wrap(key, json), chatDays(key), {}, 2, true);
+        m_nostr->publishTo(to, wrap(key, json), chatDays(key), {}, Nostr::kLinkRelays, true);   // every relay, after real messages
 }
 
 // ------------------------------------------------------------------ self-test (shared/vectors/i1f1-vectors.json)

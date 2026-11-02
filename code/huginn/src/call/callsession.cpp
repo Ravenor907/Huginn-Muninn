@@ -9,7 +9,7 @@
 #include <QDateTime>
 #include <QUdpSocket>
 
-std::function<int(const QString &key)> CallSession::gainFor;
+std::function<int(const QString &key, bool room)> CallSession::gainFor;
 
 namespace
 {
@@ -249,12 +249,20 @@ void CallSession::startRelay()
         return;
     }
     QPointer<CallSession> self(this);
-    m_getLogin([self](const TurnLogin &login, const QString &) {
+    m_getLogin([self](const TurnLogin &login, const QString &why) {
         if (!self || self->m_state == Ended)
             return;
         if (!login.valid()) {
+            self->m_relayWhy = why.isEmpty() ? QStringLiteral("The internet relay isn't available") : why;
             self->m_relayDone = true;
             self->relayReady();
+            Q_EMIT self->pathsChanged();
+            // One more try a little later (a captive network, a server that didn't answer in time).
+            if (self->m_relayTries < 2)
+                QTimer::singleShot(2000, self, [self] {
+                    if (self && self->m_state != Ended && !(self->m_turn && self->m_turn->ready()))
+                        self->startRelay();
+                });
             return;
         }
         TurnClient *old = self->m_turn;
@@ -268,6 +276,7 @@ void CallSession::startRelay()
             if (turn != self->m_turn)
                 return;
             self->m_relayDone = true;
+            self->m_relayWhy.clear();
             if (self->m_peerRelayed.valid())
                 turn->addPeer(self->m_peerRelayed);
             if (self->m_media && self->m_peerRelayed.valid())
@@ -275,9 +284,10 @@ void CallSession::startRelay()
             self->relayReady();
             Q_EMIT self->pathsChanged();
         });
-        connect(turn, &TurnClient::failed, self, [self, turn](const QString &) {
+        connect(turn, &TurnClient::failed, self, [self, turn](const QString &why) {
             if (turn != self->m_turn)
                 return;
+            self->m_relayWhy = why == QLatin1String(TurnClient::kCantReach) ? why : QStringLiteral("Couldn't reach the internet relay");
             self->m_relayDone = true;
             self->relayReady();
             Q_EMIT self->pathsChanged();
@@ -597,7 +607,9 @@ bool CallSession::startMedia()
     m_media->setMuted(m_muted);
     if (gainFor) {
         const QString peer = m_peer;
-        m_media->gain = [peer] { return gainFor ? gainFor(peer) : 100; };
+        // Mute for me counts in a voice room only; a 1:1 call uses just the volume.
+        const bool inRoom = offerExtra.contains(QStringLiteral("g")) || m_offer.contains(QStringLiteral("g"));
+        m_media->gain = [peer, inRoom] { return gainFor ? gainFor(peer, inRoom) : 100; };
     }
     m_media->start(useDevices);
     // Media that reached the socket while it rang (their first pings).
@@ -679,7 +691,7 @@ void CallSession::handle(const QJsonObject &msg)
     }
     if (t == QLatin1String("hangup")) {
         const QString why = str(msg, "why");
-        finish(why == QLatin1String("nopath") ? QStringLiteral("Can't connect")
+        finish(why == QLatin1String("nopath") ? cantConnect()
                : why == QLatin1String("dropped") ? QStringLiteral("Call dropped")
                : why == QLatin1String("noanswer") && m_state == Incoming ? QStringLiteral("Missed call")
                : QStringLiteral("Call ended"));
@@ -704,11 +716,19 @@ void CallSession::hangup(const QString &why)
         return;
     if (m_offerSent || m_answerSent || m_state == Incoming)
         sendThrice(QJsonObject{{QStringLiteral("t"), QStringLiteral("hangup")}, {QStringLiteral("call"), m_callId}, {QStringLiteral("why"), why}});
-    finish(why == QLatin1String("nopath") ? QStringLiteral("Can't connect")
+    finish(why == QLatin1String("nopath") ? cantConnect()
            : why == QLatin1String("dropped") ? QStringLiteral("Call dropped")
            : why == QLatin1String("noanswer") ? QStringLiteral("No answer")
            : why == QLatin1String("error") ? QStringLiteral("The call couldn't start")
            : QStringLiteral("Call ended"));
+}
+
+QString CallSession::cantConnect() const
+{
+    // Like Muninn: the relay's reason, worded for people, when the relay never came up.
+    if (!m_relayWhy.isEmpty() && !relayUp())
+        return QStringLiteral("Can't connect: %1").arg(m_relayWhy);
+    return QStringLiteral("Can't connect");
 }
 
 void CallSession::finish(const QString &text)

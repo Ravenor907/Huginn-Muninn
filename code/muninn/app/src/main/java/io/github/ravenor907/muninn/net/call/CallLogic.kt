@@ -323,4 +323,15 @@ object CallLogic {
         }
         return now - p.lastPing >= gap
     }
+
+    // ------------------------------------------------------------------ video on a Kids' TV, relay login retry
+
+    /** This device sends its own camera: it has VP8 and isn't a Kids' TV (a TV shows the caller's camera, never films). */
+    fun sendsCamera(vp8: Boolean, kidsTv: Boolean) = vp8 && !kidsTv
+
+    /** The TV call screen shows their camera full screen: video works both ways, their camera is on, and the call isn't over. */
+    fun showRemote(video: Boolean, peerCamera: Boolean, ended: Boolean) = video && peerCamera && !ended
+
+    /** A failed relay login fetch is tried once more, unless the relay is resting or used up for today (asking again can't help). */
+    fun retryLogin(problem: String) = !problem.contains("resting") && !problem.contains("used up")
 }

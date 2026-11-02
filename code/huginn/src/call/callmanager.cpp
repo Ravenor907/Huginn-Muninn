@@ -525,11 +525,8 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         addHistory(from, false, QStringLiteral("missed"), nowMs(), 0);
         return;
     }
-    if (!answeredLocked && hushedFor && hushedFor(from)) {
-        m_handled.insert(id);
-        addHistory(from, false, QStringLiteral("missed"), nowMs(), 0);
-        return;
-    }
+    // A muted chat: the call still shows (so it can be answered, and the caller isn't left ringing), without a sound.
+    const bool silent = !answeredLocked && hushedFor && hushedFor(from);
     auto *s = new CallSession(m_signal, from, [this](auto done) { getLogin(std::move(done)); }, this);
     prime(s);
     adopt(s);
@@ -541,8 +538,10 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         answer();
         return;
     }
-    ring(true);
-    notifyIncoming(true);
+    if (!silent) {
+        ring(true);
+        notifyIncoming(true);
+    }
     Q_EMIT incoming(peerName());
 }
 

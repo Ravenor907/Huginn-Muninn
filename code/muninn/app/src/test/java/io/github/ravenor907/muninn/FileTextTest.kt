@@ -43,7 +43,20 @@ class FileTextTest {
         assertEquals("Sent · Arrives when they're online", FileText.relayLine("sent", false, 1f))
         assertEquals("Sent · Saved in their Downloads", FileText.relayLine("delivered", false, null))
         assertEquals("Sent · Saved in their Downloads", FileText.relayLine("read", false, null))
-        assertTrue(FileText.tooBig().contains("2.0 MB"))
+        assertEquals("Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Direct is on.", FileText.tooBig())
+    }
+
+    @Test
+    fun bigFileThatCantGoDirectSaysItPlainly() {
+        val noPath = "Couldn't connect straight to them. Try on the same Wi-Fi."
+        assertEquals(FileText.tooBig(), FileText.bigWhy(noPath, FileText.RELAY_MAX + 1))
+        assertEquals(FileText.tooBig(), FileText.bigWhy("No internet connection that can go direct. Try on the same Wi-Fi.", FileText.RELAY_MAX + 1))
+        assertEquals(noPath, FileText.bigWhy(noPath, FileText.RELAY_MAX))                    // small: goes over the relays anyway
+        assertEquals("Not accepted within a day. Try again.", FileText.bigWhy("Not accepted within a day. Try again.", FileText.RELAY_MAX + 1))
+        // Video messages always fit the relay path.
+        assertEquals(io.github.ravenor907.muninn.net.Photos.INTERNET_PIECES * io.github.ravenor907.muninn.net.Photos.PIECE, io.github.ravenor907.muninn.net.Videos.SEND_MAX)
+        assertTrue(io.github.ravenor907.muninn.net.Videos.fits(io.github.ravenor907.muninn.net.Videos.SEND_MAX))
+        assertFalse(io.github.ravenor907.muninn.net.Videos.fits(io.github.ravenor907.muninn.net.Videos.SEND_MAX + 1))
     }
 
     @Test

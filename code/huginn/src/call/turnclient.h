@@ -23,6 +23,8 @@ Stun::Address fromHost(const QHostAddress &h, quint16 port);
 // Looks host up (DNS), up to tries times a second apart; an IP literal is used as it is.
 // done gets a null address when the name couldn't be looked up.
 void resolve(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries = 3);
+// The same, giving the first IPv4 and the first IPv6 address (either may be null).
+void resolveBoth(const QString &host, QObject *ctx, std::function<void(const QHostAddress &v4, const QHostAddress &v6)> done, int tries = 3);
 }
 
 // A TURN login from the relay Worker (shared/docs/relay.md).
@@ -74,6 +76,8 @@ public:
     void start();
     void stop();   // deallocates (Refresh with lifetime 0)
     bool ready() const { return m_relayed.valid(); }
+    // The reason failed() gives when not one server name could be looked up.
+    static constexpr const char kCantReach[] = "Can't reach the call relay right now";
     // The relayed transport address: the only address offers and answers carry.
     Stun::Address relayed() const { return m_relayed; }
     bool overTls() const { return m_tls != nullptr; }
@@ -142,4 +146,7 @@ private:
     bool m_stopped = false;
     QHash<QString, QHostAddress> m_resolved;   // per allocation attempt: names looked up
     QSet<QString> m_unresolved;                // and names it couldn't (not asked again)
+    QHash<QString, QHostAddress> m_resolved6;  // a name's IPv6 address, tried when its IPv4 one fails
+    Server m_altServer;                        // the server to try again over IPv6 before the next one
+    QHostAddress m_altIp;
 };

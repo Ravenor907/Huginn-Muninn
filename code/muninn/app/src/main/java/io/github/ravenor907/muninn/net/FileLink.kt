@@ -529,7 +529,7 @@ object FileLink {
             h.relay(peer, file, name)?.let { failed(peer, name, file.length(), it, id) }
             return
         }
-        fail(id, why)
+        fail(id, FileText.bigWhy(why, file.length()))
     }
 
     /** The "lan" candidate (27.1): only the port, never an address. */

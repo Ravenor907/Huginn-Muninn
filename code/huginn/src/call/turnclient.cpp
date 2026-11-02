@@ -28,26 +28,35 @@ const int kRebindMs = 4 * 60 * 1000;   // permissions last 5 minutes, channels 1
 
 void CallNet::resolve(const QString &host, QObject *ctx, std::function<void(const QHostAddress &)> done, int tries)
 {
+    // IPv4 first (what the relay hands out for calls), else IPv6.
+    resolveBoth(host, ctx, [done](const QHostAddress &v4, const QHostAddress &v6) { done(v4.isNull() ? v6 : v4); }, tries);
+}
+
+void CallNet::resolveBoth(const QString &host, QObject *ctx, std::function<void(const QHostAddress &, const QHostAddress &)> done, int tries)
+{
     // An IP literal needs no lookup; a name goes to the system resolver.
     const QHostAddress literal(host);
     if (!literal.isNull()) {
-        QTimer::singleShot(0, ctx, [done, literal] { done(literal); });
+        const bool v4 = literal.protocol() == QAbstractSocket::IPv4Protocol;
+        QTimer::singleShot(0, ctx, [done, literal, v4] { done(v4 ? literal : QHostAddress(), v4 ? QHostAddress() : literal); });
         return;
     }
     QPointer<QObject> guard(ctx);
     QHostInfo::lookupHost(host, ctx, [host, ctx, guard, done, tries](const QHostInfo &info) {
         if (!guard)
             return;
-        // IPv4 first (what the relay hands out for calls), else IPv6.
-        QHostAddress a;
-        for (const QHostAddress &x : info.addresses())
-            if (x.protocol() == QAbstractSocket::IPv4Protocol || (a.isNull() && x.protocol() == QAbstractSocket::IPv6Protocol))
-                a = x;
-        if (!a.isNull() || tries <= 1) {
-            done(a);
+        QHostAddress v4, v6;
+        for (const QHostAddress &x : info.addresses()) {
+            if (v4.isNull() && x.protocol() == QAbstractSocket::IPv4Protocol)
+                v4 = x;
+            else if (v6.isNull() && x.protocol() == QAbstractSocket::IPv6Protocol)
+                v6 = x;
+        }
+        if (!v4.isNull() || !v6.isNull() || tries <= 1) {
+            done(v4, v6);
             return;
         }
-        QTimer::singleShot(1000, ctx, [host, ctx, done, tries] { resolve(host, ctx, done, tries - 1); });
+        QTimer::singleShot(1000, ctx, [host, ctx, done, tries] { resolveBoth(host, ctx, done, tries - 1); });
     });
 }
 
@@ -101,11 +110,11 @@ void RelayCredentials::get(const QByteArray &identityKey, std::function<void(con
         return;
     }
     if (!RelayConfig::configured()) {
-        QTimer::singleShot(0, this, [done] { done(TurnLogin(), QStringLiteral("relay not set up")); });
+        QTimer::singleShot(0, this, [done] { done(TurnLogin(), QStringLiteral("The internet relay isn't set up yet")); });
         return;
     }
     if (nowMs() < m_blockedUntil) {
-        QTimer::singleShot(0, this, [done] { done(TurnLogin(), QStringLiteral("relay resting")); });
+        QTimer::singleShot(0, this, [done] { done(TurnLogin(), QStringLiteral("The internet relay is resting")); });
         return;
     }
     m_identity = identityKey;
@@ -119,7 +128,7 @@ void RelayCredentials::fetch()
     m_busy = true;
     QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/turn")));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    req.setTransferTimeout(30000);
+    req.setTransferTimeout(10000);   // a captive or hostile network: give up soon, the call retries once
     const qint64 t = nowMs() / 1000;
     QNetworkReply *r = m_net.post(req, body(m_identity, t, QByteArray(RelayConfig::kAppSecret)));
     connect(r, &QNetworkReply::finished, this, [this, r] {
@@ -143,17 +152,22 @@ void RelayCredentials::fetch()
                 finish(l, QString());
                 return;
             }
-            finish(TurnLogin(), QStringLiteral("bad answer"));
+            finish(TurnLogin(), QStringLiteral("The internet relay didn't answer properly"));
             return;
         }
         if (status == 429) {
             // Daily cap: not again until the next UTC day.
             const QDateTime tomorrow(QDateTime::currentDateTimeUtc().date().addDays(1), QTime(0, 0), QTimeZone::UTC);
             m_blockedUntil = tomorrow.toMSecsSinceEpoch();
-        } else if (status >= 500 || status == 0) {
+        } else if (status >= 500) {
+            // No answer at all (status 0, say before a hotel's login page) doesn't rest the relay.
             m_blockedUntil = nowMs() + 60000;
         }
-        finish(TurnLogin(), o.value(QStringLiteral("error")).toString(status ? QStringLiteral("refused") : QStringLiteral("no answer")));
+        // Worded like Muninn's TurnCreds; never a credential or an address.
+        finish(TurnLogin(), status == 0 ? QStringLiteral("Couldn't reach the internet relay")
+                            : status == 401 ? QStringLiteral("This device's clock looks wrong, so the internet relay said no")
+                            : status == 429 ? QStringLiteral("The internet relay is used up for today")
+                                            : QStringLiteral("The internet relay didn't answer properly"));
     });
 }
 
@@ -239,6 +253,8 @@ void TurnClient::start()
     m_next = 0;
     m_resolved.clear();
     m_unresolved.clear();
+    m_resolved6.clear();
+    m_altIp = QHostAddress();
     tryNext();
 }
 
@@ -261,13 +277,28 @@ void TurnClient::tryNext()
     m_key.clear();
     if (m_stopped)
         return;
+    if (!m_altIp.isNull()) {
+        // The IPv4 address of this server didn't work: the same server over IPv6 before the next one.
+        const QHostAddress ip = m_altIp;
+        m_altIp = QHostAddress();
+        if (m_altServer.tls)
+            connectTls(m_altServer, ip);
+        else
+            connectUdp(ip, m_altServer.port);
+        return;
+    }
     if (m_next >= m_servers.size()) {
         // Not one name could be looked up: say so.
-        fail(m_resolved.isEmpty() ? QStringLiteral("Can't reach the call relay right now") : QStringLiteral("relay unreachable"));
+        fail(m_resolved.isEmpty() ? QString::fromLatin1(kCantReach) : QStringLiteral("relay unreachable"));
         return;
     }
     const Server s = m_servers.at(m_next++);
     auto go = [this, s](const QHostAddress &ip) {
+        // An IPv4 address that fails is followed by the same name's IPv6 address, if it has one.
+        if (ip.protocol() == QAbstractSocket::IPv4Protocol && m_resolved6.contains(s.host)) {
+            m_altServer = s;
+            m_altIp = m_resolved6.value(s.host);
+        }
         if (s.tls)
             connectTls(s, ip);
         else
@@ -281,15 +312,18 @@ void TurnClient::tryNext()
         QTimer::singleShot(0, this, &TurnClient::tryNext);
         return;
     }
-    CallNet::resolve(s.host, this, [this, s, go](const QHostAddress &ip) {
+    CallNet::resolveBoth(s.host, this, [this, s, go](const QHostAddress &v4, const QHostAddress &v6) {
         if (m_stopped || m_tls || m_udp)
             return;
+        const QHostAddress ip = v4.isNull() ? v6 : v4;
         if (ip.isNull()) {
             m_unresolved.insert(s.host);
             tryNext();
             return;
         }
         m_resolved.insert(s.host, ip);
+        if (!v4.isNull() && !v6.isNull())
+            m_resolved6.insert(s.host, v6);
         go(ip);
     });
 }
@@ -558,6 +592,7 @@ void TurnClient::onResponse(const Stun::Message &m, const QByteArray &bytes)
             return;
         }
         m_giveUp.stop();
+        m_altIp = QHostAddress();
         m_relayed = relayed;
         const quint32 life = m.u32(Stun::Lifetime, 600);
         m_refresh.start(int(qMax<quint32>(30, life > 60 ? life - 60 : life / 2)) * 1000);

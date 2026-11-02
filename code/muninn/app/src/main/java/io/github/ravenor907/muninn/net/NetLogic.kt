@@ -63,11 +63,21 @@ object NetLogic {
 
     /** Events can be backdated up to 10 minutes (see [Nostr.publish]): look back twice that past the last finish. */
     const val SINCE_SLACK_S = 20 * 60L
-    /** Never ask for more than two days back. */
-    const val SINCE_MAX_S = 2 * 86_400L
+    /**
+     * Never ask for more than the longest message limit (and a day for blurred times) back: nothing older is kept
+     * anywhere, and a phone or TV offline for days still gets everything that waits for it.
+     */
+    const val SINCE_MAX_S = (Limits.LONGEST + 1) * 86_400L
 
     /** What to ask a relay for, in seconds: since it last finished sending ([eoseAt], 0: never) less the slack. */
     fun since(eoseAt: Long, nowS: Long): Long = maxOf(0L, nowS - SINCE_MAX_S, eoseAt - SINCE_SLACK_S)
+
+    /**
+     * A relay's EOSE cursor may move on: its inbox request finished ([subscribed]), nothing it handed over was left
+     * untaken ([refusedOn] holds the relays that did, each on its own), and no older page is still coming ([paging]).
+     */
+    fun cursorMoves(url: String, subscribed: Boolean, refusedOn: Set<String>, paging: Boolean): Boolean =
+        subscribed && url !in refusedOn && !paging
 
     /**
      * Locked: one more envelope of [size] characters may be kept for after unlocking, with [count] kept already

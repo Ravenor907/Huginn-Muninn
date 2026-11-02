@@ -82,6 +82,9 @@ class ReliabilityTest {
         assertEquals(1_000L, NetBackoff.waitMs(2))
         assertEquals(2_000L, NetBackoff.waitMs(3))
         assertEquals(NetBackoff.CAP_MS, NetBackoff.waitMs(50))
+        // In a call or a voice room: at once, however often the network changes.
+        assertEquals(0L, NetBackoff.waitMs(50, inCall = true))
+        assertEquals(NetBackoff.CAP_MS, NetBackoff.waitMs(50, inCall = false))
     }
 
     // ------------------------------------------------------------------ inbox pages
@@ -136,6 +139,19 @@ class ReliabilityTest {
         assertNull(p.end("b", true))
         p.reset("a")
         assertFalse(p.paging("a"))
+    }
+
+    @Test
+    fun pageEoseWithNoPageAskedIsIgnored() {
+        val p = InboxPaging(full = 2)
+        p.reset("r")
+        assertTrue(p.asked("r", page = false))    // the inbox request's EOSE always counts
+        assertFalse(p.asked("r", page = true))    // no page asked for: a page EOSE is ignored
+        p.stored("r", false, 10); p.stored("r", false, 9)
+        assertEquals(9L, p.end("r", false))
+        assertTrue(p.asked("r", page = true))     // a page is going now
+        assertNull(p.end("r", true))
+        assertFalse(p.asked("r", page = true))
     }
 
     // ------------------------------------------------------------------ notifications

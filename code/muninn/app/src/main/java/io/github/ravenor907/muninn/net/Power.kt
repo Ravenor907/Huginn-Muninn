@@ -312,7 +312,10 @@ class Power(private val app: Muninn) {
                 // Back on a network: connect again once (catching up does it, or only that with "Only when open").
                 // At once the first time; a network that keeps flapping waits a little longer each time (capped).
                 override fun onAvailable(network: Network) {
-                    app.nostr.networkChanged {
+                    // In a call or a voice room: at once every time (its signals go through the relays).
+                    val inCall = io.github.ravenor907.muninn.net.call.RoomManager.busy ||
+                        io.github.ravenor907.muninn.net.call.CallManager.call.value.let { it != null && it.phase != io.github.ravenor907.muninn.net.call.CallSession.Phase.ENDED }
+                    app.nostr.networkChanged(inCall) {
                         main.post { caughtUpAt = 0L; if (check == PowerLogic.Check.OPEN || extreme) app.nostr.reconnectNow() else catchUp() }
                     }
                 }

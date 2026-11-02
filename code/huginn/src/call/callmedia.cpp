@@ -117,13 +117,14 @@ void CallMedia::start(bool devices)
     m_running = true;
     m_started = now();
     m_lastReport = now();
+    // Voice activity (Settings › Talking) is for voice rooms only. A 1:1 call's microphone is never gated: a quiet
+    // start, a soft voice or background noise must never mute it, and a room's Manual threshold never carries over.
+    const QString gate = Settings::saved(QStringLiteral("voiceActivity"), QStringLiteral("auto")).toString();
+    m_gateOff = !m_room || gate == QLatin1String("off");
+    m_gate.reset();
+    m_gate.setAutomatic(gate != QLatin1String("manual") && !m_gateOff);
+    m_gate.setThreshold(Settings::saved(QStringLiteral("voiceThreshold"), AudioDsp::Gate::kDefaultDb).toDouble());
     if (devices) {
-        // Voice activity (Settings › Calls) for a call too: silence goes out between words, so game sound stays out.
-        const QString gate = Settings::saved(QStringLiteral("voiceActivity"), QStringLiteral("auto")).toString();
-        m_gateOff = gate == QLatin1String("off");
-        m_gate.reset();
-        m_gate.setAutomatic(gate != QLatin1String("manual") && !m_gateOff);
-        m_gate.setThreshold(Settings::saved(QStringLiteral("voiceThreshold"), AudioDsp::Gate::kDefaultDb).toDouble());
         m_audio = new AudioIO(this);
         m_audio->pull = [this](qint16 *pcm) { onPull(pcm); };
         connect(m_audio, &AudioIO::captured, this, [this](const QByteArray &pcm) {

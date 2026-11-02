@@ -17,6 +17,8 @@ namespace Photos
 const int kPiece = 16 * 1024;
 const int kMaxPieces = 200;            // 3.2 MB
 const int kInternetPieces = 130;       // 2 MB over the relays at most
+// A video message we send: always small enough for the relays, so it never needs a straight path.
+const qint64 kVideoSendBytes = qint64(kInternetPieces) * kPiece;
 const int kMaxVoiceMs = 5 * 60 * 1000;
 
 QByteArray prepare(const QString &path, bool hd);   // empty if it isn't a picture

@@ -255,11 +255,12 @@ public:
         for (const QByteArray &id : ids)
             noteSeen(id);
     }
-    // --perf-selftest: a relay's message as if it came on a socket ("$SUB" stands for the inbox request), and a
-    // socket to any address.
+    // --perf-selftest: a relay's message as if it came on a socket ("$SUB" stands for the inbox request, "$PAGE" for
+    // the page request), and a socket to any address.
     void feed(const QString &url, QString text)
     {
         text.replace(QLatin1String("$SUB"), m_subId);
+        text.replace(QLatin1String("$PAGE"), m_pageSubId);
         onMessage(url, nullptr, text);
     }
     void openUrl(const QString &url) { open(url); }
@@ -647,6 +648,10 @@ void NostrWorker::endOfStored(const QString &url, QWebSocket *ws, const QString 
     if (sub != m_subId && sub != m_pageSubId)
         return;
     if (m_links.value(url).ws != ws)
+        return;
+    // A page EOSE when no page was asked for on this relay (a late answer to one a new request replaced) says
+    // nothing about the inbox request: it must not move the cursor before the inbox's own EOSE.
+    if (sub == m_pageSubId && m_pages.value(url).until == 0)
         return;
     if (sub == m_subId)
         m_eosed.insert(url);   // from here on the inbox request is live on this relay
@@ -1485,6 +1490,10 @@ bool Nostr::threadSelfTest()
     };
     const QString eose = compact(QJsonArray{QStringLiteral("EOSE"), QStringLiteral("$SUB")});
 
+    // A linked PC's frames to its phone go to every relay, open or not (the phone listens on only some of them).
+    check("a linked device's frames go to every relay",
+          pickRelays(defaultRelays(), QSet<QString>{defaultRelays().constFirst()}, kLinkRelays) == defaultRelays());
+
     // Declared before the Nostr: the relay thread may write it until the Nostr has joined that thread.
     std::atomic<QThread *> openedOn{nullptr};
     QThread *const gui = QThread::currentThread();
@@ -1545,6 +1554,13 @@ bool Nostr::threadSelfTest()
         waitFor([&] { return bodies.size() >= 203; }, 10000);
         const int batches = n.m_batches - before;
         check("a burst of 200 events is handed over in batches", bodies.size() == 203 && batches >= 1 && batches <= 20);
+
+        // A page EOSE with no page asked for is ignored: it never moves a relay's cursor.
+        const QString other = QStringLiteral("wss://selftest-page.invalid");
+        const QString pageEose = compact(QJsonArray{QStringLiteral("EOSE"), QStringLiteral("$PAGE")});
+        n.post([other, pageEose](NostrWorker *w) { w->feed(other, pageEose); });
+        waitFor([] { return false; }, 400);
+        check("a page EOSE with no page asked for leaves the cursor alone", !n.m_eoseAt.contains(other));
 
         // Shutdown: a socket still connecting to a server that never answers, and a burst still queued, never hold it up.
         QTcpServer silent;

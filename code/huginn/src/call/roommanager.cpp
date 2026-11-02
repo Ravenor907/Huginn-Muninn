@@ -758,7 +758,7 @@ void RoomManager::peerEnded(const QString &key, CallSession *s)
         QTimer::singleShot(0, this, &RoomManager::pickSharer);
     const QString why = s->endText();
     // A pair that lost its connection while both stay: the lower key calls again (6.3 step 7).
-    if (inRoom() && (why == QLatin1String("Can't connect") || why == QLatin1String("Call dropped")) && retries < 3
+    if (inRoom() && (why.startsWith(QLatin1String("Can't connect")) || why == QLatin1String("Call dropped")) && retries < 3
         && RoomWire::offerWins(me(), key) == me()) {
         const int gen = m_gen;
         QTimer::singleShot(5000, this, [this, gen, key, retries] {

@@ -150,14 +150,14 @@ void Moderation::setVolume(const QString &key, int pct)
     save();
 }
 
-int Moderation::gainFor(const QString &key) const
+int Moderation::gainFor(const QString &key, bool room) const
 {
     if (!m_loaded)
         return ModWire::kVolumeDefault;   // never reads the vault from the speaker's pull
     const auto it = m_people.constFind(key);
     if (it == m_people.cend())
         return ModWire::kVolumeDefault;
-    return it->muted ? 0 : it->volume;
+    return it->muted && room ? 0 : it->volume;
 }
 
 // ------------------------------------------------------------------ timeouts and bans

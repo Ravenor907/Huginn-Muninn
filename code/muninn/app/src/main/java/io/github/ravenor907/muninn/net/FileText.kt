@@ -37,7 +37,14 @@ object FileText {
         else -> "Sending"
     }
 
-    fun tooBig(): String = "Too big to go without Direct: up to ${size(RELAY_MAX)}. Turn on Direct calls and files with each other, or send it on the same Wi-Fi."
+    /** A file over [RELAY_MAX] that can't go direct: the same words as Huginn's FileLink::tooBig. Retry stays on its card. */
+    fun tooBig(): String = TOO_BIG
+    const val TOO_BIG = "Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Direct is on."
+
+    /** Why a file of mine of [size] didn't go: a big one whose straight path failed says so plainly ([tooBig]). */
+    fun bigWhy(why: String, size: Long): String = if (size > RELAY_MAX && why in NO_DIRECT) tooBig() else why
+    private val NO_DIRECT = setOf("Couldn't connect straight to them. Try on the same Wi-Fi.",
+        "No internet connection that can go direct. Try on the same Wi-Fi.")
 
     /** "2.1 MB/s · 12 s left"; empty until a second has passed and something moved. */
     fun pace(done: Long, total: Long, ms: Long): String {

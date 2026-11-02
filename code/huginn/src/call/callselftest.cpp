@@ -85,6 +85,12 @@ void relayChecks()
         waitFor([&] { return done && litDone; }, 5000);
         check(done && got.isLoopback(), "the relay's name is looked up (localhost answers)");
         check(litDone && lit == QHostAddress(QStringLiteral("104.30.1.2")), "an IP literal needs no lookup");
+        QHostAddress b4, b6;
+        bool bothDone = false;
+        CallNet::resolveBoth(QStringLiteral("::1"), &ctx, [&](const QHostAddress &v4, const QHostAddress &v6) { b4 = v4; b6 = v6; bothDone = true; });
+        waitFor([&] { return bothDone; }, 5000);
+        check(bothDone && b4.isNull() && b6 == QHostAddress(QHostAddress::LocalHostIPv6),
+              "an IPv6 literal is kept as the IPv6 address to fall back to");
     }
     const auto s = TurnClient::servers({QStringLiteral("turn:turn.cloudflare.com:3478?transport=udp"), QStringLiteral("turn:turn.cloudflare.com:3478?transport=tcp"),
                                         QStringLiteral("turns:turn.cloudflare.com:5349?transport=tcp"), QStringLiteral("turns:turn.cloudflare.com:443?transport=tcp"),
@@ -333,6 +339,7 @@ void c2Media()
     b.setC2(true, false);
     a.start(false);
     b.start(false);
+    check(!a.micGated() && !b.micGated(), "a 1:1 call's microphone is never gated by voice activity");
     check(waitFor([&] { return a.live(CallMedia::Wifi) && b.live(CallMedia::Wifi); }, 3000), "Wi-Fi path live both ways");
     qint64 ph = 0;
     QTimer clock;

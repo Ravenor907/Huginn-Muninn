@@ -257,16 +257,19 @@ class CallSession(
         val askedAt = System.currentTimeMillis()
         work.execute {
             val login = try { host.relayLogin() } catch (e: Exception) { null }
+            // Why the login fetch failed, read now (before another fetch can change it).
+            val loginProblem = if (login == null) TurnCreds.lastProblem else ""
             val r = login?.let { m.startRelay(it, host::resolve) }
             exec.execute {
                 relayBusy = false
                 if (phase == Phase.ENDED) return@execute
                 if (r == null) {
-                    note = if (login == null) TurnCreds.lastProblem.ifEmpty { "The internet relay isn't available" } else TurnClient.lastProblem.ifEmpty { "Couldn't reach the internet relay" }
+                    note = if (login == null) loginProblem.ifEmpty { "The internet relay isn't available" } else TurnClient.lastProblem.ifEmpty { "Couldn't reach the internet relay" }
                     host.changed(this)
-                    // One more try a little later (a busy network, a server that didn't answer in time).
+                    // One more try a little later (a busy network, a server that didn't answer in time), also when the
+                    // login fetch failed, unless the relay is resting or used up for today.
                     // (After a restart the old relay may still be known: what counts is that nothing worked since this try.)
-                    if (relayTries < 2 && login != null) later(2_000) { if (relayOkAt < askedAt) startRelay(again = true) }
+                    if (relayTries < 2 && (login != null || CallLogic.retryLogin(loginProblem))) later(2_000) { if (relayOkAt < askedAt) startRelay(again = true) }
                     return@execute
                 }
                 if (note.isNotEmpty()) { note = ""; host.changed(this) }

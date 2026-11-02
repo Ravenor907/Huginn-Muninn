@@ -86,6 +86,8 @@ public:
     void start(bool devices = true);
     void stop();
     void setMuted(bool on) { m_muted = on; }
+    // Voice activity can silence the microphone: only ever in a voice room, never in a 1:1 call.
+    bool micGated() const { return !m_gateOff; }
     // Their volume here in percent (0 to 200, cap g2's menus; 0 while muted for me), asked for every 20 ms frame of
     // their decoded sound before it's played or mixed. Unset: 100.
     std::function<int()> gain;
@@ -177,7 +179,7 @@ private:
     JitterBuffer m_jitter;
     AudioDsp::Speaking m_speaking;
     AudioIO *m_audio = nullptr;
-    AudioDsp::Gate m_gate;     // voice activity for the microphone (devices only: a call, not a room)
+    AudioDsp::Gate m_gate;     // voice activity for the microphone (voice rooms only, never a 1:1 call)
     bool m_gateOff = false;    // Voice activity: Always on
     QUdpSocket *m_lan = nullptr;
     QHostAddress m_lanHost;

@@ -37,8 +37,9 @@ public:
     Q_INVOKABLE void setHidesMessages(const QString &key, bool on);
     Q_INVOKABLE int volume(const QString &key) const;              // 0 to 200, 100 when never set
     Q_INVOKABLE void setVolume(const QString &key, int pct);
-    // What their sound is played at: 0 while muted for me, else their volume.
-    int gainFor(const QString &key) const;
+    // What their sound is played at: their volume, or 0 while muted for me in a voice room (room). A 1:1 call never
+    // uses Mute for me, only the volume, as in Muninn.
+    int gainFor(const QString &key, bool room) const;
     // A group message of theirs to fold away.
     bool foldMessages(const QString &key) const { return mutedForMe(key) && hidesMessages(key); }
 

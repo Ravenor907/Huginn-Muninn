@@ -204,10 +204,13 @@ object CallManager {
 
     // ------------------------------------------------------------------ actions (from the screens)
 
-    /** Can [peerKey] get video calls? Their app speaks c2 (5.8) and this phone has VP8. */
-    /** This phone sends and shows video: it has VP8 and isn't a Kids' TV (the TV call screen shows no video). */
-    fun videoHere(): Boolean = Vp8.available && !io.github.ravenor907.muninn.tv.TvMic.active
+    /**
+     * This device sends its own camera: it has VP8 and isn't a Kids' TV. A TV still decodes VP8 (it says so in its
+     * offer and answer, see host.videoCodec) and shows the caller's camera, but never films.
+     */
+    fun videoHere(): Boolean = CallLogic.sendsCamera(Vp8.available, io.github.ravenor907.muninn.tv.TvMic.active)
 
+    /** Can [peerKey] get video calls from here? Their app speaks c2 (5.8) and this device sends its camera. */
     fun canVideo(peerKey: String): Boolean = videoHere() && app?.let { a -> try { a.chat.mayVideo(peerKey) } catch (e: Exception) { false } } == true
 
     /** Starts a call to [peerKey] ([video]: with the camera on). False if a call is already going on or calling isn't set up yet. */
@@ -328,10 +331,10 @@ object CallManager {
             if (a.chat.blocked.value.contains(fromKey)) return@execute
             // Extreme battery saver: calls ring only while Muninn is open. Otherwise it's in the call history as missed.
             if (a.quietUntilOpen()) { addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed")); return@execute }
-            // Their chat is muted: no ringing and no notification, just a missed call in the call history (section 26.1).
-            if (try { a.chat.flags.muted(fromKey) } catch (e: Exception) { false }) {
-                addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed")); return@execute
-            }
+            // Their chat is muted: it rings silently (the call screen and notification, no sound or vibration), so the
+            // caller hears it ring and it can still be answered. Unanswered, it's a missed call in the history, with no
+            // missed-call notification (section 26.1).
+            val silent = try { a.chat.flags.muted(fromKey) } catch (e: Exception) { false }
             val ns = CallSession(s.call, fromKey, false, host, exec, work)
             CallVideo.attach(a, ns, false)
             session = ns
@@ -352,13 +355,16 @@ object CallManager {
             }
             // In a voice room: a soft tone in the room's sound, one buzz, and Join call and leave room or Decline.
             // Unanswered, it ends as a missed call with its notice ("while you were in Hangout").
-            if (inRoom) { roomRing = ns.callId to roomTitle; Ringer.ringInRoom(a, nameOf(fromKey), roomTitle); return@execute }
-            Ringer.ring(a, ns.callId, nameOf(fromKey), fromKey)
+            if (silent) silentRing = ns.callId
+            if (inRoom && !silent) { roomRing = ns.callId to roomTitle; Ringer.ringInRoom(a, nameOf(fromKey), roomTitle); return@execute }
+            Ringer.ring(a, ns.callId, nameOf(fromKey), fromKey, silent = silent)
         }
     }
 
     /** The call that rang softly in a voice room, and that room's name (for its missed-call notice). */
     @Volatile private var roomRing: Pair<String, String>? = null
+    /** The call from a muted chat that rang silently: unanswered, it gets no missed-call notification. */
+    @Volatile private var silentRing: String? = null
 
     /** True the first time a call id is seen. */
     private fun remember(id: String): Boolean = synchronized(seen) {
@@ -392,8 +398,8 @@ object CallManager {
         override fun resolve(host: String) = TurnClient.lookup(host)
         override fun internetAllowed() = app?.let { internetCalls(it) } != false
         override fun trusted(peerKey: String) = this@CallManager.trusted(peerKey)
-        // A Kids' TV says no VP8, so a parent's video call to it is a voice call (5.8.5).
-        override fun videoCodec() = videoHere()
+        // VP8 both ways here: a Kids' TV says yes too, so a parent's camera shows on it (its own camera stays off, see videoHere).
+        override fun videoCodec() = Vp8.available
         override fun newMedia(s: CallSession) = CallMedia(app!!, s.outgoing, s.callId, s.peerKey, bluetooth, object : CallMedia.Events {
             override fun onFirstMedia() = s.mediaFirst()
             override fun onPaths(relay: Boolean, wifi: Boolean, bluetooth: Boolean) = s.mediaPaths(relay, wifi, bluetooth)
@@ -430,7 +436,9 @@ object CallManager {
                 addLog(Log(s.callId, s.peerKey, nameOf(s.peerKey), s.outgoing, s.startedAt, secs, result))
                 val inRoom = roomRing?.takeIf { it.first == s.callId }
                 if (inRoom != null) roomRing = null
-                if (result == "missed") Ringer.missed(a, nameOf(s.peerKey), s.peerKey,
+                val quiet = silentRing == s.callId
+                if (quiet) silentRing = null
+                if (result == "missed" && !quiet) Ringer.missed(a, nameOf(s.peerKey), s.peerKey,
                     if (inRoom == null) "" else if (inRoom.second.isEmpty()) "while you were in a voice room" else "while you were in ${inRoom.second}")
                 // Left a voice room to take this call: a way back to it (the end screen's button, and a notification).
                 _backTo.value?.takeIf { it.callId == s.callId }?.let { b -> Ringer.backToRoom(a, b.g, b.ch, b.title) }
@@ -443,7 +451,8 @@ object CallManager {
     /** HTTPS POST to the relay Worker. (status, body) or null if it couldn't connect. */
     private fun post(url: String, body: String): Pair<Int, String>? {
         return try {
-            Net.client.newBuilder().callTimeout(45, TimeUnit.SECONDS).build().newCall(
+            // 10 s: a slow relay Worker gives up before the 15 s no-connection cutoff, so its retry still has time.
+            Net.client.newBuilder().callTimeout(10, TimeUnit.SECONDS).build().newCall(
                 Request.Builder().url(url).post(body.toRequestBody("application/json".toMediaType())).build()
             ).execute().use { r -> r.code to (r.body?.string() ?: "") }
         } catch (e: Exception) { null }

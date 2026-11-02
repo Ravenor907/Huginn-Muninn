@@ -83,7 +83,10 @@ public:
     // A file of mine sent as a message over the internet route: state "sending", "sent", "delivered", "read";
     // fraction: how much a route took so far, below 0 before anything did.
     static QString relayText(const QString &state, bool failed, double fraction);
+    // A file over kRelayMax that can't go direct (Retry stays on its card); bigWhy: what a big file of mine whose straight
+    // path failed says instead of why (the same as Muninn's FileText.bigWhy).
     static QString tooBig();
+    static QString bigWhy(const QString &why, qint64 size);
     // "2.1 MB/s · 12 s left"; empty until a second has passed and something moved.
     static QString paceText(qint64 done, qint64 total, qint64 ms);
     static QString leftText(qint64 seconds);

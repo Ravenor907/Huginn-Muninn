@@ -107,6 +107,8 @@ public:
     // The vault was locked or erased: the cached inbox key goes.
     void forgetSecret();
     static constexpr int kMaxLowOutbox = 40;
+    // A linked PC's frames to its phone go to every relay too (0: no limit): the phone may listen on only some of them.
+    static constexpr int kLinkRelays = 0;
     // The relays an event limited to n goes to: the open ones first (in list order), then the rest.
     static QStringList pickRelays(const QStringList &all, const QSet<QString> &live, int n);
     // An event's created_at is up to this many seconds before the real time (section 20.3).
