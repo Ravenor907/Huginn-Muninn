@@ -2,8 +2,10 @@ import QtQuick
 import Huginn
 
 // Asks before something that can't be undone: the title on its own line, the message wrapping under
-// it, and Cancel and the answer at the foot, sized to the content. With `hold` set the answer has to
-// be held for 2 seconds (the mouse button, Enter or A), so a stray click can't erase anything.
+// it, and Cancel and the answer at the foot, sized to the content. With `hold` set (every hard-to-undo action) the
+// answer is a HoldToConfirm: held for 5 seconds (the mouse button, Enter, Space or A), so a stray click can't erase
+// anything. Its label says Hold ("Block" shows as "Hold to block"); a screen reader hears the title with it ("Hold
+// for 5 seconds to block Mom").
 Item {
     id: dlg
     property string title
@@ -27,7 +29,13 @@ Item {
     // A "Don't ask again" switch under the message (Y on a controller), set after open(); remember is what it says.
     property string rememberText: ""
     property bool remember: false
-    property real held: 0
+    // What the hold button says and reads out.
+    readonly property string holdLabel: confirmText.toLowerCase().indexOf("hold ") === 0 ? confirmText : "Hold to " + lowerFirst(confirmText)
+    // The title when it names the same action with whom or what ("Block Mom?" for Block), else the label's own words.
+    readonly property string holdWhat: holdLabel.toLowerCase().indexOf("hold to ") === 0 ? holdLabel.slice(8) : holdLabel
+    readonly property bool titleSays: title.slice(-1) === "?" && title.split(" ")[0].toLowerCase() === holdWhat.split(" ")[0].toLowerCase()
+    readonly property string holdSpoken: "Hold for 5 seconds to " + lowerFirst(titleSays ? title.slice(0, -1) : holdWhat)
+    function lowerFirst(t) { return t.length ? t.charAt(0).toLowerCase() + t.slice(1) : t }
 
     visible: false
     anchors.fill: parent
@@ -39,45 +47,37 @@ Item {
         otherText = ""; otherCallback = null; otherDanger = false
         extraText = ""; extraCallback = null
         rememberText = ""; remember = false
-        held = 0; visible = true
+        holdButton.reset(); visible = true
     }
     function confirm() {
         cancelCallback = null
         visible = false
-        holdTimer.stop()
+        holdButton.reset()
         if (callback) callback()
     }
     function other() {
         const o = otherCallback
         cancelCallback = null; otherCallback = null
-        visible = false; holdTimer.stop(); held = 0
+        visible = false; holdButton.reset()
         if (o) o()
     }
     function extra() {
         const e = extraCallback
         cancelCallback = null; extraCallback = null
-        visible = false; holdTimer.stop(); held = 0
+        visible = false; holdButton.reset()
         if (e) e()
     }
     function cancel() {
-        visible = false; holdTimer.stop(); held = 0
+        visible = false; holdButton.reset()
         const c = cancelCallback
         cancelCallback = null
         if (c) c()
     }
     // Closes without running either callback (the question went away on its own).
-    function dismiss() { visible = false; holdTimer.stop(); held = 0; cancelCallback = null }
+    function dismiss() { visible = false; holdButton.reset(); cancelCallback = null }
 
-    Timer {
-        id: holdTimer
-        interval: 40; repeat: true
-        onTriggered: {
-            dlg.held = Math.min(1, dlg.held + interval / 2000)
-            if (dlg.held >= 1) dlg.confirm()
-        }
-    }
-    function startHold() { if (hold) { held = 0; holdTimer.start() } else confirm() }
-    function stopHold() { if (hold && held < 1) { holdTimer.stop(); held = 0 } }
+    function startHold() { if (hold) holdButton.press(); else confirm() }
+    function stopHold() { if (hold) holdButton.release() }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
     MouseArea { anchors.fill: parent }
@@ -174,19 +174,19 @@ Item {
                 spacing: Theme.px(8)
                 HButton {
                     id: go
-                    text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : (Ui.main && Ui.main.padInUse ? "A: " : "") + dlg.confirmText
+                    visible: !dlg.hold
+                    text: (Ui.main && Ui.main.padInUse ? "A: " : "") + dlg.confirmText
                     kind: dlg.danger ? "danger" : "primary"
-                    TapHandler {
-                        onPressedChanged: pressed ? dlg.startHold() : dlg.stopHold()
-                    }
-                    Rectangle {
-                        visible: dlg.hold
-                        anchors.left: parent.left
-                        anchors.bottom: parent.bottom
-                        height: Math.max(3, Theme.px(3))
-                        width: parent.width * dlg.held
-                        color: dlg.danger ? Theme.danger : Theme.ground
-                    }
+                    onClicked: dlg.confirm()
+                }
+                HoldToConfirm {
+                    id: holdButton
+                    visible: dlg.hold
+                    label: dlg.holdLabel
+                    spoken: dlg.holdSpoken
+                    prefix: Ui.main && Ui.main.padInUse ? "A: " : ""
+                    danger: dlg.danger
+                    onConfirmed: dlg.confirm()
                 }
                 HButton {
                     visible: !dlg.single && dlg.extraText !== ""
@@ -207,6 +207,8 @@ Item {
     function handleButton(b) {
         if (b === "a") startHold()
         else if (b === "b") cancel()
+        // Space on the keyboard holds too (it comes as X; a controller's X stays the third answer).
+        else if (b === "x" && hold && otherText === "" && !(Ui.main && Ui.main.padInUse)) startHold()
         else if (b === "x" && !single && otherText !== "") other()
         else if (b === "y" && !single && extraText !== "") extra()
         else if (b === "y" && rememberText !== "") remember = !remember
@@ -214,5 +216,5 @@ Item {
             scroller.contentY = Math.max(0, Math.min(scroller.contentHeight - scroller.height, scroller.contentY + (b === "up" ? -1 : 1) * Theme.px(60)))
         return true
     }
-    function handleRelease(b) { if (b === "a") stopHold() }
+    function handleRelease(b) { if (b === "a" || b === "x") stopHold() }
 }

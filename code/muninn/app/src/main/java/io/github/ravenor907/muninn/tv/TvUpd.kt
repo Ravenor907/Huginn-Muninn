@@ -25,10 +25,12 @@ object TvUpd {
     private const val MAX_INT = (1L shl 53) - 1
 
     /** What the Update now button says it can't do while the TV's app lacks u1. */
-    const val NEEDS_FIRST = "This TV needs one update on the TV first"
+    const val NEEDS_FIRST = "Update this device first"
 
     /** What the TV shows while an update waits for someone at the TV (fallback when it can't install by itself). */
     const val TV_PROMPT = "Ask a grown-up: press OK to update"
+    /** The same on a tablet or phone. */
+    const val TOUCH_PROMPT = "Ask a grown-up: tap Update"
 
     /** One "upstate": the TV's Muninn version [app], state [s], percent [p] (only while downloading), [why] (only when failed), last check [at] (ms, 0: never). */
     data class St(val app: String, val s: String, val p: Int? = null, val why: String? = null, val at: Long = 0)
@@ -84,7 +86,7 @@ object TvUpd {
         DOWNLOADING -> "Downloading ${st.p ?: 0}%"
         INSTALLING -> "Installing"
         CURRENT -> "Up to date"
-        TAP -> "Needs a tap on the TV"
+        TAP -> "Needs a tap on the device"
         FAILED -> if (st.why.isNullOrBlank()) "Failed" else "Failed: ${st.why}"
         else -> ""
     }
@@ -94,7 +96,7 @@ object TvUpd {
      * said when the TV has nothing more urgent to report. [legacy]: what an older TV's status said, when it sends no "upstate".
      */
     fun line(app: String, st: St?, behind: Boolean, legacy: String = ""): String {
-        val v = if (app.isBlank()) "Muninn on the TV" else "Muninn $app"
+        val v = if (app.isBlank()) "Muninn on the device" else "Muninn $app"
         val busy = st != null && st.s != CURRENT
         val what = when {
             busy -> text(st)

@@ -327,13 +327,19 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTa
 
 // ------------------------------------------------------------------ dialogs and toasts
 
-/** One question at a time, app-wide. hold: the confirm button has to be held for 2 seconds. */
+/**
+ * One question at a time, app-wide. hold: a hard-to-undo action, so the confirm button is a [HoldToConfirm] (5 seconds),
+ * labeled "Hold to …"; [spoken] is what TalkBack reads on it ("": "Hold for 5 seconds to" and the confirm word).
+ */
 data class Ask(
     val title: String, val message: String, val confirm: String, val danger: Boolean = false, val hold: Boolean = false,
     /** "": no cancel button (a notice with one answer). */
     val cancel: String = "Cancel", val onCancel: () -> Unit = {},
     /** An optional second action, shown beside the main one. */
-    val extra: String? = null, val onExtra: () -> Unit = {}, val onConfirm: () -> Unit,
+    val extra: String? = null, val onExtra: () -> Unit = {},
+    /** The second action is hard to undo too: held like the main one. */
+    val holdExtra: Boolean = false,
+    val spoken: String = "", val onConfirm: () -> Unit,
 )
 
 object Ui {
@@ -353,42 +359,20 @@ fun AskDialog(a: Ask) {
         // Long messages at a large text size scroll instead of pushing the buttons off the screen.
         text = { Text(a.message, style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = {
-            if (a.hold) HoldButton(a.confirm) { Ui.ask.value = null; a.onConfirm() }
+            if (a.hold) HoldToConfirm(holdLabel(a.confirm), a.spoken.ifEmpty { holdSpoken(a.confirm.removePrefix("Hold to ")) },
+                { Ui.ask.value = null; a.onConfirm() }, danger = a.danger)
             else MButton(a.confirm, kind = if (a.danger) Kind.Danger else Kind.Accent) { Ui.ask.value = null; a.onConfirm() }
         },
         dismissButton = {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (a.cancel.isNotEmpty()) MButton(a.cancel) { Ui.ask.value = null; a.onCancel() }
-                a.extra?.let { MButton(it) { Ui.ask.value = null; a.onExtra() } }
+                a.extra?.let {
+                    if (a.holdExtra) HoldToConfirm(holdLabel(it), holdSpoken(it), { Ui.ask.value = null; a.onExtra() }, danger = a.danger)
+                    else MButton(it) { Ui.ask.value = null; a.onExtra() }
+                }
             }
         },
     )
-}
-
-/** Hold for 2 seconds: a stray tap can't erase a drive. Letting go early does nothing. */
-@Composable
-fun HoldButton(text: String, onDone: () -> Unit) {
-    var held by remember { mutableFloatStateOf(0f) }
-    var down by remember { mutableStateOf(false) }
-    LaunchedEffect(down) {
-        if (!down) { held = 0f; return@LaunchedEffect }
-        val start = System.currentTimeMillis()
-        while (down) {
-            held = ((System.currentTimeMillis() - start) / 2000f).coerceAtMost(1f)
-            if (held >= 1f) { down = false; onDone(); break }
-            delay(30)
-        }
-    }
-    Box(
-        Modifier.heightIn(min = 48.dp).clip(Corner).background(Palette.dangerFill).border(1.dp, Palette.dangerLine, Corner)
-            .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(); down = true; waitForUpOrCancellation(); down = false } },
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        // The fill grows across the whole button, however tall large text makes it.
-        Box(Modifier.matchParentSize()) { Box(Modifier.fillMaxHeight().fillMaxWidth(held).background(Palette.dangerLine)) }
-        Text(if (held > 0f) "Keep holding…" else "Hold: $text", modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            fontFamily = Type.body, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Palette.danger)
-    }
 }
 
 /**

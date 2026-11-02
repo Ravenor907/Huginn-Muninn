@@ -341,6 +341,18 @@ private fun WelcomePage(app: Muninn) {
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             Text("Have a backup from Huginn or Muninn?", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 24.dp))
             MButton("Restore from a backup", Modifier.padding(top = 8.dp)) { restoring = true }
+            // A child's tablet or phone becomes a Kids' Device: it shows a code a parent's phone scans, as a TV does.
+            Text("Is this for a child?", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 24.dp))
+            MButton("Set up as a Kids' Device", Modifier.padding(top = 8.dp)) {
+                Ui.sure(Ask("Set up as a Kids' Device?", "It shows a code for a parent's phone to scan. A parent then chooses who it can reach and what the kids can send.",
+                    "Set it up") {
+                    when {
+                        !Setup.writes.live -> Ui.say("In practice, nothing changes.")
+                        io.github.ravenor907.muninn.tv.KidMode.makeKids(app) -> Setup.finish(false)
+                        else -> Ui.say("Only a new Muninn with no lock and no contacts can become a Kids' Device.", true)
+                    }
+                })
+            }
         }
     }
 }

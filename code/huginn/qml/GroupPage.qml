@@ -59,6 +59,8 @@ Rectangle {
             if (v >= 0) chRow = v
         }
         if (a.groupOptions) Qt.callLater(groupMenu)
+        // The group's Files › Show in chat.
+        if (a.showFile) { const f = a.showFile; Qt.callLater(() => page.showFile(f)) }
     }
     onGidChanged: { channelId = "main"; sel = -1; Voice.stop() }
     onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
@@ -182,7 +184,8 @@ Rectangle {
         Settings.setAboutFolded(gid, fold, info.about || "")
     }
 
-    readonly property var prompts: finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
+    readonly property var prompts: more.prompts.length ? more.prompts
+        : finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
         : shownCode !== "" ? [{ key: "a", label: "Copy" }, { key: "x", label: "New code" }, { key: "y", label: "Stop codes" }, { key: "b", label: "Close" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
@@ -649,6 +652,7 @@ Rectangle {
                     at: index
                     picked: page.active && page.zone === "messages" && page.sel === index
                     found: finder.visible && finder.hits.indexOf(index) >= 0 ? (finder.current === index ? 2 : 1) : 0
+                    flash: page.flashId !== "" && page.flashId === modelData.id
                     lineH: index === page.newFrom ? Theme.px(30) : 0
                     grouped: page.groupedAt(index)
                     hoverTools: !page.readOnly
@@ -1035,8 +1039,8 @@ Rectangle {
         // Cap g3: new reports from members come first, for admins (they're also under Group settings).
         if (admin && !isTour && (info.reportsUnread || 0) > 0) top.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
         top.push({ name: "Search", icon: "search", detail: "In #" + channel.name, url: "find" },
-                 { name: "Media", icon: "image", detail: "And files", url: "media" },
-                 { name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
+                 { name: "Media and files", icon: "image", url: "media" },
+                 !isTour && Chat.isMuted("g:" + gid) ? { name: "Unmute", icon: "bell", url: "mute" } : { name: "Mute", icon: "belloff", url: "mute" },
                  { name: "Group settings", icon: "gear", url: "settings" })
         // The about box at the top of the first channel: fold it to one line, or show it all.
         if (aboutBox.visible) top.push({ name: aboutBox.folded ? "Show rules" : "Fold rules", icon: "info", detail: "About and rules at the top", url: "foldabout" })
@@ -1095,7 +1099,7 @@ Rectangle {
         else if (a === "settings") settingsMenu()
         else if (a === "leave") {
             if (info.amOwner && info.count > 1) { Ui.say("Make someone else owner first.", true); return }
-            Ui.sure("Leave " + info.name + "?", "Only an invite brings you back.", "Leave", () => tell(Chat.leaveGroup(g), "You left the group."), false, true)
+            Ui.sure("Leave " + info.name + "?", "Only an invite brings you back.", "Leave", () => tell(Chat.leaveGroup(g), "You left the group."), true, true)
         } else if (a === "forget") {
             Ui.sure("Delete " + info.name + " from this device?", "Can't be undone.", "Hold to delete",
                     () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
@@ -1191,7 +1195,7 @@ Rectangle {
             items.push({ name: "Add a text channel", icon: "hash", url: "addtext" },
                        { name: "Add a voice room", icon: "speaker", url: "addvoice" },
                        { name: "Rename a channel", icon: "edit", url: "rename" })
-            if (channels.some(c => c.id !== "main")) items.push({ name: "Remove a channel", url: "remove", danger: true })
+            if (channels.some(c => c.id !== "main")) items.push({ name: "Delete a channel", url: "remove", danger: true })
         }
         const g = gid, back = () => page.channelsMenu()
         Ui.pickFrom("Channels", [{ header: "", items: items }], a => {
@@ -1206,10 +1210,10 @@ Rectangle {
                     Ui.ask("Rename " + (c ? c.name : "channel"), "Up to 32 characters", c ? c.name : "", "Save", t => tell(Chat.renameChannel(g, id, t), "Renamed."), false, true)
                 }, back)
             } else if (a === "remove") {
-                pickChannel("Remove which?", channels.filter(c => c.id !== "main"), id => {
+                pickChannel("Delete which?", channels.filter(c => c.id !== "main"), id => {
                     const c = channels.find(x => x.id === id)
-                    Ui.sure("Remove " + (c ? c.name : "this channel") + "?", "Gone for everyone.", "Remove",
-                            () => { if (channelId === id) channelId = "main"; tell(Chat.removeChannel(g, id), "Removed.") }, false, true)
+                    Ui.sure("Delete " + (c ? c.name : "this channel") + "?", "Gone for everyone.", "Delete",
+                            () => { if (channelId === id) channelId = "main"; tell(Chat.removeChannel(g, id), "Deleted.") }, true, true)
                 }, back)
             }
         }, () => page.groupMenu())
@@ -1227,7 +1231,8 @@ Rectangle {
         } else {
             items.push({ name: "Open", icon: "hash", url: "open" }, { name: "Mark read", icon: "check", url: "read" })
             // Muting is for the whole group (no per-channel mute yet), so it says so.
-            items.push({ name: (!isTour && Chat.isMuted("g:" + g) ? "Unmute " : "Mute ") + (info.name || "the group") + "…", icon: "bell", url: "mute" })
+            const muted = !isTour && Chat.isMuted("g:" + g)
+            items.push({ name: (muted ? "Unmute " : "Mute ") + (info.name || "the group") + "…", icon: muted ? "bell" : "belloff", url: "mute" })
         }
         const own = []
         if (admin && !c.call) {
@@ -1256,7 +1261,7 @@ Rectangle {
             else if (a === "about") editAbout(null)
             else if (a === "delete")
                 Ui.sure("Delete " + c.name + "?", "Gone for everyone.", "Delete",
-                        () => { if (channelId === c.id) channelId = "main"; tell(Chat.removeChannel(g, c.id), "Deleted.") }, false, true)
+                        () => { if (channelId === c.id) channelId = "main"; tell(Chat.removeChannel(g, c.id), "Deleted.") }, true, true)
         })
     }
     // A new text channel, with who posts in it: everyone, or only admins (for #rules or #announcements, cap g3).
@@ -1350,7 +1355,7 @@ Rectangle {
             if (a === "go") goToMessage(r.ch, r.msg)
             else if (a === "remove")
                 Ui.sure("Delete for everyone?", "It shows as Removed by an admin for every member.", "Delete",
-                        () => { removedToast(Mod.removeForEveryone(g, r.msg, r.k)); Chat.dismissReport(g, r.id) }, false, true)
+                        () => { removedToast(Mod.removeForEveryone(g, r.msg, r.k)); Chat.dismissReport(g, r.id) }, true, true)
             else if (a === "dismiss") { Chat.dismissReport(g, r.id); if (back) Qt.callLater(back) }
         }, back)
     }
@@ -1472,7 +1477,7 @@ Rectangle {
             else if (a === "admin") tell(Chat.setAdmin(g, m.key, true), m.name + " is an admin now.")
             else if (a === "unadmin") tell(Chat.setAdmin(g, m.key, false), m.name + " isn't an admin now.")
             else if (a === "owner") Ui.sure("Make " + m.name + " owner?", "You stay an admin.", "Make owner", () => tell(Chat.handOver(g, m.key), m.name + " owns the group now."), false, true)
-            else if (a === "remove") Ui.sure("Remove " + m.name + "?", "They're told.", "Remove", () => tell(Chat.removeMember(g, m.key), m.name + " was removed."), false, true)
+            else if (a === "remove") Ui.sure("Remove " + m.name + "?", "They're told.", "Remove", () => tell(Chat.removeMember(g, m.key), m.name + " was removed."), true, true)
         }, back)
     }
     // A group call's line: ring everyone again.
@@ -1492,6 +1497,7 @@ Rectangle {
     }
     // The Menu key and Shift+F10 (Main.menuKey): the right-click menu for the focus, at menuAnchor().
     function contextMenu() {
+        if (more.sharedOpen) { more.contextMenu(); return }
         if (zone === "members") {
             const m = memberCol.ordered[memRow]
             if (m) PeopleActions.memberMenu(Object.assign({}, m, { key: m.me ? "me" : m.key }), { group: gid, host: page, member: m, tour: isTour })
@@ -1499,7 +1505,7 @@ Rectangle {
         }
         handleButton("x")
     }
-    function menuAnchor() { return zone === "channels" ? chanList.itemAtIndex(chRow) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
+    function menuAnchor() { return more.sharedOpen ? more.anchorItem() : zone === "channels" ? chanList.itemAtIndex(chRow) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
     // Report to admins: through the group, to every admin (an admin's older app gets it in a private message when they're a contact).
     function reportToAdmins(m) {
         if (!members.some(x => !x.me && (x.admin || x.owner) && x.key !== m.from)) { Ui.say("There's no other admin to tell.", true); return }
@@ -1531,7 +1537,10 @@ Rectangle {
         // Only when there's another admin to tell (not for the only admin, nor about that admin's own message).
         if (!m.mine && !m.unsent && !isTour && members.some(x => !x.me && (x.admin || x.owner) && x.key !== m.from))
             items.push({ name: "Report to admins", icon: "shield", url: "report" })
-        if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
+        if (m.photo && !m.voice && !m.video && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", icon: "save", url: "save" })
+        else if (m.photo && (m.voice || m.video) && !m.file && !m.unsent) items.push({ name: "Save", icon: "save", detail: "To " + (Transfer.saveName || "Downloads") + " › Huginn", url: "savemedia" })
+        // A photo, video or voice message: sent again as a new message.
+        if (m.photo && !m.file && !m.unsent && !m.failed && !isTour) items.push({ name: "Forward", icon: "forward", url: "forwardmedia", sub: () => PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo") })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
         // Cap g2: the person who wrote it: Mute for me and Volume, and for admins Timeout and Ban in a section with their name.
@@ -1559,13 +1568,20 @@ Rectangle {
             else if (a === "report") reportToAdmins(m)
             else if (a === "view") viewing = m.photo
             else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
+            else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
+            else if (a === "forwardmedia") PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo")
             else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
-            else if (a === "unsend") Chat.unsendGroup(g, m.id)
+            else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for everyone.", "Unsend", () => Chat.unsendGroup(g, m.id), true, true)
             else if (a === "remove")
                 Ui.sure("Delete for everyone?", "It shows as Removed by an admin for every member.", "Delete",
-                        () => page.removedToast(Mod.removeForEveryone(g, m.id, m.from)), false, true)
+                        () => page.removedToast(Mod.removeForEveryone(g, m.id, m.from)), true, true)
             else if (a === "retry") Chat.retryGroup(g, m.id)
-            else if (a === "delete") Chat.deleteGroupMessage(g, m.id)
+            else if (a === "delete") {
+                // A photo, video or voice message is held 5 seconds, as from Media and files.
+                if (m.photo) Ui.sure("Delete this " + (m.voice ? "voice message" : m.video ? "video" : "photo") + "?", "It's deleted on this computer only.", "Delete",
+                                     () => Chat.deleteGroupMessage(g, m.id), true, true)
+                else Chat.deleteGroupMessage(g, m.id)
+            }
         })
     }
     // ------------------------------------------------------------- cap m1: replies, reactions, edits, threads, pins
@@ -1574,6 +1590,20 @@ Rectangle {
         if (i < 0) { Ui.say("That message is in another channel or isn't here anymore."); return }
         sel = i
         list.positionViewAtIndex(i, ListView.Center)
+    }
+    // Files › Show in chat: the newest message with that file in this channel.
+    function showFile(name) {
+        for (let i = messages.length - 1; i >= 0; i--)
+            if (messages[i].file === name) { showInChat(messages[i].id); return }
+        Ui.say("Its message is in another channel or isn't here anymore.")
+    }
+    // Media and files › Show in chat: there, and lit for a moment.
+    property string flashId: ""
+    Timer { id: flashTimer; interval: 1800; onTriggered: page.flashId = "" }
+    function showInChat(id) {
+        zone = "messages"
+        jumpTo(id)
+        if (messages.some(m => m.id === id)) { flashId = id; flashTimer.restart() }
     }
     function reactTo(id, e) {
         if (isTour || id === "") return
@@ -1817,5 +1847,6 @@ Rectangle {
         where: page.locked || page.readOnly || page.isTour || page.gid === "" ? "" : page.chatKey
         title: "#" + (page.channel.name || "")
         tour: page.isTour
+        onShowInChat: msgId => page.showInChat(msgId)
     }
 }

@@ -202,8 +202,13 @@ public:
     Q_INVOKABLE QString sendPoll(const QString &where, const QString &question, const QStringList &answers, bool multi);
     // My vote on a poll ([] takes it back).
     Q_INVOKABLE QString vote(const QString &where, const QString &id, const QVariantList &choices);
-    // {media: [{id, photo, video, mine, name, time}], links: [{id, url, title, description, host, thumb, name, time}]}, newest first.
+    // {media: [{id, photo, video, gif, mine, name, time, here}], links: [{id, url, title, description, host, thumb, name, time}],
+    // voices: [{id, photo, voice, mine, name, time, here}]}, newest first. here: its bytes are on this device.
     Q_INVOKABLE QVariantMap shared(const QString &where) const;
+    // Media and files: save a photo, GIF, video or voice message kept here (the path, or empty), or send it again as a
+    // new message to someone else (empty when it went, else what to say).
+    Q_INVOKABLE QString saveMedia(const QString &id);
+    Q_INVOKABLE QString forwardMedia(const QString &id, const QString &to, int voiceMs);
     Q_INVOKABLE QString linkHost(const QString &url) const;
     Q_INVOKABLE bool openLink(const QString &url) const;
 
@@ -301,7 +306,7 @@ public:
     // Hide: someone nearby who isn't a contact leaves the Nearby list for good, with no notifications from them.
     Q_INVOKABLE void hideNearby(const QString &key);
     Q_INVOKABLE bool isHiddenNearby(const QString &key) const { return m_hiddenNearby.contains(key); }
-    // Delete chat (a person, someone nearby, a Kids' TV): the conversation and every message kept of it go from this
+    // Delete chat (a person, someone nearby, a Kids' Device): the conversation and every message kept of it go from this
     // computer, and its row leaves the list until a message comes or goes again. A contact stays a contact; someone
     // nearby who isn't one is forgotten.
     Q_INVOKABLE void deleteChat(const QString &key);

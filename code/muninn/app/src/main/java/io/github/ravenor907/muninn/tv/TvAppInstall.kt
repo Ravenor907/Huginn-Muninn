@@ -113,7 +113,7 @@ object TvAppInstall {
                 save(app, asks(app).filter { it.h != h })
                 tellParents(app, TvInstalls.resultMessage(h, "installed"))
             }
-            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> tellParents(app, TvInstalls.resultMessage(h, "failed", "It doesn't run on this TV"))
+            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> tellParents(app, TvInstalls.resultMessage(h, "failed", "It doesn't run on this device"))
             else -> tellParents(app, TvInstalls.resultMessage(h, "failed",
                 i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.take(80) ?: "Android didn't take it"))
         }

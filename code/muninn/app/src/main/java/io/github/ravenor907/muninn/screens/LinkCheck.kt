@@ -312,7 +312,8 @@ internal fun LinkedDevicesPanel(app: Muninn) {
                 MIcon("phone", Palette.accent, 20.dp)
                 Text(p.name, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f).padding(start = 12.dp))
                 MButton("Unlink", kind = Kind.Danger) {
-                    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Unlink ${p.name}?", "Its chats go from this device.", "Unlink", danger = true) { Link.unlink(p.key) })
+                    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Unlink ${p.name}?", "Its chats go from this device.", "Unlink", danger = true, hold = true,
+                        spoken = "Hold for 5 seconds to unlink ${p.name}") { Link.unlink(p.key) })
                 }
             }
 
@@ -324,7 +325,8 @@ internal fun LinkedDevicesPanel(app: Muninn) {
                 MIcon(if (d.ok) "check" else "clock", if (d.ok) Palette.accent else Palette.textMuted, 20.dp)
                 Text(d.name, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f).padding(start = 12.dp))
                 MButton("Unlink", kind = Kind.Danger) {
-                    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Unlink ${d.name}?", "Its copy of your chats is removed.", "Unlink", danger = true) { Link.unlink(d.key) })
+                    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Unlink ${d.name}?", "Its copy of your chats is removed.", "Unlink", danger = true, hold = true,
+                        spoken = "Hold for 5 seconds to unlink ${d.name}") { Link.unlink(d.key) })
                 }
             }
         }

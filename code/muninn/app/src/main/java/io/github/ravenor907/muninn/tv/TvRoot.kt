@@ -102,10 +102,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// The kids' TV screens: 1920 x 1080 is 960 x 540 dp.
+// The Kids' Device screens on a TV: 1920 x 1080 is 960 x 540 dp. (A tablet or phone gets the touch ones, KidTouch.)
 // Everything works with the D-pad, OK and Back alone: every action is a focusable tile, and focus shows as a
 // gold ring (never by color alone: the ring is 4 dp wide and the tile grows a little). Nothing a child reads is
-// smaller than 20 sp. There are no parent screens on the TV: a parent sets everything from their phone.
+// smaller than 20 sp. A parent sets everything from their phone; "For a parent" (the lock) needs the parent PIN.
 
 // A warm dark shade for a focused tile and their messages; on parchment (Light) the look's own light shades, so the
 // dark text stays readable.
@@ -131,7 +131,7 @@ object TvNav {
     fun show(key: String) { open = key; last = key }
 }
 
-/** The whole app on a Kids' TV: pairing until a parent sets it up, then the kids' screens. No lock, no sign in. */
+/** The whole app on a Kids' Device: pairing until a parent sets it up, then the kids' screens. No lock, no sign in. */
 @Composable
 fun TvRoot(app: Muninn) {
     val ready by app.ready.collectAsState()
@@ -156,7 +156,7 @@ fun TvRoot(app: Muninn) {
             when {
                 wiping -> TvNote("Starting over…")
                 st.parents.isEmpty() -> TvPairing(app)
-                // Paired, but its settings couldn't be read: still a Kids' TV; the parents' phones send them again.
+                // Paired, but its settings couldn't be read: still a Kids' Device; the parents' phones send them again.
                 cfg == null -> TvNote("Getting ready", TvWords.ASK_PARENT)
                 else -> TvKids(app, cfg)
             }
@@ -232,12 +232,14 @@ private const val HOLD_MS = 5_000L
 private const val PAIR_RETRY_MS = 3_000L
 
 /**
- * The pairing screen: the big code a parent scans with their phone's camera. Holding Back for 5 seconds (no hint on
- * screen) offers to run Muninn normally instead, only while no parent has ever paired this TV.
+ * The pairing screen: the big code a parent scans with their phone's camera. On a TV, holding Back for 5 seconds (no
+ * hint on screen) offers to run Muninn normally instead, only while no parent has ever paired it; on a tablet or phone
+ * a small button below the code does.
  */
 @Composable
 private fun TvPairing(app: Muninn) {
     var code by remember { mutableStateOf(try { KidTv.pairingCode(app) } catch (e: Exception) { "" }) }
+    val tv = KidMode.isTv(LocalContext.current)
     // The invite in the code lasts an hour: show a fresh one before it runs out. A code that couldn't be made is tried
     // again within seconds.
     LaunchedEffect(Unit) {
@@ -254,7 +256,7 @@ private fun TvPairing(app: Muninn) {
         delay(HOLD_MS)
         if (backDown > 0L) {
             backDown = -1L
-            if (!KidMode.paired(app)) Ui.sure(Ask("Use Muninn normally?", "This TV gets a lock and Settings.", "Use normally") { KidMode.useNormally(app) })
+            if (!KidMode.paired(app)) Ui.sure(Ask("Use Muninn normally?", "This device gets a lock and Settings.", "Use normally") { KidMode.useNormally(app) })
         }
     }
     BackHandler {}
@@ -274,13 +276,18 @@ private fun TvPairing(app: Muninn) {
         }
         .focusable().padding(32.dp),
         verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        if (code.isNotEmpty()) Qr(Contacts.link(code), 380.dp)
+        if (code.isNotEmpty()) Qr(Contacts.link(code), if (tv) 380.dp else 260.dp)
         else Text("Making the code…", style = tvText(26.sp, Palette.textMuted))
         Row(Modifier.padding(top = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-            MIcon("phone", Palette.goldBright, 36.dp)
+            MIcon("phone", Palette.goldBright, if (tv) 36.dp else 28.dp)
             Spacer(Modifier.width(14.dp))
-            Text("Parent: scan with phone camera", style = tvTitle(30.sp))
+            Text("Parent: scan with phone camera", style = tvTitle(if (tv) 30.sp else 20.sp), textAlign = TextAlign.Center)
         }
+        // A tablet or phone has no remote to hold Back on: a small button, until a parent pairs it.
+        if (!tv && !KidMode.paired(app)) Text("Not a child's device? Use Muninn normally", style = tvText(16.sp, Palette.textMuted),
+            modifier = Modifier.padding(top = 28.dp).clickable(role = Role.Button) {
+                Ui.sure(Ask("Use Muninn normally?", "This device gets a lock and Settings.", "Use normally") { KidMode.useNormally(app) })
+            }.padding(12.dp))
     }
     LaunchedEffect(Unit) { delay(80); try { root.requestFocus() } catch (_: Exception) {} }
 }
@@ -304,11 +311,19 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
             delay(3000)
         }
     }
+    val tv = remember { KidMode.isTv(context) }
+    // k11 (7.18): a quiet time on now (checked every half minute): only the parents show, and only they get through.
+    val quiet by produceState(KidTv.quietNow(), cfg) { while (true) { value = KidTv.quietNow(); delay(30_000) } }
+    val shown = person?.takeIf { KidRules.passes(it.k, cfg.parents, quiet) }
+    if (person != null && shown == null) LaunchedEffect(person.k) { TvNav.home() }
+    var parent by remember { mutableStateOf(false) }
     // Someone a parent just took off the list: back to the people who are still on it.
-    if (person == null) TvHome(app, cfg, TvNav.last) { TvNav.show(it) }
-    else TvTalk(app, cfg, person) { TvNav.home() }
+    if (!tv) KidTouch(app, cfg, shown, quiet) { parent = true }
+    else if (shown == null) TvHome(app, cfg, TvNav.last, quiet, onParent = { parent = true }) { TvNav.show(it) }
+    else TvTalk(app, cfg, shown) { TvNav.home() }
+    if (parent) KidParentArea(app, cfg, tv) { parent = false }
     TvAllow(app)
-    TvUpdatePrompt()
+    TvUpdatePrompt(tv)
 }
 
 /**
@@ -365,7 +380,7 @@ private const val SETUP_LINE = "Parent: press Allow so the kids can talk"
  * Never during a call. Later hides it for half an hour.
  */
 @Composable
-private fun TvUpdatePrompt() {
+private fun TvUpdatePrompt(tv: Boolean) {
     val context = LocalContext.current
     val st by TvUpdate.state.collectAsState()
     val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
@@ -377,8 +392,12 @@ private fun TvUpdatePrompt() {
         Column(Modifier.fillMaxSize().background(Palette.ground).padding(48.dp),
             verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
             MIcon("download", Palette.goldBright, 96.dp)
-            Text(TvUpd.TV_PROMPT, style = tvTitle(40.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 20.dp))
-            DialogButtons(listOf("Update" to { TvUpdate.confirm(context) }, "Later" to { later = true }))
+            Text(if (tv) TvUpd.TV_PROMPT else TvUpd.TOUCH_PROMPT, style = tvTitle(if (tv) 40.sp else 28.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 20.dp))
+            if (tv) DialogButtons(listOf("Update" to { TvUpdate.confirm(context) }, "Later" to { later = true }))
+            else Row(Modifier.padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                io.github.ravenor907.muninn.ui.MButton("Update", kind = io.github.ravenor907.muninn.ui.Kind.Accent) { TvUpdate.confirm(context) }
+                io.github.ravenor907.muninn.ui.MButton("Later") { later = true }
+            }
         }
     }
 }
@@ -390,22 +409,21 @@ private tailrec fun android.content.Context.findActivity(): android.app.Activity
     else -> null
 }
 
-/** Parents first, then everyone else, each by name. */
-private fun ordered(cfg: TvConfig): List<TvPerson> =
-    cfg.contacts.sortedWith(compareBy<TvPerson>({ it.k !in cfg.parents }, { it.n.lowercase() }))
-
-private fun unreadCount(list: List<Chat.Msg>, unread: Boolean): Int {
+internal fun unreadCount(list: List<Chat.Msg>, unread: Boolean): Int {
     if (!unread) return 0
     val i = list.indexOfLast { it.mine }
     return list.drop(i + 1).count { !it.mine && it.unsent.isEmpty() }.coerceAtLeast(1)
 }
 
-/** Home: only the people the TV can reach, as big tiles, each with a badge for new messages. */
+/**
+ * Home: only the people the TV can reach (only parents during a quiet time), as big tiles, each with a badge for new
+ * messages. Up from the tiles reaches the lock, "For a parent".
+ */
 @Composable
-private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, onOpen: (String) -> Unit) {
+private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, quiet: QuietTime?, onParent: () -> Unit, onOpen: (String) -> Unit) {
     val convs by app.chat.conversations.collectAsState()
     val unread by app.chat.unread.collectAsState()
-    val people = remember(cfg) { ordered(cfg) }
+    val people = remember(cfg, quiet) { kidPeople(cfg, quiet) }
     // Back here does nothing: a kid can't back out into anything else.
     BackHandler(enabled = true) {}
     val focusAt = people.indexOfFirst { it.k == focusKey }.coerceAtLeast(0)
@@ -421,6 +439,8 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, onOpen: (String
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Raven(Modifier.align(Alignment.TopStart))
+        ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 20.dp, end = 36.dp), onClick = onParent)
+        if (quiet != null) QuietLine(quiet, tv = true, modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp))
         LazyRow(Modifier.fillMaxWidth(), state = list,
             horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
@@ -502,7 +522,9 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     val openedAt = remember { System.currentTimeMillis() }
     val mic = remember { TvAudio.hasMic(context) }
     val canDictate = remember { TvAudio.canDictate(context) }
-    val dictate = cfg.dictation && canDictate
+    // k11: voice messages and Say it only when a parent chose that chatting level.
+    val dictate = cfg.dictation && canDictate && KidRules.canSend(cfg.chat, "say")
+    val voice = mic && KidRules.canSend(cfg.chat, "voice")
     var sent by remember { mutableStateOf("") }
     /** A photo shown full screen (its message id); Back goes back to the conversation. */
     var viewing by remember { mutableStateOf<String?>(null) }
@@ -580,9 +602,9 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
         }
     }
 
-    val buttons = TvRules.talkButtons(cfg.calls, mic, dictate)
+    val buttons = TvRules.talkButtons(cfg.calls, voice, dictate)
     val quick = cfg.quick.take(TvRules.QUICK_SHOWN)
-    val firstId: String? = TvRules.firstTalkFocus(cfg.calls, mic, dictate, quick.map { it.id })
+    val firstId: String? = TvRules.firstTalkFocus(cfg.calls, voice, dictate, quick.map { it.id })
     val focusManager = LocalFocusManager.current
     val first = remember { FocusRequester() }
     fun req(id: String) = if (id == firstId) first else null
@@ -727,7 +749,7 @@ private fun QuickTile(text: String, done: Boolean, requester: FocusRequester?, m
 }
 
 @Composable
-private fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onPhoto: () -> Unit) {
+internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onPhoto: () -> Unit) {
     val shape = if (m.mine) RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp) else RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp)
     val bg = if (m.mine) Palette.bubbleMine else TheirBubble
     Box(Modifier.fillMaxWidth(), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
@@ -796,7 +818,7 @@ private fun thumb(bytes: ByteArray): androidx.compose.ui.graphics.ImageBitmap? {
  * goes back to the conversation.
  */
 @Composable
-private fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (String) -> Unit, onClose: () -> Unit) {
+internal fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (String) -> Unit, onClose: () -> Unit) {
     val i = photos.indexOfFirst { it.id == id }
     val m = photos.getOrNull(i) ?: run { LaunchedEffect(Unit) { onClose() }; return }
     val context = LocalContext.current
@@ -825,7 +847,7 @@ private fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (St
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { onClose(); true }
                     else -> false
                 }
-            }.focusable(), contentAlignment = Alignment.Center) {
+            }.focusable().clickable(onClick = onClose), contentAlignment = Alignment.Center) {
             if (m.gif) io.github.ravenor907.muninn.ui.GifImage(m.id, { app.chat.photo(m.photo) }, "GIF", Modifier.fillMaxSize(), fit = true,
                 maxSide = maxOf(context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels).coerceIn(720, 1920))
             else if (bmp != null) Image(bmp, contentDescription = "Photo", contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
@@ -841,7 +863,7 @@ private fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (St
  * A long message, whole and big. Up and Down scroll it, OK or Back goes back to the conversation.
  */
 @Composable
-private fun TvFullText(text: String, onClose: () -> Unit) {
+internal fun TvFullText(text: String, onClose: () -> Unit) {
     val focus = remember { FocusRequester() }
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
@@ -855,7 +877,7 @@ private fun TvFullText(text: String, onClose: () -> Unit) {
                     Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { onClose(); true }
                     else -> false
                 }
-            }.focusable(), contentAlignment = Alignment.TopCenter) {
+            }.focusable().clickable(onClick = onClose), contentAlignment = Alignment.TopCenter) {
             Text(text, style = tvText(30.sp), modifier = Modifier.widthIn(max = 820.dp).verticalScroll(scroll).padding(horizontal = 48.dp, vertical = 40.dp))
         }
         LaunchedEffect(Unit) { delay(60); try { focus.requestFocus() } catch (_: Exception) {} }

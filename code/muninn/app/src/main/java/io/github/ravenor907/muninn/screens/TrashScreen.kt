@@ -56,7 +56,8 @@ fun TrashScreen(app: Muninn, back: () -> Unit) {
                         MButton("Restore", Modifier.weight(1f), Kind.Accent, icon = "undo") { app.chat.restoreContact(k); Ui.say("$name is back, with your chat.") }
                         MButton("Delete for good", Modifier.weight(1f), Kind.Danger) {
                             Ui.sure(Ask("Delete $name for good?", "This can't be undone.",
-                                "Delete", danger = true, onConfirm = { app.chat.deleteForGood(k); Ui.say("$name deleted.") }))
+                                "Delete", danger = true, hold = true, spoken = "Hold for 5 seconds to delete $name for good",
+                                onConfirm = { app.chat.deleteForGood(k); Ui.say("$name deleted.") }))
                         }
                     }
                 }
@@ -65,7 +66,7 @@ fun TrashScreen(app: Muninn, back: () -> Unit) {
             if (people.isNotEmpty()) item {
                 MButton("Empty trash", Modifier.fillMaxWidth().padding(vertical = 12.dp), Kind.Danger, icon = "delete") {
                     Ui.sure(Ask("Empty the trash?", "This can't be undone.", "Hold to empty",
-                        danger = true, hold = true) { app.chat.emptyTrash(); Ui.say("Trash emptied.") })
+                        danger = true, hold = true, spoken = "Hold for 5 seconds to empty the trash") { app.chat.emptyTrash(); Ui.say("Trash emptied.") })
                 }
             }
         }

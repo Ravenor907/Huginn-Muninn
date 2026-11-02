@@ -325,15 +325,34 @@ MAX_MIC = 100
 
 NR_NONE, NR_STANDARD, NR_STRONG, NR_BOTH = 0, 1, 2, 3   # k5 (7.10): the TV's noise removal
 
+def is_hex(v, n):
+    return isinstance(v, str) and len(v) == n and all(ch in "0123456789abcdef" for ch in v)
+
+def check_quiet(q):
+    """k11 (7.18): at most two quiet times, "school" and "bed", each once; days 1..127; minutes 0..1439, start != end."""
+    def small(v, lo, hi): return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+    if not isinstance(q, list) or len(q) > 2: raise ValueError("quiet")
+    names = []
+    for w in q:
+        if not isinstance(w, dict) or set(w) != {"n", "d", "s", "e"} or w["n"] not in ("school", "bed"): raise ValueError("quiet")
+        if not small(w["d"], 1, 127) or not small(w["s"], 0, 1439) or not small(w["e"], 0, 1439) or w["s"] == w["e"]: raise ValueError("quiet")
+        names.append(w["n"])
+    if len(set(names)) != len(names): raise ValueError("quiet")
+
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    optional = {"calls", "mic", "nr", "upd", "keep"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep: only sent to a TV whose app said so
+    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin: only sent to a device whose app said so
     if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
     if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
     if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")
     if "nr" in c and (not isinstance(c["nr"], int) or isinstance(c["nr"], bool) or not 0 <= c["nr"] <= NR_BOTH): raise ValueError("nr")
     if "upd" in c and not isinstance(c["upd"], bool): raise ValueError("upd")
     if "keep" in c and (not isinstance(c["keep"], int) or isinstance(c["keep"], bool) or not 1 <= c["keep"] <= 7): raise ValueError("keep")
+    if "chat" in c and (not isinstance(c["chat"], int) or isinstance(c["chat"], bool) or c["chat"] not in (1, 2)): raise ValueError("chat")
+    if "quiet" in c: check_quiet(c["quiet"])
+    if "pin" in c:
+        p = c["pin"]
+        if not isinstance(p, dict) or set(p) != {"salt", "h"} or not is_hex(p["salt"], 32) or not is_hex(p["h"], 64): raise ValueError("pin")
     if not isinstance(c["v"], int) or c["v"] < 1: raise ValueError("version")
     if c["parents"] != sorted(set(c["parents"])) or not c["parents"] or c["by"] not in c["parents"]: raise ValueError("parents")
     if not isinstance(c["dictation"], bool): raise ValueError("dictation")

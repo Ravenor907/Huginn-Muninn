@@ -9,8 +9,8 @@ QtObject {
     // ------------------------------------------------------------- a contact's one menu
     // The same everywhere: a chat row, a chat's header, Contacts and a profile card, with the mouse
     // (the three dots or a right click) or a controller (LT or X). ctx: { section, keys (that
-    // section's order as shown, for Move up and down), removed (called before Remove), tour, inChat
-    // (from the open chat, whose header has Call and Video) }.
+    // section's order as shown, for the chat list's Move up and down), removed (called before Remove), tour, inChat
+    // (from the open chat, whose header has Call and Video), listRow (from a row of the chat list) }.
     // Short, like Muninn's: Find, Media and files, Mute and Details first; then Notifications, Mark unread
     // and Add to group; everything else under More (contactMore).
     function has(fn) { return typeof Chat[fn] === "function" }
@@ -72,9 +72,6 @@ QtObject {
         if (contact) items.push({ name: "Folders and role", icon: "folder", url: "folders" }, { name: "What they can do", icon: "shield", url: "can" })
         if (has("pinChat")) items.push({ name: "Pin to the top", icon: "pin", url: "pin", check: !c.tour && Chat.isPinnedChat(k) })
         if (has("archiveChat")) items.push({ name: "Archive", url: "archive", check: !c.tour && Chat.isArchived(k) })
-        const keys = c.keys || [], at = keys.indexOf(k)
-        if (at > 0) items.push({ name: "Move up", url: "up" })
-        if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", url: "down" })
         items.push({ name: "Pinned messages", icon: "pin", url: "pins" })
         if (contact) items.push({ name: "Compare emoji", icon: "check", detail: c.tour ? "" : Chat.isVerified(k) ? "Verified" : "Not verified", url: "check" },
                                 { name: "Introduce", icon: "people", url: "introduce" })
@@ -92,14 +89,6 @@ QtObject {
             else if (a === "folders") folderMenu(k, again)
             else if (a === "pin") { Chat.pinChat(k, !Chat.isPinnedChat(k)); Qt.callLater(again) }
             else if (a === "archive") { Chat.archiveChat(k, !Chat.isArchived(k)); Qt.callLater(again) }
-            else if (a === "up" || a === "down") {
-                const order = keys.slice()
-                order.splice(at, 1)
-                order.splice(a === "up" ? at - 1 : at + 1, 0, k)
-                Chat.placeIn(k, c.section || "", c.section || "", order)
-                const next = Object.assign({}, c, { keys: order })
-                Qt.callLater(() => contactMore(k, n, next, back))
-            }
             else if (a === "pins") Ui.openPage("dms", { open: k, show: "pins" })
             else if (a === "check") checkCode(k)
             else if (a === "route") {
@@ -111,9 +100,9 @@ QtObject {
             else if (a === "deletechat") deleteChat(k, name, c.removed)
             else if (a === "block") {
                 if (blocked) { Chat.block(k, false); Ui.say(name + " unblocked.") }
-                else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { Chat.block(k, true); Ui.say(name + " blocked.") }, false, true)
+                else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { Chat.block(k, true); Ui.say(name + " blocked.") }, true, true)
             } else if (a === "remove")
-                Ui.sure("Delete contact " + name + "?", "Restore within 30 days.", "Delete contact", () => { if (c.removed) c.removed(); Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, false, true)
+                Ui.sure("Delete contact " + name + "?", "Restore within 30 days.", "Delete contact", () => { if (c.removed) c.removed(); Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, true, true)
         }, back)
     }
     // Folders and role: Family, Work and Folk are the roles (one at a time); the rest are folders.
@@ -181,7 +170,7 @@ QtObject {
     // Delete chat: its messages go from this computer (asked first). The person stays; after: before it goes (closes it).
     function deleteChat(k, name, after) {
         Ui.sure("Delete chat with " + name + "?", "Its messages go from this computer.", "Delete chat",
-                () => { if (after) after(); Chat.deleteChat(k); Ui.say("Chat deleted.") }, false, true)
+                () => { if (after) after(); Chat.deleteChat(k); Ui.say("Chat deleted.") }, true, true)
     }
     // Someone nearby who isn't a contact (the Nearby section's rows): Message, Mute, Hide, Block and Delete chat.
     // ctx: { hasChat, removed (called before Hide, Block or Delete chat) }.
@@ -189,7 +178,7 @@ QtObject {
         const c = ctx || {}
         if (!k) return
         const items = [{ name: "Message", icon: "thread", url: "message" },
-                       { name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
+                       { name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: Chat.isMuted(k) ? "bell" : "belloff", url: "mute" },
                        { name: "Hide", icon: "close", url: "hide" },
                        { name: "Block", url: "block", danger: true }]
         if (c.hasChat) items.push({ name: "Delete chat", url: "deletechat", danger: true })
@@ -198,7 +187,7 @@ QtObject {
             else if (a === "mute") muteMenu(k, n)
             else if (a === "hide") { if (c.removed) c.removed(); Chat.hideNearby(k); Ui.say(n + " is hidden.") }
             else if (a === "block")
-                Ui.sure("Block " + n + "?", "They aren't told.", "Block", () => { if (c.removed) c.removed(); Chat.block(k, true); Ui.say(n + " blocked.") }, false, true)
+                Ui.sure("Block " + n + "?", "They aren't told.", "Block", () => { if (c.removed) c.removed(); Chat.block(k, true); Ui.say(n + " blocked.") }, true, true)
             else if (a === "deletechat") deleteChat(k, n, c.removed)
         })
     }
@@ -218,6 +207,8 @@ QtObject {
     // A person's right-click menu, like Discord's: Open, Profile, Call, Mute, Notifications, Add to folder, Add to group,
     // Mark as read, Copy name, Hide, Block, Delete chat, and More (their whole menu). ctx: as contactMenu's, plus
     // near (someone nearby who isn't a contact; then also hasChat and alt) and open (opens their chat, else Chats does).
+    // From a row of the chat list (listRow) it also has Move up and Move down in that section: the one place a chat is
+    // moved besides dragging it.
     function personMenu(k, n, ctx) {
         const c = ctx || {}
         if (!k) return
@@ -231,6 +222,9 @@ QtObject {
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
         if (contact) mid.push({ name: "Add to folder", icon: "folder", url: "folder", sub: () => addToFolderMenu(k, name) },
                               { name: "Add to group", icon: "people", url: "group", sub: () => addToGroupMenu(k, name) })
+        const keys = c.listRow ? (c.keys || []) : [], at = keys.indexOf(k)
+        if (at > 0) mid.push({ name: "Move up", icon: "up", url: "up" })
+        if (at >= 0 && at < keys.length - 1) mid.push({ name: "Move down", icon: "down", url: "down" })
         mid.push({ name: "Mark read", icon: "check", url: "read" }, { name: "Copy name", url: "copy" },
                  { name: "Hide", icon: "close", url: "hide" },
                  { name: "More", icon: "more", url: "more", sub: () => c.near ? nearbyMenu(k, n, c) : contactMenu(k, n, c) })
@@ -246,6 +240,13 @@ QtObject {
             else if (a === "folder") addToFolderMenu(k, name)
             else if (a === "group") addToGroupMenu(k, name)
             else if (a === "read") Chat.markRead(k)
+            else if (a === "up" || a === "down") {
+                const order = keys.slice()
+                order.splice(at, 1)
+                order.splice(a === "up" ? at - 1 : at + 1, 0, k)
+                Chat.placeIn(k, c.section || "", c.section || "", order)
+                if (c.moved) c.moved()
+            }
             else if (a === "copy") { Chat.copyText(name); Ui.say("Name copied.") }
             else if (a === "hide") {
                 // A contact's chat goes to Archived (a new message brings it back); someone nearby leaves the list for good.
@@ -254,7 +255,7 @@ QtObject {
                 else { Chat.hideNearby(k); Ui.say(name + " is hidden.") }
             } else if (a === "block") {
                 if (blocked) { Chat.block(k, false); Ui.say(name + " unblocked.") }
-                else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { if (c.near && c.removed) c.removed(); Chat.block(k, true); Ui.say(name + " blocked.") }, false, true)
+                else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { if (c.near && c.removed) c.removed(); Chat.block(k, true); Ui.say(name + " blocked.") }, true, true)
             }
             else if (a === "deletechat") deleteChat(k, name, c.removed)
             else if (a === "more") { if (c.near) nearbyMenu(k, n, c); else contactMenu(k, n, c) }
@@ -327,7 +328,7 @@ QtObject {
             else if (a === "more") onPage("groupMenu")
             else if (a === "leave") {
                 if (info.amOwner && (row.count || 0) > 1) { Ui.say("Make someone else owner first.", true); return }
-                Ui.sure("Leave " + name + "?", "Only an invite brings you back.", "Leave", () => { const r = Chat.leaveGroup(g); Ui.say(r === "" ? "You left the group." : r, r !== "") }, false, true)
+                Ui.sure("Leave " + name + "?", "Only an invite brings you back.", "Leave", () => { const r = Chat.leaveGroup(g); Ui.say(r === "" ? "You left the group." : r, r !== "") }, true, true)
             } else if (a === "forget")
                 Ui.sure("Delete " + name + " from this device?", "Can't be undone.", "Hold to delete", () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
         })
@@ -391,12 +392,30 @@ QtObject {
     function firstLink(t) { const r = String(t || "").match(/https?:\/\/[^\s<>"]+/); return r ? r[0] : "" }
     // Forward a message's text to a contact or a group (its first channel).
     function forwardMenu(text) {
-        const people = Chat.chats.filter(c => c.contact && !c.archived).map(c => ({ name: c.name, icon: "person", url: c.key }))
-        const groups = Chat.groups.filter(g => !g.readOnly).map(g => ({ name: g.name, icon: "hash", url: "g:" + g.id }))
-        Ui.pickFrom("Forward to", [{ header: "People", items: people }, { header: "Groups", items: groups }], to => {
+        pickChat("Forward to", (to, name) => {
             if (to.indexOf("g:") === 0) Chat.sendGroup(to.substring(2), "main", text)
             else Chat.sendPrivate(to, text)
-            Ui.say("Sent.")
+            Ui.say("Sent to " + name + ".")
+        })
+    }
+    // Forward a photo, GIF, video or voice message (Media and files, or its message's menu): sent again as a new
+    // message. it: { photo (its stored id), voice (a voice message's length) }; word: "photo", "GIF", "video" or
+    // "voice message".
+    function forwardMedia(it, word) {
+        if (!it || !it.photo) return
+        pickChat("Forward the " + (word || "photo") + " to", (to, name) => {
+            const r = Chat.forwardMedia(it.photo, to, it.voice || 0)
+            Ui.say(r !== "" ? r : "Sent to " + name + ".", r !== "" && r.indexOf("need") < 0)
+        })
+    }
+    // Forward: a person or a group, then cb(a contact's key or "g:" and a group's id for its first channel, its name).
+    function pickChat(title, cb) {
+        const people = Chat.chats.filter(c => c.contact && !c.archived).map(c => ({ name: c.name, icon: "person", url: c.key }))
+        const groups = Chat.groups.filter(g => !g.readOnly).map(g => ({ name: g.name, icon: "hash", url: "g:" + g.id }))
+        if (!people.length && !groups.length) { Ui.say("No one to send it to yet.", true); return }
+        Ui.pickFrom(title, [{ header: "People", items: people }, { header: "Groups", items: groups }], to => {
+            const row = people.concat(groups).find(x => x.url === to)
+            cb(to, row ? row.name : "them")
         })
     }
 
@@ -634,14 +653,14 @@ QtObject {
                     b => {
                         if (b === "keep") { Linked.unlinkPhone(true); Ui.say("Unlinked. A read-only copy stays here. This PC's own account keeps your name until you remove the copy."); return }
                         Ui.sure("Unlink and remove?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.",
-                                "Unlink and remove", () => unlinkRemove(false), false, true)
+                                "Unlink and remove", () => unlinkRemove(false), true, true)
                     })
             } else if (a === "wipe") {
-                Ui.sure("Remove " + ph.name + "'s copy?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.", "Remove", () => unlinkRemove(true), false, true)
+                Ui.sure("Remove " + ph.name + "'s copy?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.", "Remove", () => unlinkRemove(true), true, true)
             } else if (a.indexOf("u:") === 0) {
                 const key = a.substring(2), c = Linked.companions.find(x => x.key === key)
                 const name = c ? c.name : "this device"
-                Ui.sure("Unlink " + name + "?", "It stops showing this device's chats.", "Unlink", () => { Linked.unlink(key); Ui.say("Unlinked.") }, false, true)
+                Ui.sure("Unlink " + name + "?", "It stops showing this device's chats.", "Unlink", () => { Linked.unlink(key); Ui.say("Unlinked.") }, true, true)
             }
         })
     }

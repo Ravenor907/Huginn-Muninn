@@ -752,6 +752,11 @@ Window {
     TransfersPanel { id: transfersPanel; z: 27 }
     ChatFiles { id: chatFiles; z: 27 }
     function openFiles(where, title) { chatFiles.open(where, title, app.touring) }
+    // Files › Show in chat: the chat or group opens at the file's message, lit for a moment.
+    function showFileInChat(where, name) {
+        if (where.indexOf("g:") === 0) openPage(where, { showFile: name })
+        else openPage("dms", { open: where, showFile: name })
+    }
     // Labs: Report a bug (its screenshot is taken first, so the report screen isn't in it), and on the Huginn
     // with the Labs key, Labs reports.
     LabsReport { id: labsReport; z: 28 }
@@ -1635,6 +1640,8 @@ Window {
             { page: "dms", picker: true, file: "08-options" },
             { page: "dms", prompt: true, file: "09-write" },
             { page: "dms", hold: true, file: "10-confirm" },
+            // A hold let go too soon: "Keep holding for 5 seconds" under Hold to block.
+            { page: "dms", holdEarly: true, file: "10b-confirm-keep-holding" },
             { page: "dms", zone: "messages", newGroup: true, file: "11-new-group" },
             { page: "settings", section: "look", file: "12-look" },
             { page: "g:tour-crew", file: "13-group" },
@@ -1690,6 +1697,10 @@ Window {
             // Transfers (sample rows: Direct, asking first, paused, saved, refused by a group's rules) and a group's Files.
             { page: "dms", zone: "messages", transfers: true, file: "49-transfers" },
             { page: "g:tour-crew", zone: "messages", chatFiles: true, file: "50-files-section" },
+            // A chat's Media and files: square tiles (a photo, a video, a GIF, one not on this device), an item's menu, and Voice.
+            { page: "dms", zone: "messages", shared: "media", file: "51-shared-media" },
+            { page: "dms", zone: "messages", shared: "media", sharedMenu: true, file: "52-shared-media-menu" },
+            { page: "dms", zone: "messages", shared: "voice", file: "53-shared-voice" },
             // Right-click menus, each where a right click opens it: a person (with Mute open beside it), a group on the rail,
             // a folder, a message, a member, Settings on the rail, a text box, the empty list, and a group's Call popup.
             { page: "dms", folders: true, ctx: "person", file: "70-menu-person" },
@@ -1731,6 +1742,8 @@ Window {
             transfersPanel.visible = false; chatFiles.visible = false
             labsReport.visible = false; labsInbox.visible = false; appStorage.visible = false; perfPanel.visible = false; linkPhone.visible = false
             setup.visible = false; backupPanel.visible = false
+            const shown = app.page()
+            if (shown && shown.more) shown.more.sharedOpen = false
             if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs; savedText = Settings.textSize }
             if (step >= steps.length) {
                 Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs; Settings.textSize = savedText
@@ -1785,6 +1798,17 @@ Window {
             if (s.volume) Qt.callLater(() => ModActions.volumeMenu("s", "Sam", null, true))
             if (s.ctx) Qt.callLater(() => app.tourMenu(s.ctx))
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
+            if (s.holdEarly) { confirm.open("Block Mira?", "They aren't told.", "Block", null, true, true); confirm.startHold(); confirm.stopHold() }
+            if (s.shared) {
+                const tab = s.shared, menu = !!s.sharedMenu
+                Qt.callLater(() => {
+                    const p = app.page()
+                    if (!p || !p.more) return
+                    p.more.openShared()
+                    p.more.sharedTab = tab
+                    if (menu) Qt.callLater(() => p.more.contextMenu())
+                })
+            }
             step++
         }
     }

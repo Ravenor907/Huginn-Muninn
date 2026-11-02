@@ -59,7 +59,7 @@ QtObject {
                 tell(Mod.ban(g, k), name + " is banned." + (n > 0 ? " " + n + (n === 1 ? " message removed." : " messages removed.") : "")
                      + (n >= 50 ? " Some older ones may still be up: remove them one at a time." : "")
                      + (behind > 0 ? " " + behind + (behind === 1 ? " member still sees them until they update." : " members still see them until they update.") : ""))
-            }, false, true)
+            }, true, true)
         }, back)
     }
     function tell(err, done) { if (err) Ui.say(err, true); else Ui.say(done) }
@@ -82,7 +82,7 @@ QtObject {
     function groupRowMenu(g, name) {
         if (!g || g.indexOf("tour-") === 0) return
         const k = "g:" + g, again = () => groupRowMenu(g, name)
-        Ui.pickFrom(name, [{ header: "", items: [{ name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
+        Ui.pickFrom(name, [{ header: "", items: [{ name: Chat.isMuted(k) ? "Unmute" : "Mute", icon: Chat.isMuted(k) ? "bell" : "belloff", url: "mute" },
                                                   { name: "Notifications", icon: "bell", url: "notify" }] }], a => {
             if (a === "mute") PeopleActions.muteMenu(k, name, again)
             else if (a === "notify") PeopleActions.notifyMenu(k, again)

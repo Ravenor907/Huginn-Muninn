@@ -66,6 +66,9 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
     val video by CallVideo.state.collectAsState()
     val context = LocalContext.current
     val mic = remember { TvAudio.hasMic(context) }
+    // A Kids' Device on a tablet or phone: the same screen, narrower buttons that fit its width.
+    val tv = remember { KidMode.isTv(context) }
+    val wide = if (tv) 260.dp else 140.dp
     val call = c
     BackHandler { if (call?.phase == Phase.INCOMING) CallManager.decline() else onClose() }
     Box(Modifier.fillMaxSize().background(Palette.ground), contentAlignment = Alignment.Center) {
@@ -79,7 +82,7 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
             modifier = (if (showVideo) Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Palette.ground.copy(alpha = 0.72f))
                 else Modifier.align(Alignment.Center))
                 .verticalScroll(androidx.compose.foundation.rememberScrollState())
-                .padding(horizontal = 48.dp, vertical = if (showVideo) 20.dp else 32.dp)) {
+                .padding(horizontal = if (tv) 48.dp else 16.dp, vertical = if (showVideo) 20.dp else 32.dp)) {
             // No video coming: who it is, big.
             if (!showVideo) {
                 val initial = call.name.trim().let { if (it.isEmpty()) "?" else String(Character.toChars(it.codePointAt(0))).uppercase() }
@@ -102,14 +105,14 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
                 call.note.isNotEmpty() -> Text(call.note, style = tvText(22.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
             }
             val first = remember { FocusRequester() }
-            Row(Modifier.padding(top = if (showVideo) 20.dp else 36.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(Modifier.padding(top = if (showVideo) 20.dp else 36.dp), horizontalArrangement = Arrangement.spacedBy(if (tv) 20.dp else 12.dp)) {
                 when (call.phase) {
                     Phase.INCOMING -> {
-                        Box(Modifier.width(260.dp)) { BigButton("Answer", icon = "call", requester = first, onClick = onAnswer) }
-                        Box(Modifier.width(260.dp)) { BigButton("Not now", icon = "close") { CallManager.decline() } }
+                        Box(Modifier.width(wide)) { BigButton("Answer", icon = "call", requester = first, onClick = onAnswer) }
+                        Box(Modifier.width(wide)) { BigButton("Not now", icon = "close") { CallManager.decline() } }
                     }
-                    Phase.ENDED -> Box(Modifier.width(260.dp)) { BigButton("OK", requester = first) { CallManager.dismiss(); onClose() } }
-                    else -> Box(Modifier.width(300.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
+                    Phase.ENDED -> Box(Modifier.width(wide)) { BigButton("OK", requester = first) { CallManager.dismiss(); onClose() } }
+                    else -> Box(Modifier.width(if (tv) 300.dp else 220.dp)) { BigButton("Hang up", icon = "close", requester = first) { CallManager.hangup() } }
                 }
             }
             LaunchedEffect(call.phase == Phase.INCOMING, call.phase == Phase.ENDED, showVideo) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }

@@ -129,7 +129,7 @@ private fun ShortList(app: Muninn) {
     val up by app.updater.state.collectAsState()
     Framed { MeRow(app) }
     if (mine.isNotEmpty()) Framed {
-        mine.forEach { t -> NavRow("Kids' TV: " + app.chat.nameOf(t.key), icon = "tv") { SettingsNav.folder = "tv:" + t.key } }
+        mine.forEach { t -> NavRow("Kids' Device: " + app.chat.nameOf(t.key), icon = "tv") { SettingsNav.folder = "tv:" + t.key } }
     }
     Framed {
         NavRow("Notifications", icon = "bell") { SettingsNav.folder = "notify" }
@@ -744,13 +744,13 @@ private fun EraseRows(app: Muninn) {
         return
     }
     io.github.ravenor907.muninn.ui.MenuRow("delete", "Delete all messages", danger = true) {
-        Ui.sure(Ask("Delete all messages?", "Contacts stay. This can't be undone.", "Hold to delete", danger = true, hold = true) {
+        Ui.sure(Ask("Delete all messages?", "Contacts stay. This can't be undone.", "Hold to delete", danger = true, hold = true, spoken = "Hold for 5 seconds to delete all messages") {
             app.chat.deleteAll(); Ui.say("All messages deleted.")
         })
     }
-    io.github.ravenor907.muninn.ui.MenuRow("close", "Erase everything", danger = true) {
+    io.github.ravenor907.muninn.ui.MenuRow("warning", "Erase everything", danger = true) {
         Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings. This can't be undone.",
-            "Hold to erase", danger = true, hold = true) { erased = true })
+            "Hold to erase", danger = true, hold = true, spoken = "Hold for 5 seconds to erase everything") { erased = true })
     }
 }
 

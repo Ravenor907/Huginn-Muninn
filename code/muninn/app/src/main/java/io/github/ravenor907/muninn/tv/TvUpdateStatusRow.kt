@@ -16,7 +16,7 @@ fun TvUpdateStatusRow(app: Muninn) {
     @Suppress("UNUSED_VARIABLE") val up by app.updater.state.collectAsState()   // "Update available" follows this phone's checks
     val contacts by app.contacts.all.collectAsState()
     for (t in tvs.values.filter { !it.disconnecting }) {
-        val name = contacts.firstOrNull { it.chatKey == t.key }?.shown ?: "Kids' TV"
+        val name = contacts.firstOrNull { it.chatKey == t.key }?.shown ?: "Kids' Device"
         io.github.ravenor907.muninn.ui.NavRow(name, tvUpdateLine(app, t), icon = "tv") {
             io.github.ravenor907.muninn.screens.SettingsNav.folder = "tv:" + t.key
         }

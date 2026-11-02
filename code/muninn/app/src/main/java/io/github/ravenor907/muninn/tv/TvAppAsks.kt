@@ -94,8 +94,8 @@ object TvAppAsks {
         val open = PendingIntent.getActivity(app, ("app" + a.h).hashCode(), Intent(app, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(app, Muninn.MESSAGES).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle(if (preview) "Install ${a.name} on ${app.chat.nameOf(tv)}?" else "A Kids' TV asks to install an app")
-            .setContentText("Install or Not now: Kids' TV settings, Apps")
+            .setContentTitle(if (preview) "Install ${a.name} on ${app.chat.nameOf(tv)}?" else "A Kids' Device asks to install an app")
+            .setContentText("Install or Not now: Kids' Device settings, Apps")
             .setPriority(NotificationCompat.PRIORITY_HIGH).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(app).notify(("app" + a.h).hashCode(), n) } catch (_: SecurityException) {}

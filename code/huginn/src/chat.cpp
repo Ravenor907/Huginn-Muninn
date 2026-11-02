@@ -3085,7 +3085,7 @@ void Chat::deleteChat(const QString &key)
     m_markedUnread.remove(key);
     m_notified.remove(key);
     if (isContact(key)) {
-        m_clearedChats.insert(key);   // a contact (a Kids' TV too) stays one: only its row goes for now
+        m_clearedChats.insert(key);   // a contact (a Kids' Device too) stays one: only its row goes for now
     } else if (m_met.remove(key)) {
         saveMet();                    // someone nearby: forgotten, and listed again only while around
     }

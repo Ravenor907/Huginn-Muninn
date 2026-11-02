@@ -118,7 +118,8 @@ internal fun StorageList(
     Text(if (count == 1) "1 file" else "$count files", style = Type.small)
     Spacer(Modifier.height(10.dp))
     MButton("Delete all received files", Modifier.fillMaxWidth(), Kind.Danger, enabled = !busy && received.isNotEmpty()) {
-        Ui.sure(Ask("Delete all received files?", "Only files kept inside Muninn. Downloads stays as it is.", "Delete", danger = true) {
+        Ui.sure(Ask("Delete all received files?", "Only files kept inside Muninn. Downloads stays as it is.", "Delete", danger = true, hold = true,
+            spoken = "Hold for 5 seconds to delete all received files") {
             onDeleteAll(AppStorage.Kind.RECEIVED)
         })
     }
@@ -147,7 +148,7 @@ private fun StorageRow(i: AppStorage.Item, busy: Boolean, canMove: Boolean, onDe
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (i.kind == AppStorage.Kind.RECEIVED && canMove) MButton("Move to Downloads", Modifier.weight(1f), enabled = !busy) { onMove(i) }
             MButton("Delete", Modifier.weight(1f), Kind.Danger, enabled = !busy) {
-                Ui.sure(Ask("Delete ${i.name}?", "Can't be undone.", "Delete", danger = true) { onDelete(i) })
+                Ui.sure(Ask("Delete ${i.name}?", "Can't be undone.", "Delete", danger = true, hold = true, spoken = "Hold for 5 seconds to delete ${i.name}") { onDelete(i) })
             }
         }
     }

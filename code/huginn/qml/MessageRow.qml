@@ -47,7 +47,9 @@ Rectangle {
     radius: 0
     // Find in this chat: 1 a match, 2 the match shown (the page's find bar).
     property int found: 0
-    color: picked ? Theme.focusFill : found === 2 ? Theme.accentFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : found === 1 ? Theme.panel : "transparent"
+    // Show in chat (Media and files): lit for a moment.
+    property bool flash: false
+    color: flash ? Theme.accentFill : picked ? Theme.focusFill : found === 2 ? Theme.accentFill : m.mention ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : found === 1 ? Theme.panel : "transparent"
     border.width: picked ? Theme.focusWidth : 0
     border.color: msg.accent
     Rectangle { visible: (!!msg.m.mention || msg.found > 0) && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: parent.height - msg.lineH

@@ -135,12 +135,16 @@ data class TvConfig(
     val upd: Boolean = true,
     /** k8 (7.13): days messages stay on the TV, 1 to 7 (absent: null, the TV keeps its own setting). */
     val keep: Int? = null,
+    /** k11 (7.18): the chatting level (absent: everything), the quiet times and the parent PIN (absent: none). */
+    val chat: Int = KidRules.EVERYTHING, val quiet: List<QuietTime> = emptyList(), val pin: KidPin? = null,
 )
 
 /** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
 data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MIC, /** k5: only for a TV whose app said "k5". */ val nr: Int? = null,
                      /** k7: only for a TV whose app said "k7". */ val upd: Boolean? = null,
-                     /** k8: only for a TV whose app said "k8". */ val keep: Int? = null)
+                     /** k8: only for a TV whose app said "k8". */ val keep: Int? = null,
+                     /** k11: only for a device whose app said "k11" (null: left out). */
+                     val chat: Int? = null, val quiet: List<QuietTime>? = null, val pin: KidPin? = null)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -177,7 +181,7 @@ object TvRules {
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep")
+    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin")
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -190,6 +194,10 @@ object TvRules {
         if (c.has("nr")) { val n = c.get("nr"); require(Canon.isInt(n) && (n as Number).toLong() in NR_NONE.toLong()..NR_BOTH.toLong()) { "nr" } }
         if (c.has("upd")) require(c.get("upd") is Boolean) { "upd" }
         if (c.has("keep")) { val d = c.get("keep"); require(Canon.isInt(d) && (d as Number).toLong() in MIN_KEEP.toLong()..MAX_KEEP.toLong()) { "keep" } }
+        // k11 (7.18): the chatting level, quiet times and the parent PIN.
+        if (c.has("chat")) { val l = c.get("chat"); require(Canon.isInt(l) && (l as Number).toLong() in KidRules.QUICK_ONLY.toLong()..KidRules.EVERYTHING.toLong()) { "chat" } }
+        if (c.has("quiet")) KidRules.quietIn(c.get("quiet"))
+        if (c.has("pin")) KidRules.pinIn(c.get("pin"))
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -264,6 +272,9 @@ object TvRules {
             if (c.has("nr")) c.getInt("nr") else NR_BOTH,
             c.optBoolean("upd", true),
             if (c.has("keep")) c.getInt("keep") else null,
+            if (c.has("chat")) c.getInt("chat") else KidRules.EVERYTHING,
+            if (c.has("quiet")) KidRules.quietIn(c.get("quiet")) else emptyList(),
+            if (c.has("pin")) KidRules.pinIn(c.get("pin")) else null,
         )
     }
 
@@ -275,7 +286,10 @@ object TvRules {
             .put("quick", JSONArray().apply { quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
             .put("contacts", JSONArray().apply { contacts.distinctBy { it.k }.sortedBy { it.k }.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("dictation", dictation).put("ts", ts)
-        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) }; it.upd?.let { u -> o.put("upd", u) }; it.keep?.let { d -> o.put("keep", d.coerceIn(MIN_KEEP, MAX_KEEP)) } }
+        extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) }; it.upd?.let { u -> o.put("upd", u) }; it.keep?.let { d -> o.put("keep", d.coerceIn(MIN_KEEP, MAX_KEEP)) }
+            it.chat?.let { l -> o.put("chat", l.coerceIn(KidRules.QUICK_ONLY, KidRules.EVERYTHING)) }
+            it.quiet?.takeIf { q -> q.isNotEmpty() }?.let { q -> o.put("quiet", KidRules.quietJson(q)) }
+            it.pin?.let { p -> o.put("pin", KidRules.pinJson(p)) } }
         return Canon.sign(priv, CONFIG, o)
     }
 
@@ -297,8 +311,12 @@ object TvRules {
      * [cfg]: the TV's signed config as it runs now, so a parent whose phone is behind (another parent's
      * change, a restored backup) catches up. Apps that don't read it ignore it.
      */
-    fun appliedMessage(v: Long, app: String? = null, cfg: JSONObject? = null): String =
-        JSONObject().put("t", "applied").put("v", v).apply { if (!app.isNullOrEmpty()) put("app", app); cfg?.let { put("cfg", it) } }.toString()
+    /** [dev]: k11 (7.18), what kind of device it is ("tv", "tablet" or "phone"). */
+    fun appliedMessage(v: Long, app: String? = null, cfg: JSONObject? = null, dev: String? = null): String =
+        JSONObject().put("t", "applied").put("v", v).apply {
+            if (!app.isNullOrEmpty()) put("app", app); cfg?.let { put("cfg", it) }
+            dev?.takeIf { it in KidRules.DEVICES }?.let { put("dev", it) }
+        }.toString()
     /** k2: a parent asks the TV to look for a new Muninn now and install it. */
     fun updateMessage(): String = JSONObject().put("t", "update").toString()
     /** t1 (7.6): a parent hands someone they invited the TV's contact code, so their app adds the TV. */
@@ -370,11 +388,11 @@ object TvRules {
 
     /** What a parent's phone says for the TV's update [state] ("" when there's nothing to say). */
     fun updateText(state: String?): String = when (state) {
-        "needs" -> "Waiting for Install updates. Turn it on in TV permissions."
-        "ready" -> "Waiting for Install on the TV"
+        "needs" -> "Waiting for Install updates. Turn it on in Device permissions."
+        "ready" -> "Waiting for Install on the device"
         "installing" -> "Installing"
         "done" -> "Up to date"
-        "failed" -> "The update didn't install. The TV tries again later."
+        "failed" -> "The update didn't install. The device tries again later."
         else -> ""
     }
 

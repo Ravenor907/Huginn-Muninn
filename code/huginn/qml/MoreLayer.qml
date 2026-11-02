@@ -7,6 +7,11 @@ import Huginn
 // poll), an album full size with arrows, a video message playing, the camera recording one (it waits for
 // Send or Discard, never sent by itself), a new poll, and the Shared page (photos, videos, links and voice).
 // where: the contact's key or "g:<group>:<channel>"; title: who or what it goes to.
+// On the Shared page every photo, video and voice message is a square tile (one not on this device says so). A click
+// (or A) opens it; a right click, a long press, X, LT or Menu opens its menu: Open, Show in chat (the chat scrolls to
+// it and lights it for a moment), Save, Forward (sent again as a new message) and Delete (on this computer only,
+// held 5 seconds).
+// Y goes to the next tab.
 Item {
     id: layer
     property string where: ""
@@ -22,12 +27,27 @@ Item {
     // The Shared page loads a page at a time: more as you scroll near the end.
     readonly property int pageSize: 60
     property int sharedShown: pageSize
-    readonly property var sharedData: sharedOpen ? (Chat.chats, Chat.groups, Chat.shared(where)) : ({ media: [], links: [], voices: [] })
+    readonly property var sharedData: !sharedOpen ? ({ media: [], links: [], voices: [] }) : tour ? tourShared : (Chat.chats, Chat.groups, Chat.shared(where))
+    // The tour's Shared page: one tile of each kind (nothing here is real).
+    readonly property var tourShared: ({
+        media: [{ id: "t1", photo: "t1", video: 0, name: "Sam", here: true },
+                { id: "t2", photo: "t2", video: 42000, name: "You", mine: true, here: true },
+                { id: "t3", photo: "t3", video: 0, gif: true, name: "Jake", here: true },
+                { id: "t4", photo: "t4", video: 0, name: "Mira", here: false }],
+        links: [{ id: "t5", url: "https://example.com", title: "example.com", description: "", host: "example.com", thumb: "", name: "Sam" }],
+        voices: [{ id: "t6", photo: "t6", voice: 14000, name: "Sam", time: Date.now() - 3600000, here: true },
+                 { id: "t7", photo: "t7", voice: 6000, name: "Mira", time: Date.now() - 86400000, here: false }] })
     readonly property var sharedVoices: sharedData.voices || []
-    // The tabs in order, for X on a controller.
+    // The tabs in order, for Y on a controller.
     readonly property var sharedTabs: ["media", "links", "voice"]
     function sharedCount() { return sharedTab === "media" ? sharedData.media.length : sharedTab === "links" ? sharedData.links.length : sharedVoices.length }
     readonly property bool busy: photos.length > 0 || videoId !== "" || camera || pollDlg.visible || sharedOpen
+    // Media and files › Show in chat: the page scrolls to the message and lights it for a moment.
+    signal showInChat(string msgId)
+    // The button legend while the Shared page is in front (the page shows it instead of its own).
+    readonly property var prompts: sharedOpen && photos.length === 0 && videoId === ""
+        ? [{ key: "dpad", label: "Choose" }, { key: "a", label: sharedTab === "voice" ? "Play" : "Open" }, { key: "lt", label: "Options" },
+           { key: "y", label: "Next tab" }, { key: "b", label: "Close" }] : []
     anchors.fill: parent
     z: 40
 
@@ -147,22 +167,81 @@ Item {
         if (url === "") return
         Ui.sure("Open " + Chat.linkHost(url) + "?", url, "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) })
     }
-    function openShared() { if (!tour && where !== "") { sharedTab = "media"; sharedSel = -1; sharedShown = pageSize; sharedOpen = true } }
+    function openShared() { if (tour || where !== "") { sharedTab = "media"; sharedSel = -1; sharedShown = pageSize; sharedOpen = true } }
+    function sharedList() { return sharedTab === "links" ? sharedData.links : sharedTab === "voice" ? sharedVoices : sharedData.media }
+    function kindOf(it) { return sharedTab === "voice" ? "voice message" : it.video > 0 ? "video" : it.gif ? "GIF" : "photo" }
     function openSharedItem(i) {
-        const media = sharedData.media, links = sharedData.links
+        const it = sharedList()[i]
+        if (!it || tour) return
+        if (sharedTab === "links") { askOpen(it.url); return }
+        if (it.here === false) { Ui.say("This " + kindOf(it) + " isn't on this device.", true); return }
         if (sharedTab === "voice") {
-            const v = sharedVoices[i]
-            if (!v) return
-            if (Voice.playing === v.photo) Voice.stop(); else Voice.play(v.photo)
+            if (Voice.playing === it.photo) Voice.stop(); else Voice.play(it.photo)
             return
         }
-        if (sharedTab === "media") {
-            const it = media[i]
-            if (!it) return
-            if (it.video > 0) { playVideo(it.photo); return }
-            const pics = media.filter(x => !(x.video > 0))
-            viewPhotos(pics.map(x => x.photo), Math.max(0, pics.findIndex(x => x.id === it.id)))
-        } else if (links[i]) askOpen(links[i].url)
+        if (it.video > 0) { playVideo(it.photo); return }
+        const pics = sharedData.media.filter(x => !(x.video > 0) && x.here !== false)
+        viewPhotos(pics.map(x => x.photo), Math.max(0, pics.findIndex(x => x.id === it.id)))
+    }
+    // The Menu key and Shift+F10 (the page's contextMenu and menuAnchor): the picked item's menu, at its tile.
+    function anchorItem() { return sharedOpen && sharedSel >= 0 ? (sharedTab === "links" ? linkList : tileGrid).itemAtIndex(sharedSel) : null }
+    function contextMenu() {
+        if (sharedSel < 0 && sharedCount() > 0) sharedSel = 0
+        if (sharedSel >= 0) itemMenu(sharedSel)
+    }
+    // An item's menu (a right click, a long press, X, LT or Menu): at its tile or row, or as the list when it isn't in view.
+    function itemMenuAt(i) {
+        const view = sharedTab === "links" ? linkList : tileGrid
+        const item = view.itemAtIndex(i)
+        sharedSel = i
+        if (item) Ui.menuAt(item, Math.min(item.width / 2, Theme.px(140)), item.height / 2, () => layer.itemMenu(i))
+        else itemMenu(i)
+    }
+    function itemMenu(i) {
+        const it = sharedList()[i]
+        if (!it) return
+        sharedSel = i
+        if (sharedTab === "links") {
+            Ui.pickFrom(it.host || "Link", [{ header: "", items: [
+                { name: "Open", icon: "attach", url: "open" },
+                { name: "Show in chat", icon: "thread", url: "show" },
+                { name: "Copy link", icon: "attach", url: "copy" },
+                { name: "Forward", icon: "forward", url: "forward", sub: () => { if (!layer.tour) PeopleActions.forwardMenu(it.url) } }] }],
+                a => layer.runItem(it, a))
+            return
+        }
+        const here = it.here !== false, kind = kindOf(it)
+        const items = []
+        if (here) items.push({ name: sharedTab === "voice" ? (Voice.playing !== "" && Voice.playing === it.photo ? "Stop" : "Play") : it.video > 0 ? "Play" : "Open",
+                               icon: sharedTab === "voice" || it.video > 0 ? "play" : "image", url: "open" })
+        items.push({ name: "Show in chat", icon: "thread", url: "show" })
+        if (here) items.push({ name: "Save", icon: "save", detail: "To " + saveWhere(it), url: "save" },
+                             { name: "Forward", icon: "forward", url: "forward", sub: () => { if (!layer.tour) PeopleActions.forwardMedia(it, kind) } })
+        Ui.pickFrom(kind.charAt(0).toUpperCase() + kind.slice(1) + " from " + (it.name || "someone"),
+                    [{ header: here ? "" : "Not on this device", items: items }, { header: "", items: [{ name: "Delete", url: "delete", danger: true }] }],
+                    a => layer.runItem(it, a))
+    }
+    // Where Save puts it: pictures beside Save to Pictures', videos and voice beside received files.
+    function saveWhere(it) { return sharedTab === "voice" || it.video > 0 ? (Transfer.saveName || "Downloads") + " › Huginn" : "Pictures › Huginn" }
+    function runItem(it, a) {
+        if (tour || !it) return
+        const i = sharedList().findIndex(x => x.id === it.id)
+        if (a === "open") { if (i >= 0) openSharedItem(i) }
+        else if (a === "show") { sharedOpen = false; showInChat(it.id) }
+        else if (a === "copy") { Chat.copyText(it.url); Ui.say("Link copied.") }
+        else if (a === "forward") { if (sharedTab === "links") PeopleActions.forwardMenu(it.url); else PeopleActions.forwardMedia(it, kindOf(it)) }
+        else if (a === "save") {
+            const path = Chat.saveMedia(it.photo)
+            Ui.say(path !== "" ? "Saved in " + saveWhere(it) + "." : "Couldn't save it.", path === "")
+        } else if (a === "delete") {
+            const w = where, kind = kindOf(it)
+            Ui.sure("Delete this " + kind + "?", "It's deleted on this computer only.", "Delete", () => {
+                if (Voice.playing !== "" && Voice.playing === it.photo) Voice.stop()
+                if (w.indexOf("g:") === 0) Chat.deleteGroupMessage(w.split(":")[1], it.id)
+                else Chat.deleteMessage(w, it.id)
+                Ui.say("Deleted.")
+            }, true, true)
+        }
     }
 
     function handleButton(b) {
@@ -187,13 +266,14 @@ Item {
         if (pollDlg.visible) return pollDlg.handleButton(b)
         if (sharedOpen) {
             const n = sharedCount()
-            const cols = sharedTab === "media" ? mediaGrid.columns : 1
+            const cols = sharedTab === "links" ? 1 : tileGrid.columns
             switch (b) {
-            case "left": if (sharedTab === "media" && sharedSel > 0) sharedSel--; break
-            case "right": if (sharedTab === "media" && sharedSel < n - 1) sharedSel++; break
+            case "left": if (cols > 1 && sharedSel > 0) sharedSel--; break
+            case "right": if (cols > 1 && sharedSel < n - 1) sharedSel++; break
             case "up": sharedSel = Math.max(0, sharedSel - cols); break
             case "down": sharedSel = n ? Math.min(n - 1, sharedSel < 0 ? 0 : sharedSel + cols) : -1; if (sharedSel >= sharedShown - cols) sharedShown += pageSize; break
-            case "x": sharedTab = sharedTabs[(sharedTabs.indexOf(sharedTab) + 1) % sharedTabs.length]; sharedSel = -1; sharedShown = pageSize; break
+            case "y": sharedTab = sharedTabs[(sharedTabs.indexOf(sharedTab) + 1) % sharedTabs.length]; sharedSel = -1; sharedShown = pageSize; break
+            case "x": case "start": if (sharedSel < 0 && n) sharedSel = 0; if (sharedSel >= 0) itemMenuAt(sharedSel); break
             case "a": if (sharedSel >= 0) openSharedItem(sharedSel); break
             case "b": sharedOpen = false; break
             }
@@ -216,7 +296,7 @@ Item {
             id: sharedHead
             width: parent.width
             carved: false
-            title: "Shared with " + layer.title
+            title: layer.title !== "" ? "Shared with " + layer.title : "Shared"
             subtitle: layer.sharedData.media.length + " photos and videos · " + layer.sharedData.links.length + " links · " + layer.sharedVoices.length + " voice messages"
             HButton { anchors.verticalCenter: parent.verticalCenter; text: "Close"; fontSize: 14; onClicked: layer.sharedOpen = false }
         }
@@ -229,48 +309,94 @@ Item {
             value: layer.sharedTab
             onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1; layer.sharedShown = layer.pageSize }
         }
+        // Photos and videos, or voice messages: square tiles, as many across as fit.
         GridView {
-            id: mediaGrid
-            readonly property int columns: Math.max(1, Math.floor(width / cellWidth))
-            visible: layer.sharedTab === "media"
+            id: tileGrid
+            readonly property int columns: Math.max(1, Math.floor(width / Theme.px(150)))
+            visible: layer.sharedTab !== "links"
             anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
             clip: true
-            cellWidth: Theme.px(150); cellHeight: Theme.px(150)
-            model: layer.sharedData.media.slice(0, layer.sharedShown)
+            cellWidth: Math.floor(width / columns); cellHeight: cellWidth
+            model: layer.sharedTab === "voice" ? layer.sharedVoices.slice(0, layer.sharedShown)
+                 : layer.sharedTab === "media" ? layer.sharedData.media.slice(0, layer.sharedShown) : []
             currentIndex: layer.sharedSel
-            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedData.media.length) layer.sharedShown += layer.pageSize
+            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedCount()) layer.sharedShown += layer.pageSize
             delegate: Rectangle {
-                width: mediaGrid.cellWidth - Theme.px(6); height: width
-                radius: Theme.radius; color: Theme.groundDeep; clip: true
+                id: tile
+                required property var modelData
+                required property int index
+                readonly property bool voice: layer.sharedTab === "voice"
+                readonly property bool here: modelData.here !== false
+                readonly property bool video: !voice && modelData.video > 0
+                readonly property bool photo: !voice && !video && here
+                readonly property bool playingThis: voice && Voice.playing !== "" && Voice.playing === modelData.photo
+                width: tileGrid.cellWidth - Theme.px(6); height: width
+                radius: Theme.radius; color: tileHover.hovered ? Theme.raised : Theme.groundDeep; clip: true
                 border.color: Theme.accent; border.width: index === layer.sharedSel ? Theme.focusWidth : 0
                 Image {
                     anchors.fill: parent
-                    visible: !(modelData.video > 0)
+                    visible: tile.photo && !layer.tour
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     // A small cached copy, loaded only for the tiles in view.
-                    source: visible && !layer.tour ? "image://thumb/" + modelData.photo : ""
+                    source: visible ? "image://thumb/" + tile.modelData.photo : ""
                 }
+                // A video, a voice message, one not on this device (or a tour photo): what it is, in the middle.
                 Column {
-                    visible: modelData.video > 0
+                    visible: !tile.photo || layer.tour
                     anchors.centerIn: parent
+                    width: parent.width - Theme.px(12)
                     spacing: Theme.px(4)
-                    Icon { anchors.horizontalCenter: parent.horizontalCenter; name: "play"; color: "white"; size: Theme.px(30) }
-                    Text { textFormat: Text.PlainText; text: Voice.length(modelData.video || 0); color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Icon {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        name: !tile.here ? "down" : tile.playingThis ? "stop" : tile.voice ? "mic" : tile.video ? "play" : "image"
+                        color: tile.here ? Theme.text : Theme.textMuted; size: Theme.px(30)
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                        text: !tile.here ? "Not on this device" : tile.voice ? Voice.length(tile.modelData.voice || 0)
+                            : tile.video ? Voice.length(tile.modelData.video || 0) : "Photo"
+                        color: tile.here ? Theme.text : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                    }
+                    Text {
+                        textFormat: Text.PlainText
+                        visible: tile.voice || tile.video || !tile.here
+                        width: parent.width; horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                        text: tile.modelData.name || ""
+                        color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                    }
+                }
+                // A voice message playing: how far it is.
+                Rectangle {
+                    visible: tile.playingThis
+                    anchors.left: parent.left; anchors.bottom: parent.bottom
+                    width: parent.width * Voice.progress; height: Theme.px(3); color: Theme.accent
                 }
                 // Cap a1: a GIF holds its first frame here; it moves once opened.
                 Rectangle {
-                    visible: !!modelData.gif
+                    visible: !!tile.modelData.gif
                     anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Theme.px(6)
                     width: mediaGifTag.implicitWidth + Theme.px(8); height: mediaGifTag.implicitHeight + Theme.px(2); radius: Theme.px(4)
                     color: Qt.rgba(0, 0, 0, 0.6)
                     Text { id: mediaGifTag; textFormat: Text.PlainText; anchors.centerIn: parent; text: "GIF"; color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(11) }
                 }
                 Accessible.role: Accessible.Button
-                Accessible.name: (modelData.video > 0 ? "Video from " : modelData.gif ? "GIF from " : "Photo from ") + modelData.name
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { layer.sharedSel = index; layer.openSharedItem(index) } }
+                Accessible.name: (tile.voice ? "Voice message from " : tile.video ? "Video from " : tile.modelData.gif ? "GIF from " : "Photo from ")
+                                 + (tile.modelData.name || "someone") + (tile.here ? "" : ", not on this device")
+                Accessible.onPressAction: { layer.sharedSel = tile.index; layer.openSharedItem(tile.index) }
+                HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onTapped: (point, button) => {
+                        layer.sharedSel = tile.index
+                        if (button === Qt.RightButton) Ui.menuAt(tile, point.position.x, point.position.y, () => layer.itemMenu(tile.index))
+                        else layer.openSharedItem(tile.index)
+                    }
+                    onLongPressed: { layer.sharedSel = tile.index; Ui.menuAt(tile, point.position.x, point.position.y, () => layer.itemMenu(tile.index)) }
+                }
             }
         }
         ListView {
@@ -285,72 +411,39 @@ Item {
             currentIndex: layer.sharedSel
             onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedData.links.length) layer.sharedShown += layer.pageSize
             delegate: Rectangle {
+                id: linkRow
+                required property var modelData
+                required property int index
                 width: linkList.width
                 height: Math.max(Theme.px(64), linkCol.implicitHeight) + Theme.px(16)
                 radius: Theme.radius; color: Theme.panel
-                border.color: index === layer.sharedSel ? Theme.accent : Theme.line; border.width: index === layer.sharedSel ? Theme.focusWidth : 1
+                border.color: linkRow.index === layer.sharedSel ? Theme.accent : Theme.line; border.width: linkRow.index === layer.sharedSel ? Theme.focusWidth : 1
                 Image {
                     id: linkThumb
-                    visible: modelData.thumb !== ""
+                    visible: linkRow.modelData.thumb !== ""
                     x: Theme.px(8); y: Theme.px(8); width: Theme.px(64); height: width
                     fillMode: Image.PreserveAspectCrop
-                    source: modelData.thumb
+                    source: linkRow.modelData.thumb
                 }
                 Column {
                     id: linkCol
                     x: linkThumb.visible ? Theme.px(84) : Theme.px(12); y: Theme.px(8)
                     width: parent.width - x - Theme.px(12)
                     spacing: Theme.px(2)
-                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                    Text { visible: text !== ""; width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.description; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
-                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.host + " · " + modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: linkRow.modelData.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
+                    Text { visible: text !== ""; width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: linkRow.modelData.description; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
+                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: linkRow.modelData.host + " · " + linkRow.modelData.name; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 }
-                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { layer.sharedSel = index; layer.openSharedItem(index) } }
-            }
-        }
-        // Voice messages, newest first: a click (or A) plays one, again stops it.
-        ListView {
-            id: voiceList
-            visible: layer.sharedTab === "voice"
-            anchors.top: sharedTabs.bottom; anchors.topMargin: Theme.px(12)
-            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
-            anchors.leftMargin: Theme.px(20); anchors.rightMargin: Theme.px(20)
-            clip: true
-            spacing: Theme.px(8)
-            model: layer.sharedTab === "voice" ? layer.sharedVoices.slice(0, layer.sharedShown) : []
-            currentIndex: layer.sharedSel
-            onAtYEndChanged: if (atYEnd && layer.sharedShown < layer.sharedVoices.length) layer.sharedShown += layer.pageSize
-            delegate: Rectangle {
-                id: voiceRow
-                readonly property bool playingThis: Voice.playing !== "" && Voice.playing === modelData.photo
-                width: voiceList.width
-                height: Math.max(Theme.px(56), voiceCol.implicitHeight + Theme.px(16))
-                radius: Theme.radius
-                color: voiceHover.hovered ? Theme.raised : Theme.panel
-                border.color: index === layer.sharedSel ? Theme.accent : Theme.line; border.width: index === layer.sharedSel ? Theme.focusWidth : 1
-                Accessible.role: Accessible.Button
-                Accessible.name: "Voice message from " + modelData.name + ", " + Voice.length(modelData.voice || 0)
-                Accessible.onPressAction: { layer.sharedSel = index; layer.openSharedItem(index) }
-                Icon {
-                    id: voiceIcon
-                    x: Theme.px(14); anchors.verticalCenter: parent.verticalCenter
-                    name: voiceRow.playingThis ? "stop" : "play"; size: Theme.px(22); color: Theme.accent
-                }
-                Column {
-                    id: voiceCol
-                    anchors.left: voiceIcon.right; anchors.leftMargin: Theme.px(14)
-                    anchors.right: parent.right; anchors.rightMargin: Theme.px(14)
-                    anchors.verticalCenter: parent.verticalCenter
-                    spacing: Theme.px(4)
-                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: modelData.name + " · " + Voice.length(modelData.voice || 0); color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold }
-                    Text { width: parent.width; elide: Text.ElideRight; textFormat: Text.PlainText; text: Qt.formatDateTime(new Date(modelData.time || 0), "MMM d, h:mm AP"); color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
-                    Rectangle {
-                        width: parent.width; height: Theme.px(3); radius: Theme.radiusSmall; color: Theme.lineMuted
-                        Rectangle { width: parent.width * (voiceRow.playingThis ? Voice.progress : 0); height: parent.height; radius: parent.radius; color: Theme.accent }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onTapped: (point, button) => {
+                        layer.sharedSel = linkRow.index
+                        if (button === Qt.RightButton) Ui.menuAt(linkRow, point.position.x, point.position.y, () => layer.itemMenu(linkRow.index))
+                        else layer.openSharedItem(linkRow.index)
                     }
+                    onLongPressed: { layer.sharedSel = linkRow.index; Ui.menuAt(linkRow, point.position.x, point.position.y, () => layer.itemMenu(linkRow.index)) }
                 }
-                HoverHandler { id: voiceHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: { layer.sharedSel = index; layer.openSharedItem(index) } }
             }
         }
         Text {

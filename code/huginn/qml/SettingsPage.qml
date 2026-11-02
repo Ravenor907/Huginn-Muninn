@@ -275,6 +275,7 @@ Rectangle {
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Move and pick", note: "D-pad moves, A picks, B goes back" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Sections", note: "LB goes to the next one. Hold LB with Left or Right to step" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Options", note: "LT opens the options for what's picked" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Hard-to-undo actions", note: "Hold A for 5 seconds, like Hold to block" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Settings", note: "Menu (Start)" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Scroll", note: "Left stick" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Pointer", note: "Right stick moves, RB or R3 clicks, RT right-clicks" },

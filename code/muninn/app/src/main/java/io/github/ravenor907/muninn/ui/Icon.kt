@@ -73,6 +73,13 @@ object Icons {
         "palette" to "M12 3a9 9 0 1 0 0 18c1.5 0 2-1 2-2s-1-1.5-1-2.5 1-1.5 2-1.5h2a4 4 0 0 0 4-4c0-4.4-4-8-9-8z M7.5 12h0.01 M9.5 7.5h0.01 M14.5 7.5h0.01",
         "battery" to "M3 7h15v10H3z M18 10h3v4h-3 M6 10v4 M9 10v4",
         "qr" to "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h2v2h-2z M18 18h2v2h-2z M14 18h2 M18 14h2",
+        // The red rows, each its own: Block and Ban (a circle struck through), Leave (out of a door), Remove from group
+        // (a person and a minus), Erase everything (a warning), and Archived (a box, not Transfers' arrow).
+        "block" to "M12 3a9 9 0 1 0 0.01 0 M5.6 5.6l12.8 12.8",
+        "leave" to "M13 4H4v16h9 M9 12h12 M17 8l4 4-4 4",
+        "userminus" to "M9 4a4 4 0 1 0 0.01 0 M2 21a7 7 0 0 1 14 0 M16 11h6",
+        "warning" to "M12 3l10 18H2z M12 9v5 M12 17h0.01",
+        "archive" to "M3 4h18v4H3z M5 8v12h14V8 M10 12h4",
     )
 }
 

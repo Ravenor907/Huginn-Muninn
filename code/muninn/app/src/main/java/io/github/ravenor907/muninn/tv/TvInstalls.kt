@@ -69,7 +69,7 @@ object TvInstalls {
     fun resultText(r: String, why: String = ""): String = when (r) {
         "installed" -> "Installed"
         "perm" -> "Needs Install updates permission"
-        "confirm" -> "Waiting for Install on the TV"
+        "confirm" -> "Waiting for Install on the device"
         else -> if (why.isEmpty()) "Failed" else "Failed: $why"
     }
 

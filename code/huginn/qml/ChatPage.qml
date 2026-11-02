@@ -95,6 +95,8 @@ Rectangle {
         if (a.open && a.show === "find") Qt.callLater(openFind)
         if (a.open && a.show === "pins") Qt.callLater(openPins)
         if (a.open && a.show === "shared") Qt.callLater(() => page.more.openShared())
+        // A chat's Files › Show in chat.
+        if (a.open && a.showFile) { const f = a.showFile; Qt.callLater(() => page.showFile(f)) }
     }
 
     readonly property bool locked: !tour && (!Vault.exists || Vault.screenLocked)
@@ -190,6 +192,7 @@ Rectangle {
 
     // What the hint bar shows (Main.qml adds LB). LT opens the menu (the page gets it as X).
     readonly property var prompts: mirror.visible ? mirror.prompts
+        : more.prompts.length ? more.prompts
         : finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
         : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : [])
@@ -205,7 +208,8 @@ Rectangle {
         : zone === "list" && entries[row] && entries[row].kind === "newfrom" ? [{ key: "a", label: unreadChats.length === 1 ? "Open" : "Go to them" },
                                                                              { key: "lt", label: "Hide" }, { key: "b", label: "Back" }]
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
-                             { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
+                             { key: "lt", label: "Menu" }].concat(entries[row] && (entries[row].kind === "chat" || entries[row].kind === "near") ? [{ key: "y", label: "Quick menu" }] : [])
+                             .concat([{ key: "b", label: "Back" }])
         : !picked ? [{ key: "a", label: "Add someone" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: keep.visible && sel < 0 ? "Keep in touch" : sel >= 0 && messages[sel] && messages[sel].call && openKey !== "" ? "Call back" : "Write" }].concat(openKey !== "" ? [{ key: "y", label: "Hold to record" }] : [])
             .concat(sel >= 0 ? [{ key: "lt", label: "Options" }] : openKey !== "" ? [{ key: "lt", label: "Menu" }] : []).concat([{ key: "b", label: "Back" }])
@@ -882,7 +886,9 @@ Rectangle {
                     // Find in this chat: every match lit, the one shown more.
                     readonly property bool found: finder.visible && finder.hits.indexOf(index) >= 0
                     readonly property bool foundNow: found && finder.current === index
-                    color: picked ? Theme.focusFill : foundNow ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : found ? Theme.panel : "transparent"
+                    // Show in chat (Media and files): lit for a moment.
+                    readonly property bool flash: page.flashId !== "" && page.flashId === modelData.id
+                    color: flash ? Theme.accentFill : picked ? Theme.focusFill : foundNow ? Theme.accentFill : msgHover.hovered ? Theme.panelLow : found ? Theme.panel : "transparent"
                     border.width: picked ? Theme.focusWidth : 0
                     border.color: page.tint
                     Rectangle { visible: msg.found && !msg.picked; x: 0; y: msg.lineH; width: Theme.px(3); height: Math.max(0, parent.height - msg.lineH); color: msg.foundNow ? page.tint : Theme.lineMuted }
@@ -1464,8 +1470,9 @@ Rectangle {
         if (e.kind === "chat" || e.kind === "near") {
             const k = e.key, at = entries.indexOf(e)
             PeopleActions.personMenu(k, e.name, { tour: tour, near: e.kind === "near", hasChat: !!e.hasChat, alt: e.alt || "",
-                                                  section: e.section, keys: e.kind === "chat" ? sectionKeys(e.section) : [],
+                                                  section: e.section, keys: e.kind === "chat" ? sectionKeys(e.section) : [], listRow: true,
                                                   removed: () => page.closeChatWith(k),
+                                                  moved: () => page.focusEntry(x => x.kind === "chat" && x.key === k),
                                                   open: () => { if (at >= 0) page.row = at; page.choose() } })
             return
         }
@@ -1507,10 +1514,9 @@ Rectangle {
         })
     }
     // The Menu key and Shift+F10 (Main.menuKey): the right-click menu for the focus, at menuAnchor().
-    function contextMenu() { if (zone === "list") rowContext(entries[row]); else handleButton("x") }
-    function menuAnchor() { return zone === "list" ? listPane.itemAtIndex(row) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
-    // A person's one menu (PeopleActions.contactMenu), from their row: Move up and Down follow the
-    // section they were opened in.
+    function contextMenu() { if (more.sharedOpen) more.contextMenu(); else if (zone === "list") rowContext(entries[row]); else handleButton("x") }
+    function menuAnchor() { return more.sharedOpen ? more.anchorItem() : zone === "list" ? listPane.itemAtIndex(row) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
+    // A person's one menu (PeopleActions.contactMenu), from their row (moving it is in the row's right-click menu).
     function rowMenu(e) {
         if (e && e.kind === "near") {
             const n = e.key
@@ -1519,13 +1525,13 @@ Rectangle {
         }
         if (!e || e.kind !== "chat") { listOptions(); return }
         const k = e.key
-        PeopleActions.contactMenu(k, e.name, { section: e.section, keys: sectionKeys(e.section), removed: () => page.closeChatWith(k) })
+        PeopleActions.contactMenu(k, e.name, { section: e.section, removed: () => page.closeChatWith(k) })
     }
     // The same menu for the open chat (its header's three dots, or LT with no message picked).
     function chatMenu() {
         if (openKey === "") return
         const k = openKey, e = entries.find(x => x.kind === "chat" && x.key === k)
-        PeopleActions.contactMenu(k, openName, { tour: tour, inChat: true, section: e ? e.section : "", keys: e ? sectionKeys(e.section) : [], removed: () => page.closeChatWith(k) })
+        PeopleActions.contactMenu(k, openName, { tour: tour, inChat: true, section: e ? e.section : "", removed: () => page.closeChatWith(k) })
     }
     function closeChatWith(k) { if (openKey === k) { openKey = ""; picked = false; zone = "list" } }
     function checkCode(k) { PeopleActions.checkCode(k) }
@@ -1538,7 +1544,7 @@ Rectangle {
         if (w !== "") Ui.say(w, true)
     }
     // The header's Call button: a small popup under it with Voice call and, when they can take one, Video call
-    // (a Kids' TV has no video, so only Voice call).
+    // (a Kids' Device has no video, so only Voice call).
     function callMenu() {
         if (openKey === "" || locked) return
         const items = [{ name: "Voice call", icon: "call", url: "voice" }]
@@ -1652,7 +1658,7 @@ Rectangle {
                 { name: "Delete for good", url: "delete", danger: true }] }], a => {
                 if (a === "restore") { Chat.restore(k); Ui.say(p.name + " is back.") }
                 else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "Can't be undone.", "Delete for good",
-                                                 () => { Chat.deleteForGood(k); Ui.say(p.name + " deleted for good.") }, false, true)
+                                                 () => { Chat.deleteForGood(k); Ui.say(p.name + " deleted for good.") }, true, true)
             }, () => page.openTrash())
         })
     }
@@ -1796,7 +1802,10 @@ Rectangle {
         if (m.text && !m.unsent && !m.failed && !tour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMenu(m.text) })
         if (m.saved && !m.unsent) items.push({ name: "Open in folder", icon: "folder", url: "folder" })
         if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", icon: "file", url: "savefile" })
-        else if (m.photo && !m.voice && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
+        else if (m.photo && !m.voice && !m.video && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", icon: "save", url: "save" })
+        else if (m.photo && (m.voice || m.video) && !m.file && !m.unsent) items.push({ name: "Save", icon: "save", detail: "To " + (Transfer.saveName || "Downloads") + " › Huginn", url: "savemedia" })
+        // A photo, video or voice message: sent again as a new message.
+        if (m.photo && !m.file && !m.unsent && !m.failed && !tour) items.push({ name: "Forward", icon: "forward", url: "forwardmedia", sub: () => PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo") })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
         if (openKey === "" && !m.mine) items.push({ name: "Mute " + m.name, url: "mute" })
@@ -1816,11 +1825,19 @@ Rectangle {
             else if (a === "folder") { if (!FileLink.showInFolder(m.saved)) Ui.say("That file isn't there anymore.", true) }
             else if (a === "view") viewing = m.photo
             else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
+            else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
+            else if (a === "forwardmedia") PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo")
             else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
-            else if (a === "unsend") Chat.unsend(k, m.id)
+            else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for both of you.", "Unsend", () => Chat.unsend(k, m.id), true, true)
             else if (a === "retry") Chat.retry(k, m.id)
             else if (a === "mute") Chat.block(m.peer, true)
-            else if (a === "delete") { if (k === "") Chat.deleteNearbyMessage(m.id); else Chat.deleteMessage(k, m.id) }
+            else if (a === "delete") {
+                // A photo, video or voice message is held 5 seconds, as from Media and files.
+                if (k !== "" && m.photo) Ui.sure("Delete this " + (m.voice ? "voice message" : m.video ? "video" : "photo") + "?", "It's deleted on this computer only.", "Delete",
+                                                 () => Chat.deleteMessage(k, m.id), true, true)
+                else if (k === "") Chat.deleteNearbyMessage(m.id)
+                else Chat.deleteMessage(k, m.id)
+            }
             else if (a === "savefile") PeopleActions.saveFile(k, m)
         })
     }
@@ -1831,6 +1848,20 @@ Rectangle {
         if (i < 0) { Ui.say("That message isn't here anymore."); return }
         sel = i
         list.positionViewAtIndex(i, ListView.Center)
+    }
+    // Files › Show in chat: the newest message with that file.
+    function showFile(name) {
+        for (let i = messages.length - 1; i >= 0; i--)
+            if (messages[i].file === name) { showInChat(messages[i].id); return }
+        Ui.say("Its message isn't here anymore.")
+    }
+    // Media and files › Show in chat: there, and lit for a moment.
+    property string flashId: ""
+    Timer { id: flashTimer; interval: 1800; onTriggered: page.flashId = "" }
+    function showInChat(id) {
+        zone = "messages"
+        jumpTo(id)
+        if (messages.some(m => m.id === id)) { flashId = id; flashTimer.restart() }
     }
     function reactTo(id, e) {
         if (openKey === "" || id === "") return
@@ -2036,6 +2067,13 @@ Rectangle {
             else if (zone === "messages") write()
             return true
         case "y":
+            // On a person in the list: their right-click menu (Move up and Move down are there).
+            if (zone === "list" && entries[row] && (entries[row].kind === "chat" || entries[row].kind === "near")) {
+                const it = listPane.itemAtIndex(row)
+                if (it) rowContextAt(it, Qt.point(Math.min(it.width / 2, Theme.px(140)), it.height / 2), entries[row])
+                else rowContext(entries[row])
+                return true
+            }
             if (zone === "messages" && openKey !== "" && !Voice.recording) {
                 if (!Voice.start(openKey)) Ui.say("The microphone isn't available right now.", true)
             }
@@ -2073,5 +2111,6 @@ Rectangle {
         where: page.locked ? "" : page.openKey
         title: page.openName
         tour: page.tour
+        onShowInChat: msgId => page.showInChat(msgId)
     }
 }

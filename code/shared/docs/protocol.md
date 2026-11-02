@@ -86,6 +86,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `n1` | nudges (section 23.3): a real message to someone whose caps include `n1` also sends one small envelope `{"t":"nudge","ts":...}` sealed to their ring key, to their ring mailbox, so a locked device notifies only when a message came. Needs `b1`. Muninn and Huginn. |
 | `n2` | richer nudges and the nudge key (section 23.3): `nk` and `np` in receipts to contacts and group peers; a nudge to someone whose caps include `n2` also says who sent it, the group's name and what kind of message came, sealed to their nudge key, to their nudge mailbox, so group members can nudge too. The nudge key never rings. Muninn and Huginn. |
 | `u1` | a kids' TV updates by itself and reports it (7.17): `upnow` from a parent, `upstate` from the TV. Muninn only. |
+| `k11` | Kids' Device on any Android device (7.18): config fields `chat`, `quiet` and `pin`, `dev` in `applied`, and `unlockask`, `unlock`, `left`. Muninn only. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -937,7 +938,10 @@ A phone that loses its connection or dies never sends `vleave`, so without more 
 Cost: one small envelope per `v2` member every 10 s while in a room. Huginn `RoomWire::heard` and `Presence::state`,
 Muninn `RoomLogic.heard` and `Presence.state`; checked in Huginn's `--call-selftest` and Muninn's `RoomTest`.
 
-## 7. Kids' TV
+## 7. Kids' TV (Kids' Device)
+
+The apps call it a Kids' Device: an Android TV, tablet or phone in kids' mode (7.18). The wire names (`tvconfig`, `tv`,
+the domains) stay as they are, so this section still says "TV" for any of them.
 
 The TV is a Muninn install set to Kids' TV mode on first start (for example on an Android TV box). It has a
 chat key like any device and the same caps as any Muninn (`k1` and `k2` matter here).
@@ -973,8 +977,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 }
 ```
 
-Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd` and the k8 field `keep`
-(7.5, 7.10, 7.12, 7.13); `parents` sorted, unique, not empty, `by` in
+Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd`, the k8 field `keep`
+and the k11 fields `chat`, `quiet` and `pin` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1302,8 +1306,56 @@ States: `checking`, `downloading`, `installing`, `current` (it runs the newest),
   Muninn it runs and when it last checked. A phone that knows a newer release than the TV's `app` says so.
 - A parent's phone shows the state on the TV's page and in Settings, Updates and about: "Checking", "Downloading 42%",
   "Installing", "Up to date", "Needs a tap on the TV", "Failed: <why>", with "Last check". Update now is offered only
-  for a TV whose app says `u1`; for any other it says "This TV needs one update on the TV first".
+  for a TV whose app says `u1`; for any other it says "Update this device first".
 - The older `update` (7.5) and the `update` field of `status` (7.13) stay as they are for apps without `u1`.
+
+### 7.18 Kids' Device on a tablet or phone, chatting level, quiet times and the parent PIN (`k11`)
+
+Kids' mode is not only for TVs. A tablet or phone becomes a Kids' Device from the welcome page of its first setup (only a
+fresh install: no lock, no contacts). It pairs exactly as a TV does (7.1: it shows the code with `"tv":1`, a parent's phone
+scans it) and from then on everything in section 7 applies to it. Only its screens differ: big touch tiles instead of the
+D-pad. A device whose app says `k11` adds what it is to every `applied`: `"dev":"tv"`, `"tablet"` or `"phone"` (apps that
+don't know it ignore it; a device that says nothing is a TV).
+
+**Config fields.** A device whose app says `k11` takes three more optional config fields. A parent's app puts them in only
+for such a device (always `chat`; `quiet` and `pin` when set), next to the k2 fields; a device without `k11` would refuse
+the config as malformed, so a parent's app shows "Update this device first" on those rows instead.
+
+| field | value | absent means | what the device does |
+|---|---|---|---|
+| `chat` | integer 1 or 2 | 2 | 1: the kids can send quick messages only. 2: quick messages, typing (Say it on a TV), photos and voice messages. Calls follow `calls` (7.5) |
+| `quiet` | array of at most 2 objects, exactly `n`, `d`, `s`, `e` | no quiet times | `n`: `"school"` or `"bed"`, each at most once. `d`: integer 1 to 127, the days it starts on (bit 0 Monday to bit 6 Sunday). `s`, `e`: integers 0 to 1439, minutes after midnight, `s != e`; `e < s` runs past midnight into the next day. During one, by the device's own clock, only the parents get through (below) |
+| `pin` | object, exactly `salt` (32 lowercase hex: 16 bytes) and `h` (64 lowercase hex) | no PIN | the parent PIN: `h` = PBKDF2-HMAC-SHA256(PIN as UTF-8, salt, 20000 rounds, 32 bytes). The PIN is 4 to 8 digits; only its hash travels and is kept |
+
+Anything else (`chat` 0 or 3, a repeated `n`, `s == e`, upper-case hex, an extra field) makes the config malformed.
+
+**Older parent apps.** A config with none of `chat`, `quiet` and `pin` comes from a parent's app without `k11`: the device
+takes the rest of it and keeps its current chatting level, quiet times and PIN (it keeps them beside the signed config, so a
+restart keeps them too). A config that carries any of the three sets all three, "absent means" as above, so a parent's app
+with `k11` can still turn quiet times or the PIN off.
+
+**Enforced on the device.** The level decides which buttons the kids' screens show; nothing else on the device sends.
+During a quiet time the device refuses (403) every envelope in rooms `private`, `photo`, `rich`, `mx`, `live`, `unsend` and
+`call` from anyone but its parents (receipts, `tvconfig` and a call already under way still pass). The sender's app keeps
+the message and resends it as usual (a day, until delivered), so it arrives after the quiet time ends; nothing rings or
+shows on the device meanwhile. Its home screen shows only the parents then. The kids can't add anyone: the device takes
+contacts only from configs (7.2), and its screens have no scan, add or code.
+
+**Locked in.** Kids' mode stays on. On the device, "For a parent" opens only with the parent PIN or a parent's yes; it
+then stays open for 10 minutes and offers Android's settings page for Muninn and Leave kids' mode. Five wrong PINs in a
+row make the next try wait 30 seconds, doubling each time, at most 15 minutes. Messages in room `tvconfig`:
+
+| t | from | fields |
+|---|---|---|
+| `unlockask` | the device, to each parent whose app says `k11` | `id`: 32 lowercase hex, fresh for each ask |
+| `unlock` | a parent | `id` of that ask. The device takes it only from a current parent, for the ask it has open, within 10 minutes of asking; it then opens "For a parent" for 10 minutes |
+| `left` | the device, to every parent | none (exactly `{"t":"left"}`): someone with the PIN or a parent's yes left kids' mode. The device then erases itself as a disconnect does (7.3) and runs as an ordinary Muninn. A parent's phone takes it only from a device it looks after, and stops looking after it (the contact stays) |
+
+Exactly these fields; anything else is malformed and ignored. A parent's app asks its person (and shows a notification)
+before it sends `unlock`. Apps suggest Android's App pinning on tablets and phones but never turn it on.
+
+The PIN hash is in the config, which every parent and the device hold (7.4 still holds for the rest). Updates from anywhere
+(7.17) work on every kind of Kids' Device.
 
 ## 8. Message types
 
@@ -1326,6 +1378,7 @@ States: `checking`, `downloading`, `installing`, `current` (it runs the newest),
 | `tvconfig` | `appask` `appok` `appno` `appres` | 7.15 | yes | no | Seen | k9 |
 | `tvconfig` | `files` `filelist` `filedel` `filemove` | 7.16 | yes | no | Seen | k10 |
 | `tvconfig` | `upnow` `upstate` | 7.17 | yes | no | Seen | u1 |
+| `tvconfig` | `unlockask` `unlock` `left` | 7.18 | yes | no | Seen | k11 |
 | `rich` | | 11.2 | yes | as `private` | as `private` | m1 |
 | `mx` | `react` `edit` | 11.3 | yes | a day, until a receipt names its envelope id | Seen | m1 |
 | `live` | `typing` `active` | 11.4 | never (v1) | no | Seen | m1 |

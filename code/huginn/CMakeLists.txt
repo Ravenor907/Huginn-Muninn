@@ -233,6 +233,7 @@ qt_add_qml_module(huginn
         qml/Segmented.qml
         qml/TextPrompt.qml
         qml/ConfirmDialog.qml
+        qml/HoldToConfirm.qml
         qml/MoveCover.qml
         qml/Toast.qml
         qml/ListPicker.qml
@@ -302,7 +303,7 @@ qt_add_qml_module(huginn
 
 # Keep resource paths short: qml/Main.qml is served as Main.qml.
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
-                   TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
+                   TextPrompt ConfirmDialog HoldToConfirm Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer FindBar EmojiPicker Reactions QuoteLine
                    HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions ModActions FileStrip MirrorPanel
                    Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox AppStoragePanel LinkPhone FirstSetup

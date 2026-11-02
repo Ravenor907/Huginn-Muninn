@@ -155,7 +155,20 @@ Item {
         if (b === "left") { button = Math.max(0, button - 1); return true }
         if (b === "right") { button = Math.min(Math.max(0, list.length - 1), button + 1); return true }
         if (b === "a" && list.length) { run(rows[sel], list[Math.min(button, list.length - 1)].act); return true }
+        // X, LT or Menu: the row's buttons as a menu, as a right click opens them.
+        if ((b === "x" || b === "start") && n) {
+            if (sel < 0) sel = 0
+            const item = rowsRepeater.itemAt(sel), t = rows[sel]
+            if (item) Ui.menuAt(item, Math.min(item.width / 2, Theme.px(140)), item.height / 2, () => panel.rowMenu(t))
+            else rowMenu(t)
+            return true
+        }
         return true
+    }
+    // A row's buttons as a menu (a right click, a long press, X, LT or Menu).
+    function rowMenu(t) {
+        const list = t ? acts(t) : []
+        if (list.length) Ui.pickFrom(t.name, [{ header: "", items: list.map(a => ({ name: a.label, url: a.act })) }], a => panel.run(t, a))
     }
     function reveal() {
         const item = rowsRepeater.itemAt(sel)
@@ -235,15 +248,18 @@ Item {
                         border.width: panel.sel === index ? Theme.focusWidth : 1
                         Accessible.role: Accessible.StaticText
                         Accessible.name: t.name + ", " + panel.line(t) + ", " + panel.whoLine(t)
-                        // A right click: the row's buttons as a menu.
+                        // A right click or a long press: the row's buttons as a menu.
                         TapHandler {
                             acceptedButtons: Qt.RightButton
                             onTapped: (point, button) => {
                                 panel.sel = row.index
-                                const t = row.t, list = row.buttons
-                                if (list.length) Ui.menuAt(row, point.position.x, point.position.y, () =>
-                                    Ui.pickFrom(t.name, [{ header: "", items: list.map(a => ({ name: a.label, url: a.act })) }], a => panel.run(t, a)))
+                                const t = row.t
+                                if (row.buttons.length) Ui.menuAt(row, point.position.x, point.position.y, () => panel.rowMenu(t))
                             }
+                        }
+                        TapHandler {
+                            acceptedDevices: PointerDevice.TouchScreen
+                            onLongPressed: { panel.sel = row.index; const t = row.t; if (row.buttons.length) Ui.menuAt(row, point.position.x, point.position.y, () => panel.rowMenu(t)) }
                         }
                         Rectangle {
                             anchors.left: parent.left; anchors.bottom: parent.bottom

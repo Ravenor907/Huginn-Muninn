@@ -250,9 +250,9 @@ internal fun VideoThumb(m: Chat.Msg, bytes: () -> ByteArray?) {
     }
 }
 
-/** Full screen playback of a video message ([bytes] the decrypted MP4), from memory. */
+/** Full screen playback of a video message ([bytes] the decrypted MP4), from memory. [bottom]: a row under Play (the viewer's actions). */
 @Composable
-internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, actions: @Composable () -> Unit = {}) {
+internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composable () -> Unit)? = null, actions: @Composable () -> Unit = {}) {
     BackHandler { close() }
     var playing by remember { mutableStateOf(true) }
     val player = remember { MediaPlayer() }
@@ -289,6 +289,7 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, actions: @Composa
                 try { if (player.isPlaying) { player.pause(); playing = false } else { player.start(); playing = true } } catch (_: Exception) {}
             }
         }
+        bottom?.invoke()
     }
 }
 
@@ -334,20 +335,31 @@ internal fun albumsOf(msgs: List<Chat.Msg>): Pair<Set<String>, Map<String, List<
 
 /**
  * Media and files, from a chat's menu: two tabs. Media has videos, photos, links and voice shared in the chat, newest
- * first; Files ([files], when given) has the chat's files. [startFiles]: opens on Files.
+ * first; Files ([files], when given) has the chat's files. [startFiles]: opens on Files. Every photo, video and voice
+ * message is a square tile: a tap opens it ([onOpen], the viewer), a long press offers [actions] (Show in chat, Save,
+ * Forward, Delete).
  */
 @Composable
 internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, onOpen: (Chat.Msg) -> Unit,
-                         files: (@Composable (Modifier) -> Unit)? = null, startFiles: Boolean = false, close: () -> Unit) {
+                         files: (@Composable (Modifier) -> Unit)? = null, startFiles: Boolean = false, actions: MediaActions? = null,
+                         close: () -> Unit) {
     BackHandler { close() }
     var part by remember { mutableStateOf(if (startFiles && files != null) "files" else "media") }
     var tab by remember { mutableStateOf("media") }
-    val media = remember(msgs) { msgs.filter { it.photo.isNotEmpty() && it.unsent.isEmpty() && it.voice == 0 }.reversed() }
+    // A file that came as a message is in Files, not here.
+    val media = remember(msgs) { msgs.filter { it.photo.isNotEmpty() && it.unsent.isEmpty() && it.voice == 0 && it.file.isEmpty() }.reversed() }
     val links = remember(msgs) { msgs.filter { it.unsent.isEmpty() && (it.preview != null || More.firstLink(it.text) != null) }.reversed() }
     val voices = remember(msgs) { msgs.filter { it.voice > 0 && it.unsent.isEmpty() }.reversed() }
     // Loads in pages: the newest first, and the next page only once the list is scrolled near its end.
     var shown by remember(tab) { mutableStateOf(SHARED_PAGE) }
+    var options by remember { mutableStateOf<Chat.Msg?>(null) }
+    var forwarding by remember { mutableStateOf<Chat.Msg?>(null) }
     val context = LocalContext.current
+    val app = context.applicationContext as io.github.ravenor907.muninn.Muninn
+    options?.let { m ->
+        if (actions != null) MediaOptions(m, { bytes(m) }, actions, onOpen = { onOpen(m) }, onForward = { forwarding = m }) { options = null }
+    }
+    ForwardMedia(app, forwarding) { forwarding = null }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             MButton("Back", icon = "back") { close() }
@@ -359,34 +371,26 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
         }
         if (part == "files" && files != null) files(Modifier.weight(1f).fillMaxWidth())
         else {
-            Row(Modifier.padding(horizontal = 12.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MButton("Photos and videos (${media.size})", kind = if (tab == "media") Kind.Accent else Kind.Normal) { tab = "media" }
-                MButton("Links (${links.size})", kind = if (tab == "links") Kind.Accent else Kind.Normal) { tab = "links" }
-                MButton("Voice (${voices.size})", kind = if (tab == "voice") Kind.Accent else Kind.Normal) { tab = "voice" }
+            // Each choice gets its share of the width. (In a sideways-scrolling row a button had no width to fit its
+            // words into, so its text broke a letter a line and the buttons stood as tall empty bars.)
+            io.github.ravenor907.muninn.ui.ChoiceRow(3, Modifier.padding(horizontal = 12.dp), minWidth = 100.dp, gap = 8.dp) { i, mod ->
+                when (i) {
+                    0 -> MButton("Photos and videos (${media.size})", mod, kind = if (tab == "media") Kind.Accent else Kind.Normal) { tab = "media" }
+                    1 -> MButton("Links (${links.size})", mod, kind = if (tab == "links") Kind.Accent else Kind.Normal) { tab = "links" }
+                    else -> MButton("Voice (${voices.size})", mod, kind = if (tab == "voice") Kind.Accent else Kind.Normal) { tab = "voice" }
+                }
             }
             val total = when (tab) { "media" -> media.size; "links" -> links.size; else -> voices.size }
-            if (tab == "media") {
+            if (tab != "links") {
+                val tiles = if (tab == "media") media else voices
                 val grid = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
                 val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (grid.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 9 } }
                 LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
-                if (media.isEmpty()) Text("No photos or videos yet.", style = Type.normal, modifier = Modifier.padding(12.dp))
+                if (tiles.isEmpty()) Text(if (tab == "media") "No photos or videos yet." else "No voice messages yet.", style = Type.normal, modifier = Modifier.padding(12.dp))
                 androidx.compose.foundation.lazy.grid.LazyVerticalGrid(androidx.compose.foundation.lazy.grid.GridCells.Fixed(3), Modifier.weight(1f).padding(10.dp), state = grid) {
-                    items(media.take(shown).size, key = { media[it].id }) { i ->
-                        val m = media[i]
-                        val bmp by produceState<ImageBitmap?>(null, m.id) {
-                            value = withContext(Dispatchers.IO) {
-                                if (m.video > 0) videoFrame(bytes(m))
-                                else bytes(m)?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(context, "${m.id}:360:${b.size}") { decode(b, 360) } }
-                            }
-                        }
-                        Box(Modifier.aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
-                            .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
-                            bmp?.let { Image(it, contentDescription = if (m.video > 0) "Video" else if (m.gif) "GIF" else "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-                            if (m.video > 0) MIcon("play", Color.White, 22.dp, filled = true)
-                            // A GIF holds still here (its first frame); it moves once opened.
-                            if (m.gif) Text("GIF", style = Type.small.copy(color = Color.White), modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
-                                .clip(RoundedCornerShape(4.dp)).background(Color(0x99000000)).padding(horizontal = 4.dp))
-                        }
+                    items(minOf(shown, tiles.size), key = { tiles[it].id }) { i ->
+                        val m = tiles[i]
+                        MediaTile(m, bytes, onOpen = { onOpen(m) }, onLong = { if (actions != null) { options = m } else onOpen(m) })
                     }
                 }
             } else {
@@ -394,25 +398,16 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
                 val nearEnd by remember { androidx.compose.runtime.derivedStateOf { (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= shown - 5 } }
                 LaunchedEffect(nearEnd, total) { if (nearEnd && shown < total) shown += SHARED_PAGE }
                 androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f).padding(12.dp), state = list) {
-                    if (tab == "links") {
-                        if (links.isEmpty()) item { Text("No links yet.", style = Type.normal) }
-                        items(links.take(shown).size, key = { links[it].id }) { i ->
-                            val m = links[i]
-                            val lp = m.preview
-                            if (lp != null) PreviewCard(lp)
-                            else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
-                                Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
-                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
-                                }))
-                            } }
-                        }
-                    } else {
-                        if (voices.isEmpty()) item { Text("No voice messages yet.", style = Type.normal) }
-                        items(voices.take(shown).size, key = { voices[it].id }) { i ->
-                            val m = voices[i]
-                            VoiceNote(m, { bytes(m) }, io.github.ravenor907.muninn.net.Voice.length(m.voice) + " · " + (if (m.mine) "You" else m.name), Type.small)
-                            Spacer(Modifier.width(1.dp).height(8.dp))
-                        }
+                    if (links.isEmpty()) item { Text("No links yet.", style = Type.normal) }
+                    items(minOf(shown, links.size), key = { links[it].id }) { i ->
+                        val m = links[i]
+                        val lp = m.preview
+                        if (lp != null) PreviewCard(lp)
+                        else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
+                            Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
+                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
+                            }))
+                        } }
                     }
                 }
             }

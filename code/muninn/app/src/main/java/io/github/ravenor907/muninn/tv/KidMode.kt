@@ -19,10 +19,11 @@ import java.io.File
 import java.util.Base64
 
 /**
- * Whether this install is a Kids' TV. Decided once, on the first start on a TV (Android TV or Google TV):
- * a fresh install becomes a Kids' TV; a TV that already has a lock or contacts (someone used Muninn on it
- * before) stays a normal Muninn. Kept outside the vault and outside Muninn's own settings, so neither a
- * disconnect nor Erase all turns it off.
+ * Whether this install is a Kids' Device. Decided once, on the first start on a TV (Android TV or Google TV):
+ * a fresh install becomes a Kids' Device; a TV that already has a lock or contacts (someone used Muninn on it
+ * before) stays a normal Muninn. A tablet or phone becomes one from first setup's welcome page ([makeKids]).
+ * Kept outside the vault and outside Muninn's own settings, so neither a disconnect nor Erase all turns it off.
+ * The saved names ("muninn-tv", "kids") stay as they were, so a paired TV keeps working.
  */
 object KidMode {
     private const val PREFS = "muninn-tv"
@@ -38,7 +39,25 @@ object KidMode {
         return (ui || leanback).also { tv = it }
     }
 
-    /** True if this install runs as a Kids' TV. Cheap: MainActivity asks on every composition. */
+    /** "tv", "tablet" or "phone" ([KidRules.DEVICES]): what the kids' screens look like, and what the parents' phones show. */
+    fun device(context: Context): String = when {
+        isTv(context) -> KidRules.TV
+        context.resources.configuration.smallestScreenWidthDp >= 600 -> KidRules.TABLET
+        else -> KidRules.PHONE
+    }
+
+    /**
+     * First setup on a tablet or phone: this device becomes a Kids' Device and shows the pairing code. Only on a fresh
+     * install (no lock, no contacts), like a TV. False when it can't.
+     */
+    fun makeKids(app: Muninn): Boolean {
+        if (app.vault.hasPassword || !app.ready.value || app.contacts.all.value.isNotEmpty()) return false
+        decide(app, "kids")
+        Tv.startKids(app)
+        return true
+    }
+
+    /** True if this install runs as a Kids' Device. Cheap: MainActivity asks on every composition. */
     fun on(app: Muninn): Boolean {
         if (app.ready.value) Tv.install(app)
         if (!loaded) { mode = prefs(app).getString("mode", null); loaded = true }
@@ -55,6 +74,9 @@ object KidMode {
      * parent has paired it, only a parent can let it go: their Disconnect with "make it a normal TV" ([free]).
      */
     fun useNormally(app: Muninn) { if (!paired(app)) decide(app, "normal") }
+
+    /** k11: someone with the parent PIN (or a parent's phone) let it go: erased, it runs as an ordinary Muninn now. */
+    internal fun leave(app: Muninn) { free(app); decide(app, "normal") }
 
     /** A parent has paired this TV at some point and hasn't let it go: the kids can't leave kids' mode. */
     fun paired(context: Context): Boolean = prefs(context).getBoolean("paired", false)
@@ -104,7 +126,8 @@ object KidTv {
         if (o == null) { _state.value = KidState(); return@synchronized }
         val ps = o.optJSONArray("parents")
         val parents = if (ps == null) emptyList() else (0 until ps.length()).map { ps.getString(it) }
-        val cfg = o.optJSONObject("cfg")?.let { c -> try { TvRules.check(c); TvRules.parse(c) } catch (e: Exception) { null } }
+        // k11: the chatting level, quiet times and PIN kept from before an older parent app's config (7.18).
+        val cfg = o.optJSONObject("cfg")?.let { c -> try { TvRules.check(c); KidRules.keptIn(TvRules.parse(c), o.optJSONObject("k11")) } catch (e: Exception) { null } }
         val local = if (o.has("micLocal")) o.optInt("micLocal").coerceIn(0, TvRules.MAX_MIC) else null
         val nr = if (o.has("nrLocal")) o.optInt("nrLocal").coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH) else null
         _state.value = KidState(parents, cfg, local, o.optLong("micAt"), nr)
@@ -142,7 +165,7 @@ object KidTv {
 
     private fun save(app: Muninn, s: KidState) {
         val o = JSONObject().put("parents", JSONArray(s.parents))
-        s.cfg?.let { o.put("cfg", it.raw) }
+        s.cfg?.let { o.put("cfg", it.raw); if (!KidRules.hasK11(it.raw)) o.put("k11", KidRules.keptJson(it)) }
         s.micLocal?.let { o.put("micLocal", it).put("micAt", s.micAt) }
         s.nrLocal?.let { o.put("nrLocal", it) }
         app.vault.write(file(app), o.toString())
@@ -183,7 +206,11 @@ object KidTv {
     /** The QR code a parent scans: this TV's contact code with a fresh invite (an hour) and "tv":1. */
     fun pairingCode(app: Muninn): String {
         // A fresh TV is named for what it is, not a random Nearby name.
-        if (Regex("""Raven \d{4}""").matches(app.identity.username)) app.identity.username = "Kids' TV"
+        if (Regex("""Raven \d{4}""").matches(app.identity.username)) app.identity.username = when (KidMode.device(app)) {
+            KidRules.TABLET -> "Kids' Tablet"
+            KidRules.PHONE -> "Kids' Phone"
+            else -> "Kids' TV"
+        }
         val code = app.chat.myCode(once = false)
         val body = code.removePrefix(Contacts.PREFIX)
         val o = JSONObject(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8)).put("tv", 1)
@@ -197,7 +224,85 @@ object KidTv {
         val s = _state.value
         if (s.parents.isEmpty()) return false
         if (room !in PRIVATE_ROOMS && !(room == "call" && s.cfg?.calls != false)) return false
-        return approved(fromKey)
+        if (!approved(fromKey)) return false
+        // k11 (7.18): during a quiet time only the parents get through (and a call already under way). Everyone else's
+        // app keeps what they sent and tries again, so it arrives once the quiet time is over; nothing rings or shows here.
+        if (room == "receipt" || io.github.ravenor907.muninn.net.call.CallManager.call.value?.peerKey == fromKey) return true
+        return KidRules.passes(fromKey, s.parents, quietNow())
+    }
+
+    /** The quiet time on now, by this device's clock, or null. */
+    fun quietNow(): QuietTime? {
+        val q = _state.value.cfg?.quiet
+        if (q.isNullOrEmpty()) return null
+        val c = java.util.Calendar.getInstance()
+        // Calendar counts from Sunday (1); the quiet days count from Monday (0).
+        return KidRules.quietNow(q, (c.get(java.util.Calendar.DAY_OF_WEEK) + 5) % 7, c.get(java.util.Calendar.HOUR_OF_DAY) * 60 + c.get(java.util.Calendar.MINUTE))
+    }
+
+    // ---- k11 (7.18): the parent settings on the device, opened by the parent PIN or a parent's phone
+
+    /** Until when the parent settings are open (this device's clock); 0: closed. */
+    val unlockedUntil = MutableStateFlow(0L)
+    @Volatile private var asked: String? = null
+    @Volatile private var askedAt = 0L
+
+    fun unlocked(now: Long = System.currentTimeMillis()): Boolean = unlockedUntil.value > now
+    fun lockAgain() { unlockedUntil.value = 0L }
+
+    /** How long before the next PIN try (ms, 0: now), after wrong ones. */
+    fun pinWait(context: Context): Long {
+        val p = prefs(context)
+        return (KidRules.waitMs(p.getInt(PIN_FAILS, 0)) - (System.currentTimeMillis() - p.getLong(PIN_AT, 0L))).coerceAtLeast(0L)
+    }
+
+    /**
+     * The parent PIN typed on the device. 0: right, the parent settings open for 10 minutes. -1: wrong. More: the
+     * milliseconds to wait before the next try. Slow on purpose (the hash): call it off the main thread.
+     */
+    fun tryPin(context: Context, pin: String): Long {
+        pinWait(context).let { if (it > 0) return it }
+        val p = prefs(context)
+        val now = System.currentTimeMillis()
+        if (KidRules.pinOk(pin, _state.value.cfg?.pin)) {
+            p.edit().putInt(PIN_FAILS, 0).apply()
+            unlockedUntil.value = now + KidRules.UNLOCK_MS
+            return 0
+        }
+        val fails = p.getInt(PIN_FAILS, 0) + 1
+        p.edit().putInt(PIN_FAILS, fails).putLong(PIN_AT, now).apply()
+        return KidRules.waitMs(fails).takeIf { it > 0 } ?: -1
+    }
+    private const val PIN_FAILS = "pinFails"
+    private const val PIN_AT = "pinAt"
+
+    /** Asks every parent whose app takes it (k11) to open the parent settings from their phone. False: none can yet. */
+    fun askUnlock(app: Muninn): Boolean {
+        val s = _state.value
+        if (s.cfg == null) return false
+        val to = s.parents.filter { KidRules.CAP in (app.contacts.get(it)?.caps ?: emptySet()) }
+        if (to.isEmpty()) { s.parents.forEach { app.chat.probeCaps(it) }; return false }
+        val id = KidRules.askId()
+        asked = id
+        askedAt = System.currentTimeMillis()
+        val msg = KidRules.unlockAskMessage(id)
+        to.forEach { send(app, it, msg) }
+        return true
+    }
+
+    /**
+     * Leave kids' mode, only while the parent settings are open: the parents' phones are told (they stop looking after
+     * it), then everything is erased as a disconnect does, and Muninn runs as an ordinary one with a lock and Settings.
+     */
+    fun leave(app: Muninn) {
+        if (!unlocked() || wiping.value) return
+        val msg = KidRules.leftMessage()
+        _state.value.parents.forEach { send(app, it, msg) }
+        wiping.value = true
+        Thread {
+            try { Thread.sleep(3000); wipe(app); KidMode.leave(app) } catch (_: Exception) {}
+            finally { unlockedUntil.value = 0L; wiping.value = false }
+        }.start()
     }
 
     /** On the parent's list (or a parent): the only people this TV talks to, calls included. */
@@ -232,7 +337,9 @@ object KidTv {
                     if (cur != null && fromKey in s.parents) { answer(app, listOf(fromKey), cur.v, cur.raw); return true }
                     return false
                 }
-                val cfg = try { TvRules.parse(new) } catch (e: Exception) { return false }
+                // k11 (7.18): a config from an older parent app (no k11 field) keeps this device's chatting level,
+                // quiet times and PIN; one that carries a k11 field sets them.
+                val cfg = try { KidRules.keepK11(TvRules.parse(new), s.cfg) } catch (e: Exception) { return false }
                 KidMode.markPaired(app)
                 // Parents this config takes off: their phones stop looking after the TV (sent while they're still contacts).
                 if (!pairing) for (k in TvRules.dropped(s.parents, cfg.parents)) send(app, k, TvRules.removedMessage(cfg.raw))
@@ -326,6 +433,16 @@ object KidTv {
                 TvApps.allow(fromKey, name, parts)
                 true
             }
+            "unlock" -> {
+                // k11 (7.18): a parent's phone said yes to the ask from this device: the parent settings open for 10 minutes.
+                if (s.cfg == null || fromKey !in s.parents) return false
+                val id = KidRules.idIn(o, "unlock") ?: return false
+                val now = System.currentTimeMillis()
+                if (!KidRules.unlockOk(fromKey, s.parents, asked, askedAt, id, now)) return false
+                asked = null
+                unlockedUntil.value = now + KidRules.UNLOCK_MS
+                true
+            }
             "disconnect" -> {
                 val d = o.optJSONObject("d") ?: return false
                 val cur = s.cfg ?: return false
@@ -375,7 +492,9 @@ object KidTv {
     private fun answer(app: Muninn, to: List<String>, v: Long, cfg: JSONObject? = null) {
         val b = Tv.bridge(app) ?: return
         val version = try { app.updater.current } catch (e: Exception) { null }
-        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v, version, cfg)) } catch (_: Exception) {} }
+        // k11: what kind of device this is, so the parents' page shows it.
+        val dev = try { KidMode.device(app) } catch (_: Exception) { null }
+        to.forEach { try { b.sendTvRoom(it, TvRules.appliedMessage(v, version, cfg, dev)) } catch (_: Exception) {} }
     }
 
     /**
@@ -397,6 +516,8 @@ object KidTv {
         app.contacts.all.value.forEach { app.chat.removeContact(it.chatKey) }
         file(app).delete()
         TvApps.clear()
+        unlockedUntil.value = 0L
+        asked = null
         _state.value = KidState()
         tune(KidState())
     }
@@ -421,14 +542,17 @@ object Tv : TvHandler {
             if (this.app !== app) { this.app = app; first = true; KidTv.load(app); TvParent.load(app) }
             b?.tvHandler = this
         }
-        if (first && KidMode.on(app)) kids(app)
+        if (first && KidMode.on(app)) startKids(app)
     }
+    @Volatile private var kidsStarted = false
 
     /**
      * A Kids' TV keeps listening with Muninn in the background (the foreground service, as on a phone, also
      * started after the TV boots), brings an incoming call up over whatever is on, and updates itself.
      */
-    private fun kids(app: Muninn) {
+    internal fun startKids(app: Muninn) {
+        if (kidsStarted) return
+        kidsStarted = true
         // A Kids' TV is always reachable at once, whatever "Check for messages" said before it became one.
         if (app.power.check != io.github.ravenor907.muninn.net.PowerLogic.Check.LIVE) app.power.check = io.github.ravenor907.muninn.net.PowerLogic.Check.LIVE
         if (!app.identity.stayConnected) app.identity.stayConnected = true

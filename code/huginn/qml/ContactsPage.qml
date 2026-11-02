@@ -173,7 +173,7 @@ Rectangle {
                 { name: "Delete for good", url: "delete", danger: true }] }], a => {
                 if (a === "restore") { Chat.restore(p.key); Ui.say(p.name + " is back.") }
                 else if (a === "delete") Ui.sure("Delete " + p.name + " for good?", "Can't be undone.", "Delete for good",
-                                                 () => { Chat.deleteForGood(p.key); Ui.say(p.name + " deleted for good.") }, false, true)
+                                                 () => { Chat.deleteForGood(p.key); Ui.say(p.name + " deleted for good.") }, true, true)
             })
             return
         }
@@ -194,7 +194,7 @@ Rectangle {
             else if (a === "nick") Ui.ask("Nickname for " + p.name, "Your phone shows it too", p.nick || "", "Save", t => said(Linked.renameContact(p.key, t)))
             else if (a === "folders") phoneFolders(p)
             else if (a === "block") said(Linked.blockContact(p.key, !p.blocked))
-            else if (a === "remove") Ui.sure("Remove " + p.name + "?", "From your phone too.", "Remove", () => said(Linked.removeContact(p.key)), false, true)
+            else if (a === "remove") Ui.sure("Remove " + p.name + "?", "From your phone too.", "Remove", () => said(Linked.removeContact(p.key)), true, true)
         })
     }
     function phoneFolders(p) {

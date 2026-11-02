@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -261,11 +263,13 @@ internal fun ChatFilesScreen(app: Muninn, where: String) {
 
 /**
  * A chat's Files (the Files tab of Media and files): everything sent and received there, newest first, with Open,
- * Folder and Delete (a received file goes from Downloads too; a sent one only leaves the list). A group's list starts
- * with who can send files and the size limit, which admins change. [where]: their key or "g:<group>".
+ * Show in chat, Forward, Folder and Delete (a received file goes from Downloads too; a sent one only leaves the list).
+ * A tap opens a received file, a long press lists the same actions. A group's list starts with who can send files and
+ * the size limit, which admins change. [where]: their key or "g:<group>". [inChat]: Show in chat for a file that
+ * went as a message (null: it has no message).
  */
 @Composable
-internal fun ChatFilesList(app: Muninn, where: String, modifier: Modifier) {
+internal fun ChatFilesList(app: Muninn, where: String, modifier: Modifier, inChat: (Chat.SharedFile) -> (() -> Unit)? = { null }) {
     val context = LocalContext.current
     val files by app.chat.sharedFiles.collectAsState()
     val groups by app.chat.groups.all.collectAsState()
@@ -293,17 +297,42 @@ internal fun ChatFilesList(app: Muninn, where: String, modifier: Modifier) {
             if (shown.isEmpty()) Text(if (all.isEmpty()) "No files here yet. Send one with the clip beside the message box." else "No file names have that.",
                 style = Type.normal.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 16.dp))
         }
-        items(shown, key = { it.time.toString() + it.name + it.uri }) { f -> SharedFileRow(app, context, f) }
+        items(shown, key = { it.time.toString() + it.name + it.uri }) { f -> SharedFileRow(app, context, f, inChat(f)) }
         item { Spacer(Modifier.height(24.dp)) }
     }
     if (rules && grp != null) FileRulesDialog(app, g, grp.state.fs, grp.state.fm) { rules = false }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-private fun SharedFileRow(app: Muninn, context: Context, f: Chat.SharedFile) {
+private fun SharedFileRow(app: Muninn, context: Context, f: Chat.SharedFile, show: (() -> Unit)?) {
     val there = remember(f.uri) { f.mine || Received.exists(context, f.uri) }
     val day = remember(f.time) { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(f.time)) }
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(Corner).background(Palette.panel).padding(10.dp)) {
+    val scope = rememberCoroutineScope()
+    var options by remember { mutableStateOf(false) }
+    var forwarding by remember { mutableStateOf(false) }
+    val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
+    val canOpen = !f.mine && there && !(kids && FileText.isApp(f.name))
+    val canForward = !f.mine && there && f.uri.isNotEmpty()
+    val open: () -> Unit = { if (!Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true) }
+    val folder: () -> Unit = { if (!Received.showFolder(context)) Ui.say("It's in ${Received.shownRoot()}. Open it from your Files app.") }
+    val delete: () -> Unit = {
+        if (f.mine) { app.chat.deleteFile(f); Ui.say("Removed from the list. The file itself stays where it was.") }
+        else Ui.sure(io.github.ravenor907.muninn.ui.Ask("Delete ${f.name}?", if (there) "It's deleted from this phone." else "It's already gone; this takes it off the list.",
+            "Delete", danger = true, hold = there, spoken = io.github.ravenor907.muninn.ui.holdSpoken("delete ${f.name}"),
+            onConfirm = { if (app.chat.deleteFile(f)) Ui.say("Deleted.") else Ui.say("It couldn't be deleted.", true) }))
+    }
+    if (forwarding) ChatPicker(app, "Forward ${f.name} to", onPick = { to, name ->
+        forwarding = false
+        sendFileFrom(app, context, scope, to, Uri.parse(f.uri))
+        Ui.say("Sending to $name. Transfers shows how it goes.")
+    }, onCancel = { forwarding = false })
+    if (options) FileOptions(f, canOpen, show, canForward, there && !f.mine, { options = false },
+        onOpen = open, onForward = { forwarding = true }, onFolder = folder, onDelete = delete)
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(Corner).background(Palette.panel)
+        .combinedClickable(onClickLabel = if (canOpen) "Open" else null, onLongClickLabel = "Options", onLongClick = { options = true },
+            onClick = { if (canOpen) open() else { options = true } })
+        .padding(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(Corner).background(Palette.coolTint), contentAlignment = Alignment.Center) {
                 MIcon(FileText.icon(f.name), if (there) Palette.accent else Palette.textMuted, 22.dp)
@@ -314,19 +343,30 @@ private fun SharedFileRow(app: Muninn, context: Context, f: Chat.SharedFile) {
                     style = Type.small.copy(color = if (there) Palette.textMuted else Palette.danger), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
-        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
-            if (!f.mine && there && !(kids && FileText.isApp(f.name))) MButton("Open", kind = Kind.Accent) {
-                if (!Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true)
-            }
-            if (!f.mine && there) MButton("Folder", icon = "folder") {
-                if (!Received.showFolder(context)) Ui.say("It's in ${Received.shownRoot()}. Open it from your Files app.")
-            }
-            MButton(if (f.mine) "Remove" else "Delete", kind = Kind.Danger) {
-                if (f.mine) { app.chat.deleteFile(f); Ui.say("Removed from the list. The file itself stays where it was.") }
-                else Ui.sure(io.github.ravenor907.muninn.ui.Ask("Delete ${f.name}?", if (there) "It's deleted from this phone." else "It's already gone; this takes it off the list.",
-                    "Delete", danger = true, onConfirm = { if (app.chat.deleteFile(f)) Ui.say("Deleted.") else Ui.say("It couldn't be deleted.", true) }))
-            }
+        FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (canOpen) MButton("Open", kind = Kind.Accent) { open() }
+            if (show != null) MButton("Show in chat", icon = "chat") { show() }
+            if (canForward) MButton("Forward", icon = "send") { forwarding = true }
+            if (!f.mine && there) MButton("Folder", icon = "folder") { folder() }
+            MButton(if (f.mine) "Remove" else "Delete", kind = Kind.Danger) { delete() }
+        }
+    }
+}
+
+/** A file's long-press list: the same actions as its buttons. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun FileOptions(f: Chat.SharedFile, canOpen: Boolean, show: (() -> Unit)?, canForward: Boolean, canFolder: Boolean, done: () -> Unit,
+                        onOpen: () -> Unit, onForward: () -> Unit, onFolder: () -> Unit, onDelete: () -> Unit) {
+    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = done, sheetState = sheet, containerColor = Palette.panel, shape = Corner, dragHandle = null) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = 8.dp).navigationBarsPadding()) {
+            Text(f.name, style = Type.big, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
+            if (canOpen) io.github.ravenor907.muninn.ui.MenuRow("open", "Open") { done(); onOpen() }
+            if (show != null) io.github.ravenor907.muninn.ui.MenuRow("chat", "Show in chat") { done(); show() }
+            if (canForward) io.github.ravenor907.muninn.ui.MenuRow("send", "Forward") { done(); onForward() }
+            if (canFolder) io.github.ravenor907.muninn.ui.MenuRow("folder", "Folder") { done(); onFolder() }
+            io.github.ravenor907.muninn.ui.MenuRow("delete", if (f.mine) "Remove" else "Delete", danger = true) { done(); onDelete() }
         }
     }
 }

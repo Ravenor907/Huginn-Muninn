@@ -39,7 +39,7 @@ class TvUpdTest {
         assertTrue(TvUpd.canAsk(setOf("k1", "k2", "u1")))
         assertFalse(TvUpd.canAsk(setOf("k1", "k2", "k10")))
         assertFalse(TvUpd.canAsk(emptySet()))
-        assertEquals("This TV needs one update on the TV first", TvUpd.NEEDS_FIRST)
+        assertEquals("Update this device first", TvUpd.NEEDS_FIRST)
     }
 
     @Test fun upstateRoundTrips() {
@@ -89,7 +89,7 @@ class TvUpdTest {
         assertEquals("Downloading 42%", TvUpd.text(TvUpd.St("1.33", TvUpd.DOWNLOADING, p = 42)))
         assertEquals("Installing", TvUpd.text(TvUpd.St("1.33", TvUpd.INSTALLING)))
         assertEquals("Up to date", TvUpd.text(TvUpd.St("1.33", TvUpd.CURRENT)))
-        assertEquals("Needs a tap on the TV", TvUpd.text(TvUpd.St("1.33", TvUpd.TAP)))
+        assertEquals("Needs a tap on the device", TvUpd.text(TvUpd.St("1.33", TvUpd.TAP)))
         assertEquals("Failed: No internet", TvUpd.text(TvUpd.St("1.33", TvUpd.FAILED, why = "No internet")))
         assertEquals("Failed", TvUpd.text(TvUpd.St("1.33", TvUpd.FAILED)))
         assertEquals("", TvUpd.text(null))
@@ -103,7 +103,7 @@ class TvUpdTest {
         assertEquals("Muninn 1.32 · Downloading 10%", TvUpd.line("1.32", TvUpd.St("1.32", TvUpd.DOWNLOADING, p = 10), behind = true))
         // An older TV (no upstate): what its status said.
         assertEquals("Muninn 1.30 · Installing", TvUpd.line("1.30", null, behind = false, legacy = "Installing"))
-        assertEquals("Muninn on the TV", TvUpd.line("", null, behind = false))
+        assertEquals("Muninn on the device", TvUpd.line("", null, behind = false))
     }
 
     @Test fun behindCountsOnlyStableVersions() {

@@ -3,11 +3,12 @@ import QtQuick.Controls.Basic
 import Huginn
 
 // A chat's or group's Files (its menu › Media and files › Files): everything sent and received there, newest
-// first, with where it is. Typing in the box at the top shows only the files whose name has it; a right click on a
-// file opens the same choices as a menu.
-// Open uses this computer's app for that kind of file (only when asked), Show in folder opens its folder, and Delete
-// takes a received file off the disk (a sent one only leaves the list; the original stays). Esc, B or a click outside
-// closes it; Up and Down pick a file, Left and Right a button, A presses it.
+// first, with where it is. Typing in the box at the top shows only the files whose name has it; a right click, a long
+// press, X, LT or Menu on a file opens its menu: the buttons' choices, Show in chat and Forward.
+// Open uses this computer's app for that kind of file (only when asked), Show in folder opens its folder, Show in chat
+// goes to its message (lit for a moment), Forward sends it again to someone else, and Delete takes a received file off
+// the disk (held 5 seconds; a sent one only leaves the list, the original stays). Esc, B or a click outside closes it;
+// Up and Down pick a file, Left and Right a button, A presses it.
 Item {
     id: panel
     visible: false
@@ -47,6 +48,8 @@ Item {
     }
     function run(f, a) {
         if (tour) return
+        if (a === "show") { const w = where, n = f.name; close(); if (Ui.main) Ui.main.showFileInChat(w, n); return }
+        if (a === "forward") { const p = f.path; PeopleActions.pickChat("Forward " + f.name + " to", to => PeopleActions.sendFiles(to, [p])); return }
         if (a === "open") { if (!FileLink.openFile(f.path)) Ui.say("Nothing on this computer opens this kind of file.", true) }
         else if (a === "folder") { if (!FileLink.showInFolder(f.path)) Ui.say("It isn't there any more.", true) }
         else if (a === "delete") {
@@ -56,14 +59,24 @@ Item {
                 if (FileLink.deleteFile(w, p)) Ui.say("Deleted.")
                 else Ui.say("It couldn't be deleted.", true)
                 panel.revision++
-            }, false, true)
+            }, f.there, true)
         }
     }
-    // A right click on a file: its choices as a menu.
+    // A right click on a file: its choices as a menu, with Show in chat and Forward.
     function rowMenu(f) {
+        if (!f) return
         const list = acts(f)
-        if (!list.length) return
-        Ui.pickFrom(f.name, [{ header: "", items: list.map(a => ({ name: a.label, url: a.act })) }], a => panel.run(f, a))
+        const items = list.filter(a => a.act !== "delete").map(a => ({ name: a.label, icon: a.act === "open" ? "file" : "folder", url: a.act }))
+        items.push({ name: "Show in chat", icon: "thread", url: "show" })
+        if (f.there) items.push({ name: "Forward", icon: "forward", url: "forward" })
+        Ui.pickFrom(f.name, [{ header: "", items: items }, { header: "", items: list.filter(a => a.act === "delete").map(a => ({ name: a.label, url: a.act, danger: true })) }],
+                    a => panel.run(f, a))
+    }
+    // The menu at the picked row (X, LT or Menu), or as the list when it isn't in view.
+    function rowMenuAt(i) {
+        const item = rows.itemAt(i)
+        if (item) Ui.menuAt(item, Math.min(item.width / 2, Theme.px(140)), item.height / 2, () => panel.rowMenu(panel.shown[i]))
+        else rowMenu(shown[i])
     }
     function when(ms) {
         const d = new Date(ms)
@@ -79,6 +92,7 @@ Item {
         if (b === "left") { button = Math.max(0, button - 1); return true }
         if (b === "right") { button = Math.min(Math.max(0, list.length - 1), button + 1); return true }
         if (b === "a" && list.length) { run(shown[sel], list[Math.min(button, list.length - 1)].act); return true }
+        if ((b === "x" || b === "start") && n) { if (sel < 0) sel = 0; rowMenuAt(sel); return true }
         return true
     }
 
@@ -168,6 +182,7 @@ Item {
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
                 Repeater {
+                    id: rows
                     model: panel.shown
                     delegate: Rectangle {
                         id: row
@@ -186,6 +201,10 @@ Item {
                         TapHandler {
                             acceptedButtons: Qt.RightButton
                             onTapped: (point, button) => { panel.sel = row.index; Ui.menuAt(row, point.position.x, point.position.y, () => panel.rowMenu(row.f)) }
+                        }
+                        TapHandler {
+                            acceptedDevices: PointerDevice.TouchScreen
+                            onLongPressed: { panel.sel = row.index; Ui.menuAt(row, point.position.x, point.position.y, () => panel.rowMenu(row.f)) }
                         }
                         Rectangle {
                             id: badge

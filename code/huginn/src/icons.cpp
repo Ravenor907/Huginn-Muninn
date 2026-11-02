@@ -60,6 +60,9 @@ const QHash<QString, QString> &paths()
         {QStringLiteral("search"), QStringLiteral("M11 4a7 7 0 1 0 0.01 0 M20 20l-3.5-3.5")},
         {QStringLiteral("close"), QStringLiteral("M5 5l14 14 M19 5L5 19")},
         {QStringLiteral("down"), QStringLiteral("M5 9l7 7 7-7")},
+        {QStringLiteral("up"), QStringLiteral("M5 15l7-7 7 7")},
+        // Save: an arrow into a tray.
+        {QStringLiteral("save"), QStringLiteral("M12 4v11 M7 10l5 5 5-5 M4 17v3h16v-3")},
         // The desktop panels.
         {QStringLiteral("sidebar"), QStringLiteral("M3 5h18v14H3z M9 5v14")},
         {QStringLiteral("headphones"), QStringLiteral("M4 16v-4a8 8 0 0 1 16 0v4 M4 14h3v6H4z M17 14h3v6h-3z")},

@@ -30,12 +30,12 @@ Item {
     function close() { visible = false; if (Ui.main) Ui.main.restoreFocus() }
     function remove(i) {
         if (tour || !i) return
-        Ui.sure("Delete " + i.name + "?", "Can't be undone.", "Delete", () => Ui.say(AppStorage.remove(i.id) ? "Deleted." : "Couldn't delete.", false), false, true)
+        Ui.sure("Delete " + i.name + "?", "Can't be undone.", "Delete", () => Ui.say(AppStorage.remove(i.id) ? "Deleted." : "Couldn't delete.", false), true, true)
     }
     function removeReceived() {
         if (tour || !hasReceived) return
         Ui.sure("Delete all received files?", "Only files kept inside Huginn.", "Delete",
-                () => Ui.say(AppStorage.removeKind("received") + " deleted."), false, true)
+                () => Ui.say(AppStorage.removeKind("received") + " deleted."), true, true)
     }
     function clearCaches() {
         if (tour || !hasCaches) return

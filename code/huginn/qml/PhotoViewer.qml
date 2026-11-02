@@ -2,7 +2,7 @@ import QtQuick
 import Huginn
 
 // An album's photos full size, one at a time: the arrows (on screen, the keyboard or the D-pad) go between
-// them, B, Esc or a click on the picture closes it.
+// them, Save to Pictures (or X) keeps a copy in Pictures › Huginn, and B, Esc or a click on the picture closes it.
 Rectangle {
     id: viewer
     property var photos: []           // stored photo ids, in the album's order
@@ -13,10 +13,16 @@ Rectangle {
     visible: photos.length > 0
 
     function step(by) { if (photos.length) at = (at + by + photos.length) % photos.length }
+    function save() {
+        if (tour || !photos[at]) return
+        const ok = Chat.savePhoto(photos[at])
+        Ui.say(ok ? "Saved in Pictures › Huginn." : "Couldn't save it.", !ok)
+    }
     function handleButton(b) {
         switch (b) {
         case "left": step(-1); return true
         case "right": step(1); return true
+        case "x": save(); return true
         case "a": case "b": closed(); return true
         }
         return true
@@ -57,7 +63,7 @@ Rectangle {
         textFormat: Text.PlainText
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top; anchors.topMargin: Theme.px(14)
-        text: (viewer.at + 1) + " of " + viewer.photos.length + "   ·   ← → to move · B or Esc to close"
+        text: (viewer.photos.length > 1 ? (viewer.at + 1) + " of " + viewer.photos.length + "   ·   ← → to move · " : "") + "B or Esc to close"
         color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(15)
         style: Text.Outline; styleColor: "black"
     }
@@ -74,5 +80,25 @@ Rectangle {
             // A MouseArea, so the click stays here and doesn't also close the picture under it.
             MouseArea { id: arrowArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: viewer.step(modelData) }
         }
+    }
+    // Save to Pictures: a MouseArea, so the click stays here and doesn't also close the picture under it.
+    Rectangle {
+        visible: !viewer.tour
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(18)
+        width: saveWord.implicitWidth + Theme.px(32); height: Math.max(Theme.tapMin, saveWord.implicitHeight + Theme.px(12))
+        radius: Theme.radius
+        color: saveArea.containsMouse ? Qt.rgba(1, 1, 1, 0.28) : Qt.rgba(1, 1, 1, 0.14)
+        Accessible.role: Accessible.Button
+        Accessible.name: "Save to Pictures"
+        Accessible.onPressAction: viewer.save()
+        Text {
+            id: saveWord
+            textFormat: Text.PlainText
+            anchors.centerIn: parent
+            text: (Ui.main && Ui.main.padInUse ? "X: " : "") + "Save to Pictures"
+            color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+        }
+        MouseArea { id: saveArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: viewer.save() }
     }
 }

@@ -1,0 +1,196 @@
+package io.github.ravenor907.muninn.tv
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.ui.HoldToConfirm
+import io.github.ravenor907.muninn.ui.MIcon
+import io.github.ravenor907.muninn.ui.Palette
+import io.github.ravenor907.muninn.ui.Ui
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * A dialog on a Kids' Device: the TV's own ([TvDialog], sized for the remote), or on a tablet or phone one that fits
+ * the screen's width. Back closes it.
+ */
+@Composable
+internal fun KidDialog(tv: Boolean, onBack: () -> Unit, content: @Composable () -> Unit) {
+    if (tv) { TvDialog(onBack, content); return }
+    Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Column(Modifier.fillMaxWidth().widthIn(max = 560.dp).padding(16.dp).clip(RoundedCornerShape(20.dp)).background(Palette.panel)
+            .verticalScroll(rememberScrollState()).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally) { content() }
+    }
+}
+
+/**
+ * "For a parent" on a Kids' Device (cap k11, 7.18): closed until the parent PIN is typed or a parent's phone says yes;
+ * then, for 10 minutes, Android's settings for Muninn and Leave kids' mode. Everything else is set from a parent's phone.
+ * Works with touch and with the D-pad alike.
+ */
+@Composable
+internal fun KidParentArea(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Unit) {
+    val until by KidTv.unlockedUntil.collectAsState()
+    val now by produceState(System.currentTimeMillis()) { while (true) { value = System.currentTimeMillis(); delay(1000) } }
+    KidDialog(tv, onClose) {
+        if (until > now) KidUnlocked(app, tv, until, onClose) else KidLocked(app, cfg, tv, onClose)
+    }
+}
+
+@Composable
+private fun KidLocked(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pin by remember { mutableStateOf("") }
+    var line by remember { mutableStateOf("") }
+    var checking by remember { mutableStateOf(false) }
+    MIcon("lock", Palette.goldBright, if (tv) 64.dp else 48.dp)
+    Text("For a parent", style = tvTitle(if (tv) 32.sp else 24.sp), modifier = Modifier.padding(top = 10.dp))
+    fun ok() {
+        if (checking || pin.isEmpty()) return
+        checking = true
+        val typed = pin
+        scope.launch {
+            val r = withContext(Dispatchers.Default) { KidTv.tryPin(context, typed) }
+            checking = false
+            pin = ""
+            line = when {
+                r == 0L -> ""
+                r < 0L -> "Wrong PIN"
+                else -> "Wrong PIN. Try again in ${(r + 999) / 1000} seconds."
+            }
+        }
+    }
+    if (cfg.pin != null) {
+        // The digits typed so far, as dots.
+        Text(if (pin.isEmpty()) "Type the parent PIN" else "● ".repeat(pin.length).trim(), style = tvText(if (tv) 28.sp else 22.sp, Palette.textSoft),
+            modifier = Modifier.padding(top = 12.dp).semantics { contentDescription = "${pin.length} digits typed" })
+        Keypad(tv, onDigit = { d -> if (pin.length < KidRules.PIN_MAX) pin += d; line = "" }, onDelete = { pin = pin.dropLast(1) }, onOk = { ok() })
+    } else Text("No parent PIN is set. A parent's phone can open this.", style = tvText(if (tv) 24.sp else 18.sp, Palette.textSoft),
+        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
+    if (line.isNotEmpty()) Text(line, style = tvText(if (tv) 24.sp else 18.sp, Palette.danger), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+    Box(Modifier.padding(top = 16.dp)) {
+        BigButton("Ask a parent's phone", icon = "phone") {
+            line = if (KidTv.askUnlock(app)) "Asked. A parent can say yes on their phone." else "A parent's phone needs an update first"
+        }
+    }
+    Box(Modifier.padding(top = 10.dp)) { BigButton("Close") { onClose() } }
+}
+
+@Composable
+private fun KidUnlocked(app: Muninn, tv: Boolean, until: Long, onClose: () -> Unit) {
+    val context = LocalContext.current
+    MIcon("lock", Palette.online, if (tv) 64.dp else 48.dp)
+    Text("Parent settings", style = tvTitle(if (tv) 32.sp else 24.sp), modifier = Modifier.padding(top = 10.dp))
+    val at = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(until))
+    Text("Open until $at. Everything else is set on a parent's phone, on this device's page.", style = tvText(if (tv) 22.sp else 16.sp, Palette.textSoft),
+        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
+    Box(Modifier.padding(top = 16.dp)) {
+        BigButton("Android settings for Muninn", icon = "gear") { if (!TvUpdate.openAppPage(context)) Ui.say(TvWords.ASK_PARENT, true) }
+    }
+    Text("Leaving kids' mode erases the messages and people on this device. Then it runs as a normal Muninn.", style = tvText(if (tv) 22.sp else 16.sp, Palette.textMuted),
+        textAlign = TextAlign.Center, modifier = Modifier.padding(top = 18.dp))
+    HoldToConfirm("Hold to leave kids' mode", "Hold for 5 seconds to erase this device and leave kids' mode",
+        { KidTv.leave(app); onClose() }, Modifier.fillMaxWidth().padding(top = 10.dp))
+    Box(Modifier.padding(top = 12.dp)) { BigButton("Lock again") { KidTv.lockAgain(); onClose() } }
+}
+
+/** 1 to 9, Delete, 0, OK: big keys a remote's D-pad or a finger can press. */
+@Composable
+private fun Keypad(tv: Boolean, onDigit: (Char) -> Unit, onDelete: () -> Unit, onOk: () -> Unit) {
+    val first = remember { FocusRequester() }
+    val rows = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("Delete", "0", "OK"))
+    Column(Modifier.padding(top = 14.dp).widthIn(max = if (tv) 420.dp else 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        rows.forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { k ->
+                    PadKey(k, tv, if (k == "1") first else null, Modifier.weight(1f)) {
+                        when (k) { "Delete" -> onDelete(); "OK" -> onOk(); else -> onDigit(k[0]) }
+                    }
+                }
+            }
+        }
+    }
+    if (tv) LaunchedEffect(Unit) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+}
+
+@Composable
+private fun PadKey(label: String, tv: Boolean, requester: FocusRequester?, modifier: Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(14.dp)
+    Box(modifier.heightIn(min = if (tv) 64.dp else 56.dp)
+        .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
+        .onFocusChanged { focused = it.isFocused }
+        .clip(shape).background(Palette.field)
+        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+        .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        Text(label, style = tvText(if (label.length > 1) (if (tv) 22.sp else 18.sp) else (if (tv) 30.sp else 26.sp), weight = FontWeight.SemiBold))
+    }
+}
+
+/** The small lock in a corner of the kids' screens that opens [KidParentArea]. */
+@Composable
+internal fun ParentLock(tv: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(14.dp)
+    Box(modifier.size(if (tv) 56.dp else 48.dp).onFocusChanged { focused = it.isFocused }.clip(shape)
+        .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
+        .clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = "For a parent" },
+        contentAlignment = Alignment.Center) {
+        MIcon("lock", Palette.textMuted, if (tv) 30.dp else 24.dp)
+    }
+}
+
+/** "Quiet time until 07:00. Only parents now." */
+@Composable
+internal fun QuietLine(q: QuietTime, tv: Boolean, modifier: Modifier = Modifier) {
+    Row(modifier.clip(RoundedCornerShape(14.dp)).background(Palette.raised).padding(horizontal = 18.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        MIcon("clock", Palette.goldBright, if (tv) 30.dp else 22.dp)
+        Text("${KidRules.quietName(q.n)} until ${KidRules.clock(q.e)}. Only parents now.", style = tvText(if (tv) 24.sp else 17.sp),
+            modifier = Modifier.padding(start = 10.dp))
+    }
+}

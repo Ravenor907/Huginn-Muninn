@@ -7,9 +7,13 @@
 #include "linkpreview.h"
 #include "morewire.h"
 #include "photos.h"
+#include "vault.h"
 
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -378,6 +382,8 @@ QVariantMap Chat::shared(const QString &where) const
         all = m_private.value(where);
     }
     QVariantList media, links, voices;
+    // here: its bytes are on this device (a tile without them says so, and can't be opened, saved or forwarded).
+    const auto here = [this](const QString &id) { return QFileInfo::exists(m_vault->path(QStringLiteral("photos/") + id)); };
     for (int i = int(all.size()) - 1; i >= 0; --i) {
         const QVariantMap m = all.at(i).toMap();
         if (!str(m, "unsent").isEmpty() || m.value(QStringLiteral("system")).toBool())
@@ -386,13 +392,14 @@ QVariantMap Chat::shared(const QString &where) const
         const QString name = mine ? QStringLiteral("You") : group ? memberName(g, str(m, "from")) : nameOf(where);
         if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() > 0) {
             voices << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("voice"), m.value(QStringLiteral("voice")).toInt()},
-                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))}};
+                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))},
+                                  {QStringLiteral("here"), here(str(m, "photo"))}};
             continue;
         }
         if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() == 0) {
             media << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("video"), m.value(QStringLiteral("video")).toInt()},
                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))},
-                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}};
+                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}, {QStringLiteral("here"), here(str(m, "photo"))}};
             continue;
         }
         const QVariantMap lp = m.value(QStringLiteral("lp")).toMap();
@@ -405,6 +412,66 @@ QVariantMap Chat::shared(const QString &where) const
                              {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))}};
     }
     return {{QStringLiteral("media"), media}, {QStringLiteral("links"), links}, {QStringLiteral("voices"), voices}};
+}
+
+// Media and files › Save: a photo or GIF goes to Pictures › Huginn (as Save to Pictures does); a video or voice message
+// in Huginn in the folder Settings › Save files to names (Downloads unless changed), where received files go too. The
+// path it was saved as, or empty when it isn't on this device or couldn't be written.
+QString Chat::saveMedia(const QString &id)
+{
+    QByteArray b = blob(id);
+    if (b.isEmpty())
+        return QString();
+    const bool voice = Photos::isAdts(b), video = !voice && MoreWire::isVideo(b);
+    QString dir;
+    if (voice || video) {
+        const QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        dir = Settings::saved(QStringLiteral("transferFolder"), downloads).toString();
+        if (dir.isEmpty())
+            dir = QDir::homePath();
+        dir += QStringLiteral("/Huginn");
+    } else {
+        dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation) + QStringLiteral("/Huginn");
+    }
+    QDir().mkpath(dir);
+    const QString ext = voice ? QStringLiteral("aac") : video ? QStringLiteral("mp4") : Photos::isGif(b) ? QStringLiteral("gif") : QStringLiteral("jpg");
+    const QString stem = (voice ? QStringLiteral("Huginn voice-") : video ? QStringLiteral("Huginn video-") : QStringLiteral("Huginn-")) + QString::number(now());
+    QString path = QDir(dir).filePath(stem + QLatin1Char('.') + ext);
+    for (int n = 1; QFile::exists(path) && n < 1000; ++n)
+        path = QDir(dir).filePath(stem + QStringLiteral(" (%1).").arg(n) + ext);
+    QFile f(path);
+    const bool ok = f.open(QIODevice::WriteOnly) && f.write(b) == b.size();
+    b.fill(0);
+    return ok ? path : QString();
+}
+
+// Media and files › Forward: a photo, GIF, video or voice message kept here goes again as a new message, by the same
+// paths as one sent from here, to a contact's key, a group ("g:<group>", its first channel) or "g:<group>:<channel>".
+// voiceMs: a voice message's length. Empty when it went, else what to say.
+QString Chat::forwardMedia(const QString &id, const QString &to, int voiceMs)
+{
+    const QByteArray b = blob(id);
+    if (b.isEmpty())
+        return QStringLiteral("It isn't on this device, so it can't be forwarded.");
+    QString where = to;
+    if (where.startsWith(QLatin1String("g:")) && where.count(QLatin1Char(':')) == 1)
+        where += QStringLiteral(":main");
+    QString g, ch;
+    const bool group = inGroup(where, &g, &ch);
+    if (Photos::isAdts(b)) {
+        sendVoice(where, b, voiceMs > 0 ? voiceMs : 1000);
+        return QString();
+    }
+    if (MoreWire::isVideo(b)) {
+        const int ms = MoreWire::mp4Ms(b);
+        return sendVideo(where, b, ms > 0 ? ms : 1000);
+    }
+    if (Photos::isGif(b))
+        return sendGifTo(where, b) ? QString() : QStringLiteral("That didn't send.");
+    if (group)
+        return sendGroupBlob(g, ch, b, 0).isEmpty() ? QStringLiteral("That didn't send.") : QString();
+    sendBlob(where, b, 0);
+    return QString();
 }
 
 QString Chat::linkHost(const QString &url) const { return MoreWire::host(url); }

@@ -274,7 +274,7 @@ object PowerLogic {
         Why.OPEN -> "Fully connected while Muninn is open"
         Why.CALL -> "In a call: fully connected"
         Why.ROOM -> "In a voice room: connected for the sound, lighter with the screen off"
-        Why.KIDS_TV -> "Kids' TV: always fully connected so calls ring at once"
+        Why.KIDS_TV -> "Kids' Device: always fully connected so calls ring at once"
         Why.PLUGGED -> "Charging: fully connected"
         Why.ALWAYS -> "Always fully connected"
         Why.TALKING -> "In a conversation: fully connected for a few minutes so replies arrive at once"

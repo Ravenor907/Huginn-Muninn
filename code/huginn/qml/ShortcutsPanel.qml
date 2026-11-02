@@ -26,6 +26,7 @@ Item {
             ["Settings", "Ctrl+,"],
             ["Scroll a screenful", "Page Up"],
             ["Right-click menu", "Shift+F10"],
+            ["Hard-to-undo actions", "hold Enter 5 s"],
             ["Back", "Esc"] ] },
          { title: "MESSAGES", keys: [
             ["Send", "Enter"],
