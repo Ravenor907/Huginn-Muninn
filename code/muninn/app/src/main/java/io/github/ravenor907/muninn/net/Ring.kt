@@ -149,6 +149,100 @@ object RingWire {
     fun fileRatchet(room: String, c: Contact?) = room == "file" && c?.ratchet == true && WRAP_CAP in c.caps
 }
 
+/**
+ * Cap n1 (protocol.md 23.3): a nudge. Sending a real message (text, photo, voice or video message, file offer, group
+ * invite) to a contact whose app says n1 also sends one tiny ring envelope {"t":"nudge","ts":...} to their ring
+ * mailbox, at most one a minute per person. A locked phone opens it with its ring key and says "Muninn is locked" only
+ * then, instead of on every receipt, check-in or presence that reaches its inbox.
+ */
+object NudgeWire {
+    const val CAP = "n1"
+    /** At most one nudge per recipient in this long. */
+    const val EVERY_MS = 60_000L
+
+    /** Whether something sent in [room] with plaintext [plain] is a real message (and so is worth a nudge). */
+    fun counts(room: String, plain: String): Boolean = when (room) {
+        "private", "rich", "photo", "gmsg", "gphoto" -> true
+        "file" -> tOf(plain) == "offer"
+        "group" -> tOf(plain) == "invite"
+        else -> false
+    }
+
+    private fun tOf(plain: String): String = try { JSONObject(plain).optString("t") } catch (e: Exception) { "" }
+
+    /** The nudge plaintext: {"t":"nudge","ts":<ms>}. Nothing else: no name, no text, no chat. */
+    fun plain(ts: Long): String = JSONObject().put("t", "nudge").put("ts", ts).toString()
+
+    /** Well-formed: t "nudge" and ts an integer 0 <= ts < 2^53. Other fields are ignored. */
+    fun ok(p: JSONObject): Boolean = p.opt("t") == "nudge" && Rich.isTs(p.opt("ts"))
+
+    /** The relay event's content: sealed to their ring key like a ring, padded like every relay envelope (section 20). */
+    fun content(ringPub: String, ts: Long): String =
+        Base64.getEncoder().encodeToString(EnvelopePad.pad(RingWire.sealRing(ringPub, plain(ts).toByteArray()).toString()).toByteArray())
+
+    /** A nudge's content opened with [ring]: its ts, or null when it isn't a good nudge. */
+    fun openContent(content: String, ring: KeyPair): Long? = try {
+        val o = JSONObject(String(Base64.getDecoder().decode(content)))
+        val p = RingWire.openRing(o, ring)?.let { JSONObject(String(it, Charsets.UTF_8)) }
+        if (p == null || !ok(p)) null else (p.get("ts") as Number).toLong()
+    } catch (e: Exception) { null }
+
+    /**
+     * While locked, whether an event in the normal inbox (which can't be opened, so it may be a receipt, a check-in or
+     * a message) puts up the notice: only when this app doesn't nudge-listen or someone who writes may not nudge.
+     */
+    fun inboxNotices(ourCaps: Set<String>, legacyPeers: Boolean): Boolean = CAP !in ourCaps || legacyPeers
+
+    /** An event for the ring mailbox that isn't a ring: the notice only while [locked] and only for a good nudge. */
+    fun ringMailboxNotices(locked: Boolean, content: String, ring: RingKey): Boolean = locked && ring.nudge(content) != null
+
+    /**
+     * True when someone may write without nudging: a contact whose app hasn't said n1 (or whose caps aren't known),
+     * or a group-only peer (it never gets the ring key, 23.2). An empty list counts too, so a list that didn't load
+     * never turns the old notice off.
+     */
+    fun legacy(people: List<Contact>): Boolean = people.isEmpty() || people.any { it.groupOnly || CAP !in it.caps }
+
+    /** At most one nudge per recipient per [EVERY_MS]. */
+    class Gate(private val everyMs: Long = EVERY_MS) {
+        private val last = HashMap<String, Long>()
+        /** True when a nudge to [key] may go now (and counts it). */
+        @Synchronized
+        fun take(key: String, nowMs: Long): Boolean {
+            val t = last[key]
+            if (t != null && nowMs - t in 0 until everyMs) return false
+            if (last.size > 500) last.entries.removeIf { nowMs - it.value !in 0 until everyMs }
+            last[key] = nowMs
+            return true
+        }
+    }
+}
+
+/**
+ * Cap n1: `legacy-peers.json`, a small plain file outside the vault: {"legacyPeers":true|false}. The contacts are in
+ * the vault, so a locked phone reads this instead, written whenever they change while unlocked. Missing or unreadable
+ * means true (the notice on any inbox event, as before n1).
+ */
+class LegacyPeers(private val file: File) {
+    @Volatile private var known: Boolean? = null
+
+    fun read(): Boolean = known ?: (when (val r = SafeFile.read(file) { b -> JSONObject(String(b)).getBoolean("legacyPeers") }) {
+        is SafeFile.Read.Ok -> r.value
+        else -> true
+    }).also { known = it }
+
+    /** Written only when it changes. */
+    @Synchronized
+    fun write(v: Boolean) {
+        if (known == v && SafeFile.exists(file)) return
+        try { SafeFile.write(file, JSONObject().put("legacyPeers", v).toString().toByteArray()); known = v } catch (_: Exception) {}
+    }
+
+    /** Erase everything and Move: the file goes (true again). */
+    @Synchronized
+    fun forget() { known = null; SafeFile.delete(file) }
+}
+
 /** This device's day keys (e1): a new one every day, each kept [RingWire.WRAP_KEEP_S]. Saved (encrypted) through [write]. */
 class WrapKeys(private val read: () -> String?, private val write: (String) -> Unit) {
     class Day(val id: String, val pub: String, val priv: String, val t: Long)
@@ -313,6 +407,10 @@ class RingKey(private val file: File) {
     /** A ring envelope's content opened: (call id, ts), or null. */
     fun open(content: String, nowMs: Long = System.currentTimeMillis()): Pair<String, Long>? =
         live(nowMs).firstNotNullOfOrNull { RingWire.openRingContent(content, it.keys) }
+
+    /** A nudge's content opened (cap n1): its ts, or null. */
+    fun nudge(content: String, nowMs: Long = System.currentTimeMillis()): Long? =
+        live(nowMs).firstNotNullOfOrNull { NudgeWire.openContent(content, it.keys) }
 
     /**
      * Someone was blocked: a new ring key and ring mailbox, so what they hold no longer rings this phone. The old

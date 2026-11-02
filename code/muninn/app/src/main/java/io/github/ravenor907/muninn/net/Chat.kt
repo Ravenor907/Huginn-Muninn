@@ -79,6 +79,23 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (rung.size > 200) rung.clear()
         nostr.publish(rp, RingWire.ringContent(rk, call, ts), days = Limits.LONGEST)
     }
+
+    /**
+     * Cap n1 (section 23.3): a real message ([NudgeWire.counts]) to a contact whose app says n1 also sends a nudge to
+     * their ring mailbox, sealed to their ring key, so their phone can say "Muninn is locked" while locked there.
+     * At most one a minute per person.
+     */
+    private fun nudgeIf(room: String, plain: String, to: String) {
+        if (Move.locked || !NudgeWire.counts(room, plain)) return
+        val c = contacts.contact(to) ?: return
+        if (NudgeWire.CAP !in c.caps) return
+        val k = peerKeys.get(to) ?: return
+        val rk = k.rk ?: return
+        val rp = k.rp ?: return
+        val now = System.currentTimeMillis()
+        if (!nudged.take(to, now)) return
+        try { nostr.publish(rp, NudgeWire.content(rk, now), days = Limits.LONGEST) } catch (_: Exception) {}
+    }
     @Volatile override var tvHandler: io.github.ravenor907.muninn.tv.TvHandler? = null
     override fun sendTvRoom(peerKey: String, plain: String) {
         bg { deliver(peerKey, envelope("tvconfig", peerKey, plain, UUID.randomUUID().toString()), contacts.get(peerKey)?.mailbox) }
@@ -251,6 +268,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     @Volatile var ringKey: RingKey? = null
     /** Call ids a ring envelope already went out for (one per call). */
     private val rung: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Cap n1: when each person was last nudged. */
+    private val nudged = NudgeWire.Gate()
     /** Contacts my keys went to when their app first said b1 or e1 (once each while Muninn runs). */
     private val keysSent: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /** Cap s1 for someone who isn't a contact (a linked device, someone met close by): what their app said, and that it seals. */
@@ -296,6 +315,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 bg {
                     val body = envelope("file", peer, json, UUID.randomUUID().toString()).toString()
                     spread(peer, listOf(body), false, 1, contacts.get(peer)?.mailbox)
+                    nudgeIf("file", json, peer)
                 }
             }
             override fun trusted(peer: String) = io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)
@@ -2306,7 +2326,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Once relays hold it, it isn't sent to them again every few minutes (see NetLogic).
         val mailbox = backupMailbox(m)
         if (mailbox != null && !publishNow(t)) any = true
-        else if (internet(m.peerKey, listOf(body), mailbox, stored = { markSent(m, "internet") }, held = heldBy(t))) any = true
+        else if (internet(m.peerKey, listOf(body), mailbox, stored = { markSent(m, "internet") }, held = heldBy(t))) { any = true; nudgeIf("private", "", k) }
         if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
     }
 
@@ -2336,7 +2356,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val mailbox = backupMailbox(m)
         if ((!any || t.count >= 2) && parts.size <= (if (m.gif) Gifs.PIECES else Photos.INTERNET_PIECES) && mailbox != null) {
             if (!publishNow(t)) any = true
-            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) any = true
+            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) { any = true; nudgeIf("photo", "", k) }
         }
         if (!any && t.count == 1) {
             update(m.peerKey, m.id) { it.copy(failed = true) }
@@ -2733,6 +2753,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             else outbox.fresh(o.env, stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
         spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null, groupDays(o.g),
             if (o.gif) Gifs.PIECES else Photos.INTERNET_PIECES)
+        if (o.net) nudgeIf(o.room, o.plain, o.to)
     }
 
     /** A group photo or voice message: the usual photo pieces plus g, ch and gid in the clear (3.9). */

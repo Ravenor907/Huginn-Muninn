@@ -544,7 +544,8 @@ void Chat::sendEverywhere(const QString &key, const QString &room, const QJsonOb
     const QString base = baseTo(key);
     if (!base.isEmpty())
         post(base, json);
-    sendInternet(key, {json}, mailbox.isEmpty() ? mailboxOf(key) : mailbox);
+    if (sendInternet(key, {json}, mailbox.isEmpty() ? mailboxOf(key) : mailbox))
+        nudge(key, room, compact(msg));   // cap n1: a file offer is a real message
 }
 
 void Chat::sendLink(const QString &key, const QJsonObject &msg, const QString &mailbox)

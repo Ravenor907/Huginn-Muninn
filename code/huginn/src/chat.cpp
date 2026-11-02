@@ -887,6 +887,22 @@ void Chat::ring(const QString &key, const QJsonObject &msg)
         m_nostr->publish(k.rp, content, Nostr::kLongestDays);
 }
 
+void Chat::nudge(const QString &key, const QString &room, const QByteArray &plain)
+{
+    // Cap n1 (section 23.3): their phone, while locked, says "Muninn is locked" only for a real message.
+    if (!m_peerKeys || !isContact(key) || isBlocked(key) || !hasCap(key, QLatin1String(RingWire::kNudgeCap)) || !RingWire::nudgeCounts(room, plain))
+        return;
+    const RingWire::Announce k = m_peerKeys->get(key);
+    if (k.rk.isEmpty() || k.rp.isEmpty())
+        return;
+    const qint64 t = now();
+    if (!m_nudged.take(key, t))
+        return;
+    const QString content = RingWire::nudgeContent(k.rk, t);
+    if (!content.isEmpty())
+        m_nostr->publish(k.rp, content, Nostr::kLongestDays);
+}
+
 QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
 {
     // Cap b1: the ring key only to contacts, so a group-only peer (or someone blocked) can't ring this device.
@@ -2591,8 +2607,10 @@ void Chat::attempt(const QString &key, const QString &id)
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
     const int relayPieces = m.value(QStringLiteral("gif")).toBool() ? Photos::kGifPieces : Photos::kInternetPieces;   // cap a1: a GIF up to 8 MB
     if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= relayPieces) {
-        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step))
+        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step)) {
             any = true;
+            nudge(key, photo ? QStringLiteral("photo") : QStringLiteral("private"), {});
+        }
     }
     if (!any && t.count == 1)
         update(key, id, [](QVariantMap &x) { x.insert(QStringLiteral("failed"), true); });

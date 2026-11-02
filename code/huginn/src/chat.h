@@ -626,6 +626,10 @@ private:
     void sendKeys(const QString &key, bool again = false);
     // A 1:1 offer also goes as a ring envelope to their ring mailbox (b1).
     void ring(const QString &key, const QJsonObject &msg);
+    // Cap n1 (section 23.3): a real message (RingWire::nudgeCounts) to a contact whose app says n1 also sends a nudge
+    // to their ring mailbox, at most one a minute per person (m_nudged).
+    void nudge(const QString &key, const QString &room, const QByteArray &plain);
+    NudgeGate m_nudged;
     // Room "file" goes through the ratchet for a contact whose app says e1.
     bool fileRatchet(const QString &room, const QString &key) const;
     bool inviteOk(const QString &token) const;

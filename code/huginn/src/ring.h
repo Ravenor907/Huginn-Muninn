@@ -65,9 +65,37 @@ bool mayUse(qint64 wt, qint64 nowS);
 bool keep(qint64 t, qint64 nowS);
 bool rotateDue(qint64 newest, qint64 nowS);   // newest < 0: none yet
 
+// Cap n1 (protocol.md 23.3): a nudge. A real message (text, photo, voice or video message, file offer, group invite) to
+// a contact whose app says n1 also sends one tiny envelope {"t":"nudge","ts":...} to their ring mailbox, sealed to
+// their ring key like a ring, at most one a minute per person. A locked phone says "Muninn is locked" only then.
+extern const char kNudgeCap[];   // "n1"
+constexpr qint64 kNudgeEveryMs = 60000;
+// Whether something sent in room with plaintext plain is a real message (and so worth a nudge).
+bool nudgeCounts(const QString &room, const QByteArray &plain);
+// {"t":"nudge","ts":<ms>}: nothing else, no name, no text, no chat.
+QByteArray nudgePlain(qint64 ts);
+// Well-formed: t "nudge" and ts an integer 0 <= ts < 2^53. Other fields are ignored.
+bool nudgeOk(const QJsonObject &p);
+// The relay event's content, sealed to a ring key and padded like a ring.
+QString nudgeContent(const QString &ringPub, qint64 ts);
+bool openNudgeContent(const QString &content, const ChatCrypto::KeyPair &ring, qint64 *ts);
+
 // Checks shared/vectors/e1b1-vectors.json; prints what it found. Returns true when everything matches.
 bool selfTest(const QString &vectorsPath);
 }
+
+// Cap n1: at most one nudge per recipient per RingWire::kNudgeEveryMs.
+class NudgeGate
+{
+public:
+    explicit NudgeGate(qint64 everyMs = RingWire::kNudgeEveryMs) : m_every(everyMs) {}
+    // True when a nudge to key may go now (and counts it).
+    bool take(const QString &key, qint64 nowMs);
+
+private:
+    qint64 m_every;
+    QHash<QString, qint64> m_last;
+};
 
 // This device's day keys (e1): a new one every day, each kept RingWire::kWrapKeepS. Saved (encrypted) through write.
 class WrapKeys

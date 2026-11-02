@@ -47,6 +47,8 @@ class Muninn : Application() {
     /** The conversation on screen right now ("" for none). */
     @Volatile var openChat = ""
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /** Cap n1: legacy-peers.json, outside the vault (net/Ring.kt, LegacyPeers). */
+    private val legacyPeers by lazy { io.github.ravenor907.muninn.net.LegacyPeers(java.io.File(filesDir, "legacy-peers.json")) }
 
     override fun onCreate() {
         super.onCreate()
@@ -85,19 +87,31 @@ class Muninn : Application() {
         }
         // Until the chats are open, what arrives waits (on the relays, or sealed in the locked store, see Nostr).
         nostr.onEnvelope = { false }
-        // While locked: one "Muninn is locked" notice, once until the next unlock.
-        nostr.onLocked = { lockedNotice() }
+        // While locked: one "Muninn is locked" notice, once until the next unlock. Cap n1: a sealed event in the inbox
+        // (it may be a receipt, a check-in or presence) only says so while someone may write without nudging
+        // (legacy-peers.json, outside the vault); everyone else nudges the ring mailbox when a real message comes.
+        nostr.onLocked = {
+            if (io.github.ravenor907.muninn.net.NudgeWire.inboxNotices(io.github.ravenor907.muninn.net.Proto06.caps(io.github.ravenor907.muninn.net.Proto06.CAPS),
+                    legacyPeers.read())) lockedNotice()
+        }
         // Cap b1: the ring key lives outside the vault (app-private files, never an OS key store), so a call rings even
         // while Muninn is locked. Only "Incoming call", no name: answering opens the lock screen, and the call itself
         // (kept sealed with everything else that came while locked) is picked up once Muninn is unlocked.
         val ring = io.github.ravenor907.muninn.net.RingKey(java.io.File(filesDir, "ring-key.json"))
         nostr.ring = ring
         nostr.onRing = { content ->
-            ring.open(content)?.let { (call, ts) -> io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, call, ts) }
+            val rang = ring.open(content)
+            if (rang != null) {
+                io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, rang.first, rang.second)
+            } else if (io.github.ravenor907.muninn.net.NudgeWire.ringMailboxNotices(vault.locked.value, content, ring)) {
+                // Cap n1: a nudge says a real message came. Unlocked, it's ignored (the message itself notifies).
+                lockedNotice()
+            }
         }
         // Erase everything and Move: the ring key, the day keys and what was kept while locked all go.
         vault.onErase = {
             ring.forget()
+            legacyPeers.forget()
             nostr.forgetHeld()
             if (ready.value) try { chat.forgetKeys(); chat.forgetKeyCache() } catch (_: Exception) {}
             io.github.ravenor907.muninn.ui.PhotoCache.clear()
@@ -148,6 +162,10 @@ class Muninn : Application() {
         contacts = Contacts(this, vault)
         chat = Chat(this, net, ble, nostr, contacts, vault)
         chat.ringKey = nostr.ring
+        // Cap n1: whether anyone may write without nudging, kept outside the vault for while it's locked.
+        scope.launch(Dispatchers.IO) {
+            contacts.all.collect { if (!vault.locked.value) legacyPeers.write(io.github.ravenor907.muninn.net.NudgeWire.legacy(it)) }
+        }
         profile = io.github.ravenor907.muninn.net.Profile(this, vault, contacts, chat)
         chat.profile = profile
         io.github.ravenor907.muninn.tv.Tv.install(this)
@@ -238,10 +256,10 @@ class Muninn : Application() {
     }
 
     /**
-     * Something arrived while locked. Nothing can be opened yet, and relay traffic that isn't a message (receipts, a
-     * linked computer's check-ins, room presence) can't be told apart from one, so the notice claims nothing: "Unlock
-     * to get new messages". It goes up and buzzes once per locked spell, and never comes back on its own until the next
-     * unlock (the owner's choice). Never during Extreme battery saver (no notifications then).
+     * Something arrived while locked: a nudge (cap n1) for a real message, or, while someone may write without
+     * nudging, any event in the inbox (receipts, a linked computer's check-ins and room presence can't be told apart
+     * from a message then), so the notice stays calm: "Unlock to get new messages". It goes up and buzzes once per
+     * locked spell, and never comes back on its own until the next unlock (the owner's choice). Never during Extreme battery saver (no notifications then).
      */
     @Synchronized
     fun lockedNotice() {

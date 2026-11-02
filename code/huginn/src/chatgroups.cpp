@@ -977,6 +977,7 @@ void Chat::queueGroup(const QString &g, const QString &to, const QString &room, 
         return;
     const QString envId = GroupWire::envelopeId(logical, to);
     queueGroupBodies(g, to, room, logical, {compact(envelope(room, to, plain, envId))});
+    nudge(to, room, plain);   // cap n1: a group message or invite (never state, control or receipts)
 }
 
 void Chat::queueGroupBodies(const QString &g, const QString &to, const QString &room, const QString &logical, const QList<QByteArray> &bodies)
@@ -1296,8 +1297,10 @@ QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArra
                   {QStringLiteral("voice"), voiceMs}, {QStringLiteral("unsent"), QString()}, {QStringLiteral("failed"), false}};
     m.insert(extra);
     storeGroupMessage(g, m, false);
-    for (const QString &k : to)
+    for (const QString &k : to) {
         queueGroupBodies(g, k, QStringLiteral("gphoto"), gid, groupPieces(g, channel, gid, k, bytes, voiceMs, extra));
+        nudge(k, QStringLiteral("gphoto"), {});   // cap n1
+    }
     return gid;
 }
 

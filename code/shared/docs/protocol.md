@@ -83,6 +83,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `f2` | file sharing (section 27): the `lan` candidate, group files (`g` on an offer), the group's file rules (`fs` and `fm` in the state), `why` on a decline, and the Hold packet. Muninn and Huginn. |
 | `g4` | join refusals (28.5): an admin's app that couldn't take a `join` answers `t:"joinno"` with why, so the joiner's row says "Not let in" instead of waiting. Muninn and Huginn. |
 | `f3` | resume and long waits (27.7): a stopped file goes on from the pieces the receiver kept, 2 minutes of silence before a transfer stops (with a packet a second while quiet), and a big file's offer waits a day. Muninn and Huginn. |
+| `n1` | nudges (section 23.3): a real message to someone whose caps include `n1` also sends one small ring envelope `{"t":"nudge","ts":...}` to their ring mailbox, so a locked phone says "Muninn is locked" only when a message came. Needs `b1`. Muninn and Huginn send them; Muninn acts on them (Huginn ignores one). |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -2314,7 +2315,7 @@ move (18). Between Muninn and Huginn `@move.json` (18.4) carries it as
 after the move. Received pictures travel too (they are vault files), with the per-person sent versions, so nothing is
 sent twice.
 
-## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`)
+## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`, `n1`)
 
 Everything here is in `code/shared/tools/e1b1_ref.py`, which writes `code/shared/vectors/e1b1-vectors.json`. `ECDH(a, B)` below is
 `ChatCrypto.sharedKey` (section 0: HKDF over the P-256 secret, salted with both public keys).
@@ -2402,8 +2403,45 @@ can't ring. With `b1` it can:
 - Someone holding a locked device learns only that calls came and when; the relays learn that the ring mailbox got an
   event, as they learn that the mailbox did.
 
+### 23.3 Nudges (`n1`)
+
+A locked device can't open anything in its inbox, so it can't tell a message from a receipt, a linked computer's
+`ping` or room presence. Before `n1`, every inbox event while locked put up "Muninn is locked". With `n1` the sender
+says when a real message came:
+
+- **What counts.** Rooms `private`, `rich`, `photo` (photos, voice and video messages, GIFs, small files, 14.2),
+  `gmsg`, `gphoto`, room `file` with `t:"offer"`, and room `group` with `t:"invite"`. Nothing else: not receipts
+  (`receipt`, `greceipt`), `live` (typing, active status), `profile`, `link`, `call`, `mx` (reactions, edits, votes),
+  `unsend`, `keep`, `intro`, presence, or any other group control or state.
+- **Sending.** When such a message goes to the relays for a **contact** whose caps include `n1` and whose ring key and
+  ring mailbox (`rk`, `rp`, 23.2) the sender holds, the sender also publishes one **nudge** to that ring mailbox,
+  sealed exactly like a ring envelope (same key derivation and AAD), padded and expiring like any other event:
+
+  ```
+  {"e": one-off public key, "n": nonce, "d": AES-256-GCM(key, {"t":"nudge","ts":<ms>}, AAD "huginn-muninn")}
+  ```
+
+  Coalesced on the sender's side: at most one nudge per recipient per 60 s, whatever the number of messages, rooms
+  or retries. A nudge plaintext is well-formed when `t` is `nudge` and `ts` an integer 0 <= ts < 2^53; other fields
+  are ignored. A nudge never rings (it has no `call`), and a ring is never a nudge.
+- **Receiving, locked.** An event for the ring mailbox that opens with the ring key as a well-formed nudge puts up the
+  locked notice ("Muninn is locked", "Unlock to get new messages"), once per locked spell as before. No freshness
+  check: an old nudge still means messages are waiting. **Unlocked**, a nudge is ignored (the message itself
+  notifies). Huginn ignores nudges.
+- **The normal inbox while locked.** Events are still kept sealed until unlocking, but they put up the notice only
+  while someone may write without nudging. Contacts are in the vault, so Muninn keeps a small plain file outside it,
+  `legacy-peers.json` (`{"legacyPeers": true|false}`, beside `ring-key.json`), written whenever the contacts or their
+  caps change while unlocked. It is true when any contact's caps lack `n1` (or aren't known), when there is any
+  group-only peer (it never gets the ring key, 23.2, so it can't nudge), or when the list is empty. A missing or
+  unreadable file counts as true, so the old behavior stays until every contact's app says `n1`. Erase everything and
+  Move delete the file. Someone holding a locked phone can learn from it only whether every contact's app is new.
+- **Privacy.** The relays see one more small event to the ring mailbox per burst of messages (at most one a minute
+  per recipient), padded to the smallest size, with nothing inside but `t` and `ts`: no sender, name, text or chat.
+  As with rings, they learn that the ring mailbox got an event, as they learn that the inbox did.
+
 An app without `b1` or `e1` ignores the receipt fields and gets neither ring envelopes nor day key wrappings; with
-mixed versions everything falls back to sections 14 and 20.
+mixed versions everything falls back to sections 14 and 20. An app without `n1` is sent no nudges, and its messages
+keep the locked notice on every inbox event (above).
 
 ## 24. Labs bug reports (field `lb`)
 
