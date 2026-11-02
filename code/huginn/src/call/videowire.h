@@ -38,6 +38,7 @@ struct Report {
     int lossPct = 0;        // of the packets due since the last report
     bool camera = false;    // the sender of the report is sending camera video
     bool screen = false;    // ... is sharing its screen
+    bool notWatching = false;   // bit 2: ... isn't watching our screen share (cap c3, 5.8.7)
     int jitterMs = 0;       // its jitter buffer's delay
     int kbps = 0;           // media it received since the last report, all paths, copies dropped
     int rttMs = 0;          // its round trip, 0 when unknown

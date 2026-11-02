@@ -76,7 +76,7 @@ QByteArray VideoWire::encodeReport(const Report &r)
 {
     QByteArray b;
     b.append(char(clampi(r.lossPct, 0, 100)));
-    b.append(char((r.camera ? 1 : 0) | (r.screen ? 2 : 0)));
+    b.append(char((r.camera ? 1 : 0) | (r.screen ? 2 : 0) | (r.notWatching ? 4 : 0)));
     put16(b, clampi(r.jitterMs, 0, 65535));
     put16(b, clampi(r.kbps, 0, 65535));
     put16(b, clampi(r.rttMs, 0, 65535));
@@ -91,6 +91,7 @@ bool VideoWire::decodeReport(const QByteArray &p, Report *out)
     r.lossPct = quint8(p[0]);
     r.camera = quint8(p[1]) & 1;
     r.screen = quint8(p[1]) & 2;
+    r.notWatching = quint8(p[1]) & 4;
     r.jitterMs = get16(p, 2);
     r.kbps = get16(p, 4);
     r.rttMs = get16(p, 6);
@@ -465,6 +466,13 @@ bool VideoWire::selfTest()
         const QByteArray e = encodeReport(r);
         check(e.size() == 8 && decodeReport(e, &g) && g.lossPct == 7 && g.camera && !g.screen && g.jitterMs == 80 && g.kbps == 812 && g.rttMs == 45,
               "a receiver report is 8 bytes and round-trips");
+        Report w;
+        w.screen = true;
+        w.notWatching = true;
+        Report gw;
+        const QByteArray ew = encodeReport(w);
+        check(quint8(ew[1]) == 6 && decodeReport(ew, &gw) && gw.screen && gw.notWatching && !gw.camera && !g.notWatching,
+              "report flag bit 2 says not watching (cap c3)");
     }
     {
         RateControl rc;

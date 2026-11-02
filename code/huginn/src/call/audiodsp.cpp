@@ -75,6 +75,9 @@ double AudioDsp::Gate::threshold() const
 {
     if (!m_auto)
         return m_manual;
+    // Nothing measured yet (the first 2 s after joining): the manual default, so game sound doesn't open it at once.
+    if (!m_measured)
+        return kDefaultDb;
     const double t = floorDb() + 15;
     return t < -45 ? -45 : t > kMaxDb ? kMaxDb : t;
 }
@@ -88,6 +91,7 @@ bool AudioDsp::Gate::frame(double levelDb)
         m_lastMin = m_blockMin;
         m_blockMin = 0;
         m_blockFrames = 0;
+        m_measured = true;
     }
     const double t = threshold();
     if (levelDb > t || (m_open && levelDb > t - 6)) {
@@ -108,6 +112,7 @@ void AudioDsp::Gate::reset()
     m_lastMin = -70;
     m_blockMin = 0;
     m_blockFrames = 0;
+    m_measured = false;
 }
 
 void AudioDsp::tone(qint16 *pcm, int n, double hz, double amplitude, qint64 *phase)
@@ -204,7 +209,7 @@ bool AudioDsp::selfTest()
 
     // Automatic (the default).
     Gate a;
-    check(a.automatic() && a.threshold() == -45, "automatic: -45 dBFS to start");
+    check(a.automatic() && a.threshold() == Gate::kDefaultDb && !a.frame(-45), "automatic: -40 dBFS until the first 2 s are heard");
     for (int i = 0; i < 100; ++i)
         a.frame(-75);
     check(a.threshold() == -45 && a.frame(-35), "automatic: a normal voice in a quiet room opens it");
@@ -217,7 +222,7 @@ bool AudioDsp::selfTest()
     check(leakedLate == 0 && a.threshold() >= -21, "automatic: steady game sound raises it and stops going out within 4 s");
     check(a.frame(-12), "automatic: talking over the game still opens it");
     a.reset();
-    check(!a.open() && a.threshold() == -45, "reset: back to a quiet room");
+    check(!a.open() && a.threshold() == Gate::kDefaultDb, "reset: -40 dBFS until it hears the room again");
     std::printf("audio helpers: %s\n", g_fail ? "FAILED" : "all good");
     return g_fail == 0;
 }

@@ -26,9 +26,9 @@ class SharingTest {
         assertEquals("internet", Sharing.route(sameWifi = false, trusted = true, size = 900 * mb, relayMax = relayMax))
         assertEquals("relay", Sharing.route(sameWifi = false, trusted = false, size = relayMax, relayMax = relayMax))
         assertEquals("", Sharing.route(sameWifi = false, trusted = false, size = relayMax + 1, relayMax = relayMax))
-        assertEquals("Direct", Sharing.routeLabel("direct"))
+        assertEquals("Same Wi-Fi", Sharing.routeLabel("direct"))
         assertEquals("Over the internet", Sharing.routeLabel("relay"))
-        assertEquals("Over the internet", Sharing.routeLabel("internet"))
+        assertEquals("Straight to them", Sharing.routeLabel("internet"))
     }
 
     @Test

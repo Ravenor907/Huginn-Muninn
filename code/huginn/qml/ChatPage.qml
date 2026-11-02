@@ -111,7 +111,9 @@ Rectangle {
                                                     unread: (c.unread || 0) > 0 && !c.muted, muted: !!c.muted }))
             if (!phoneChats.length) out.push({ kind: "mirror", peer: "", name: Linked.phone.name + "'s chats", tag: "Phone", label: "From your phone" })
         }
-        Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, tag: i.waiting ? "Waiting" : "Invite" }))
+        // Cap g4: a join the admin's app couldn't take says so ("Not let in"), with why when the row is opened.
+        Chat.groupInvites.forEach(i => out.push({ kind: "ginvite", g: i.g, name: i.name, waiting: i.waiting, fromName: i.fromName, refused: i.refused || "",
+                                                  refusedText: i.refusedText || "", tag: i.refused ? "Not let in" : i.waiting ? "Waiting" : "Invite" }))
         Chat.requests.forEach(r => out.push({ kind: "request", key: r.key, name: r.name, replaces: r.replaces || "", replacesName: r.replacesName || "",
                                               tag: r.replaces ? "New key" : "Request" }))
         // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
@@ -1328,7 +1330,7 @@ Rectangle {
         if (locked) return
         // While a phone is linked these are this PC's own account (its own code and contacts), not the phone's.
         const own = !!Linked.phone.key && !Linked.phone.gone
-        Ui.pickFrom("Add", [{ header: own ? "This PC's own account, not your phone's. Add people on your phone." : "", items: [{ name: "Add someone", icon: "plus", url: "add" },
+        Ui.pickFrom("Add", [{ header: own ? "This PC's own account: same name and picture as you, but separate from your phone, so people would see a second " + Ui.myName + ". Add people on your phone." : "", items: [{ name: "Add someone", icon: "plus", url: "add" },
                                                    { name: "Join a group", icon: "people", url: "join" },
                                                    { name: "My code", icon: "qr", url: "code" },
                                                    { name: "One-time link", icon: "attach", url: "once" }] }], a => {
@@ -1354,8 +1356,14 @@ Rectangle {
         })
     }
     // Join a group: the same paste box, for a group's invite link or code (a person's code works here too).
-    function joinGroup() { Ui.ask("Join a group", "Paste the invite link or code", "", "Join", t => takePaste(t)) }
-    function addSomeone() { Ui.ask("Add someone or join a group", "Paste a code or invite link", "", "Add", t => takePaste(t)) }
+    function joinGroup() { Ui.ask("Join a group", ownNote("To join as you, open the invite on your phone.") || "Paste the invite link or code", "", "Join", t => takePaste(t)) }
+    function addSomeone() { Ui.ask("Add someone or join a group", ownNote("To add people as you, use your phone.") || "Paste a code or invite link", "", "Add", t => takePaste(t)) }
+    // While a phone is linked, the paste box works for this PC's own account, which looks just like the phone's.
+    function ownNote(tail) {
+        if (!Linked.phone.key || Linked.phone.gone) return ""
+        return "This adds to this PC's own account: same name and picture as you, but separate from your phone, so people see a second "
+            + Ui.myName + ". " + tail
+    }
     function takePaste(t) {
             // A group's code or invite link: its name and size, then Join or Not now.
             if (PeopleActions.joinGroup(t, null)) return
@@ -1394,10 +1402,10 @@ Rectangle {
             return
         }
         if (e.kind === "folder") { folderOptions(e); return }
-        // A chat from the phone: open it, or mute it (on the phone too).
+        // A chat from the phone: mute it (on the phone too). The chat isn't opened, so nothing in it is marked read.
         if (e.kind === "mirror" && e.peer) {
             const c = Linked.mirror.find(x => x.peer === e.peer)
-            if (c) { mirror.open(e.peer); mirror.chatMenu(c) }
+            if (c) mirror.chatMenu(c)
             return
         }
         spaceMenu(true)
@@ -1627,6 +1635,11 @@ Rectangle {
         case "nearby": openKey = ""; picked = true; zone = "messages"; return
         case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
         case "ginvite":
+            if (e.refused) {
+                Ui.sure("Not let in to " + e.name, e.refusedText + " To try again, ask " + (e.fromName || "them") + " for a new invite.",
+                        "Remove", () => Chat.declineGroupInvite(e.g), false, false)
+                return
+            }
             if (e.waiting) {
                 Ui.sure("Waiting for " + e.fromName, "You're in " + e.name + " as soon as " + e.fromName + " has the app open. If it takes a while, ask them to open it.",
                         "Stop waiting", () => Chat.declineGroupInvite(e.g), false, false)

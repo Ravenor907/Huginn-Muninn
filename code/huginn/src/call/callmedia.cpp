@@ -1,6 +1,7 @@
 #include "callmedia.h"
 #include "../modwire.h"
 #include "../busy.h"
+#include "../settings.h"
 
 #include "audioio.h"
 #include "turnclient.h"
@@ -117,11 +118,22 @@ void CallMedia::start(bool devices)
     m_started = now();
     m_lastReport = now();
     if (devices) {
+        // Voice activity (Settings › Calls) for a call too: silence goes out between words, so game sound stays out.
+        const QString gate = Settings::saved(QStringLiteral("voiceActivity"), QStringLiteral("auto")).toString();
+        m_gateOff = gate == QLatin1String("off");
+        m_gate.reset();
+        m_gate.setAutomatic(gate != QLatin1String("manual") && !m_gateOff);
+        m_gate.setThreshold(Settings::saved(QStringLiteral("voiceThreshold"), AudioDsp::Gate::kDefaultDb).toDouble());
         m_audio = new AudioIO(this);
         m_audio->pull = [this](qint16 *pcm) { onPull(pcm); };
         connect(m_audio, &AudioIO::captured, this, [this](const QByteArray &pcm) {
-            if (pcm.size() == AudioDsp::kFrame * 2)
-                onFrame(reinterpret_cast<const qint16 *>(pcm.constData()));
+            if (pcm.size() != AudioDsp::kFrame * 2)
+                return;
+            static const qint16 silence[AudioDsp::kFrame] = {};
+            const qint16 *frame = reinterpret_cast<const qint16 *>(pcm.constData());
+            if (!m_gateOff && !m_gate.frame(AudioDsp::levelDb(frame, AudioDsp::kFrame)))
+                frame = silence;
+            onFrame(frame);
         });
         m_audio->start();
     }
@@ -490,7 +502,10 @@ void CallMedia::sendReport()
 
 void CallMedia::onReport(const VideoWire::Report &r)
 {
+    const bool wasPaused = m_peerReport.notWatching;
     m_peerReport = r;
+    if (wasPaused && !r.notWatching && m_sending[1])
+        Q_EMIT keyframeWanted(VideoWire::Screen);   // c3: watching again, so a keyframe goes next
     if (r.camera != m_peerSending[0] || r.screen != m_peerSending[1]) {
         m_peerSending[0] = r.camera;
         m_peerSending[1] = r.screen;
@@ -534,6 +549,16 @@ bool CallMedia::sendVideo(int stream, bool key, int rotation, const QByteArray &
     stream &= 1;
     if (!m_c2 || !m_running || !m_sending[stream])
         return false;
+    if (stream == VideoWire::Screen) {
+        // Cap c3 (5.8.7): nothing to a peer that isn't watching, then from a keyframe on.
+        if (m_peerReport.notWatching) {
+            m_screenWaitKey = true;
+            return false;
+        }
+        if (m_screenWaitKey && !key)
+            return false;
+        m_screenWaitKey = false;
+    }
     const quint16 n = m_videoFrame[stream]++;
     if (key)
         m_keySentAt[stream] = now();

@@ -116,6 +116,10 @@ QString Settings::defaultDeviceName()
     QString host = QSysInfo::machineHostName();
     if (host.isEmpty() || host == QLatin1String("localhost"))
         host = QStringLiteral("handheld");
+    // Windows makes up names like DESKTOP-7KQ2M1B: nobody knows their computer by that.
+    for (const char *made : {"DESKTOP-", "LAPTOP-", "WIN-"})
+        if (host.startsWith(QLatin1String(made), Qt::CaseInsensitive))
+            host = QStringLiteral("Windows");
     return QStringLiteral("Huginn on %1").arg(host);
 }
 

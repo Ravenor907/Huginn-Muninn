@@ -73,9 +73,7 @@ internal fun ColumnScope.ModRows(app: Muninn, g: String, key: String, name: Stri
     if (danger) {
         if (admin) MenuRow("close", "Ban $name…", danger = true) {
             done()
-            io.github.ravenor907.muninn.ui.Ui.sure(io.github.ravenor907.muninn.ui.Ask("Ban $name?",
-                "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban", danger = true,
-                onConfirm = { tell(app.chat.groups.ban(g, key), "$name is banned.") }))
+            banAsk(app, g, key, name)
         }
         return
     }
@@ -89,6 +87,22 @@ internal fun ColumnScope.ModRows(app: Muninn, g: String, key: String, name: Stri
         if (app.chat.groups.timedOutUntil(g, key) > 0) MenuRow("clock", "Cancel timeout") { done(); tell(app.chat.groups.cancelTimeout(g, key), "$name can post again.") }
         else MenuRow("clock", "Timeout $name…") { go("timeout") }
     }
+}
+
+/** After Delete for everyone: an app without g2 keeps showing it, so the toast says how far it went. */
+internal fun removedText(behind: Int): String =
+    if (behind <= 0) "Removed for everyone."
+    else "Removed for everyone on the new version. $behind ${if (behind == 1) "member still sees it" else "members still see it"} until they update."
+
+/** Ban, or Ban and also remove what they posted in the last day (a signed remove each, like Delete for everyone). */
+internal fun banAsk(app: Muninn, g: String, k: String, who: String) {
+    io.github.ravenor907.muninn.ui.Ui.sure(io.github.ravenor907.muninn.ui.Ask("Ban $who?",
+        "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban", danger = true,
+        extra = "Ban and remove their messages", onExtra = {
+            val n = app.chat.groups.removeRecent(g, k, ModLogic.DAY)
+            tell(app.chat.groups.ban(g, k), "$who is banned." + if (n > 0) " $n ${if (n == 1) "message" else "messages"} removed." else "")
+        },
+        onConfirm = { tell(app.chat.groups.ban(g, k), "$who is banned.") }))
 }
 
 private fun tell(err: String?, done: String) {
@@ -175,13 +189,20 @@ internal fun PersonModDialog(app: Muninn, g: String, key: String, name: String, 
                         if (err != null) say(err, true) else say("$name is banned.", false)
                         done()
                     }
+                    // Also takes down what they posted in the last day (one signed remove each, for everyone).
+                    MButton("Ban and remove their messages", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Danger) {
+                        val n = app.chat.groups.removeRecent(g, key, ModLogic.DAY)
+                        val err = app.chat.groups.ban(g, key)
+                        if (err != null) say(err, true) else say("$name is banned." + if (n > 0) " $n ${if (n == 1) "message" else "messages"} removed." else "", false)
+                        done()
+                    }
                     return@Column
                 }
                 // In a room this mutes their voice only; folding their messages is its own choice below.
-                MenuRow(if (p.muted) "sound" else "mute", if (p.muted) "Unmute their voice" else "Mute their voice for me") {
+                MenuRow(if (p.muted) "sound" else "mute", if (p.muted) "Unmute their voice" else "Mute their voice in rooms") {
                     app.chat.sound.setMuted(key, !p.muted)
                     if (!p.muted) app.chat.sound.setHides(key, false)
-                    say(if (p.muted) "You hear $name again." else "$name's voice is muted for you. Their messages still show.", false)
+                    say(if (p.muted) "You hear $name again." else "$name's voice is muted for you in voice rooms. Calls with them aren't. Their messages still show.", false)
                 }
                 if (p.muted) MenuRow("hide", "Fold their messages", value = if (!p.show) "On" else "Off") { app.chat.sound.setHides(key, p.show) }
                 MenuRow("audio", "Volume (just for you)", value = "${p.volume}%") { page = "volume" }
@@ -222,7 +243,8 @@ internal fun MyModStatus(app: Muninn, g: String) {
     }
 }
 
-/** Group settings for admins: who is banned (Unban) and who is timed out (time left, Cancel). */
+/** Group settings for admins: reports from members, who is banned (Unban) and who is timed out (time left, Cancel). */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun GroupModPanels(app: Muninn, g: String) {
     @Suppress("UNUSED_VARIABLE") val serial by app.chat.groups.modSerial.collectAsState()
@@ -230,6 +252,37 @@ internal fun GroupModPanels(app: Muninn, g: String) {
     LaunchedEffect(g) { while (true) { delay(30_000); tick++ } }
     val banned = remember(g, serial) { app.chat.groups.bannedList(g) }
     val outs = remember(g, serial, tick) { app.chat.groups.timeoutList(g) }
+    // Cap g3: reports from members, only on this phone, newest first. Seeing the list marks them read.
+    val allReports by app.chat.groups.reportsByGroup.collectAsState()
+    val reports = allReports[g].orEmpty()
+    val chats by app.chat.groups.messages.collectAsState()
+    LaunchedEffect(g, reports.size) { app.chat.groups.readReports(g) }
+    Framed("Reports") {
+        if (reports.isEmpty()) Text("None", style = Type.small, modifier = Modifier.padding(vertical = 8.dp))
+        reports.forEach { r ->
+            val here = chats[g].orEmpty().any { it.id == r.msg && it.unsent.isEmpty() }
+            val chName = app.chat.groups.group(g)?.state?.channel(r.ch)?.n
+            Line("${r.fromName} reported ${r.kName}" + if (r.read) "" else " · new",
+                (if (chName != null) "#$chName · " else "") + r.text.ifEmpty { "(a photo or file)" } + if (here) "" else " · gone now", icon = "info", enabled = false) {}
+            androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
+                if (here && r.ch.isNotEmpty()) MButton("Go to it") { ChatNav.channel[g] = r.ch; ChatNav.openGroup(g) }
+                val canAct = app.chat.groups.canModerate(g, r.k)
+                if (here && canAct) MButton("Delete for everyone", kind = Kind.Danger) {
+                    io.github.ravenor907.muninn.ui.Ui.sure(io.github.ravenor907.muninn.ui.Ask("Delete for everyone?",
+                        "It shows as Removed by an admin on every member's phone.", "Delete", danger = true, onConfirm = {
+                            val err = app.chat.groups.removeForEveryone(g, r.msg, r.k)
+                            if (err == null) app.chat.groups.dismissReport(g, r.id)
+                            tell(err, removedText(app.chat.groups.withoutRemove(g)))
+                        }))
+                }
+                if (canAct) MButton("Timeout…") { ModNav.page = "timeout"; ChatNav.menuGroup = g; ChatNav.hold = r.k }
+                if (canAct) MButton("Ban…", kind = Kind.Danger) { banAsk(app, g, r.k, r.kName) }
+                MButton("Dismiss") { app.chat.groups.dismissReport(g, r.id) }
+            }
+        }
+    }
     Framed("Banned") {
         if (banned.isEmpty()) Text("Nobody", style = Type.small, modifier = Modifier.padding(vertical = 8.dp))
         banned.forEach { b ->

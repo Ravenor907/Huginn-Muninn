@@ -667,14 +667,17 @@ int main(int argc, char *argv[])
     // Calls live in their chats: each one that ends goes into that chat's timeline. A missed one raises a
     // notification (unless Do not disturb is on), and a click on it opens the chat. Who called shows only
     // with Show preview on and Huginn unlocked.
-    auto missedNote = [chat, vault](const QString &where, const QString &who, const QString &text) {
+    auto missedNote = [chat, vault, system](const QString &where, const QString &who, const QString &text) {
         if (Settings::silenced())
             return;
         const bool hide = vault->screenLocked() || !chat->showName();
         const QString title = hide ? QStringLiteral("Huginn") : QStringLiteral("Missed call");
         const QString body = hide ? QStringLiteral("Missed call") : text.isEmpty() ? who : text;
-        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); },
-                         [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); });
+        auto fallback = [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); };
+        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); }, fallback);
+        // Game mode: the system's notification may not show over the game, so the banner waits in the window too.
+        if (system->gameMode())
+            fallback();
     };
     QObject::connect(calls, &CallManager::logged, chat, [chat, calls, missedNote](const QString &key, bool out, const QString &result, int seconds) {
         const bool missed = result == QLatin1String("missed") || result == QLatin1String("internetOff");

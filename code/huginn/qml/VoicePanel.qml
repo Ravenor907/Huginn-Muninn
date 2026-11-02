@@ -10,7 +10,7 @@ Rectangle {
     id: panel
     property bool tour: false              // the screenshot tour shows how it looks
     property var roomBar: null             // shows someone's shared screen above the conversation
-    property bool compact: false           // a short window: the "With" line goes (the faces say it)
+    property bool compact: false           // a short window (a handheld): the room is one line, so the panel stays small
     // Its buttons: at least 44 px to touch in Handheld mode, and never smaller than their words.
     readonly property int smallButton: Math.max(Theme.touch ? Theme.tapMin : Theme.px(28), Math.round(Theme.fs(12) * 1.3) + Theme.px(8))
     property bool cardOpen: false          // your card is up (Main.qml), so the name stays lit
@@ -47,11 +47,71 @@ Rectangle {
         visible: panel.inVoice
         x: Theme.px(10)
         width: parent.width - Theme.px(20)
-        spacing: Theme.px(6)
-        topPadding: Theme.px(8)
-        bottomPadding: Theme.px(8)
+        spacing: panel.compact ? Theme.px(4) : Theme.px(6)
+        topPadding: panel.compact ? Theme.px(4) : Theme.px(8)
+        bottomPadding: panel.compact ? Theme.px(4) : Theme.px(8)
+
+        // Compact: the room, the faces of whoever is talking, More (Share, Watch) and Leave, all on one line.
+        Row {
+            id: oneLine
+            visible: panel.compact
+            width: parent.width
+            spacing: Theme.px(6)
+            readonly property var talkers: panel.others.filter(p => p.speaking).slice(0, 3)
+            readonly property bool hasMore: Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar)
+            Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.max(0, parent.width - compactLeave.width - parent.spacing
+                                - (oneLine.hasMore ? compactMore.width + parent.spacing : 0)
+                                - (oneLine.talkers.length ? talkerFaces.width + parent.spacing : 0))
+                elide: Text.ElideRight
+                text: Rooms.note !== "" && !panel.tour ? Rooms.note
+                    : !panel.tour && Settings.pushToTalk && Rooms.talking ? "Talking"
+                    : panel.tour ? "Voice / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
+                color: Rooms.note !== "" && !panel.tour ? Theme.danger : !panel.tour && Settings.pushToTalk && Rooms.talking ? Theme.accent : Theme.online
+                font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
+                Accessible.name: "Voice connected: " + text
+                TapHandler { onTapped: if (!panel.tour) Ui.openPage("g:" + Rooms.group, { voice: true }) }
+            }
+            Row {
+                id: talkerFaces
+                visible: oneLine.talkers.length > 0
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Theme.px(2)
+                Repeater {
+                    model: oneLine.talkers
+                    Avatar {
+                        required property var modelData
+                        size: Theme.px(24)
+                        key: panel.tour ? "" : (modelData.key || "")
+                        name: modelData.name || ""
+                        backdrop: Theme.raised
+                    }
+                }
+            }
+            HButton {
+                id: compactMore
+                visible: oneLine.hasMore
+                anchors.verticalCenter: parent.verticalCenter
+                implicitHeight: panel.smallButton
+                fontSize: 12
+                text: "More"
+                onClicked: if (!panel.tour) panel.moreMenu(compactMore)
+            }
+            HButton {
+                id: compactLeave
+                anchors.verticalCenter: parent.verticalCenter
+                implicitHeight: panel.smallButton
+                fontSize: 12
+                kind: "danger"
+                text: "Leave"
+                onClicked: if (!panel.tour) Rooms.leave()
+            }
+        }
 
         Row {
+            visible: !panel.compact
             width: parent.width
             spacing: Theme.px(8)
             Column {
@@ -69,7 +129,7 @@ Rectangle {
                     textFormat: Text.PlainText
                     width: parent.width
                     elide: Text.ElideRight
-                    text: panel.tour ? "Lounge / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
+                    text: panel.tour ? "Voice / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
                     color: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(12)
                     HoverHandler { cursorShape: Qt.PointingHandCursor }
@@ -91,7 +151,7 @@ Rectangle {
         Flow {
             width: parent.width
             spacing: Theme.px(6)
-            visible: panel.people.length > 0
+            visible: !panel.compact && panel.people.length > 0
             Repeater {
                 model: panel.people
                 Item {
@@ -147,7 +207,7 @@ Rectangle {
         }
         // Push to talk: the key to hold, lit while it's held.
         Rectangle {
-            visible: Settings.pushToTalk
+            visible: Settings.pushToTalk && !panel.compact
             width: parent.width
             height: Math.max(Theme.px(24), pttText.implicitHeight + Theme.px(6))
             radius: Theme.radius
@@ -161,14 +221,17 @@ Rectangle {
                 width: parent.width - Theme.px(12)
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
-                text: !panel.tour && Rooms.talking ? "Talking" : "Push to talk: hold " + TalkKey.keyName
+                // Windows: push to talk only hears the key while Huginn is in front, so with a game in front it says so.
+                text: !panel.tour && Rooms.talking ? "Talking"
+                    : !panel.tour && Qt.platform.os === "windows" && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while a game is in front"
+                    : "Push to talk: hold " + TalkKey.keyName
                 color: !panel.tour && Rooms.talking ? Theme.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
             }
         }
         Row {
             id: buttons
-            visible: Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar)
+            visible: !panel.compact && (Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar))
             spacing: Theme.px(6)
             HButton {
                 visible: Rooms.canShare || panel.tour
@@ -184,6 +247,20 @@ Rectangle {
             }
         }
         Rectangle { width: parent.width; height: 1; color: Theme.line }
+    }
+
+    // Compact's More: Share screen and Watch their screen.
+    function moreMenu(item) {
+        Ui.menuAt(item, item.width / 2, 0, () => {
+            const items = []
+            if (Rooms.canShare) items.push({ name: Rooms.sharing ? "Stop sharing" : "Share screen", icon: "screen", url: "share" })
+            if (Rooms.sharerName !== "" && panel.roomBar)
+                items.push({ name: panel.roomBar.screenShown ? "Hide their screen" : "Watch their screen", icon: "screen", url: "watch" })
+            Ui.pickFrom("Voice", [{ header: "", items: items }], a => {
+                if (a === "share") Rooms.toggleShare()
+                else if (a === "watch" && panel.roomBar) panel.roomBar.screenShown = !panel.roomBar.screenShown
+            })
+        })
     }
 
     // You: picture, name and status (a click opens your card), then Mute and Deafen.
@@ -241,11 +318,11 @@ Rectangle {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Theme.px(2)
             PanelButton {
-                icon: panel.muted ? "micoff" : "mic"; label: (panel.muted ? "Unmute mic" : "Mute mic") + " (Ctrl+Shift+M)"; lit: panel.muted
+                icon: panel.muted ? "micoff" : "mic"; label: (panel.muted ? "Unmute mic" : "Mute mic") + " (" + GlobalKeys.muteName + ")"; lit: panel.muted
                 onClicked: if (!panel.tour) Ui.toggleMic()
             }
             PanelButton {
-                icon: panel.deafened ? "deafened" : "headphones"; label: (panel.deafened ? "Undeafen" : "Deafen") + " (Ctrl+Shift+D)"; lit: panel.deafened
+                icon: panel.deafened ? "deafened" : "headphones"; label: (panel.deafened ? "Undeafen" : "Deafen") + " (" + GlobalKeys.deafenName + ")"; lit: panel.deafened
                 onClicked: if (!panel.tour) Ui.toggleDeaf()
             }
         }

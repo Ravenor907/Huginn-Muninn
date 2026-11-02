@@ -34,13 +34,13 @@
 <main>
   <header>
     <img src="../raven.png" alt="">
-    <div><h1>MUNINN</h1><div class="runes">ᛗᚢᚾᛁᚾᚾ</div></div>
+    <div><h1 id="brand">MUNINN</h1><div class="runes" id="runes">ᛗᚢᚾᛁᚾᚾ</div></div>
   </header>
 
   <div class="panel" id="found">
     <h2 id="title">Someone shared their Muninn code</h2>
     <p id="invite" class="hidden"></p>
-    <p>Muninn is a free private messenger for Android: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Huginn, does the same on desktops and handhelds (.exe or Flatpak), and the two talk to each other.</p>
+    <p id="about">Muninn is a free private messenger for Android: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Huginn, does the same on desktops and handhelds (.exe or Flatpak), and the two talk to each other.</p>
     <a class="btn" id="open" href="#">I have Muninn: open it</a>
   </div>
 
@@ -119,9 +119,18 @@
       $("byhand").innerHTML = "In Muninn or Huginn, tap <b>+</b> and <b>Join a group</b>, and paste this code (or this whole link):";
     }
     if (!android) {
-      // A computer or handheld: Huginn first, and no button that only opens the Android app.
+      // A computer or handheld: a Huginn page. No button or panel that only works on Android, and the code to paste right
+      // under the downloads.
       $("open").classList.add("hidden");
+      $("android").classList.add("hidden");
+      document.title = group ? "Join on Huginn" : "Add on Huginn";
+      $("brand").textContent = "HUGINN";
+      $("runes").textContent = "ᚺᚢᚷᛁᚾᚾ";
+      $("about").textContent = "Huginn is a free private messenger for desktops and handhelds: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Muninn, does the same on Android, and the two talk to each other.";
+      if (!group) $("title").textContent = "Someone shared their code";
       $("found").parentNode.insertBefore($("desktop"), $("android"));
+      $("desktop").parentNode.insertBefore($("manual"), $("desktop").nextSibling);
+      $("manual").querySelector("h2").textContent = "The code to paste";
     }
     var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
     document.getElementById("open").href = android

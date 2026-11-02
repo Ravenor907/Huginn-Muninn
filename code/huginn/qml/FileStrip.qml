@@ -38,7 +38,7 @@ Column {
             out.push({ label: "Open", act: "open", kind: "accent" }, { label: "Folder", act: "folder", kind: "normal" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "failed" && FileLink.canRetry(t.id)) {
             if (FileLink.needsDirect(t.id) && Chat.isContact(t.peer))
-                out.push({ label: Calls.trusted(t.peer) ? "Ask " + Chat.nameOf(t.peer) : "Allow direct", act: "direct", kind: "primary" })
+                out.push({ label: PeopleActions.directLabel(t.peer), act: "direct", kind: PeopleActions.directLabel(t.peer) === "Asked" ? "normal" : "primary" })
             out.push({ label: "Retry", act: "retry", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "done" || t.state === "failed") {
             out.push({ label: "Close", act: "close", kind: "normal" })

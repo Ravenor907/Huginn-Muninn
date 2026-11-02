@@ -3,7 +3,7 @@ package io.github.ravenor907.muninn.net
 /**
  * Cap f2 (shared/docs/protocol.md, section 27): file sharing, the parts Muninn and Huginn must agree on (Huginn:
  * sharing.cpp, checked in --chat-selftest). Plain logic only (SharingTest).
- *  - the route a file takes: the same Wi-Fi first ("Direct"), else the internet ("Over the internet")
+ *  - the route a file takes: the same Wi-Fi first ("Same Wi-Fi"), straight over the internet ("Straight to them"), else the relays ("Over the internet")
  *  - a group's file rules in its signed state: who may send ("fs") and the size limit ("fm", whole MB)
  *  - where a received file goes: Download/Muninn/<chat name>, with every name made safe
  *  - why a file was refused, in plain words
@@ -29,7 +29,11 @@ object Sharing {
     }
 
     /** What a transfer row says about its route. */
-    fun routeLabel(route: String): String = if (route == "direct") "Direct" else "Over the internet"
+    fun routeLabel(route: String): String = when (route) {
+        "direct" -> "Same Wi-Fi"
+        "internet" -> "Straight to them"
+        else -> "Over the internet"
+    }
 
     /** Who may send files in a group: "everyone", "admins" or "nobody" ([fs] as the state has it, "" when left out). */
     fun whoMaySend(fs: String): String = if (fs == ADMINS || fs == NOBODY) fs else EVERYONE

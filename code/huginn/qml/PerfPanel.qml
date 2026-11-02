@@ -94,6 +94,12 @@ Item {
     }
     function restart() {
         if (tour) return
+        // Game mode: a copy Huginn starts itself runs outside the game list, without the controller's setup there.
+        // Close instead, and start it again from the library.
+        if (System.gameMode) {
+            Ui.sure("Close Huginn?", "Start it again from your library to use your new choices.", "Close", () => { if (Ui.main) Ui.main.quitNow(); else Qt.quit() })
+            return
+        }
         if (!Perf.restart()) Ui.say("Couldn't restart. Close Huginn and open it again.", true)
     }
     function copy() {
@@ -473,7 +479,8 @@ Item {
                             visible: panel.restartNeeded
                             width: parent.width
                             wrapMode: Text.Wrap
-                            text: "Restart to use your new choices."
+                            text: System.gameMode ? "Close Huginn and start it again from your library to use your new choices."
+                                                  : "Restart to use your new choices."
                             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
                         }
                     }
@@ -483,7 +490,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: Theme.px(8)
                         HButton { visible: panel.overOn; text: "Undo all"; focused: panel.lit("undo"); onClicked: panel.undoAll() }
-                        HButton { visible: panel.restartNeeded; text: "Restart"; kind: "primary"; focused: panel.lit("restart"); onClicked: panel.restart() }
+                        HButton { visible: panel.restartNeeded; text: System.gameMode ? "Close Huginn" : "Restart"; kind: "primary"; focused: panel.lit("restart"); onClicked: panel.restart() }
                     }
                 }
 

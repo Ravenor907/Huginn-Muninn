@@ -441,7 +441,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     if (msgs.isEmpty()) null else "g:$g" to (grp.state.name to msgs.map { linkGroupItem(it) })
                 }.toMap()
             }
-            override fun sendToGroup(g: String, text: String, re: String): Boolean = groups.sendText(g, "", text, re)
+            override fun sendToGroup(g: String, text: String, re: String, ch: String): Boolean = groups.sendText(g, ch, text, re)
+            override fun adminsOnlyFor(g: String, ch: String): Boolean = groups.adminsOnlyHere(g, ch)
             override fun sendAsMeReply(peer: String, text: String, re: String): String? = if (!isContact(peer)) null else sendPrivate(peer, text, re)
             override fun groupDays(g: String) = this@Chat.groupDays(g)
             // Cap l2: read on a linked computer. Only when nothing newer came in since, so nothing unseen is marked read.
@@ -468,7 +469,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         retryScope.launch { groups.messages.collect { m ->
             if (Link.companions.value.none { it.ok && it.l1 }) return@collect
             val names = groups.all.value
-            Link.onGroupMessages(m.mapValues { (_, l) -> l.sortedBy { it.time }.takeLast(500) }, { g -> names[g]?.state?.name ?: "Group" }, { it.id }, { linkGroupItem(it) })
+            Link.onGroupMessages(m.mapValues { (_, l) -> l.sortedBy { it.time }.takeLast(500) }, { g -> names[g]?.state?.name ?: "Group" }, { it.id }, { linkGroupItem(it) }, { it.unsent + "\u0000" + it.text })
         } }
         // Cap l1: a mute changed here, a linked computer mutes too.
         retryScope.launch { flags.all.collect { s -> if (s.muted != lastMuted) { lastMuted = s.muted; Link.accountChanged() } } }
@@ -959,6 +960,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             true
         }
         val m = target ?: return
+        linkChanged(peerKey, msgId)
         outbox.drop(m.id)   // the message itself isn't sent again
         tries[m.id] = Tries(0, 0)
         queue(peerKey, m.id)
@@ -1334,7 +1336,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                     true
                 }
                 // Not here yet (still on its way): make sure it never shows.
-                if (!found) { forget(listOf(gone)); held[fromKey]?.remove(gone) }
+                if (!found) { forget(listOf(gone)); held[fromKey]?.remove(gone) } else linkChanged(fromKey, gone)
                 recalls.tryEmit(fromKey)
                 receipt(fromKey, listOf(gone), "unsent", mailbox)
             }
@@ -2095,6 +2097,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             true
         }
         if (done) queueMx(peerKey, Rich.editMsg(msgId, t, _private.value[peerKey]?.firstOrNull { it.id == msgId }?.edited ?: ts))
+        if (done) linkChanged(peerKey, msgId)
         return null
     }
 
@@ -2116,13 +2119,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             mine?.let { m -> arrivals.tryEmit(Triple(contacts.get(fromKey)?.shown ?: name, "Reacted $e to “${preview(m)}”", fromKey)) }
         } else {
             val t = p.getString("text")
-            edit { map ->
+            val changed = edit { map ->
                 val list = map[fromKey] ?: return@edit false
                 val m = list.firstOrNull { it.id == msgId && !it.mine && it.unsent.isEmpty() && it.photo.isEmpty() } ?: return@edit false
                 if (!Rich.editWins(fromKey, fromKey, ts, m.edited)) return@edit false
                 map[fromKey] = list.map { if (it.id == msgId) it.copy(text = t, edited = ts) else it }
                 true
             }
+            if (changed) linkChanged(fromKey, msgId)
         }
     }
 
@@ -2590,6 +2594,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun hasG2(k: String) = ModLogic.CAP in capsOf(k) || envCaps[k]?.contains(ModLogic.CAP) == true
         override fun hasF2(k: String) = this@Chat.hasF2(k)
         override fun hasG3(k: String) = Proto06.G3 in capsOf(k) || envCaps[k]?.contains(Proto06.G3) == true
+        override fun hasG4(k: String) = Proto06.G4 in capsOf(k) || envCaps[k]?.contains(Proto06.G4) == true
         override fun typeChanged(g: String, type: String) { if (type == Limits.FAMILY) bg { familySync() } }
     }
 
@@ -3035,6 +3040,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     private fun replace(peer: String, m: Msg) = update(peer, m.id) { m }
+
+    /** Cap l3: a message a linked computer already has was edited or deleted: it goes again (same id) and replaces it there. */
+    private fun linkChanged(peer: String, msgId: String) {
+        if (!isContact(peer)) return
+        val m = _private.value[peer]?.firstOrNull { it.id == msgId } ?: return
+        bg { Link.onChanged(peer, nameOf(peer), m) }
+    }
 
     private fun toJson(list: List<Msg>) = JSONArray().apply {
         list.forEach { put(JSONObject().put("id", it.id).put("peer", it.peerKey).put("name", it.name).put("text", it.text).put("mine", it.mine)

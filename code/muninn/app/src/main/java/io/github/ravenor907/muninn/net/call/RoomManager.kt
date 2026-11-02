@@ -103,9 +103,12 @@ object RoomManager {
     private fun pausesScreen(k: String): Boolean = try { app?.chat?.contacts?.get(k)?.caps?.contains(SCREEN_PAUSE_CAP) == true } catch (e: Exception) { false }
     const val SCREEN_PAUSE_CAP = "c3"
     /** What the room says while a phone call has the sound. */
-    const val ON_CALL = "On a phone call"
+    const val ON_CALL = SoundHold.ON_CALL
 
     private var proximityLock: android.os.PowerManager.WakeLock? = null
+    /** The room screen is in front (resumed): only then does the proximity sensor darken the screen. */
+    private val inFront = MutableStateFlow(false)
+    fun screenInFront(on: Boolean) { inFront.value = on }
 
     /** On the earpiece in a room: the screen goes dark against the cheek. */
     private fun proximity(c: Context, on: Boolean) {
@@ -180,8 +183,9 @@ object RoomManager {
             catch (_: Exception) {}
         }
         // Proximity on the earpiece: the screen goes dark against the cheek (the speaker or a headset keeps it on).
+        // Only while the room screen is in front: covering the phone's top in a chat doesn't blank it.
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
-            combine(AudioRoute.current, _room) { out, r -> r != null && out?.kind == AudioRoute.Kind.EARPIECE }.distinctUntilChanged()
+            combine(AudioRoute.current, _room, inFront) { out, r, front -> r != null && front && out?.kind == AudioRoute.Kind.EARPIECE }.distinctUntilChanged()
                 .collect { proximity(app, it) }
         }
         // Who is in a room ages out (25 minutes, or 20 s and 60 s for an app with heartbeats): a screen showing it looks
@@ -279,7 +283,9 @@ object RoomManager {
             publish()
             app?.let { a -> _room.value?.let { RoomRinger.stillHere(a, it) } }
         } else if (stillHere && t - askedAt >= RoomLogic.ASK_MS) {
+            val title = _room.value?.title ?: ""
             doLeave("Nobody else came, so you left the voice room")
+            app?.let { RoomRinger.leftAlone(it, title) }   // a note that stays, even with the screen off
             return true
         }
         return false
@@ -402,9 +408,13 @@ object RoomManager {
         RoomService.start(a)   // the microphone joins the service's types
     }
 
-    /** Another app took the sound ([why], e.g. a phone call) or gave it back (""): the room pauses and resumes. */
-    private fun hold(why: String) = exec.execute {
-        if (g.isEmpty() || held == why) return@execute
+    /**
+     * Another app took the sound ([why], e.g. a phone call) or gave it back (""): the room pauses and resumes.
+     * [retake]: the room's call mode, route and focus go back even when the reason doesn't change.
+     */
+    private fun hold(why: String, retake: Boolean = false) = exec.execute {
+        if (g.isEmpty()) return@execute
+        if (held == why) { if (retake) RoomAudio.resume(); return@execute }
         held = why
         if (why.isEmpty()) RoomAudio.resume()
         micToPeers()
@@ -521,7 +531,8 @@ object RoomManager {
         for (k in presenceTable.inRoom(g, ch, now())) if (k != me() && peers[k] == null && beats(k)) people += Person(k, nameOf(g, k), false, state = "reconnecting")
         val sorted = listOf(people.first()) + people.drop(1).sortedBy { it.name.lowercase() }
         val title = if (RoomLogic.isGroupCall(ch)) "Group call" else st?.channel(ch)?.n ?: "Voice room"
-        _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note,
+        // Deafened: the mic is off too, so it shows muted, and Unmute undeafens (setMuted).
+        _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted || deafened, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note,
             deafened, held, listenOnly, stillHere)
         // Group video goes to the people in the room whose call is up.
         app?.let { a -> RoomVideo.peers(a, peers.mapNotNull { (k, p) -> p.s.mediaNow?.let { k to it } }.toMap(), sorted.size) }
@@ -717,25 +728,57 @@ object RoomManager {
         private var audio: AudioManager? = null
         private var focus: android.media.AudioFocusRequest? = null
         private var modeWatch: Any? = null   // an AudioManager.OnModeChangedListener (Android 12 and newer)
+        private var recWatch: AudioManager.AudioRecordingCallback? = null
+        private val main = android.os.Handler(android.os.Looper.getMainLooper())
+        /** The focus went for good (music, a clip): Android sends no more focus changes, so the mode is watched. */
+        @Volatile private var lostFocus = false
+        @Volatile private var ownModeAt = 0L
+        private var polledMode = AudioManager.MODE_IN_COMMUNICATION
 
-        /** A phone call (its ring or the call itself) has the sound now. */
-        private fun phoneCall(m: Int?) = m == AudioManager.MODE_IN_CALL || m == AudioManager.MODE_RINGTONE ||
-            (Build.VERSION.SDK_INT >= 30 && m == AudioManager.MODE_CALL_SCREENING)
+        private fun setOwnMode(am: AudioManager) {
+            ownModeAt = android.os.SystemClock.elapsedRealtime()
+            try { am.mode = AudioManager.MODE_IN_COMMUNICATION } catch (_: Exception) {}
+        }
+        private fun ours() = android.os.SystemClock.elapsedRealtime() - ownModeAt < SoundHold.OWN_MODE_MS
+
+        /** Another app records for a call (Discord, WhatsApp): the room's own microphone doesn't count. */
+        private fun otherVoip(am: AudioManager): Boolean = try {
+            val mine = record?.audioSessionId
+            am.activeRecordingConfigurations.any {
+                it.clientAudioSource == MediaRecorder.AudioSource.VOICE_COMMUNICATION && it.clientAudioSessionId != mine
+            }
+        } catch (_: Exception) { false }
+
+        private fun take(s: SoundHold.Step) {
+            lostFocus = s.lost
+            when {
+                s.held != null -> hold(s.held, s.retake)
+                s.retake -> hold(held, true)
+            }
+        }
+
+        private fun onMode(m: Int) = take(SoundHold.mode(m, ours(), held, lostFocus, Build.VERSION.SDK_INT))
 
         /**
-         * The room asks Android for the sound like a call. A phone call (or another app for a moment) takes it: the room
-         * pauses, mic and sound, and comes back when it's given back. Another app taking it for good (music) is let be,
-         * unless it's a phone call.
+         * The room asks Android for the sound like a call. A phone call or another app's call takes it: the room pauses,
+         * mic and sound, and comes back when it's given back or the mode returns to normal (see [SoundHold]). Another app
+         * taking it for good (music, a clip) is let be.
          */
         private val focusChange = AudioManager.OnAudioFocusChangeListener { change ->
-            val m = audio?.mode
-            when (change) {
-                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> hold(if (phoneCall(m)) ON_CALL else "Paused while another app plays")
-                AudioManager.AUDIOFOCUS_LOSS -> { if (phoneCall(m)) hold(ON_CALL) }
-                AudioManager.AUDIOFOCUS_GAIN -> hold("")
-                else -> {}
-            }
+            val am = audio
+            if (am != null) take(SoundHold.focus(change, am.mode, otherVoip(am), lostFocus, Build.VERSION.SDK_INT))
             Unit
+        }
+
+        /** Android 11 and older have no mode listener: the mode is read every second while the room is up. */
+        private val modePoll = object : Runnable {
+            override fun run() {
+                val am = audio ?: return
+                if (!running) return
+                val m = try { am.mode } catch (_: Exception) { polledMode }
+                if (m != polledMode) { polledMode = m; onMode(m) }
+                main.postDelayed(this, SoundHold.MODE_POLL_MS)
+            }
         }
 
         @SuppressLint("MissingPermission")
@@ -744,7 +787,9 @@ object RoomManager {
             val am = c.getSystemService(AudioManager::class.java) ?: return false
             audio = am
             oldMode = am.mode
-            am.mode = AudioManager.MODE_IN_COMMUNICATION
+            lostFocus = false
+            setOwnMode(am)
+            polledMode = AudioManager.MODE_IN_COMMUNICATION
             AudioRoute.start(am, speaker = true)
             val req = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -755,17 +800,23 @@ object RoomManager {
             try { am.requestAudioFocus(req) } catch (_: Exception) {}
             // Android 12 and newer also say when a phone call starts and ends, in case the focus change doesn't come.
             if (Build.VERSION.SDK_INT >= 31) try {
-                val l = AudioManager.OnModeChangedListener { m ->
-                    when {
-                        phoneCall(m) -> hold(ON_CALL)
-                        m == AudioManager.MODE_NORMAL && held == ON_CALL -> hold("")
-                        else -> {}
-                    }
-                }
+                val l = AudioManager.OnModeChangedListener { m -> onMode(m) }
                 am.addOnModeChangedListener(c.mainExecutor, l)
                 modeWatch = l
             } catch (_: Exception) {}
+            // Another app starting or ending a call's recording (it may take the focus before it records).
+            try {
+                val r = object : AudioManager.AudioRecordingCallback() {
+                    override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>?) {
+                        val a = audio ?: return
+                        take(SoundHold.recording(otherVoip(a), held, lostFocus))
+                    }
+                }
+                am.registerAudioRecordingCallback(r, main)
+                recWatch = r
+            } catch (_: Exception) {}
             running = true
+            if (Build.VERSION.SDK_INT < 31) main.postDelayed(modePoll, SoundHold.MODE_POLL_MS)
             val minOut = AudioTrack.getMinBufferSize(Opus.RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val t = try {
                 AudioTrack.Builder()
@@ -802,7 +853,8 @@ object RoomManager {
         /** The phone call ended: Android reset the call audio, so the room's mode, route and focus go back. */
         fun resume() {
             val am = audio ?: return
-            try { am.mode = AudioManager.MODE_IN_COMMUNICATION } catch (_: Exception) {}
+            setOwnMode(am)
+            lostFocus = false
             AudioRoute.reapply()
             focus?.let { try { am.requestAudioFocus(it) } catch (_: Exception) {} }
         }
@@ -856,10 +908,12 @@ object RoomManager {
                         if (n <= 0) one.fill(0)
                         val key = peers.entries.firstOrNull { it.value.s.callId == id }?.key
                         if (key != null) {
-                            val s = talk.getOrPut(id) { CallLogic.Speaking() }.feed(one, Opus.FRAME, nowMs)
+                            // Their volume here (cap g2: 0 to 200 %, 0 while muted for me), before the mix. Someone you can't
+                            // hear never lights up as speaking.
+                            val gain = io.github.ravenor907.muninn.net.PeopleSound.gainOf(key)
+                            val s = talk.getOrPut(id) { CallLogic.Speaking() }.feed(one, Opus.FRAME, nowMs) && gain > 0
                             if (s != (speaking[key] == true)) { speaking[key] = s; exec.execute { publish() } }
-                            // Their volume here (cap g2: 0 to 200 %, 0 while muted for me), before the mix.
-                            io.github.ravenor907.muninn.net.ModLogic.applyGain(one, Opus.FRAME, io.github.ravenor907.muninn.net.PeopleSound.gainOf(key))
+                            io.github.ravenor907.muninn.net.ModLogic.applyGain(one, Opus.FRAME, gain)
                         }
                         for (i in 0 until Opus.FRAME) mix[i] += one[i].toInt()
                     }
@@ -887,13 +941,16 @@ object RoomManager {
             record = null; track = null; aec = null; ns = null
             audio?.let { am ->
                 if (Build.VERSION.SDK_INT >= 31) (modeWatch as? AudioManager.OnModeChangedListener)?.let { try { am.removeOnModeChangedListener(it) } catch (_: Exception) {} }
+                recWatch?.let { try { am.unregisterAudioRecordingCallback(it) } catch (_: Exception) {} }
                 focus?.let { try { am.abandonAudioFocusRequest(it) } catch (_: Exception) {} }
                 try {
                     AudioRoute.stop()
                     am.mode = oldMode
                 } catch (_: Exception) {}
             }
-            modeWatch = null; focus = null
+            modeWatch = null; focus = null; recWatch = null
+            main.removeCallbacks(modePoll)
+            lostFocus = false
             audio = null
         }
     }

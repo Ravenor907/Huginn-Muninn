@@ -267,8 +267,10 @@ QtObject {
         const name = n || info.name || "Group"
         const lim = c.tour ? { links: true } : Chat.groupLimit(g)
         const top = [{ name: "Open", icon: "hash", url: "open" }]
-        if (!row.readOnly) top.push({ name: "Invite people", icon: "plus", url: "people" })
-        if (info.amAdmin && lim.links && !row.readOnly) top.push({ name: "Copy invite link", icon: "attach", url: "invite" })
+        // Only for someone who can invite: an admin, or anyone in a group where members can invite.
+        const canInvite = !row.readOnly && (c.tour || !!info.amAdmin || (lim.links && typeof Chat.membersInvite === "function" && !!Chat.membersInvite(g)))
+        if (canInvite) top.push({ name: "Invite people", icon: "plus", url: "people" })
+        if (canInvite && lim.links) top.push({ name: "Copy invite link", icon: "attach", url: "invite" })
         const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute notifications", icon: "bell", url: "mute" }
                                                 : { name: "Mute notifications", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
@@ -284,7 +286,7 @@ QtObject {
             else if (a === "notify") notifyMenu(k)
             else if (a === "read") (info.channels || []).forEach(ch => Chat.markGroupRead(g, ch.id))
             else if (a === "invite") copyInvite(g)
-            else if (a === "people") onPage("addMenu")
+            else if (a === "people") onPage("inviteMenu")
             else if (a === "channels") onPage("channelsMenu")
             else if (a === "settings") onPage("settingsMenu")
             else if (a === "leave") {
@@ -294,11 +296,27 @@ QtObject {
                 Ui.sure("Delete " + name + " from this device?", "Can't be undone.", "Hold to delete", () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
         })
     }
-    // An invite to copy: a link good for a day, or the group's code (good for an hour) where links don't work.
+    // My newest invite link for g nobody used yet, with no use limit and more than an hour left: shown and copied again
+    // instead of making another. { link, x (ms, 0 never), max } or null.
+    function spareLink(g) {
+        if (typeof Chat.groupLinks !== "function") return null
+        const spare = (Chat.groupLinks(g) || []).filter(l => l.mine && l.link && !(l.uses > 0) && !(l.max > 0) && (!l.x || l.x - Date.now() > 3600000))
+        return spare.length ? spare.sort((a, b) => (b.x || Infinity) - (a.x || Infinity))[0] : null
+    }
+    // "7 days", "5 hours", "20 minutes": how long a link still works.
+    function worksFor(x) {
+        if (!x) return "Never expires."
+        const left = x - Date.now(), h = Math.floor(left / 3600000)
+        return "Works for " + (h >= 48 ? Math.floor(h / 24) + " days" : h >= 1 ? h + (h === 1 ? " hour" : " hours") : Math.max(1, Math.floor(left / 60000)) + " minutes") + "."
+    }
+    // An invite to copy: my spare link again, else a new one good for 7 days (as the invite panel makes), or the
+    // group's code (good for an hour) where links don't work.
     function copyInvite(g) {
-        const r = Chat.createGroupLink(g, 86400000, 0) || {}
         const name = (Chat.groupInfo(g) || {}).name || ""
-        if (r.link) { Chat.copyText(inviteText(name, r.link)); Ui.say("Invite link copied, with how to join. Works for a day."); return }
+        const spare = spareLink(g)
+        if (spare) { Chat.copyText(inviteText(name, spare.link)); Ui.say("Invite link copied, with how to join. " + worksFor(spare.x || 0)); return }
+        const r = Chat.createGroupLink(g, 7 * 86400000, 0) || {}
+        if (r.link) { Chat.copyText(inviteText(name, r.link)); Ui.say("Invite link copied, with how to join. Works for 7 days."); return }
         const code = Chat.groupCode(g)
         if (code !== "") { Chat.copyText(inviteText(name, code)); Ui.say("Group code copied, with how to join. Works for an hour."); return }
         Ui.say(r.error ? r.error : "Couldn't make an invite.", true)
@@ -403,7 +421,7 @@ QtObject {
         // While a phone is linked, this joins as this PC's own account, not the phone's: said plainly.
         const own = !!Linked.phone.key && !Linked.phone.gone
         Ui.sure(own ? "Join " + gc.name + " as this PC's own account?" : "Join " + gc.name + "?",
-                (n ? n + (n === 1 ? " member. " : " members. ") : "") + (own ? "They see this PC's own account, not your phone's. To join as you, open the invite on your phone." : "They see your name."),
+                (n ? n + (n === 1 ? " member. " : " members. ") : "") + (own ? "They'd see a second " + Ui.myName + ": this PC's own account, with the same name and picture but separate from your phone. To join as you, open the invite on your phone." : "They see your name."),
                 "Join", go, false, false)
         Ui.confirm.cancelText = "Not now"
         return true
@@ -445,12 +463,19 @@ QtObject {
         else Ui.say(urls.length === 1 ? "Sending the file. Transfers shows how it goes." : "Sending " + urls.length + " files. Transfers shows how they go.")
     }
     // A file too big to go without Direct (Transfers, a chat's file card): Direct calls and files with them on here (it
-    // shares this device's internet address with them), and a message asks them to turn it on too. Retry once they have.
+    // shares this device's internet address with them), and a message asks them to turn it on too, once per person this
+    // run (the button then says Asked). Retry once they have.
+    property var askedDirect: ({})
+    function directLabel(k) { return !Calls.trusted(k) ? "Allow direct" : askedDirect[k] ? "Asked" : "Ask " + Chat.nameOf(k) }
     function allowDirect(k) {
         const name = Chat.nameOf(k)
+        if (Calls.trusted(k) && askedDirect[k]) { Ui.say(name + " was already asked. Retry once they turn on Direct calls and files."); return }
         const ask = () => {
             if (!Calls.trusted(k)) Calls.setTrusted(k, true)
             Chat.sendPrivate(k, "Can you turn on Direct calls and files for me? It's in the menu for my name. Then big files go straight between us.")
+            const a = Object.assign({}, askedDirect)
+            a[k] = true
+            askedDirect = a
             Ui.say("Direct is on here, and " + name + " was asked to turn it on too. Retry once they have.")
         }
         if (Calls.trusted(k)) { ask(); return }
@@ -515,6 +540,14 @@ QtObject {
 
     // ------------------------------------------------------------- linked devices (section 15)
 
+    // Unlinks the phone and takes its copy off. This PC's own name and picture come back; when they aren't known
+    // (it was linked before they were kept, or it never had a name), it asks for one instead of keeping the phone's.
+    function unlinkRemove() {
+        if (Linked.unlinkPhone(false)) { Ui.say("Unlinked. This computer has its own name again."); return }
+        Qt.callLater(() => Ui.ask("Name this computer's account", "Your phone's name was used here. Pick the name this computer shows in its own chats.", "", "Save",
+                                  t => { Chat.username = t; Ui.say("Unlinked.") }))
+    }
+
     function linkedDevices() {
         if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
         const ph = Linked.phone
@@ -526,7 +559,7 @@ QtObject {
                        { name: "Remove " + ph.name + "'s copy", detail: "Its chats and contacts leave this device", url: "wipe", danger: true })
         } else {
             if (!ph.ok) phone.push({ name: "Check the 4 emoji", detail: "Nothing comes over until they match", url: "check" })
-            phone.push({ name: "Unlink " + ph.name, detail: "Its chats leave this device", url: "ph", danger: true })
+            phone.push({ name: "Unlink " + ph.name, detail: "Keep a read-only copy here, or remove it", url: "ph", danger: true })
         }
         // Huginn as the phone: another device mirrors this one.
         // The other way round, rarely wanted: another device shows this PC's chats.
@@ -557,9 +590,13 @@ QtObject {
                 Ui.pickFrom("Unlink " + ph.name + "?", [{ header: "", items: [
                     { name: "Unlink, keep a copy", detail: "Chats and contacts stay here, read only", url: "keep" },
                     { name: "Unlink and remove", detail: "Its chats and contacts leave this device", url: "wipe", danger: true }] }],
-                    b => { Linked.unlinkPhone(b === "keep"); Ui.say("Unlinked.") })
+                    b => {
+                        if (b === "keep") { Linked.unlinkPhone(true); Ui.say("Unlinked. A read-only copy stays here."); return }
+                        Ui.sure("Unlink and remove?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.",
+                                "Unlink and remove", () => unlinkRemove(), false, true)
+                    })
             } else if (a === "wipe") {
-                Ui.sure("Remove " + ph.name + "'s copy?", "Its chats and contacts leave this device.", "Remove", () => Linked.unlinkPhone(false), false, true)
+                Ui.sure("Remove " + ph.name + "'s copy?", "Its chats and contacts leave this device.", "Remove", () => unlinkRemove(), false, true)
             } else if (a.indexOf("u:") === 0) {
                 const key = a.substring(2), c = Linked.companions.find(x => x.key === key)
                 const name = c ? c.name : "this device"

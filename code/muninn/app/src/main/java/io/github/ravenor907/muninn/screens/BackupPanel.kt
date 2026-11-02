@@ -209,12 +209,15 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, onCancel: () -> Unit, re
     }
 
     fun replace(o: BackupFormat.Opened, copyOk: Boolean = false) {
-        // A backup from a computer makes this phone the same person as that computer: said first, with its own confirm.
+        // A backup from another device (a computer, or another phone) makes this phone the same person as that device:
+        // said first, with its own confirm (the same rule as Huginn's).
         val s = BackupFormat.summary(o)
-        if (!copyOk && s.app == "huginn") {
+        if (!copyOk && (s.app == "huginn" || (s.device.isNotEmpty() && s.device != app.identity.deviceName))) {
+            val where = s.device.ifEmpty { if (s.app == "huginn") "that computer" else "that phone" }
             Ui.sure(Ask("This makes a copy of you",
-                "This phone becomes the same person as ${s.device.ifEmpty { "that computer" }}. If both are used, messages stop working on one or both, " +
-                    "and friends see errors. To use both, link instead: Settings › Linked devices › Scan to link. Restore only if that computer won't chat again.",
+                "This phone becomes the same person as $where. If both are used, messages stop working on one or both, " +
+                    "and friends see errors." + (if (s.app == "huginn") " To use both, link instead: Settings › Linked devices › Scan to link." else "") +
+                    " Restore only if $where won't chat again.",
                 "Restore anyway", danger = true) { replace(o, copyOk = true) })
             return
         }

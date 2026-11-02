@@ -154,6 +154,18 @@ class ModTest {
         assertEquals("{}", saved)            // back to the usual: nothing kept
     }
 
+    @Test
+    fun muteForMeIsForRoomsOnly() {
+        var saved: String? = null
+        val s = PeopleSound({ saved }, { saved = it })
+        s.setVolume("k", 150)
+        s.setMuted("k", true)
+        assertEquals(0, s.gain("k"))                  // in a room: silent
+        assertEquals(150, s.gain("k", room = false))  // a 1:1 call: heard, at their volume
+        s.setMuted("k", false)
+        assertEquals(150, s.gain("k", room = true))
+    }
+
     // ------------------------------------------------------------------ three phones
 
     private var clock = 1_762_000_000_000L

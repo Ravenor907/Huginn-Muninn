@@ -306,6 +306,46 @@ QString Moderation::removeForEveryone(const QString &g, const QString &msgId, co
     return QString();
 }
 
+int Moderation::removeRecent(const QString &g, const QString &author, qint64 ms)
+{
+    ensureLoaded();
+    if (!m_loaded || !canModerate(g, author) || ms <= 0)
+        return 0;
+    const auto it = m_chat->m_groups.constFind(g);
+    const QJsonObject state = it->state;
+    const qint64 since = now() - ms;
+    QJsonArray list;
+    for (auto m = it->messages.crbegin(); m != it->messages.crend() && list.size() < ModWire::kMaxList; ++m) {
+        const QVariantMap x = m->toMap();
+        if (x.value(QStringLiteral("time")).toLongLong() < since)
+            break;
+        const QString id = x.value(QStringLiteral("id")).toString();
+        if (x.value(QStringLiteral("mine")).toBool() || x.value(QStringLiteral("system")).toBool() || x.value(QStringLiteral("from")).toString() != author
+            || !x.value(QStringLiteral("unsent")).toString().isEmpty() || !GroupWire::isLogicalId(id))
+            continue;
+        bool ok = false;
+        const QJsonObject rec = GroupWire::sign(m_chat->m_priv, QLatin1String(ModWire::kDomain), ModWire::makeRemove(g, author, m_chat->myKey(), now(), id), &ok);
+        if (ok && ModWire::accept(&state, rec) == QLatin1String("ok"))
+            list.append(rec);
+    }
+    for (const QJsonValue &v : std::as_const(list))
+        blank(g, v.toObject());
+    if (!list.isEmpty())
+        for (const QString &k : GroupWire::keysOf(state))
+            if (k != m_chat->myKey() && hasG2(k))
+                m_chat->sendControl(g, k, QJsonObject{{QStringLiteral("t"), QStringLiteral("mod")}, {QStringLiteral("list"), list}});
+    return int(list.size());
+}
+
+int Moderation::withoutRemove(const QString &g) const
+{
+    int n = 0;
+    for (const QString &k : GroupWire::keysOf(m_chat->m_groups.value(g).state))
+        if (k != m_chat->myKey() && !hasG2(k))
+            ++n;
+    return n;
+}
+
 void Moderation::blank(const QString &g, const QJsonObject &rec)
 {
     const QString author = jstr(rec, "k"), id = jstr(rec, "m"), me = m_chat->myKey();

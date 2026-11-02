@@ -93,6 +93,7 @@ object RoomRinger {
     const val RING_ID = 0x4351
     const val ONGOING_ID = 0x4352
     const val STILL_HERE_ID = 0x4353
+    const val LEFT_ID = 0x4354
 
     private fun shown(c: Context, text: String): String? {
         val preview = try { (c.applicationContext as Muninn).identity.showPreview } catch (e: Exception) { false }
@@ -178,7 +179,9 @@ object RoomRinger {
     /** Alone in the room for a while: "Still here?", with I'm here and Leave. */
     fun stillHere(c: Context, ui: RoomManager.Ui) {
         val title = shown(c, ui.title) ?: "Voice room"
-        val n = NotificationCompat.Builder(c, Muninn.MESSAGES).setSmallIcon(R.drawable.ic_notify)
+        Ringer.channels(c)
+        // On the calls channel: a muted messages channel or Do not disturb for messages doesn't hide it.
+        val n = NotificationCompat.Builder(c, Ringer.CALLS).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle("Still here?")
             .setContentText("You're the only one in $title. Muninn leaves in ${RoomLogic.ASK_MS / 60_000} minutes.")
             .setCategory(NotificationCompat.CATEGORY_REMINDER).setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -189,6 +192,23 @@ object RoomRinger {
             .setTimeoutAfter(RoomLogic.ASK_MS)
             .build()
         try { NotificationManagerCompat.from(c).notify(STILL_HERE_ID, n) } catch (_: SecurityException) {}
+    }
+
+    /** Muninn left [room] after "Still here?" went unanswered: a note that says so, until it's tapped or cleared. */
+    fun leftAlone(c: Context, room: String) {
+        val title = shown(c, room)?.takeIf { it.isNotEmpty() }
+        Ringer.channels(c)
+        val open = c.packageManager.getLaunchIntentForPackage(c.packageName)?.let {
+            PendingIntent.getActivity(c, LEFT_ID, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        }
+        val n = NotificationCompat.Builder(c, Ringer.CALLS).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle(if (title != null) "You left $title" else "You left the voice room")
+            .setContentText("Nobody else came, so Muninn left after asking \"Still here?\". Join again any time.")
+            .setCategory(NotificationCompat.CATEGORY_STATUS).setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setAutoCancel(true)
+            .apply { if (open != null) setContentIntent(open) }
+            .build()
+        try { NotificationManagerCompat.from(c).notify(LEFT_ID, n) } catch (_: SecurityException) {}
     }
 
     fun stillHereGone(c: Context) { try { NotificationManagerCompat.from(c).cancel(STILL_HERE_ID) } catch (_: Exception) {} }

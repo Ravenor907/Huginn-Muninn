@@ -21,6 +21,7 @@ class FileTextTest {
         assertEquals("Checking it", FileText.line("sending", false, 100, 100, "Checking it", "Ana"))
         assertEquals("Sent · Saved in their Downloads", FileText.line("done", true, 10, 10, "", "Ana"))
         assertEquals("Saved to Downloads", FileText.line("done", false, 10, 10, "", "Ana"))
+        assertEquals("Saved to Pictures/Ana", FileText.line("done", false, 10, 10, "", "Ana", "Pictures/Ana"))   // Save files to
         assertEquals("Wants to send you this", FileText.line("asking", false, 0, 10, "", "Ana"))
         assertEquals("They're offline. Try again when they're back.", FileText.line("failed", true, 0, 10, "They're offline. Try again when they're back.", "Ana"))
         assertEquals("Didn't go through", FileText.line("failed", true, 0, 10, "", "Ana"))

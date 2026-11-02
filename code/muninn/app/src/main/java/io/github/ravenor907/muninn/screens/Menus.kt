@@ -416,6 +416,14 @@ private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
     MenuRow("chat", "Every message", value = if (mode == ChatFlags.EVERY) "On" else "") { pick(ChatFlags.EVERY) }
     MenuRow("clock", "One until I open it", value = if (mode == ChatFlags.ONE) "On" else "") { pick(ChatFlags.ONE) }
     if (group) MenuRow("people", "Only mentions and replies to me", value = if (mode == ChatFlags.MENTIONS) "On" else "") { pick(ChatFlags.MENTIONS) }
+    if (group) {
+        // The same nicknames as Settings › Notifications, saved as they're typed.
+        var nick by remember { mutableStateOf(app.identity.mentionNames) }
+        Column(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+            Text("Also mention me as", style = io.github.ravenor907.muninn.ui.Type.small)
+            Field(nick, { nick = it.take(80); app.identity.mentionNames = nick }, "Nicknames, like tay, T", Modifier.padding(top = 4.dp))
+        }
+    }
     if (!group) {
         var ra by remember(key) { mutableStateOf(app.power.isRightAway(key)) }
         Column(Modifier.padding(horizontal = 20.dp)) {

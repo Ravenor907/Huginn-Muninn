@@ -117,20 +117,22 @@ Rectangle {
     }
 
     // A short window (a handheld, or in a voice room) never squeezes the groups away: the whole rail scrolls
-    // instead, with at least two groups on show between Chats and the foot.
+    // instead, all of it in one scroller (the groups at their full height, so a drag anywhere moves the rail),
+    // with a fade at an edge that has more past it. A taller window keeps the foot in place and scrolls the groups.
     readonly property real groupsMin: Math.min(groupCol.implicitHeight, Theme.px(48) * 2 + groupCol.spacing)
+    readonly property real fixedPart: Theme.px(4) + top.implicitHeight + Theme.px(8) + Theme.px(10) + bottomCol.implicitHeight + Theme.px(8)
+    readonly property bool squeezed: fixedPart + groupsMin > height + 1
     Flickable {
         id: whole
         anchors.fill: parent
         contentWidth: width
-        contentHeight: Math.max(height, body.need)
-        interactive: contentHeight > height + 1
+        contentHeight: rail.squeezed ? rail.fixedPart + groupCol.implicitHeight : height
+        interactive: rail.squeezed
         onInteractiveChanged: if (!interactive) contentY = 0
         clip: interactive
         boundsBehavior: Flickable.StopAtBounds
         Item {
             id: body
-            readonly property real need: Theme.px(4) + top.implicitHeight + Theme.px(8) + rail.groupsMin + Theme.px(10) + bottomCol.implicitHeight + Theme.px(8)
             width: whole.width
             height: whole.contentHeight
 
@@ -163,6 +165,8 @@ Rectangle {
                 width: parent.width
                 contentWidth: width
                 contentHeight: groupCol.implicitHeight
+                interactive: !rail.squeezed && contentHeight > height + 1
+                onInteractiveChanged: if (!interactive) contentY = 0
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 Column {
@@ -215,6 +219,25 @@ Rectangle {
                     RailButton { entry: modelData }
                 }
             }
+        }
+    }
+    // The rail scrolls: a fade at each edge with more past it.
+    Rectangle {
+        visible: whole.interactive && whole.contentY > 1
+        anchors.top: parent.top
+        width: parent.width; height: Theme.px(24)
+        gradient: Gradient {
+            GradientStop { position: 0; color: Theme.rail }
+            GradientStop { position: 1; color: "transparent" }
+        }
+    }
+    Rectangle {
+        visible: whole.interactive && whole.contentY < whole.contentHeight - whole.height - 1
+        anchors.bottom: parent.bottom
+        width: parent.width; height: Theme.px(24)
+        gradient: Gradient {
+            GradientStop { position: 0; color: "transparent" }
+            GradientStop { position: 1; color: Theme.rail }
         }
     }
 

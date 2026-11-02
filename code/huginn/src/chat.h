@@ -246,7 +246,12 @@ public:
     // What their app can do (the "caps" of their envelopes). Unknown until they send an envelope
     // with caps or answer probeCaps (at most once an hour each).
     Q_INVOKABLE bool capsKnown(const QString &key) const { return m_caps.contains(key); }
-    bool hasCap(const QString &key, const QString &cap) const { return m_caps.value(key).contains(cap); }
+    // The envelope being handled counts too: someone joining by a link isn't kept here yet, but their envelope says what
+    // their app takes (as hasJ1 and hasD1 do).
+    bool hasCap(const QString &key, const QString &cap) const
+    {
+        return m_caps.value(key).contains(cap) || (key == m_openedFrom && m_openedCaps.contains(cap));
+    }
     Q_INVOKABLE bool canGroup(const QString &key) const;
     Q_INVOKABLE void probeCaps(const QString &key);
     // For the screens (chatpeople.cpp): unknown caps count as a current app and a probe asks; the wire
@@ -378,6 +383,13 @@ public:
     Q_INVOKABLE QString setGroupAbout(const QString &g, const QString &text);
     Q_INVOKABLE QString setChannelAdminsOnly(const QString &g, const QString &ch, bool on);
     Q_INVOKABLE int reportToAdmins(const QString &g, const QString &msgId);
+    // Reports that reached me as an admin (newest first): [{id, from, fromName, k, kName, msg, ch, chName, text, time, read}].
+    // Opening the list marks them read; Dismiss takes one away.
+    Q_INVOKABLE QVariantList groupReports(const QString &g) const;
+    Q_INVOKABLE void readGroupReports(const QString &g);
+    Q_INVOKABLE void dismissReport(const QString &g, const QString &id);
+    // Members whose apps need an update before the about text or "Only admins post" can go on (names), empty when none.
+    Q_INVOKABLE QStringList needG3Update(const QString &g) const;
     Q_INVOKABLE QString setAdmin(const QString &g, const QString &key, bool on);
     Q_INVOKABLE QString removeMember(const QString &g, const QString &key);
     Q_INVOKABLE QString handOver(const QString &g, const QString &key);
@@ -670,6 +682,8 @@ private:
         QHash<QString, int> unread;         // channel -> unread messages
         QList<QJsonObject> held;            // messages from someone not in the state yet
         QJsonObject lastOp;                 // my last change, re-done if it loses a conflict
+        QVariantList reports;               // cap g3: reports that reached me as an admin, oldest first (at most 100)
+        int reportsUnread = 0;              // of those, not seen in the Reports list yet
         bool removed = false, left = false;
         qint64 since = 0;
     };
@@ -698,6 +712,9 @@ private:
     bool gmsgKnown(const QString &id) const { return m_gidx.contains(id) || m_deleted.contains(id); }
     void processHeld(const QString &g);
     void groupNote(const QString &g, const QString &text, bool call = false);
+    void takeReport(const QString &g, const QString &from, const QString &msgId, const QString &about, const QString &text);
+    void refuseJoin(const QString &g, const QString &to, const QString &mailbox, const QString &name, const QString &why);
+    static QString refusalText(const QString &why, const QString &group);
     QString groupName(const QString &g) const;
     QString memberName(const QString &g, const QString &key) const;
     QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());
@@ -820,6 +837,7 @@ private:
     QSet<QString> m_clearedChats;                       // Delete chat: off the list until a message comes or goes
     QHash<QString, QString> m_notifyMode;               // a chat's own "every", "one" or "mentions"
     QSet<QString> m_notified;                           // chats that notified since they were last opened
+    bool m_reportArriving = false;                      // takeReport is announcing a report (toMe: it's for me)
     QHash<QString, bool> m_alerted;                     // whether the last message for a key notified
     bool toMe(const QString &key, const QString &name) const;   // a group message that mentions or answers me
     QSet<QString> m_rightAway;

@@ -75,6 +75,45 @@ bool usesG3(const QJsonObject &s)
             return true;
     return false;
 }
+// Cap g3 (28.1): about text from the editor. Paragraphs are kept, joined by U+2029 PARAGRAPH SEPARATOR (a line break
+// is a control character, which canonical JSON can't hold), at most kMaxAboutParagraphs; each is cleaned like a name.
+const int kMaxAboutParagraphs = 10;
+QString cleanAbout(const QString &text)
+{
+    QString t = text;
+    t.replace(QChar(0x2029), QLatin1Char('\n')).replace(QChar(0x2028), QLatin1Char('\n')).replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    QStringList kept;
+    for (const QString &line : t.split(QLatin1Char('\n'))) {
+        const QString c = GroupWire::cleanName(line, GroupWire::kMaxAbout).trimmed();
+        if (c.isEmpty())
+            continue;
+        if (kept.size() >= kMaxAboutParagraphs)
+            kept.last() += QLatin1Char(' ') + c;
+        else
+            kept << c;
+    }
+    // At most kMaxAbout characters in all (code points, separators counted).
+    QString out = kept.join(QChar(0x2029));
+    while (GroupWire::length(out) > GroupWire::kMaxAbout)
+        out.chop(out.size() > 1 && out.at(out.size() - 1).isLowSurrogate() ? 2 : 1);
+    return out.trimmed();
+}
+// "Taylor", "Taylor and Alex", "Taylor, Alex and Sam".
+QString namesList(QStringList names)
+{
+    for (QString &n : names)
+        if (n.trimmed().isEmpty())
+            n = QStringLiteral("Someone");
+    if (names.size() <= 1)
+        return names.join(QString());
+    const QString last = names.takeLast();
+    return names.join(QStringLiteral(", ")) + QStringLiteral(" and ") + last;
+}
+QString needUpdate(const QStringList &names)
+{
+    return QStringLiteral("%1 need%2 the newest Huginn or Muninn first. Ask them to update, then try again.")
+        .arg(namesList(names), names.size() == 1 ? QStringLiteral("s") : QString());
+}
 // Cap g3 (28.2): channel ch of state s takes posts only from admins, and key isn't one.
 bool adminsOnlyFor(const QJsonObject &s, const QString &ch, const QString &key)
 {
@@ -116,6 +155,9 @@ QVariantList Chat::groups() const
             if (u.value() > 0)
                 mentions += unreadMentions(gr.messages, u.key(), u.value(), username());
         }
+        // Cap g3: an unread report counts like an @mention (the badge stands out).
+        unread += gr.reportsUnread;
+        mentions += gr.reportsUnread;
         const QString name = gr.state.value(QStringLiteral("name")).toString();
         rows << qMakePair(gr.since, QVariantMap{{QStringLiteral("id"), it.key()},
                                                 {QStringLiteral("name"), name},
@@ -142,7 +184,10 @@ QVariantList Chat::groupInvites() const
     for (const QVariantMap &j : m_joining)
         out << QVariantMap{{QStringLiteral("g"), j.value(QStringLiteral("g"))}, {QStringLiteral("name"), j.value(QStringLiteral("name"))},
                            {QStringLiteral("from"), j.value(QStringLiteral("admin"))}, {QStringLiteral("fromName"), j.value(QStringLiteral("adminName"))},
-                           {QStringLiteral("count"), 0}, {QStringLiteral("waiting"), true}};
+                           {QStringLiteral("count"), 0}, {QStringLiteral("waiting"), true},
+                           // Cap g4: not let in, and why ("" while still waiting).
+                           {QStringLiteral("refused"), str(j, "refused")},
+                           {QStringLiteral("refusedText"), str(j, "refused").isEmpty() ? QString() : refusalText(str(j, "refused"), str(j, "name"))}};
     return out;
 }
 
@@ -178,6 +223,8 @@ QVariantMap Chat::groupInfo(const QString &g) const
                                {QStringLiteral("me"), k == me},
                                {QStringLiteral("contact"), isContact(k)},
                                {QStringLiteral("checked"), k != me && isVerified(k)},   // safety code matched (Family)
+                               // Cap g3: their app can't take an about text or "Only admins post" yet (as change() checks).
+                               {QStringLiteral("needsUpdate"), k != me && !hasCap(k, QLatin1String(GroupWire::kAboutCap))},
                                {QStringLiteral("route"), k == me ? QString() : route(k)}};
     // The owner first, then admins, then everyone else, each by name.
     std::stable_sort(members.begin(), members.end(), [](const QVariant &a, const QVariant &b) {
@@ -208,7 +255,10 @@ QVariantMap Chat::groupInfo(const QString &g) const
             {QStringLiteral("left"), it->left},
             {QStringLiteral("count"), int(members.size())},
             {QStringLiteral("type"), Limits::groupType(s)},   // "folk" or "family" (16.2)
-            {QStringLiteral("about"), s.value(QStringLiteral("about")).toString()},   // cap g3 (28.1)
+            // Cap g3 (28.1): paragraphs travel as U+2029; the screens get line breaks.
+            {QStringLiteral("about"), s.value(QStringLiteral("about")).toString().replace(QChar(0x2029), QLatin1Char('\n'))},
+            {QStringLiteral("reports"), admins.contains(me) ? int(it->reports.size()) : 0},
+            {QStringLiteral("reportsUnread"), admins.contains(me) ? it->reportsUnread : 0},
             {QStringLiteral("members"), members},
             {QStringLiteral("channels"), channels}};
 }
@@ -407,7 +457,7 @@ QString Chat::change(const QString &g, const QJsonObject &op)
     } else if (what == QLatin1String("about") || what == QLatin1String("ao")) {
         // Cap g3 (28.1, 28.2): the about text, or a text channel's "Only admins post".
         if (what == QLatin1String("about")) {
-            const QString t = GroupWire::cleanName(op.value(QStringLiteral("about")).toString(), GroupWire::kMaxAbout).trimmed();
+            const QString t = cleanAbout(op.value(QStringLiteral("about")).toString());
             if (t == cur.value(QStringLiteral("about")).toString())
                 return QString();
             if (t.isEmpty())
@@ -437,7 +487,7 @@ QString Chat::change(const QString &g, const QJsonObject &op)
                 if (m.value(QStringLiteral("k")).toString() != me && !hasCap(m.value(QStringLiteral("k")).toString(), QLatin1String(GroupWire::kAboutCap)))
                     old << m.value(QStringLiteral("n")).toString();
             if (!old.isEmpty())
-                return QStringLiteral("Everyone needs an update first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
+                return needUpdate(old);
         }
     } else if (what == QLatin1String("admin")) {
         if (!GroupWire::isMember(cur, k))
@@ -500,7 +550,7 @@ QString Chat::change(const QString &g, const QJsonObject &op)
                 if (m.value(QStringLiteral("k")).toString() != me && !hasJ1(m.value(QStringLiteral("k")).toString()))
                     old << m.value(QStringLiteral("n")).toString();
             if (!old.isEmpty())
-                return QStringLiteral("Everyone needs an update first. Still waiting for: %1.").arg(old.join(QStringLiteral(", ")));
+                return needUpdate(old);
             next.insert(QStringLiteral("mi"), true);
         } else {
             next.remove(QStringLiteral("mi"));
@@ -568,6 +618,134 @@ int Chat::reportToAdmins(const QString &g, const QString &msgId)
         ++sent;
     }
     return sent;
+}
+
+// Cap g4 (28.5): a join this admin's app couldn't take hears why ("full", "update", "banned" or "other"). Only to an
+// app that says g4 (an older one would answer 400 and wait as before). Someone who isn't a contact is kept as a group
+// peer while it's on its way, so it can be reached (refreshGroupPeers lets them go once it's there).
+void Chat::refuseJoin(const QString &g, const QString &to, const QString &mb, const QString &name, const QString &why)
+{
+    if (to.isEmpty() || to == myKey() || !hasCap(to, QLatin1String(GroupWire::kRefuseCap)))
+        return;
+    if (!isContact(to) && !m_gpeers.contains(to) && GroupWire::isMailbox(mb))
+        m_gpeers.insert(to, {{QStringLiteral("key"), to}, {QStringLiteral("name"), name}, {QStringLiteral("mailbox"), mb}});
+    sendControl(g, to, {{QStringLiteral("t"), QStringLiteral("joinno")}, {QStringLiteral("why"), why}});
+}
+
+QString Chat::refusalText(const QString &why, const QString &group)
+{
+    if (why == QLatin1String("full"))
+        return QStringLiteral("%1 is full (50 people).").arg(group);
+    if (why == QLatin1String("update"))
+        return QStringLiteral("Update Huginn to join: %1 uses something your version doesn't have yet.").arg(group);
+    if (why == QLatin1String("banned"))
+        return QStringLiteral("An admin of %1 has stopped you from joining.").arg(group);
+    return QStringLiteral("The admin's app couldn't add you. Ask them about it.");
+}
+
+// Cap g3 (28.3): a report kept for the Reports list (admins only, never a line in a channel), counted unread like an
+// @mention, with a notification that opens the reported message's channel.
+void Chat::takeReport(const QString &g, const QString &from, const QString &msgId, const QString &about, const QString &text)
+{
+    if (!m_groups.contains(g))
+        return;
+    Group &gr = m_groups[g];
+    for (const QVariant &v : std::as_const(gr.reports)) {
+        const QVariantMap r = v.toMap();
+        if (str(r, "msg") == msgId && str(r, "from") == from)
+            return;   // the same person again: once is enough
+    }
+    QString ch;
+    for (const QVariant &v : std::as_const(gr.messages))
+        if (str(v.toMap(), "id") == msgId)
+            ch = str(v.toMap(), "ch");
+    const QString chName = ch.isEmpty() ? QString() : GroupWire::channel(gr.state, ch).value(QStringLiteral("n")).toString();
+    gr.reports << QVariantMap{{QStringLiteral("id"), uuid()},       {QStringLiteral("from"), from}, {QStringLiteral("fromName"), memberName(g, from)},
+                              {QStringLiteral("k"), about},         {QStringLiteral("kName"), memberName(g, about)},
+                              {QStringLiteral("msg"), msgId},       {QStringLiteral("ch"), ch},     {QStringLiteral("chName"), chName},
+                              {QStringLiteral("text"), text},       {QStringLiteral("time"), now()}, {QStringLiteral("read"), false}};
+    while (gr.reports.size() > 100)
+        gr.reports.removeFirst();
+    gr.reportsUnread = qMin(gr.reportsUnread + 1, int(gr.reports.size()));
+    saveGroupsSoon();
+    noteChanged();
+    const QString line = QStringLiteral("%1 reported %2%3: %4")
+                             .arg(memberName(g, from), memberName(g, about), chName.isEmpty() ? QString() : QStringLiteral(" in #") + chName,
+                                  text.isEmpty() ? QStringLiteral("(a photo or file)") : text);
+    m_reportArriving = true;
+    Q_EMIT arrived(QStringLiteral("Report in %1").arg(groupName(g)), line, QStringLiteral("g:%1:%2").arg(g, ch.isEmpty() ? QStringLiteral("main") : ch));
+    m_reportArriving = false;
+}
+
+QVariantList Chat::groupReports(const QString &g) const
+{
+    QVariantList out;
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->state.isEmpty() || !GroupWire::isAdmin(it->state, myKey()))
+        return out;
+    for (auto r = it->reports.crbegin(); r != it->reports.crend(); ++r) {
+        QVariantMap m = r->toMap();
+        // Still here? Then the list can jump to it and act on it.
+        bool here = false;
+        for (const QVariant &v : it->messages)
+            if (str(v.toMap(), "id") == str(m, "msg")) {
+                const QVariantMap x = v.toMap();
+                here = str(x, "unsent").isEmpty() && !x.value(QStringLiteral("removed")).toBool();
+            }
+        m.insert(QStringLiteral("here"), here);
+        out << m;
+    }
+    return out;
+}
+
+void Chat::readGroupReports(const QString &g)
+{
+    if (!m_groups.contains(g))
+        return;
+    Group &gr = m_groups[g];
+    bool touched = gr.reportsUnread != 0;
+    gr.reportsUnread = 0;
+    for (QVariant &v : gr.reports) {
+        QVariantMap r = v.toMap();
+        if (!r.value(QStringLiteral("read")).toBool()) {
+            r.insert(QStringLiteral("read"), true);
+            v = r;
+            touched = true;
+        }
+    }
+    if (touched) {
+        saveGroupsSoon();
+        noteChanged();
+    }
+}
+
+void Chat::dismissReport(const QString &g, const QString &id)
+{
+    if (!m_groups.contains(g))
+        return;
+    Group &gr = m_groups[g];
+    for (qsizetype i = 0; i < gr.reports.size(); ++i)
+        if (str(gr.reports.at(i).toMap(), "id") == id) {
+            if (!gr.reports.at(i).toMap().value(QStringLiteral("read")).toBool())
+                gr.reportsUnread = qMax(0, gr.reportsUnread - 1);
+            gr.reports.removeAt(i);
+            saveGroupsSoon();
+            noteChanged();
+            return;
+        }
+}
+
+QStringList Chat::needG3Update(const QString &g) const
+{
+    QStringList old;
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend() || it->state.isEmpty())
+        return old;
+    const QString me = myKey();
+    for (const QString &k : GroupWire::keysOf(it->state))
+        if (k != me && !hasCap(k, QLatin1String(GroupWire::kAboutCap)))
+            old << memberName(g, k);
+    return old;
 }
 
 QString Chat::renameGroup(const QString &g, const QString &name) { return change(g, {{QStringLiteral("op"), QStringLiteral("rename")}, {QStringLiteral("name"), name}}); }
@@ -729,7 +907,7 @@ QString Chat::joinWithCode(const QString &text)
     if (c.value(QStringLiteral("member")).toBool())
         return QStringLiteral("You're already in %1.").arg(str(c, "name"));
     if (c.value(QStringLiteral("expired")).toBool())
-        return QStringLiteral("That group code has expired (they last an hour). Ask for a new one.");
+        return QStringLiteral("That invite has expired. Ask for a new one.");
     const QString g = str(c, "g"), admin = str(c, "admin");
     // Back into a group you left or were taken out of: start from what the admin sends.
     if (m_groups.contains(g)) {
@@ -1484,6 +1662,8 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
             if (m_mod && m_mod->isBanned(g, fromKey)) {
                 // Cap g2: banned people don't get back in by a code, a link or an invite until they're unbanned.
                 Q_EMIT notice(QStringLiteral("%1 tried to join %2, but they're banned.").arg(name, groupName(g)));
+                const QString pb = p.value(QStringLiteral("p")).toString();
+                refuseJoin(g, fromKey, GroupWire::isMailbox(pb) ? pb : mailbox, name, QStringLiteral("banned"));
             } else if (GroupWire::isMember(git->state, fromKey)) {
                 sendStateTo(g, fromKey);   // they missed it: once more
             } else {
@@ -1495,8 +1675,14 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                     n = name;
                 const QString err = change(g, {{QStringLiteral("op"), QStringLiteral("add")}, {QStringLiteral("k"), fromKey}, {QStringLiteral("n"), n},
                                                {QStringLiteral("p"), pm}});
-                if (!err.isEmpty())
+                if (!err.isEmpty()) {
                     Q_EMIT notice(QStringLiteral("%1 tried to join %2: %3").arg(name, groupName(g), err));
+                    // Cap g4 (28.5): they hear why, instead of waiting.
+                    refuseJoin(g, fromKey, pm, n,
+                               err.contains(QLatin1String("full")) ? QStringLiteral("full")
+                               : err.contains(QLatin1String("update")) ? QStringLiteral("update")
+                                                                       : QStringLiteral("other"));
+                }
                 else if (byLink && m_groups.contains(g) && GroupWire::isMember(m_groups.value(g).state, fromKey))
                     linkUsed(inv, g);
                 if (err.isEmpty() && m_mod)
@@ -1534,6 +1720,20 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
             return 400;
         if (member && !git->removed && !git->left && !(m_mod && m_mod->barred(g, fromKey)))
             takeGroupVote(g, fromKey, p);
+    } else if (t == QLatin1String("joinno")) {
+        // Cap g4 (28.5): the admin I asked didn't let me in, and why. Only from that admin, while I wait.
+        const QString why = p.value(QStringLiteral("why")).toString();
+        if (why != QLatin1String("full") && why != QLatin1String("update") && why != QLatin1String("banned") && why != QLatin1String("other"))
+            return 400;
+        if (!m_joining.contains(g) || str(m_joining.value(g), "admin") != fromKey)
+            return 403;
+        QVariantMap &j = m_joining[g];
+        if (str(j, "refused") != why) {
+            j.insert(QStringLiteral("refused"), why);
+            saveGroupsSoon();
+            Q_EMIT notice(QStringLiteral("Not let in to %1. %2").arg(str(j, "name"), refusalText(why, str(j, "name"))));
+            Q_EMIT changed();
+        }
     } else if (t == QLatin1String("report")) {
         // Cap g3 (28.3): a member's report, to an admin; shown here only.
         const QString text = p.value(QStringLiteral("text")).toString(), about = p.value(QStringLiteral("k")).toString();
@@ -1541,8 +1741,7 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
             return 400;
         if (!member || !GroupWire::isAdmin(git->state, myKey()))
             return 403;
-        groupNote(g, QStringLiteral("Report from %1: %2 wrote: %3")
-                         .arg(memberName(g, fromKey), memberName(g, about), text.isEmpty() ? QStringLiteral("(a photo or file)") : text));
+        takeReport(g, fromKey, p.value(QStringLiteral("msg")).toString(), about, text);
     } else if (t == QLatin1String("unsend")) {
         const QString gone = p.value(QStringLiteral("msg")).toString();
         if (have && GroupWire::isLogicalId(gone)) {
@@ -1974,7 +2173,8 @@ bool Chat::saveGroups()
             unread.insert(u.key(), u.value());
         gs.insert(it.key(), QJsonObject{{QStringLiteral("state"), it->state}, {QStringLiteral("history"), history}, {QStringLiteral("held"), held},
                                         {QStringLiteral("unread"), unread}, {QStringLiteral("lastOp"), it->lastOp}, {QStringLiteral("removed"), it->removed},
-                                        {QStringLiteral("left"), it->left}, {QStringLiteral("since"), it->since}});
+                                        {QStringLiteral("left"), it->left}, {QStringLiteral("since"), it->since},
+                                        {QStringLiteral("reports"), QJsonArray::fromVariantList(it->reports)}, {QStringLiteral("reportsUnread"), it->reportsUnread}});
     }
     auto maps = [](const QHash<QString, QVariantMap> &h) {
         QJsonObject o;
@@ -2050,6 +2250,8 @@ void Chat::loadGroups()
         gr.removed = e.value(QStringLiteral("removed")).toBool();
         gr.left = e.value(QStringLiteral("left")).toBool();
         gr.since = e.value(QStringLiteral("since")).toInteger();
+        gr.reports = e.value(QStringLiteral("reports")).toArray().toVariantList();
+        gr.reportsUnread = qBound(0, e.value(QStringLiteral("reportsUnread")).toInt(), int(gr.reports.size()));
         gr.messages = chats.value(it.key()).toArray().toVariantList();
         for (const QVariant &v : std::as_const(gr.messages)) {
             const QVariantMap m = v.toMap();

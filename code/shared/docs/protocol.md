@@ -51,7 +51,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `g1` | group chats (section 3) |
 | `c1` | 1:1 calls (section 5) |
 | `c2` | call extras (5.8): the direct path between trusted contacts, receiver reports and the higher Opus bitrate, video calls and screen share. Implies `c1`. |
-| `c3` | screen share only to people watching (5.8.7): a sharer with `c3` sends no screen frames to a peer whose reports set flag bit 2. Implies `c2`. Said by a sharer (Huginn, once it does this); Muninn sets the bit only for a peer that says `c3`. |
+| `c3` | screen share only to people watching (5.8.7): a sharer with `c3` sends no screen frames to a peer whose reports set flag bit 2. Implies `c2`. Said by a sharer (Huginn); Muninn sets the bit only for a peer that says `c3`. |
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
 | `v2` | room heartbeats (6.8): `vjoin` every 10 s while in a room, and presence that ends 60 s after the last one. Muninn and Huginn. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
@@ -78,8 +78,10 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `e1` | the relay wrapping sealed to a day key too, and room `file` through the ratchet (section 23.1): `wk` and `wt` in receipts. Muninn and Huginn. |
 | `a1` | animated GIFs: photo pieces with `kind:"gif"` (section 25). Muninn and Huginn. |
 | `l1` | the whole account on a linked companion (section 15.1). Not in envelope `caps`: it goes in room `link`, in the companion's `sync`. Muninn as the phone, Huginn as the companion. |
+| `l3` | edits and deletes reach a linked companion (section 15.3). Like `l1`, only in room `link` (`sync` and `ping`). Muninn as the phone, Huginn as the companion. |
 | `g2` | group timeouts and bans (section 26): signed records in room `group` (`t:"mod"`), and posts from someone timed out or banned dropped. Muninn and Huginn. |
 | `f2` | file sharing (section 27): the `lan` candidate, group files (`g` on an offer), the group's file rules (`fs` and `fm` in the state), `why` on a decline, and the Hold packet. Muninn and Huginn. |
+| `g4` | join refusals (28.5): an admin's app that couldn't take a `join` answers `t:"joinno"` with why, so the joiner's row says "Not let in" instead of waiting. Muninn and Huginn. |
 | `f3` | resume and long waits (27.7): a stopped file goes on from the pieces the receiver kept, 2 minutes of silence before a transfer stops (with a packet a second while quiet), and a big file's offer waits a day. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
@@ -773,7 +775,7 @@ sets report flag bit 2 (5.8.4), in the next report and at once when it changes, 
 include `c3`. A sharer with `c3` sends that peer no screen frames (stream 1) while the bit is set, keeps its sound,
 and leaves the size and bitrate to the peers that watch. When the bit clears the viewer asks for a keyframe (type 5)
 and the sharer sends it the next frames, starting with that keyframe. A viewer whose sharer lacks `c3` gets the frames
-anyway and drops them without decoding. Muninn sets the bit; Huginn ignores it until it says `c3`.
+anyway and drops them without decoding. Muninn sets the bit; Huginn says `c3` and honors it.
 
 What is shared is chosen first, on the sharer's device only (nothing changes on the wire): **an app window** (a list of
 open windows with live pictures; only that window is captured, even when another window is in front) or **a full
@@ -1762,8 +1764,11 @@ which is why the first full set is taken whole.
 
 **Groups.** To an `l1` companion the phone also sends its group chats as chats with `peer` = `"g:"` + group id (the
 last 500 messages each, in `chat` pages, and new ones as `msg`), each item with `"fn"`: the name of who wrote it. A
-`send` with `peer` `"g:"` + id from an `l1` companion is posted in that group's main channel as the phone's own
-message (the same member), each `id` once, answered with `result` (`err` `"not in group"` when it can't be posted).
+`send` with `peer` `"g:"` + id from an `l1` companion is posted as the phone's own message (the same member), each
+`id` once, answered with `result` (`err` `"not in group"` when it can't be posted). It may carry `ch`: the id of the
+channel being viewed on the companion. The phone posts in that channel when it is one of the group's text channels, and
+in the main channel when `ch` is left out or names no text channel (so an older companion's sends land as before). In a
+channel with `"ao": true` (28.2) a member's phone posts nothing and answers `err` `"admins only"`.
 Each `chat` page and `msg` of a group carries the group's own limit in `d` (16.2). Live group messages go by message id
 (each once, a late older one too): up to 20 at a time as `msg`; a bigger burst also goes as `chat` pages over the home
 Wi-Fi (or is owed until then). A group that appears while the phone runs (just joined) has its history sent in pages.
@@ -1772,14 +1777,17 @@ The companion lists every group of the account that isn't `gone`, with or withou
 **Unlinking.** The companion asks: keep a copy or remove it. Keeping sends `unlink` and leaves the chats, contacts,
 groups and folders on the companion, read only (nothing is sent, fetched or taken from that phone until it's linked
 again, which then replaces the copy). Removing takes everything that came from the phone off the companion. A phone
-that unlinks the companion removes it all, as in section 15.
+that unlinks the companion removes it all, as in section 15. Either way the companion's own name, status and picture
+from before linking (kept aside, on its side only, when the first full set replaced them) come back; when they weren't
+kept (linked before this, or it never had a name), the phone's picture goes, and after its own Remove the companion asks
+for a name. A kept copy keeps the phone's name until it's removed.
 
 ### 15.2 Read state, mute and the phone's status (cap `l2`)
 
 Small live frames in room `link`, between a checked pair; Huginn takes the companion side and Muninn the phone side.
 
-**The gate.** The companion sends `{"t": "ping", "caps": "l1 l2", "dn": its device name}` when the phone's chats are
-opened and at most once a minute while they're on screen (its `sync` says `"caps": "l1 l2"` too). A phone with `l2`
+**The gate.** The companion sends `{"t": "ping", "caps": "l1 l2 l3", "dn": its device name}` when the phone's chats are
+opened and at most once a minute while they're on screen (its `sync` says `"caps": "l1 l2 l3"` too; `l3` is 15.3). A phone with `l2`
 marks that companion, keeps `dn` (one line, at most 40 characters) as its name in its list of linked devices, and
 answers `{"t": "pong"}`. A phone without it ignores both, and nothing below is sent to the companion. The companion
 treats the phone as `l2` from the first `pong`, and shows its status in plain words: online (a `pong` or any frame in the
@@ -1789,12 +1797,28 @@ found on the home Wi-Fi, the companion says history and photos can't come and wh
 
 **Read state.** `{"t": "read", "peer", "upTo": ms}` goes both ways: the chat (`"g:"` + id for a group) was read up to
 that message time. The companion keeps an unread count per mirrored chat (messages not `me` after the time read; history
-that comes with a new chat counts as read) and sends `read` a moment after a chat is on screen. The phone marks the chat
+that comes with a new chat counts as read) and sends `read` once a chat has stayed on screen, with the window in front,
+for about a second (never on opening the list, picking with a controller on the way past, or a menu).
+Its unread badge counts chats, not messages. The phone marks the chat
 read (sending receipts as usual) and clears its notification, only when nothing newer came in; it sends `read` to `l2`
 companions a moment after a chat is read on it, never back for a `read` it just took.
 
 **Mute.** A `mute` item (15.1) carries a chat's mute either way: the companion stops sounds and notifications for it,
 and the phone mutes it in its own chat flags. A companion without `l1` mutes only on itself.
+
+### 15.3 Edits and deletes on the companion (cap `l3`)
+
+**The gate.** A companion with `l3` says so in `caps` on every `sync` and `ping` (15.2). A phone with `l3` marks that
+companion (kept with the pair) the first time it sees the token; a phone without it ignores it.
+
+**Frames.** No new frame: when a message the companion already has changes on the phone (a contact edits it or deletes
+it for everyone, or the phone's owner does), the phone sends `msg` again with the same `id` and the new item (`x` the new
+text, or `"Message deleted"`), to `l3` companions only. For groups (15.1) the phone compares what each message shows
+with what it showed last and sends the changed ones the same way, up to 20 at a time. Routes as for any `msg`.
+
+**On the companion.** A `msg` whose `id` the chat already has replaces that item (as merging always did) without a sound,
+a notification or a change to the unread count, and never ends a "Sending" row. A companion without `l3` never gets
+these, so it never shows an edit as a new message.
 
 ## 16. Message limits (cap `d1`)
 
@@ -2570,13 +2594,13 @@ doesn't work. Huginn `Sharing` (sharing.cpp) and `FileLink`, Muninn `Sharing.kt`
 
 In this order (`Sharing::route`, `Sharing.route`):
 
-1. **Same Wi-Fi** ("Direct"): the other side's app says `f2` and they are on this home Wi-Fi as a device whose chat key
+1. **Same Wi-Fi** ("Same Wi-Fi"): the other side's app says `f2` and they are on this home Wi-Fi as a device whose chat key
    proved its certificate (21.2). The offer and the accept carry a candidate `{"t": "lan", "p": port}`: the port of the
    transfer's own UDP socket and **no address**. The receiver pairs it with the address it already reached that person
    at on this Wi-Fi; nothing new about either side is learned and no address is ever shown. Between two people who
    don't trust each other with their addresses (14.1), the `lan` candidate is the only one, no STUN server is asked,
    and the receiver answers with only its own `lan` candidate.
-2. **Straight over the internet** ("Over the internet"): with trust, as 14.1 (the `lan` candidate comes first when
+2. **Straight over the internet** ("Straight to them"): with trust, as 14.1 (the `lan` candidate comes first when
    they are also on the same Wi-Fi; whichever answers first is used, and the row says which).
 3. **The relays** ("Over the internet"): a file of 2 MB or less, as 14.2.
 
@@ -2644,8 +2668,9 @@ the wire: the ack (14.1) already says which pieces are in.
   sends one packet a second (the sender a probe, the receiver an ack) and no data, until it hears the other again;
   its row says "Waiting for Ana to come back".
 - **Keeping what came.** When a file of theirs stops for silence, the receiver keeps the part file and how many pieces
-  from the start are in, for this run (Close on its row, or quitting, deletes it). The sender's row says Retry goes on
-  from there.
+  from the start are in (Close on its row deletes it). Huginn keeps the part, and the sender's row whose Retry goes
+  on, across a restart for up to 7 days (quitting keeps a file still on its way the same way); Muninn keeps them for
+  this run. The row says where it stopped without blaming either side ("Stopped at 61% (no answer from Ana)").
 - **Going on.** Retry sends a new `offer` (a new id and keys) for the same file. A receiver with a kept part from the
   same sender with the same `sha`, `size` and `g` takes it without asking again (Data saver still asks), writes into
   the kept part, and its acks say from the first one that everything below the kept count is in. The sender marks
@@ -2656,7 +2681,7 @@ the wire: the ack (14.1) already says which pieces are in.
   work. The receiver shows a system notification for it, as for a message.
 
 
-## 28. The group's about text, admin-only channels and reports (cap `g3`)
+## 28. The group's about text, admin-only channels, reports (cap `g3`) and join refusals (cap `g4`)
 
 `code/shared/tools/proto06_ref.py` (`check_state`) is the reference; `code/shared/tools/g2_ref.py` writes the cases to
 `code/shared/vectors/g2-vectors.json` (`g3`), which Huginn checks in `--chat-selftest` and Muninn in `ModTest`.
@@ -2665,17 +2690,24 @@ the wire: the ack (14.1) already says which pieces are in.
 
 One optional field in the signed state (3.2), changed only by an admin's next state (`op` hint `"about"`):
 
-- `about`: text, 1 to 500 characters (code points), not only spaces, no control characters (so one paragraph). Left
-  out when there is none. It never expires: it is part of the state, not a message.
+- `about`: text, 1 to 500 characters (code points), not only spaces, no control characters. Left out when there is
+  none. It never expires: it is part of the state, not a message.
 
-The apps show it at the top of the group's first channel and in Group settings, where admins edit it.
+Paragraphs (a numbered rule on each line) are joined by U+2029 PARAGRAPH SEPARATOR, which is not a control character, so
+canonical JSON (2.1) holds it and apps with `g3` already take it: a line break (U+000A) never goes in the state. The
+editors keep at most 10 paragraphs, each cleaned like a name, and show each on its own line. Vector `g3.paragraphs`.
+
+The apps show it at the top of the group's first channel (a tap or click folds it to one line, on that device only) and
+in Group settings, where admins edit it. Turning it on (or `ao`, 28.2) while some members' apps lack `g3` is refused
+with their names: "Taylor and Alex need the newest Huginn or Muninn first. Ask them to update, then try again."
 
 ### 28.2 Only admins post
 
 A text channel may carry `"ao": true`: only admins post there (for #rules or #announcements). It is only ever
 `true` (off is left out), never on a voice room and never on `main`. Every app with `g3` drops a `gmsg` or `gphoto`
-in that channel from someone who isn't an admin in its current state (answering `greceipt` `delivered`), and its
-composer says "Only admins post here." Changed by an admin's next state (`op` hint `"ao"`).
+in that channel from someone who isn't an admin in its current state (answering `greceipt` `delivered`), and for
+them the message box is replaced by a line saying "Only admins post here" (nothing to type, attach or record).
+Changed by an admin's next state (`op` hint `"ao"`).
 
 ### 28.3 Report to admins
 
@@ -2687,11 +2719,28 @@ Room `group`, `t:"report"`, from a member to each admin of the current state who
 | `k` | its author's chat key |
 | `text` | what it said, at most 500 characters (`""` for a photo or file) |
 
-An admin's app shows it in the group, only to itself: "Report from Raven: Moose wrote: ...". From someone not in the
-state, or to someone who isn't an admin, it is dropped (403).
+An admin's app keeps it, only for itself, in the group's Reports list (Group settings, admins only), never as a line in
+a channel: who reported whom, the channel and what it said. It counts as unread like an @mention (a notification "Report
+in Gaming Crew", and the group's badge) until the list is opened, and the list offers going to the message, Delete for
+everyone (26.2), Timeout and Ban for its author, and Dismiss. The same reporter and message again count once. From
+someone not in the state, or to someone who isn't an admin, it is dropped (403).
 
 ### 28.4 Apps without `g3`
 
 An app without `g3` refuses a state with `about` or `ao` ("exactly these fields"), so an admin's app sets them only
 when every other member's caps include `g3`, and adds someone to a group that has them only when theirs do. It
 answers 400 to `report`, so reports go only to admins with `g3`.
+
+### 28.5 Join refusals (cap `g4`)
+
+Room `group`, `t:"joinno"`, from the admin whose app took a `join` (3.3, 17.3) with a live invite, code or link but couldn't
+add the person, to that person, only when their caps include `g4`:
+
+| field | |
+|---|---|
+| `why` | `"full"` (50 members), `"update"` (their app lacks something the group's state uses, 28.4, 27.3, 17.1 or 16.2), `"banned"` (26), or `"other"` |
+
+The joiner's app takes it only from the admin it is waiting on (3.3 step 2), and only while it waits; another `why` is
+400. Its waiting row then says "Not let in" and why ("Gaming Crew is full (50 people).", "Update Huginn to join: ..."),
+with Remove; joining again with a new invite starts over. A joiner who isn't a contact is reached as a group peer
+(3.7) while the answer is on its way. An app without `g4` answers 400 and keeps waiting, as before.

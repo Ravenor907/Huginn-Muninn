@@ -137,7 +137,7 @@ Window {
         const types = Chat.groupTypes()
         // While a phone is linked, a group made here belongs to this PC's own account: said in the box.
         const own = !!Linked.phone.key && !Linked.phone.gone
-        Ui.askWith("New group", own ? "This PC's own account, not your phone's. Everyone in it sees the name" : "Everyone in it sees the name", "", "Make the group",
+        Ui.askWith("New group", own ? "Made by this PC's own account: same name and picture as you, but separate from your phone, so people see a second " + Ui.myName + ". Everyone in it sees the name" : "Everyone in it sees the name", "", "Make the group",
                    types.map(t => ({ value: t.type, label: t.name, detail: t.line })), "folk",
                    "Type", (t, type) => {
             const g = Chat.createGroup(t, type)
@@ -179,33 +179,72 @@ Window {
         openPage("dms", {})
         Ui.say("Huginn locked.")
     }
-    // Every Exit goes through here (the window's X, Exit, B or Esc at the top), so a transfer is never cut off by
-    // surprise. Huginn never locks on its own: closing asks. Lock and close (A) quits, and Huginn opens locked next
-    // time; Minimize (X) keeps it running out of sight, still getting messages and calls; Stay (B).
+    // Every Exit goes through here (the window's X, Exit, B or Esc at the top), so a call, a voice room or a transfer is
+    // never cut off by surprise. Huginn never locks on its own: closing asks. Lock and close (A) quits, and Huginn opens
+    // locked next time; Minimize (X) keeps it running out of sight, still getting messages and calls; Stay (B).
     // fromX: the window's X (or Alt+F4). It asks once with "Don't ask again", and then does what was picked
-    // (Settings › Look › Window › Close button changes it). A transfer going still asks.
+    // (Settings › Look › Window › Close button changes it). A call, a voice room or a transfer still asks before closing;
+    // a remembered Minimize still minimizes (that ends nothing).
+    // What closing or restarting now would cut off, in words ("" when nothing). ending: "Closing" or "Restarting".
+    function stakeText(ending) {
+        const parts = []
+        if (Rooms.inRoom) parts.push("You're in " + (Rooms.groupName ? Rooms.groupName + " › " + Rooms.title : Rooms.title) + ". " + ending + " leaves it.")
+        else if (Calls.inCall) parts.push("You're in a call" + (Calls.peerName ? " with " + Calls.peerName : "") + ". " + ending + " ends it.")
+        if (FileLink.closeWarning !== "") parts.push(FileLink.closeWarning)
+        if (LocalSend.busy) parts.push(LocalSend.status + " " + ending + " now stops it partway.")
+        return parts.join(" ")
+    }
+    // A file still moving: Wait for it. Only paused ones: Resume and wait (paused, it would never finish).
+    function offerWait(what) {
+        if (FileLink.runningCount > 0) {
+            confirm.otherText = "Wait for it"
+            confirm.otherCallback = () => app.waitThen(what)
+            return true
+        }
+        if (FileLink.pausedCount > 0) {
+            confirm.otherText = "Resume and wait"
+            confirm.otherCallback = () => { FileLink.resumeAll(); app.waitThen(what) }
+            return true
+        }
+        return false
+    }
     function requestExit(fromX) {
-        // A chat file on its way counts too: Wait for it closes once it's done.
-        const files = FileLink.runningCount > 0
-        const busy = LocalSend.busy || files
+        // A chat file on its way, paused or waiting for them to accept counts too.
+        const files = FileLink.closeWarning !== ""
+        const voice = app.inVoice
+        const busy = LocalSend.busy || files || voice
         const locks = Vault.hasLock && !Vault.screenLocked
         const lockAndQuit = () => { if (locks) Vault.lockScreen(); app.quitNow() }
-        if (fromX && !busy && Settings.closeAction === "minimize") { System.minimize(app); return }
+        if (fromX && !files && !LocalSend.busy && Settings.closeAction === "minimize") { System.minimize(app); return }
         if (fromX && !busy && Settings.closeAction === "quit") { lockAndQuit(); return }
-        const why = files ? FileLink.closeWarning : busy ? LocalSend.status + " Closing now stops it partway." : "Minimize keeps messages and calls coming."
-        Ui.sure("Leave Huginn?", why, files ? "Close anyway" : locks ? "Lock and close" : "Close", () => {
+        if (voice && !files && !LocalSend.busy) {
+            // In a call or a voice room: Minimize is the main choice, as it keeps the call going.
+            Ui.sure("Leave Huginn?", app.stakeText("Closing") + " Minimize keeps it going.", "Minimize", () => {
+                if (fromX && confirm.remember) Settings.closeAction = "minimize"
+                System.minimize(app)
+            }, false, false)
+            confirm.otherText = "Close anyway"
+            confirm.otherCallback = lockAndQuit
+            confirm.cancelText = "Stay"
+            if (fromX) confirm.rememberText = "Don't ask again"
+            return
+        }
+        const why = busy ? app.stakeText("Closing") : "Minimize keeps messages and calls coming."
+        Ui.sure("Leave Huginn?", why, busy ? "Close anyway" : locks ? "Lock and close" : "Close", () => {
             if (fromX && confirm.remember) Settings.closeAction = "quit"
             lockAndQuit()
         }, busy, busy)
-        confirm.otherText = files ? "Wait for it" : "Minimize"
-        confirm.otherCallback = files ? () => app.waitThen(locks ? "lock" : "quit") : () => {
-            if (fromX && confirm.remember) Settings.closeAction = "minimize"
-            System.minimize(app)
+        if (!(files && app.offerWait(locks ? "lock" : "quit"))) {
+            confirm.otherText = "Minimize"
+            confirm.otherCallback = () => {
+                if (fromX && confirm.remember) Settings.closeAction = "minimize"
+                System.minimize(app)
+            }
         }
         confirm.cancelText = "Stay"
         if (fromX && !busy) confirm.rememberText = "Don't ask again"
     }
-    // Wait for it: what to do once no chat file is on its way any more ("quit", "lock" or "restart" to update).
+    // Wait for it: what to do once no chat file is moving any more ("quit", "lock" or "restart" to update).
     property string afterFiles: ""
     function waitThen(what) {
         afterFiles = what
@@ -217,20 +256,22 @@ Window {
             if (app.afterFiles === "" || FileLink.runningCount > 0) return
             const what = app.afterFiles
             app.afterFiles = ""
+            // Paused while waiting: it would never finish, so Huginn stays (and says so) rather than cut it off.
+            if (FileLink.pausedCount > 0) {
+                Ui.say(what === "restart" ? "A file is paused, so the update waits. Restart now is in Settings › About." : "A file is paused, so Huginn stays open.")
+                return
+            }
             if (what === "restart") Updater.restartToUpdate()
             else { if (what === "lock" && Vault.hasLock && !Vault.screenLocked) Vault.lockScreen(); app.quitNow() }
         }
     }
-    // Restart now (the update bar, Settings › About): a file on its way asks first, and the update can wait for it.
+    // Restart now (the update bar, Settings › About): a call, a voice room or a file on its way asks first, and the
+    // update can wait for the file.
     function restartForUpdate() {
-        const files = FileLink.runningCount > 0
-        if (!files && !LocalSend.busy) { Updater.restartToUpdate(); return }
-        Ui.sure("Restart to update?", files ? FileLink.closeWarning : LocalSend.status + " Restarting now stops it partway.", "Restart anyway",
-                () => Updater.restartToUpdate(), false, true)
-        if (files) {
-            confirm.otherText = "Wait for it"
-            confirm.otherCallback = () => app.waitThen("restart")
-        }
+        const files = FileLink.closeWarning !== ""
+        if (!files && !app.inVoice && !LocalSend.busy) { Updater.restartToUpdate(); return }
+        Ui.sure("Restart to update?", app.stakeText("Restarting"), "Restart anyway", () => Updater.restartToUpdate(), false, true)
+        if (files) app.offerWait("restart")
         confirm.cancelText = "Later"
     }
     // Answered: Huginn closes (the window's close question isn't asked again).
@@ -312,6 +353,7 @@ Window {
     readonly property bool pageList: { const p = pageLoader.item; return !(p && p.listHidden === true) }
     readonly property bool pageMembers: { const p = pageLoader.item; return !!(p && p.membersVisible === true) }
     property bool tourVoice: false
+    property bool tourLegend: false   // the tour's handheld stops show the button legend, as Handheld mode does at start
     // You and your voice controls, at the bottom left under the rail and the list (wide windows).
     VoicePanel {
         id: voicePanel
@@ -370,7 +412,9 @@ Window {
 
     // ------------------------------------------------------------- your status
     // Do not disturb: no message sound, notification or ring (Settings.quiet is read by main.cpp and the ring).
-    Binding { target: Settings; property: "quiet"; value: Ui.myStatus === "dnd" }
+    // The tray's Mute notifications: only this computer goes quiet (this run); your status, which others see, stays.
+    property bool trayMuted: false
+    Binding { target: Settings; property: "quiet"; value: Ui.myStatus === "dnd" || app.trayMuted }
     // Away by itself after 10 minutes without a key, mouse or controller press while Online; back
     // to Online at the first press after. A status picked by hand on the card stays as picked.
     property real lastInput: Date.now()
@@ -408,8 +452,8 @@ Window {
         anchors.bottom: parent.bottom
         z: callPage.visible || incomingCall.visible || moveCover.visible || linkPhone.visible || setup.visible || backupPanel.visible ? 38 : 0   // a call's, a move's, Link your phone's or first setup's buttons stay on show over it
         width: parent.width
-        visible: (app.legend && Gamepad.connected) || LocalSend.busy
-        showKeys: app.legend && Gamepad.connected
+        visible: (app.legend && Gamepad.connected) || app.tourLegend || LocalSend.busy
+        showKeys: (app.legend && Gamepad.connected) || app.tourLegend
         status: incomingCall.visible ? incomingCall.status : callPage.visible ? callPage.status
               : app.focusZone === "rail" ? "" : pageLoader.item && pageLoader.item.status !== undefined ? pageLoader.item.status : ""
         prompts: {
@@ -420,6 +464,7 @@ Window {
             if (backupPanel.visible && !prompt.visible && !confirm.visible) return backupPanel.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (setup.visible && !prompt.visible && !confirm.visible) return setup.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (prompt.visible && !confirm.visible) return prompt.prompts.concat([{ key: "back", label: "Hide buttons" }])
+            if (app.overlay() === newsBanner) return newsBanner.prompts.concat([{ key: "back", label: "Hide buttons" }])
             const lb = [{ key: "lb", label: "Next section" }]
             // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
             const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
@@ -477,13 +522,15 @@ Window {
     Shortcut { sequence: "Ctrl+Shift+U"; context: Qt.ApplicationShortcut; enabled: app.keysOn && !app.portrait; onActivated: app.togglePane("members") }
     // Panic lock from the keyboard (a controller holds L3 and R3).
     Shortcut { sequence: "Ctrl+Shift+Q"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Vault.panicLock; onActivated: Vault.panic() }
-    Shortcut { sequence: "Ctrl+Shift+M"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: Ui.toggleMic() }
-    Shortcut { sequence: "Ctrl+Shift+D"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: Ui.toggleDeaf() }
-    // The same two while a game is in front (GlobalKeys: in a voice room or a call, where the system allows it).
+    // Mute and Deafen: Ctrl+Shift+M and D, or what Settings › Calls set (not while new ones are being picked there).
+    Shortcut { sequence: GlobalKeys.muteSequence; context: Qt.ApplicationShortcut; enabled: app.keysOn && GlobalKeys.capturing === 0; onActivated: Ui.toggleMic() }
+    Shortcut { sequence: GlobalKeys.deafenSequence; context: Qt.ApplicationShortcut; enabled: app.keysOn && GlobalKeys.capturing === 0; onActivated: Ui.toggleDeaf() }
+    // The same two while a game is in front (GlobalKeys: in a voice room or a call, where the system allows it), with a
+    // short sound, since a toast would be behind the game: rising when back on, falling when off.
     Connections {
         target: GlobalKeys
-        function onMutePressed() { Ui.toggleMic() }
-        function onDeafenPressed() { Ui.toggleDeaf() }
+        function onMutePressed() { Ui.toggleMic(); GlobalKeys.cue(!Ui.micMuted) }
+        function onDeafenPressed() { Ui.toggleDeaf(); GlobalKeys.cue(!Ui.deafened) }
     }
     Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.leave() }
     Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(1) }
@@ -797,14 +844,42 @@ Window {
     }
 
     // A message or missed call the system couldn't show as a notification (no notification service, or a game in front
-    // in game mode): the newest one waits here, under the top bar, until it's opened or closed.
+    // in game mode): the newest one waits here, under the top bar. It goes when its chat opens by any route, on A or B
+    // (the controller), or 10 seconds after Huginn is in front again.
     Rectangle {
         id: newsBanner
         property string title: ""
         property string body: ""
         property string where: ""
-        function show(t, b, w) { title = t; body = b; where = w; visible = true }
+        property bool away: false          // it came while another window (a game) was in front
+        function show(t, b, w) {
+            title = t; body = b; where = w
+            away = Qt.application.state !== Qt.ApplicationActive
+            visible = true
+            if (newsGone.running) newsGone.restart()
+        }
         function hide() { visible = false }
+        function open() {
+            const w = where
+            hide()
+            if (!app.touring) Chat.showChat(w)
+        }
+        // The controller, while it shows: A opens it, B closes it, and any other button closes it and does its own job.
+        readonly property var prompts: [{ key: "a", label: "Open" }, { key: "b", label: "Close" }]
+        function handleButton(b) {
+            if (b === "a") open()
+            else if (b === "b") hide()
+            else { hide(); app.press(b) }
+        }
+        // Its chat opened (from the list, a notification or anywhere else).
+        readonly property string openNow: Chat.openChat
+        onOpenNowChanged: if (visible && openNow !== "" && (openNow === where || openNow.startsWith(where + ":"))) hide()
+        Timer {
+            id: newsGone
+            interval: 10000
+            running: newsBanner.visible && Qt.application.state === Qt.ApplicationActive && !app.touring
+            onTriggered: newsBanner.hide()
+        }
         visible: false
         anchors.top: topBar.bottom; anchors.topMargin: Theme.px(8)
         anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
@@ -839,17 +914,23 @@ Window {
                 color: Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(14)
             }
+            Text {
+                textFormat: Text.PlainText
+                visible: text !== ""
+                width: parent.width
+                elide: Text.ElideRight
+                text: [newsBanner.away ? (System.gameMode ? "While you were playing" : "While you were away") : "",
+                       app.padInUse ? "A: Open  B: Close" : ""].filter(x => x !== "").join("  ·  ")
+                color: Theme.accent
+                font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+            }
         }
         // A click on the words opens that chat.
         MouseArea {
             anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
             anchors.right: newsClose.left
             cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                const w = newsBanner.where
-                newsBanner.hide()
-                if (!app.touring) Chat.showChat(w)
-            }
+            onClicked: newsBanner.open()
         }
         HButton {
             id: newsClose
@@ -953,7 +1034,8 @@ Window {
         function onShowChat(where) {
             if (newsBanner.visible && newsBanner.where === where) newsBanner.hide()
             if (Vault.screenLocked || where === "") { app.openPage("dms", {}); return }
-            if (where.startsWith("g:")) {
+            if (where.startsWith("mirror:")) app.openPage("dms", { mirror: where.substring(7) })   // a chat from the phone
+            else if (where.startsWith("g:")) {
                 const parts = where.split(":")
                 app.openPage("g:" + parts[1], parts.length > 2 ? { channel: parts.slice(2).join(":"), zone: "messages" } : {})
             } else app.openPage("dms", { open: where })
@@ -963,12 +1045,14 @@ Window {
         // The tray icon's menu (Windows).
         function onTrayAction(what) {
             if (what === "mute") {
-                Ui.setMyStatus(Ui.myStatus === "dnd" ? "online" : "dnd")
-                app.autoAway = false
+                // A local mute: Do not disturb (seen by others) is only ever set from your card.
+                if (Ui.myStatus === "dnd") { Ui.say("Do not disturb is on. Your card changes it."); return }
+                app.trayMuted = !app.trayMuted
+                Ui.say(app.trayMuted ? "Notifications are muted on this computer." : "Notifications are on again.")
                 return
             }
-            // A transfer going: Huginn comes up and asks first, as the X does.
-            if (LocalSend.busy || FileLink.runningCount > 0) {
+            // A call, a voice room or a transfer: Huginn comes up and asks first, as the X does.
+            if (LocalSend.busy || FileLink.closeWarning !== "" || app.inVoice) {
                 if (app.visibility === Window.Minimized || app.visibility === Window.Hidden) app.visibility = app.fullNow ? Window.FullScreen : Window.Windowed
                 app.raise(); app.requestActivate()
                 app.requestExit(false)
@@ -983,7 +1067,7 @@ Window {
             if (!Chat.alerted(key)) return
             // An @mention always says so (without the text unless previews are on).
             // Settings › Notifications › Show: Name and message, Name only, or Nothing.
-            const mention = name.indexOf(" mentioned you in ") > 0
+            const mention = name.indexOf(" mentioned you in ") > 0 || name.indexOf("Report in ") === 0
             const hidden = Vault.screenLocked
             const mode = hidden ? 0 : Chat.previewMode
             Ui.say(mode === 2 ? name + ": " + text : mode === 1 || mention && !hidden ? name + "." : "New message.")
@@ -997,6 +1081,24 @@ Window {
     Connections {
         target: Rooms
         function onFinished(t) { Ui.say(t) }
+    }
+    // Push to talk on Windows only hears the key while Huginn is in front (Huginn never watches keys in other apps, on
+    // purpose). It can't tell when the key was held behind a game, so the first time Huginn is back in front after being
+    // behind in a voice room with push to talk on, a toast says so (once per room).
+    readonly property bool inFront: Qt.application.state === Qt.ApplicationActive
+    property bool talkWentBehind: false
+    property bool talkToldOnce: false
+    onInFrontChanged: {
+        if (Qt.platform.os !== "windows" || app.touring || !Rooms.inRoom || !Settings.pushToTalk) return
+        if (!app.inFront) { app.talkWentBehind = true; return }
+        if (!app.talkWentBehind || app.talkToldOnce) return
+        app.talkWentBehind = false
+        app.talkToldOnce = true
+        Ui.say("Push to talk only hears " + TalkKey.keyName + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
+    }
+    Connections {
+        target: Rooms
+        function onChanged() { if (!Rooms.inRoom) { app.talkWentBehind = false; app.talkToldOnce = false } }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen. Report a bug stays, behind its own lock
     // (Labs › Performance check's results stay too, for when it's opened again).
@@ -1056,6 +1158,7 @@ Window {
         if (profileCard.visible) return profileCard
         if (meCard.visible) return meCard
         if (rail.menuOpen) return rail
+        if (newsBanner.visible && app.padInUse) return newsBanner
         return null
     }
     function page() { return pageLoader.item && pageLoader.status === Loader.Ready ? pageLoader.item : null }
@@ -1233,8 +1336,8 @@ Window {
                 event.accepted = true
                 return
             }
-            // Esc on the rail does nothing from the keyboard (only B on a controller asks to leave).
-            if (event.key === Qt.Key_Escape && app.focusZone === "rail" && !app.overlay()) { app.padInUse = false; event.accepted = true; return }
+            // Esc and Backspace on the rail do nothing from the keyboard (only B on a controller asks to leave).
+            if ((event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace) && app.focusZone === "rail" && !app.overlay()) { app.padInUse = false; event.accepted = true; return }
             // In a call, Space mutes (a controller's X still turns the camera on and off).
             const b = event.key === Qt.Key_Space && callPage.visible && !incomingCall.visible ? "a" : map[event.key]
             if (b) { if (!app.touring) app.padInUse = false; app.press(b); event.accepted = true }
@@ -1346,6 +1449,8 @@ Window {
             { page: "settings", section: "backup", restore: "summary", file: "85-restore-summary" },
             // The handheld's layout (a 7 inch 1080p screen at its fit: 914 by 514 design px) in a voice room.
             { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, file: "86-handheld-voice" },
+            { page: "g:tour-crew", zone: "messages", voicePanel: true, handheld: true, textSize: "115", file: "86b-handheld-voice-large" },
+            { page: "dms", setup: "lock", handheld: true, file: "86c-handheld-setup-lock" },
             { page: "dms", setup: "welcome", file: "60-setup-welcome" },
             { page: "dms", setup: "lock", file: "61-setup-lock" },
             { page: "dms", setup: "name", file: "62-setup-name" },
@@ -1368,6 +1473,7 @@ Window {
             if (step >= steps.length) {
                 Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs; Settings.textSize = savedText
                 app.width = 1920; app.height = 1080
+                System.setTourHandheld(false); app.tourLegend = false
                 stop(); System.tourFinished(); return
             }
             const s = steps[step]
@@ -1379,6 +1485,9 @@ Window {
             if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 }
             else if (s.handheld) { app.width = 914; app.height = 514 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
+            // Handheld stops: Handheld mode's sizes (44 px targets) and its button legend, as on the device.
+            System.setTourHandheld(!!s.handheld)
+            app.tourLegend = !!s.handheld
             Settings.labs = s.labs ? true : savedLabs
             const args = { tour: true }
             if (s.section) args.section = s.section

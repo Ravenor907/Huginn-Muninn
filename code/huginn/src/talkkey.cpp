@@ -30,6 +30,9 @@ QString TalkKey::keyName() const
 {
     if (m_key == Qt::Key_Space)
         return QStringLiteral("Space");
+    // The default: "`" alone is easy to miss in "hold `".
+    if (m_key == Qt::Key_QuoteLeft)
+        return QStringLiteral("Backtick (`)");
     const QString n = QKeySequence(m_key).toString(QKeySequence::NativeText);
     return n.isEmpty() ? QStringLiteral("Key %1").arg(m_key) : n;
 }

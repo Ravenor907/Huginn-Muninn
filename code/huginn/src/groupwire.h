@@ -24,6 +24,7 @@ const int kMaxChannelName = 32;
 const int kMaxStateBytes = 24 * 1024;
 const int kMaxAbout = 500;            // cap g3 (protocol 28): the group's "about" text, in characters
 extern const char kAboutCap[];        // "g3"
+extern const char kRefuseCap[];       // "g4" (protocol 28.5): a join that wasn't let in hears why
 const int kHistory = 32;              // accepted states kept for sync
 const int kStatesAnswer = 16;         // at most this many in one "states" answer
 const int kMaxHeld = 50;              // messages from unknown senders held per group

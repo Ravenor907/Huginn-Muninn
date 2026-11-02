@@ -22,6 +22,11 @@ Item {
     property int expireAt: 5          // index into expireChoices (7 days)
     property int usesAt: 0            // index into useChoices (no limit)
     property int revision: 0
+    // The shown link's own expiry (ms, 0 never) and use limit (0 none): a reused link says its real time left.
+    property real linkX: 0
+    property int linkMax: 0
+    // Admins: the other ways in, from the same place (GroupPage adds people from contacts, or lists the links).
+    signal fromContacts()
     visible: mode !== ""
 
     readonly property var expireChoices: [{ label: "30 minutes", s: 1800 }, { label: "1 hour", s: 3600 }, { label: "6 hours", s: 21600 },
@@ -38,15 +43,19 @@ Item {
         if (!ready) { link = ""; return }
         const r = Chat.createGroupLink(gid, expireChoices[expireAt].s * 1000, useChoices[usesAt].n) || {}
         if (r.error) { link = ""; Ui.say(r.error, true) }
-        else link = r.link || ""
+        else {
+            link = r.link || ""
+            const ttl = expireChoices[expireAt].s * 1000
+            linkX = ttl ? Date.now() + ttl : 0
+            linkMax = useChoices[usesAt].n
+        }
         revision++
     }
     // Opening it again shows my newest link nobody used yet (with no use limit) instead of making another.
     function openCreate() {
         mode = "create"; editing = false
-        const spare = has("groupLinks") ? (Chat.groupLinks(gid) || []).filter(l => l.mine && l.link && !(l.uses > 0) && !(l.max > 0)
-                                                                          && (!l.x || l.x - Date.now() > 3600000)) : []
-        if (spare.length) { link = spare.sort((a, b) => (b.x || Infinity) - (a.x || Infinity))[0].link; revision++ }
+        const spare = PeopleActions.spareLink(gid)
+        if (spare) { link = spare.link; linkX = spare.x || 0; linkMax = spare.max || 0; revision++ }
         else make()
     }
     function openList() { mode = "list"; revision++ }
@@ -124,7 +133,9 @@ Item {
                 Text {
                     textFormat: Text.PlainText
                     visible: panel.mode === "create" && panel.ready
-                    text: "Expires after " + panel.expireChoices[panel.expireAt].label.toLowerCase() + " · " + panel.useChoices[panel.usesAt].label.toLowerCase()
+                    // This link's own time left (a reused one keeps its own), not the choices below.
+                    text: (panel.revision, panel.link === "" ? "" : (!panel.linkX ? "Never expires" : panel.linkX <= Date.now() ? "Expired" : "Works for " + panel.timeLeft(panel.linkX) + " more")
+                          + " · " + (panel.linkMax ? panel.linkMax + (panel.linkMax === 1 ? " use" : " uses") : "no limit"))
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
                 }
                 Rectangle {
@@ -201,6 +212,8 @@ Item {
                     anchors.right: parent.right
                     spacing: Theme.px(8)
                     HButton { visible: panel.mode === "list" && panel.ready; text: "Make a link"; onClicked: panel.openCreate() }
+                    HButton { visible: panel.mode === "create" && panel.amAdmin; text: "From contacts"; onClicked: { panel.close(); panel.fromContacts() } }
+                    HButton { visible: panel.mode === "create" && panel.amAdmin && panel.has("groupLinks"); text: "Active links"; onClicked: panel.openList() }
                     HButton { text: "Done"; kind: "primary"; onClicked: panel.close() }
                 }
             }

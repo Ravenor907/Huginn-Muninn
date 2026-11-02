@@ -181,7 +181,7 @@ object FileLink {
 
     /**
      * One transfer, as the chat and Transfers show it. [state]: "offered", "asking" (Accept or Decline), "waiting" (data
-     * saver), "connecting", "sending", "done", "failed". [group]: a group's file (cap f2). [route]: "Direct" or "Over the
+     * saver), "connecting", "sending", "done", "failed". [group]: a group's file (cap f2). [route]: "Same Wi-Fi", "Straight to them" or "Over the
      * internet" (empty until known). [pace]: "2.1 MB/s · 12 s left". [folder]: where theirs goes, as words. [relay]: a
      * file of mine going as a message over the internet route (its message shows it in the chat).
      */
@@ -704,7 +704,7 @@ object FileLink {
                     if (id in stopped) return
                     val now = System.currentTimeMillis()
                     if (now - lastHeard > (if (f3) LONG_IDLE_MS else IDLE_MS)) {
-                        fail(id, if (f3) "$who went offline at ${FileText.percent(sent, o.size)}%. Retry goes on from there." else "They went offline. Try again.")
+                        fail(id, if (f3) "Stopped at ${FileText.percent(sent, o.size)}% (no answer from $who). Retry goes on from there." else "Stopped (no answer from them). Try again.")
                         return
                     }
                     // Cap f3: quiet for a moment, a probe a second instead of data until they're heard again.
@@ -804,8 +804,8 @@ object FileLink {
                             val below = r.ack().first
                             partials[id] = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, below)
                             keep = true
-                            fail(id, "$who went offline at ${FileText.percent(minOf(inc.size, below.toLong() * CHUNK), inc.size)}%. It goes on from there when they send it again.")
-                        } else fail(id, "They went offline. Ask them to send it again.")
+                            fail(id, "Stopped at ${FileText.percent(minOf(inc.size, below.toLong() * CHUNK), inc.size)}% (no answer from $who). It goes on from there if they send it again while Muninn stays open.")
+                        } else fail(id, "Stopped (no answer from them). Ask them to send it again.")
                         return
                     }
                     // Cap f3: quiet for a moment, an ack a second until they're heard again.

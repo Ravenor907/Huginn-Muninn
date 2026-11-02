@@ -37,10 +37,11 @@ Item {
             ["Mention someone in a group", "@name"],
             ["Find in this chat", "Ctrl+F"] ] }],
         [{ title: "CALLS AND VOICE", keys: [
-            ["Mute mic", "Ctrl+Shift+M"],
-            ["Deafen", "Ctrl+Shift+D"],
-            ["Leave", "Ctrl+Shift+H"],
-            [Settings.pushToTalk ? "Push to talk" : "Push to talk (Settings › Calls)", "hold " + TalkKey.keyName],
+            // Which work while a game is in front: only Mute and Deafen (GlobalKeys); the rest need Huginn in front.
+            [GlobalKeys.everywhere ? "Mute mic (also in a game)" : "Mute mic", GlobalKeys.muteName],
+            [GlobalKeys.everywhere ? "Deafen (also in a game)" : "Deafen", GlobalKeys.deafenName],
+            ["Leave (Huginn in front)", "Ctrl+Shift+H"],
+            [Settings.pushToTalk ? "Push to talk (Huginn in front)" : "Push to talk (Settings › Calls)", "hold " + TalkKey.keyName],
             ["In a call: mute", "Space"] ] },
          { title: "LOOK AND LOCK", keys: [
             ["Bigger", "Ctrl+="],

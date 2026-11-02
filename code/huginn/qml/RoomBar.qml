@@ -54,7 +54,8 @@ Rectangle {
             id: shareQuality
             anchors.right: stopShare.left; anchors.rightMargin: Theme.px(6)
             anchors.verticalCenter: parent.verticalCenter
-            text: Rooms.shareSmooth ? "Smooth" : "Sharp"; fontSize: 13; implicitHeight: Theme.px(32)
+            // Says what it is now; a click switches to the other.
+            text: "Quality: " + (Rooms.shareSmooth ? "Smooth" : "Sharp"); fontSize: 13; implicitHeight: Theme.px(32)
             onClicked: Rooms.shareSmooth = !Rooms.shareSmooth
         }
         HButton {
@@ -283,10 +284,10 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     elide: Text.ElideRight
                     wrapMode: Text.WordWrap
-                    maximumLineCount: 2
-                    text: (picker.mode === "window" ? "Only that window is shared. " : "Everything on that screen is shared. ")
-                          + (Rooms.shareSmooth ? "Smooth: 30 frames a second, smaller." : "Sharp: full size, up to 10 frames a second.")
-                          + " Game sound isn't shared."
+                    maximumLineCount: 3
+                    // "No game sound" on a line of its own, so a narrow window cuts the rest first, never that.
+                    text: "No game sound.\n" + (picker.mode === "window" ? "Only that window is shared. " : "Everything on that screen is shared. ")
+                          + (Rooms.shareSmooth ? "Smooth: up to 30 frames a second, smaller." : "Sharp: full size, up to 10 frames a second.")
                     color: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(12)
                 }

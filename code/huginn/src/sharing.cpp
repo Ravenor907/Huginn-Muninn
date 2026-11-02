@@ -41,7 +41,10 @@ QString Sharing::route(bool sameWifi, bool trusted, qint64 size, qint64 relayMax
 
 QString Sharing::routeLabel(const QString &route)
 {
-    return route == QLatin1String("direct") ? QStringLiteral("Direct") : QStringLiteral("Over the internet");
+    // "Direct" alone read like Direct calls and files (straight over the internet), so each route says where it goes.
+    if (route == QLatin1String("direct"))
+        return QStringLiteral("Same Wi-Fi");
+    return route == QLatin1String("internet") ? QStringLiteral("Straight to them") : QStringLiteral("Over the internet");
 }
 
 QString Sharing::whoMaySend(const QJsonObject &state)
@@ -200,8 +203,8 @@ bool Sharing::selfTest()
     check(route(false, true, 900 * kMb, relayMax) == QLatin1String("internet"), QStringLiteral("route: trusted"));
     check(route(false, false, relayMax, relayMax) == QLatin1String("relay"), QStringLiteral("route: small, no trust"));
     check(route(false, false, relayMax + 1, relayMax).isEmpty(), QStringLiteral("route: big, no trust, not close"));
-    check(routeLabel(QStringLiteral("direct")) == QLatin1String("Direct") && routeLabel(QStringLiteral("relay")) == QLatin1String("Over the internet")
-              && routeLabel(QStringLiteral("internet")) == QLatin1String("Over the internet"), QStringLiteral("route labels"));
+    check(routeLabel(QStringLiteral("direct")) == QLatin1String("Same Wi-Fi") && routeLabel(QStringLiteral("relay")) == QLatin1String("Over the internet")
+              && routeLabel(QStringLiteral("internet")) == QLatin1String("Straight to them"), QStringLiteral("route labels"));
 
     // Group rules, as every member's app enforces them.
     QJsonObject s = GroupWire::withMembers(QJsonObject{{QStringLiteral("g"), QStringLiteral("x")}},

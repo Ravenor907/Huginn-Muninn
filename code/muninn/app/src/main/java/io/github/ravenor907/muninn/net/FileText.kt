@@ -10,14 +10,14 @@ object FileText {
 
     fun percent(done: Long, size: Long): Int = if (size <= 0) 0 else (done.coerceIn(0, size) * 100 / size).toInt()
 
-    /** A straight transfer (FileLink.Progress): its state in a few words. [who]: the other person's name. */
-    fun line(state: String, mine: Boolean, done: Long, size: Long, note: String, who: String): String = when (state) {
+    /** A straight transfer (FileLink.Progress): its state in a few words. [who]: the other person's name; [where]: its folder. */
+    fun line(state: String, mine: Boolean, done: Long, size: Long, note: String, who: String, where: String = "Downloads"): String = when (state) {
         "connecting" -> if (mine) "Getting ready" else "Receiving"
         "offered" -> "Waiting for $who to accept"
         "asking" -> "Wants to send you this"
         "waiting" -> "On mobile data. Download it?"
         "sending" -> if (note.isNotEmpty()) note else (if (mine) "Sending " else "Receiving ") + percent(done, size) + "%"
-        "done" -> if (mine) "Sent · Saved in their Downloads" else "Saved to Downloads"
+        "done" -> if (mine) "Sent · Saved in their Downloads" else "Saved to ${where.ifEmpty { "Downloads" }}"
         "failed" -> note.ifEmpty { "Didn't go through" }
         else -> note
     }

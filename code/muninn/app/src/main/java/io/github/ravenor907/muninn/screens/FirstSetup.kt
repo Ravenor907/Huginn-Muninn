@@ -508,7 +508,7 @@ private fun DonePage() {
             Box(Modifier.size(72.dp).clip(CircleShape).background(Palette.accentFill).border(2.dp, Palette.accent, CircleShape),
                 contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
             Text("You're set.", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
-            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. Family groups can keep them longer.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+            Text("Messages, photos and calls delete after 7 days, so old chats can't leak. Groups can choose to keep them longer.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             if (practice) Text("Practice ends here and goes back to Labs.", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
     }

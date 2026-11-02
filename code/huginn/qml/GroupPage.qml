@@ -77,7 +77,7 @@ Rectangle {
         g: gid, name: gid === "tour-family" ? "Family" : gid === "tour-folk" ? "Folk" : "Gaming Crew", amAdmin: true, amOwner: true, readOnly: false, count: 6,
         type: gid === "tour-family" ? "family" : "folk",
         channels: [{ id: "main", name: "general", type: "text", unread: 0 }, { id: "s", name: "screenshots", type: "text", unread: 2, mentions: 1 },
-                   { id: "p", name: "plans", type: "text", unread: 0 }, { id: "l", name: "Lounge", type: "voice", unread: 0 },
+                   { id: "p", name: "plans", type: "text", unread: 0 }, { id: "l", name: "Voice", type: "voice", unread: 0 },
                    { id: "r", name: "Raid night", type: "voice", unread: 0 }],
         members: [{ key: "me", name: Ui.myName, owner: true, admin: true, me: true, contact: false, route: "" },
                   { key: "j", name: "Jake", admin: true, owner: false, me: false, contact: true, route: "wifi" },
@@ -127,7 +127,7 @@ Rectangle {
             return channelId !== "main" ? [] : [
                 { id: "1", name: "Jake", from: "j", text: "Who's on tonight? I can host at 8.", mine: false, time: Date.now() - 600000 },
                 { id: "2", name: "Sam", from: "s", text: "In. Grabbing food first.", mine: false, time: Date.now() - 480000 },
-                { id: "3", name: Ui.myName, from: "me", text: "Jumping in the Lounge now.", mine: true, time: Date.now() - 60000, state: "delivered", receipt: "Delivered to 4 of 5" }]
+                { id: "3", name: Ui.myName, from: "me", text: "Jumping in Voice now.", mine: true, time: Date.now() - 60000, state: "delivered", receipt: "Delivered to 4 of 5" }]
         return (Chat.groups, Chat.groupMessages(gid, channelId))
     }
     readonly property string chatKey: "g:" + gid + ":" + channelId
@@ -136,6 +136,10 @@ Rectangle {
     property int modTick: 0
     Timer { interval: 30000; repeat: true; running: !page.isTour && page.exists; onTriggered: page.modTick++ }
     readonly property string modStatus: isTour || locked || !exists ? "" : (Mod.serial, modTick, Mod.myStatus(gid))
+    // Cap g3 (28.2): an "Only admins post" channel, and I'm not an admin: no message box, a line saying so.
+    readonly property bool postLocked: !isTour && !readOnly && !!channel.adminsOnly && !info.amAdmin
+    // The about box folds to one line (kept for this run, per group).
+    property var aboutFolds: ({})
 
     readonly property var prompts: finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
@@ -303,7 +307,7 @@ Rectangle {
                         id: chanIcon
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
                         anchors.verticalCenter: parent.verticalCenter
-                        name: rowItem.voice ? "speaker" : "hash"
+                        name: rowItem.voice ? "speaker" : modelData.adminsOnly ? "lock" : "hash"
                         size: Theme.px(16)
                         color: Theme.textMuted
                     }
@@ -442,7 +446,7 @@ Rectangle {
             anchors.top: convHead.bottom
             anchors.left: parent.left
             anchors.right: parent.right
-            anchors.bottom: compose.visible ? compose.top : parent.bottom
+            anchors.bottom: compose.visible ? compose.top : postLockBar.visible ? postLockBar.top : parent.bottom
             clip: true
 
             // Removed or left: say so, and what to do with it.
@@ -473,15 +477,31 @@ Rectangle {
                 anchors.margins: Theme.px(12)
                 height: visible ? aboutText.implicitHeight + Theme.px(20) : 0
                 radius: Theme.radius; color: Theme.raised; border.color: Theme.line; border.width: 1
-                Accessible.role: Accessible.StaticText
+                readonly property bool folded: !!page.aboutFolds[page.gid]
+                Accessible.role: Accessible.Button
                 Accessible.name: "About this group: " + about
+                Accessible.description: folded ? "Folded. Click to show it all." : "Click to fold it to one line."
                 Text {
                     id: aboutText
                     textFormat: Text.PlainText
-                    x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
+                    x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28) - foldWord.width
                     wrapMode: Text.WordWrap
+                    maximumLineCount: aboutBox.folded ? 1 : 200
+                    elide: Text.ElideRight
                     text: aboutBox.about
                     color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                }
+                Text {
+                    id: foldWord
+                    textFormat: Text.PlainText
+                    anchors.right: parent.right; anchors.rightMargin: Theme.px(12); y: Theme.px(10)
+                    text: aboutBox.folded ? "Show" : "Fold"
+                    color: aboutHover.hovered ? Theme.accent : Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+                }
+                HoverHandler { id: aboutHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    onTapped: { const f = Object.assign({}, page.aboutFolds); f[page.gid] = !aboutBox.folded; page.aboutFolds = f }
                 }
             }
             // Find in this channel: over the messages, which start under it.
@@ -622,14 +642,35 @@ Rectangle {
         }
 
         // The message box, docked at the bottom and typed into directly (A puts the controller in it).
+        // Cap g3: in an "Only admins post" channel a member gets this line instead of a box they could type into.
+        Rectangle {
+            id: postLockBar
+            visible: !page.locked && page.exists && page.postLocked
+            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+            anchors.leftMargin: Theme.px(16); anchors.rightMargin: Theme.px(16); anchors.bottomMargin: Theme.px(24)
+            height: Theme.px(44)
+            radius: Theme.radius; color: Theme.raised; border.color: Theme.line; border.width: 1
+            Accessible.role: Accessible.StaticText
+            Accessible.name: "Only admins post here"
+            Row {
+                anchors.centerIn: parent
+                spacing: Theme.px(8)
+                Icon { anchors.verticalCenter: parent.verticalCenter; name: "lock"; size: Theme.px(16); color: Theme.textMuted }
+                Text {
+                    textFormat: Text.PlainText
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Only admins post here"
+                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                }
+            }
+        }
         Composer {
             id: compose
-            visible: !page.locked && page.exists && !page.readOnly
+            visible: !page.locked && page.exists && !page.readOnly && !page.postLocked
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(16); anchors.rightMargin: Theme.px(16); anchors.bottomMargin: Theme.px(24)
             height: implicitHeight
-            placeholder: page.modStatus !== "" ? page.modStatus
-                       : page.channel.adminsOnly && !page.info.amAdmin ? "Only admins post here" : "Message #" + page.channel.name
+            placeholder: page.modStatus !== "" ? page.modStatus : "Message #" + page.channel.name
             target: page.isTour ? "" : page.chatKey
             voiceTo: page.isTour || page.readOnly ? "" : page.chatKey
             micShown: true
@@ -697,7 +738,7 @@ Rectangle {
         }
         Composer {
             id: threadBox
-            visible: page.side === "thread" && !page.readOnly
+            visible: page.side === "thread" && !page.readOnly && !page.postLocked
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.margins: Theme.px(12)
             height: implicitHeight
@@ -801,7 +842,7 @@ Rectangle {
     }
 
     // Invite links (Discord style): make one, see them all, revoke.
-    InvitePanel { id: invitePanel; anchors.fill: parent; z: 21; gid: page.gid; groupName: page.info.name || ""; amAdmin: !!page.info.amAdmin }
+    InvitePanel { id: invitePanel; anchors.fill: parent; z: 21; gid: page.gid; groupName: page.info.name || ""; amAdmin: !!page.info.amAdmin; onFromContacts: page.invite() }
     readonly property bool canInvite: !page.locked && page.exists && !page.readOnly && !page.isTour && (!!page.info.amAdmin || invitePanel.membersCanInvite)
 
     // ============================================================= actions
@@ -876,8 +917,12 @@ Rectangle {
         if (!exists) return
         const items = []
         const admin = !readOnly && !!info.amAdmin
-        if (isTour || ((canInvite || admin) && !family)) items.push({ name: "Invite people", icon: "plus", detail: "A link or code", url: "invite" })
-        if (isTour || admin) items.push({ name: "Add people", icon: "person", detail: family ? "" : "From contacts, links", url: "add" })
+        // Cap g3: new reports from members come first, for admins (they're also under Group settings).
+        if (admin && !isTour && (info.reportsUnread || 0) > 0) items.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
+        // One Invite people: the link panel (with From contacts and Active links in it for admins); a Family group's admins
+        // get From contacts or a code. Hidden for whoever can't invite.
+        if (isTour || (!family && (canInvite || admin)) || (family && admin))
+            items.push({ name: "Invite people", icon: "plus", detail: family ? "From contacts or a code" : admin ? "A link, a code or contacts" : "A link or code", url: "invite" })
         // Family: each member's safety code is checked once.
         const unchecked = family && !readOnly && !isTour ? members.filter(m => !m.me && !m.checked).length : 0
         if (unchecked) items.push({ name: "Check safety codes", icon: "check", detail: unchecked + " to check", url: "check" })
@@ -901,6 +946,7 @@ Rectangle {
         if (a === "check") { checkMenu(); return }
         if (a === "find") { openFind(); return }
         if (isTour) return
+        if (a === "reports") { reportsMenu(() => page.groupMenu()); return }
         if (a === "mute") PeopleActions.muteMenu("g:" + g, info.name || "Group", () => page.groupMenu())
         else if (a === "notify") PeopleActions.notifyMenu("g:" + g, () => page.groupMenu())
         else if (a === "callall") {
@@ -908,7 +954,7 @@ Rectangle {
             Ui.sure("Ring all " + n + (n === 1 ? " person?" : " people?"), "Their phones and computers ring now. To just talk, join a voice room.",
                     "Ring everyone", () => tell(Rooms.callGroup(g, []), "Ringing everyone."), false, false)
         }
-        else if (a === "invite") linkOrCode()
+        else if (a === "invite") inviteMenu()
         else if (a === "callsome") pickCallees([])
         else if (a === "add") addMenu()
         else if (a === "channels") channelsMenu()
@@ -932,7 +978,8 @@ Rectangle {
     // People: everyone in the group; each opens their member menu.
     function peopleMenu() {
         Ui.pickFrom("People", [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.me ? "me" : m.key,
-            detail: [m.owner ? "Owner" : m.admin ? "Admin" : "", family && !m.me ? (m.checked ? "Checked" : "Not checked") : ""].filter(x => x).join(" · ") })) }],
+            detail: [m.owner ? "Owner" : m.admin ? "Admin" : "", family && !m.me ? (m.checked ? "Checked" : "Not checked") : "",
+                     !isTour && m.needsUpdate ? "Needs an update" : ""].filter(x => x).join(" · ") })) }],
             k => { const m = members.find(x => (x.me ? "me" : x.key) === k); if (m) memberMenu(m, () => page.peopleMenu()) },
             () => page.groupMenu())
     }
@@ -966,6 +1013,8 @@ Rectangle {
             else if (a === "links") invitePanel.openList()
         }, () => page.groupMenu())
     }
+    // Invite people (the group menu and the rail's right-click): the link panel where links work, else Add people.
+    function inviteMenu() { if (!family && invitePanel.ready && canInvite) invitePanel.openCreate(); else addMenu() }
     function linkOrCode() { if (!family && invitePanel.ready && canInvite) invitePanel.openCreate(); else showCode() }
     function invite() {
         const inGroup = members.map(m => m.key)
@@ -995,10 +1044,9 @@ Rectangle {
             if (a === "pins") openPins()
             else if (a === "shared") more.openShared()
             else if (a === "files") { if (!isTour) PeopleActions.openFiles("g:" + gid, info.name) }
-            else if (a === "addtext" || a === "addvoice") {
-                const voice = a === "addvoice"
-                Ui.ask(voice ? "New voice room" : "New text channel", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, voice), "Added."), false, true)
-            } else if (a === "rename") {
+            else if (a === "addtext") newTextChannel(g, "", false)
+            else if (a === "addvoice")
+                Ui.ask("New voice room", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, true), "Added."), false, true) else if (a === "rename") {
                 pickChannel("Rename which?", channels, id => {
                     const c = channels.find(x => x.id === id)
                     Ui.ask("Rename " + (c ? c.name : "channel"), "Up to 32 characters", c ? c.name : "", "Save", t => tell(Chat.renameChannel(g, id, t), "Renamed."), false, true)
@@ -1024,12 +1072,15 @@ Rectangle {
             if (inIt && Rooms.canShare) items.push({ name: "Share my screen", icon: "screen", url: "share", check: Rooms.sharing })
         } else {
             items.push({ name: "Open", icon: "hash", url: "open" }, { name: "Mark as read", icon: "check", url: "read" })
-            items.push({ name: !isTour && Chat.isMuted("g:" + g) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" })
+            // Muting is for the whole group (no per-channel mute yet), so it says so.
+            items.push({ name: (!isTour && Chat.isMuted("g:" + g) ? "Unmute " : "Mute ") + (info.name || "the group") + "…", icon: "bell", url: "mute" })
         }
         const own = []
         if (admin && !c.call) {
             own.push({ name: "Rename", icon: "edit", url: "rename" })
             if (!voice && c.id !== "main") own.push({ name: "Only admins post", detail: "For rules or announcements", url: "ao", check: !!c.adminsOnly })
+            // The first channel stays open to everyone: say where "Only admins post" goes instead.
+            if (!voice && c.id === "main") own.push({ name: "Only admins post", detail: "Not here: add a #rules channel", url: "aomain" })
             if (c.id !== "main") own.push({ name: voice ? "Delete voice room" : "Delete channel", url: "delete", danger: true })
         }
         Ui.pickFrom((voice ? "" : "#") + c.name, [{ header: "", items: items }, { header: "", items: own }], a => {
@@ -1044,9 +1095,23 @@ Rectangle {
                 Ui.ask("Rename " + c.name, "Up to 32 characters", c.name, "Save", t => tell(Chat.renameChannel(g, c.id, t), "Renamed."), false, true)
             else if (a === "ao")
                 tell(Chat.setChannelAdminsOnly(g, c.id, !c.adminsOnly), c.adminsOnly ? "Everyone can post in #" + c.name + "." : "Only admins post in #" + c.name + " now.")
+            else if (a === "aomain") newTextChannel(g, "rules", true)
             else if (a === "delete")
                 Ui.sure("Delete " + c.name + "?", "Gone for everyone.", "Delete",
                         () => { if (channelId === c.id) channelId = "main"; tell(Chat.removeChannel(g, c.id), "Deleted.") }, false, true)
+        })
+    }
+    // A new text channel, with who posts in it: everyone, or only admins (for #rules or #announcements, cap g3).
+    function newTextChannel(g, name, adminsOnly) {
+        Ui.askWith("New text channel", "Up to 32 characters", name, "Add",
+                   [{ value: "all", label: "Everyone posts" }, { value: "ao", label: "Only admins post" }], adminsOnly ? "ao" : "all", "Who posts here", (t, pick) => {
+            const err = Chat.addChannel(g, t, false)
+            if (err !== "") { Ui.say(err, true); return }
+            if (pick !== "ao") { Ui.say("Added."); return }
+            const text = (Chat.groupInfo(g).channels || []).filter(c => c.type === "text")
+            const made = text.length ? text[text.length - 1] : null
+            const r = made ? Chat.setChannelAdminsOnly(g, made.id, true) : ""
+            Ui.say(r !== "" ? "Added. " + r : "Added #" + (made ? made.name : t) + ". Only admins post there.", r !== "")
         })
     }
     function pickChannel(title, list, cb, back) {
@@ -1059,7 +1124,7 @@ Rectangle {
         if (admin) items.push({ name: "Name", icon: "edit", detail: info.name, url: "name" })
         // Cap g3: the about text (description and rules), shown at the top of the first channel. It never expires.
         const about = isTour ? "" : (info.about || "")
-        items.push({ name: "About and rules", icon: "info", detail: about !== "" ? about : admin ? "Add a description or rules" : "None", url: "about" })
+        items.push({ name: "About and rules", icon: "info", detail: about !== "" ? about.replace(/\n+/g, " · ") : admin ? "Add a description or rules" : "None", url: "about" })
         items.push({ name: "Type", icon: "people", detail: l.typeName, url: "type" })
         items.push({ name: "Message days", icon: "moon", detail: l.days + " days", url: "days" })
         if (admin && l.links && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
@@ -1068,11 +1133,15 @@ Rectangle {
         // Cap g2: who is banned (Unban) and who is timed out (time left, Cancel). Admins only.
         if (admin || (isTour && !locked)) {
             const banned = isTour ? [] : Mod.bannedList(gid), outs = isTour ? [] : Mod.timeoutList(gid)
+            // Cap g3: reports from members, only on admins' devices; unread ones count on the group like an @mention.
+            const nr = isTour ? 0 : (info.reports || 0), nu = isTour ? 0 : (info.reportsUnread || 0)
+            items.push({ name: "Reports", icon: "shield", detail: nr ? (nu ? nu + " new · " : "") + nr + (nr === 1 ? " report" : " reports") : "None", url: "reports" })
             items.push({ name: "Banned", icon: "shield", detail: banned.length ? banned.length + (banned.length === 1 ? " person" : " people") : "Nobody", url: "banned" },
                        { name: "Timeouts", icon: "moon", detail: outs.length ? outs.length + (outs.length === 1 ? " person" : " people") : "Nobody", url: "timeouts" })
         }
         const g = gid, back = () => page.settingsMenu()
         Ui.pickFrom("Group settings", [{ header: "", items: items }], a => {
+            if (a === "reports") { if (!isTour) reportsMenu(back); return }
             if (a === "banned") { if (!isTour) bannedMenu(back); return }
             if (a === "timeouts") { if (!isTour) timeoutsMenu(back); return }
             if (a === "files") { if (!isTour) PeopleActions.groupFilesMenu(g, back); return }
@@ -1080,8 +1149,11 @@ Rectangle {
             else if (a === "about") {
                 if (isTour) return
                 if (!admin) { Ui.note("About " + (info.name || "this group"), about !== "" ? about : "No description or rules yet."); return }
-                Ui.ask("About and rules", "Everyone sees it. Up to 500 characters, kept until changed", about, "Save",
-                       t => tell(Chat.setGroupAbout(g, t), t.trim() !== "" ? "Saved. Everyone sees it." : "Removed."), false, true)
+                // Paragraphs are kept (a numbered rule on each line); turning it on may need everyone's update first.
+                const behind = Chat.needG3Update(g)
+                Ui.askLong("About and rules", "Everyone sees it at the top of #" + ((channels[0] || {}).name || "general") + ". Up to 500 characters and 10 lines, kept until changed."
+                           + (behind.length && about === "" ? " " + behind.join(", ") + (behind.length === 1 ? " needs" : " need") + " the newest Huginn or Muninn first." : ""),
+                           about, "Save", t => tell(Chat.setGroupAbout(g, t), t.trim() !== "" ? "Saved. Everyone sees it." : "Removed."))
             }
             else if (a === "days") pickGroupLimit(back)
             else if (a === "type") pickGroupType(back)
@@ -1092,6 +1164,45 @@ Rectangle {
                 Qt.callLater(back)
             }
         }, () => page.groupMenu())
+    }
+    // Cap g3: reports from members, newest first. Each: go to the message, Delete for everyone, Timeout or Ban its
+    // author, or Dismiss. Opening the list marks them read.
+    function reportsMenu(back) {
+        const g = gid, list = Chat.groupReports(g), again = () => page.reportsMenu(back)
+        Chat.readGroupReports(g)
+        if (!list.length) { Ui.say("No reports."); if (back) Qt.callLater(back); return }
+        Ui.pickFrom("Reports", [{ header: "Newest first", items: list.map(r => ({ name: r.fromName + " reported " + r.kName,
+            detail: (r.chName ? "#" + r.chName + " · " : "") + (r.text || "(a photo or file)") + (r.here ? "" : " · gone now"), icon: r.read ? "" : "bell", url: r.id })) }],
+            id => { const r = list.find(x => x.id === id); if (r) reportMenu(r, again) }, back)
+    }
+    function reportMenu(r, back) {
+        const g = gid
+        const items = []
+        if (r.here && r.ch) items.push({ name: "Go to the message", icon: "search", url: "go" })
+        if (r.here && Mod.canModerate(g, r.k)) items.push({ name: "Delete for everyone", detail: "Shows as Removed by an admin", url: "remove", danger: true })
+        const who = Mod.canModerate(g, r.k) ? ModActions.items(g, r.k, false, r.kName).filter(x => !!x.person) : []
+        Ui.pickFrom(r.fromName + " reported " + r.kName, [{ header: "", items: items }, { header: who.length ? r.kName : "", items: who },
+                                                          { header: "", items: [{ name: "Dismiss", detail: "Takes it off this list", url: "dismiss" }] }], a => {
+            if (ModActions.handle(a, g, r.k, r.kName, back)) return
+            if (a === "go") goToMessage(r.ch, r.msg)
+            else if (a === "remove")
+                Ui.sure("Delete for everyone?", "It shows as Removed by an admin for every member.", "Delete",
+                        () => { removedToast(Mod.removeForEveryone(g, r.msg, r.k)); Chat.dismissReport(g, r.id) }, false, true)
+            else if (a === "dismiss") { Chat.dismissReport(g, r.id); if (back) Qt.callLater(back) }
+        }, back)
+    }
+    // Opens channel ch and puts the selection on message id.
+    function goToMessage(ch, id) {
+        const i = rows.findIndex(x => x.kind === "channel" && x.id === ch)
+        if (i >= 0 && ch !== channelId) { chRow = i; openRow() }
+        Qt.callLater(() => page.jumpTo(id))
+    }
+    // After Delete for everyone: an app without g2 keeps showing it, so the toast says how far it went.
+    function removedToast(w) {
+        if (w !== "") { Ui.say(w, true); return }
+        const behind = Mod.withoutRemove(gid)
+        Ui.say(behind > 0 ? "Removed for everyone on the new version. " + behind + (behind === 1 ? " member still sees it until they update." : " members still see it until they update.")
+                          : "Removed for everyone.")
     }
     // Cap g2: the Banned list, each with Unban; they can rejoin by a code, a link or an invite after.
     function bannedMenu(back) {
@@ -1229,7 +1340,9 @@ Rectangle {
         const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
         if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
         if (m.text && !m.unsent && !isTour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMenu(m.text) })
-        if (!m.mine && !m.unsent && !isTour) items.push({ name: "Report to admins", icon: "shield", url: "report" })
+        // Only when there's another admin to tell (not for the only admin, nor about that admin's own message).
+        if (!m.mine && !m.unsent && !isTour && members.some(x => !x.me && (x.admin || x.owner) && x.key !== m.from))
+            items.push({ name: "Report to admins", icon: "shield", url: "report" })
         if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
@@ -1261,7 +1374,7 @@ Rectangle {
             else if (a === "unsend") Chat.unsendGroup(g, m.id)
             else if (a === "remove")
                 Ui.sure("Delete for everyone?", "It shows as Removed by an admin for every member.", "Delete",
-                        () => { const w = Mod.removeForEveryone(g, m.id, m.from); Ui.say(w !== "" ? w : "Removed for everyone.", w !== "") }, false, true)
+                        () => page.removedToast(Mod.removeForEveryone(g, m.id, m.from)), false, true)
             else if (a === "retry") Chat.retryGroup(g, m.id)
             else if (a === "delete") Chat.deleteGroupMessage(g, m.id)
         })

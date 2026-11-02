@@ -144,6 +144,7 @@ void Link::ensureLoaded() const
     m_meStatus.clear();
     m_meCustom.clear();
     m_mePic.clear();
+    m_own = m_phone.key.isEmpty() ? QJsonObject() : o.value(QStringLiteral("own")).toObject();
     if (!m_phone.key.isEmpty()) {
         const QVariantMap me = readMe(o.value(QStringLiteral("me")).toObject());
         m_meName = vstr(me, "name");
@@ -205,6 +206,8 @@ void Link::save()
                 me.insert(QStringLiteral("pic"), QString::fromLatin1(m_mePic.toBase64()));
             o.insert(QStringLiteral("me"), me);
         }
+        if (!m_own.isEmpty())
+            o.insert(QStringLiteral("own"), m_own);
     }
     m_chat->m_vault->write(QStringLiteral("link.json"), compact(o));
     Q_EMIT changed();
@@ -295,6 +298,10 @@ QString Link::errText(const QString &err)
         return QStringLiteral("Confirm the emoji on your phone");
     if (err == QLatin1String("not a contact"))
         return QStringLiteral("Not a contact on your phone");
+    if (err == QLatin1String("not in group"))
+        return QStringLiteral("You're not in this group any more");
+    if (err == QLatin1String("admins only"))
+        return QStringLiteral("Only admins post in that channel");
     return QStringLiteral("Didn't send");
 }
 
@@ -347,8 +354,8 @@ int Link::unread() const
         return 0;
     int n = 0;
     for (const Mirror &m : std::as_const(m_mirror))
-        if (!m_chat->isMuted(QStringLiteral("mirror:") + m.peer))
-            n += unreadIn(m.msgs, m.readAt);
+        if (!m_chat->isMuted(QStringLiteral("mirror:") + m.peer) && unreadIn(m.msgs, m.readAt) > 0)
+            ++n;   // chats, like the badge's own chats (not messages)
     return n;
 }
 
@@ -484,8 +491,26 @@ void Link::lanTick()
     }
 }
 
+bool Link::restoreOwn()
+{
+    if (m_own.isEmpty())
+        return false;
+    const QJsonObject own = std::exchange(m_own, {});
+    if (setMyProfile)
+        setMyProfile(jstr(own, "n"), jstr(own, "st"), jstr(own, "cs"));
+    if (setMyPicture)
+        setMyPicture(QByteArray::fromBase64(jstr(own, "pic").toLatin1()));
+    return !jstr(own, "n").isEmpty();   // it had no name of its own (linked first): ask for one
+}
+
 void Link::forgetPhone()
 {
+    // Cap l1 made the phone's name and picture this device's own: its own from before come back. Not known (linked
+    // before they were kept): the phone's picture goes, and the screens ask for a name.
+    const bool took = m_phone.l1;
+    m_ownBack = restoreOwn() || !took;
+    if (!m_ownBack && setMyPicture)
+        setMyPicture(QByteArray());
     m_phone = Device();
     m_ownOpen = false;
     m_mirror.clear();
@@ -662,6 +687,8 @@ QString Link::saveMedia(const QString &peer, const QString &id) const
         QFile f(path);
         const bool ok = f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size();
         bytes.fill(0);
+        if (ok)
+            m_lastSaved = path;
         return ok ? QString() : QStringLiteral("Couldn't save it.");
     }
     return QStringLiteral("That message isn't here any more.");
@@ -1493,19 +1520,26 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
             c.name = n;
         if (c.name.isEmpty())
             c.name = QStringLiteral("Someone");
+        // Cap l3 (15.3): an id already here is that message edited or deleted: it replaces the old copy, quietly.
+        const bool again = std::any_of(c.msgs.cbegin(), c.msgs.cend(), [&](const M &y) { return y.id == x.id; });
         merge(c.msgs, {x});
-        // My own message from here came back: it isn't pending any more.
-        if (x.mine)
+        // My own message from here came back: it isn't pending any more. Only when one pending row has its text (two
+        // the same wait for their "result", which ends each by its own id).
+        if (x.mine && !again) {
+            qsizetype at = -1, same = 0;
             for (qsizetype i = 0; i < m_pending.size(); ++i)
                 if (m_pending.at(i).peer == peer && m_pending.at(i).text.left(kText) == x.text) {
-                    m_pending.removeAt(i);
-                    break;
+                    at = i;
+                    ++same;
                 }
+            if (same == 1)
+                m_pending.removeAt(at);
+        }
         saveMirror();
         want(x);
         fetchNext();
         // Who wrote it, in a group ("Sam in gaming server"). Muted here or on the phone: notifyFor stays quiet.
-        if (!x.mine)
+        if (!x.mine && !again)
             Q_EMIT m_chat->arrived(x.from.isEmpty() ? c.name : x.from + QStringLiteral(" in ") + c.name, x.text.left(60), QStringLiteral("mirror:") + peer);
         return true;
     }
@@ -1601,7 +1635,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
 
 // ------------------------------------------------------------------ the companion's side
 
-QString Link::send(const QString &peer, const QString &text, const QString &re)
+QString Link::send(const QString &peer, const QString &text, const QString &re, const QString &ch)
 {
     ensureLoaded();
     const QString t = text.trimmed();
@@ -1612,7 +1646,9 @@ QString Link::send(const QString &peer, const QString &text, const QString &re)
     if (t.isEmpty())
         return QStringLiteral("Write something first.");
     // Shown at once as pending, until the phone answers or its copy comes back.
-    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, t.left(Chat::kMax), QString(), re.left(200), now()};
+    const bool group = peer.startsWith(QLatin1String("g:"));
+    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, t.left(Chat::kMax), QString(), re.left(200), now(),
+                    group && ch.size() <= 40 ? ch : QString()};
     m_pending << p;
     while (m_pending.size() > 50)
         m_pending.removeFirst();
@@ -1627,6 +1663,8 @@ void Link::sendPending(const Pending &p)
                       {QStringLiteral("id"), p.id}};
     if (!p.re.isEmpty())
         frame.insert(QStringLiteral("re"), p.re);
+    if (!p.ch.isEmpty())
+        frame.insert(QStringLiteral("ch"), p.ch);   // 15.1: the channel being viewed
     sendTo(m_phone, frame);
     // No answer in a minute: "Phone didn't answer", with Retry (it still goes if the phone takes it later; never twice).
     const QString id = p.id;
@@ -1797,7 +1835,7 @@ bool Link::saysL1(const QString &caps)
 QJsonObject Link::syncFrame(bool first) const
 {
     // "caps": "l1" asks the phone for its whole account too; an old phone ignores it and links the old way.
-    QJsonObject o{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2")}};
+    QJsonObject o{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3")}};
     if (first)
         o.insert(QStringLiteral("f"), true);
     return o;
@@ -1853,6 +1891,9 @@ void Link::takeAcct(const QJsonObject &p)
     QList<Item> won;
     if (p.value(QStringLiteral("full")).toBool() && m_acctFresh) {
         // The first full set after linking: the phone's account replaces this device's, its name and picture too.
+        // This device's own are kept aside (once), to come back on unlinking.
+        if (m_own.isEmpty() && myProfile)
+            m_own = myProfile();
         adoptItems(m_acct, in);
         m_acctFresh = false;
         won = in;
@@ -2122,21 +2163,21 @@ void Link::ping()
     if (m_pingAt > 0 && t - m_pingAt < 60000)
         return;
     m_pingAt = t;
-    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2")},
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3")},
                                 {QStringLiteral("dn"), myDeviceName()}});
     Q_EMIT changed();
     // No answer in 20 seconds: the status says so.
     QTimer::singleShot(20500, this, [this] { Q_EMIT changed(); });
 }
 
-void Link::unlinkPhone(bool keep)
+bool Link::unlinkPhone(bool keep)
 {
     ensureLoaded();
     if (m_phone.key.isEmpty())
-        return;
+        return true;
     if (!keep || m_phone.gone) {
         unlink(m_phone.key);
-        return;
+        return m_ownBack;
     }
     // Keep a copy: the phone forgets this device, and what came from it stays here, read only.
     sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("unlink")}});
@@ -2151,6 +2192,7 @@ void Link::unlinkPhone(bool keep)
     m_partsHave = 0;
     saveAcct();
     save();
+    return true;
 }
 
 // ------------------------------------------------------------------ self-test (shared/vectors/i1f1-vectors.json "link")

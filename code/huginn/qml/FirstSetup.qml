@@ -27,16 +27,19 @@ Item {
     // A short window (a handheld): the raven and the progress marks go, so the pattern keeps its room.
     readonly property bool shortWindow: height < Theme.px(600)
 
-    // The stops of the tour, one sentence each. spot: what Main.tourSpot() finds on the real screen.
+    // The stops of the tour, one sentence each. spot: what Main.tourSpot() finds on the real screen. Linked first: the
+    // stops about adding people, files and groups say what the phone does, not this PC's own account.
+    readonly property bool linkedTour: !!Linked.phone.key && !setup.practice
     readonly property var stops: [
         { spot: "groups", text: Linked.phone.key && !setup.practice ? "The rail: Chats, then this PC's own groups. Your phone's chats are under From your phone in Chats."
                                 : setup.pad ? "The rail: Chats, then your groups. LB steps through them." : "The rail: Chats, then your groups." },
-        { spot: "chats", text: "Your chats are listed here." },
-        { spot: "add", text: "The + adds someone or shows your code." },
-        { spot: "chats", text: setup.pad ? "LT opens the options for what's picked." : "Right-click a chat or a message for its options." },
-        { spot: "attach", text: "In a chat, the clip beside the message box sends a file." },
-        { spot: "card", text: setup.pad ? "Your card and profile. In voice, hold LB: Up mutes, Down deafens." : "Your card: mute, deafen and your profile. Ctrl+Shift+M mutes." },
-        { spot: "newgroup", text: "The + under your groups makes a new group for family or friends." },
+        { spot: "chats", text: linkedTour ? "From your phone, at the top, has your phone's chats, groups and folders." : "Your chats are listed here." },
+        { spot: "add", text: linkedTour ? "The + is for this PC's own account. Add people on your phone." : "The + adds someone, shows your code or joins a group from an invite." },
+        { spot: "chats", text: linkedTour ? (setup.pad ? "LT on a phone chat mutes it, on your phone too." : "Right-click a phone chat to mute it, on your phone too.")
+                                          : setup.pad ? "LT opens the options for what's picked." : "Right-click a chat or a message for its options." },
+        { spot: "attach", text: linkedTour ? "Calls and files stay on your phone. Write and reply to your phone's chats here." : "In a chat, the clip beside the message box sends a file." },
+        { spot: "card", text: setup.pad ? "Your card and profile. In voice, while Huginn is in front: hold LB, then Up mutes and Down deafens." : "Your card: mute, deafen and your profile. " + GlobalKeys.muteName + " mutes." },
+        { spot: "newgroup", text: linkedTour ? "The + under the groups makes one for this PC's own account. Make groups on your phone." : "The + under your groups makes a group, or joins one with an invite." },
         { spot: setup.pad ? "" : "search", text: setup.pad ? "Lost? Press View to show the buttons." : "Ctrl+K jumps to any chat. Transfers shows files on their way." },
         { spot: "settings", text: setup.pad ? "The knot icon at the bottom opens Settings. Menu does too." : "The knot icon at the bottom opens Settings." }
     ]

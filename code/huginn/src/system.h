@@ -103,6 +103,8 @@ public:
     // Leave Huginn running out of sight: minimized, or in game mode (no minimizing there) hidden with Steam in front.
     // A notification, the tray, the taskbar or starting Huginn again brings it back.
     Q_INVOKABLE void minimize(QQuickWindow *window);
+    // The screenshot tour only: draw Handheld mode for a stop (the tour otherwise always draws the desktop layout).
+    Q_INVOKABLE void setTourHandheld(bool on);
     Q_INVOKABLE void showSteamKeyboard();
     Q_INVOKABLE void hideSteamKeyboard();
     // The computer's own file picker, several at once. Empty when nothing was picked.
@@ -160,6 +162,7 @@ private:
     bool m_software = false;
     QString m_renderLoop;
     bool m_handheld = false;
+    bool m_tourHandheld = false;   // the tour's handheld stops
     bool m_handheldAuto = false;
     bool m_controllerAtStart = false;
     bool m_smallScreen = false;

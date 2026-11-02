@@ -12,6 +12,8 @@ Item {
     id: box
     property string placeholder: ""
     property string target: ""             // where pasted pictures go: a contact's key or "g:<group>:<channel>"
+    property bool showAttach: true         // the paperclip (hidden where files can't go from here)
+    property string pasteRefusal: ""       // with no target: said when a picture is pasted, instead of nothing
     property string bannerTitle: ""        // "Replying to Raven" or "Editing your message"; empty for none
     property string bannerText: ""
     property bool editing: false
@@ -170,6 +172,7 @@ Item {
             border.color: box.pad ? box.accent : Theme.lineMuted
             Icon {
                 id: attachIcon
+                visible: box.showAttach
                 anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
                 anchors.bottom: parent.bottom; anchors.bottomMargin: (Theme.px(46) - size) / 2
                 name: "attach"; size: Theme.px(20); color: attachHover.hovered ? Theme.text : Theme.textMuted
@@ -180,7 +183,7 @@ Item {
             }
             Flickable {
                 id: flick
-                anchors.left: attachIcon.right; anchors.leftMargin: Theme.px(6)
+                anchors.left: box.showAttach ? attachIcon.right : parent.left; anchors.leftMargin: Theme.px(box.showAttach ? 6 : 14)
                 anchors.right: emojiIcon.left; anchors.rightMargin: Theme.px(6)
                 anchors.top: parent.top; anchors.bottom: parent.bottom
                 contentHeight: field.implicitHeight
@@ -223,6 +226,9 @@ Item {
                             event.accepted = true
                         } else if (event.matches(StandardKey.Paste) && box.target !== "" && Chat.clipboardHasImage()) {
                             if (Chat.pasteImage(box.target)) Ui.say("Sending the picture.")
+                            event.accepted = true
+                        } else if (event.matches(StandardKey.Paste) && box.target === "" && box.pasteRefusal !== "" && Chat.clipboardHasImage()) {
+                            Ui.say(box.pasteRefusal)
                             event.accepted = true
                         }
                     }

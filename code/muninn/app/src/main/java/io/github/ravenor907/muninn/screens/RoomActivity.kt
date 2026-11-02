@@ -28,10 +28,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
- * A voice room or group call, full screen (also over the lock screen for a group call's ring). Joining,
+ * A voice room or group call, full screen (over the lock screen only when opened there, as for a group call's ring). Joining,
  * calling a group and answering a ring come through here so the microphone can be asked for first; without it
  * a room is joined listening only. Tapping a voice room shows the join sheet first (unless "Don't ask again").
- * A shared screen keeps the phone's screen on and goes to picture-in-picture when the person leaves the room screen.
+ * A shared screen keeps the phone's screen on and goes to picture-in-picture when the person leaves the room screen
+ * (Home, another app, or Back).
  */
 class RoomActivity : ComponentActivity() {
     private var pending: ((Boolean) -> Unit)? = null
@@ -54,8 +55,11 @@ class RoomActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) }
-        else @Suppress("DEPRECATION") window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+        overLock(locked())
+        // Back with a shared screen showing: the picture goes on in a small window, so the chat can be answered.
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() { if (!enterPip()) finish() }
+        })
         val app = application as? Muninn
         // In Recents now: "Hide Muninn's screen" covers this window too.
         if (app?.identity?.secureScreen == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -68,7 +72,7 @@ class RoomActivity : ComponentActivity() {
                 if (a != null && app != null) RoomJoinSheet(app, a.first, a.second, onCancel = { asking = null; finish() }) { muted, output ->
                     asking = null
                     joinNow(a.first, a.second, muted, output)
-                } else RoomScreen(onBack = { finish() }, onJoinRing = { withMic { mic -> say(RoomManager.answerRing(listen = !mic)) } }, hideNames = hide(),
+                } else RoomScreen(onBack = { if (!enterPip()) finish() }, onJoinRing = { withMic { mic -> say(RoomManager.answerRing(listen = !mic)) } }, hideNames = hide(),
                     pip = pip, onAllowMic = { askMicToTalk.launch(Manifest.permission.RECORD_AUDIO) })
             }
         }
@@ -81,7 +85,28 @@ class RoomActivity : ComponentActivity() {
         handle(intent)
     }
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handle(intent) }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); if (locked()) overLock(true); handle(intent) }
+
+    // Over the lock screen only when opened there (a ring, or the notification on the lock screen). Once the phone is
+    // unlocked, a later lock covers the room: no lit screen, buttons or camera in a pocket.
+    override fun onResume() {
+        super.onResume()
+        if (!locked()) overLock(false)
+        // Back from Android's settings with the microphone allowed: listening only ends by itself.
+        if (RoomManager.room.value?.listenOnly == true &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) RoomManager.micAllowed()
+        RoomManager.screenInFront(true)
+    }
+    override fun onPause() { RoomManager.screenInFront(false); super.onPause() }
+
+    private fun locked() = getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+
+    @Suppress("DEPRECATION")
+    private fun overLock(on: Boolean) {
+        if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(on); setTurnScreenOn(on); return }
+        val f = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        if (on) window.addFlags(f) else window.clearFlags(f)
+    }
 
     // Watching: the shared screen comes only while the room screen shows (picture-in-picture counts) with the screen on.
     override fun onStart() { super.onStart(); RoomManager.setWatching(true) }
@@ -90,15 +115,21 @@ class RoomActivity : ComponentActivity() {
     /** Home or another app while a screen is shared: the picture goes on in a small window. */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        val sc = RoomManager.screen.value ?: return
-        if (RoomManager.room.value == null || asking != null) return
-        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return
+        enterPip()
+    }
+
+    /** A screen is shared: the room screen shrinks to picture-in-picture. False when there's nothing to show in one. */
+    private fun enterPip(): Boolean {
+        if (pip) return true
+        val sc = RoomManager.screen.value ?: return false
+        if (RoomManager.room.value == null || asking != null) return false
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
         val turned = sc.rotation % 180 != 0
         val w = if (turned) sc.height else sc.width
         val h = if (turned) sc.width else sc.height
         // Android takes ratios between 1:2.39 and 2.39:1.
         val ratio = if (w > 0 && h > 0) Rational(w, h).let { r -> if (r.toFloat() > 2.39f) Rational(239, 100) else if (r.toFloat() < 1 / 2.39f) Rational(100, 239) else r } else Rational(16, 9)
-        try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(ratio).build()) } catch (_: Exception) {}
+        return try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(ratio).build()) } catch (_: Exception) { false }
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {

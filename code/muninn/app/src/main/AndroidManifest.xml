@@ -217,8 +217,6 @@
             android:name=".screens.RoomActivity"
             android:exported="false"
             android:launchMode="singleTop"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:taskAffinity="io.github.ravenor907.muninn.room"
             android:autoRemoveFromRecents="true"
             android:resizeableActivity="true"

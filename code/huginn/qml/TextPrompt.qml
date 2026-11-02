@@ -33,11 +33,22 @@ Item {
     anchors.fill: parent
 
     property bool raw: false   // keep spaces as typed (config file lines)
+    // Several lines (a group's about text and rules): Enter starts a new line, Ctrl+Enter saves.
+    property bool multiLine: false
+    readonly property string typed: multiLine ? area.text : field.text
+    function openLong(t, ctx, initial, confirm, callback) {
+        openWith(t, ctx, initial, confirm, callback, false, true, [], "", "")
+        multiLine = true
+        area.text = field.text
+        area.cursorPosition = area.text.length
+        area.forceActiveFocus()
+    }
     function open(t, ctx, initial, confirm, callback, isPassword, keepSpaces) {
         openWith(t, ctx, initial, confirm, callback, isPassword, keepSpaces, [], "", "")
     }
     function openWith(t, ctx, initial, confirm, callback, isPassword, keepSpaces, opts, pick, optsLabel) {
         raw = !!keepSpaces
+        multiLine = false
         label = ""
         title = t
         context = ctx || ""
@@ -63,7 +74,7 @@ Item {
         System.showSteamKeyboard()
     }
     function accept() {
-        const t = raw ? field.text : field.text.trim()
+        const t = raw && !multiLine ? typed : typed.trim()
         if (!raw && t.length === 0) return
         if (drafts[draftKey] !== undefined) { const d = Object.assign({}, drafts); delete d[draftKey]; drafts = d }
         visible = false
@@ -78,7 +89,7 @@ Item {
     property var drafts: ({})
     property string draftKey: ""
     function cancel() {
-        if (!password && field.text.length > 0) { const d = Object.assign({}, drafts); d[draftKey] = field.text; drafts = d }
+        if (!password && typed.length > 0) { const d = Object.assign({}, drafts); d[draftKey] = typed; drafts = d }
         visible = false
         System.hideSteamKeyboard()
         if (Ui.main) Ui.main.restoreFocus()
@@ -158,6 +169,7 @@ Item {
             }
             TextField {
                 id: field
+                visible: !prompt.multiLine
                 FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                 width: parent.width
                 height: Math.max(Theme.px(40), implicitHeight)
@@ -177,6 +189,42 @@ Item {
                 Keys.onReturnPressed: prompt.accept()
                 Keys.onEnterPressed: prompt.accept()
                 Keys.onEscapePressed: prompt.cancel()
+            }
+            // Several lines: wraps, scrolls past about eight lines.
+            ScrollView {
+                id: areaView
+                visible: prompt.multiLine
+                width: parent.width
+                height: visible ? Theme.px(180) : 0
+                background: Rectangle {
+                    radius: Theme.radius
+                    color: Theme.groundDeep
+                    border.color: area.activeFocus ? Theme.accent : Theme.line
+                }
+                TextArea {
+                    id: area
+                    FieldMenu {}
+                    wrapMode: TextEdit.Wrap
+                    leftPadding: Theme.px(10); rightPadding: Theme.px(10); topPadding: Theme.px(8); bottomPadding: Theme.px(8)
+                    color: Theme.text
+                    selectionColor: Theme.accentFill
+                    selectedTextColor: Theme.text
+                    font.family: Theme.body
+                    font.pixelSize: Theme.fs(15)
+                    background: null
+                    Keys.onEscapePressed: prompt.cancel()
+                    Keys.onReturnPressed: event => { if (event.modifiers & Qt.ControlModifier) prompt.accept(); else event.accepted = false }
+                    Keys.onEnterPressed: event => { if (event.modifiers & Qt.ControlModifier) prompt.accept(); else event.accepted = false }
+                }
+            }
+            Text {
+                textFormat: Text.PlainText
+                visible: prompt.multiLine
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "Enter starts a new line. Ctrl+Enter saves."
+                color: Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
             Text {
                 textFormat: Text.PlainText
@@ -279,16 +327,16 @@ Item {
     }
 
     // The controller's buttons here. X pastes while the clipboard has text; LT then shows the more words.
-    readonly property bool canPaste: visible && field.canPaste
+    readonly property bool canPaste: visible && (multiLine ? area.canPaste : field.canPaste)
     readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }, { key: "y", label: "Keyboard" }].concat(
         canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: canPaste ? "lt" : "x", label: moreLabel }] : [])
     function handleButton(b) {
         switch (b) {
         case "a": case "start": accept(); return true
         case "b": cancel(); return true
-        case "y": field.forceActiveFocus(); System.showSteamKeyboard(); return true
+        case "y": (multiLine ? area : field).forceActiveFocus(); System.showSteamKeyboard(); return true
         case "x":
-            if (canPaste) { field.forceActiveFocus(); field.paste() }
+            if (canPaste) { const f = multiLine ? area : field; f.forceActiveFocus(); f.paste() }
             else if (moreLabel.length) moreOpen = !moreOpen
             return true
         case "lt": if (moreLabel.length) moreOpen = !moreOpen; return true

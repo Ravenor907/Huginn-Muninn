@@ -1040,7 +1040,8 @@ QString RoomManager::startShare(const std::function<void(VideoSender *)> &aim, c
     auto profile = [this] {
         bool allFree = !m_peers.isEmpty();
         for (const Peer &p : std::as_const(m_peers))
-            if (p.s && p.s->media() && p.s->media()->profile(VideoWire::Screen).capKbps == VideoWire::screenProfile(false).capKbps)
+            if (p.s && p.s->media() && p.s->media()->peerWatching()
+                && p.s->media()->profile(VideoWire::Screen).capKbps == VideoWire::screenProfile(false).capKbps)
                 allFree = false;
         return VideoWire::screenProfile(allFree, m_shareSmooth);
     };
@@ -1060,7 +1061,7 @@ QString RoomManager::startShare(const std::function<void(VideoSender *)> &aim, c
             return;
         int kbps = 0;
         for (const Peer &p : std::as_const(m_peers))
-            if (p.s && p.s->media() && p.s->videoBoth()) {
+            if (p.s && p.s->media() && p.s->videoBoth() && p.s->media()->peerWatching()) {   // c3: only those watching
                 const int k = p.s->media()->videoKbps(VideoWire::Screen);
                 kbps = kbps ? std::min(kbps, k) : k;
             }

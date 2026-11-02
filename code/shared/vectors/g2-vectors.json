@@ -1023,6 +1023,41 @@
     "sig": "MEUCIF3Jnk82T+1niuj0Z63ncPwjD8vnZ2LDP2atjSjgwrzMAiEAijos2O3ruFCaQWFYIakAZrAC8vavY+SIoXM3z+gPsPA="
    },
    "verdict": "about"
+  },
+  "paragraphs": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "1. No NSFW 2. No slurs 3. Files under 25 MB",
+    "sig": "MEYCIQChkKy5ReqnQuvFW8wtG06XzmEkCD3FnWd+DixVQBbFXwIhAPbMGXN9DZqexrACw0wxELPSKLFWq7ksW5UXs1o9yVIi"
+   },
+   "verdict": ""
   }
  }
 }

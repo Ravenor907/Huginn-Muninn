@@ -59,7 +59,8 @@ Rectangle {
     // One notch left or right: on to the next number the slider gives (near 1 several positions give
     // the same one). A puts it back: Amount follows the window again, Size goes to 60%.
     function stepFall(key, dir) {
-        if (key === "gateThreshold") { Rooms.gateThreshold = dir === 0 ? -40 : Rooms.gateThreshold + dir; return }
+        // A on Input sensitivity never turns Automatic off: from Manual it goes back to Automatic, else it does nothing.
+        if (key === "gateThreshold") { if (dir !== 0) Rooms.gateThreshold = Rooms.gateThreshold + dir; else if (Rooms.gateMode === "manual") Rooms.gateMode = "auto"; return }
         if (key === "seasonGradient") { Settings.seasonGradient = dir === 0 ? 100 : Math.max(0, Math.min(200, Settings.seasonGradient + dir * 10)); return }
         if (dir === 0) {
             if (key === "fallCount") Settings.fallCount = 0
@@ -158,11 +159,20 @@ Rectangle {
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
             // The bar under the slider is your microphone's level: lit while it goes out.
             { group: "Talking", kind: "slider", key: "gateThreshold", hide: Settings.pushToTalk || Rooms.gateMode === "off",
-              title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself" : "",
+              title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself"
+                                                : Ui.main && Ui.main.padInUse ? "A: back to Automatic" : "",
               low: "Picks up more", high: "Picks up less" },
             { group: "Talking", kind: "button", key: "micTest", hide: Settings.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
               note: Rooms.micTest ? "Talk: the bar lights while you'd be heard" : "Shows your level on the bar", label: Rooms.micTest ? "Stop" : "Test" },
             { group: "Talking", kind: "info", title: "Mute and deafen keys", note: GlobalKeys.keysNote },
+            // Windows: the two combinations can be moved off keys a game or another app uses (still RegisterHotKey only).
+            { group: "Talking", kind: "button", key: "muteKey", hide: !GlobalKeys.changeable, title: "Mute key: " + GlobalKeys.muteName,
+              note: GlobalKeys.capturing === 1 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 1 ? "Press keys" : "Change" },
+            { group: "Talking", kind: "button", key: "deafenKey", hide: !GlobalKeys.changeable, title: "Deafen key: " + GlobalKeys.deafenName,
+              note: GlobalKeys.capturing === 2 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 2 ? "Press keys" : "Change" },
+            { group: "Talking", kind: "button", key: "resetKeys", hide: !GlobalKeys.changeable || (GlobalKeys.muteSequence === "Ctrl+Shift+M" && GlobalKeys.deafenSequence === "Ctrl+Shift+D"),
+              title: "Mute and deafen keys", note: "Back to Ctrl+Shift+M and Ctrl+Shift+D", label: "Reset" },
+            { group: "Talking", kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds", note: "A short sound when the keys turn them on or off, heard over a game" },
             { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
             { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" }
         ].filter(r => !r.hide)
@@ -204,7 +214,7 @@ Rectangle {
             { kind: "info", title: "Scroll", note: "Left stick" },
             { kind: "info", title: "Pointer", note: "Right stick moves, RB or R3 clicks, RT right-clicks" },
             { kind: "info", title: "Search and Transfers", note: "Up from the top of a list or the rail" },
-            { kind: "info", title: "In voice", note: "Hold LB: Up mutes, Down deafens" },
+            { kind: "info", title: "In voice", note: "While Huginn is in front: hold LB, then Up mutes and Down deafens" },
             { kind: "info", title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
             { kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
         ]
@@ -729,8 +739,7 @@ Rectangle {
 
     // Anything that closes or restarts Huginn checks first that it won't cut off a job.
     function running() {
-        if (FileLink.runningCount > 0) return FileLink.closeWarning
-        if (LocalSend.busy) return LocalSend.status + " Closing now stops it partway."
+        if (Ui.main && (Calls.inCall || Rooms.inRoom || FileLink.closeWarning !== "" || LocalSend.busy)) return Ui.main.stakeText("Closing")
         return ""
     }
     // Any accent color, as a code like #6E9CC8.
@@ -797,9 +806,14 @@ Rectangle {
         else if (key === "micDevice" || key === "speakerDevice") pickDevice(key)
         else if (key === "saveFolder") { if (Transfer.pickSaveFolder()) Ui.say("Received files now go in " + Transfer.saveName + "/Huginn.") }
         else if (key === "saveFolderReset") { Transfer.resetSaveFolder(); Ui.say("Received files go in Downloads/Huginn again.") }
-        else if (key === "deviceName") Ui.ask("This computer's name", "Nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
+        else if (key === "deviceName") Ui.ask("This computer's name", "Your phone and nearby devices see it", Settings.deviceName, "Save", t => Settings.deviceName = t, false, true)
         else if (key === "micTest") Rooms.micTest = !Rooms.micTest
         else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
+        else if (key === "muteKey" || key === "deafenKey") {
+            const which = key === "muteKey" ? 1 : 2
+            if (GlobalKeys.capturing === which) GlobalKeys.stopCapture(); else GlobalKeys.capture(which)
+        }
+        else if (key === "resetKeys") { GlobalKeys.resetKeys(); Ui.say("Mute and deafen keys are Ctrl+Shift+M and Ctrl+Shift+D again.") }
         else if (key === "resetPanels") { Ui.resetPanels(); Ui.say("Panels reset.") }
         else if (key === "shortcuts") Ui.main.showShortcuts()
         else if (key === "backup") startBackup()
@@ -838,6 +852,8 @@ Rectangle {
             const opts = r.options
             const now = r.value !== undefined ? r.value : r.chat ? String(Chat[r.key]) : Settings[r.key]
             let i = opts.findIndex(o => o.value === now)
+            // A on Voice activity goes between Automatic and Manual only: Always on (game sound too) takes Right.
+            if (dir === 0 && r.key === "gateMode") { pickSegment(r, now === "auto" ? "manual" : "auto"); return }
             i = dir === 0 ? (i + 1) % opts.length : Math.max(0, Math.min(opts.length - 1, i + dir))
             pickSegment(r, opts[i].value)
         } else if (r.kind === "grounds") {

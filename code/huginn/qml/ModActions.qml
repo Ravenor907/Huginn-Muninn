@@ -42,10 +42,21 @@ QtObject {
         } else if (a === "mod:volume") volumeMenu(k, name, back)
         else if (a === "mod:timeout") timeoutMenu(g, k, name, back)
         else if (a === "mod:untimeout") tell(Mod.cancelTimeout(g, k), name + "'s timeout ended.")
-        else if (a === "mod:ban")
-            Ui.sure("Ban " + name + "?", "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban",
-                    () => tell(Mod.ban(g, k), name + " is banned."), false, true)
+        else if (a === "mod:ban") banMenu(g, k, name, back)
         return true
+    }
+    // Ban, or Ban and also remove what they posted in the last day (one remove each, like Delete for everyone).
+    function banMenu(g, k, name, back) {
+        Ui.pickFrom("Ban " + name + "?", [{ header: "They leave the group and can't rejoin by a link, code or invite until you unban them.", items: [
+            { name: "Ban " + name, url: "ban", danger: true },
+            { name: "Ban and remove their messages", detail: "From the last day, for everyone", url: "clear", danger: true }] }], a => {
+            const clear = a === "clear"
+            Ui.sure("Ban " + name + "?", clear ? "Their messages from the last day show as Removed by an admin, and they can't rejoin until you unban them."
+                                               : "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban", () => {
+                const n = clear && typeof Mod.removeRecent === "function" ? Mod.removeRecent(g, k, 86400000) : 0
+                tell(Mod.ban(g, k), name + " is banned." + (n > 0 ? " " + n + (n === 1 ? " message removed." : " messages removed.") : ""))
+            }, false, true)
+        }, back)
     }
     function tell(err, done) { if (err) Ui.say(err, true); else Ui.say(done) }
     function personMenu(g, k, name, back, tour) {

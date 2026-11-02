@@ -257,10 +257,8 @@ private fun NotifyPage(app: Muninn) {
         // Mentions: "@" and my name, or one of these nicknames, in a group.
         var nick by remember { mutableStateOf(id.mentionNames) }
         Text("Also mention me as", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 10.dp))
-        Row(Modifier.padding(vertical = 6.dp)) {
-            Field(nick, { nick = it.take(80) }, "Nicknames, like tay, T", Modifier.weight(1f))
-            MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = nick.trim() != id.mentionNames) { id.mentionNames = nick; nick = id.mentionNames; Ui.say("Saved.") }
-        }
+        // Saved as it's typed: nothing is lost by leaving.
+        Field(nick, { nick = it.take(80); id.mentionNames = nick }, "Nicknames, like tay, T", Modifier.padding(vertical = 6.dp))
         Help("Groups with more than 10 people notify only for mentions and replies, unless you pick otherwise in the group.")
         PageRow("Sound and vibration", "") {
             try {
@@ -497,6 +495,11 @@ private fun BatteryPage(app: Muninn) {
             Check.HOUR -> "Within an hour. Calls missed."
             Check.OPEN -> "Only while Muninn is open."
         } })
+        // A linked computer sends and reads through this phone: anything but Right away makes it wait.
+        val linked by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
+        linked.firstOrNull { it.ok }?.takeIf { check != Check.LIVE || choice == BatteryChoice.EXTREME }?.let { c ->
+            Help("${c.name} sends and gets messages through this phone. Choose ${Check.LIVE.title} so it doesn't wait.")
+        }
         Spacer(Modifier.height(8.dp))
     }
     Framed("Saving") {

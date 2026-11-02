@@ -173,8 +173,10 @@ def build():
         about[name] = {"state": st, "verdict": state_verdict(st)}
     st = sign(A, D_GROUP, dict(base, v=3, channels=[dict(base["channels"][0], ao=True)], ts=1761500120000))
     about["adminsPostMain"] = {"state": st, "verdict": state_verdict(st)}
+    # Paragraphs (28.1) are joined by U+2029 PARAGRAPH SEPARATOR, which isn't a control character, so it can be signed.
     for name, text in [("short", "No spam. Be kind."), ("longest", "\U0001F600" * ABOUT_MAX), ("tooLong", "a" * (ABOUT_MAX + 1)),
-                       ("newline", "No spam.\nBe kind."), ("empty", ""), ("blank", "   "), ("number", 5)]:
+                       ("newline", "No spam.\nBe kind."), ("empty", ""), ("blank", "   "), ("number", 5),
+                       ("paragraphs", "1. No NSFW\u20292. No slurs\u20293. Files under 25 MB")]:
         st = dict(base, v=3, about=text, ts=1761500120000)
         # A control character can't be signed (canonical text has none): that one carries the base state's signature.
         st = dict(st, sig=state["sig"]) if isinstance(text, str) and "\n" in text else sign(A, D_GROUP, st)
@@ -213,7 +215,7 @@ def verify_vectors(v):
         assert gain(c["sample"], c["pct"]) == c["out"], c; n += 1
     for k, c in v["g3"].items():
         assert state_verdict(c["state"]) == c["verdict"], k; n += 1
-    assert v["g3"]["short"]["verdict"] == v["g3"]["longest"]["verdict"] == v["g3"]["adminsPost"]["verdict"] == ""
+    assert v["g3"]["short"]["verdict"] == v["g3"]["longest"]["verdict"] == v["g3"]["adminsPost"]["verdict"] == v["g3"]["paragraphs"]["verdict"] == ""
     return n
 
 

@@ -17,6 +17,7 @@
 const char GroupWire::kDomain[] = "huginn-muninn group v1";
 const char GroupWire::kCodePrefix[] = "MUNINNG1:";
 const char GroupWire::kAboutCap[] = "g3";
+const char GroupWire::kRefuseCap[] = "g4";
 
 namespace
 {

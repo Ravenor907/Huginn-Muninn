@@ -306,7 +306,9 @@ void Chat::hideNearby(const QString &key)
 // someone else in that channel answers one of mine.
 bool Chat::toMe(const QString &key, const QString &name) const
 {
-    if (name.contains(QLatin1String(" mentioned you in ")))
+    // Cap g3: a report to me as an admin counts as for me, like an @mention (set only while it is being announced, so a
+    // member's name can't pass for one).
+    if (name.contains(QLatin1String(" mentioned you in ")) || m_reportArriving)
         return true;
     if (!key.startsWith(QLatin1String("g:")))
         return false;

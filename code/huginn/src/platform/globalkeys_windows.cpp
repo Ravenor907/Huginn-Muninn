@@ -1,4 +1,4 @@
-// Windows: Mute and Deafen through RegisterHotKey, push to talk only while Huginn is in front (see globalkeys.h).
+// Windows: Mute and Deafen (Ctrl+Shift+M and D, or what Settings › Calls set) through RegisterHotKey, push to talk only while Huginn is in front (see globalkeys.h).
 // Neither sees any other key, and neither is a keyboard hook.
 #include "../globalkeys.h"
 
@@ -51,6 +51,22 @@ int virtualKey(int k)
     return 0;
 }
 
+// Qt modifiers as RegisterHotKey's.
+UINT hotMods(int qtMods)
+{
+    const Qt::KeyboardModifiers m = Qt::KeyboardModifiers::fromInt(qtMods);
+    UINT out = MOD_NOREPEAT;
+    if (m & Qt::ControlModifier)
+        out |= MOD_CONTROL;
+    if (m & Qt::ShiftModifier)
+        out |= MOD_SHIFT;
+    if (m & Qt::AltModifier)
+        out |= MOD_ALT;
+    if (m & Qt::MetaModifier)
+        out |= MOD_WIN;
+    return out;
+}
+
 class WindowsKeys : public GlobalKeys::Backend, public QAbstractNativeEventFilter
 {
 public:
@@ -75,9 +91,18 @@ public:
     bool everywhere() const override { return true; }
     QString taken() const override
     {
+        const QString mute = m_owner->comboName(GlobalKeys::Mute), deafen = m_owner->comboName(GlobalKeys::Deafen);
         if (m_muteTaken && m_deafenTaken)
-            return QStringLiteral("Ctrl+Shift+M and Ctrl+Shift+D");
-        return m_muteTaken ? QStringLiteral("Ctrl+Shift+M") : m_deafenTaken ? QStringLiteral("Ctrl+Shift+D") : QString();
+            return mute + QStringLiteral(" and ") + deafen;
+        return m_muteTaken ? mute : m_deafenTaken ? deafen : QString();
+    }
+    void rebind() override
+    {
+        if (!m_registered)
+            return;
+        setRegistered(false);
+        setRegistered(true);
+        m_owner->backendChanged();
     }
 
     bool nativeEventFilter(const QByteArray &type, void *message, qintptr *) override
@@ -105,8 +130,9 @@ private:
         m_registered = on;
         const bool wasTaken = m_muteTaken || m_deafenTaken;
         if (on) {
-            m_muteTaken = !RegisterHotKey(nullptr, kMuteId, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'M');
-            m_deafenTaken = !RegisterHotKey(nullptr, kDeafenId, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'D');
+            const int muteVk = virtualKey(m_owner->comboKey(GlobalKeys::Mute)), deafenVk = virtualKey(m_owner->comboKey(GlobalKeys::Deafen));
+            m_muteTaken = muteVk == 0 || !RegisterHotKey(nullptr, kMuteId, hotMods(m_owner->comboMods(GlobalKeys::Mute)), UINT(muteVk));
+            m_deafenTaken = deafenVk == 0 || !RegisterHotKey(nullptr, kDeafenId, hotMods(m_owner->comboMods(GlobalKeys::Deafen)), UINT(deafenVk));
         } else {
             if (!m_muteTaken)
                 UnregisterHotKey(nullptr, kMuteId);

@@ -2,8 +2,8 @@ import QtQuick
 import Huginn
 
 // Transfers (the top bar's button): every file coming or going, newest first. Each row says what it is (name, size,
-// kind), who it's from or to and which chat, how it's going with a bar, speed and time left, its route ("Direct" on the
-// same Wi-Fi, "Over the internet" otherwise), and why when it didn't work. Buttons: Accept, Always from this person and
+// kind), who it's from or to and which chat, how it's going with a bar, speed and time left, its route ("Same Wi-Fi",
+// "Straight to them" or "Over the internet"), and why when it didn't work. Buttons: Accept, Always from this person and
 // Decline when a file asks first, Pause or Resume and Cancel while it runs, Retry after a failure, Open and Folder once
 // saved. LocalSend devices nearby show here too. Esc, B or a click outside closes it; Up and Down pick a row, Left and
 // Right a button, A presses it.
@@ -21,13 +21,13 @@ Item {
     // The screenshot tour's sample rows (nothing real is shown or sent).
     readonly property var samples: [
         { id: "s1", name: "Raid plan.pdf", size: 2400000, done: 1100000, mine: true, state: "sending", kind: "PDF document", chat: "Gaming Crew",
-          peer: "", route: "Direct", pace: "4.2 MB/s · 1 s left", where: "g:tour", folder: "", note: "", path: "", paused: false, held: false },
+          peer: "", route: "Same Wi-Fi", pace: "4.2 MB/s · 1 s left", where: "g:tour", folder: "", note: "", path: "", paused: false, held: false },
         { id: "s2", name: "Holiday photos.zip", size: 380000000, done: 0, mine: false, state: "asking", kind: "Archive", chat: "Mira", peer: "tour",
           route: "", pace: "", where: "tour", folder: "Downloads/Huginn/Mira", note: "", path: "", paused: false, held: false },
         { id: "s3", name: "Map pack.7z", size: 52000000, done: 31000000, mine: true, state: "sending", kind: "Archive", chat: "Jake", peer: "",
-          route: "Over the internet", pace: "", where: "j", folder: "", note: "", path: "", paused: true, held: false },
+          route: "Straight to them", pace: "", where: "j", folder: "", note: "", path: "", paused: true, held: false },
         { id: "s4", name: "Recipe.docx", size: 48000, done: 48000, mine: false, state: "done", kind: "Document", chat: "Family", peer: "tour",
-          route: "Direct", pace: "", where: "g:fam", folder: "Downloads/Huginn/Family", note: "", path: "", paused: false, held: false },
+          route: "Same Wi-Fi", pace: "", where: "g:fam", folder: "Downloads/Huginn/Family", note: "", path: "", paused: false, held: false },
         { id: "s5", name: "Season 2.mkv", size: 1900000000, done: 0, mine: true, state: "failed", kind: "Video", chat: "Folk", peer: "",
           route: "", pace: "", where: "g:folk", folder: "", note: "Refused by the group's file rules.", path: "", paused: false, held: false }
     ]
@@ -38,12 +38,12 @@ Item {
         if (tour) return out
         if (LocalSend.sending) {
             LocalSend.outgoing.forEach((f, i) => out.push({ id: "ls-out-" + i, local: true, name: f.name, size: f.size, done: f.done, mine: true,
-                state: f.status === "Sent" ? "done" : "sending", kind: FileLink.kind(f.name), chat: "LocalSend · " + f.to, peer: "", route: "Direct",
+                state: f.status === "Sent" ? "done" : "sending", kind: FileLink.kind(f.name), chat: "LocalSend · " + f.to, peer: "", route: "Same Wi-Fi",
                 pace: LocalSend.pace, where: "", folder: "", note: f.status, path: "", paused: false, held: false }))
         }
         LocalSend.items.forEach((f, i) => { if (f.from !== undefined) out.push({ id: "ls-in-" + i, local: true, name: f.name, size: f.size || 0,
             done: f.done || 0, mine: false, state: f.failed ? "failed" : f.running ? "sending" : "done", kind: FileLink.kind(f.name),
-            chat: "LocalSend · " + f.from, peer: "", route: "Direct", pace: f.running ? LocalSend.pace : "", where: "", folder: "", note: f.status,
+            chat: "LocalSend · " + f.from, peer: "", route: "Same Wi-Fi", pace: f.running ? LocalSend.pace : "", where: "", folder: "", note: f.status,
             path: "", paused: false, held: false }) })
         return out
     }
@@ -80,7 +80,7 @@ Item {
         } else if (t.state === "failed" && FileLink.canRetry(t.id)) {
             // Too big to go without Direct: one tap turns it on here and asks them to do the same.
             if (FileLink.needsDirect(t.id) && Chat.isContact(t.peer))
-                out.push({ label: Calls.trusted(t.peer) ? "Ask " + Chat.nameOf(t.peer) : "Allow direct", act: "direct", kind: "primary" })
+                out.push({ label: PeopleActions.directLabel(t.peer), act: "direct", kind: PeopleActions.directLabel(t.peer) === "Asked" ? "normal" : "primary" })
             out.push({ label: "Retry", act: "retry", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "done" || t.state === "failed") {
             out.push({ label: "Close", act: "close", kind: "normal" })

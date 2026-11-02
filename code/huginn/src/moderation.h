@@ -50,6 +50,11 @@ public:
     Q_INVOKABLE QString unban(const QString &g, const QString &key);
     // Delete for everyone (26.2 "remove"): an admin blanks someone's message on every member's app with g2.
     Q_INVOKABLE QString removeForEveryone(const QString &g, const QString &msgId, const QString &author);
+    // Members (not me) whose app has no g2, so a removed message stays on their screen until they update.
+    Q_INVOKABLE int withoutRemove(const QString &g) const;
+    // Ban's "Also remove their messages from the last day": a remove record for each of their messages in the last
+    // ms (at most 50, newest first), sent in one "mod" list. How many were removed.
+    Q_INVOKABLE int removeRecent(const QString &g, const QString &author, qint64 ms);
     // For the group's settings: [{key, name}] and [{key, name, until, left}].
     Q_INVOKABLE QVariantList bannedList(const QString &g) const;
     Q_INVOKABLE QVariantList timeoutList(const QString &g) const;

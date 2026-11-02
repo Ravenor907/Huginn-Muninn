@@ -154,8 +154,11 @@ Item {
     MouseArea {
         anchors.fill: parent
         enabled: pad.enabled
+        // A scrolling page around the pad must not take the stroke away mid-draw.
+        preventStealing: true
         onPressed: m => { pad.drawing = false; pad.dots = []; pad.finger = Qt.point(m.x, m.y); pad.add(pad.hit(m.x, m.y)); canvas.requestPaint() }
         onPositionChanged: m => { pad.finger = Qt.point(m.x, m.y); pad.add(pad.hit(m.x, m.y)); canvas.requestPaint() }
         onReleased: pad.finish()
+        onCanceled: { pad.dots = []; pad.finger = Qt.point(-1, -1); canvas.requestPaint() }
     }
 }

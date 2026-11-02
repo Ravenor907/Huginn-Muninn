@@ -167,7 +167,7 @@ class Muninn : Application() {
             // Reduce notifications: one per chat until it's opened; a group can also be set to mentions and replies only.
             // A group of more than 10 starts on mentions and replies only, until it's set otherwise.
             val big = key.startsWith("g:") && (try { chat.groups.group(key.removePrefix("g:"))?.state?.members?.size } catch (_: Exception) { null } ?: 0) > io.github.ravenor907.muninn.net.ChatFlags.BIG_GROUP
-            if (!chat.flags.alert(key, identity.reduceNotifications, toMe(key, name), big)) return@collect
+            if (!chat.flags.alert(key, identity.reduceNotifications, toMe(key), big)) return@collect
             // Extreme battery saver: no notifications; the chat list shows what's new.
             if (power.extreme) return@collect
             // Quiet hours kept open for the "Always right away" list: everyone else's messages wait quietly.
@@ -316,11 +316,17 @@ class Muninn : Application() {
     }
 
     /** A group message for me: an @mention of me, or a reply to one of my messages (the newest one there). */
-    private fun toMe(key: String, title: String): Boolean {
-        if (title.contains(" mentioned you in ")) return true
+    private fun toMe(key: String): Boolean {
+        // Read from the message itself: a name or group name with "mentioned you in" in it doesn't get through.
         if (!key.startsWith("g:")) return false
-        val msgs = chat.groups.messages.value[key.removePrefix("g:")] ?: return false
+        val g = key.removePrefix("g:")
+        // Cap g3: a report to me as an admin, newer than the last message, counts as for me, like an @mention.
+        val report = chat.groups.reportsByGroup.value[g]?.firstOrNull()
+        val lastTime = chat.groups.messages.value[g]?.lastOrNull { !it.mine }?.time ?: 0L
+        if (report != null && !report.read && report.time >= lastTime) return true
+        val msgs = chat.groups.messages.value[g] ?: return false
         val last = msgs.lastOrNull { !it.mine } ?: return false
+        if (chat.groups.mentionsMe(g, last)) return true
         return last.re.isNotEmpty() && msgs.any { it.id == last.re && it.mine }
     }
 

@@ -716,8 +716,9 @@ class CallMedia(
                 if (n <= 0) pcm.fill(0)
                 val s = speaking.feed(pcm, Opus.FRAME, System.currentTimeMillis())
                 if (s != wasSpeaking) { wasSpeaking = s; events.onSpeaking(s) }
-                // Their volume here (cap g2: 0 to 200 %, 0 while muted for me), read for every frame after the speaking ring.
-                io.github.ravenor907.muninn.net.ModLogic.applyGain(pcm, Opus.FRAME, io.github.ravenor907.muninn.net.PeopleSound.gainOf(peerKey))
+                // Their volume here (cap g2: 0 to 200 %), read for every frame after the speaking ring. Mute for me is for
+                // rooms only: a 1:1 call always plays them.
+                io.github.ravenor907.muninn.net.ModLogic.applyGain(pcm, Opus.FRAME, io.github.ravenor907.muninn.net.PeopleSound.gainOf(peerKey, room = false))
                 val len = if (tv != null) tv.render(pcm, out) else Opus.FRAME
                 t.write(out, 0, len)   // blocking: the audio clock paces this loop
             }

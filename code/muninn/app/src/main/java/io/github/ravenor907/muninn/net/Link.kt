@@ -107,6 +107,9 @@ object LinkWire {
     /** Cap l2 (15.2): read state both ways, ping and pong, the companion's device name. */
     const val L2 = "l2"
     fun saysL2(caps: String) = caps.split(' ').any { it == L2 }
+    /** Cap l3 (15.3): a "msg" with an id the companion has is that message edited or deleted, and replaces it quietly. */
+    const val L3 = "l3"
+    fun saysL3(caps: String) = caps.split(' ').any { it == L3 }
     /** A device name from a "ping" ("dn"): one line, at most 40 characters. */
     fun deviceName(s: String) = s.trim().replace(Regex("\\s+"), " ").take(40)
 
@@ -189,7 +192,7 @@ object Link {
     /** [ok]: both screens showed the same 4 emoji and the person said so (nothing is mirrored before). */
     /** [l1]: on the phone, the companion's "sync" said "caps": "l1": it takes the whole account (15.1). */
     /** [l2]: on the phone, the companion's "ping" said "caps": "l2": it takes "read" frames (15.2). */
-    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = false, val l1: Boolean = false, val l2: Boolean = false)
+    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = false, val l1: Boolean = false, val l2: Boolean = false, val l3: Boolean = false)
     /** A photo, voice message, video or file on the phone: its SHA-256 (hex), size, kind and name. */
     data class Media(val h: String, val s: Long, val k: String, val nm: String)
     /** One mirrored message on the companion. [f]: its photo or file, fetched on the home Wi-Fi. */
@@ -237,8 +240,13 @@ object Link {
         fun applyAccount(item: LinkAccount.Item) {}
         /** Cap l1: the group chats, "g:" + group id to (name, items as in "chat" pages, with "fn" the sender's name), oldest first. */
         fun groupChats(): Map<String, Pair<String, List<JSONObject>>> = emptyMap()
-        /** Cap l1: post [text] in group [g] (its main channel) as me, answering message [re] when not empty. False when I can't post there. */
-        fun sendToGroup(g: String, text: String, re: String = ""): Boolean = false
+        /**
+         * Cap l1: post [text] in group [g] as me, answering message [re] when not empty, in channel [ch] (15.1: the one the
+         * companion is viewing; "" or one that isn't a text channel there: the main channel). False when I can't post there.
+         */
+        fun sendToGroup(g: String, text: String, re: String = "", ch: String = ""): Boolean = false
+        /** Cap g3: channel [ch] of group [g] takes posts only from admins, and I'm not one. */
+        fun adminsOnlyFor(g: String, ch: String): Boolean = false
         /** The same as [sendAsMeId], answering message [re] when not empty. */
         fun sendAsMeReply(peer: String, text: String, re: String): String? = sendAsMeId(peer, text)
         /** Cap l1: how many days group [g] keeps its messages (section 16). */
@@ -523,6 +531,17 @@ object Link {
         }
     }
 
+    /** Cap l3 (15.3): a message already sent was edited or deleted (by me or by them): it goes again, same id, to companions that replace it. */
+    fun onChanged(peer: String, name: String, m: Chat.Msg) {
+        val h = host ?: return
+        val to = _companions.value.filter { it.ok && it.l3 }
+        if (to.isEmpty()) return
+        later {
+            val json = JSONObject().put("t", "msg").put("peer", peer).put("n", name).put("m", mJson(m)).put("d", h.days(peer)).toString()
+            to.forEach { h.send(it, json) }
+        }
+    }
+
     private fun mJson(m: Chat.Msg): JSONObject {
         val o = JSONObject().put("id", m.id).put("x", text(m).take(LinkWire.TEXT_MAX)).put("me", m.mine).put("t", m.time)
         mediaOf(m)?.let { o.put("f", LinkWire.mediaJson(it)) }
@@ -693,8 +712,9 @@ object Link {
             comp != null && t == "ping" -> {
                 val dn = LinkWire.deviceName(p.optString("dn"))
                 val l2 = LinkWire.saysL2(p.optString("caps"))
-                if ((l2 && !comp.l2) || (dn.isNotEmpty() && dn != comp.name)) {
-                    val c = comp.copy(l2 = comp.l2 || l2, name = dn.ifEmpty { comp.name })
+                val l3 = LinkWire.saysL3(p.optString("caps"))
+                if ((l2 && !comp.l2) || (l3 && !comp.l3) || (dn.isNotEmpty() && dn != comp.name)) {
+                    val c = comp.copy(l2 = comp.l2 || l2, l3 = comp.l3 || l3, name = dn.ifEmpty { comp.name })
                     _companions.value = _companions.value.map { if (it.key == c.key) c else it }
                     save()
                 }
@@ -721,6 +741,7 @@ object Link {
                 val text = p.optString("text").trim()
                 val id = p.optString("id")
                 val re = p.optString("re").take(200)   // optional: the message this one answers
+                val ch = p.optString("ch").take(40)    // optional (15.1): a group's channel, the one viewed on the companion
                 // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice. Always
                 // answered ("result"), so the companion shows what happened.
                 later {
@@ -730,7 +751,8 @@ object Link {
                         // Cap l1: a group chat ("g:" + its id), posted as the same member.
                         comp.l1 && peer.startsWith("g:") -> when {
                             !firstSend(id) -> answerSend(h, comp, id, true, "")
-                            h.sendToGroup(peer.removePrefix("g:"), text.take(LinkWire.TEXT_MAX), re) -> answerSend(h, comp, id, true, "")
+                            h.adminsOnlyFor(peer.removePrefix("g:"), ch) -> answerSend(h, comp, id, false, "admins only")
+                            h.sendToGroup(peer.removePrefix("g:"), text.take(LinkWire.TEXT_MAX), re, ch) -> answerSend(h, comp, id, true, "")
                             else -> answerSend(h, comp, id, false, "not in group")
                         }
                         !h.isContactHere(peer) -> answerSend(h, comp, id, false, "not a contact")
@@ -746,9 +768,11 @@ object Link {
             comp != null && t == "sync" -> {
                 val now = System.currentTimeMillis()
                 // Cap l1: "caps" with "l1" says the companion takes the whole account (an old one leaves it out).
-                val d = if (LinkAccount.says(p.optString("caps")) && !comp.l1) comp.copy(l1 = true).also { c ->
-                    _companions.value = _companions.value.map { if (it.key == c.key) c else it }; save()
-                } else comp
+                val caps = p.optString("caps")
+                val d = if ((LinkAccount.says(caps) && !comp.l1) || (LinkWire.saysL3(caps) && !comp.l3))
+                    comp.copy(l1 = comp.l1 || LinkAccount.says(caps), l3 = comp.l3 || LinkWire.saysL3(caps)).also { c ->
+                        _companions.value = _companions.value.map { if (it.key == c.key) c else it }; save()
+                    } else comp
                 if (p.optBoolean("f") || LinkWire.syncDue(synced[d.key] ?: 0L, now)) {
                     synced[d.key] = now; syncAll(d); sendMe(true)
                     if (d.l1) later { sendAccount(h, d, full = true) }
@@ -771,6 +795,8 @@ object Link {
     @Volatile private var acctSoon = false
     /** Per group: the message ids already sent to the companions or noted at the first look (live group messages, l1 only). */
     private val groupSent = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+    /** Per group: what each message showed when last looked at (cap l3: a change goes again). */
+    private val groupShown = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, String>>()
 
     private fun acctNow(h: Host): Map<String, LinkAccount.Item> = acct ?: LinkAccount.load(h.read(ACCOUNT)).also { acct = it }
 
@@ -861,7 +887,7 @@ object Link {
      * as "chat" pages on the home Wi-Fi (else the companion is owed its history). The first look this run only notes what's
      * there, except a group that showed up since (just joined): its history goes in pages.
      */
-    fun <T> onGroupMessages(all: Map<String, List<T>>, name: (String) -> String, id: (T) -> String, item: (T) -> JSONObject) {
+    fun <T> onGroupMessages(all: Map<String, List<T>>, name: (String) -> String, id: (T) -> String, item: (T) -> JSONObject, shown: (T) -> String = { "" }) {
         val h = host ?: return
         val to = _companions.value.filter { it.ok && it.l1 }
         val first = !groupsPrimed
@@ -874,6 +900,22 @@ object Link {
             known.addAll(ids)
             if (known.size > 1000) known.retainAll(ids.toSet())
             groupSent[g] = known
+            // Cap l3 (15.3): a message already sent whose text changed since (edited, or deleted for everyone).
+            val was = groupShown.getOrPut(g) { java.util.concurrent.ConcurrentHashMap<String, String>() }
+            val changed = msgs.filter { m -> was[id(m)].let { it != null && it != shown(m) } }
+            msgs.forEach { was[id(it)] = shown(it) }
+            if (was.size > 1000) was.keys.retainAll(ids.toSet())
+            val l3 = to.filter { it.l3 }
+            if (changed.isNotEmpty() && l3.isNotEmpty() && seen != null) {
+                val n = name(g)
+                later {
+                    val days = h.groupDays(g)
+                    for (m in changed.takeLast(LIVE_BURST)) {
+                        val json = JSONObject().put("t", "msg").put("peer", "g:$g").put("n", n).put("m", item(m)).put("d", days).toString()
+                        l3.forEach { h.send(it, json) }
+                    }
+                }
+            }
             if (to.isEmpty() || fresh.isEmpty() || (seen == null && first)) continue
             val peer = "g:$g"
             val n = name(g)
@@ -1040,8 +1082,8 @@ object Link {
     // ------------------------------------------------------------------ storage
 
     private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name).put("ok", d.ok)
-        .apply { if (d.l1) put("l", true); if (d.l2) put("l2", true) }
-    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", false), o.optBoolean("l", false), o.optBoolean("l2", false))
+        .apply { if (d.l1) put("l", true); if (d.l2) put("l2", true); if (d.l3) put("l3", true) }
+    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", false), o.optBoolean("l", false), o.optBoolean("l2", false), o.optBoolean("l3", false))
     private fun mOf(o: JSONObject) = M(o.optString("id"), o.optString("x").take(LinkWire.TEXT_MAX), o.optBoolean("me"), o.optLong("t"), LinkWire.media(o.optJSONObject("f")))
     private fun msgsOf(a: JSONArray?) = if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let { o -> mOf(o) } }
     private fun daysOf(o: JSONObject) = o.optInt("d", Limits.DEFAULT).coerceIn(Limits.DEFAULT, Limits.LONGEST)

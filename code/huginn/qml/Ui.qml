@@ -105,6 +105,8 @@ QtObject {
     function fieldMenu(field, x, y) { if (menu) menu.forField(field, x, y, false) }
     function say(text, bad) { if (toast) toast.show(text, bad) }
     function ask(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) { prompt.open(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) }
+    // Several lines of text (Enter starts a new line, Ctrl+Enter saves): a group's about text and rules.
+    function askLong(title, ctx, initial, confirmText, cb) { prompt.openLong(title, ctx, initial, confirmText, cb) }
     // The same with a row of choices under the field: cb(text, choice).
     function askWith(title, ctx, initial, confirmText, choices, choice, choicesLabel, cb) { prompt.openWith(title, ctx, initial, confirmText, cb, false, true, choices, choice, choicesLabel) }
     // Someone's profile card: avatar, nickname, note, folders, and Message, Call and Video.

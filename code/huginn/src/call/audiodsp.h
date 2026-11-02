@@ -52,7 +52,8 @@ private:
 //    400 ms after it drops below that, so the ends of words aren't cut.
 //  - Manual: the threshold picked (-60 to -20 dBFS, -40 unless changed).
 //  - Automatic (the default): 15 dB over the steady sound around you (the quietest 20 ms in the last 2 to 4 s),
-//    never under -45 or over -20 dBFS. A game's music or a fan raises it within 2 to 4 s.
+//    never under -45 or over -20 dBFS. A game's music or a fan raises it within 2 to 4 s. Until the first 2 s
+//    are heard it uses -40, the manual default.
 class Gate
 {
 public:
@@ -78,6 +79,7 @@ private:
     double m_lastMin = -70;    // the quietest frame of the last 2 s block (quiet, until one is heard)
     double m_blockMin = 0;     // and of the block so far
     int m_blockFrames = 0;
+    bool m_measured = false;   // a whole 2 s block has been heard
 };
 
 // A test tone, for the loopback self-test: amplitude 0..1 of full scale.

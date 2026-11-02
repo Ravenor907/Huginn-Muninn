@@ -38,7 +38,7 @@ class Link : public QObject
     // heard (ms: the last frame from it this run, 0 none), asked (ms: the last "ping" sent), answered (a "pong" came after
     // it), lan (it's found on this Wi-Fi now), home (this device is on its usual Wi-Fi). Never an address.
     Q_PROPERTY(QVariantMap phone READ phone NOTIFY changed)
-    // On a companion: unread messages in the phone's chats, all together (each chat's are in mirror).
+    // On a companion: how many of the phone's chats have unread messages (each chat's count is in mirror).
     Q_PROPERTY(int unread READ unread NOTIFY changed)
     // On the phone: the devices that mirror it, [{key, name, ok}] (ok: the 4 emoji were checked).
     Q_PROPERTY(QVariantList companions READ companions NOTIFY changed)
@@ -99,8 +99,9 @@ public:
     Q_INVOKABLE void confirm(const QString &key);
     Q_INVOKABLE void unlink(const QString &key);
     // On a companion: unlink the phone. keep: its chats, contacts, groups and folders stay here, read only (Unlink
-    // again, or linking another phone, takes them away); else everything that came from it goes now.
-    Q_INVOKABLE void unlinkPhone(bool keep);
+    // again, or linking another phone, takes them away); else everything that came from it goes now. False when this
+    // device's own name from before linking isn't known (linked before it was kept): ask for one.
+    Q_INVOKABLE bool unlinkPhone(bool keep);
     // Cap l1, on a companion: changes to the phone's account, made here and sent to it (the later change wins on both).
     // "" when done, else what to tell the person.
     Q_INVOKABLE QString renameContact(const QString &key, const QString &nickname);
@@ -117,10 +118,14 @@ public:
     // On a companion: a photo, voice, video or file that came from the phone, saved in Downloads. "" when done,
     // else what to tell the person.
     Q_INVOKABLE QString saveMedia(const QString &peer, const QString &id) const;
+    // Where the last saveMedia put its file (to open it or show it in its folder).
+    Q_INVOKABLE QString lastSaved() const { return m_lastSaved; }
     // On a companion: send through the phone. It shows at once as pending until the phone answers ("result") or its copy
     // comes back; no answer in a minute: "Didn't send". "" when it went, else what to tell the person.
     // re: the message this one answers (optional; a phone without it sends it as a plain message).
-    Q_INVOKABLE QString send(const QString &peer, const QString &text, const QString &re = QString());
+    // ch: for a group ("g:<id>"), the channel being viewed; the phone posts there (an older phone, or a channel that
+    // isn't there: the group's first channel, as before; an "Only admins post" one, for a member: not sent).
+    Q_INVOKABLE QString send(const QString &peer, const QString &text, const QString &re = QString(), const QString &ch = QString());
     // On a companion: a phone contact's chat with no messages here yet, so it can be written to (Contacts › Message).
     // False when it isn't a contact on the phone.
     Q_INVOKABLE bool startChat(const QString &peer);
@@ -267,6 +272,7 @@ private:
     struct Pending {
         QString id, peer, text, err, re;
         qint64 time = 0;
+        QString ch;   // a group's channel (15.1), "" for the first one
     };
     QList<Pending> m_pending;
     void sendPending(const Pending &p);
@@ -331,6 +337,12 @@ private:
     mutable QString m_meName, m_meStatus, m_meCustom;
     mutable QByteArray m_mePic;
     void forgetPhone();                     // the phone unlinked or was unlinked: what came with it goes
+    // This device's own profile from before the phone's replaced it (myProfile's shape, in link.json), put back on
+    // unlinking; m_ownBack: whether the last forgetPhone put a name back (or never needed to).
+    mutable QJsonObject m_own;
+    mutable QString m_lastSaved;
+    bool m_ownBack = true;
+    bool restoreOwn();
     // Cap l1, the companion's side: the phone's account (link-account.json), and whether the next full set replaces it.
     mutable QHash<QString, Item> m_acct;
     mutable bool m_acctFresh = false;

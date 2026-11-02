@@ -469,7 +469,7 @@ internal fun TapScreen(app: io.github.ravenor907.muninn.Muninn, back: () -> Unit
  * Folder (Save if it couldn't be saved then). Nothing received ever opens by itself.
  */
 @Composable
-internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
+internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?, folder: String = "") {
     val context = LocalContext.current
     val app = context.applicationContext as io.github.ravenor907.muninn.Muninn
     val uploads by app.chat.uploads.collectAsState()
@@ -477,6 +477,8 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
     var savedUri by remember(m.id) { mutableStateOf(m.saved) }
     val progress = uploads[m.id]
     val sending = m.mine && !m.failed && (m.state == "sending" || m.state.isEmpty() && progress != null)
+    // Where Save puts it: the chat's folder in Settings › Save files to (Download/Muninn/<chat> by default).
+    val where = { if (folder.isEmpty()) io.github.ravenor907.muninn.net.Received.shownRoot() else io.github.ravenor907.muninn.net.Received.shown(folder) }
     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).widthIn(min = 200.dp, max = 280.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.coolTint), contentAlignment = Alignment.Center) {
@@ -484,7 +486,7 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
             }
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
                 Text(m.file, style = Type.normal.copy(color = Palette.text), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val line = if (m.mine) FileText.relayLine(m.state, m.failed, progress) else if (savedUri.isNotEmpty()) "Saved to Downloads" else "Not saved yet"
+                val line = if (m.mine) FileText.relayLine(m.state, m.failed, progress) else if (savedUri.isNotEmpty()) "Saved to ${where()}" else "Not saved yet"
                 Text((if (size >= 0) FileText.size(size) + " · " else "") + line,
                     style = Type.small.copy(color = if (m.failed) Palette.danger else Palette.textMuted), maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
@@ -494,16 +496,16 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
             val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
             if (savedUri.isEmpty()) MButton("Save", kind = Kind.Accent) {
                 val b = bytes()
-                val got = b?.let { io.github.ravenor907.muninn.net.Received.save(context, m.file, it) }
+                val got = b?.let { io.github.ravenor907.muninn.net.Received.save(context, m.file, it, folder) }
                 if (got != null) savedUri = got.second
-                Ui.say(if (got != null) "${got.first} is in Downloads." else "That file couldn't be saved.", got == null)
+                Ui.say(if (got != null) "${got.first} is in ${where()}." else "That file couldn't be saved.", got == null)
             } else {
                 // An app installer opens only when the person asks, and on a Kids' TV not at all (a parent installs).
                 if (!(kids && FileText.isApp(m.file))) MButton("Open", kind = Kind.Accent) {
                     if (!io.github.ravenor907.muninn.net.Received.open(context, savedUri, m.file)) Ui.say("Nothing on this device opens this kind of file.", true)
                 }
                 MButton("Folder", icon = "folder") {
-                    if (!io.github.ravenor907.muninn.net.Received.showFolder(context)) Ui.say("It's in Downloads. Open it from your Files app.")
+                    if (!io.github.ravenor907.muninn.net.Received.showFolder(context)) Ui.say("It's in ${where()}. Open it from your Files app.")
                 }
             }
         }

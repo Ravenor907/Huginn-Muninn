@@ -25,6 +25,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,10 +39,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -66,8 +70,9 @@ internal fun KeepScreenOn(on: Boolean) {
 
 /**
  * A shared screen filling the window: landscape, pinch to zoom (double tap goes back to the whole picture), and a
- * small bar with Mute, Leave and Back. [pip]: Android's picture-in-picture window, just the picture (or who's
- * talking when nothing is shared).
+ * small bar with Mute, Deafen and Back (Leave apart, in the top corner, away from the zoom), hidden after a few
+ * seconds and shown again by a tap. [pip]: Android's picture-in-picture window, just the picture (or who's talking
+ * when nothing is shared).
  */
 @Composable
 internal fun SharedScreenFull(r: RoomManager.Ui, sc: RoomManager.Screen?, hideNames: Boolean, pip: Boolean, onExit: () -> Unit) {
@@ -89,7 +94,17 @@ internal fun SharedScreenFull(r: RoomManager.Ui, sc: RoomManager.Screen?, hideNa
     }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    var bar by remember { mutableStateOf(true) }
+    var touched by remember { mutableIntStateOf(0) }
+    LaunchedEffect(bar, touched) { if (bar) { kotlinx.coroutines.delay(4_000); bar = false } }
+    /** The picture never leaves the window: a zoomed picture moves at most to its own edges. */
+    fun clamp(o: Offset, s: Float): Offset {
+        val mx = box.width * (s - 1f) / 2f
+        val my = box.height * (s - 1f) / 2f
+        return Offset(o.x.coerceIn(-mx, mx), o.y.coerceIn(-my, my))
+    }
+    Box(Modifier.fillMaxSize().background(Color.Black).onSizeChanged { box = it }) {
         if (sc != null) {
             VideoPicture({ RoomManager.screenSurface(it) }, sc.width, sc.height, sc.rotation,
                 Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
@@ -106,14 +121,17 @@ internal fun SharedScreenFull(r: RoomManager.Ui, sc: RoomManager.Screen?, hideNa
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
                         scale = (scale * zoom).coerceIn(1f, 4f)
-                        offset = if (scale == 1f) Offset.Zero else offset + pan
+                        offset = if (scale == 1f) Offset.Zero else clamp(offset + pan, scale)
                     }
                 }
-                .pointerInput(Unit) { detectTapGestures(onDoubleTap = { scale = 1f; offset = Offset.Zero }) })
-            Row(Modifier.align(Alignment.BottomCenter).systemBarsPadding().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!r.listenOnly) MButton(if (r.muted) "Unmute mic" else "Mute mic", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { RoomManager.setMuted(!r.muted) }
-                MButton("Back", icon = "back") { onExit() }
-                MButton("Leave", kind = Kind.Danger) { RoomManager.leave() }
+                .pointerInput(Unit) { detectTapGestures(onTap = { bar = !bar; touched++ }, onDoubleTap = { scale = 1f; offset = Offset.Zero }) })
+            if (bar) {
+                Row(Modifier.align(Alignment.BottomCenter).systemBarsPadding().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (!r.listenOnly) MButton(if (r.muted) "Unmute mic" else "Mute mic", kind = if (r.muted) Kind.Accent else Kind.Normal, icon = "mic") { touched++; RoomManager.setMuted(!r.muted) }
+                    MButton(if (r.deafened) "Undeafen" else "Deafen", kind = if (r.deafened) Kind.Accent else Kind.Normal) { touched++; RoomManager.setDeafened(!r.deafened) }
+                    MButton("Back", icon = "back") { onExit() }
+                }
+                MButton("Leave", Modifier.align(Alignment.TopEnd).systemBarsPadding().padding(12.dp), kind = Kind.Danger) { RoomManager.leave() }
             }
         }
     }
@@ -128,9 +146,21 @@ internal fun RoomJoinSheet(app: Muninn, g: String, ch: String, onCancel: () -> U
     val id = app.identity
     val state = try { app.chat.groups.group(g)?.state } catch (e: Exception) { null }
     val title = if (io.github.ravenor907.muninn.net.call.RoomLogic.isGroupCall(ch)) "Group call" else state?.channel(ch)?.n ?: "Voice room"
-    val who = remember(g, ch) { try { RoomManager.whoIn(g, ch) } catch (e: Exception) { emptyList() } }
+    // Who's in it and where the sound can go, kept up to date while the sheet shows (earbuds turned on, someone joins).
+    val seen by RoomManager.presence.collectAsState()
+    val who = remember(g, ch, seen) { try { RoomManager.whoIn(g, ch) } catch (e: Exception) { emptyList() } }
     val ctx = LocalContext.current
-    val outputs = remember {
+    var devices by remember { mutableIntStateOf(0) }
+    DisposableEffect(Unit) {
+        val am = ctx.getSystemService(AudioManager::class.java)
+        val cb = object : android.media.AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(added: Array<out android.media.AudioDeviceInfo>?) { devices++ }
+            override fun onAudioDevicesRemoved(removed: Array<out android.media.AudioDeviceInfo>?) { devices++ }
+        }
+        try { am?.registerAudioDeviceCallback(cb, android.os.Handler(android.os.Looper.getMainLooper())) } catch (_: Exception) {}
+        onDispose { try { am?.unregisterAudioDeviceCallback(cb) } catch (_: Exception) {} }
+    }
+    val outputs = remember(devices) {
         val am = ctx.getSystemService(AudioManager::class.java)
         if (am == null) emptyList() else try { AudioRoute.preview(am) } catch (e: Exception) { emptyList() }
     }

@@ -110,6 +110,9 @@ public:
     // video can't go now (no c2, no path, or too big).
     bool sendVideo(int stream, bool key, int rotation, const QByteArray &vp8);
     bool peerSending(int stream) const { return m_peerSending[stream & 1]; }
+    // Cap c3 (5.8.7): the peer watches our screen share. While it doesn't, sendVideo() skips the screen
+    // stream; when it does again, the frames go on from the next keyframe.
+    bool peerWatching() const { return !m_peerReport.notWatching; }
     // Asks the peer for a keyframe now (the decoder lost its place, or the picture came back on screen).
     void requestKeyframe(int stream);
     // The size, frame rate and bitrate cap for a stream right now (480p over the relay), and the
@@ -174,6 +177,8 @@ private:
     JitterBuffer m_jitter;
     AudioDsp::Speaking m_speaking;
     AudioIO *m_audio = nullptr;
+    AudioDsp::Gate m_gate;     // voice activity for the microphone (devices only: a call, not a room)
+    bool m_gateOff = false;    // Voice activity: Always on
     QUdpSocket *m_lan = nullptr;
     QHostAddress m_lanHost;
     quint16 m_lanPeerPort = 0;
@@ -205,6 +210,7 @@ private:
     // Video.
     bool m_sending[2] = {false, false}, m_peerSending[2] = {false, false};
     quint16 m_videoFrame[2] = {0, 0};
+    bool m_screenWaitKey = false;   // cap c3: screen frames resume at a keyframe
     std::map<quint16, QList<QByteArray>> m_sentFrames[2];   // the last frames' packets, for resends
     std::deque<quint16> m_sentOrder[2];
     VideoWire::Assembler m_asm[2];

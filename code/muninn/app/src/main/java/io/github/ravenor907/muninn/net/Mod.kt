@@ -138,7 +138,8 @@ object ModLogic {
 
 /**
  * Mute for me and volume per person, kept on this phone only (in the vault), never on the wire (section 26.1). The
- * same in every call, room and group. A key is someone's chat key.
+ * same in every room and group; 1:1 calls keep only the volume (Mute for me is made in a room, never for a direct call).
+ * A key is someone's chat key.
  */
 class PeopleSound(private val read: () -> String?, private val write: (String) -> Unit) {
     /** [show]: their group messages aren't folded while they're muted. */
@@ -173,8 +174,8 @@ class PeopleSound(private val read: () -> String?, private val write: (String) -
     fun hides(k: String) = !person(k).show
     fun fold(k: String) = person(k).let { it.muted && !it.show }
     fun volume(k: String) = person(k).volume
-    /** What their sound is played at: 0 while muted for me, else their volume. Read for every 20 ms frame. */
-    fun gain(k: String): Int = person(k).let { if (it.muted) 0 else it.volume }
+    /** What their sound is played at: in a [room], 0 while muted for me, else their volume. Read for every 20 ms frame. */
+    fun gain(k: String, room: Boolean = true): Int = person(k).let { if (it.muted && room) 0 else it.volume }
 
     @Synchronized fun setMuted(k: String, on: Boolean) = set(_all.value + (k to person(k).copy(muted = on)))
     @Synchronized fun setHides(k: String, on: Boolean) = set(_all.value + (k to person(k).copy(show = !on)))
@@ -183,6 +184,6 @@ class PeopleSound(private val read: () -> String?, private val write: (String) -
     companion object {
         /** Set by the app: the one store, so the call code reads volumes without a Chat. */
         @Volatile var current: PeopleSound? = null
-        fun gainOf(k: String): Int = current?.gain(k) ?: ModLogic.VOLUME_DEFAULT
+        fun gainOf(k: String, room: Boolean = true): Int = current?.gain(k, room) ?: ModLogic.VOLUME_DEFAULT
     }
 }

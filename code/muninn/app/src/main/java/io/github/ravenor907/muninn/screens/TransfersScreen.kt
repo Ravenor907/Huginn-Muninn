@@ -66,7 +66,7 @@ internal fun transferLine(f: FileLink.Progress, who: String): String {
     val status = when {
         f.state == "sending" && f.paused -> "Paused"
         f.state == "sending" && f.held -> "Paused on their side"
-        else -> FileText.line(f.state, f.mine, f.done, f.size, f.note, who)
+        else -> FileText.line(f.state, f.mine, f.done, f.size, f.note, who, f.folder)
     }
     return listOf(FileText.size(f.size), f.kind, status, if (f.state != "failed") f.route else "", f.pace).filter { it.isNotEmpty() }.joinToString(" · ")
 }
@@ -124,7 +124,7 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                         if (!Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true)
                     }
                     MButton("Folder", icon = "folder") {
-                        if (!Received.showFolder(context)) Ui.say("It's in ${f.folder.ifEmpty { "Downloads" }}. Open it from your Files app.")
+                        if (!Received.showFolder(context)) Ui.say("It's in ${f.folder.ifEmpty { Received.shownRoot() }}. Open it from your Files app.")
                     }
                     MButton("Close") { link.dismiss(f.id) }
                 }
@@ -217,7 +217,7 @@ internal fun TransfersScreen(app: Muninn) {
             if (nearby.active) item {
                 Panel(Modifier.padding(top = 8.dp)) {
                     Text(TransferViewTitle(nearby), style = Type.big)
-                    Text(listOf(LocalSend.size(nearby.total), nearby.status, "Direct", nearby.pace()).filter { it.isNotEmpty() }.joinToString(" · "),
+                    Text(listOf(LocalSend.size(nearby.total), nearby.status, "Same Wi-Fi", nearby.pace()).filter { it.isNotEmpty() }.joinToString(" · "),
                         style = Type.small, modifier = Modifier.padding(top = 4.dp))
                     Bar(nearby.fraction, Modifier.padding(top = 8.dp), Palette.gold)
                     if (nearby.sending) MButton("Cancel", Modifier.padding(top = 8.dp), kind = Kind.Danger) { app.net.cancelSend() }
@@ -259,7 +259,7 @@ internal fun ChatFilesScreen(app: Muninn, where: String) {
         PageBar("Files · $title", "Back to $title") { ChatNav.open = where }
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
             item {
-                Text("Received files are saved in Download/${Sharing.folderFor("Muninn", title)}.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                Text("Received files are saved in ${Received.shown(Sharing.folderFor("Muninn", title))}.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
                 if (grp != null) {
                     val admin = !grp.readOnly && grp.state.isAdmin(app.identity.publicKey)
                     Panel(Modifier.padding(top = 10.dp)) {
@@ -301,7 +301,7 @@ private fun SharedFileRow(app: Muninn, context: Context, f: Chat.SharedFile) {
                 if (!Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true)
             }
             if (!f.mine && there) MButton("Folder", icon = "folder") {
-                if (!Received.showFolder(context)) Ui.say("It's in Downloads. Open it from your Files app.")
+                if (!Received.showFolder(context)) Ui.say("It's in ${Received.shownRoot()}. Open it from your Files app.")
             }
             MButton(if (f.mine) "Remove" else "Delete", kind = Kind.Danger) {
                 if (f.mine) { app.chat.deleteFile(f); Ui.say("Removed from the list. The file itself stays where it was.") }

@@ -58,6 +58,8 @@ class Groups(
         fun hasF2(k: String): Boolean = false
         /** Their app said "g3": the group's about text, admin-only channels and reports (section 28). */
         fun hasG3(k: String): Boolean = false
+        /** Their app said "g4": a join that isn't let in hears why (section 28.5). */
+        fun hasG4(k: String): Boolean = false
     }
 
     /**
@@ -164,7 +166,20 @@ class Groups(
     /** Groups I asked to join, and the admin I asked: the first state is taken only from them (3.3 step 2). */
     private val joining = HashMap<String, String>()
     /** A join by a code or link waiting on the admin's app: what the chat list shows. */
-    data class Waiting(val g: String, val name: String, val inviter: String)
+    data class Waiting(val g: String, val name: String, val inviter: String, val refused: String = "")
+    /** Cap g4: groups whose admin's app didn't let me in, and why ("full", "update", "banned" or "other"). */
+    private val refusals = HashMap<String, String>()
+
+    /**
+     * Cap g3: a report that reached me as an admin (kept only on this phone, for the group's Reports list): who reported
+     * whom, the message, its channel, what it said, when, and whether the list has shown it.
+     */
+    data class Report(val id: String, val g: String, val from: String, val fromName: String, val k: String, val kName: String,
+                      val msg: String, val ch: String, val text: String, val time: Long, val read: Boolean = false)
+    private val reports = HashMap<String, List<Report>>()
+    private val _reports = MutableStateFlow<Map<String, List<Report>>>(emptyMap())
+    /** For the screens: each group's reports, newest first (admins only ever get any). */
+    val reportsByGroup: StateFlow<Map<String, List<Report>>> = _reports.asStateFlow()
     /** Names of the groups I asked to join by a code or link (only on this phone, for the waiting row). */
     private val joinNames = HashMap<String, Pair<String, String>>()
     private val _waiting = MutableStateFlow<List<Waiting>>(emptyList())
@@ -211,6 +226,10 @@ class Groups(
     // ------------------------------------------------------------------ reading
 
     fun group(g: String): Group? = synchronized(lock) { groups[g] }
+
+    /** [m] mentions me: my name, a nickname of mine, or @everyone from an admin (read from the message, never a title). */
+    fun mentionsMe(g: String, m: GMsg): Boolean = !m.mine && m.unsent.isEmpty() &&
+        group(g)?.state?.let { s -> Rich.mentionsMe(m.text, host.myName, host.mentionNames, s.isAdmin(m.from)) } == true
     fun isMember(g: String, k: String) = synchronized(lock) { groups[g]?.let { !it.readOnly && it.state.has(k) } == true }
     /** A key I share a live group with (or am joining through): group rooms from them are welcome. */
     fun sharesGroup(k: String) = synchronized(lock) { groups.values.any { !it.readOnly && it.state.has(k) } || k in joining.values }
@@ -269,13 +288,15 @@ class Groups(
     /** Cap f2: who may send files in the group and the size limit (an admin's signed change, section 27.3). */
     fun setFiles(g: String, who: String, mb: Int) = change(g, Change("files", Sharing.whoMaySend(who), mb.coerceIn(0, Sharing.MAX_LIMIT_MB).toString()))
 
-    /** Cap g3: the group's about text, 500 characters at most, one paragraph ("" takes it away). */
-    fun setAbout(g: String, text: String) = change(g, Change("about", "", clean(text.replace(Regex("\\s+"), " "), Proto06.MAX_ABOUT).trim()))
+    /** Cap g3: the group's about text, 500 characters and 10 paragraphs at most ("" takes it away). See [aboutWire]. */
+    fun setAbout(g: String, text: String) = change(g, Change("about", "", aboutWire(text)))
     /** Cap g3: only admins post in text channel [ch] (not the first one). */
     fun setAdminsOnly(g: String, ch: String, on: Boolean) = change(g, Change("ao", ch, if (on) "on" else ""))
 
     /** Cap g3 (28.2): channel [ch] of [s] takes posts only from admins, and [k] isn't one. */
     private fun adminsOnlyFor(s: State, ch: String, k: String) = s.channel(ch)?.ao == true && !s.isAdmin(k)
+    /** Cap g3: channel [ch] of group [g] takes posts only from admins, and I'm not one (the message box says so). */
+    fun adminsOnlyHere(g: String, ch: String): Boolean = synchronized(lock) { groups[g]?.state?.let { adminsOnlyFor(it, ch, me) } == true }
     private fun usesG3(s: State) = s.about.isNotEmpty() || s.channels.any { it.ao }
 
     /**
@@ -341,7 +362,7 @@ class Groups(
             return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} the latest Muninn or Huginn to join, because ${cur.name} has an about text or admin-only channels."
         if ((c.op == "about" && c.b.isNotEmpty()) || (c.op == "ao" && c.b == "on")) {
             val old = cur.members.filter { it.k != me && !host.hasG3(it.k) }
-            if (old.isNotEmpty()) return "Everyone needs the latest Muninn or Huginn first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
+            if (old.isNotEmpty()) return needUpdate(old.map { it.n })
         }
         if (c.op == "files" && (c.a != Sharing.EVERYONE || (c.b.toIntOrNull() ?: 0) > 0)) {
             val old = cur.members.filter { it.k != me && !host.hasF2(it.k) }
@@ -435,13 +456,14 @@ class Groups(
         if (!host.isContact(c.a)) host.peer(c.a, c.an.ifBlank { "Admin" }, c.p)
         joining[c.g] = c.a
         joinNames[c.g] = c.gn to c.an
+        refusals.remove(c.g)
         sendJoin(c.g, c.a, c.i)
         null
     }
 
 
     /** Stops waiting to join [g] (a later state from that admin is no longer taken as joining). */
-    fun stopWaiting(g: String) = act { joining.remove(g); joinNames.remove(g); Unit }
+    fun stopWaiting(g: String) = act { joining.remove(g); joinNames.remove(g); refusals.remove(g); Unit }
 
     private fun sendJoin(g: String, admin: String, inv: String) {
         val id = Proto06.newLogicalId()
@@ -682,6 +704,44 @@ class Groups(
 
     fun unban(g: String, k: String): String? = act { if (!bannedLocked(g, k)) null else modLocked(g, k, "unban", 0) }
 
+    /**
+     * Ban's "remove their messages": a signed remove (26.2) for each of [author]'s messages in [g] from the last [ms]
+     * (at most [ModLogic.MAX_LIST], newest first), in one "mod" list to every member with g2. How many.
+     */
+    fun removeRecent(g: String, author: String, ms: Long): Int = act {
+        val grp = groups[g] ?: return@act 0
+        val s = grp.state
+        if (grp.readOnly || ms <= 0 || author.isEmpty() || author == me || author == s.owner || !s.isAdmin(me) || (s.isAdmin(author) && s.owner != me)) return@act 0
+        val since = now() - ms
+        val recs = chats[g].orEmpty().filter { !it.mine && it.from == author && it.unsent.isEmpty() && it.time >= since && Proto06.isLogicalId(it.id) }
+            .sortedByDescending { it.time }.take(ModLogic.MAX_LIST)
+            .mapNotNull { m -> try { ModLogic.makeRemove(keys.private, g, author, me, now(), m.id).takeIf { ModLogic.accept(s, it) == "ok" } } catch (e: Exception) { null } }
+        if (recs.isEmpty()) return@act 0
+        recs.forEach { blankLocked(g, it) }
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "mod").put("g", g).put("id", id).put("list", JSONArray().apply { recs.forEach { put(it) } }).toString()
+        s.members.map { it.k }.filter { it != me && host.hasG2(it) }.forEach { out(it, "group", plain, id, g) }
+        recs.size
+    }
+
+    /** Members (not me) whose app has no g2: a message removed for everyone stays on their screen until they update. */
+    fun withoutRemove(g: String): Int = synchronized(lock) { groups[g]?.state?.members?.count { it.k != me && !host.hasG2(it.k) } ?: 0 }
+
+    /** Cap g3: members whose app can't take the about text or "Only admins post" yet (their names). */
+    fun needG3Update(g: String): List<String> = synchronized(lock) {
+        groups[g]?.state?.members?.filter { it.k != me && !host.hasG3(it.k) }?.map { it.n.ifBlank { "Someone" } }.orEmpty()
+    }
+
+    /** Opening the Reports list: they're read, and the group's dot goes when nothing else is unread there. */
+    fun readReports(g: String) = act {
+        val l = reports[g] ?: return@act
+        if (l.any { !it.read }) reports[g] = l.map { it.copy(read = true) }
+    }
+
+    fun dismissReport(g: String, id: String) = act {
+        reports[g]?.let { l -> reports[g] = l.filter { it.id != id } }
+    }
+
     private fun modLocked(g: String, k: String, action: String, until0: Long): String? {
         val grp = groups[g] ?: return "That group isn't here any more."
         val s = grp.state
@@ -803,6 +863,8 @@ class Groups(
             "mod" -> grp != null && inGroup
             // Cap g3: a member's report, only to an admin.
             "report" -> grp != null && !grp.readOnly && grp.state.has(from) && grp.state.isAdmin(me)
+            // Cap g4: the admin I asked to let me in says why not, only while I wait for them.
+            "joinno" -> joining[g] == from
             else -> return 400
         }
         if (!allowed) return 403
@@ -825,6 +887,7 @@ class Groups(
                 // Cap g2: someone banned doesn't get back in by a code, a link or an invite until they're unbanned.
                 if (bannedLocked(g, from)) {
                     host.notice("${clean(fromName, Proto06.MAX_NAME).ifBlank { "Someone" }} tried to join ${cur.name}, but they're banned.")
+                    refuseJoin(g, from, "banned")
                     receipt(from, g, listOf(id), "delivered")
                     return 200
                 }
@@ -837,7 +900,11 @@ class Groups(
                     out(from, "group", JSONObject().put("t", "state").put("g", g).put("id", rid).put("op", "join").put("state", cur.json()).toString(), rid, g)
                 } else {
                     val why = changeLocked(g, Change("join", from, n, mb))
-                    if (why != null) host.notice(why)
+                    if (why != null) {
+                        host.notice(why)
+                        // Cap g4 (28.5): they hear why, instead of waiting.
+                        refuseJoin(g, from, if (" is full" in why) "full" else if ("need" in why) "update" else "other")
+                    }
                     else {
                         sendMods(g, from)   // cap g2: so their app knows who is timed out
                         // Cap j1: one more use, counted only here (this admin is the link's only counter).
@@ -916,14 +983,29 @@ class Groups(
                 if (!Rich.ok("group", p)) return 400
                 if (!barredLocked(g, from)) takeChange(grp!!, from, fromName, p)
             }
+            "joinno" -> {
+                val why = p.optString("why")
+                if (why !in REFUSALS) return 400
+                if (refusals[g] != why) {
+                    refusals[g] = why
+                    val name = joinNames[g]?.first?.ifBlank { null } ?: "the group"
+                    host.notice("Not let in to $name. ${refusalText(why, name)}")
+                }
+            }
             "report" -> {
                 val msg = p.optString("msg"); val k = p.optString("k"); val text = p.opt("text") as? String ?: return 400
                 if (!Proto06.isLogicalId(msg) || k.isEmpty() || Proto06.chars(text) > 500) return 400
                 val s = grp!!.state
-                // Shown only on this admin's phone, like a notification.
-                val line = "Report from ${nameIn(s, from, fromName)}: ${nameIn(s, k, modNames[k] ?: "Someone")} wrote: ${text.ifEmpty { "(a photo or file)" }}"
-                host.notice(line)
-                host.arrived(g, "Report in ${s.name}", line)
+                // Kept only on this admin's phone, in the group's Reports list (never a line in a channel), unread with a
+                // notification like an @mention. The same person reporting the same message again counts once.
+                if (reports[g].orEmpty().none { it.msg == msg && it.from == from }) {
+                    val chId = chats[g]?.firstOrNull { it.id == msg }?.ch.orEmpty()
+                    val r = Report(Proto06.newLogicalId(), g, from, nameIn(s, from, fromName), k, nameIn(s, k, modNames[k] ?: "Someone"), msg, chId, text, now())
+                    reports[g] = (listOf(r) + reports[g].orEmpty()).take(100)
+                    unread.add(g)
+                    val chName = s.channel(chId)?.n
+                    host.arrived(g, "Report in ${s.name}", "${r.fromName} reported ${r.kName}${if (chName != null) " in #$chName" else ""}: ${text.ifEmpty { "(a photo or file)" }}")
+                }
             }
             "mod" -> {
                 val a = p.optJSONArray("list") ?: return 400
@@ -949,6 +1031,13 @@ class Groups(
         // Every group message is confirmed to its sender, so they stop resending it.
         receipt(from, g, listOf(id), "delivered")
         return 200
+    }
+
+    /** Cap g4 (28.5): tells [k] their join to [g] wasn't taken, and why. Only to an app that says g4 (an older one would answer 400). */
+    private fun refuseJoin(g: String, k: String, why: String) {
+        if (!host.hasG4(k) || k == me) return
+        val id = Proto06.newLogicalId()
+        out(k, "group", JSONObject().put("t", "joinno").put("g", g).put("id", id).put("why", why).toString(), id, g)
     }
 
     private fun liveToken(inv: String, g: String): Token? =
@@ -1163,10 +1252,12 @@ class Groups(
         }
         val s = grp.state
         val name = nameIn(s, from, fromName)
-        addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs,
+        val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN
+        addMsg(GMsg(gid, g, chId, from, name, "", false, now(), photo = blob, voice = voiceMs,
             video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, gif = gif))
         unread.add(g)
-        host.arrived(g, "$name in ${s.name}", when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; gif -> "GIF"; album != null -> "Photos"; else -> "Photo" })
+        // The title names the channel, as for text.
+        host.arrived(g, "$name in ${s.name}" + (s.channel(chId)?.n?.let { " #$it" } ?: ""), when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; gif -> "GIF"; album != null -> "Photos"; else -> "Photo" })
         receipt(from, g, listOf(gid), "delivered")
         true
     }
@@ -1181,7 +1272,8 @@ class Groups(
             val e = p.getString("e")
             val all = Rich.react(m.reactions, from, e, ts) ?: return
             edit(g, msg) { it.copy(reactions = all) }
-            if (m.mine && e.isNotEmpty()) host.arrived(g, "${nameIn(grp.state, from, fromName)} in ${grp.state.name}", "Reacted $e to your message")
+            if (m.mine && e.isNotEmpty()) host.arrived(g, "${nameIn(grp.state, from, fromName)} in ${grp.state.name}" +
+                (grp.state.channel(m.ch)?.n?.let { " #$it" } ?: ""), "Reacted $e to your message")
         } else {
             if (m.mine || m.photo.isNotEmpty() || !Rich.editWins(m.from, from, ts, m.edited)) return
             val t = p.getString("text")
@@ -1364,10 +1456,14 @@ class Groups(
         _chats.value = HashMap(chats)
         _invites.value = invites.toList()
         _links.value = groups.keys.associateWith { g -> linkLists[g].orEmpty().filter { (it.x == 0L || it.x > now()) && (it.max == 0 || it.uses < it.max) } }
-        _unread.value = unread.toSet()
+        // Cap g3: unread reports keep the group's dot on until the Reports list shows them.
+        _unread.value = unread.toSet() + reports.filterValues { l -> l.any { !it.read } }.keys
         joinNames.keys.retainAll(joining.keys)
+        refusals.keys.retainAll(joining.keys)
         _waiting.value = joinNames.filterKeys { groups[it]?.let { grp -> !grp.readOnly && grp.state.has(me) } != true }
-            .map { (g, n) -> Waiting(g, n.first, n.second) }
+            .map { (g, n) -> Waiting(g, n.first, n.second, refusals[g].orEmpty()) }
+        reports.keys.retainAll(groups.keys)
+        _reports.value = HashMap(reports)
     }
 
     // ------------------------------------------------------------------ storage
@@ -1392,6 +1488,10 @@ class Groups(
             o.put("mods", JSONObject().apply { mods.forEach { (g, who) -> put(g, JSONObject().apply { who.forEach { (k, slots) ->
                 put(k, JSONObject().apply { slots.forEach { (slot, rec) -> put(slot, rec) } }) } }) } })
             o.put("modNames", JSONObject().apply { modNames.forEach { (k, v) -> put(k, v) } })
+            o.put("refused", JSONObject().apply { refusals.forEach { (g, w) -> put(g, w) } })
+            o.put("reports", JSONObject().apply { reports.forEach { (g, l) -> put(g, JSONArray().apply { l.forEach { r ->
+                put(JSONObject().put("id", r.id).put("f", r.from).put("fn", r.fromName).put("k", r.k).put("kn", r.kName).put("m", r.msg)
+                    .put("ch", r.ch).put("x", r.text).put("t", r.time).put("rd", r.read)) } }) } })
             o.put("lists", JSONObject().apply { linkLists.forEach { (g, l) -> put(g, JSONArray().apply { l.forEach { put(JSONObject().put("id", it.id)
                 .put("by", it.by).put("bn", it.byName).put("x", it.x).put("max", it.max).put("uses", it.uses).put("c", it.counter)) } }) } })
             writeIfChanged(FILE, o.toString())
@@ -1442,6 +1542,12 @@ class Groups(
                 o.optJSONObject("deleted")?.let { j -> j.keys().forEach { deleted[it] = j.optLong(it) } }
                 o.optJSONObject("unsentBy")?.let { j -> j.keys().forEach { k -> j.optJSONArray(k)?.let { a -> unsentBy[k] = a.optString(0) to a.optLong(1) } } }
                 unread.addAll(strings(o.optJSONArray("unread")))
+                o.optJSONObject("refused")?.let { j -> j.keys().forEach { g -> j.optString(g).takeIf { it in REFUSALS }?.let { refusals[g] = it } } }
+                o.optJSONObject("reports")?.let { j -> j.keys().forEach { g -> j.optJSONArray(g)?.let { a ->
+                    reports[g] = (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { r ->
+                        Report(r.optString("id"), g, r.optString("f"), r.optString("fn"), r.optString("k"), r.optString("kn"), r.optString("m"),
+                            r.optString("ch"), r.optString("x"), r.optLong("t"), r.optBoolean("rd")) } }
+                } } }
                 o.optJSONObject("made")?.let { j -> j.keys().forEach { madeLinks[it] = j.getString(it) } }
                 // Cap g2: kept as they were taken (the signature was checked when each came); the shape is checked again.
                 o.optJSONObject("mods")?.let { j -> j.keys().forEach { g -> val who = j.getJSONObject(g); who.keys().forEach { k ->
@@ -1484,6 +1590,34 @@ class Groups(
     companion object {
         /** [GMsg.unsent] of a message an admin removed for everyone (no name holds a control character). */
         const val REMOVED = "\u0001admin"
+        /** Cap g4 (28.5): why a join wasn't taken. */
+        val REFUSALS = setOf("full", "update", "banned", "other")
+        fun refusalText(why: String, group: String): String = when (why) {
+            "full" -> "$group is full (${Proto06.MAX_MEMBERS} people)."
+            "update" -> "Update Muninn to join: $group uses something your version doesn't have yet."
+            "banned" -> "An admin of $group has stopped you from joining."
+            else -> "The admin's app couldn't add you. Ask them about it."
+        }
+        /** "Taylor and Alex need the newest Huginn or Muninn first. Ask them to update, then try again." */
+        fun needUpdate(names: List<String>): String {
+            val n = names.map { it.ifBlank { "Someone" } }
+            val list = if (n.size <= 1) n.joinToString("") else n.dropLast(1).joinToString(", ") + " and " + n.last()
+            return "$list need${if (n.size == 1) "s" else ""} the newest Huginn or Muninn first. Ask them to update, then try again."
+        }
+        /** Cap g3 (28.1): the most paragraphs in a group's about text. */
+        const val MAX_ABOUT_PARAGRAPHS = 10
+        /**
+         * Cap g3 (28.1): about text from the editor as it goes in the state. Paragraphs are joined by U+2029 PARAGRAPH
+         * SEPARATOR (a line break is a control character, which canonical JSON can't hold); each is cleaned like a name.
+         */
+        fun aboutWire(text: String): String {
+            val parts = text.replace('\u2029', '\n').replace('\u2028', '\n').replace('\r', '\n').split('\n')
+                .map { clean(it.replace(Regex("\\s+"), " "), Proto06.MAX_ABOUT).trim() }.filter { it.isNotEmpty() }
+            val kept = if (parts.size <= MAX_ABOUT_PARAGRAPHS) parts else parts.take(MAX_ABOUT_PARAGRAPHS - 1) + parts.drop(MAX_ABOUT_PARAGRAPHS - 1).joinToString(" ")
+            return clean(kept.joinToString("\u2029"), Proto06.MAX_ABOUT).trim()
+        }
+        /** The about text for the screens: one paragraph a line. */
+        fun aboutShown(about: String): String = about.replace('\u2029', '\n')
         const val FILE = "groups.json"
         const val CHATS = "gchats.json"
         const val OUTS = "gouts.json"

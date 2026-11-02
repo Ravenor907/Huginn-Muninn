@@ -75,11 +75,26 @@ object Received {
         context.contentResolver.openInputStream(Uri.parse(uri))?.use { true } ?: false
     } catch (_: Exception) { false }
 
-    /** Show in folder: the system's Downloads list. False when this device has none (some TVs). */
-    fun showFolder(context: Context): Boolean = try {
-        context.startActivity(android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-        true
-    } catch (_: Exception) { false }
+    /**
+     * Show in folder: the folder picked in Settings › Save files to (in the Files app), else the system's Downloads
+     * list. False when neither opens (some TVs): say [where] it is instead.
+     */
+    fun showFolder(context: Context): Boolean {
+        chosenTree(context)?.let { tree ->
+            try {
+                val doc = android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, android.provider.DocumentsContract.getTreeDocumentId(tree))
+                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW)
+                    .setDataAndType(doc, android.provider.DocumentsContract.Document.MIME_TYPE_DIR)
+                    .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                return true
+            } catch (_: Exception) {}
+            return false   // not Downloads: the file isn't there
+        }
+        return try {
+            context.startActivity(android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        } catch (_: Exception) { false }
+    }
 
     /** Saves [bytes] in Downloads (under [under], a chat's folder) as [name]: the name it got and its URI, or null. */
     fun save(context: Context, name: String, bytes: ByteArray, under: String = ""): Pair<String, String>? = try {
@@ -122,7 +137,9 @@ object Received {
     fun chosenTree(context: Context): Uri? {
         val s = context.getSharedPreferences("muninn", Context.MODE_PRIVATE).getString(PREF, null)?.takeIf { it.isNotEmpty() } ?: return null
         val u = Uri.parse(s)
-        return if (context.contentResolver.persistedUriPermissions.any { it.uri == u && it.isWritePermission }) u else null
+        if (context.contentResolver.persistedUriPermissions.any { it.uri == u && it.isWritePermission }) return u
+        rootName = ""   // the folder went away: files go to Download/Muninn again, and the screen says so
+        return null
     }
 
     /** Saves the folder Android's picker returned (null: back to Download/Muninn) and keeps the right to write there. */

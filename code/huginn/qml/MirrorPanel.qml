@@ -14,7 +14,10 @@ Rectangle {
     id: panel
     visible: false
     color: Theme.ground
-    property int row: 0
+    // The chat picked, kept by its key: the list re-sorts as messages come and go, and the chat on screen stays.
+    property string peer: ""
+    property int at: -1               // where it was picked (a chat in two folders shows twice)
+    property var drafts: ({})         // per chat: the half-written message and what it answers
     property string zone: "chats"     // "chats" or "talk"
     property int msgSel: -1
     property string replyId: ""
@@ -34,8 +37,8 @@ Rectangle {
         rest.forEach((c, i) => out.push(Object.assign({ head: i === 0 && out.length ? "Chats" : "" }, c)))
         return out
     }
-    readonly property var current: chats[row] || null
-    readonly property string peer: current ? current.peer : ""
+    readonly property int row: peer === "" ? -1 : chats[at] && chats[at].peer === peer ? at : chats.findIndex(c => c.peer === peer)
+    readonly property var current: row >= 0 ? chats[row] : null
     readonly property var msgs: current ? (Linked.mirror, Linked.messages(current.peer)) : []
     readonly property var picked: zone === "talk" ? msgs[msgSel] || null : null
     readonly property var replyMsg: replyId !== "" ? msgs.find(m => m.id === replyId) || null : null
@@ -43,30 +46,63 @@ Rectangle {
         ? [{ key: "a", label: picked && picked.failed ? "Retry" : picked && picked.media ? actionWord(picked) : "Reply" }, { key: "x", label: "Refresh" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Close" }]
 
+    // Picks the chat at [i] in the list: its draft comes back, the last one's is kept.
+    function pick(i) {
+        const c = chats[i]
+        if (!c) return
+        at = i
+        if (c.peer === peer) return
+        keepDraft()
+        peer = c.peer
+        const d = drafts[peer]
+        compose.text = d ? d.text : ""
+        replyId = d ? d.re : ""
+        msgSel = -1
+        if (zone === "talk") zone = "chats"
+        looked()
+    }
+    function keepDraft() {
+        if (peer === "") return
+        if (compose.text !== "" || replyId !== "") drafts[peer] = { text: compose.text, re: replyId }
+        else delete drafts[peer]
+    }
+    // Opens on chat [p], else the one picked before (or the first). Nothing is read until it's been on screen a moment.
     function open(p) {
-        row = 0; zone = "chats"; msgSel = -1; replyId = ""
+        zone = "chats"; msgSel = -1
         visible = true
-        if (p) { const i = chats.findIndex(c => c.peer === p); if (i >= 0) row = i }
+        let i = p ? chats.findIndex(c => c.peer === p) : -1
+        if (i < 0) i = row >= 0 ? row : 0
+        pick(i)
         Linked.ping()
         looked()
     }
     function close() {
-        visible = false; zone = "chats"; msgSel = -1; replyId = ""
+        readSoon.stop()
+        visible = false; zone = "chats"; msgSel = -1
         // The chat behind (if any) is the one on screen again.
         Chat.openChat = parent && parent.openKey !== undefined ? parent.openKey : ""
         if (Ui.main) Ui.main.restoreFocus()
     }
     // Unlinked with its copy kept: read only.
     readonly property bool kept: !!Linked.phone.gone
-    // The chat on screen: no sound or toast for it, and it's read (here and, cap l2, on the phone).
+    // The chat on screen: no sound or toast for it. It's read (here and, cap l2, on the phone, whose read receipts
+    // follow its own setting) only once it has stayed on screen, with this window in front, for a moment: arrowing
+    // past a chat, or a menu opening the panel, reads nothing.
     function looked() {
         if (!visible || !current) return
         Chat.openChat = "mirror:" + current.peer
-        if (Qt.application.state === Qt.ApplicationActive) Linked.markRead(current.peer)
+        readSoon.restart()
     }
-    onPeerChanged: { replyId = ""; compose.text = ""; looked() }
-    onMsgsChanged: looked()
-    Connections { target: Qt.application; function onStateChanged() { panel.looked() } }
+    Timer {
+        id: readSoon
+        interval: 1200
+        onTriggered: if (panel.visible && panel.current && Qt.application.state === Qt.ApplicationActive) Linked.markRead(panel.current.peer)
+    }
+    onMsgsChanged: if (visible && current && !readSoon.running) readSoon.start()
+    Connections {
+        target: Qt.application
+        function onStateChanged() { if (Qt.application.state === Qt.ApplicationActive) panel.looked(); else readSoon.stop() }
+    }
     // While open: the time moves on, and the phone is asked whether it's there (at most once a minute).
     Timer { interval: 5000; repeat: true; running: panel.visible; onTriggered: panel.clock = Date.now() }
     Timer { interval: 60000; repeat: true; running: panel.visible && !panel.kept; onTriggered: Linked.ping() }
@@ -76,6 +112,7 @@ Rectangle {
         if (kept) { Ui.say("Unlinked. Link your phone again to send.", true); return }
         const r = Linked.send(current.peer, t, replyId)
         replyId = ""
+        delete drafts[current.peer]
         if (r !== "") Ui.say(r, true)
     }
     function write() { if (current && !kept) { zone = "chats"; compose.focusField() } }
@@ -88,17 +125,28 @@ Rectangle {
         if (!m || !m.media || !current) return
         if (m.kind === "voice") { if (Voice.playing === m.media) Voice.stop(); else Voice.play(m.media); return }
         const r = Linked.saveMedia(current.peer, m.id)
-        Ui.say(r === "" ? "Saved in Downloads." : r, r !== "")
+        if (r !== "") { Ui.say(r, true); return }
+        const path = Linked.lastSaved()
+        Ui.pickFrom("Saved in Downloads", [{ header: "", items: [{ name: "Open", icon: "file", url: "open" }, { name: "Show in folder", icon: "folder", url: "show" }] }], a => {
+            if (a === "open" && !FileLink.openFile(path)) Ui.say("It can't be opened here.", true)
+            else if (a === "show" && !FileLink.showInFolder(path)) Ui.say("The folder can't be opened here.", true)
+        })
     }
     // Web links in a message's text, to open (asked first).
     function linksIn(text) { return String(text || "").match(/https?:\/\/[^\s<>"]+/g) || [] }
-    function openLink(url) { Ui.sure("Open " + Chat.linkHost(url) + "?", url, "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) }) }
+    // A group invite: joining here would join as this PC's own account, so it's for the phone.
+    function isInvite(url) { return String(url).indexOf("MUNINNG1:") >= 0 }
+    function linkLabel(url) { return isInvite(url) ? "Group invite: open it on your phone" : "Open " + Chat.linkHost(url) }
+    function openLink(url) {
+        if (isInvite(url)) { Ui.say("Open the invite on your phone to join as you."); return }
+        Ui.sure("Open " + Chat.linkHost(url) + "?", url, "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) })
+    }
     function messageMenu(m) {
         if (!m) return
         const items = []
         if (!kept && !m.pending) items.push({ name: "Reply", icon: "reply", url: "reply" })
         if (m.text) items.push({ name: "Copy text", icon: "file", url: "copy" })
-        linksIn(m.text).forEach((u, i) => items.push({ name: "Open " + Chat.linkHost(u), icon: "attach", url: "l" + i }))
+        linksIn(m.text).forEach((u, i) => items.push({ name: linkLabel(u), icon: "attach", url: "l" + i }))
         if (m.failed) items.push({ name: "Retry", icon: "send", url: "retry" })
         if (!items.length) return
         Ui.pickFrom("Message", [{ header: "", items: items }], a => {
@@ -135,8 +183,8 @@ Rectangle {
             return true
         }
         switch (b) {
-        case "up": row = Math.max(0, row - 1); return true
-        case "down": row = Math.min(chats.length - 1, row + 1); return true
+        case "up": pick(Math.max(0, row - 1)); return true
+        case "down": pick(Math.min(chats.length - 1, row + 1)); return true
         case "right": if (msgs.length) { zone = "talk"; msgSel = msgs.length - 1; talk.positionViewAtEnd() } return true
         case "a": write(); return true
         case "x": refresh(); return true
@@ -144,7 +192,6 @@ Rectangle {
         }
         return true
     }
-    onRowChanged: { msgSel = -1; if (zone === "talk") zone = "chats" }
 
     // ---- the phone's status (cap l2), in plain words. Never an address.
     readonly property var ph: Linked.phone
@@ -331,8 +378,8 @@ Rectangle {
                 HoverHandler { id: rowHover }
                 TapHandler {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
-                    onTapped: (point, button) => { panel.row = index; panel.zone = "chats"; if (button === Qt.RightButton) panel.chatMenu(modelData) }
-                    onLongPressed: { panel.row = index; panel.chatMenu(modelData) }
+                    onTapped: (point, button) => { panel.pick(index); panel.zone = "chats"; if (button === Qt.RightButton) panel.chatMenu(modelData) }
+                    onLongPressed: { panel.pick(index); panel.chatMenu(modelData) }
                 }
             }
         }
@@ -423,7 +470,7 @@ Rectangle {
                         Text {
                             required property var modelData
                             textFormat: Text.PlainText
-                            text: "Open " + Chat.linkHost(modelData)
+                            text: panel.linkLabel(modelData)
                             color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.underline: true
                             Accessible.role: Accessible.Link
                             Accessible.name: text
@@ -467,6 +514,8 @@ Rectangle {
             bannerTitle: panel.replyMsg ? "Replying to " + (panel.replyMsg.mine ? "yourself" : panel.replyMsg.from || (panel.current ? panel.current.name : "")) : ""
             bannerText: panel.replyMsg ? (panel.replyMsg.text || "") : ""
             onSend: t => panel.send(t)
+            showAttach: false
+            pasteRefusal: "Send pictures from your phone."
             onAttach: Ui.say("Send files from your phone.")
             onCancelBanner: panel.replyId = ""
             onEscaped: compose.leave()

@@ -391,8 +391,9 @@ void System::updateHandheld()
 {
     const QString mode = m_settings->handheldMode();
     const bool detected = m_tourDir.isEmpty() && handheldRule(!m_model.isEmpty(), m_smallScreen, m_controllerAtStart, m_gameMode);
-    // The tour always draws the desktop layout.
-    const bool on = m_tourDir.isEmpty() && (mode == QLatin1String("on") || (mode == QLatin1String("auto") && detected));
+    // The tour draws the desktop layout, except at its handheld stops.
+    const bool on = m_tourDir.isEmpty() ? (mode == QLatin1String("on") || (mode == QLatin1String("auto") && detected))
+                                        : m_tourHandheld;
     QStringList why;
     if (!m_model.isEmpty())
         why << m_model;
@@ -409,6 +410,14 @@ void System::updateHandheld()
     m_handheldAuto = detected;
     m_handheldWhy = whyText;
     Q_EMIT handheldChanged();
+}
+
+void System::setTourHandheld(bool on)
+{
+    if (m_tourDir.isEmpty() || on == m_tourHandheld)
+        return;
+    m_tourHandheld = on;
+    updateHandheld();
 }
 
 bool System::gameLike() const

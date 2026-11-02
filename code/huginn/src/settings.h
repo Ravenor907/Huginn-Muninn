@@ -51,6 +51,8 @@ class Settings : public QObject
     Q_PROPERTY(bool showMembers READ showMembers WRITE setShowMembers NOTIFY appearanceChanged)
     // Settings › Calls › Push to talk: in a voice room the microphone only sends while the key is held.
     Q_PROPERTY(bool pushToTalk READ pushToTalk WRITE setPushToTalk NOTIFY changed)
+    // Settings › Calls: a short sound when the Mute and Deafen keys turn them on or off (heard over a game).
+    Q_PROPERTY(bool muteSounds READ muteSounds WRITE setMuteSounds NOTIFY changed)
     // Mute and Deafen in your card (and Ctrl+Shift+M and D), kept between calls: every call and voice room starts this
     // way. Deafen mutes too; mutedByDeaf says the mic was on before, so undeafening turns it back on.
     Q_PROPERTY(bool micMuted READ micMuted WRITE setMicMuted NOTIFY changed)
@@ -167,6 +169,7 @@ public:
     bool showList() const { return value("showList", true).toBool(); }
     bool showMembers() const { return value("showMembers", true).toBool(); }
     bool pushToTalk() const { return value("pushToTalk", false).toBool(); }
+    bool muteSounds() const { return value("muteSounds", true).toBool(); }
     bool micMuted() const { return value("micMuted", false).toBool(); }
     bool deafened() const { return value("deafened", false).toBool(); }
     bool mutedByDeaf() const { return value("mutedByDeaf", false).toBool(); }
@@ -275,6 +278,7 @@ public:
     void setShowList(bool v) { setLook("showList", v); }
     void setShowMembers(bool v) { setLook("showMembers", v); }
     void setPushToTalk(bool v) { set("pushToTalk", v); }
+    void setMuteSounds(bool v) { set("muteSounds", v); }
     void setMicMuted(bool v) { set("micMuted", v); }
     void setDeafened(bool v) { set("deafened", v); }
     void setMutedByDeaf(bool v) { set("mutedByDeaf", v); }

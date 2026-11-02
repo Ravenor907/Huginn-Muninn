@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -35,15 +36,17 @@ class FileLink : public QObject
     // Every transfer this run: [{id, peer, where, chat, name, size, mine, state, done, note, path, route, pace, paused,
     // held, kind, folder, group, relay}]. state: "connecting", "offered", "asking" (waiting for Accept or Decline),
     // "sending", "done", "failed". where: the chat it belongs to (their key, or "g:<group>"); chat: its name. path:
-    // mine, the file sent; theirs, where it was saved once done. route: "Direct" (the same Wi-Fi) or "Over the internet"
+    // mine, the file sent; theirs, where it was saved once done. route: "Same Wi-Fi", "Straight to them" or "Over the internet"
     // (empty until known). pace: "2.1 MB/s · 12 s left". folder: where theirs is saved, as words. relay: a file of mine
     // going as a message over the internet route (its message shows it in the chat). A file of theirs coming over the
     // internet route shows too (id: its message id), until its message is in.
     Q_PROPERTY(QVariantList transfers READ transfers NOTIFY changed)
     // Running or waiting for an answer here: the Transfers button's count.
     Q_PROPERTY(int activeCount READ activeCount NOTIFY changed)
-    // Moving or about to (closing would cut it off), and what closing now would stop, in words ("" when nothing).
+    // Moving or about to, not paused here or there (what Wait for it waits for); paused here (Resume and wait); and what
+    // closing now would stop or cancel, in words ("" when nothing): moving, paused or waiting for them to accept.
     Q_PROPERTY(int runningCount READ runningCount NOTIFY changed)
+    Q_PROPERTY(int pausedCount READ pausedCount NOTIFY changed)
     Q_PROPERTY(QString closeWarning READ closeWarning NOTIFY changed)
 
 public:
@@ -149,6 +152,8 @@ public:
     Q_INVOKABLE void resume(const QString &id);
     Q_INVOKABLE bool canPause(const QString &id) const;
     Q_INVOKABLE bool canResume(const QString &id) const;
+    // Every transfer paused here goes on (Resume and wait, when closing).
+    Q_INVOKABLE void resumeAll();
     // Accept, and from now on their files arrive without asking ("Always from this person").
     Q_INVOKABLE void acceptAlways(const QString &id);
     // A chat's Files: everything sent and received there, newest first: [{name, size, path, mine, time, there, folder}].
@@ -162,6 +167,7 @@ public:
     bool expects(const QString &peer, const QString &id) const;
     int activeCount() const;
     int runningCount() const;
+    int pausedCount() const;
     QString closeWarning() const;
     // Cap f3: their app keeps a stopped file and goes on from there, and waits a day for a big file's answer.
     bool hasF3(const QString &peer) const { return resumes && resumes(peer); }
@@ -281,9 +287,19 @@ private:
     void logFile(const QString &where, const QString &name, qint64 size, const QString &path, bool mine);
     void loadLog();
     void saveLog();
-    // Cap f3: a file of theirs that stopped part way, kept to go on from (this run): by card id.
-    struct Partial { QString peer, sha, path, folder, name, group; qint64 size = 0; int below = 0; };
+    // Cap f3: a file of theirs that stopped part way, kept to go on from: by card id. Kept across a restart too
+    // (keptparts.json in the vault, with its card), for kKeepDays.
+    struct Partial { QString peer, sha, path, folder, name, group; qint64 size = 0; int below = 0; qint64 time = 0; };
     QHash<QString, Partial> m_partial;
+    // Cards of mine whose Retry goes on from where it stopped (cap f3), kept across a restart with the parts.
+    QSet<QString> m_resumable;
+    static constexpr int kKeepDays = 7;
+    bool m_keptLoaded = false, m_keptSaved = false;
+    // Read once the vault is open; written when a kept part or a resumable card comes or goes, and on quitting.
+    void loadKept();
+    void saveKept();
+    // Quitting: a file of mine on its way becomes a card whose Retry goes on, and one of theirs is kept as a part.
+    void keepForRestart();
     void dropPartial(const QString &id);
     // The kept part this file of theirs goes on from (its card id), or "".
     QString partialFor(const Xfer *x) const;
