@@ -233,14 +233,10 @@ public:
     Q_INVOKABLE QString audioDeviceName(bool input, const QString &id) const;
     QString deviceName() const;
     static QString defaultDeviceName();
-    // A group's about box folded to one line (GroupPage.qml), kept across restarts, per group.
-    Q_INVOKABLE bool aboutFolded(const QString &gid) const { return value(QStringLiteral("aboutFold/") + gid, false).toBool(); }
-    Q_INVOKABLE void setAboutFolded(const QString &gid, bool v)
-    {
-        if (gid.isEmpty()) return;
-        if (v) m_settings.setValue(QStringLiteral("aboutFold/") + gid, true);
-        else m_settings.remove(QStringLiteral("aboutFold/") + gid);
-    }
+    // A group's about box folded to one line (GroupPage.qml), kept across restarts, per group. Kept with a short hash
+    // of the about text it was folded on: when an admin edits the rules, the box shows open again for everyone.
+    Q_INVOKABLE bool aboutFolded(const QString &gid, const QString &about) const;
+    Q_INVOKABLE void setAboutFolded(const QString &gid, bool v, const QString &about);
     bool blockScreenshots() const { return value("blockScreenshots", false).toBool(); }
     bool dataSaver() const { return value("dataSaver", false).toBool(); }
     static bool dataSaverOn() { return saved(QStringLiteral("dataSaver"), false).toBool(); }

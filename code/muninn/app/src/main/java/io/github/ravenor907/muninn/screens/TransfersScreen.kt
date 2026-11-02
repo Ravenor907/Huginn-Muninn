@@ -140,6 +140,16 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                     }
                     MButton("Close") { link.dismiss(f.id) }
                 }
+                // What came of their file is kept (it goes on from there): Close keeps it, Discard asks, then deletes it.
+                failed && link.isKept(f.id) -> {
+                    MButton("Close") { link.dismiss(f.id) }
+                    MButton("Discard", kind = Kind.Danger) {
+                        val pct = FileText.percent(link.keptBytes(f.id), f.size)
+                        Ui.sure(io.github.ravenor907.muninn.ui.Ask("Throw away the $pct% that came?",
+                            "The $pct% of ${f.name} that came (${FileText.size(link.keptBytes(f.id))}) is deleted. It starts over if $who sends it again. " +
+                                "Close keeps it for ${FileLink.KEEP_DAYS} days instead.", "Discard", danger = true) { link.discard(f.id) })
+                    }
+                }
                 !FileText.running(f.state) -> MButton("Close") { link.dismiss(f.id) }
             }
         }

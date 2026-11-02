@@ -103,6 +103,12 @@ public:
     // Leave Huginn running out of sight: minimized, or in game mode (no minimizing there) hidden with Steam in front.
     // A notification, the tray, the taskbar or starting Huginn again brings it back.
     Q_INVOKABLE void minimize(QQuickWindow *window);
+    // Windows: the unread count on the taskbar button (a badge) and in the tray icon's tooltip, and whether the tray's
+    // Mute notifications is on. Elsewhere it does nothing.
+    Q_INVOKABLE void setUnreadState(QQuickWindow *window, int unread, bool muted);
+    // A system notification now (Huginn out of sight, so a toast in the window wouldn't be seen). A click brings
+    // Huginn to the front.
+    Q_INVOKABLE void notifyNow(const QString &title, const QString &body);
     // The screenshot tour only: draw Handheld mode for a stop (the tour otherwise always draws the desktop layout).
     Q_INVOKABLE void setTourHandheld(bool on);
     Q_INVOKABLE void showSteamKeyboard();
@@ -114,7 +120,8 @@ public:
     Q_INVOKABLE QStringList pickFiles() const;
     // Huginn's own file picker (game mode, driven by the controller; Ui.pickFiles): the usual folders that exist here
     // [{name, path}], and one folder's contents, folders first, then up to 300 files newest first
-    // [{name, path, dir, size, time}]. Hidden files are left out.
+    // [{name, path, dir, size, time}]. Hidden files are left out. With Steam screenshots on this computer, the last place
+    // is "Steam screenshots" (path "steam:screenshots"): every game's, newest first.
     Q_INVOKABLE QVariantList filePlaces() const;
     Q_INVOKABLE QVariantList listFolder(const QString &path) const;
     /** A picture file from the computer's own file picker, as a file URL; empty when none was chosen. */

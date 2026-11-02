@@ -11,8 +11,9 @@ import Huginn
 // and the phone's folders as sections; the call button says calls ring on the phone. Cap l2 (15.2): unread counts and
 // read state both ways, mute (on the phone too), and the phone's status. A copy kept after unlinking is read only.
 // A group with more than one text channel shows them as tabs over its messages (LB and RB on a controller); a message
-// goes in the channel on screen. Both lists change in place (LiveList), so a link change never moves the view or
-// drops a text selection. Drafts are kept (Linked.drafts) until sent.
+// goes in the channel on screen. A tab shows a dot for unread and a count for mentions of me; only the tab on screen is
+// read, and a message in another tab notifies as usual. Both lists change in place (LiveList), so a link change never
+// moves the view or drops a text selection. Drafts are kept (Linked.drafts) per chat and channel until sent.
 Rectangle {
     id: panel
     visible: false
@@ -21,6 +22,7 @@ Rectangle {
     property string peer: ""
     property int at: -1               // where it was picked (a chat in two folders shows twice)
     property var chanFor: ({})        // per group chat: the channel picked (its id)
+    property var aboutOpen: ({})      // per group chat: its about box shown in full (folded to one line until then)
     property string zone: "chats"     // "chats" or "talk"
     property int msgSel: -1
     property string replyId: ""
@@ -51,10 +53,16 @@ Rectangle {
         return chans.some(c => c.id === want) ? want : chans[0].id
     }
     readonly property var chanNow: chan === "" ? null : chans.find(c => c.id === chan) || null
+    // Per channel id: {n: unread, me: mentions of me and replies to mine}.
+    readonly property var tabMarks: current && current.tabs ? current.tabs : ({})
+    // The group's about text and rules, over its first channel (as in the group itself).
+    readonly property string about: !!current && !!current.about && (chan === "" || chan === chans[0].id) ? String(current.about) : ""
     // Only admins post there, and on the phone I'm a member: no message box, as in the group itself.
     readonly property bool chanLocked: !!chanNow && !!chanNow.ao && !!current && current.role === "Member"
     readonly property var allMsgs: current ? (Linked.mirror, Linked.messages(current.peer)) : []
     readonly property var msgs: chan === "" ? allMsgs : allMsgs.filter(m => (m.ch || "main") === chan)
+    // The newest message on screen: a new one here (not in another tab) is what gets read.
+    readonly property string lastShown: msgs.length ? msgs[msgs.length - 1].id : ""
     readonly property var picked: zone === "talk" ? msgs[msgSel] || null : null
     readonly property var replyMsg: replyId !== "" ? allMsgs.find(m => m.id === replyId) || null : null
     readonly property var prompts: (zone === "talk"
@@ -70,43 +78,71 @@ Rectangle {
         if (c.peer === peer) return
         keepDraft()
         peer = c.peer
-        const d = Linked.drafts[peer]
-        compose.text = d ? d.text || "" : ""
-        replyId = d ? d.re || "" : ""
+        loadDraft()
         msgSel = -1
         if (zone === "talk") zone = "chats"
         talk.stick = true
+        talk.newBelow = false
         talk.positionViewAtEnd()
         looked()
+    }
+    // Drafts and replies are kept per channel: "<peer>#<channel>" in a group with tabs, else the chat's key.
+    function draftKey() { return peer === "" ? "" : chan !== "" ? peer + "#" + chan : peer }
+    // A chat row's draft: the chat's own, or one in any of its channels.
+    function draftOf(p) {
+        const all = Linked.drafts
+        if (all[p] && all[p].text) return all[p]
+        for (const k in all) if (k.indexOf(p + "#") === 0 && all[k].text) return all[k]
+        return null
+    }
+    // The draft for the chat and channel on screen comes back into the box (with what it answers).
+    function loadDraft() {
+        const k = draftKey()
+        let d = Linked.drafts[k] || null
+        // One kept for the whole group before channels had their own: it comes into the channel opened first.
+        if (!d && k !== peer && Linked.drafts[peer]) { d = Linked.drafts[peer]; Linked.setDraft(peer, "", "") }
+        compose.text = d ? d.text || "" : ""
+        replyId = d ? d.re || "" : ""
     }
     // The half-written message, kept in the vault so closing Huginn doesn't lose it.
     function keepDraft() {
         draftSoon.stop()
-        if (peer !== "") Linked.setDraft(peer, compose.text, replyId)
+        const k = draftKey()
+        if (k !== "") Linked.setDraft(k, compose.text, replyId)
     }
     Timer { id: draftSoon; interval: 1500; onTriggered: panel.keepDraft() }
     onReplyIdChanged: if (visible) draftSoon.restart()
     // Another channel of the group on screen.
+    // Its own draft and reply come with it: nothing typed or answered in one channel is sent in another.
     function pickChan(id) {
-        if (!current || id === chan) return
+        if (!current || id === chan || !chans.some(c => c.id === id)) return
+        keepDraft()
         const m = Object.assign({}, chanFor)
         m[peer] = id
         chanFor = m
+        loadDraft()
         msgSel = -1
         talk.stick = true
+        talk.newBelow = false
         talk.positionViewAtEnd()
+        looked()
     }
     function stepChan(d) {
         const i = chans.findIndex(c => c.id === chan)
         if (i >= 0 && chans.length > 1) pickChan(chans[(i + d + chans.length) % chans.length].id)
     }
-    // Opens on chat [p], else the one picked before (or the first). Nothing is read until it's been on screen a moment.
+    // Opens on chat [p] ("<peer>#<channel>": on that channel's tab, as a notification's click does), else the one
+    // picked before (or the first). Nothing is read until it's been on screen a moment.
     function open(p) {
         zone = "chats"; msgSel = -1
         visible = true
+        const cut = p ? p.indexOf("#") : -1
+        const ch = cut > 0 ? p.substring(cut + 1) : ""
+        if (cut > 0) p = p.substring(0, cut)
         let i = p ? chats.findIndex(c => c.peer === p) : -1
         if (i < 0) i = row >= 0 ? row : 0
         pick(i)
+        if (ch !== "") pickChan(ch)
         Linked.ping()
         looked()
     }
@@ -120,20 +156,21 @@ Rectangle {
     }
     // Unlinked with its copy kept: read only.
     readonly property bool kept: !!Linked.phone.gone
-    // The chat on screen: no sound or toast for it. It's read (here and, cap l2, on the phone, whose read receipts
-    // follow its own setting) only once it has stayed on screen, with this window in front, for a moment: arrowing
-    // past a chat, or a menu opening the panel, reads nothing.
+    // The chat on screen (a group with tabs: only the tab on screen, "mirror:<peer>#<channel>"): no sound or toast for
+    // it. It's read (here and, cap l2, on the phone, whose read receipts follow its own setting) only once it has stayed
+    // on screen, with this window in front, for a moment: arrowing past a chat, or a menu opening the panel, reads
+    // nothing. In a group with tabs only that channel is read; the others keep their unread until their tab is viewed.
     function looked() {
         if (!visible || !current) return
-        Chat.openChat = "mirror:" + current.peer
+        Chat.openChat = "mirror:" + current.peer + (chan !== "" ? "#" + chan : "")
         readSoon.restart()
     }
     Timer {
         id: readSoon
         interval: 1200
-        onTriggered: if (panel.visible && panel.current && Qt.application.state === Qt.ApplicationActive) Linked.markRead(panel.current.peer)
+        onTriggered: if (panel.visible && panel.current && Qt.application.state === Qt.ApplicationActive) Linked.markRead(panel.current.peer, panel.chan)
     }
-    onMsgsChanged: if (visible && current && !readSoon.running) readSoon.start()
+    onLastShownChanged: if (visible && current && !readSoon.running) readSoon.start()
     Connections {
         target: Qt.application
         function onStateChanged() { if (Qt.application.state === Qt.ApplicationActive) panel.looked(); else readSoon.stop() }
@@ -156,7 +193,7 @@ Rectangle {
         }
         replyId = ""
         draftSoon.stop()
-        Linked.setDraft(current.peer, "", "")
+        Linked.setDraft(draftKey(), "", "")
         talk.stick = true
     }
     // What a message answers, as one short line ("" when it answers nothing).
@@ -168,6 +205,13 @@ Rectangle {
         return "Replying to " + who + ": " + String(q.text || "").replace(/\s+/g, " ").substring(0, 80)
     }
     function write() { if (current && !kept) { zone = "chats"; compose.focusField() } }
+    // To the newest message (the "New messages" chip); with a controller, the newest one is picked.
+    function toEnd() {
+        talk.stick = true
+        talk.newBelow = false
+        talk.positionViewAtEnd()
+        if (zone === "talk") msgSel = msgs.length - 1
+    }
     function replyTo(m) { if (!m || kept) return; replyId = m.id; compose.focusField() }
     function refresh() { Ui.say(Linked.refresh()) }
     function stateWord(m) { return m.failed ? (m.err || "Didn't send") + " · Retry" : "Sending" }
@@ -218,13 +262,14 @@ Rectangle {
         }
         const items = [{ name: "For 15 minutes", url: "900000" }, { name: "For 1 hour", url: "3600000" },
                        { name: "For 8 hours", url: "28800000" }, { name: "Until I turn it back on", url: "on" }]
-        const sections = [{ header: Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }]
+        // A group's menu is about its notifications: muting is one part of it (J4-5).
+        const sections = [{ header: c.group ? (Linked.phone.l1 ? "Mute, on your phone too" : "Mute on this computer") : Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }]
         // A group: every message, or only @mentions and replies to me (on this computer).
         const key = "mirror:" + c.peer, mode = Chat.notifyMode(key)
         if (c.group) sections.push({ header: "Notifications on this computer", items: [
             { name: "Every message", url: "n:every", check: mode !== "mentions" },
             { name: "Only mentions and replies to me", url: "n:mentions", check: mode === "mentions" }] })
-        Ui.pickFrom("Mute " + c.name, sections, a => {
+        Ui.pickFrom((c.group ? "Notifications for " : "Mute ") + c.name, sections, a => {
             if (a.indexOf("n:") === 0) {
                 Chat.setNotifyMode(key, a === "n:mentions" ? "mentions" : "")
                 Ui.say(a === "n:mentions" ? c.name + ": only mentions and replies to you." : c.name + ": every message.")
@@ -388,7 +433,7 @@ Rectangle {
             id: chatRow
             readonly property bool on: index === panel.row
             // A half-written message (not for the chat on screen, whose box shows it).
-            readonly property var draft: modelData.peer !== panel.peer ? Linked.drafts[modelData.peer] || null : null
+            readonly property var draft: modelData.peer !== panel.peer ? panel.draftOf(modelData.peer) : null
             width: side.width
             height: headH + Theme.px(56)
             readonly property real headH: modelData.head ? Theme.px(28) : 0
@@ -479,37 +524,106 @@ Rectangle {
         delegate: Rectangle {
             id: tab
             readonly property bool on: modelData.id === panel.chan
-            width: tabText.implicitWidth + Theme.px(20); height: chanBar.height
+            // Unread in this channel: a dot and bold; mentions of me (and replies to mine): how many, in red.
+            readonly property var mark: panel.tabMarks[modelData.id] || null
+            readonly property int unreadN: mark ? mark.n || 0 : 0
+            readonly property int meN: mark ? mark.me || 0 : 0
+            width: tabRow.implicitWidth + Theme.px(20); height: chanBar.height
             radius: Theme.radius
             color: on ? Theme.tile : tabHover.hovered ? Theme.raised : "transparent"
             border.width: on ? 1 : 0
             border.color: Theme.accent
             Accessible.role: Accessible.PageTab
             Accessible.name: "#" + modelData.name + (modelData.ao ? ", only admins post" : "")
+                             + (tab.meN > 0 ? ", " + tab.meN + (tab.meN === 1 ? " mention" : " mentions") : tab.unreadN > 0 ? ", unread" : "")
             Accessible.onPressAction: panel.pickChan(modelData.id)
-            Text {
-                id: tabText
+            Row {
+                id: tabRow
                 anchors.centerIn: parent
-                textFormat: Text.PlainText
-                text: "#" + modelData.name + (modelData.ao ? " (admins)" : "")
-                color: tab.on ? Theme.text : Theme.textMuted
-                font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: tab.on ? Font.DemiBold : Font.Normal
+                spacing: Theme.px(6)
+                Text {
+                    id: tabText
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    text: "#" + modelData.name + (modelData.ao ? " (admins)" : "")
+                    color: tab.on || tab.unreadN > 0 ? Theme.text : Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: tab.on || tab.unreadN > 0 ? Font.DemiBold : Font.Normal
+                }
+                Rectangle {
+                    visible: tab.unreadN > 0 || tab.meN > 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: tab.meN > 0 ? Math.max(height, meText.implicitWidth + Theme.px(10)) : Theme.px(8)
+                    height: tab.meN > 0 ? Theme.px(18) : Theme.px(8)
+                    radius: height / 2
+                    color: tab.meN > 0 ? Theme.danger : Theme.accent
+                    Text {
+                        id: meText
+                        visible: tab.meN > 0
+                        anchors.centerIn: parent
+                        textFormat: Text.PlainText
+                        text: tab.meN > 99 ? "99+" : String(tab.meN)
+                        color: Theme.ground
+                        font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.Bold
+                    }
+                }
             }
             HoverHandler { id: tabHover; cursorShape: Qt.PointingHandCursor }
             TapHandler { onTapped: panel.pickChan(modelData.id) }
         }
     }
+    // The group's about text and rules (cap g3), over its first channel: one line until clicked, as in the group.
+    Rectangle {
+        id: aboutBox
+        readonly property bool full: !!panel.aboutOpen[panel.peer]
+        visible: panel.about !== ""
+        anchors.top: chanBar.bottom; anchors.left: side.right; anchors.right: parent.right
+        anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14); anchors.topMargin: visible ? Theme.px(8) : 0
+        height: visible ? aboutText.implicitHeight + Theme.px(16) : 0
+        radius: Theme.radius; color: Theme.raised; border.color: Theme.line; border.width: 1
+        Accessible.role: Accessible.Button
+        Accessible.name: "About this group: " + panel.about
+        Accessible.description: full ? "Click to fold it to one line." : "Folded. Click to show it all."
+        Accessible.onPressAction: aboutBox.flip()
+        function flip() { const o = Object.assign({}, panel.aboutOpen); o[panel.peer] = !aboutBox.full; panel.aboutOpen = o }
+        Text {
+            id: aboutText
+            textFormat: Text.PlainText
+            x: Theme.px(12); y: Theme.px(8); width: parent.width - Theme.px(24) - foldWord.width
+            wrapMode: Text.WordWrap
+            maximumLineCount: aboutBox.full ? 200 : 1
+            elide: Text.ElideRight
+            text: panel.about
+            color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+        }
+        Text {
+            id: foldWord
+            textFormat: Text.PlainText
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(10); y: Theme.px(8)
+            text: aboutBox.full ? "Fold" : "Show"
+            color: aboutHover.hovered ? Theme.accent : Theme.textMuted
+            font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+        }
+        HoverHandler { id: aboutHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: aboutBox.flip() }
+    }
     ListView {
         id: talk
-        // Follows new messages only while it's at the end: scrolled up to read, it stays put.
+        // Follows new messages only while it's at the end: scrolled up to read, it stays put, and a chip says new ones came.
         property bool stick: true
-        anchors.top: chanBar.bottom; anchors.bottom: composeCol.top; anchors.left: side.right; anchors.right: parent.right
+        property bool newBelow: false
+        property int lastCount: 0
+        anchors.top: aboutBox.bottom; anchors.bottom: composeCol.top; anchors.left: side.right; anchors.right: parent.right
         anchors.margins: Theme.px(14)
         clip: true
         spacing: Theme.px(6)
         model: msgModel
-        onMovementEnded: stick = atYEnd
-        onCountChanged: if (panel.zone !== "talk" && stick) positionViewAtEnd()
+        onMovementEnded: { stick = atYEnd; if (atYEnd) newBelow = false }
+        onAtYEndChanged: if (atYEnd) newBelow = false
+        onCountChanged: {
+            if (panel.zone !== "talk" && stick) positionViewAtEnd()
+            else if (count > lastCount && !atYEnd) newBelow = true
+            lastCount = count
+        }
         delegate: Column {
             id: msgItem
             readonly property bool sel: panel.zone === "talk" && index === panel.msgSel
@@ -623,6 +737,28 @@ Rectangle {
             }
         }
     }
+    // Scrolled up and new messages came: a chip at the bottom of the messages goes to them.
+    Rectangle {
+        visible: talk.newBelow
+        z: 3
+        anchors.horizontalCenter: talk.horizontalCenter
+        anchors.bottom: talk.bottom; anchors.bottomMargin: Theme.px(6)
+        width: newText.implicitWidth + Theme.px(20); height: Theme.px(28)
+        radius: height / 2
+        color: Theme.accent
+        Accessible.role: Accessible.Button
+        Accessible.name: "New messages. Go to them."
+        Accessible.onPressAction: panel.toEnd()
+        Text {
+            id: newText
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: "New messages \u2193"
+            color: Theme.onAccent; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+        }
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: panel.toEnd() }
+    }
     // The message box, as in every chat. Files go from the phone.
     Column {
         id: composeCol
@@ -650,7 +786,7 @@ Rectangle {
             width: parent.width
             wrapMode: Text.WordWrap
             text: panel.kept ? "Unlinked. Link your phone again to send."
-                  : panel.chanLocked ? "Only admins post here. Rules for everyone are in Group settings on your phone."
+                  : panel.chanLocked ? "Only admins post here."
                   : "Sent by your phone as its own message. Send files from your phone."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }

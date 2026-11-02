@@ -18,8 +18,11 @@ Rectangle {
     border.color: Theme.line
 
     property bool screenShown: true
-    // Someone else's screen made big: it fills the window above the bar (the button, a double-click, Esc to return).
+    // Someone else's screen made big: it fills the window above the bar (the button, a double-click, Bigger in the
+    // voice menus with a controller; Esc or B to return).
     property bool screenBig: false
+    // Someone else's screen is on show above the bar (so it can be made bigger).
+    readonly property bool screenOn: screenPanel.visible
     // Someone new starts sharing: show it again, at the usual size.
     readonly property string sharer: Rooms.sharerName
     onSharerChanged: { screenShown = true; screenBig = false }
@@ -338,7 +341,7 @@ Rectangle {
             id: bigScreen
             anchors.right: hideScreen.visible ? hideScreen.left : parent.right; anchors.top: parent.top
             anchors.rightMargin: Theme.px(hideScreen.visible ? 6 : 10); anchors.topMargin: Theme.px(10)
-            text: bar.screenBig ? "Smaller (Esc)" : "Full screen"; fontSize: 13; implicitHeight: Theme.px(32)
+            text: bar.screenBig ? "Smaller (Esc)" : "Bigger"; fontSize: 13; implicitHeight: Theme.px(32)
             onClicked: bar.screenBig = !bar.screenBig
         }
         Text {

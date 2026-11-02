@@ -38,6 +38,13 @@ object CallManager {
     private val _call = MutableStateFlow<Ui?>(null)
     /** The call going on (or just ended, for a moment), or null. */
     val call: StateFlow<Ui?> = _call.asStateFlow()
+
+    /** The voice room left to answer a call from its soft ring: once that call ends, "Back to <room>" joins it again. */
+    data class BackTo(val g: String, val ch: String, val title: String, val callId: String)
+    private val _backTo = MutableStateFlow<BackTo?>(null)
+    val backTo: StateFlow<BackTo?> = _backTo.asStateFlow()
+    /** "Back to <room>" was used (or isn't wanted any more). */
+    fun backDone() { _backTo.value = null }
     private val _history = MutableStateFlow<List<Log>>(emptyList())
     val history: StateFlow<List<Log>> = _history.asStateFlow()
 
@@ -238,7 +245,11 @@ object CallManager {
         session?.let { s ->
         app?.let { Ringer.stop(it) }
         // Rang during a voice room: "Join call and leave room" leaves it first, then answers.
-        if (RoomManager.busy) { RoomManager.leaveThen { exec.execute { if (session === s) answerNow(s, video) } }; return@execute }
+        if (RoomManager.busy) {
+            RoomManager.room.value?.let { r -> _backTo.value = BackTo(r.g, r.ch, r.title, s.callId) }
+            RoomManager.leaveThen { exec.execute { if (session === s) answerNow(s, video) } }
+            return@execute
+        }
         answerNow(s, video)
     } } }
     private fun answerNow(s: CallSession, video: Boolean) {
@@ -421,6 +432,8 @@ object CallManager {
                 if (inRoom != null) roomRing = null
                 if (result == "missed") Ringer.missed(a, nameOf(s.peerKey), s.peerKey,
                     if (inRoom == null) "" else if (inRoom.second.isEmpty()) "while you were in a voice room" else "while you were in ${inRoom.second}")
+                // Left a voice room to take this call: a way back to it (the end screen's button, and a notification).
+                _backTo.value?.takeIf { it.callId == s.callId }?.let { b -> Ringer.backToRoom(a, b.g, b.ch, b.title) }
             }
             // The ended state stays on screen for a moment, then goes.
             exec.schedule(Runnable { if (_call.value?.callId == s.callId && session == null) _call.value = null }, 2500, TimeUnit.MILLISECONDS)

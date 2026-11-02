@@ -36,7 +36,8 @@ Item {
         return !!hook(getters[id], [key], id !== "always")
     }
     readonly property string tint: tour ? "" : (revision, Chat.chats, hook("chatColor", [key], ""))
-    readonly property var colors: ["", "#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6"]
+    // Color vision: only the ones that look different (Theme.distinctSwatches).
+    readonly property var colors: Theme.distinctSwatches(["", "#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6"])
 
     readonly property var rows: page === "can" ? [
         { id: "always", label: "Always right away", toggle: true },
@@ -84,7 +85,7 @@ Item {
         revision++
     }
     function pickColor(dir) {
-        const at = Math.max(0, colors.indexOf(tint))
+        const at = Math.max(0, colors.findIndex(c => Theme.sameSwatch(c, tint)))
         setColor(colors[(at + dir + colors.length) % colors.length])
     }
 
@@ -215,13 +216,13 @@ Item {
                                     Repeater {
                                         model: modelData.swatches ? panel.colors : []
                                         Rectangle {
-                                            readonly property bool picked: (panel.tint || "") === modelData
+                                            readonly property bool picked: Theme.sameSwatch(panel.tint, modelData)
                                             width: Theme.px(24); height: width; radius: Theme.radius
                                             color: modelData === "" ? Theme.raised : modelData
                                             border.width: picked ? Theme.px(2) : 1
                                             border.color: picked ? Theme.text : Theme.line
                                             Accessible.role: Accessible.RadioButton
-                                            Accessible.name: modelData === "" ? "No color" : "Color " + index
+                                            Accessible.name: Theme.swatchName(modelData)
                                             Accessible.checked: picked
                                             Icon { visible: modelData === ""; anchors.centerIn: parent; name: "close"; size: Theme.px(12); color: Theme.textMuted }
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: panel.setColor(modelData) }

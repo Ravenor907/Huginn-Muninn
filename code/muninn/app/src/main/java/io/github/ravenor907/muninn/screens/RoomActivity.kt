@@ -221,7 +221,10 @@ class RoomActivity : ComponentActivity() {
 
         private fun open(c: Context, i: Intent) = c.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         /** Joins a voice room (or a group call going on) of [g]: the join sheet first, unless turned off. */
-        fun join(c: Context, g: String, ch: String) = open(c, Intent(c, RoomActivity::class.java).setAction(JOIN).putExtra(GROUP, g).putExtra(ROOM, ch))
+        fun join(c: Context, g: String, ch: String) = open(c, joinIntent(c, g, ch))
+        /** The intent [join] starts (for a notification: "Back to Hangout" after a call taken from the room). */
+        fun joinIntent(c: Context, g: String, ch: String): Intent = Intent(c, RoomActivity::class.java).setAction(JOIN).putExtra(GROUP, g).putExtra(ROOM, ch)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         /** Rings [keys] of [g] (everyone who can join, when empty) into a new group call. */
         fun call(c: Context, g: String, keys: List<String>) = open(c, Intent(c, RoomActivity::class.java).setAction(CALL).putExtra(GROUP, g).putExtra(KEYS, keys.toTypedArray()))
         /** Back to the room going on. */

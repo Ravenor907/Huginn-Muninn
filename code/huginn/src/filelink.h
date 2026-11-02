@@ -48,6 +48,8 @@ class FileLink : public QObject
     Q_PROPERTY(int runningCount READ runningCount NOTIFY changed)
     Q_PROPERTY(int pausedCount READ pausedCount NOTIFY changed)
     Q_PROPERTY(QString closeWarning READ closeWarning NOTIFY changed)
+    // Kept parts of their files whose cards were closed (cap f3): { count, bytes }, for Transfers' "Discard all".
+    Q_PROPERTY(QVariantMap keptAway READ keptAway NOTIFY changed)
 
 public:
     static const char kCap[];                   // "f1"
@@ -169,6 +171,8 @@ public:
     int runningCount() const;
     int pausedCount() const;
     QString closeWarning() const;
+    // The same with another word for what ends it ("Restarting"): whether it stops, or pauses and goes on later.
+    Q_INVOKABLE QString closeText(const QString &verb) const;
     // Cap f3: their app keeps a stopped file and goes on from there, and waits a day for a big file's answer.
     bool hasF3(const QString &peer) const { return resumes && resumes(peer); }
     // A failed file of mine that needs Direct calls with them (no shared Wi-Fi, too big for the relays).
@@ -182,6 +186,9 @@ public:
     Q_INVOKABLE void dismiss(const QString &id);
     Q_INVOKABLE void discard(const QString &id);
     Q_INVOKABLE double keptSize(const QString &id) const;
+    QVariantMap keptAway() const;
+    // Deletes every kept part whose card was closed (they'd go by themselves after kKeepDays).
+    Q_INVOKABLE void discardKept();
     Q_INVOKABLE bool hasF1(const QString &peer) const { return peerHasF1 && peerHasF1(peer); }
     // A file that came through the relays (a message with "file"): saved in Downloads. "" when saved.
     Q_INVOKABLE QString saveReceived(const QString &peer, const QString &msgId);
@@ -297,6 +304,8 @@ private:
     QHash<QString, Partial> m_partial;
     // Cards of mine whose Retry goes on from where it stopped (cap f3), kept across a restart with the parts.
     QSet<QString> m_resumable;
+    // The ones already retried by themselves this run (once each).
+    QSet<QString> m_autoTried;
     static constexpr int kKeepDays = 7;
     bool m_keptLoaded = false, m_keptSaved = false;
     // Read once the vault is open; written when a kept part or a resumable card comes or goes, and on quitting.

@@ -79,7 +79,8 @@ Rectangle {
         }
         setFall(key, v)
     }
-    readonly property var swatches: ["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"]
+    // Color vision: only the ones that look different (Theme.distinctSwatches).
+    readonly property var swatches: Theme.distinctSwatches(["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"])
 
     // Each row: { kind: "segmented"|"toggle"|"accent"|"swatches"|"grounds"|"button"|"size"|"slider"|"info", group, title, note, ... }.
     // A segmented row's value is Settings[key] (or Chat's), unless the row gives its own value.
@@ -160,7 +161,9 @@ Rectangle {
             // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
             { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk", note: GlobalKeys.talkNote },
             { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: "Talk key: " + TalkKey.keyName,
-              note: TalkKey.capturing ? "Press the new key" : "While you type in a text box, it types instead of talking", label: TalkKey.capturing ? "Press a key" : "Change" },
+              note: TalkKey.capturing ? "Press the new key. One that doesn't type, like Caps Lock or F13, talks while you type too"
+                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Caps Lock or F13, always talk"
+                    : "Talks even while you type", label: TalkKey.capturing ? "Press a key" : "Change" },
             { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Settings.pushToTalk,
               title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
@@ -179,7 +182,9 @@ Rectangle {
               note: GlobalKeys.capturing === 2 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 2 ? "Press keys" : "Change" },
             { group: "Talking", kind: "button", key: "resetKeys", hide: !GlobalKeys.changeable || (GlobalKeys.muteSequence === "Ctrl+Shift+M" && GlobalKeys.deafenSequence === "Ctrl+Shift+D"),
               title: "Mute and deafen keys", note: "Back to Ctrl+Shift+M and Ctrl+Shift+D", label: "Reset" },
-            { group: "Talking", kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds", note: "A short sound when the keys turn them on or off, heard over a game" },
+            { group: "Talking", kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds",
+              note: GlobalKeys.everywhere ? "A short sound when the keys turn them on or off, heard over a game"
+                  : "A short sound when the keys (or LB with Up or Down) turn them on or off" },
             { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
             { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" }
         ].filter(r => !r.hide)
@@ -608,13 +613,13 @@ Rectangle {
                 Repeater {
                     model: rowItem.r.kind === "swatches" ? page.swatches : []
                     Rectangle {
-                        readonly property bool mine: String(Profile.myColour).toUpperCase() === modelData
+                        readonly property bool mine: Theme.sameSwatch(Profile.myColour, modelData)
                         width: Theme.px(28); height: width; radius: width / 2
                         color: modelData
                         border.width: mine ? Theme.px(2) : 1
                         border.color: mine ? Theme.text : Theme.lineMuted
                         Accessible.role: Accessible.RadioButton
-                        Accessible.name: "Color " + (index + 1)
+                        Accessible.name: Theme.swatchName(modelData)
                         Accessible.checked: mine
                         Icon { visible: parent.mine; anchors.centerIn: parent; name: "check"; size: Theme.px(14); color: Theme.ground }
                         HoverHandler { cursorShape: Qt.PointingHandCursor }

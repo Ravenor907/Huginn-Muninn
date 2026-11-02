@@ -38,6 +38,9 @@ Window {
     readonly property int unreadTotal: touring || Vault.screenLocked ? 0
                                        : railItems.reduce((n, e) => n + (e.id === "dms" || e.kind === "group" ? (e.badge || 0) : 0), 0)
     title: unreadTotal > 0 ? "(" + unreadTotal + ") Huginn" : "Huginn"
+    // Windows also shows it as a badge on the taskbar button and in the tray icon's tooltip, with the tray's mute.
+    readonly property string unreadState: unreadTotal + (trayMuted ? " muted" : "")
+    onUnreadStateChanged: System.setUnreadState(app, unreadTotal, trayMuted)
     color: Theme.ground
 
     readonly property bool touring: System.tourDir.length > 0
@@ -193,7 +196,7 @@ Window {
         const parts = []
         if (Rooms.inRoom) parts.push("You're in " + (Rooms.groupName ? Rooms.groupName + " › " + Rooms.title : Rooms.title) + ". " + ending + " leaves it.")
         else if (Calls.inCall) parts.push("You're in a call" + (Calls.peerName ? " with " + Calls.peerName : "") + ". " + ending + " ends it.")
-        if (FileLink.closeWarning !== "") parts.push(FileLink.closeWarning)
+        if (FileLink.closeWarning !== "") parts.push(FileLink.closeText(ending))
         if (LocalSend.busy) parts.push(LocalSend.status + " " + ending + " now stops it partway.")
         return parts.join(" ")
     }
@@ -218,12 +221,16 @@ Window {
         if (fromX && !busy && Settings.closeAction === "quit") { lockAndQuit(); return }
         if (busy) {
             // A call, a voice room or a file on its way: Minimize is the main choice, as it keeps them going.
-            Ui.sure("Leave Huginn?", app.stakeText("Closing") + " Minimize keeps it going.", "Minimize", () => {
+            // Only paused files: nothing is going, so Minimize just keeps them.
+            const onlyPaused = files && !voice && !LocalSend.busy && FileLink.runningCount === 0
+            Ui.sure("Leave Huginn?", app.stakeText("Closing") + (onlyPaused ? " Minimize keeps it." : " Minimize keeps it going."), "Minimize", () => {
                 if (fromX && confirm.remember) Settings.closeAction = "minimize"
                 System.minimize(app)
             }, false, false)
             confirm.otherText = "Close anyway"
             confirm.otherCallback = lockAndQuit
+            // A file moving: Close anyway is red.
+            confirm.otherDanger = FileLink.runningCount > 0 || LocalSend.busy
             const wait = files ? app.waitChoice(locks ? "lock" : "quit") : null
             if (wait) {
                 confirm.extraText = wait.text
@@ -278,16 +285,22 @@ Window {
             app.waitIds = []
             // A file that stopped before it was done: Huginn stays, so it can be retried.
             if (failed.length > 0) {
-                Ui.say(failed[0].name + " stopped before it was done, so Huginn stays open.", true)
+                app.sayOutOfSight("Huginn didn't close", failed[0].name + " stopped before it was done, so Huginn stays open.", true)
                 return
             }
             // Paused while waiting: it would never finish, so Huginn stays (and says so) rather than cut it off.
             if (FileLink.pausedCount > 0) {
-                Ui.say(what === "restart" ? "A file is paused, so the update waits. Restart now is in Settings › About." : "A file is paused, so Huginn stays open.")
+                app.sayOutOfSight(what === "restart" ? "Huginn didn't restart" : "Huginn didn't close",
+                                  what === "restart" ? "A file is paused, so the update waits. Restart now is in Settings › About." : "A file is paused, so Huginn stays open.", false)
                 return
             }
             // Something else started meanwhile (a call, a voice room, another file): ask again rather than cut it off.
+            // Out of sight (minimized, or another app in front), a notification says Huginn didn't close.
             if (app.inVoice || LocalSend.busy || FileLink.closeWarning !== "") {
+                if (app.outOfSight())
+                    System.notifyNow(what === "restart" ? "Huginn didn't restart" : "Huginn didn't close",
+                                     (app.inVoice ? (Rooms.inRoom ? "You're in a voice room." : "You're in a call.")
+                                                  : "Something else is still on its way.") + " Open Huginn to choose.")
                 if (what === "restart") app.restartForUpdate()
                 else app.requestExit(false)
                 return
@@ -295,6 +308,15 @@ Window {
             if (what === "restart") Updater.restartToUpdate()
             else { if (what === "lock" && Vault.hasLock && !Vault.screenLocked) Vault.lockScreen(); app.quitNow() }
         }
+    }
+    // Huginn minimized, hidden or behind another app: a toast in the window wouldn't be seen.
+    function outOfSight() {
+        return Qt.application.state !== Qt.ApplicationActive || app.visibility === Window.Minimized || app.visibility === Window.Hidden
+    }
+    // A toast, and a system notification too while the window is out of sight.
+    function sayOutOfSight(title, text, bad) {
+        if (outOfSight()) System.notifyNow(title, text)
+        Ui.say(text, bad)
     }
     // Restart now (the update bar, Settings › About): a call, a voice room or a file on its way asks first, and the
     // update can wait for the file.
@@ -382,6 +404,8 @@ Window {
         // On the desktop the voice panel has the controls; a shared screen still shows above here.
         docked: voicePanel.visible
     }
+    // For the pages' voice room menus (Bigger / Smaller on someone's shared screen).
+    readonly property var screenBar: roomBar
 
     // ------------------------------------------------------------- the desktop panels
     // The page's own list column shows (ChatPage and GroupPage can hide theirs), and a group's member list.
@@ -922,23 +946,30 @@ Window {
     }
 
     // A message or missed call the system couldn't show as a notification (no notification service, or a game in front
-    // in game mode): the newest one waits here, under the top bar. It goes when its chat opens by any route, on A or B
-    // (the controller), or 10 seconds after Huginn is in front again.
+    // in game mode): the newest one waits here, under the top bar, with how many came. It goes when its chat opens by
+    // any route, on A or B (the controller), or 10 seconds after Huginn is in front again. With Huginn in front it's only
+    // a toast, so A keeps doing what it was doing.
     Rectangle {
         id: newsBanner
         property string title: ""
         property string body: ""
         property string where: ""
+        property int count: 0              // how many came since it showed (more than one: A opens Chats)
         property bool away: false          // it came while another window (a game) was in front
         function show(t, b, w) {
+            if (Qt.application.state === Qt.ApplicationActive && !visible) {
+                Ui.say(b !== "" ? t + ": " + b : t)
+                return
+            }
+            count = visible ? count + 1 : 1
             title = t; body = b; where = w
-            away = Qt.application.state !== Qt.ApplicationActive
+            away = true
             visible = true
             if (newsGone.running) newsGone.restart()
         }
-        function hide() { visible = false }
+        function hide() { visible = false; count = 0 }
         function open() {
-            const w = where
+            const w = count > 1 ? "" : where
             hide()
             if (!app.touring) Chat.showChat(w)
         }
@@ -997,7 +1028,8 @@ Window {
                 visible: text !== ""
                 width: parent.width
                 elide: Text.ElideRight
-                text: [newsBanner.away ? (System.gameMode ? "While you were playing" : "While you were away") : "",
+                text: [newsBanner.count > 1 ? newsBanner.count + (System.gameMode ? " new while you were playing" : " new while you were away")
+                       : newsBanner.away ? (System.gameMode ? "While you were playing" : "While you were away") : "",
                        app.padInUse ? "A: Open  B: Close" : ""].filter(x => x !== "").join("  ·  ")
                 color: Theme.accent
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
@@ -1127,7 +1159,7 @@ Window {
         function onShowChat(where) {
             if (newsBanner.visible && newsBanner.where === where) newsBanner.hide()
             if (Vault.screenLocked || where === "") { app.openPage("dms", {}); return }
-            if (where.startsWith("mirror:")) app.openPage("dms", { mirror: where.substring(7) })   // a chat from the phone
+            if (where.startsWith("mirror:")) app.openPage("dms", { mirror: where.substring(7) })   // a chat from the phone ("<peer>#<channel>" opens that tab)
             else if (where.startsWith("g:")) {
                 const parts = where.split(":")
                 app.openPage("g:" + parts[1], parts.length > 2 ? { channel: parts.slice(2).join(":"), zone: "messages" } : {})
@@ -1147,7 +1179,10 @@ Window {
                 // A local mute: Do not disturb (seen by others) is only ever set from your card.
                 if (Ui.myStatus === "dnd") { Ui.say("Do not disturb is on. Your card changes it."); return }
                 app.trayMuted = !app.trayMuted
-                Ui.say(app.trayMuted ? "Notifications are muted on this computer." : "Notifications are on again.")
+                const said = app.trayMuted ? "Notifications are muted on this computer until Huginn restarts." : "Notifications are on again."
+                // From the tray with the window out of sight, a toast in it wouldn't be seen.
+                if (Qt.application.state !== Qt.ApplicationActive) System.notifyNow("Huginn", said)
+                Ui.say(said)
                 return
             }
             // A call, a voice room or a transfer: Huginn comes up and asks first, as the X does.
@@ -1161,7 +1196,9 @@ Window {
             app.quitNow()
         }
         function onArrived(name, text, key) {
-            if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
+            // A phone group's message names its channel ("mirror:<peer>#<channel>"): on screen as that tab, or as one list.
+            const shown = Chat.openChat === key || Chat.openChat.startsWith("mirror:") && key.startsWith(Chat.openChat + "#")
+            if (shown && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
             // Muted, hidden or reduced (Chat.notifyFor): no toast either.
             if (!Chat.alerted(key)) return
             // An @mention always says so (without the text unless previews are on).
@@ -1199,6 +1236,13 @@ Window {
     Connections {
         target: Rooms
         function onChanged() { if (!Rooms.inRoom) { app.talkWentBehind = false; app.talkToldOnce = false } }
+    }
+    // The talk key typed into a text box during a voice room (once a run): say how to talk while typing.
+    Connections {
+        target: TalkKey
+        function onTypedInstead() {
+            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like Caps Lock or F13 (Settings › Calls).")
+        }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen. Report a bug stays, behind its own lock
     // (Labs › Performance check's results stay too, for when it's opened again).
@@ -1258,7 +1302,8 @@ Window {
         if (profileCard.visible) return profileCard
         if (meCard.visible) return meCard
         if (rail.menuOpen) return rail
-        if (newsBanner.visible && app.padInUse) return newsBanner
+        // Only one that came while Huginn was behind takes the buttons (a passing notice never changes what A does).
+        if (newsBanner.visible && newsBanner.away && app.padInUse) return newsBanner
         return null
     }
     function page() { return pageLoader.item && pageLoader.status === Loader.Ready ? pageLoader.item : null }
@@ -1287,9 +1332,17 @@ Window {
     }
     // In a voice room or call: hold LB, then Up mutes and Down deafens (from any page).
     readonly property bool inVoice: Rooms.inRoom || Calls.inCall
+    // The same short sounds as the mute and deafen keys (Settings › Calls › Mute and deafen sounds).
     function voiceKey(b) {
-        if (b === "lb+up") { Ui.toggleMic(); Ui.say(Ui.micMuted ? "Muted." : "Unmuted.") }
-        else { Ui.toggleDeaf(); Ui.say(Ui.deafened ? "Deafened." : "Undeafened.") }
+        if (b === "lb+up") {
+            Ui.toggleMic()
+            GlobalKeys.cue(!Ui.micMuted)
+            Ui.say(Ui.micMuted ? "Muted." : "Unmuted.")
+        } else {
+            Ui.toggleDeaf()
+            GlobalKeys.cue(!Ui.deafened, true)
+            Ui.say(Ui.deafened ? "Deafened." : "Undeafened.")
+        }
     }
     // LB on its own goes to the next section when it's let go; held, the D-pad's left and right
     // go back and forward instead (and it doesn't move on when let go).
@@ -1303,6 +1356,8 @@ Window {
         if (b === "lb+up" || b === "lb+down") { if (inVoice) voiceKey(b); return }
         const o = overlay()
         if (o) { if (o.handleButton) o.handleButton(b); return }
+        // Someone's shared screen made bigger: B makes it smaller again first.
+        if (b === "b" && roomBar.screenBig && roomBar.screenOn) { roomBar.screenBig = false; return }
         const p = page()
         // The page has LB right now (the chat lock's pattern or password).
         const pageShoulders = p && p.ownsShoulders && focusZone === "content"

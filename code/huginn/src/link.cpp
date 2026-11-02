@@ -178,6 +178,10 @@ void Link::ensureLoaded() const
             m.msgs << mOf(v.toObject());
         // Read up to: kept from before this was saved, everything counts as read.
         m.readAt = c.contains(QStringLiteral("r")) ? qint64(c.value(QStringLiteral("r")).toDouble()) : m.msgs.isEmpty() ? 0 : m.msgs.last().time;
+        const QJsonObject seen = c.value(QStringLiteral("s")).toObject();
+        for (auto s = seen.begin(); s != seen.end(); ++s)
+            if (qint64(s.value().toDouble()) > m.readAt)
+                m.seen.insert(s.key(), qint64(s.value().toDouble()));
         if (!m.peer.isEmpty())
             m_mirror.insert(m.peer, m);
     }
@@ -271,8 +275,15 @@ void Link::saveMirror()
                 j.insert(QStringLiteral("ed"), double(x.edited));
             a.append(j);
         }
-        o.insert(m.peer, QJsonObject{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("d"), m.days}, {QStringLiteral("msgs"), a},
-                                     {QStringLiteral("r"), double(m.readAt)}});
+        QJsonObject c{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("d"), m.days}, {QStringLiteral("msgs"), a},
+                      {QStringLiteral("r"), double(m.readAt)}};
+        if (!m.seen.isEmpty()) {
+            QJsonObject seen;
+            for (auto it = m.seen.cbegin(); it != m.seen.cend(); ++it)
+                seen.insert(it.key(), double(it.value()));
+            c.insert(QStringLiteral("s"), seen);
+        }
+        o.insert(m.peer, c);
     }
     m_chat->m_vault->write(QStringLiteral("mirror.json"), compact(o));
     Q_EMIT changed();
@@ -348,11 +359,21 @@ QVariantMap Link::phone() const
 
 namespace
 {
-int unreadIn(const QList<Link::M> &msgs, qint64 readAt)
+// A message's channel ("main" when the phone gave none).
+QString chOf(const Link::M &x)
+{
+    return x.ch.isEmpty() ? QStringLiteral("main") : x.ch;
+}
+// Unread: after readAt, and in a group after its channel's own seen time (its tab was on screen here).
+bool unreadMsg(const Link::M &x, qint64 readAt, const QHash<QString, qint64> &seen)
+{
+    return !x.mine && x.time > qMax(readAt, seen.value(chOf(x)));
+}
+int unreadIn(const QList<Link::M> &msgs, qint64 readAt, const QHash<QString, qint64> &seen)
 {
     int n = 0;
     for (const Link::M &x : msgs)
-        if (!x.mine && x.time > readAt)
+        if (unreadMsg(x, readAt, seen))
             n++;
     return n;
 }
@@ -365,7 +386,7 @@ int Link::unread() const
         return 0;
     int n = 0;
     for (const Mirror &m : std::as_const(m_mirror))
-        if (!m_chat->isMuted(QStringLiteral("mirror:") + m.peer) && unreadIn(m.msgs, m.readAt) > 0)
+        if (!m_chat->isMuted(QStringLiteral("mirror:") + m.peer) && unreadIn(m.msgs, m.readAt, m.seen) > 0)
             ++n;   // chats, like the badge's own chats (not messages)
     return n;
 }
@@ -670,12 +691,22 @@ QVariantList Link::mirror() const
         }
         return chans;
     };
+    // The group's about text and rules (cap g3), from its signed state; paragraphs as lines.
+    auto aboutOf = [](const Item &i) {
+        return i.v.value(QStringLiteral("st")).toObject().value(QStringLiteral("about")).toString().replace(QChar(0x2029), QLatin1Char('\n')).left(600);
+    };
+    // Tabs only once the phone has sent an item with its channel (J4-2): an older Muninn sends none, so everything would
+    // land in the first tab and the others would stay empty.
+    const bool tabbed = std::any_of(all.cbegin(), all.cend(), [](const Mirror *m) {
+        return std::any_of(m->msgs.cbegin(), m->msgs.cend(), [](const M &x) { return !x.ch.isEmpty(); });
+    });
     QVariantList out;
     for (const Mirror *m : all) {
         // Cap l1: the name the account gives (a nickname first), the folders it's in, and my role in a group.
         QString name = m->name, role;
         QStringList folders;
         QVariantList chans;
+        QString about;
         if (m_phone.l1) {
             const bool group = m->peer.startsWith(QLatin1String("g:"));
             const Item i = m_acct.value(group ? QStringLiteral("group|") + m->peer.mid(2) : QStringLiteral("contact|") + m->peer);
@@ -685,7 +716,9 @@ QVariantList Link::mirror() const
                 if (group) {
                     const QString r = jstr(i.v, "role");
                     role = r == QLatin1String("owner") ? QStringLiteral("Owner") : r == QLatin1String("admin") ? QStringLiteral("Admin") : QStringLiteral("Member");
-                    chans = chansOf(i);
+                    if (tabbed)
+                        chans = chansOf(i);
+                    about = aboutOf(i);
                 }
             }
             for (const Item &f : std::as_const(m_acct))
@@ -693,12 +726,28 @@ QVariantList Link::mirror() const
                     folders << jstr(f.v, "n");
             folders.sort(Qt::CaseInsensitive);
         }
+        // Per channel: how many are unread, and how many of those are for me (an @mention, or a reply to one of mine).
+        QVariantMap tabs;
+        if (chans.size() > 1) {
+            QHash<QString, int> n, me;
+            for (const M &x : m->msgs) {
+                if (!unreadMsg(x, m->readAt, m->seen))
+                    continue;
+                n[chOf(x)]++;
+                if ((!m_meName.isEmpty() && RichWire::mentions(x.text, m_meName))
+                    || (!x.re.isEmpty() && std::any_of(m->msgs.cbegin(), m->msgs.cend(), [&](const M &y) { return y.id == x.re && y.mine; })))
+                    me[chOf(x)]++;
+            }
+            for (auto it = n.cbegin(); it != n.cend(); ++it)
+                tabs.insert(it.key(), QVariantMap{{QStringLiteral("n"), it.value()}, {QStringLiteral("me"), me.value(it.key())}});
+        }
         const M *l = m->msgs.isEmpty() ? nullptr : &m->msgs.last();
         out << QVariantMap{{QStringLiteral("peer"), m->peer}, {QStringLiteral("name"), name},
                            {QStringLiteral("last"), !l ? QString() : (l->mine ? QStringLiteral("You: ") : l->from.isEmpty() ? QString() : l->from + QStringLiteral(": ")) + l->text.left(80)},
                            {QStringLiteral("time"), double(last(m))}, {QStringLiteral("role"), role}, {QStringLiteral("folders"), folders.join(QStringLiteral(", "))},
-                           {QStringLiteral("unread"), unreadIn(m->msgs, m->readAt)}, {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + m->peer)},
-                           {QStringLiteral("group"), m->peer.startsWith(QLatin1String("g:"))}, {QStringLiteral("chans"), chans}};
+                           {QStringLiteral("unread"), unreadIn(m->msgs, m->readAt, m->seen)}, {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + m->peer)},
+                           {QStringLiteral("group"), m->peer.startsWith(QLatin1String("g:"))}, {QStringLiteral("chans"), chans},
+                           {QStringLiteral("tabs"), tabs}, {QStringLiteral("about"), about}};
     }
     // Cap l1: a group on the phone with nothing here yet (just joined, or no messages) still shows, at the end.
     if (m_phone.l1) {
@@ -712,7 +761,8 @@ QVariantList Link::mirror() const
                                  {QStringLiteral("role"), r == QLatin1String("owner") ? QStringLiteral("Owner") : r == QLatin1String("admin") ? QStringLiteral("Admin") : QStringLiteral("Member")},
                                  {QStringLiteral("folders"), QString()}, {QStringLiteral("unread"), 0},
                                  {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + peer)}, {QStringLiteral("group"), true},
-                                 {QStringLiteral("chans"), chansOf(i)}};
+                                 {QStringLiteral("chans"), tabbed ? chansOf(i) : QVariantList()},
+                                 {QStringLiteral("tabs"), QVariantMap()}, {QStringLiteral("about"), aboutOf(i)}};
         }
     }
     return out;
@@ -1639,7 +1689,10 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
                 && ((!m_meName.isEmpty() && RichWire::mentions(x.text, m_meName))
                     || (!x.re.isEmpty() && std::any_of(c.msgs.cbegin(), c.msgs.cend(), [&](const M &y) { return y.id == x.re && y.mine; })));
             const QString who = x.from.isEmpty() ? c.name : x.from + (toMe ? QStringLiteral(" mentioned you in ") : QStringLiteral(" in ")) + c.name;
-            Q_EMIT m_chat->arrived(who, x.text.left(60), QStringLiteral("mirror:") + peer);
+            // A group's message names its channel ("mirror:<peer>#<channel>"): only that tab on screen counts as looking
+            // (main.cpp), and a click opens that tab. Mute and Reduce notifications go by the chat (Chat::notifyFor).
+            const bool group = peer.startsWith(QLatin1String("g:"));
+            Q_EMIT m_chat->arrived(who, x.text.left(60), QStringLiteral("mirror:") + peer + (group ? QStringLiteral("#") + chOf(x) : QString()));
         }
         return true;
     }
@@ -2224,15 +2277,41 @@ bool Link::startChat(const QString &peer)
     return true;
 }
 
-void Link::markRead(const QString &peer)
+void Link::markRead(const QString &peer, const QString &ch)
 {
     ensureLoaded();
     // Opened: with Reduce notifications, its next message notifies again (as this computer's own chats do).
     m_chat->m_notified.remove(QStringLiteral("mirror:") + peer);
     auto it = m_mirror.find(peer);
-    if (it == m_mirror.end() || it->msgs.isEmpty() || it->msgs.last().time <= it->readAt)
+    if (it == m_mirror.end() || it->msgs.isEmpty())
         return;
-    it->readAt = it->msgs.last().time;
+    qint64 upTo = it->msgs.last().time;
+    bool seenMoved = false;
+    if (!ch.isEmpty()) {
+        // One tab on screen: that channel is read. The chat (here and on the phone) only up to just before the first
+        // message still unread in another channel, so that one stays unread until its own tab is viewed.
+        qint64 inCh = 0;
+        for (const M &x : std::as_const(it->msgs))
+            if (chOf(x) == ch)
+                inCh = qMax(inCh, x.time);
+        if (inCh > qMax(it->readAt, it->seen.value(ch))) {
+            it->seen.insert(ch, inCh);
+            seenMoved = true;
+        }
+        for (const M &x : std::as_const(it->msgs))
+            if (unreadMsg(x, it->readAt, it->seen)) {
+                upTo = x.time - 1;
+                break;
+            }
+    }
+    if (upTo <= it->readAt) {
+        if (seenMoved)
+            saveMirror();
+        return;
+    }
+    it->readAt = upTo;
+    for (auto s = it->seen.begin(); s != it->seen.end();)
+        s = s.value() <= upTo ? it->seen.erase(s) : std::next(s);
     saveMirror();
     // The phone marks it read too (an older phone ignores "read").
     if (!m_phone.key.isEmpty() && m_phone.ok && !m_phone.gone) {

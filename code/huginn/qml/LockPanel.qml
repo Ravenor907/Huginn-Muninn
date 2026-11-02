@@ -15,6 +15,8 @@ Item {
     // Setting one: a password (a passphrase) with a mouse and keyboard; the pattern with a controller or on a handheld.
     property bool usePattern: asks ? Vault.usesPattern : (System.handheld || System.gameMode || (!!Ui.main && Ui.main.padInUse))
     property var first: null
+    // A controller pattern is under way (B clears it), for the button legend.
+    readonly property bool drawing: usePattern && pad.drawing
     property string note: ""
     property bool bad: false
     property int wait: Vault.waitSeconds
@@ -128,7 +130,9 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: panel.asks
                   ? (panel.lead !== "" ? panel.lead + "\n" : "") + (panel.usePattern ? "Draw your pattern" : "Type your password")
-                  : panel.mode === "setup" ? "Keeps your chats private on this computer. It can't be recovered, so pick one you'll remember. A few words make a good password." : "No way to recover it."
+                  : panel.mode === "setup" ? (panel.usePattern ? "Keeps your chats private on this computer. Connect at least 6 dots. It can't be recovered, so pick one you'll remember."
+                                                                : "Keeps your chats private on this computer. It can't be recovered, so pick one you'll remember. A few words make a good password.")
+                  : "No way to recover it."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
         Row {

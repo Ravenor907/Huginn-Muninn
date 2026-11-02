@@ -47,7 +47,15 @@ Item {
             path: "", paused: false, held: false }) })
         return out
     }
-    readonly property var rows: tour ? samples : nearbyRows.concat(FileLink.transfers.slice().reverse())
+    // What came of their files whose cards were closed (kept 7 days so they go on): one line, with Discard all.
+    readonly property var keptRow: {
+        const k = FileLink.keptAway
+        if (tour || !k || !k.count) return []
+        return [{ id: "kept", kept: true, local: true, name: k.count === 1 ? "1 part kept" : k.count + " parts kept", size: k.bytes, done: 0,
+                  mine: false, state: "kept", kind: "", chat: "", peer: "", route: "", pace: "", where: "", folder: "",
+                  note: "Of closed files, so they go on if sent again", path: "", paused: false, held: false }]
+    }
+    readonly property var rows: tour ? samples : nearbyRows.concat(FileLink.transfers.slice().reverse(), keptRow)
 
     function acts(t) {
         if (!t) return []
@@ -60,6 +68,7 @@ Item {
             else out.push({ label: "Retry", act: "", kind: "accent" }, { label: "Close", act: "", kind: "normal" })
             return out
         }
+        if (t.kept) return [{ label: "Discard all", act: "discardkept", kind: "danger" }]
         if (t.local) {
             if (t.state === "sending") out.push({ label: "Cancel", act: t.mine ? "lsout" : "lsin", kind: "danger" })
             return out
@@ -105,6 +114,9 @@ Item {
             Ui.sure("Throw away what came?", "The " + pct + "% of " + t.name + " that came (" + FileLink.size(FileLink.keptSize(t.id))
                     + ") is deleted. It starts over if they send it again. Close keeps it for 7 days instead.", "Discard", () => FileLink.discard(t.id), false, true)
         }
+        else if (a === "discardkept")
+            Ui.sure("Throw away the kept parts?", "What came of the closed files (" + FileLink.size(t.size)
+                    + ") is deleted. They start over if they're sent again.", "Discard all", () => FileLink.discardKept(), false, true)
         else if (a === "open") { if (!FileLink.openFile(t.path)) Ui.say("Nothing on this computer opens this kind of file, or it was moved.", true) }
         else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It isn't there any more.", true) }
         else if (a === "direct") PeopleActions.allowDirect(t.peer)
@@ -127,6 +139,7 @@ Item {
     }
     // Who it's from or to, the chat, and where it goes.
     function whoLine(t) {
+        if (t.kept) return "They go by themselves after 7 days"
         if (t.mine) return "To " + t.chat
         const from = t.local || tour ? t.chat : Chat.nameOf(t.peer)
         const via = !t.local && t.where.indexOf("g:") === 0 ? " in " + t.chat : ""

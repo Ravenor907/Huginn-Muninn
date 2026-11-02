@@ -189,7 +189,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                             onLongClick = { modFor = p }) { modFor = p }
                         .semantics {
                         contentDescription = name + (if (p.speaking) ", speaking" else "") + (if (p.muted) ", muted" else "") +
-                            (if (mutedByMe) ", muted by you, tap to unmute" else "") +
+                            (if (mutedByMe) ", muted by you, tap for options" else "") +
                             (if (p.state == "connecting") ", connecting" else if (p.state == "reconnecting") ", reconnecting" else "")
                     }, horizontalAlignment = Alignment.CenterHorizontally) {
                         Box {

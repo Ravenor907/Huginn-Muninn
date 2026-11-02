@@ -13,15 +13,22 @@ Item {
     property int current: 0
     property var callback: null
     property var backFn: null
+    // Marking several (Huginn's own file list): mark = { toggle: (url, on) => total marked, total }. Y marks the row
+    // (rows with markable: true), and A then answers as usual, for the caller to send everything marked.
+    property var markFn: null
+    property int markTotal: 0
+    readonly property int headerCount: entries.filter(e => !!e.header).length
 
     visible: false
     anchors.fill: parent
 
     // sections = [{ header, items: [{ name, detail, url, icon, check, danger }] }]; back: the menu this came from.
-    function openList(t, sections, cb, back) {
+    function openList(t, sections, cb, back, mark) {
         title = t
         callback = cb
         backFn = back || null
+        markFn = mark ? mark.toggle : null
+        markTotal = mark ? mark.total || 0 : 0
         const out = []
         sections.forEach(sec => {
             if (!sec.items.length) return
@@ -38,10 +45,23 @@ Item {
         if (!e || e.header || e.slider) return
         visible = false
         backFn = null
+        markFn = null
         const cb = callback
         if (cb) cb(e.url)
     }
-    function close() { visible = false; backFn = null }
+    function close() { visible = false; backFn = null; markFn = null }
+    // Y: mark or unmark the row (a file to send with others).
+    function mark() {
+        const e = entries[current]
+        if (!markFn || !e || !e.markable) return
+        const out = entries.slice()
+        out[current] = Object.assign({}, e, { check: !e.check })
+        const at = current
+        entries = out
+        current = at
+        list.positionViewAtIndex(at, ListView.Contain)
+        markTotal = markFn(e.url, !e.check)
+    }
     // B: back to the menu this sub-page came from, or closed.
     function goBack() {
         const f = backFn
@@ -259,7 +279,14 @@ Item {
             anchors.bottom: parent.bottom
             width: parent.width
             color: "transparent"
-            prompts: [{ key: "a", label: "Choose" }, { key: "b", label: picker.backFn ? "Back" : "Close" }]
+            prompts: {
+                const e = picker.entries[picker.current]
+                const out = [{ key: "a", label: picker.markTotal > 0 && e && e.markable ? "Send " + (picker.markTotal + (e.check ? 0 : 1)) : "Choose" }]
+                if (picker.markFn) out.push({ key: "y", label: "Mark" })
+                if (picker.headerCount > 1) out.push({ key: "lb", label: "Next part" })
+                out.push({ key: "b", label: picker.backFn ? "Back" : "Close" })
+                return out
+            }
             onPrompt: k => picker.handleButton(k)
         }
     }
@@ -281,6 +308,7 @@ Item {
             break
         }
         case "a": pick(); break
+        case "y": mark(); break
         case "b": goBack(); break
         }
         return true

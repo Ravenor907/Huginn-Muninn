@@ -636,7 +636,11 @@ int main(int argc, char *argv[])
     }
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault, linked, system](const QString &name, const QString &text, const QString &key) {
-        const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
+        // A linked phone's group names its channel ("mirror:<peer>#<channel>"): looking only when that tab is on screen,
+        // or when the group shows as one list ("mirror:<peer>").
+        const QString shown = chat->property("openChat").toString();
+        const bool onScreen = shown == key || (shown.startsWith(QLatin1String("mirror:")) && key.startsWith(shown + QLatin1Char('#')));
+        const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && onScreen;
         // A muted chat makes no sound, nor someone nearby put away with Hide; an archived one comes back to the list.
         // Reduce notifications: one per chat until it's opened (a group: mentions and replies only, when set so).
         // Do not disturb: no sound and no notification either.
@@ -654,12 +658,13 @@ int main(int argc, char *argv[])
                 shortText = shortText.left(99) + QStringLiteral("…");
             const QString title = mode >= 1 ? name : QStringLiteral("Huginn");
             const QString body = mode == 2 ? shortText : QStringLiteral("New message");
-            // A click opens that chat (a group's "g:<group>:<channel>"; an invite opens the chat list).
+            // A click opens that chat (a group's "g:<group>:<channel>", a phone group's "mirror:<peer>#<channel>"; an
+            // invite opens the chat list).
             const QString where = key.startsWith(QLatin1String("invite:")) ? QString() : key;
             auto open = [chat, where] { Q_EMIT chat->showChat(where); };
             // No system notification here (or, in game mode, none that shows over the game): a banner in the window.
             auto fallback = [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); };
-            Platform::notify(title, body, 6000, open, fallback);
+            Platform::notify(title, body, 6000, open, fallback, where);
             if (system->gameMode())
                 fallback();
         }
@@ -674,7 +679,7 @@ int main(int argc, char *argv[])
         const QString title = hide ? QStringLiteral("Huginn") : QStringLiteral("Missed call");
         const QString body = hide ? QStringLiteral("Missed call") : text.isEmpty() ? who : text;
         auto fallback = [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); };
-        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); }, fallback);
+        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); }, fallback, where);
         // Game mode: the system's notification may not show over the game, so the banner waits in the window too.
         if (system->gameMode())
             fallback();
@@ -714,10 +719,20 @@ int main(int argc, char *argv[])
         const QString title = hide ? QStringLiteral("Huginn") : QStringLiteral("File waiting");
         const QString body = hide ? QStringLiteral("A file is waiting for you") : text;
         auto fallback = [chat, title, body, where] { Q_EMIT chat->banner(title, body, where); };
-        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); }, fallback);
+        Platform::notify(title, body, 15000, [chat, where] { Q_EMIT chat->showChat(where); }, fallback, where);
         if (system->gameMode())
             fallback();
     });
+    // Windows: a chat open with Huginn in front takes its notifications off the list a later click guesses from
+    // (Platform::forgetChat), so a click from the notification list opens the one chat still unread. A phone group
+    // shown as one list is open as "mirror:<peer>", and forgetChat takes every "mirror:<peer>#<channel>" with it; a tab
+    // ("mirror:<peer>#<channel>") takes only its own.
+    auto forgetOpen = [chat] {
+        if (QGuiApplication::applicationState() == Qt::ApplicationActive)
+            Platform::forgetChat(chat->property("openChat").toString());
+    };
+    QObject::connect(chat, &Chat::changed, chat, forgetOpen);
+    QObject::connect(qApp, &QGuiApplication::applicationStateChanged, chat, forgetOpen);
     // Windows: the tray icon from the start, with Open, Mute notifications, Lock and close and Quit (Main.qml answers).
     if (!quiet)
         Platform::setUpTray([] { return Settings::silenced(); }, [vault] { return vault->hasLock() && !vault->screenLocked(); },

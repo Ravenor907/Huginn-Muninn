@@ -295,6 +295,12 @@ object FileLink {
     private class Partial(val peer: String, val sha: String, val size: Long, val group: String, val file: File, val below: Int,
                           val name: String = "", val time: Long = System.currentTimeMillis())
     private val partials = ConcurrentHashMap<String, Partial>()
+    /** Kept parts whose card was closed: the part stays (it goes on from there), its card doesn't come back on a restart. */
+    private val closedKept: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** A stopped file of theirs whose part is kept: its card offers Close (keeps it) and Discard (asks, then deletes it). */
+    fun isKept(id: String) = partials.containsKey(id)
+    /** How much of a kept file came (bytes), for Discard's question. */
+    fun keptBytes(id: String): Long = partials[id]?.let { minOf(it.size, it.below.toLong() * CHUNK) } ?: 0L
     private fun partialFor(peer: String, sha: String, size: Long, group: String): String? =
         if (host?.resumes(peer) != true) null
         else partials.entries.firstOrNull { (_, p) -> p.peer == peer && p.sha == sha && p.size == size && p.group == group && p.file.isFile }?.key
@@ -303,11 +309,13 @@ object FileLink {
 
     /**
      * Cap f3: the kept parts from before a restart (and their cards), read once the vault is open. Older than
-     * [KEEP_DAYS], or with the part file gone: dropped.
+     * [KEEP_DAYS], or with the part file gone: dropped. My own files that can be sent again (Retry) come back too, as
+     * stopped cards: Android may close Muninn in the middle of a big one.
      */
     fun loadKept() {
         val h = host ?: return
-        val a = try { h.readKept()?.let { JSONObject(it).optJSONArray("parts") } } catch (_: Exception) { null } ?: return
+        val saved = try { h.readKept()?.let { JSONObject(it) } } catch (_: Exception) { null } ?: return
+        val a = saved.optJSONArray("parts") ?: JSONArray()
         val oldest = System.currentTimeMillis() - KEEP_MS
         var dropped = false
         for (i in 0 until a.length()) {
@@ -322,19 +330,52 @@ object FileLink {
                 o.optString("name"), o.optLong("time"))
             if (p.peer.isEmpty() || p.sha.isEmpty() || p.size <= 0) { f.delete(); dropped = true; continue }
             partials[id] = p
+            if (o.optBoolean("closed")) { closedKept.add(id); continue }
             if (_all.value[id] == null) _all.value = _all.value + (id to Progress(id, p.peer, p.name.ifEmpty { "A file" }, p.size, false, "failed",
                 minOf(p.size, p.below.toLong() * CHUNK), note = stoppedNote(p, h.nameOf(p.peer)), group = p.group, time = p.time))
+        }
+        val outs = saved.optJSONArray("outs") ?: JSONArray()
+        for (i in 0 until outs.length()) {
+            val o = outs.optJSONObject(i) ?: continue
+            val id = o.optString("id")
+            val fileName = o.optString("file")
+            // Only a copy of ours, by its plain name in the cache (as sendFileFrom makes them).
+            val f = if (fileName.startsWith("out-") && !fileName.contains('/') && !fileName.contains("..")) File(h.cacheDir(), fileName) else null
+            if (id.isEmpty() || again.containsKey(id) || _all.value[id] != null) continue
+            val peer = o.optString("peer")
+            if (f == null || !f.isFile || peer.isEmpty() || o.optLong("time") < oldest) { f?.delete(); dropped = true; continue }
+            val name = o.optString("name").ifEmpty { "file" }
+            val g = o.optString("group")
+            again[id] = Triple(peer, f, name)
+            if (g.isNotEmpty()) againGroup[id] = g
+            _all.value = _all.value + (id to Progress(id, peer, name, f.length(), true, "failed",
+                note = o.optString("note").ifEmpty { "Stopped when Muninn closed. Retry sends it again." }, group = g, time = o.optLong("time")))
         }
         if (dropped) saveKept()
     }
 
-    /** Cap f3: writes the kept parts' list (when one comes or goes). */
+    /** My own cards that can be sent again (Retry): their copy in the cache, who to and the group, for [saveKept]. */
+    private fun againJson(h: Host): JSONArray {
+        val dir = h.cacheDir().absolutePath
+        val a = JSONArray()
+        for ((id, t) in again) {
+            val f = t.second
+            if (f.parentFile?.absolutePath != dir || !f.name.startsWith("out-") || !f.isFile) continue
+            val p = _all.value[id]
+            a.put(JSONObject().put("id", id).put("peer", t.first).put("file", f.name).put("name", t.third).put("group", againGroup[id].orEmpty())
+                .put("time", p?.time ?: f.lastModified()).put("note", if (p?.state == "failed") p.note else ""))
+        }
+        return a
+    }
+
+    /** Cap f3: writes the kept parts' list (when one comes or goes), with my own files that can be sent again. */
     private fun saveKept() {
         val h = host ?: return
         val a = JSONArray()
+        closedKept.retainAll(partials.keys)
         for ((id, p) in partials) a.put(JSONObject().put("id", id).put("peer", p.peer).put("sha", p.sha).put("size", p.size).put("group", p.group)
-            .put("file", p.file.name).put("below", p.below).put("name", p.name).put("time", p.time))
-        try { h.writeKept(JSONObject().put("parts", a).toString()) } catch (_: Exception) {}
+            .put("file", p.file.name).put("below", p.below).put("name", p.name).put("time", p.time).apply { if (id in closedKept) put("closed", true) })
+        try { h.writeKept(JSONObject().put("parts", a).put("outs", againJson(h)).toString()) } catch (_: Exception) {}
     }
 
     /** A file of mine already hashed (path, size, last change): Retry doesn't read it all again. */
@@ -359,6 +400,7 @@ object FileLink {
         if (direct) directIds.add(id)
         if (retry != null) { again[id] = Triple(peer, retry, name); if (group.isNotEmpty()) againGroup[id] = group }
         put(Progress(id, peer, name, size, true, "failed", note = why, group = group))
+        if (retry != null) saveKept()
         host?.notice("$name didn't go. $why")
     }
 
@@ -415,22 +457,35 @@ object FileLink {
         refresh(id)
     }
 
-    /** Close: a finished or failed card goes. */
+    /**
+     * Close: a finished or failed card goes. A stopped file of theirs keeps what came (as Huginn does): it still goes on
+     * from there if they send it again within [KEEP_DAYS] days. [discard] throws it away.
+     */
     fun dismiss(id: String) {
         val p = _all.value[id] ?: return
         if (FileText.running(p.state)) return
-        partials.remove(id)?.let { it.file.delete(); saveKept() }   // closing a stopped file of theirs lets go of what came of it
+        if (partials.containsKey(id)) closedKept.add(id)
         directIds.remove(id)
-        again.remove(id)?.second?.delete()
+        val wasAgain = again.remove(id)?.second?.delete() != null
         againGroup.remove(id)
         _all.value = _all.value - id
+        if (wasAgain || id in closedKept) saveKept()
+    }
+
+    /** Discard: a kept part is deleted (it starts over if they send it again), and its card goes. Asked first by the card. */
+    fun discard(id: String) {
+        partials.remove(id)?.let { it.file.delete() }
+        closedKept.remove(id)
+        saveKept()
+        dismiss(id)
     }
 
     /** A card of mine whose file went over the internet route instead: the chat's own message takes over from here. */
     fun handedOff(id: String) {
-        again.remove(id)
+        val had = again.remove(id) != null
         againGroup.remove(id)
         _all.value = _all.value - id
+        if (had) saveKept()
     }
 
     /** Cancel shows: mine while it runs, theirs while it comes straight (one over the internet route just arrives). */
@@ -444,6 +499,7 @@ object FileLink {
         val t = again.remove(id) ?: return null
         directIds.remove(id)
         _all.value = _all.value - id
+        saveKept()
         return t.takeIf { it.second.isFile }
     }
     fun retryGroup(id: String): String = againGroup.remove(id).orEmpty()
@@ -469,6 +525,7 @@ object FileLink {
             again.remove(id)
             againGroup.remove(id)
             _all.value = _all.value - id   // the chat's own message takes over from here
+            saveKept()
             h.relay(peer, file, name)?.let { failed(peer, name, file.length(), it, id) }
             return
         }
@@ -509,6 +566,7 @@ object FileLink {
         again[id] = Triple(peer, file, name)
         if (group.isNotEmpty()) againGroup[id] = group
         put(Progress(id, peer, name, size, true, "connecting", group = group, route = if (lanOnly) Sharing.routeLabel("direct") else ""))
+        saveKept()   // closed by Android part way, it comes back as a stopped card with Retry
         work.execute {
             try {
                 val known = hashed[file.absolutePath]
@@ -703,6 +761,7 @@ object FileLink {
     private fun fail(id: String, why: String) {
         if (id in stopped) return
         _all.value[id]?.let { put(it.copy(state = "failed", note = why)) }
+        if (again.containsKey(id)) saveKept()   // its Retry card, with why, comes back after a restart
         host?.notice(why)
     }
 
@@ -807,6 +866,7 @@ object FileLink {
             host?.logFile(if (o.group.isEmpty()) o.peer else "g:${o.group}", o.name, o.size, "", true)
             again.remove(id)?.second?.delete()
             againGroup.remove(id)
+            saveKept()
         } catch (e: Exception) { fail(id, "That file couldn't be sent.") } finally { outs.remove(id); sock.close(); ended(id) }
     }
 

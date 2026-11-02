@@ -50,7 +50,8 @@ Rectangle {
     // go, then the labels get short, then the rest goes on two lines. Nothing is ever cut off.
     FontMetrics { id: labelMetrics; font.family: Theme.body; font.pixelSize: Theme.fs(15) }
     FontMetrics { id: glyphMetrics; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
-    readonly property var briefs: ({ "Next section": "Next", "Hold to record": "Record", "Group menu": "Menu",
+    // "Group menu" isn't shortened to "Menu": that reads as the Menu button, which opens Settings.
+    readonly property var briefs: ({ "Next section": "Next", "Hold to record": "Record", "Group menu": "Options",
                                      "Mute mic": "Mute", "Unmute mic": "Unmute", "Search, Transfers": "Search",
                                      "Reply in the thread": "Reply", "Answer with video": "Video", "Let go: send": "Send",
                                      "Older or newer": "Scroll", "Pattern or password": "Lock" })
@@ -97,7 +98,8 @@ Rectangle {
                 required property var modelData
                 anchors.right: parent.right
                 spacing: keys.gap
-                height: bar.lines.length > 1 ? Theme.px(34) : implicitHeight
+                // Two lines: each still a full touch target in Handheld mode (the chips are tappable).
+                height: bar.lines.length > 1 ? Math.max(Theme.px(34), Theme.touch ? Theme.tapMin : 0) : implicitHeight
                 Repeater {
                     model: parent.modelData
                     PromptKey {

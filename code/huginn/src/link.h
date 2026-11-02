@@ -42,8 +42,10 @@ class Link : public QObject
     Q_PROPERTY(int unread READ unread NOTIFY changed)
     // On the phone: the devices that mirror it, [{key, name, ok}] (ok: the 4 emoji were checked).
     Q_PROPERTY(QVariantList companions READ companions NOTIFY changed)
-    // On a companion: the phone's chats, newest first: [{peer, name, last, time, role, folders, unread, muted, group, chans}]
-    // (chans: a group's text channels, [{id, name, ao}], from its signed state; empty without cap l1).
+    // On a companion: the phone's chats, newest first: [{peer, name, last, time, role, folders, unread, muted, group, chans,
+    // tabs, about}] (chans: a group's text channels, [{id, name, ao}], from its signed state; empty without cap l1, and
+    // until the phone has sent an item with its channel, as an older Muninn doesn't. tabs: per channel id, its unread
+    // {n, me} (me: mentions of me and replies to mine). about: the group's about text and rules, "" for none).
     // Cap l1: groups the account has with no messages here yet (just joined) are listed too.
     Q_PROPERTY(QVariantList mirror READ mirror NOTIFY changed)
     // The link code being shown here (empty until newCode), and when it stops working (ms).
@@ -137,7 +139,9 @@ public:
     // False when it isn't a contact on the phone.
     Q_INVOKABLE bool startChat(const QString &peer);
     // On a companion: a mirrored chat was read here (on screen). Its unread count goes, and the phone hears of it ("read").
-    Q_INVOKABLE void markRead(const QString &peer);
+    // ch: a group's channel on screen (its tab): only that channel is read; the chat, here and on the phone, is read up to
+    // the first message still unread in another channel ("" reads the whole chat).
+    Q_INVOKABLE void markRead(const QString &peer, const QString &ch = QString());
     // On a companion: mute a mirrored chat until (ms; 0 unmutes, a huge value until turned back on). Here at once, and with
     // cap l1 on the phone too (a "mute" item). "" when done, else what to tell the person.
     Q_INVOKABLE QString setMute(const QString &peer, qint64 until);
@@ -266,6 +270,7 @@ private:
         QList<M> msgs;
         int days = 7;                       // the phone's limit for this chat (Limits::kDefault)
         qint64 readAt = 0;                  // read here (or on the phone, cap l2) up to this message time
+        QHash<QString, qint64> seen;        // a group's channels read here past readAt (their tab was on screen), by channel id
     };
     void ensureLoaded() const;
     void save();

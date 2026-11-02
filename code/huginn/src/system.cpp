@@ -3,6 +3,7 @@
 
 #include "platform/crashlog.h"
 #include "platform/keepawake.h"
+#include "platform/notify.h"
 #include "platform/portable.h"
 #include "platform/singleinstance.h"
 #include "platform/winstart.h"
@@ -37,11 +38,18 @@
 #ifdef Q_OS_WIN
 #include <rhi/qrhi.h>
 #include <windows.h>
+#include <objbase.h>
+#include <shobjidl.h>
+#include <QColor>
+#include <QFont>
+#include <QPainter>
+#include <string>
 #else
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -701,6 +709,64 @@ bool System::startsFullScreen() const
     return !m_windowed && (m_settings->fullScreen() || m_gameMode || m_handheld);
 }
 
+void System::setUnreadState(QQuickWindow *window, int unread, bool muted)
+{
+    Platform::setTrayState(unread, muted);
+#ifdef Q_OS_WIN
+    // The taskbar button's badge: Windows 11 shows no window titles there, so "(3) Huginn" alone isn't seen.
+    if (!window)
+        return;
+    static ITaskbarList3 *bar = nullptr;
+    static bool tried = false;
+    if (!bar && !tried) {
+        tried = true;
+        ITaskbarList3 *made = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&made)))) {
+            if (SUCCEEDED(made->HrInit()))
+                bar = made;
+            else
+                made->Release();
+        }
+    }
+    if (!bar)
+        return;
+    const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    if (unread <= 0) {
+        bar->SetOverlayIcon(hwnd, nullptr, L"");
+        return;
+    }
+    // A red dot with the count in white (9+ past nine), drawn at 32 px; Windows shrinks it to the corner.
+    QImage dot(32, 32, QImage::Format_ARGB32_Premultiplied);
+    dot.fill(Qt::transparent);
+    {
+        QPainter p(&dot);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0xD8, 0x3A, 0x3A));
+        p.drawEllipse(QRectF(1, 1, 30, 30));
+        QFont f = p.font();
+        f.setPixelSize(unread > 9 ? 15 : 20);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(QRectF(0, 0, 32, 32), Qt::AlignCenter, unread > 9 ? QStringLiteral("9+") : QString::number(unread));
+    }
+    const HICON icon = dot.toHICON();
+    if (!icon)
+        return;
+    const std::wstring words = QStringLiteral("%1 unread").arg(unread).toStdWString();
+    bar->SetOverlayIcon(hwnd, icon, words.c_str());
+    DestroyIcon(icon);
+#else
+    Q_UNUSED(window)
+#endif
+}
+
+void System::notifyNow(const QString &title, const QString &body)
+{
+    Platform::notify(title, body, 8000);
+}
+
 void System::minimize(QQuickWindow *window)
 {
     if (!window)
@@ -743,6 +809,44 @@ QStringList System::pickFiles() const
                                          QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
 }
 
+// Steam's screenshots (F12, or the Steam button and R1 in game mode): <Steam>/userdata/<account>/760/remote/<game>/screenshots,
+// for every account and game, newest first. The thumbnails folder under each is left out. Steam is looked for where it
+// installs itself and where its Flatpak keeps it; the ~/.steam/steam link is the first one again, so a file is listed once.
+static QFileInfoList steamShotFiles()
+{
+    const QString home = QDir::homePath();
+    const QStringList roots = {home + QStringLiteral("/.local/share/Steam/userdata"), home + QStringLiteral("/.steam/steam/userdata"),
+                               home + QStringLiteral("/.var/app/com.valvesoftware.Steam/.local/share/Steam/userdata")};
+    QFileInfoList out;
+    QStringList seen;
+    for (const QString &root : roots) {
+        const QDir users(root);
+        if (!users.exists())
+            continue;
+        const QFileInfoList accounts = users.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable);
+        for (const QFileInfo &account : accounts) {
+            const QDir remote(account.absoluteFilePath() + QStringLiteral("/760/remote"));
+            if (!remote.exists())
+                continue;
+            const QFileInfoList games = remote.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable);
+            for (const QFileInfo &game : games) {
+                const QDir shots(game.absoluteFilePath() + QStringLiteral("/screenshots"));
+                const QFileInfoList files = shots.entryInfoList({QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.png")},
+                                                                QDir::Files | QDir::Readable);
+                for (const QFileInfo &fi : files) {
+                    const QString real = fi.canonicalFilePath();
+                    if (real.isEmpty() || seen.contains(real))
+                        continue;
+                    seen << real;
+                    out << fi;
+                }
+            }
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const QFileInfo &a, const QFileInfo &b) { return a.lastModified() > b.lastModified(); });
+    return out;
+}
+
 QVariantList System::filePlaces() const
 {
     QVariantList out;
@@ -758,12 +862,24 @@ QVariantList System::filePlaces() const
         seen << path;
         out << QVariantMap{{QStringLiteral("name"), QString::fromLatin1(place.second)}, {QStringLiteral("path"), path}};
     }
+    // Steam's screenshots, all games in one list (listFolder knows this path).
+    if (!steamShotFiles().isEmpty())
+        out << QVariantMap{{QStringLiteral("name"), QStringLiteral("Steam screenshots")}, {QStringLiteral("path"), QStringLiteral("steam:screenshots")}};
     return out;
 }
 
 QVariantList System::listFolder(const QString &path) const
 {
     QVariantList out;
+    if (path == QLatin1String("steam:screenshots")) {
+        const QFileInfoList shots = steamShotFiles();
+        for (int i = 0; i < shots.size() && i < 300; ++i) {
+            const QFileInfo &fi = shots.at(i);
+            out << QVariantMap{{QStringLiteral("name"), fi.fileName()}, {QStringLiteral("path"), fi.absoluteFilePath()}, {QStringLiteral("dir"), false},
+                               {QStringLiteral("size"), double(fi.size())}, {QStringLiteral("time"), double(fi.lastModified().toMSecsSinceEpoch())}};
+        }
+        return out;
+    }
     const QDir dir(path);
     if (path.isEmpty() || !dir.exists())
         return out;

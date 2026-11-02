@@ -1666,6 +1666,9 @@ Rectangle {
         }
         if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "Only on this device.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
         const items = []
+        // A group invite in the message: Join, first (its name and size, then Join or Not now).
+        const invite = m.text && !m.unsent && !m.mine && !tour ? Chat.parseGroupCode(m.text) : ({})
+        if (invite.name && !invite.mine && !invite.member) items.push({ name: "Join " + invite.name, icon: "people", url: "joingroup" })
         if (openKey !== "" && !m.unsent && !m.failed) {
             items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react", sub: () => pickReaction(m) })
             items.push({ name: "Reply", icon: "reply", url: "reply" })
@@ -1695,6 +1698,7 @@ Rectangle {
             else if (a === "edit") startEdit(m)
             else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
             else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
+            else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
             else if (a === "forward") PeopleActions.forwardMenu(m.text)
             else if (a === "folder") { if (!FileLink.showInFolder(m.saved)) Ui.say("That file isn't there anymore.", true) }
             else if (a === "view") viewing = m.photo
@@ -1814,7 +1818,11 @@ Rectangle {
             else if (System.keyboardCovers()) writeAbove(box)
             else System.showSteamKeyboard()
             return true
-        case "y": System.showSteamKeyboard(); return true
+        // Y: the keyboard again; where it would cover the box, the top prompt with what's typed so far.
+        case "y":
+            if (System.keyboardCovers()) writeAbove(box)
+            else System.showSteamKeyboard()
+            return true
         case "x": boxOptions(box); return true
         case "down": return true
         }

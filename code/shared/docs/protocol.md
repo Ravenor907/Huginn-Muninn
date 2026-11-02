@@ -2670,9 +2670,9 @@ the wire: the ack (14.1) already says which pieces are in.
   sends one packet a second (the sender a probe, the receiver an ack) and no data, until it hears the other again;
   its row says "Waiting for Ana to come back".
 - **Keeping what came.** When a file of theirs stops for silence, the receiver keeps the part file and how many pieces
-  from the start are in (Close on its row deletes it). Huginn keeps the part, and the sender's row whose Retry goes
-  on, across a restart for up to 7 days (quitting keeps a file still on its way the same way); Muninn keeps the part
-  across a restart for up to 7 days too. The row says where it stopped without blaming either side ("Stopped at 61% (no answer from Ana)").
+  from the start are in (Close on its row keeps it; Discard asks, then deletes it). Huginn and Muninn keep the part,
+  and the sender's row whose Retry goes on, across a restart for up to 7 days (quitting, or Android closing Muninn,
+  keeps a file still on its way the same way). The row says where it stopped without blaming either side ("Stopped at 61% (no answer from Ana)").
 - **Going on.** Retry sends a new `offer` (a new id and keys) for the same file. A receiver with a kept part from the
   same sender with the same `sha`, `size` and `g` takes it without asking again (Data saver still asks), writes into
   the kept part, and its acks say from the first one that everything below the kept count is in. The sender marks

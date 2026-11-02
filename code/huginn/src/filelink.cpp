@@ -472,6 +472,23 @@ FileLink::FileLink(Chat *chat, QObject *parent)
     alwaysFrom = [chat](const QString &peer) { return chat->filesAlways(peer); };
     setAlways = [chat](const QString &peer) { chat->setFilesAlways(peer, true); };
     isContact = [chat](const QString &peer) { return chat->isContact(peer); };
+    // Cap f3: a file of mine that stopped when Huginn closed goes on by itself, once a run, when they show as active
+    // again (their Active status, Settings › Privacy), rather than waiting for Retry.
+    connect(chat, &Chat::liveChanged, this, [this, chat] {
+        if (m_resumable.isEmpty())
+            return;
+        const QVariantMap live = chat->activeMap();
+        QStringList go;
+        for (const QVariantMap &e : std::as_const(m_list)) {
+            const QString id = e.value(QStringLiteral("id")).toString();
+            if (m_resumable.contains(id) && !m_autoTried.contains(id) && live.contains(e.value(QStringLiteral("peer")).toString()))
+                go << id;
+        }
+        for (const QString &id : std::as_const(go)) {
+            m_autoTried.insert(id);
+            retry(id);
+        }
+    });
     // A file of mine going as a message: its card follows the message (how far, then sent or not).
     connect(chat, &Chat::uploadsChanged, this, &FileLink::relayTick);
     connect(chat, &Chat::changed, this, &FileLink::relayTick);
@@ -594,26 +611,47 @@ int FileLink::pausedCount() const
 
 QString FileLink::closeWarning() const
 {
+    return closeText(QStringLiteral("Closing"));
+}
+
+QString FileLink::closeText(const QString &verb) const
+{
     QStringList moving, waiting;
+    QString at;
+    bool allResume = true;
     for (const Xfer *x : std::as_const(m_x)) {
         const QString pct = QString::number(percent(x->done, x->size)) + QLatin1Char('%');
+        const bool going = x->state == QLatin1String("connecting") || x->state == QLatin1String("sending");
         if (x->state == QLatin1String("sending") && x->paused)
             moving << QStringLiteral("%1 is paused at %2.").arg(x->name, pct);
         else if (x->state == QLatin1String("sending") && x->held)
             moving << QStringLiteral("%1 paused %2 at %3.").arg(who(x->peer), x->name, pct);
-        else if (x->state == QLatin1String("connecting") || x->state == QLatin1String("sending"))
+        else if (going)
             moving << (x->mine ? QStringLiteral("Sending %1 to %2 (%3).") : QStringLiteral("Receiving %1 from %2 (%3)."))
                           .arg(x->name, chatOf(x->peer, x->group), pct);
         else if (x->state == QLatin1String("offered"))
             waiting << QStringLiteral("%1 is waiting for %2 to accept.").arg(x->name, who(x->peer));
+        // Cap f3 on their side: what came is kept (or Retry goes on), so it carries on from here later.
+        if (going) {
+            at = pct;
+            allResume = allResume && hasF3(x->peer);
+        }
     }
+    const int n = int(moving.size());
     if (moving.size() > 2)
         moving = QStringList{moving.first(), QStringLiteral("And %1 more.").arg(moving.size() - 1)};
-    if (!moving.isEmpty())
-        return moving.join(QLatin1Char(' ')) + QStringLiteral(" Closing stops it.");
+    if (!moving.isEmpty()) {
+        QString tail;
+        if (allResume)
+            tail = n == 1 ? QStringLiteral(" %1 pauses it; it goes on from %2 later.").arg(verb, at)
+                         : QStringLiteral(" %1 pauses them; they go on from where they stopped later.").arg(verb);
+        else
+            tail = n == 1 ? QStringLiteral(" %1 stops it.").arg(verb) : QStringLiteral(" %1 stops them.").arg(verb);
+        return moving.join(QLatin1Char(' ')) + tail;
+    }
     if (!waiting.isEmpty())
         return (waiting.size() > 1 ? QStringLiteral("%1 files are waiting to be accepted.").arg(waiting.size()) : waiting.first())
-            + QStringLiteral(" Closing cancels the offer.");
+            + QStringLiteral(" %1 cancels the offer.").arg(verb);
     return {};
 }
 
@@ -712,6 +750,39 @@ double FileLink::keptSize(const QString &id) const
     if (it == m_partial.cend())
         return 0;
     return double(QFileInfo(it->path).size());
+}
+
+// The kept parts no card shows any more (Close on a stopped file of theirs).
+QVariantMap FileLink::keptAway() const
+{
+    QSet<QString> cards;
+    for (const QVariantMap &t : m_list)
+        cards.insert(t.value(QStringLiteral("id")).toString());
+    int count = 0;
+    qint64 bytes = 0;
+    for (auto it = m_partial.cbegin(); it != m_partial.cend(); ++it) {
+        if (cards.contains(it.key()) || m_x.contains(it.key()))
+            continue;
+        ++count;
+        bytes += QFileInfo(it->path).size();
+    }
+    return {{QStringLiteral("count"), count}, {QStringLiteral("bytes"), double(bytes)}};
+}
+
+void FileLink::discardKept()
+{
+    QSet<QString> cards;
+    for (const QVariantMap &t : m_list)
+        cards.insert(t.value(QStringLiteral("id")).toString());
+    QStringList gone;
+    for (auto it = m_partial.cbegin(); it != m_partial.cend(); ++it)
+        if (!cards.contains(it.key()) && !m_x.contains(it.key()))
+            gone << it.key();
+    if (gone.isEmpty())
+        return;
+    for (const QString &id : gone)
+        dropPartial(id);
+    Q_EMIT changed();
 }
 
 QString FileLink::send(const QString &peer, const QString &path, const QString &group)
@@ -1033,7 +1104,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
             // Cap f3: it waits a day (their app waits as long), and the card says so.
             const bool day = hasF3(from);
             x->state = QStringLiteral("asking");
-            x->note = day ? QStringLiteral("Wants to send you this. Waits a day for your answer") : QStringLiteral("Wants to send you this. Accept or decline");
+            x->note = day ? QStringLiteral("Wants to send you this. Waits up to a day, while both apps stay open") : QStringLiteral("Wants to send you this. Accept or decline");
             put(x, true);
             const QString text = QStringLiteral("%1 wants to send you %2 (%3). Accept or decline it in the chat or Transfers.").arg(who(from), x->name, sizeText(x->size));
             Q_EMIT notice(text);
@@ -1849,13 +1920,19 @@ void FileLink::loadKept()
     }
     // Mine: a failed card whose Retry goes on from where it stopped, while its file is still there.
     for (const QJsonValue &v : o.value(QStringLiteral("sent")).toArray()) {
-        const QVariantMap card = v.toObject().toVariantMap();
+        QVariantMap card = v.toObject().toVariantMap();
+        // Its file's SHA-256 from before (with its size and last change), so Retry doesn't read it all again.
+        const QJsonObject h = v.toObject().value(QStringLiteral("hash")).toObject();
+        card.remove(QStringLiteral("hash"));
         const QString id = card.value(QStringLiteral("id")).toString();
         if (id.isEmpty() || qint64(card.value(QStringLiteral("time")).toDouble()) < oldest
             || !QFileInfo(card.value(QStringLiteral("path")).toString()).isFile()) {
             stale = true;
             continue;
         }
+        if (!jstr(h, "sha").isEmpty())
+            m_hashed.insert(card.value(QStringLiteral("path")).toString(),
+                            Hashed{qint64(h.value(QStringLiteral("size")).toDouble()), qint64(h.value(QStringLiteral("changed")).toDouble()), jstr(h, "sha")});
         drop(id);
         m_list << card;
         m_resumable.insert(id);
@@ -1887,8 +1964,14 @@ void FileLink::saveKept()
                              {QStringLiteral("card"), QJsonObject::fromVariantMap(cardFor(it.key()))}};
     for (const QString &id : std::as_const(m_resumable)) {
         const QVariantMap card = cardFor(id);
-        if (!card.isEmpty())
-            sent << QJsonObject::fromVariantMap(card);
+        if (card.isEmpty())
+            continue;
+        QJsonObject j = QJsonObject::fromVariantMap(card);
+        const Hashed h = m_hashed.value(card.value(QStringLiteral("path")).toString());
+        if (!h.sha.isEmpty())
+            j.insert(QStringLiteral("hash"), QJsonObject{{QStringLiteral("sha"), h.sha}, {QStringLiteral("size"), double(h.size)},
+                                                         {QStringLiteral("changed"), double(h.changed)}});
+        sent << j;
     }
     if (parts.isEmpty() && sent.isEmpty())
         m_chat->m_vault->remove(QStringLiteral("keptparts.json"));
@@ -1913,7 +1996,9 @@ void FileLink::keepForRestart()
             // Its card says so and Retry goes on, once both apps are open again.
             x->state = QStringLiteral("failed");
             x->paused = x->held = false;
-            x->note = QStringLiteral("Stopped at %1% when Huginn closed. Retry goes on from there.").arg(percent(x->done, x->size));
+            x->note = QStringLiteral("Stopped at %1% when Huginn closed. Retry goes on from there; it also does by itself when %2 shows as active.")
+                          .arg(percent(x->done, x->size))
+                          .arg(who(x->peer));
             put(x, true);
             m_resumable.insert(id);
             end(x);

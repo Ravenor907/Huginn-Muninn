@@ -93,7 +93,7 @@ void notify(const QString &title, const QString &body, int timeoutMs)
     notify(title, body, timeoutMs, nullptr);
 }
 
-void notify(const QString &title, const QString &body, int timeoutMs, std::function<void()> onClick, std::function<void()> onFailed)
+void notify(const QString &title, const QString &body, int timeoutMs, std::function<void()> onClick, std::function<void()> onFailed, const QString &)
 {
     // No session bus, or nobody on it shows notifications (some full-screen sessions run without a notification
     // service; the Flatpak may talk to org.freedesktop.Notifications): said in the window instead.
@@ -150,6 +150,9 @@ uint notifyCall(uint replaces, const QString &title, const QString &body, std::f
 
 // Linux has no tray icon of Huginn's own: the desktop's notifications and the window do the job.
 void setUpTray(std::function<bool()>, std::function<bool()>, std::function<void(const QString &)>) {}
+void setTrayState(int, bool) {}
+// The desktop says which notification was clicked, so there's nothing to guess.
+void forgetChat(const QString &) {}
 
 void closeNotification(uint id)
 {

@@ -50,7 +50,12 @@ Item {
                 else if (a === "file") PeopleActions.sendFile(where)
             })
     }
+    // In game mode the system's window can't be driven with the controller: Huginn's own list, pictures only.
     function pickPictures() {
+        if (Ui.ownPicker()) {
+            Ui.pickFiles(paths => layer.sendPictures(paths, false), "pictures")
+            return
+        }
         const paths = Chat.pickPictures()
         if (!paths.length) return
         sendPictures(paths, false)
@@ -80,8 +85,11 @@ Item {
         }
     }
     function sendVideoFile() {
-        const path = Videos.pickFile()
-        if (path === "") return
+        if (Ui.ownPicker()) { Ui.pickFiles(paths => layer.sendVideoPath(paths[0]), "videos", true); return }
+        sendVideoPath(Videos.pickFile())
+    }
+    function sendVideoPath(path) {
+        if (!path) return
         // Too big or too long for a video message: it goes as a file instead.
         if (!Videos.fitsMessage(path)) { PeopleActions.sendFiles(where, [path]); return }
         const r = Videos.sendFile(where, path)

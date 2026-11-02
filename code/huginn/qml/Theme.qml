@@ -267,6 +267,34 @@ QtObject {
     // A chat's own color (a contact's menu › Details › Chat color, one of the accent swatches as "#RRGGBB"), drawn
     // like the accent; the accent itself when the chat has none. Color vision: the nearest safe accent.
     readonly property var chatSwatches: ["", "#C2A25E", "#A9B4BE", "#B07A5A", "#6FAE8C", "#6E9CC8", "#A58BC6", "#CF6F54"]
+    // Swatches (chat colors, your avatar color) with Color vision on: only one for each safe accent they'd look like,
+    // so two that look the same aren't both offered. "" (no color) and a custom one stay.
+    function distinctSwatches(list) {
+        if (!cb) return list
+        const seen = {}
+        return list.filter(c => {
+            if (!validColor(c)) return true
+            const k = safeAccent(c)
+            if (seen[k]) return false
+            seen[k] = true
+            return true
+        })
+    }
+    // Two colors that look the same here (with Color vision: the same safe accent).
+    function sameSwatch(a, b) {
+        const x = String(a || "").toUpperCase(), y = String(b || "").toUpperCase()
+        if (x === y) return true
+        if (!cb || !validColor(x) || !validColor(y)) return false
+        return safeAccent(x) === safeAccent(y)
+    }
+    // A swatch's name for screen readers: Gold, Fjord, Jade... (with Color vision, the accent it looks like).
+    function swatchName(c) {
+        if (!validColor(c)) return "No color"
+        const up = String(c).toUpperCase()
+        let n = cb ? safeAccent(up) : ""
+        if (n === "" || !accentHex[n]) n = allAccents.find(k => accentHex[k].toUpperCase() === up) || ""
+        return n === "" ? "Custom color" : n.charAt(0).toUpperCase() + n.substring(1)
+    }
     function chatAccent(c) {
         if (!validColor(c)) return accent
         if (mono) return accent

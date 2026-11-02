@@ -18,6 +18,7 @@ Item {
     // A third answer between Cancel and the main one (X on a controller), set after open().
     property string otherText: ""
     property var otherCallback: null
+    property bool otherDanger: false   // red, for one that loses something (Close anyway while a file is moving)
     // A fourth answer, next to the main one (Y on a controller, when there's no "Don't ask again"), set after open().
     property string extraText: ""
     property var extraCallback: null
@@ -35,7 +36,7 @@ Item {
         title = t; message = msg; confirmText = confirm || "Continue"
         callback = cb || null; hold = !!needsHold; danger = !!isDanger
         cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"; single = false
-        otherText = ""; otherCallback = null
+        otherText = ""; otherCallback = null; otherDanger = false
         extraText = ""; extraCallback = null
         rememberText = ""; remember = false
         held = 0; visible = true
@@ -195,6 +196,7 @@ Item {
                 HButton {
                     visible: !dlg.single && dlg.otherText !== ""
                     text: (Ui.main && Ui.main.padInUse ? "X: " : "") + dlg.otherText
+                    kind: dlg.otherDanger ? "danger" : "normal"
                     onClicked: dlg.other()
                 }
                 HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }

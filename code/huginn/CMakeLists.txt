@@ -336,6 +336,7 @@ if(WIN32)
         ${QRENCODE_LIBRARY}
         winmm      # PlaySound, for the raven call (src/platform/chime_windows.cpp)
         psapi      # Labs › Performance check's memory figure (src/perfcheck.cpp)
+        ole32 uuid # the taskbar button's unread badge (ITaskbarList3, src/system.cpp)
     )
 else()
     target_link_libraries(huginn PRIVATE Qt6::DBus KF6::Prison PkgConfig::SDL2)

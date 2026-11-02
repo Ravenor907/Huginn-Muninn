@@ -76,7 +76,10 @@ Item {
 
     readonly property var prompts: {
         if (step === "lock" && !(Vault.exists && !practice))
-            return [{ key: "lb", label: lockPanel.usePattern ? "Password" : "Pattern" }, { key: "x", label: "Skip" }, { key: "b", label: "Back" }]
+            // The pattern: the D-pad moves, A starts and ends, B clears while drawing.
+            return (lockPanel.usePattern ? [{ key: "dpad", label: "Move" }, { key: "a", label: lockPanel.drawing ? "Done" : "Draw" }] : [])
+                .concat([{ key: "lb", label: lockPanel.usePattern ? "Password" : "Pattern" }, { key: "x", label: "Skip" },
+                         { key: "b", label: lockPanel.drawing ? "Clear" : "Back" }])
         const a = order.length ? order[focusAt].label : ""
         const b = index > 0 ? (touring && stop > 0 ? "Previous" : "Back") : ribbon ? "Leave" : ""
         const x = step === "people" && pasteInput.canPaste && focusId !== "pasteCode" ? [{ key: "x", label: "Paste" }] : []
@@ -197,6 +200,16 @@ Item {
         pasteInput.text = ""
         addedCount++
     }
+    // A text field with the controller: Steam's keyboard covers the lower half, so with it up the text is typed in the
+    // prompt at the top (as the message box does), then lands in the field and goes on as Enter would.
+    function typeIn(field, title, confirmText, done) {
+        if (!System.keyboardCovers()) {
+            field.forceActiveFocus()
+            System.showSteamKeyboard()
+            return
+        }
+        Ui.ask(title, "", field.text, confirmText, t => { field.text = t; done() }, false, true)
+    }
     function run(id) {
         switch (id) {
         case "next": case "next2": next(); break
@@ -207,13 +220,13 @@ Item {
         // A backup from Huginn or Muninn instead of starting fresh (practice: nothing is opened).
         case "restore": if (Ui.main) Ui.main.openBackup("restore", true, practice); break
         case "skipLock": skipLock(); break
-        case "nameField": nameInput.forceActiveFocus(); System.showSteamKeyboard(); break
+        case "nameField": typeIn(nameInput, "Your name", "Save", () => setup.saveName()); break
         case "picture": if (practice) Ui.say("Practice: your picture stays as it is."); else picker.open(); break
         case "saveName": saveName(); break
         case "linkNow": linkNow(); break
         case "showCode": showCode(); break
         case "copyLink": copyLink(); break
-        case "pasteField": pasteInput.forceActiveFocus(); System.showSteamKeyboard(); break
+        case "pasteField": typeIn(pasteInput, "Paste a code or invite link", "Add", () => setup.addCode()); break
         case "pasteCode": pasteCode(); break
         case "addCode": addCode(); break
         case "skipTour": next(); break

@@ -197,13 +197,31 @@ private fun Paths(c: CallManager.Ui) {
 private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit,
                     onCamera: (Boolean) -> Unit, gap: Dp) {
     when (c.phase) {
-        Phase.INCOMING -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Round(CallIcons.hangup, "Decline", CallColors.end, Color.White, 76.dp) { CallManager.decline() }
-            // A video call can be taken with the camera, or as a voice call.
-            if (c.videoCall && Vp8.available) Round(CallIcons.camera, "Video", CallColors.answer, Color.White, 76.dp, onClick = onAnswerVideo)
-            Round(CallIcons.answer, if (c.videoCall) "Voice only" else "Answer", CallColors.answer, Color.White, 76.dp, onClick = onAnswer)
+        Phase.INCOMING -> {
+            // Rang softly in a voice room: answering leaves it first, and the button says so.
+            val room by io.github.ravenor907.muninn.net.call.RoomManager.room.collectAsState()
+            val leave = room?.let { "Answer and leave " + it.title.ifEmpty { "the room" } }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Round(CallIcons.hangup, "Decline", CallColors.end, Color.White, 76.dp) { CallManager.decline() }
+                // A video call can be taken with the camera, or as a voice call.
+                if (c.videoCall && Vp8.available) Round(CallIcons.camera, "Video", CallColors.answer, Color.White, 76.dp, onClick = onAnswerVideo)
+                Round(CallIcons.answer, leave ?: if (c.videoCall) "Voice only" else "Answer", CallColors.answer, Color.White, 76.dp, onClick = onAnswer)
+            }
         }
-        Phase.ENDED -> Spacer(Modifier.height(106.dp))
+        Phase.ENDED -> {
+            // Left a voice room to take this call: one tap back to it.
+            val back by CallManager.backTo.collectAsState()
+            val b = back?.takeIf { it.callId == c.callId }
+            val ctx = androidx.compose.ui.platform.LocalContext.current
+            if (b == null) Spacer(Modifier.height(106.dp))
+            else Row(Modifier.fillMaxWidth().heightIn(min = 106.dp), horizontalArrangement = Arrangement.Center) {
+                Round(CallIcons.speaker, "Back to " + b.title.ifEmpty { "the room" }, Palette.coolTint, Palette.text, 76.dp) {
+                    CallManager.backDone()
+                    io.github.ravenor907.muninn.net.call.Ringer.backUsed(ctx)
+                    io.github.ravenor907.muninn.screens.RoomActivity.join(ctx, b.g, b.ch)
+                }
+            }
+        }
         else -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             // Wraps onto two lines when four don't fit (a small phone at a large size).
             androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly,

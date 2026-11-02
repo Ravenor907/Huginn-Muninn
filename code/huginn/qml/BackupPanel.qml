@@ -148,12 +148,18 @@ Item {
             return
         }
         if (copy && !copyOk) {
+            // A phone's backup: linking is the way to use both. Another computer's (a new PC replacing an old one):
+            // no phone in it, so only the warning.
+            const fromPhone = panel.opened.app === "muninn"
             Ui.sure("This makes a copy of you",
                     "This computer becomes the same person as " + where + ". If both are used, messages stop working on one or both, and friends see errors. "
-                    + "To use both, link this PC to your phone instead. Restore only if " + where + " won't chat again.",
+                    + (fromPhone ? "To use both, link this PC to your phone instead. Restore only if " + where + " won't chat again."
+                                 : "Restore only if " + where + " won't chat again (a new PC replacing an old one)."),
                     "Restore anyway", () => panel.restoreNow(true), false, true)
-            Ui.confirm.otherText = "Link instead"
-            Ui.confirm.otherCallback = () => { panel.close(); if (Ui.main) Ui.main.showLinkPhone(panel.fromSetup, panel.sample) }
+            if (fromPhone) {
+                Ui.confirm.otherText = "Link instead"
+                Ui.confirm.otherCallback = () => { panel.close(); if (Ui.main) Ui.main.showLinkPhone(panel.fromSetup, panel.sample) }
+            }
             return
         }
         Ui.sure("Replace what's here?", "Everything in Huginn is replaced by the backup. A copy of what's here now is kept first.",

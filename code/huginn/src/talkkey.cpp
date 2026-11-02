@@ -60,7 +60,21 @@ void TalkKey::release()
     m_rooms->setTalking(false);
 }
 
-// A text box has the focus (a message, a name, a search): the talk key types there instead of talking, so a
+// A key that puts a character in a text box (Backtick, Space, a letter). Caps Lock, F13, Insert, Pause and the
+// like type nothing, so they always talk.
+static bool typesText(const QKeyEvent *k)
+{
+    const QString t = k->text();
+    return !t.isEmpty() && t.at(0).isPrint();
+}
+
+bool TalkKey::keyTypes() const
+{
+    // Qt's keys below 0x01000000 are characters; the ones above (F keys, Caps Lock, Insert) aren't.
+    return m_key < 0x01000000;
+}
+
+// A text box has the focus (a message, a name, a search): a talk key that types goes there instead of talking, so a
 // Backtick or Space in a message still works. A read-only text (a message being selected) doesn't count.
 static bool typingNow()
 {
@@ -98,9 +112,15 @@ bool TalkKey::eventFilter(QObject *watched, QEvent *event)
     }
     if (key != m_key || !m_settings->pushToTalk() || !m_rooms->inRoom())
         return QObject::eventFilter(watched, event);
-    // Typing: the key goes to the text box. Held down from before the box took the focus, it still lets go here.
-    if (!m_down && typingNow())
+    // Typing: a key that types goes to the text box. Held down from before the box took the focus, it still lets go
+    // here. A key that types nothing talks even while a box has the focus.
+    if (!m_down && typesText(k) && typingNow()) {
+        if (t == QEvent::KeyPress && !k->isAutoRepeat() && !m_toldTyped) {
+            m_toldTyped = true;
+            Q_EMIT typedInstead();
+        }
         return QObject::eventFilter(watched, event);
+    }
     if (k->isAutoRepeat())
         return true;
     if (t == QEvent::KeyPress) {

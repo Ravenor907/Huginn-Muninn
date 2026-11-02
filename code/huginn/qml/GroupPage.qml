@@ -163,12 +163,14 @@ Rectangle {
     readonly property string modStatus: isTour || locked || !exists ? "" : (Mod.serial, modTick, Mod.myStatus(gid))
     // Cap g3 (28.2): an "Only admins post" channel, and I'm not an admin: no message box, a line saying so.
     readonly property bool postLocked: !isTour && !readOnly && !!channel.adminsOnly && !info.amAdmin
-    // The about box folds to one line, per group: this run's taps, else what Settings kept from before.
+    // The about box folds to one line, per group and per text: this run's taps, else what Settings kept from before.
+    // Edited rules are new text, so they show open again (once) for everyone.
     property var aboutFolds: ({})
+    readonly property string aboutKey: gid + "\n" + (info.about || "")
     // Fold or show the about box (a tap on it, or Fold rules / Show rules in the group menu with a controller); kept.
     function foldAbout(fold) {
-        const f = Object.assign({}, aboutFolds); f[gid] = fold; aboutFolds = f
-        Settings.setAboutFolded(gid, fold)
+        const f = Object.assign({}, aboutFolds); f[aboutKey] = fold; aboutFolds = f
+        Settings.setAboutFolded(gid, fold, info.about || "")
     }
 
     readonly property var prompts: finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
@@ -315,16 +317,42 @@ Rectangle {
                         mentions: modelData.mentions || 0
                     }
                     // Admins: a "+" adds a text channel or voice room here (the header's one tap handler sees where it lands).
-                    Icon {
+                    // A 28 px square that lights under the pointer, with its name beside it.
+                    Rectangle {
                         id: catPlus
+                        readonly property bool lit: catHover.hovered && catHover.point.position.x >= catPlus.x
+                        readonly property string label: modelData.cat === "voice" ? "Add a voice room" : "Add a text channel"
                         visible: page.canEditChannels
-                        anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(2)
                         anchors.verticalCenter: parent.verticalCenter
-                        name: "plus"; size: Theme.px(14); lineWidth: 2
-                        color: catHover.hovered && catHover.point.position.x >= catPlus.x - Theme.px(6) ? Theme.text : Theme.textMuted
+                        width: Theme.px(28); height: parent.height
+                        radius: Theme.radius
+                        color: lit ? Theme.raised : "transparent"
                         Accessible.role: Accessible.Button
-                        Accessible.name: modelData.cat === "voice" ? "Add a voice room" : "Add a text channel"
+                        Accessible.name: label
                         Accessible.onPressAction: page.addChannelIn(modelData.cat)
+                        Icon {
+                            anchors.centerIn: parent
+                            name: "plus"; size: Theme.px(14); lineWidth: 2
+                            color: catPlus.lit ? Theme.text : Theme.textMuted
+                        }
+                        Rectangle {
+                            visible: catPlus.lit
+                            z: 10
+                            anchors.right: parent.left; anchors.rightMargin: Theme.px(4)
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: plusTip.implicitWidth + Theme.px(12); height: plusTip.implicitHeight + Theme.px(6)
+                            radius: Theme.radius
+                            color: Theme.groundDeep
+                            border.color: Theme.line
+                            Text {
+                                id: plusTip
+                                textFormat: Text.PlainText
+                                anchors.centerIn: parent
+                                text: catPlus.label
+                                color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                            }
+                        }
                     }
                     HoverHandler { id: catHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
@@ -333,7 +361,7 @@ Rectangle {
                         onTapped: (point, button) => {
                             page.zone = "channels"; page.chRow = index
                             if (button === Qt.RightButton) Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.headerMenu(modelData.cat, !!modelData.folded))
-                            else if (catPlus.visible && point.position.x >= catPlus.x - Theme.px(6)) page.addChannelIn(modelData.cat)
+                            else if (catPlus.visible && point.position.x >= catPlus.x) page.addChannelIn(modelData.cat)
                             else page.foldCat(modelData.cat)
                         }
                         onLongPressed: { page.zone = "channels"; page.chRow = index; Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.headerMenu(modelData.cat, !!modelData.folded)) }
@@ -533,7 +561,7 @@ Rectangle {
                 anchors.margins: Theme.px(12)
                 height: visible ? aboutText.implicitHeight + Theme.px(20) : 0
                 radius: Theme.radius; color: Theme.raised; border.color: Theme.line; border.width: 1
-                readonly property bool folded: page.aboutFolds[page.gid] !== undefined ? !!page.aboutFolds[page.gid] : Settings.aboutFolded(page.gid)
+                readonly property bool folded: page.aboutFolds[page.aboutKey] !== undefined ? !!page.aboutFolds[page.aboutKey] : Settings.aboutFolded(page.gid, about)
                 Accessible.role: Accessible.Button
                 Accessible.name: "About this group: " + about
                 Accessible.description: folded ? "Folded. Click to show it all." : "Click to fold it to one line."
@@ -562,10 +590,10 @@ Rectangle {
                 // Read once (open on screen for a few seconds): it stays open now, and starts folded from the next start.
                 Timer {
                     interval: 4000
-                    running: aboutBox.visible && !aboutBox.folded && page.aboutFolds[page.gid] === undefined && !page.isTour
+                    running: aboutBox.visible && !aboutBox.folded && page.aboutFolds[page.aboutKey] === undefined && !page.isTour
                     onTriggered: {
-                        const f = Object.assign({}, page.aboutFolds); f[page.gid] = false; page.aboutFolds = f
-                        Settings.setAboutFolded(page.gid, true)
+                        const f = Object.assign({}, page.aboutFolds); f[page.aboutKey] = false; page.aboutFolds = f
+                        Settings.setAboutFolded(page.gid, true, aboutBox.about)
                     }
                 }
             }
@@ -929,12 +957,15 @@ Rectangle {
             const items = [{ name: "Mute mic", icon: "micoff", url: "mute", check: Rooms.muted },
                            { name: "Deafen", icon: "deafened", url: "deafen", check: Rooms.deafened }]
             if (Rooms.canShare) items.push({ name: "Share my screen", icon: "screen", url: "share", check: Rooms.sharing })
+            const bar = Ui.main ? Ui.main.screenBar : null
+            if (bar && bar.screenOn) items.push({ name: bar.screenBig ? "Smaller (B)" : "Bigger: " + Rooms.sharerName + "'s screen", icon: "screen", url: "big" })
             items.push({ name: "Output: " + Rooms.outputName, icon: "speaker", url: "output" },
                        { name: "Leave " + r.name, url: "leave", danger: true })
             Ui.pickFrom(r.name, [{ header: "", items: items }], a => {
                 if (a === "mute") Ui.toggleMic()
                 else if (a === "deafen") Ui.toggleDeaf()
                 else if (a === "share") Rooms.toggleShare()
+                else if (a === "big" && bar) bar.screenBig = !bar.screenBig
                 else if (a === "output") Rooms.nextOutput()
                 else if (a === "leave") Rooms.leave()
             })
@@ -1442,6 +1473,9 @@ Rectangle {
         const m = messages[sel]
         if (!m || m.system) { groupMenu(); return }
         const items = []
+        // A group invite in the message: Join, first (its name and size, then Join or Not now).
+        const invite = m.text && !m.unsent && !m.mine && !isTour ? Chat.parseGroupCode(m.text) : ({})
+        if (invite.name && !invite.mine && !invite.member) items.push({ name: "Join " + invite.name, icon: "people", url: "joingroup" })
         if (!m.unsent && !readOnly) {
             items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react", sub: () => pickReaction(m) })
             items.push({ name: "Reply", icon: "reply", url: "reply" })
@@ -1480,6 +1514,7 @@ Rectangle {
             else if (a === "pin") togglePin(m.id)
             else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
             else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
+            else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
             else if (a === "forward") PeopleActions.forwardMenu(m.text)
             else if (a === "report") reportToAdmins(m)
             else if (a === "view") viewing = m.photo
@@ -1601,7 +1636,11 @@ Rectangle {
             else if (System.keyboardCovers()) writeAbove(box)
             else System.showSteamKeyboard()
             return true
-        case "y": System.showSteamKeyboard(); return true
+        // Y: the keyboard again; where it would cover the box, the top prompt with what's typed so far.
+        case "y":
+            if (System.keyboardCovers()) writeAbove(box)
+            else System.showSteamKeyboard()
+            return true
         case "x": boxOptions(box); return true
         case "down": return true
         }

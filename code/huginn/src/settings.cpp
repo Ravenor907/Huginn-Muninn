@@ -1,5 +1,6 @@
 #include "settings.h"
 #include <QAudioDevice>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QMediaDevices>
 #include <QStandardPaths>
@@ -135,4 +136,25 @@ void Settings::setDeviceName(const QString &v)
     if (t == defaultDeviceName())
         t.clear();
     set("deviceName", t);
+}
+
+// The about text's fingerprint for its fold (12 hex digits are plenty to notice an edit).
+static QString aboutHash(const QString &about)
+{
+    return QString::fromLatin1(QCryptographicHash::hash(about.toUtf8(), QCryptographicHash::Sha256).toHex().left(12));
+}
+
+bool Settings::aboutFolded(const QString &gid, const QString &about) const
+{
+    return value(QStringLiteral("aboutFold/") + gid, QString()).toString() == aboutHash(about);
+}
+
+void Settings::setAboutFolded(const QString &gid, bool v, const QString &about)
+{
+    if (gid.isEmpty())
+        return;
+    if (v)
+        m_settings.setValue(QStringLiteral("aboutFold/") + gid, aboutHash(about));
+    else
+        m_settings.remove(QStringLiteral("aboutFold/") + gid);
 }

@@ -123,6 +123,7 @@ object Ringer {
     const val MISSED = "raven_missed"
     const val RING_ID = 0x4341
     const val ONGOING_ID = 0x4342
+    const val BACK_ID = 0x4343
     private val PATTERN = longArrayOf(0, 700, 500, 700, 1200)
     private var player: MediaPlayer? = null
     private var vibrating = false
@@ -278,6 +279,22 @@ object Ringer {
     }
 
     /** [key]: the chat it opens (the caller, or "g:" and a group for a group call). [note]: why it was missed. */
+    /** After a call answered from a voice room's soft ring: "Back to <room>" joins it again (gone after 10 minutes). */
+    fun backToRoom(c: Context, g: String, ch: String, title: String) {
+        channels(c)
+        val room = title.ifEmpty { "the voice room" }
+        val open = PendingIntent.getActivity(c, ("back" + g + ch).hashCode(), io.github.ravenor907.muninn.screens.RoomActivity.joinIntent(c, g, ch),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(c, MISSED).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle("Back to $room?").setContentText("You left $room to take the call. Tap to join again.")
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
+            .setTimeoutAfter(10 * 60_000L).build()
+        try { NotificationManagerCompat.from(c).notify(BACK_ID, n) } catch (_: SecurityException) {}
+    }
+
+    /** "Back to <room>" was used from the call's end screen: its notification goes. */
+    fun backUsed(c: Context) = NotificationManagerCompat.from(c).cancel(BACK_ID)
+
     fun missed(c: Context, name: String, key: String, note: String = "") {
         // Extreme battery saver: no notifications; the chat still shows it.
         if (try { (c.applicationContext as Muninn).power.manual() } catch (_: Exception) { false }) return

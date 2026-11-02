@@ -51,42 +51,75 @@ Rectangle {
         topPadding: panel.compact ? Theme.px(4) : Theme.px(8)
         bottomPadding: panel.compact ? Theme.px(4) : Theme.px(8)
 
-        // Compact: the room, the faces of whoever is talking, More (Share, Watch) and Leave, all on one line.
+        // Compact: the room, the faces of whoever is talking (or, with push to talk, the key to hold), More (Share,
+        // Watch) and Leave, all on one line. A problem (Rooms.note) gets the line to itself, beside Leave.
         Row {
             id: oneLine
             visible: panel.compact
             width: parent.width
             spacing: Theme.px(6)
             readonly property var talkers: panel.others.filter(p => p.speaking).slice(0, 3)
-            readonly property bool hasMore: Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar)
+            readonly property bool noted: Rooms.note !== "" && !panel.tour
+            readonly property bool holdShown: !noted && !panel.tour && Settings.pushToTalk
+            readonly property bool facesShown: !noted && !holdShown && talkers.length > 0
+            readonly property bool hasMore: !noted && (Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar))
             Text {
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.max(0, parent.width - compactLeave.width - parent.spacing
                                 - (oneLine.hasMore ? compactMore.width + parent.spacing : 0)
-                                - (oneLine.talkers.length ? talkerFaces.width + parent.spacing : 0))
+                                - (oneLine.facesShown ? talkerFaces.width + parent.spacing : 0)
+                                - (oneLine.holdShown ? holdKey.width + parent.spacing : 0))
                 elide: Text.ElideRight
-                text: Rooms.note !== "" && !panel.tour ? Rooms.note
+                text: oneLine.noted ? Rooms.note
                     : !panel.tour && Settings.pushToTalk && Rooms.talking ? "Talking"
                     : panel.tour ? "Voice / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
-                color: Rooms.note !== "" && !panel.tour ? Theme.danger : !panel.tour && Settings.pushToTalk && Rooms.talking ? Theme.accent : Theme.online
+                color: oneLine.noted ? Theme.danger : !panel.tour && Settings.pushToTalk && Rooms.talking ? Theme.accent : Theme.online
                 font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
                 Accessible.name: "Voice connected: " + text
                 TapHandler { onTapped: if (!panel.tour) Ui.openPage("g:" + Rooms.group, { voice: true }) }
             }
+            // Push to talk: the key to hold, where the faces would be.
+            Text {
+                id: holdKey
+                visible: oneLine.holdShown
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Hold " + (TalkKey.key === Qt.Key_QuoteLeft ? "`" : TalkKey.keyName)
+                color: Rooms.talking ? Theme.accent : Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+            }
             Row {
                 id: talkerFaces
-                visible: oneLine.talkers.length > 0
+                visible: oneLine.facesShown
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Theme.px(2)
                 Repeater {
                     model: oneLine.talkers
                     Avatar {
+                        id: talker
                         required property var modelData
                         size: Theme.px(24)
                         key: panel.tour ? "" : (modelData.key || "")
                         name: modelData.name || ""
                         backdrop: Theme.raised
+                        Accessible.role: Accessible.Button
+                        Accessible.name: (modelData.name || "") + ", speaking"
+                        // The same as the full panel's faces: a tap, their profile; a long press or right click, Mute
+                        // for me, Volume, and for admins Timeout and Ban.
+                        function menuAt(x, y) {
+                            if (panel.tour) return
+                            Ui.menuAt(talker, x, y, () => PeopleActions.memberMenu({ key: talker.modelData.key, name: talker.modelData.name,
+                                                                                     contact: Chat.isContact(talker.modelData.key) }, { group: Rooms.group }))
+                        }
+                        TapHandler {
+                            onTapped: if (!panel.tour) Ui.showProfile(talker.modelData.key, talker.modelData.name, {})
+                            onLongPressed: talker.menuAt(point.position.x, point.position.y)
+                        }
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            onTapped: (point, button) => talker.menuAt(point.position.x, point.position.y)
+                        }
                     }
                 }
             }
@@ -257,9 +290,12 @@ Rectangle {
             if (Rooms.canShare) items.push({ name: Rooms.sharing ? "Stop sharing" : "Share screen", icon: "screen", url: "share" })
             if (Rooms.sharerName !== "" && panel.roomBar)
                 items.push({ name: panel.roomBar.screenShown ? "Hide their screen" : "Watch their screen", icon: "screen", url: "watch" })
+            if (panel.roomBar && panel.roomBar.screenOn)
+                items.push({ name: panel.roomBar.screenBig ? "Smaller (B)" : "Bigger", icon: "screen", url: "big" })
             Ui.pickFrom("Voice", [{ header: "", items: items }], a => {
                 if (a === "share") Rooms.toggleShare()
                 else if (a === "watch" && panel.roomBar) panel.roomBar.screenShown = !panel.roomBar.screenShown
+                else if (a === "big" && panel.roomBar) panel.roomBar.screenBig = !panel.roomBar.screenBig
             })
         })
     }

@@ -1222,7 +1222,7 @@ private fun Conversation(app: Muninn, key: String) {
                 s.mine && s.failed -> add(SheetAction("Try again", "send") { app.chat.retry(key, s.id) })
             }
             add(SheetAction("Delete for me", "delete", danger = true) {
-                Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true, onConfirm = { app.chat.deleteMessage(key, s.id) }))
+                Ui.sure(Ask("Delete this message?", deletedHereOnly(), "Delete", danger = true, onConfirm = { app.chat.deleteMessage(key, s.id) }))
             })
         }
         MessageSheet(s.reactions[me]?.e?.takeIf { it.isNotEmpty() }, s.unsent.isEmpty() && !s.failed, actions,
@@ -2454,7 +2454,7 @@ private fun GroupConversation(app: Muninn, g: String) {
                         onConfirm = { app.chat.groups.removeForEveryone(g, gm.id, gm.from)?.let { Ui.say(it, true) } ?: Ui.say(removedText(app.chat.groups.withoutRemove(g))) }))
                 })
             add(SheetAction("Delete for me", "delete", danger = true) {
-                Ui.sure(Ask("Delete this message?", "It's deleted on this phone only.", "Delete", danger = true,
+                Ui.sure(Ask("Delete this message?", deletedHereOnly(), "Delete", danger = true,
                     onConfirm = { app.chat.groups.deleteMessage(g, gm.id) }))
             })
         }
@@ -2890,3 +2890,8 @@ private fun GifPanel(p: PendingGif, to: String, busy: Boolean, onSend: () -> Uni
         }
     }
 }
+
+/** "Delete for me" says where it goes: this phone only, and a linked computer keeps its own copy. */
+internal fun deletedHereOnly(): String =
+    if (io.github.ravenor907.muninn.net.Link.companions.value.isEmpty()) "It's deleted on this phone only."
+    else "It's deleted on this phone only. Your linked computer keeps its copy."
