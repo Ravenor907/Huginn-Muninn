@@ -1046,7 +1046,8 @@ Rectangle {
             else if (a === "files") { if (!isTour) PeopleActions.openFiles("g:" + gid, info.name) }
             else if (a === "addtext") newTextChannel(g, "", false)
             else if (a === "addvoice")
-                Ui.ask("New voice room", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, true), "Added."), false, true) else if (a === "rename") {
+                Ui.ask("New voice room", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, true), "Added."), false, true)
+            else if (a === "rename") {
                 pickChannel("Rename which?", channels, id => {
                     const c = channels.find(x => x.id === id)
                     Ui.ask("Rename " + (c ? c.name : "channel"), "Up to 32 characters", c ? c.name : "", "Save", t => tell(Chat.renameChannel(g, id, t), "Renamed."), false, true)
