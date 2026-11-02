@@ -80,19 +80,26 @@ object Icons {
         "userminus" to "M9 4a4 4 0 1 0 0.01 0 M2 21a7 7 0 0 1 14 0 M16 11h6",
         "warning" to "M12 3l10 18H2z M12 9v5 M12 17h0.01",
         "archive" to "M3 4h18v4H3z M5 8v12h14V8 M10 12h4",
+        // A little sparkle (the kids' greeting).
+        "sparkle" to "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z M19 3v4 M17 5h4",
     )
 }
+
+/** Rounded line ends and corners on every icon under it: the Kids' Device's friendly style. Off elsewhere. */
+val LocalRoundIcons = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 @Composable
 fun MIcon(name: String, color: Color = Palette.textMuted, size: Dp = 24.dp, modifier: Modifier = Modifier, weight: Float = 1.6f, filled: Boolean = false) {
     val path = remember(name) { PathParser().parsePathString(Icons.paths[name] ?: Icons.paths.getValue("file")).toPath() }
     // In the icon's own 24-unit space, so it scales with the icon once (big icons on a TV stay as light as small ones).
     val boldness = weight
+    val round = LocalRoundIcons.current
     Canvas(modifier.size(size)) {
         val k = this.size.width / 24f
         scale(k, k, pivot = Offset.Zero) {
             if (filled) drawPath(path, color)
-            else drawPath(path, color, style = Stroke(width = boldness, cap = StrokeCap.Square, join = StrokeJoin.Miter))
+            else drawPath(path, color, style = Stroke(width = boldness, cap = if (round) StrokeCap.Round else StrokeCap.Square,
+                join = if (round) StrokeJoin.Round else StrokeJoin.Miter))
         }
     }
 }

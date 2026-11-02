@@ -76,6 +76,9 @@ data class ManagedTv(
     val tz: String = "",
     /** When this phone last heard from the device (this phone's clock), and when it last said the device went quiet. */
     val seenAt: Long = 0, val silentTold: Long = 0,
+    /** k13 (7.18): the colors picked for the device (the same choices as Settings › Look), and Let the kid choose. */
+    val look: String = KidLook.DEFAULT.look, val season: String = KidLook.DEFAULT.season, val accent: String = KidLook.DEFAULT.accent,
+    val lookPick: Boolean = true,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -248,13 +251,17 @@ object TvParent {
             val quick = t.quick.filter { it.text.isNotBlank() }.take(TvRules.MAX_QUICK)
             val k11 = k11(app, key)
             val k12 = k12(app, key)
+            val k13 = k13(app, key)
             val (havw, havh) = havWording(t)
             val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null,
                 if (k7(app, key)) t.upd else null, if (k8(app, key)) t.keep else null,
                 if (k11) t.chat else null, if (k11) t.quiet else null, if (k11) t.pin else null,
                 if (k12) t.hav else null, if (k12) havw else null, if (k12) havh else null,
                 // k11: the time zone quiet times follow (this phone's until a parent picks another).
-                tz = if (k11) t.tz.ifEmpty { java.util.TimeZone.getDefault().id } else null) else null
+                tz = if (k11) t.tz.ifEmpty { java.util.TimeZone.getDefault().id } else null,
+                // k13: the colors, Let the kid choose, and the device's name on this phone for the kids' greeting.
+                look = if (k13) t.look else null, season = if (k13) t.season else null, accent = if (k13) t.accent else null,
+                lookPick = if (k13) t.lookPick else null, kname = if (k13) app.contacts.get(key)?.shown else null) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -408,6 +415,8 @@ object TvParent {
                     if (done && !t.k11Sent && k11(app, fromKey) && (t.chat != KidRules.EVERYTHING || t.quiet.isNotEmpty() || t.pin != null)) resend = true
                     // The device just showed it speaks k12: Daily Hávamál as the parent set it goes out.
                     if (done && runs != null && !Havamal.hasOn(runs.raw) && k12(app, fromKey) && (t.hav || t.havw == Havamal.MINE)) resend = true
+                    // The device just showed it speaks k13: the colors as the parent set them go out.
+                    if (done && runs != null && !runs.raw.has("look") && k13(app, fromKey)) resend = true
                 }
             }
             _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
@@ -442,6 +451,9 @@ object TvParent {
             sharedWith = (t.sharedWith + cfg.parents.filter { it != me }).distinct(),
             // k11: everyone's name on the device as its config has them (the same for every parent), and its time zone.
             names = cfg.contacts.associate { it.k to it.n }, tz = if (KidRules.hasK11(cfg.raw)) cfg.tz else t.tz,
+            // k13: another parent's colors; a config without them leaves this phone's as they were.
+            look = cfg.look ?: t.look, season = cfg.season ?: t.season, accent = cfg.accent ?: t.accent,
+            lookPick = if (cfg.raw.has("lookpick")) cfg.lookPick else t.lookPick,
         )
     }
 
@@ -824,6 +836,19 @@ object TvParent {
     /** The device's app said "k12". */
     fun k12(app: Muninn, key: String): Boolean = Havamal.CAP in (app.contacts.get(key)?.caps ?: emptySet())
 
+    // ---- k13 (7.18): the device's colors
+
+    /** The device's app said "k13". */
+    fun k13(app: Muninn, key: String): Boolean = KidLook.CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The parent picked the device's look, Seasonal choice or accent. */
+    fun setLook(key: String, look: String) = change(key) { it.copy(look = io.github.ravenor907.muninn.ui.Looks.of(look)) }
+    fun setSeason(key: String, season: String) = change(key) { it.copy(season = io.github.ravenor907.muninn.ui.Seasons.choice(season)) }
+    fun setAccent(key: String, accent: String) = change(key) { it.copy(accent = io.github.ravenor907.muninn.ui.Accents.choice(accent)) }
+
+    /** Let the kid choose: whether "My colors" shows on the device. */
+    fun setLookPick(key: String, on: Boolean) = change(key) { it.copy(lookPick = on) }
+
     /** The parent switched Daily Hávamál on or off. */
     fun setHav(key: String, on: Boolean) = change(key) { it.copy(hav = on) }
 
@@ -954,6 +979,7 @@ object TvParent {
             .put("hav", t.hav).put("havw", t.havw).put("havx", t.havx).put("havHeld", t.havHeld)
             .put("names", JSONObject().apply { t.names.forEach { (k, n) -> put(k, n) } }).put("tz", t.tz)
             .put("seenAt", t.seenAt).put("silentTold", t.silentTold)
+            .put("look", t.look).put("season", t.season).put("accent", t.accent).put("lookPick", t.lookPick)
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -983,7 +1009,11 @@ object TvParent {
                 hav = x.optBoolean("hav"), havw = if (x.optString("havw") == Havamal.MINE) Havamal.MINE else Havamal.BELLOWS,
                 havx = x.optString("havx"), havHeld = x.optString("havHeld"),
                 names = x.optJSONObject("names")?.let { n -> n.keys().asSequence().associateWith { n.optString(it) }.filterValues { it.isNotBlank() } } ?: emptyMap(),
-                tz = x.optString("tz"), seenAt = x.optLong("seenAt"), silentTold = x.optLong("silentTold"))
+                tz = x.optString("tz"), seenAt = x.optLong("seenAt"), silentTold = x.optLong("silentTold"),
+                look = io.github.ravenor907.muninn.ui.Looks.of(x.optString("look")),
+                season = io.github.ravenor907.muninn.ui.Seasons.choice(x.optString("season")),
+                accent = io.github.ravenor907.muninn.ui.Accents.choice(x.optString("accent")),
+                lookPick = x.optBoolean("lookPick", true))
         } catch (e: Exception) { null }
     }.toMap()
 }

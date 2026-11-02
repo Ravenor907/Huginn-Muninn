@@ -341,7 +341,7 @@ def check_quiet(q):
 
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh: only sent to a device whose app said so
+    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz", "look", "season", "accent", "lookpick", "kname"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh; k13 (7.18) look, season, accent, lookpick, kname: only sent to a device whose app said so
     if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
     if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
     if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")
@@ -360,6 +360,12 @@ def check_tvconfig(c):
     if "havh" in c and (not is_hex(c["havh"], 64) or c.get("havw") != "y"): raise ValueError("havh")
     # k11: the IANA time zone quiet times follow.
     if "tz" in c and (not isinstance(c["tz"], str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_+\-/]{0,63}", c["tz"]) or "//" in c["tz"] or c["tz"].endswith("/")): raise ValueError("tz")
+    # k13: the colors (a look or season the device doesn't know shows as Dark or Seasonal off), Let the kid choose, and the kid's name.
+    for f in ("look", "season"):
+        if f in c and (not isinstance(c[f], str) or not re.fullmatch(r"[a-z]{1,16}", c[f])): raise ValueError(f)
+    if "accent" in c and (not isinstance(c["accent"], str) or not (c["accent"] in ("gold", "iron", "copper", "jade", "fjord", "heather", "ember") or re.fullmatch(r"#[0-9A-F]{6}", c["accent"]))): raise ValueError("accent")
+    if "lookpick" in c and not isinstance(c["lookpick"], bool): raise ValueError("lookpick")
+    if "kname" in c and (not isinstance(c["kname"], str) or not c["kname"].strip() or len(c["kname"]) > 40 or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in c["kname"])): raise ValueError("kname")
     if not isinstance(c["v"], int) or c["v"] < 1: raise ValueError("version")
     if c["parents"] != sorted(set(c["parents"])) or not c["parents"] or c["by"] not in c["parents"]: raise ValueError("parents")
     if not isinstance(c["dictation"], bool): raise ValueError("dictation")

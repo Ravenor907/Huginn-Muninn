@@ -94,6 +94,7 @@ object ParentTvMenu {
         "quiet" to "Quiet times",
         "lock" to "Parent PIN",
         "havamal" to "Daily Hávamál",
+        "look" to "Look",
         "apps" to "Apps",
         "updates" to "Updates",
         "more" to "More",
@@ -229,6 +230,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
                 "quiet" -> Quiet(app, t)
                 "lock" -> Lock(app, t)
                 "havamal" -> DailyHavamal(app, t)
+                "look" -> KidLookPart(app, t)
                 "quick" -> QuickMessages(t)
                 "sound" -> Sound(app, t)
                 "names" -> Names(app, t, tvName)
@@ -262,6 +264,8 @@ private fun Menu(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
             "lock" -> if (!k11) UPDATE_FIRST else if (t.pin == null) "Not set" else "Set"
             // k12: an older device can't show it yet.
             "havamal" -> if (!TvParent.k12(app, t.key)) UPDATE_FIRST else if (t.hav) "On" else "Off"
+            // k13: an older device can't take its colors yet.
+            "look" -> if (!TvParent.k13(app, t.key)) UPDATE_FIRST else io.github.ravenor907.muninn.ui.Looks.name(t.look)
             "apps" -> asks.let { TvAppAsks.of(app, t.key).count { !it.answered } }.let { n -> if (n > 0) "$n waiting for you" else "" }
             "updates" -> if (t.upd) "Auto-update on" else "Auto-update off"
             else -> ""
@@ -573,7 +577,10 @@ private fun Names(app: Muninn, t: ManagedTv, tvName: String) {
     MenuRow("Device name", tvName) { naming = "tv" }
     MenuRow("Your name on it", t.myName.ifBlank { "Parent" }) { naming = "me" }
     when (naming) {
-        "tv" -> TextDialog("Device name", tvName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name -> app.chat.rename(t.key, name); naming = "" }
+        // The name also greets the kids on the device (k13): the config goes out again.
+        "tv" -> TextDialog("Device name", tvName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name ->
+            app.chat.rename(t.key, name); naming = ""; TvParent.change(t.key) { it }
+        }
         "me" -> TextDialog("Your name on it", t.myName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name ->
             TvParent.setName(t.key, app.identity.publicKey, name); naming = ""
         }
@@ -884,6 +891,49 @@ private fun DailyHavamal(app: Muninn, t: ManagedTv) {
         HoldToConfirm("Hold to remove", "Hold for 5 seconds to remove your translation", { HavParent.remove(app); Ui.say("Removed") },
             Modifier.fillMaxWidth().padding(top = 8.dp))
     }
+}
+
+/**
+ * The device's colors (k13): the same Looks, Seasonal choices and accents as Settings › Look, and Let the kid choose,
+ * which shows "My colors" on the device so the kid can pick their own. A change here puts the parent's colors on again.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun KidLookPart(app: Muninn, t: ManagedTv) {
+    val k13 = TvParent.k13(app, t.key)
+    if (!k13) Note(UPDATE_FIRST)
+    fun saved() = Ui.say("Saved. It changes on the device once it's online.")
+    Text("Theme", style = Type.big.copy(fontSize = 16.sp, color = if (k13) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+    val looks = io.github.ravenor907.muninn.ui.Looks.ALL
+    ChoiceRow(looks.size, Modifier.padding(vertical = 6.dp), minWidth = 100.dp) { i, m ->
+        val (k, n) = looks[i]
+        MButton(n, m, if (t.look == k) Kind.Accent else Kind.Normal, enabled = k13) { if (t.look != k) { TvParent.setLook(t.key, k); saved() } }
+    }
+    Text("Seasonal", style = Type.big.copy(fontSize = 16.sp, color = if (k13) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+    val seasons = io.github.ravenor907.muninn.ui.Seasons.CHOICES
+    ChoiceRow(seasons.size, Modifier.padding(vertical = 6.dp), minWidth = 120.dp, max = 2) { i, m ->
+        val (k, n) = seasons[i]
+        MButton(n, m, if (t.season == k) Kind.Accent else Kind.Normal, enabled = k13) { if (t.season != k) { TvParent.setSeason(t.key, k); saved() } }
+    }
+    Text("Accent", style = Type.big.copy(fontSize = 16.sp, color = if (k13) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+    val names = io.github.ravenor907.muninn.ui.Accents.NAMES
+    androidx.compose.foundation.layout.FlowRow(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        names.forEachIndexed { i, n ->
+            val on = t.accent == n
+            val c = Palette.accentOf(n)
+            val title = io.github.ravenor907.muninn.ui.Accents.TITLES[i]
+            Column(Modifier.clip(Corner).clickable(enabled = k13, role = Role.RadioButton) { if (!on) { TvParent.setAccent(t.key, n); saved() } }
+                .semantics(mergeDescendants = true) { contentDescription = if (on) "$title, picked" else title }.padding(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.size(44.dp).clip(CircleShape).background(c).border(if (on) 3.dp else 1.dp, if (on) Palette.text else Palette.line, CircleShape),
+                    contentAlignment = Alignment.Center) { if (on) MIcon("check", Palette.onAccentOf(c), 22.dp, weight = 2.2f) }
+                Text(title, style = Type.small.copy(color = if (on) Palette.text else Palette.textMuted), modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+    TvToggle("Let the kid choose", "Shows My colors on the device, with the same choices. Your pick here goes on again whenever you change it.",
+        t.lookPick, enabled = k13) { on -> TvParent.setLookPick(t.key, on); saved() }
 }
 
 /** A new PIN, typed twice. */

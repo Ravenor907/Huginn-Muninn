@@ -141,6 +141,11 @@ data class TvConfig(
     val hav: Boolean = false, val havw: String = Havamal.BELLOWS, val havh: String? = null,
     /** k11 (7.18): the time zone quiet times follow, an IANA id (absent: ""; the device's own zone then). */
     val tz: String = "",
+    /**
+     * k13 (7.18): the colors a parent picked ([look], [season], [accent]; null: none yet, the device keeps its own), whether
+     * the kid may pick their own (absent: yes) and the kid's name for the greeting (absent: none).
+     */
+    val look: String? = null, val season: String? = null, val accent: String? = null, val lookPick: Boolean = true, val kname: String = "",
 )
 
 /** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
@@ -152,7 +157,10 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      /** k12: only for a device whose app said "k12" (null: left out). [havh]: only with the wording [Havamal.MINE]. */
                      val hav: Boolean? = null, val havw: String? = null, val havh: String? = null,
                      /** k11: the time zone quiet times follow (null or empty: left out). */
-                     val tz: String? = null)
+                     val tz: String? = null,
+                     /** k13: only for a device whose app said "k13" (null: left out). */
+                     val look: String? = null, val season: String? = null, val accent: String? = null,
+                     val lookPick: Boolean? = null, val kname: String? = null)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -190,7 +198,7 @@ object TvRules {
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz")
+    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz") + KidLook.FIELDS
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -211,6 +219,8 @@ object TvRules {
         Havamal.check(c)
         // k11 (7.18): the time zone quiet times follow.
         if (c.has("tz")) KidRules.tzIn(c.get("tz"))
+        // k13 (7.18): the colors, Let the kid choose and the kid's name.
+        KidLook.check(c)
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -292,6 +302,11 @@ object TvRules {
             if (c.optString("havw") == Havamal.MINE) Havamal.MINE else Havamal.BELLOWS,
             if (c.has("havh")) c.getString("havh") else null,
             tz = if (c.has("tz")) KidRules.tzIn(c.get("tz")) else "",
+            look = if (c.has("look")) c.getString("look") else null,
+            season = if (c.has("season")) c.getString("season") else null,
+            accent = if (c.has("accent")) c.getString("accent") else null,
+            lookPick = c.optBoolean("lookpick", true),
+            kname = if (c.has("kname")) c.getString("kname") else "",
         )
     }
 
@@ -311,7 +326,13 @@ object TvRules {
             it.havw?.let { w -> o.put("havw", if (w == Havamal.MINE && it.havh != null) Havamal.MINE else Havamal.BELLOWS) }
             if (it.havw == Havamal.MINE) it.havh?.let { h -> o.put("havh", h) }
             // k11: the time zone, only with the other k11 fields (a valid IANA id).
-            if (it.chat != null) it.tz?.takeIf { z -> z.isNotEmpty() && runCatching { KidRules.tzIn(z) }.isSuccess }?.let { z -> o.put("tz", z) } }
+            if (it.chat != null) it.tz?.takeIf { z -> z.isNotEmpty() && runCatching { KidRules.tzIn(z) }.isSuccess }?.let { z -> o.put("tz", z) }
+            // k13: the colors, Let the kid choose and the kid's name.
+            it.look?.takeIf { l -> Regex("[a-z]{1,16}").matches(l) }?.let { l -> o.put("look", l) }
+            it.season?.takeIf { l -> Regex("[a-z]{1,16}").matches(l) }?.let { l -> o.put("season", l) }
+            it.accent?.let { a -> o.put("accent", KidLook.accentOut(a)) }
+            it.lookPick?.let { k -> o.put("lookpick", k) }
+            it.kname?.let { n -> clean(n, MAX_NAME).takeIf { x -> x.isNotEmpty() }?.let { x -> o.put("kname", x) } } }
         return Canon.sign(priv, CONFIG, o)
     }
 

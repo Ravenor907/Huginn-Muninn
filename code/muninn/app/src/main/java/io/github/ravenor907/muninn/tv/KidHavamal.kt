@@ -202,21 +202,21 @@ private fun havDay(cfg: TvConfig): Triple<HavVerse, List<HavVerse>, Map<Int, Str
     return Triple(v, Havamal.at(verses, Havamal.earlier(today, start, verses.size)), HavDevice.stanzasFor(cfg, held))
 }
 
-/** On a tablet or phone: today's verse as a card below the people. */
+/**
+ * On a tablet or phone: today's verse as the first row of the chat list, like a chat (a gold book, the verse's first line
+ * and its stanza). A tap opens it big, with what it means and Read aloud.
+ */
 @Composable
-internal fun HavCard(cfg: TvConfig, modifier: Modifier = Modifier) {
+internal fun HavRow(cfg: TvConfig, modifier: Modifier = Modifier) {
     val day = havDay(cfg) ?: return
     var open by remember { mutableStateOf(false) }
     val text = Havamal.wordingOf(day.first, cfg.havw, day.third)
-    val shape = RoundedCornerShape(18.dp)
-    Column(modifier.fillMaxWidth().clip(shape).background(Palette.panel).clickable(role = Role.Button) { open = true }
-        .semantics { contentDescription = "Today's verse. Open it" }.padding(horizontal = 18.dp, vertical = 14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            MIcon("text", Palette.goldBright, 22.dp)
-            Text("Today's verse", style = tvText(17.sp, Palette.goldBright, FontWeight.SemiBold), modifier = Modifier.padding(start = 8.dp))
-        }
-        Text(text, style = tvText(18.sp), maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
-    }
+    io.github.ravenor907.muninn.screens.PersonRow("Today's verse", text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty(),
+        "Stanza ${day.first.n}", 0, false, {
+            Box(Modifier.size(50.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Palette.goldTint), contentAlignment = Alignment.Center) {
+                MIcon("text", Palette.goldBright, 24.dp)
+            }
+        }, modifier = modifier) { open = true }
     if (open) HavDialog(cfg, day.first, day.second, day.third, tv = false) { open = false }
 }
 

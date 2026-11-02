@@ -511,7 +511,7 @@ private suspend fun PointerInputScope.holdToDrag(press: MutableInteractionSource
  */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PersonRow(name: String, preview: String, time: String, unread: Int, dot: Boolean, avatar: @Composable () -> Unit,
+internal fun PersonRow(name: String, preview: String, time: String, unread: Int, dot: Boolean, avatar: @Composable () -> Unit,
                       muted: Boolean = false, onLong: (() -> Unit)? = null, picked: Boolean = false, longLabel: String = "Menu", modifier: Modifier = Modifier,
                       onDrag: ((Float) -> Unit)? = null, onDrop: ((Boolean) -> Unit)? = null, onClick: () -> Unit) {
     val press = remember { MutableInteractionSource() }
@@ -2135,13 +2135,16 @@ private fun GroupAvatar(name: String, others: List<Proto06.Member>, size: Dp) {
     }
 }
 
-/** A round chip (folders, channels). [onLong]: hold to rename or delete. */
+/**
+ * A round chip (folders, channels, the chat list's filters). [onLong]: hold to rename or delete. [shape] and [minHeight]:
+ * the look's corners and 40dp, unless a screen (the Kids' Device's) asks for rounder and bigger ones.
+ */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun Chip(text: String, on: Boolean, icon: String? = null, onLong: (() -> Unit)? = null, onClick: () -> Unit) {
-    val shape = io.github.ravenor907.muninn.ui.Corner
+internal fun Chip(text: String, on: Boolean, icon: String? = null, onLong: (() -> Unit)? = null,
+                  shape: androidx.compose.ui.graphics.Shape = io.github.ravenor907.muninn.ui.Corner, minHeight: Dp = 40.dp, onClick: () -> Unit) {
     // A 40dp chip with a full 48dp touch area.
-    Row(Modifier.minimumInteractiveComponentSize().heightIn(min = 40.dp).clip(shape)
+    Row(Modifier.minimumInteractiveComponentSize().heightIn(min = minHeight).clip(shape)
         .then(if (on) Modifier.background(Palette.gold) else Modifier.border(1.dp, if (Access.contrast) Palette.lineMuted else Palette.line, shape))
         .combinedClickable(role = Role.Tab, onLongClickLabel = if (onLong != null) "Rename or delete" else null, onLongClick = onLong, onClick = onClick)
         .semantics { selected = on }.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {

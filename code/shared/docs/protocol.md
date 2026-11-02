@@ -88,6 +88,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `u1` | a kids' TV updates by itself and reports it (7.17): `upnow` from a parent, `upstate` from the TV. Muninn only. |
 | `k11` | Kids' Device on any Android device (7.18): config fields `chat`, `quiet` and `pin`, `dev` in `applied`, and `unlockask`, `unlock`, `left`. Muninn only. |
 | `k12` | Daily Hávamál on a Kids' Device (7.18): config fields `hav`, `havw` and `havh`, `havh` in `applied`, and `havtext`. Muninn only. |
+| `k13` | a Kids' Device's colors and the kid's name (7.18): config fields `look`, `season`, `accent`, `lookpick` and `kname`. Muninn only. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -979,7 +980,7 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 ```
 
 Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd`, the k8 field `keep`
-and the k11 fields `chat`, `quiet` and `pin` and the k12 fields `hav`, `havw` and `havh` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
+and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1314,8 +1315,10 @@ States: `checking`, `downloading`, `installing`, `current` (it runs the newest),
 
 Kids' mode is not only for TVs. A tablet or phone becomes a Kids' Device from the welcome page of its first setup (only a
 fresh install: no lock, no contacts). It pairs exactly as a TV does (7.1: it shows the code with `"tv":1`, a parent's phone
-scans it) and from then on everything in section 7 applies to it. Only its screens differ: big touch tiles instead of the
-D-pad. A device whose app says `k11` adds what it is to every `applied`: `"dev":"tv"`, `"tablet"` or `"phone"` (apps that
+scans it) and from then on everything in section 7 applies to it. Only its screens differ: Muninn's own layout (a top
+card with a greeting and "For a parent", filter chips, the chat list and the conversation, with Chats, Call and People at
+the bottom), a little rounder and bigger, instead of the D-pad tiles; on a tablet, the list and the conversation side by
+side. Quick messages sit behind a button beside the message box, or are the composer at `chat` 1. A device whose app says `k11` adds what it is to every `applied`: `"dev":"tv"`, `"tablet"` or `"phone"` (apps that
 don't know it ignore it; a device that says nothing is a TV).
 
 **Config fields.** A device whose app says `k11` takes four more optional config fields. A parent's app puts them in only
@@ -1366,8 +1369,8 @@ clock stands in.
 talk to"; it then talks with this one once each is on the other's list (a parent who looks after both does both in one
 step). A Kids' Device takes a group invite, or being put straight into a group (op `"add"`, cap m1), only from one of its
 parents, and takes it without asking; any other invite is declined. It takes rooms `group`, `gmsg`, `gphoto` and
-`greceipt` only from its parents and from people in a group it is in. Its screens show those groups as tiles (not during a
-quiet time). A parent's app shows a Kids' Device in its group pickers only to that device's parents.
+`greceipt` only from its parents and from people in a group it is in. Its screens show those groups (as tiles on a TV, as
+chats on a tablet or phone; not during a quiet time). A parent's app shows a Kids' Device in its group pickers only to that device's parents.
 
 **Locked in.** Kids' mode stays on inside Muninn. On the device, "For a parent" opens only with the parent PIN or a parent's
 yes; it then stays open for 10 minutes and offers Android's settings page for Muninn and Leave kids' mode; closing it locks
@@ -1397,8 +1400,8 @@ the config with `pin` taken out. That config's signature can't hold then, so a p
 `chat` and no `pin` on the word of its sender: the device itself, or a parent it knew. Updates from anywhere (7.17) work on
 every kind of Kids' Device; a device without `u1` but with `k2` is asked with the k2 `update`.
 
-**Daily Hávamál (`k12`).** One verse of the Hávamál a day on the kids' home (a card below the people on a tablet or phone,
-a tile after them on a TV), the same verse all day by the device's local date, cycling through the app's list (Henry
+**Daily Hávamál (`k12`).** One verse of the Hávamál a day on the kids' home (the first row of the chat list on a tablet or
+phone, a tile after the people on a TV), the same verse all day by the device's local date, cycling through the app's list (Henry
 Adams Bellows' translation, 1923, public domain), with a line for children on what it means, Read aloud (the device's
 text-to-speech, when it has one) and the verses shown before (at most 30, since it came on). A device whose app says
 `k12` takes three more optional config fields. A parent's app puts `hav` and `havw` in only for such a device (always,
@@ -1428,6 +1431,27 @@ them together (a part for another `h` drops the last one's), and keeps the text 
 is `h`. It keeps one translation, replacing any other, and erases it on a disconnect or when it leaves kids' mode. Its
 every `applied` then carries `"havh"`: the hash it holds (apps that don't know it ignore it). A parent's phone sends the
 parts again, at most once a minute, while the device's `applied` says otherwise.
+
+**Colors and the kid's name (`k13`).** A tablet or phone in kids' mode has the same Looks, Seasonal choices and accents
+as Muninn's Settings › Look, and the kid can pick them from "My colors" unless a parent turned that off. A device whose app
+says `k13` takes five more optional config fields. A parent's app puts them in only for such a device (`look`, `season`,
+`accent` and `lookpick` always; `kname` when it has a name for the device); a device without `k13` would refuse the config
+as malformed, so the parent's page shows "Update this device first" on its Look row instead.
+
+| field | value | absent means | what the device does |
+|---|---|---|---|
+| `look` | 1 to 16 lowercase letters: `"dark"`, `"black"` or `"light"` | the device keeps its current value (none on a new device) | the look the parent picked. One the device doesn't know shows as Dark |
+| `season` | 1 to 16 lowercase letters: `"off"`, `"auto"` or a season (`"autumn"`, `"snow"`) | as for `look` | the Seasonal choice. One the device doesn't know shows as Off |
+| `accent` | `"gold"`, `"iron"`, `"copper"`, `"jade"`, `"fjord"`, `"heather"`, `"ember"`, or `"#RRGGBB"` (upper-case hex) | as for `look` | the accent |
+| `lookpick` | true or false | the device keeps its current value (true on a new device) | true: "My colors" shows, and the kid's own pick stays until the parent's colors change. false: no "My colors", and the parent's colors are always on |
+| `kname` | a string, 1 to 40 characters, not only spaces, no control characters | the device keeps its current name | the kid's name in the greeting ("Hi, Ava"). Without one the greeting is "Hi there" |
+
+Anything else (a look with capitals or digits, a lower-case `#rrggbb`, `lookpick` that isn't a boolean, an empty `kname`)
+makes the config malformed. Like `hav` and `havw`, each field is kept on its own when absent (the device keeps them beside
+the signed config), so a parent's app without `k13` changes none of them. The device puts the parent's colors on when
+`look`, `season` or `accent` differ from the last ones it put on (a config sent again with the same colors leaves the kid's
+own pick alone); while `lookpick` is false it puts them on whenever something else shows. A TV takes the colors too; only a
+tablet or phone has "My colors". A parent's phone sends the name it shows for the device (its "Device name") as `kname`.
 
 ## 8. Message types
 

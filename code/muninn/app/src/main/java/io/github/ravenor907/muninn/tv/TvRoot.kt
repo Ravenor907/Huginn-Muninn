@@ -102,7 +102,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-// The Kids' Device screens on a TV: 1920 x 1080 is 960 x 540 dp. (A tablet or phone gets the touch ones, KidTouch.)
+// The Kids' Device screens on a TV: 1920 x 1080 is 960 x 540 dp. (A tablet or phone gets Muninn's own layout, KidPhone.)
 // Everything works with the D-pad, OK and Back alone: every action is a focusable tile, and focus shows as a
 // gold ring (never by color alone: the ring is 4 dp wide and the tile grows a little). Nothing a child reads is
 // smaller than 20 sp. A parent sets everything from their phone; "For a parent" (the lock) needs the parent PIN.
@@ -321,8 +321,10 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     var parent by remember { mutableStateOf(false) }
     // k12: Daily Hávamál turned off: Earlier verses starts over the next time it comes on.
     LaunchedEffect(cfg.hav) { if (!cfg.hav) HavDevice.forgetStart(context) }
+    // k13 (7.18): the colors a parent picked go on when they change, or always while the kid may not pick their own.
+    LaunchedEffect(cfg) { applyKidLook(app, cfg) }
     // Someone a parent just took off the list: back to the people who are still on it.
-    if (!tv) KidTouch(app, cfg, shown, quiet) { parent = true }
+    if (!tv) KidPhone(app, cfg, shown, quiet) { parent = true }
     else if (shown == null) TvHome(app, cfg, TvNav.last, quiet, onParent = { parent = true }) { TvNav.show(it) }
     else TvTalk(app, cfg, shown) { TvNav.home() }
     if (parent) KidParentArea(app, cfg, tv) { parent = false }
@@ -785,8 +787,9 @@ private fun QuickTile(text: String, done: Boolean, requester: FocusRequester?, m
 
 @Composable
 internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onVideo: () -> Unit = {}, onPoll: () -> Unit = {},
-                        speak: (() -> Unit)? = null, onPhoto: () -> Unit) {
-    val shape = if (m.mine) RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp) else RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp)
+                        speak: (() -> Unit)? = null, corner: Dp = 14.dp, onPhoto: () -> Unit) {
+    // [corner]: 14dp on a TV; rounder on a tablet or phone (the kids' style).
+    val shape = if (m.mine) RoundedCornerShape(corner, corner, 4.dp, corner) else RoundedCornerShape(corner, corner, corner, 4.dp)
     val bg = if (m.mine) Palette.bubbleMine else TheirBubble
     Box(Modifier.fillMaxWidth(), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
         when {
