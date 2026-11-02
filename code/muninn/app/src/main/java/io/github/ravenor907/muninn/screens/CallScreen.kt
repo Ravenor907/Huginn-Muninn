@@ -72,10 +72,10 @@ import io.github.ravenor907.muninn.ui.Palette
 import io.github.ravenor907.muninn.ui.Type
 import kotlinx.coroutines.delay
 
-/** The colors only this screen uses (the end-call red and answer green). */
+/** The colors only this screen uses (the end-call red and answer green, remapped by Color vision in [Palette]). */
 private object CallColors {
-    val end get() = if (Access.colorBlind) Color(0xFFB8741A) else Color(0xFFC4553F)
-    val answer get() = if (Access.colorBlind) Color(0xFF2F6FB3) else Color(0xFF3E8A55)
+    val end get() = Palette.hangUp
+    val answer get() = Palette.answer
     val ring1 get() = if (Access.contrast) Color(0xFF333333) else Color(0xFF1B1813)
     val ring2 get() = if (Access.contrast) Color(0xFF1A1A1A) else Color(0xFF141210)
     val encrypted get() = Palette.online

@@ -73,7 +73,7 @@ const int kIdleMs = 5000;       // then 5 seconds with nothing asked to draw: wh
 const int kTotalMs = 3 * kPhaseMs + kWarmMs + kIdleMs;
 const char *const kKeys[] = {"display", "drawing", "loop", "animations"};
 
-QSettings store() { return QSettings(Settings::org(), QStringLiteral("Huginn")); }
+QSettings store() { return Settings::store(); }
 QString key(const char *k) { return QStringLiteral("labs/perf/") + QLatin1String(k); }
 QString defaultOf(const QString &k) { return k == QLatin1String("animations") ? QStringLiteral("on") : QStringLiteral("auto"); }
 
@@ -336,18 +336,45 @@ qint64 clockNs() { return timer().nsecsElapsed(); }
 void add(const char *what, qint64 ns) { addTo(s_counts, what, ns); }
 void addAll(const char *what, qint64 ns) { addTo(s_all, what, ns); }
 
+namespace
+{
+// The worker threads' parts and counts: written from those threads, read on the window's thread.
+QMutex s_threadLock;
+QHash<const char *, Count> s_threadParts;
+QHash<QString, qint64> s_threadTally;
+}
+
+void addThread(const char *what, qint64 ns)
+{
+    if (!on || !what)
+        return;
+    QMutexLocker l(&s_threadLock);
+    addTo(s_threadParts, what, ns);
+}
+
+QList<Entry> threadParts()
+{
+    QMutexLocker l(&s_threadLock);
+    return entriesOf(s_threadParts);
+}
+
 void count(const QString &what, int n)
 {
-    if (!on || !QThread::isMainThread())
+    if (!on)
         return;
+    if (!QThread::isMainThread()) {
+        QMutexLocker l(&s_threadLock);
+        s_threadTally[what] += n;
+        return;
+    }
     s_tally[what] += n;
 }
 
 void count(const char *what, int n)
 {
-    if (!on || !QThread::isMainThread())
+    if (!on)
         return;
-    s_tally[QString::fromUtf8(what)] += n;
+    count(QString::fromUtf8(what), n);
 }
 
 void nameSocket(QObject *socket, const char *name)
@@ -380,6 +407,11 @@ void start()
     s_sockets.clear();
     s_seen.clear();
     s_tally.clear();
+    {
+        QMutexLocker l(&s_threadLock);
+        s_threadParts.clear();
+        s_threadTally.clear();
+    }
     s_eventNs = 0;
     ++s_generation;
     timer();
@@ -393,8 +425,14 @@ QList<Entry> allParts() { return entriesOf(s_all); }
 
 QList<QPair<QString, qint64>> counts()
 {
+    QHash<QString, qint64> all = s_tally;
+    {
+        QMutexLocker l(&s_threadLock);
+        for (auto it = s_threadTally.cbegin(); it != s_threadTally.cend(); ++it)
+            all[it.key()] += it.value();
+    }
     QList<QPair<QString, qint64>> out;
-    for (auto it = s_tally.cbegin(); it != s_tally.cend(); ++it)
+    for (auto it = all.cbegin(); it != all.cend(); ++it)
         out.append({it.key(), it.value()});
     std::sort(out.begin(), out.end(), [](const QPair<QString, qint64> &a, const QPair<QString, qint64> &b) { return a.first < b.first; });
     return out;
@@ -1384,6 +1422,13 @@ void PerfCheck::noteDetails(double wallMs)
     if (parts.isEmpty())
         d << QStringLiteral("  none");
     for (const Busy::Entry &e : parts)
+        d << QStringLiteral("  %1: %2 times, %3 ms, slowest %4 ms").arg(e.what).arg(e.times).arg(fixed(e.ms)).arg(fixed(e.longest));
+
+    d << QStringLiteral("Off the window's thread (the relay and saving threads; each on its own):");
+    const QList<Busy::Entry> offParts = Busy::threadParts();
+    if (offParts.isEmpty())
+        d << QStringLiteral("  none");
+    for (const Busy::Entry &e : offParts)
         d << QStringLiteral("  %1: %2 times, %3 ms, slowest %4 ms").arg(e.what).arg(e.times).arg(fixed(e.ms)).arg(fixed(e.longest));
 
     const QList<Busy::EventEntry> events = Busy::busiestEvents();

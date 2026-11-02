@@ -95,6 +95,17 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     /** Every event for the ring mailbox (its content): never kept, never handed to [onEnvelope]. */
     var onRing: ((String) -> Unit)? = null
     private val ringSubId = "muninn-r" + UUID.randomUUID().toString().take(8)
+    /** The inbox in pages (`until`), as Huginn asks: a relay that hands over a full answer is asked for the ones before it. */
+    private val pageSubId = "muninn-p" + UUID.randomUUID().toString().take(8)
+    private val paging = InboxPaging()
+    /** Held for a few seconds while an incoming event (a message, a call) is handled, so the phone doesn't sleep halfway. */
+    private val eventWake by lazy {
+        context.getSystemService(android.os.PowerManager::class.java).newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "muninn:incoming")
+            .apply { setReferenceCounted(true) }
+    }
+    /** Network changes within the last minute (elapsed ms), and the reconnect waiting for its turn. */
+    private val netChanges = ArrayDeque<Long>()
+    @Volatile private var netPending: java.util.concurrent.ScheduledFuture<*>? = null
     /** Per relay: its last sign-in challenge (NIP-42), to sign in again once the vault opens. */
     private val challenges = ConcurrentHashMap<String, String>()
 
@@ -115,14 +126,19 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         writeHeld(list)
     }
 
-    private fun readHeld(): MutableList<String> = try {
-        if (!heldFile.exists()) mutableListOf() else JSONArray(heldFile.readText()).let { a -> MutableList(a.length()) { a.getString(it) } }
-    } catch (_: Exception) { mutableListOf() }
+    /** True when the kept list is there but can't be read: it's left as it is, and nothing more is kept in it. */
+    @Volatile private var heldBroken = false
 
+    private fun readHeld(): MutableList<String> =
+        when (val r = SafeFile.read(heldFile) { b -> JSONArray(String(b)).let { a -> MutableList(a.length()) { a.getString(it) } } }) {
+            is SafeFile.Read.Ok -> { heldBroken = false; r.value }
+            is SafeFile.Read.Missing -> { heldBroken = false; mutableListOf() }
+            is SafeFile.Read.Bad -> { heldBroken = true; android.util.Log.w("Muninn", "nostr-held.json can't be read; it isn't saved over"); mutableListOf() }
+        }
+
+    /** False (nothing written) when the kept list didn't load: what's in it is never replaced by a shorter list. */
     private fun writeHeld(list: List<String>): Boolean = try {
-        val tmp = java.io.File(heldFile.path + ".tmp")
-        tmp.writeText(JSONArray(list).toString())
-        tmp.renameTo(heldFile)
+        if (heldBroken) false else { SafeFile.write(heldFile, JSONArray(list).toString().toByteArray()); true }
     } catch (_: Exception) { false }
 
     /**
@@ -131,18 +147,19 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
      */
     fun openHeld() {
         val list = synchronized(heldLock) { readHeld() }
-        if (list.isEmpty()) { heldFile.delete(); return }
+        if (list.isEmpty()) { if (!heldBroken) SafeFile.delete(heldFile); return }
         val handled = HashSet<String>()
         for (content in list) try { if (onEnvelope?.invoke(content) == true) handled.add(content) } catch (_: Exception) {}
         synchronized(heldLock) {
             // Anything kept meanwhile (locked again already), or not taken yet, stays for the next unlock.
             val rest = readHeld().filter { it !in handled }
-            if (rest.isEmpty()) heldFile.delete() else writeHeld(rest)
+            if (heldBroken) return
+            if (rest.isEmpty()) SafeFile.delete(heldFile) else writeHeld(rest)
         }
     }
 
     /** Erase everything and Move: what was kept while locked goes, unopened. */
-    fun forgetHeld() = synchronized(heldLock) { heldFile.delete(); java.io.File(heldFile.path + ".tmp").delete() }
+    fun forgetHeld() = synchronized(heldLock) { SafeFile.delete(heldFile); heldBroken = false }
 
     private val _connected = MutableStateFlow(0)
     val connected: StateFlow<Int> = _connected.asStateFlow()
@@ -160,7 +177,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     init {
         try {
             if (stateFile.exists()) {
-                val o = JSONObject(stateFile.readText())
+                val o = (SafeFile.read(stateFile) { b -> JSONObject(String(b)) } as? SafeFile.Read.Ok)?.value ?: JSONObject()
                 o.optJSONArray("seen")?.let { a -> for (i in 0 until a.length()) seen.add(a.getString(i)) }
                 o.optJSONObject("eose")?.let { e -> e.keys().forEach { eoseAt[it] = e.optLong(it) } }
             } else {
@@ -181,9 +198,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
                 val o = JSONObject()
                 synchronized(seen) { o.put("seen", JSONArray(seen.toList())) }
                 o.put("eose", JSONObject(HashMap<String, Long>(eoseAt) as Map<*, *>))
-                val tmp = java.io.File(stateFile.path + ".tmp")
-                tmp.writeText(o.toString())
-                tmp.renameTo(stateFile)
+                SafeFile.write(stateFile, o.toString().toByteArray())
             } catch (_: Exception) {}
         }, SAVE_EVERY_S, TimeUnit.SECONDS)
     }
@@ -418,7 +433,39 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         _connected.value = 0
     }
 
+    /** The inbox before [until] (a full answer came): same mailbox and since as the inbox request, on its own request. */
+    private fun askPage(url: String, ws: WebSocket, until: Long) {
+        val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
+        val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since).put("until", until)
+        ws.send(JSONArray().put("REQ").put(pageSubId).put(filter).toString())
+    }
+
+    /** Runs [f] (an incoming event) with a short partial wake lock held, released when it's done. */
+    private inline fun awake(f: () -> Unit) {
+        val w = try { eventWake.also { it.acquire(EVENT_WAKE_MS) } } catch (_: Exception) { null }
+        try { f() } finally { try { if (w?.isHeld == true) w.release() } catch (_: Exception) {} }
+    }
+
+    /**
+     * The network changed (Android's callback): [run] reconnects at once the first time, then, while the network keeps
+     * changing, after a wait that grows up to [NetBackoff.CAP_MS]. Only the newest one waiting runs.
+     */
+    fun networkChanged(run: () -> Unit) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val n = synchronized(netChanges) {
+            netChanges.addLast(now)
+            while (netChanges.isNotEmpty() && now - netChanges.first() > NetBackoff.WINDOW_MS) netChanges.removeFirst()
+            netChanges.size
+        }
+        val wait = NetBackoff.waitMs(n)
+        netPending?.cancel(false)
+        if (wait <= 0L) { netPending = null; run(); return }
+        netPending = timer.schedule(Runnable { try { run() } catch (_: Exception) {} }, wait, TimeUnit.MILLISECONDS)
+    }
+
     private fun subscribe(url: String, ws: WebSocket) {
+        // Stored events are counted again from here (a full answer asks for the ones before it).
+        paging.reset(url)
         // Only what came since this relay last finished sending, less a margin for backdated events (see publish).
         val since = NetLogic.since(eoseAt[url] ?: 0L, System.currentTimeMillis() / 1000)
         val filter = JSONObject().put("kinds", JSONArray().put(KIND)).put("#p", JSONArray().put(publicKey)).put("since", since)
@@ -464,19 +511,31 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             val a = try { JSONArray(text) } catch (e: Exception) { return }
             when (a.optString(0)) {
                 "EOSE" -> {
-                    if (a.optString(1) == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
-                    else if (a.optString(1) == subId) subscribed[url] = true
+                    val sub = a.optString(1)
+                    if (sub == PROBE) webSocket.send(JSONArray().put("CLOSE").put(PROBE).toString())
+                    else if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) {
+                        if (sub == subId) subscribed[url] = true
+                        // A full answer: there may be more before it. Asked for on a request of its own (the inbox
+                        // request stays live), until a page comes back short. Never a plain limit, which drops messages.
+                        val until = paging.end(url, sub == pageSubId)
+                        if (until != null) { askPage(url, webSocket, until); return }
+                        if (sub == pageSubId) webSocket.send(JSONArray().put("CLOSE").put(pageSubId).toString())
+                    }
                     // Everything this relay held for me has been handed over (and the inbox request is still open):
                     // next time ask only for what's newer. Not while something had to stay on the relays (locked, with the
-                    // locked store full): it must come again after unlocking.
-                    if (sockets[url] === webSocket && subscribed[url] == true && !refused) {
+                    // locked store full): it must come again after unlocking. Nor while older pages are still coming.
+                    if (sockets[url] === webSocket && subscribed[url] == true && !refused && !paging.paging(url)) {
                         eoseAt[url] = System.currentTimeMillis() / 1000
                         saveSoon()
                     }
                 }
                 // The relay ended the inbox request (it may ask to sign in first): what's newer isn't known to be read.
                 "CLOSED" -> if (a.optString(1) == subId) subscribed.remove(url)
-                "EVENT" -> a.optJSONObject(2)?.let { handle(it) }
+                "EVENT" -> a.optJSONObject(2)?.let { ev ->
+                    val sub = a.optString(1)
+                    if ((sub == subId || sub == pageSubId) && sockets[url] === webSocket) paging.stored(url, sub == pageSubId, ev.optLong("created_at"))
+                    awake { handle(ev) }
+                }
                 // Some relays only hand out messages to the mailbox's owner: prove it (NIP-42).
                 "AUTH" -> {
                     val challenge = a.optString(1)
@@ -536,6 +595,7 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         countPings(url, ws)
         pingsSeen.remove(ws)
         subscribed.remove(url)
+        paging.reset(url)
         askedAt.remove(url)
         liveSince.remove(url)?.let { since -> relayMs.merge(url, android.os.SystemClock.elapsedRealtime() - since, { a, b -> a + b }) }
     }
@@ -730,6 +790,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         /** A check the relay sent on its own (a WebSocket ping), for the battery report. */
         const val SERVER_PING = "serverPing"
         private const val SAVE_EVERY_S = 30L
+        /** The most an incoming event keeps the phone awake (released as soon as it's handled). */
+        private const val EVENT_WAKE_MS = 10_000L
         /** Envelopes kept while locked: at most this many, and this many characters in all. */
         const val HELD_MAX = 500
         const val HELD_BYTES = 4_000_000L

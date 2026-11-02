@@ -21,6 +21,22 @@ object RoomLogic {
     const val PRESENCE_TTL_MS = 25 * 60_000L
     const val ANNOUNCE_MS = 10 * 60_000L
     const val RING_MS = 45_000L
+    /**
+     * Cap v2 (6.8): an app with it re-sends vjoin every 10 s while in a room, to members whose caps include v2. Its
+     * presence is "Reconnecting" after 20 s without news and gone after 60 s (a phone that died never sends vleave).
+     */
+    const val HEARTBEAT_CAP = "v2"
+    const val HEARTBEAT_MS = 10_000L
+    const val QUIET_MS = 20_000L
+    const val GONE_MS = 60_000L
+
+    /** How someone counts who was last heard from [quietMs] ago: 0 gone, 1 in, 2 reconnecting. [beats]: their app has v2. */
+    fun heard(quietMs: Long, beats: Boolean): Int = when {
+        !beats -> if (quietMs <= PRESENCE_TTL_MS) 1 else 0
+        quietMs > GONE_MS -> 0
+        quietMs > QUIET_MS -> 2
+        else -> 1
+    }
     val TYPES = setOf("vjoin", "vleave", "vring", "vdecline", "full")
     private val FIELDS = setOf("t", "call", "g", "ch", "ts", "sig")
 
@@ -90,28 +106,36 @@ object RoomLogic {
 
     /** 6.4, for one device. Thread-safe. */
     class Presence {
-        private data class Entry(val inRoom: Boolean, val ts: Long, val seen: Long)
+        private data class Entry(val inRoom: Boolean, val ts: Long, val seen: Long, val beats: Boolean = false)
         private val entries = HashMap<Triple<String, String, String>, Entry>()
 
-        /** An accepted ("ok" or "stale") vjoin or vleave. True if it changed anything. */
-        @Synchronized fun apply(from: String, m: JSONObject, now: Long): Boolean {
+        /**
+         * An accepted ("ok" or "stale") vjoin or vleave. True if it changed anything. [beats]: the sender's app has v2 (its
+         * presence goes after 60 s without news); [fresh]: the message was "ok" (a stale one from such an app shows nothing
+         * new, so a late copy never brings someone back).
+         */
+        @Synchronized fun apply(from: String, m: JSONObject, now: Long, beats: Boolean = false, fresh: Boolean = true): Boolean {
             val t = m.optString("t")
             if (t != "vjoin" && t != "vleave") return false
             val k = Triple(m.optString("g"), m.optString("ch"), from)
             val ts = ts(m)
             val cur = entries[k]
             if (cur != null && ts <= cur.ts) return false
-            entries[k] = Entry(t == "vjoin", ts, now)
+            entries[k] = Entry(t == "vjoin", ts, if (beats && !fresh) now - GONE_MS - 1 else now, beats)
             return true
         }
 
+        /** 0 not in (g, ch), 1 in, 2 reconnecting. */
+        @Synchronized fun state(g: String, ch: String, key: String, now: Long): Int =
+            entries[Triple(g, ch, key)]?.takeIf { it.inRoom }?.let { heard(now - it.seen, it.beats) } ?: 0
+
         /** Who is in (g, ch), sorted. */
         @Synchronized fun inRoom(g: String, ch: String, now: Long): List<String> =
-            entries.filter { (k, e) -> k.first == g && k.second == ch && e.inRoom && now - e.seen <= PRESENCE_TTL_MS }.map { it.key.third }.sorted()
+            entries.filter { (k, e) -> k.first == g && k.second == ch && e.inRoom && heard(now - e.seen, e.beats) != 0 }.map { it.key.third }.sorted()
 
         /** Rooms of g with anyone in them: ch to sorted keys. */
         @Synchronized fun rooms(g: String, now: Long): Map<String, List<String>> =
-            entries.filter { (k, e) -> k.first == g && e.inRoom && now - e.seen <= PRESENCE_TTL_MS }.entries
+            entries.filter { (k, e) -> k.first == g && e.inRoom && heard(now - e.seen, e.beats) != 0 }.entries
                 .groupBy({ it.key.second }, { it.key.third }).mapValues { it.value.sorted() }
 
         @Synchronized fun clear() = entries.clear()

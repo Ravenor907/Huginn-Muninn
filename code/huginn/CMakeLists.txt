@@ -81,13 +81,17 @@ qt_add_executable(huginn
     src/richwire.cpp src/richwire.h
     src/morewire.cpp src/morewire.h
     src/chatmore.cpp
+    src/chatfiles.cpp
     src/linkpreview.cpp src/linkpreview.h
     src/videomsg.cpp src/videomsg.h
     src/thumbs.cpp src/thumbs.h
     src/msglimits.cpp src/msglimits.h
+    src/modwire.cpp src/modwire.h
+    src/moderation.cpp src/moderation.h
     src/trust.cpp src/trust.h
     src/profile.cpp src/profile.h
     src/filelink.cpp src/filelink.h
+    src/sharing.cpp src/sharing.h
     src/link.cpp src/link.h
     src/ratchet.cpp src/ratchet.h
     src/vault.cpp src/vault.h
@@ -136,6 +140,7 @@ target_sources(huginn PRIVATE
     src/platform/singleinstance.cpp src/platform/singleinstance.h
     src/platform/crashlog.cpp src/platform/crashlog.h
     src/platform/scratch.cpp src/platform/scratch.h
+    src/platform/portable.cpp src/platform/portable.h
     src/platform/winupdate.cpp src/platform/winupdate.h
     src/platform/winstart.cpp src/platform/winstart.h
 )
@@ -197,7 +202,7 @@ else()
     )
 endif()
 
-set_source_files_properties(qml/Theme.qml qml/Ui.qml qml/PeopleActions.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
+set_source_files_properties(qml/Theme.qml qml/Ui.qml qml/PeopleActions.qml qml/ModActions.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 if(WIN32)
     # Windows: only the compiled QML goes into Huginn.exe, not its source text (qmlcachegen still
     # compiles every file; the engine runs the compiled form, which matches the Qt shipped beside it).
@@ -234,6 +239,7 @@ qt_add_qml_module(huginn
         qml/MeCard.qml
         qml/ProfileCard.qml
         qml/Avatar.qml
+        qml/StatusDot.qml
         qml/PicturePicker.qml
         qml/Leaves.qml
         qml/ShortcutsPanel.qml
@@ -261,9 +267,13 @@ qt_add_qml_module(huginn
         qml/PhotoViewer.qml
         qml/PollDialog.qml
         qml/PeopleActions.qml
+        qml/ModActions.qml
         qml/FileStrip.qml
+        qml/TransfersPanel.qml
+        qml/ChatFiles.qml
         qml/MirrorPanel.qml
         qml/LinkPhone.qml
+        qml/FirstSetup.qml
         qml/TopBar.qml
         qml/PersonPanel.qml
         qml/InvitePanel.qml
@@ -272,6 +282,9 @@ qt_add_qml_module(huginn
         qml/LabsInbox.qml
         qml/AppStoragePanel.qml
         qml/PerfPanel.qml
+        qml/BackupPanel.qml
+        qml/RightClickMenu.qml
+        qml/FieldMenu.qml
     RESOURCES
         qml/assets/raven-gold.png
         qml/assets/valknut.png
@@ -283,12 +296,13 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer FindBar EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions FileStrip MirrorPanel
-                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox AppStoragePanel LinkPhone)
+                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions ModActions FileStrip MirrorPanel
+                   Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox AppStoragePanel LinkPhone FirstSetup
+                   TransfersPanel ChatFiles)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 # The desktop panels.
-foreach(f IN ITEMS Splitter MemberList VoicePanel MeCard ProfileCard ShortcutsPanel TopBar PersonPanel InvitePanel)
+foreach(f IN ITEMS Splitter MemberList VoicePanel MeCard ProfileCard ShortcutsPanel TopBar PersonPanel InvitePanel RightClickMenu FieldMenu)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
 endforeach()
 set_source_files_properties(qml/assets/raven-gold.png PROPERTIES QT_RESOURCE_ALIAS assets/raven-gold.png)

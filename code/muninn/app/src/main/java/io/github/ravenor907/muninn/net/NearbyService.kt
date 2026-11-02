@@ -40,6 +40,21 @@ class NearbyService : Service() {
         return START_NOT_STICKY
     }
 
+    /**
+     * Android 15 and newer: a data sync service may run 6 hours in a day. Past that Android calls this, and the
+     * service must stop within seconds or Muninn is closed. The transfer itself goes on while Muninn is open.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) = stopNow()
+
+    /** Android 14: the same for a short service (not used, but stopping is always right). */
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onTimeout(startId: Int) = stopNow()
+
+    private fun stopNow() {
+        try { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+        stopSelf()
+    }
+
     override fun onDestroy() {
         running = false
         try { getSystemService(NotificationManager::class.java)?.cancel(ID) } catch (_: Exception) {}

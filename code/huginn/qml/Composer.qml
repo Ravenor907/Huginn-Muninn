@@ -188,6 +188,7 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
                 TextArea.flickable: TextArea {
                     id: field
+                    FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                     placeholderText: box.placeholder
                     placeholderTextColor: Theme.textMuted
                     color: Theme.text

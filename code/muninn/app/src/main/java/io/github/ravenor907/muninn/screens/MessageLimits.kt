@@ -1,7 +1,13 @@
 package io.github.ravenor907.muninn.screens
 
 import android.content.Context
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,38 +52,69 @@ fun keepNotice(): io.github.ravenor907.muninn.ui.Ask = io.github.ravenor907.muni
             "Got it", cancel = "") {})
     }) {}
 
-/** Group settings › Keep messages: the group's type and days. Only admins change it; the same for everyone in the group. */
+/**
+ * Group settings › Type: Folk or Family, and for Family how many days messages stay (7 to 30). Only admins change it;
+ * the same for everyone in the group (16.2).
+ */
 @Composable
 fun GroupLimitPanel(app: Muninn, g: String, s: Proto06.State, admin: Boolean) {
     val days = Limits.groupDays(s)
-    Text("${Limits.kindName(s.kind)} group · $days days", style = Type.normal, modifier = Modifier.padding(vertical = 8.dp))
+    val type = Limits.groupType(s)
+    Text("${Limits.typeName(type)} group · $days days", style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+    Text(Limits.typeLine(type), style = Type.small, modifier = Modifier.padding(bottom = 8.dp))
     if (admin) {
-        val kinds = listOf("") + Limits.KINDS
-        io.github.ravenor907.muninn.ui.ChoiceRow(kinds.size, Modifier.padding(bottom = 8.dp), minWidth = 88.dp) { i, m ->
-            val k = kinds[i]
-            MButton(Limits.kindName(k), m, if (s.kind == k) Kind.Accent else Kind.Normal) {
-                if (s.kind != k) app.chat.groups.setLimit(g, k, if (k.isEmpty()) Limits.DEFAULT else days)?.let { Ui.say(it, true) }
+        io.github.ravenor907.muninn.ui.ChoiceRow(Limits.TYPES.size, Modifier.padding(bottom = 8.dp), minWidth = 88.dp) { i, m ->
+            val t = Limits.TYPES[i]
+            MButton(Limits.typeName(t), m, if (type == t) Kind.Accent else Kind.Normal) {
+                if (type != t) Ui.sure(io.github.ravenor907.muninn.ui.Ask(
+                    if (t == Limits.FAMILY) "Make it Family?" else "Make it Folk?",
+                    if (t == Limits.FAMILY) "Invite links stop. Only admins add people." else "Messages disappear after 7 days. Members can invite.",
+                    if (t == Limits.FAMILY) "Make it Family" else "Make it Folk") {
+                    app.chat.groups.setLimit(g, t, days)?.let { Ui.say(it, true) } ?: Ui.say("This is a ${Limits.typeName(t)} group now.")
+                })
             }
         }
-        if (s.kind.isNotEmpty()) io.github.ravenor907.muninn.ui.ChoiceRow(Limits.CHOICES.size, Modifier.padding(bottom = 8.dp)) { i, m ->
+        if (type == Limits.FAMILY) io.github.ravenor907.muninn.ui.ChoiceRow(Limits.CHOICES.size, Modifier.padding(bottom = 8.dp)) { i, m ->
             val d = Limits.CHOICES[i]
             MButton("$d days", m, if (days == d) Kind.Accent else Kind.Normal) {
-                if (days != d) app.chat.groups.setLimit(g, s.kind, d)?.let { Ui.say(it, true) }
+                if (days != d) app.chat.groups.setLimit(g, Limits.FAMILY, d)?.let { Ui.say(it, true) }
             }
-        } else Text("Family or Work: up to 30 days.", style = Type.small, modifier = Modifier.padding(bottom = 8.dp))
+        }
     }
+    TypeRulesLink()
     val me = app.identity.publicKey
     val older = s.members.filter { it.k != me && app.chat.contacts.get(it.k)?.caps?.let { c -> c.isNotEmpty() && Limits.CAP !in c } == true }
     if (older.isNotEmpty()) Text("Needs an update: " + older.joinToString(", ") { memberName(app, it) },
         style = Type.small.copy(color = Palette.textSoft), modifier = Modifier.padding(bottom = 8.dp))
 }
 
-/** New group: Standard, Family or Work (Family and Work can keep messages longer, set in its settings). */
+/** "What's the difference?": the rules of Folk and Family. */
+@Composable
+fun TypeRulesLink() {
+    Text("What's the difference?", style = Type.small.copy(color = Palette.accent,
+        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline),
+        modifier = Modifier.padding(vertical = 8.dp).clickable(role = androidx.compose.ui.semantics.Role.Button) {
+            Ui.sure(io.github.ravenor907.muninn.ui.Ask("Folk and Family",
+                Limits.TYPES.joinToString("\n\n") { t -> Limits.typeName(t) + "\n" + Limits.typeRules(t).joinToString("\n") { "· $it" } },
+                "Got it", cancel = "") {})
+        })
+}
+
+/** New group: two cards, Folk and Family, each with its one line; "What's the difference?" opens the rules. */
 @Composable
 fun GroupKindPicker(kind: String, onKind: (String) -> Unit) {
-    val kinds = listOf("") + Limits.KINDS
-    io.github.ravenor907.muninn.ui.ChoiceRow(kinds.size, Modifier.padding(bottom = 8.dp), minWidth = 88.dp) { i, m ->
-        val k = kinds[i]
-        MButton(Limits.kindName(k), m, if (kind == k) Kind.Accent else Kind.Normal) { onKind(k) }
+    val picked = if (kind == Limits.FAMILY) Limits.FAMILY else Limits.FOLK
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp).height(androidx.compose.foundation.layout.IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Limits.TYPES.forEach { t ->
+            val on = picked == t
+            Column(Modifier.weight(1f).fillMaxHeight().clip(io.github.ravenor907.muninn.ui.Corner)
+                .border(if (on) 2.dp else 1.dp, if (on) Palette.accent else Palette.line, io.github.ravenor907.muninn.ui.Corner)
+                .selectable(on, role = androidx.compose.ui.semantics.Role.RadioButton) { onKind(t) }
+                .padding(12.dp)) {
+                Text(Limits.typeName(t), style = Type.normal.copy(color = if (on) Palette.accent else Palette.text, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold))
+                Text(Limits.typeLine(t), style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
     }
+    TypeRulesLink()
 }

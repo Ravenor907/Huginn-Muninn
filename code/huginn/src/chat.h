@@ -21,6 +21,7 @@
 class Ble;
 class FileLink;
 class Labs;
+class Moderation;
 class Link;
 class LocalSend;
 class Nostr;
@@ -62,6 +63,8 @@ class Chat : public QObject
     Q_PROPERTY(bool keepNearby READ keepNearby WRITE setKeepNearby NOTIFY changed)
     Q_PROPERTY(bool readReceipts READ readReceipts WRITE setReadReceipts NOTIFY changed)
     Q_PROPERTY(bool showPreview READ showPreview WRITE setShowPreview NOTIFY changed)
+    // Settings › Notifications › Reduce notifications: one per chat until it's opened, instead of one per message.
+    Q_PROPERTY(bool reduceNotifications READ reduceNotifications WRITE setReduceNotifications NOTIFY changed)
     Q_PROPERTY(qint64 deleteAfter READ deleteAfter WRITE setDeleteAfter NOTIFY changed)
     Q_PROPERTY(int internet READ internet NOTIFY changed)
     Q_PROPERTY(QString myLink READ myLink NOTIFY changed)          // the code being shown (newLink makes one)
@@ -107,6 +110,8 @@ public:
     bool readReceipts() const { return m_settings.value(QStringLiteral("chat/readReceipts"), true).toBool(); }
     void setReadReceipts(bool v) { m_settings.setValue(QStringLiteral("chat/readReceipts"), v); Q_EMIT changed(); }
     bool showPreview() const { return m_settings.value(QStringLiteral("chat/showPreview"), false).toBool(); }
+    bool reduceNotifications() const { return m_settings.value(QStringLiteral("chat/reduceNotifications"), false).toBool(); }
+    void setReduceNotifications(bool v) { m_settings.setValue(QStringLiteral("chat/reduceNotifications"), v); Q_EMIT changed(); }
     void setShowPreview(bool v) { m_settings.setValue(QStringLiteral("chat/showPreview"), v); Q_EMIT changed(); }
     qint64 deleteAfter() const { return m_settings.value(QStringLiteral("chat/deleteAfter"), 0).toLongLong(); }
     void setDeleteAfter(qint64 v) { m_settings.setValue(QStringLiteral("chat/deleteAfter"), v); prune(); Q_EMIT changed(); }
@@ -244,6 +249,16 @@ public:
     Q_INVOKABLE void setCallsAllowed(const QString &key, bool on);
     Q_INVOKABLE void setFilesAllowed(const QString &key, bool on);
     Q_INVOKABLE void setShowsActive(const QString &key, bool on);
+    // Cap f2 (chatfiles.cpp, protocol.md section 27): "Always from this person", their files arrive without asking.
+    Q_INVOKABLE bool filesAlways(const QString &key) const;
+    Q_INVOKABLE void setFilesAlways(const QString &key, bool on);
+    // A group's file rules: {who ("everyone", "admins", "nobody"), mb (0: no limit), line, canChange}. Admins change them.
+    Q_INVOKABLE QVariantMap groupFiles(const QString &g) const;
+    Q_INVOKABLE QString setGroupFiles(const QString &g, const QString &who, int mb);
+    // Empty when a file of this size from this member is welcome in the group (every member's app checks), else why not.
+    QString groupFileRefusal(const QString &g, const QString &from, qint64 size) const;
+    bool groupFilesArrive(const QString &g, qint64 size) const;
+    QStringList groupFileMembers(const QString &g) const;   // everyone in the group but me
 
     // Where a chat sits (key: a contact, or "g:" + group id), only on this computer: pinned to the top
     // (newest pin first), archived, muted until a time (ms; 0 unmutes, a huge value is for good), marked unread.
@@ -253,6 +268,22 @@ public:
     Q_INVOKABLE bool isArchived(const QString &key) const { return m_archived.contains(key); }
     Q_INVOKABLE void muteChat(const QString &key, qint64 until);
     Q_INVOKABLE bool isMuted(const QString &key) const;
+    // When a muted chat speaks again (ms; 0 when it isn't muted, a huge value until it's turned back on).
+    Q_INVOKABLE qint64 mutedUntil(const QString &key) const { return isMuted(key) ? m_mutedUntil.value(key) : 0; }
+    // How a chat notifies (chatpeople.cpp): "every" message, "one" until it's opened, or for a group "mentions" (only
+    // @mentions and replies to me). notifyMode: what applies now (its own choice, else Reduce notifications); "" to
+    // setNotifyMode follows Settings again.
+    Q_INVOKABLE QString notifyMode(const QString &key) const;
+    Q_INVOKABLE void setNotifyMode(const QString &key, const QString &mode);
+    // Hide: someone nearby who isn't a contact leaves the Nearby list for good, with no notifications from them.
+    Q_INVOKABLE void hideNearby(const QString &key);
+    Q_INVOKABLE bool isHiddenNearby(const QString &key) const { return m_hiddenNearby.contains(key); }
+    // Delete chat (a person, someone nearby, a Kids' TV): the conversation and every message kept of it go from this
+    // computer, and its row leaves the list until a message comes or goes again. A contact stays a contact; someone
+    // nearby who isn't one is forgotten.
+    Q_INVOKABLE void deleteChat(const QString &key);
+    // Whether the last message for key made a notification (muted, hidden or reduced: no). Main.qml's toast follows it.
+    Q_INVOKABLE bool alerted(const QString &key) const { return m_alerted.value(key, true); }
     Q_INVOKABLE void markUnread(const QString &key, bool on);
     Q_INVOKABLE bool isMarkedUnread(const QString &key) const { return m_markedUnread.contains(key); }
     // Always right away (as Muninn's list): their messages make a sound and a notification even while muted.
@@ -262,7 +293,9 @@ public:
     Q_INVOKABLE QString chatColor(const QString &key) const { return m_chatColors.value(key); }
     Q_INVOKABLE void setChatColor(const QString &key, const QString &color);
     // A message arrived for key: false while that chat is muted (unless Always right away); an archived one comes back.
-    bool notifyFor(const QString &key);
+    // Muted, someone nearby put away with Hide, or Reduce notifications (one per chat until opened; a group set to
+    // mentions only): false. name: what the notification says (an @mention says so). Calls don't come this way.
+    bool notifyFor(const QString &key, const QString &name = QString());
 
     // Calls (shared/docs/protocol.md 5.2), for CallSignalHooks in main.cpp. sendCall seals msg as
     // room "call" and sends it on every route at once, never through the Outbox.
@@ -292,7 +325,7 @@ public:
     // Groups (chatgroups.cpp). Calls that can fail return what to tell the person, "" when done.
     QVariantList groups() const;
     QVariantList groupInvites() const;
-    // kind: "" (Standard), "family" or "work" (cap d1).
+    // kind: "" or "folk" (Folk) or "family" (Family), cap d1.
     Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
     // Writes everything still waiting to be saved (before Huginn closes or restarts for an update).
     void flushSaves();
@@ -358,9 +391,14 @@ public:
     qint64 keepCutoff(const QString &key) const;
     Q_INVOKABLE QVariantMap limitInfo(const QString &key) const;
     Q_INVOKABLE void setKeep(const QString &key, int days);
-    // A group's {kind, kindName, days, older (names whose apps keep everything), choices}; admins change it.
+    // A group's {kind, kindName, type, typeName, line, days, older (names whose apps keep everything), choices,
+    // links (invite links allowed), unchecked (Family: members whose safety code isn't checked yet)}; admins change it.
     Q_INVOKABLE QVariantMap groupLimit(const QString &g) const;
     Q_INVOKABLE QString setGroupLimit(const QString &g, const QString &kind, int days);
+    // Group types, Folk and Family (16.2): [{type, name, line, rules}] for the new group screen and settings.
+    Q_INVOKABLE QVariantList groupTypes() const;
+    // Someone in one of my Family groups: their files and photos arrive by themselves.
+    bool inFamilyGroup(const QString &key) const;
     // "Messages now disappear after 7 days", once on the chat list for someone who had chats already.
     Q_INVOKABLE bool limitsNote() const;
     Q_INVOKABLE void dismissLimitsNote();
@@ -382,6 +420,8 @@ public:
     void setRingKey(RingKey *ring) { m_ringKey = ring; }
     // Labs (labs.*): bug reports to the Labs contact, and on the Huginn with the Labs key, its inbox.
     void setLabs(Labs *labs) { m_labs = labs; }
+    // Mute for me, volume, group timeouts and bans (cap g2, moderation.*), made in main.cpp.
+    void setModeration(Moderation *mod) { m_mod = mod; }
 
     static const int kMax = 2000;
     // once: "1": true (13.6), the way Muninn's codes carry it.
@@ -414,6 +454,8 @@ private:
     Profile *m_profile = nullptr;
     friend class Labs;   // seals a report to the Labs key and sends it; the Labs inbox opens reports (labs.cpp)
     Labs *m_labs = nullptr;
+    friend class Moderation;   // signs and sends group timeouts and bans, reads group states (moderation.cpp)
+    Moderation *m_mod = nullptr;
     int receiveProfile(const QString &fromKey, const QString &sentId, const QJsonObject &p);
     Trust *m_trust = nullptr;
     FileLink *m_files = nullptr;
@@ -635,6 +677,7 @@ private:
     void sendLinks(const QString &g);
     bool takeLinkControl(const QString &g, const QString &from, const QJsonObject &p);
     void linkUsed(const QString &token, const QString &g);
+    void familyLinksOff(const QString &g);
     QHash<QString, QVariantMap> m_glinks;               // links counted here: token -> {g, by, x, max, uses, off}
     QHash<QString, QVariantList> m_glinkLists;          // group -> links as their counters said
     QHash<QString, QString> m_gmade;                    // link id -> the links made here
@@ -647,6 +690,8 @@ private:
     QString limitBlocked(const QString &g, const QString &kind) const;
     void noteLimitsOnce();
     void pruneToLimits();
+    // Group types (chatlimits.cpp): members of my Family groups who are contacts go in my Family folder, once each.
+    void familySync();
 
     LocalSend *m_net;
     Vault *m_vault;
@@ -727,6 +772,12 @@ private:
     QStringList m_pinnedChats;                          // chats pinned to the top, in order
     QSet<QString> m_archived, m_markedUnread;
     QHash<QString, qint64> m_mutedUntil;
+    QSet<QString> m_hiddenNearby;                       // Hide: nearby people who aren't contacts, kept off the list
+    QSet<QString> m_clearedChats;                       // Delete chat: off the list until a message comes or goes
+    QHash<QString, QString> m_notifyMode;               // a chat's own "every", "one" or "mentions"
+    QSet<QString> m_notified;                           // chats that notified since they were last opened
+    QHash<QString, bool> m_alerted;                     // whether the last message for a key notified
+    bool toMe(const QString &key, const QString &name) const;   // a group message that mentions or answers me
     QSet<QString> m_rightAway;
     QHash<QString, QString> m_chatColors;
     QSet<QString> m_keptBack;

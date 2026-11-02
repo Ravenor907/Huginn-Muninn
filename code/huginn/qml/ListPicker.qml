@@ -8,6 +8,8 @@ Item {
     id: picker
     property string title
     property var entries: []          // flat list: { header } or { name, detail, url, icon, check, danger }
+    // A slider row: { name, slider: true, value, from, to, step, unit, moved: v => {} }. It stays open while it moves;
+    // left and right (or the mouse) change it, and moved is called with each new value.
     property int current: 0
     property var callback: null
     property var backFn: null
@@ -33,7 +35,7 @@ Item {
     }
     function pick() {
         const e = entries[current]
-        if (!e || e.header) return
+        if (!e || e.header || e.slider) return
         visible = false
         backFn = null
         const cb = callback
@@ -124,8 +126,10 @@ Item {
                 // The first red row gets a line above it, so what can't be undone sits apart.
                 readonly property bool firstDanger: !!modelData.danger && index > 0 && !!picker.entries[index - 1] && !picker.entries[index - 1].danger
                 readonly property int gap: firstDanger ? Theme.px(11) : 0
+                readonly property var sliderBar: modelData.slider ? slide : null
                 width: list.width
-                height: modelData.header ? headText.implicitHeight + Theme.px(14) : gap + Math.max(Theme.px(40), rowCol.implicitHeight + Theme.px(14))
+                height: modelData.header ? headText.implicitHeight + Theme.px(14)
+                      : gap + Math.max(Theme.px(40), rowCol.implicitHeight + Theme.px(14)) + (modelData.slider ? Theme.px(30) : 0)
                 Rectangle {
                     visible: rowItem.firstDanger
                     y: Theme.px(5)
@@ -184,7 +188,7 @@ Item {
                             textFormat: Text.PlainText
                             width: parent.width
                             wrapMode: Text.Wrap
-                            text: modelData.name || ""
+                            text: (modelData.name || "") + (modelData.slider ? " " + slide.value + (modelData.unit || "") : "")
                             color: modelData.danger ? Theme.danger : Theme.text
                             font.family: Theme.body
                             font.pixelSize: Theme.fs(15)
@@ -199,6 +203,48 @@ Item {
                             color: Theme.textMuted
                             font.family: Theme.body
                             font.pixelSize: Theme.fs(13)
+                        }
+                        // A slider row's bar: drag or click along it.
+                        Item {
+                            id: slide
+                            visible: !!modelData.slider
+                            width: parent.width
+                            height: visible ? Theme.px(28) : 0
+                            readonly property real lo: modelData.from !== undefined ? modelData.from : 0
+                            readonly property real hi: modelData.to !== undefined ? modelData.to : 100
+                            readonly property real stepBy: modelData.step || 1
+                            property real value: modelData.value !== undefined ? modelData.value : lo
+                            function set(v) {
+                                const n = Math.max(lo, Math.min(hi, Math.round(v / stepBy) * stepBy))
+                                if (n === value) return
+                                value = n
+                                if (modelData.moved) modelData.moved(n)
+                            }
+                            function fromX(x) { set(lo + (hi - lo) * Math.max(0, Math.min(1, x / width))) }
+                            Accessible.role: Accessible.Slider
+                            Accessible.name: modelData.name || ""
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width; height: Theme.px(4); radius: height / 2
+                                color: Theme.line
+                                Rectangle {
+                                    width: parent.width * (slide.value - slide.lo) / Math.max(1, slide.hi - slide.lo)
+                                    height: parent.height; radius: parent.radius
+                                    color: Theme.accent
+                                }
+                            }
+                            Rectangle {
+                                width: Theme.px(16); height: width; radius: width / 2
+                                anchors.verticalCenter: parent.verticalCenter
+                                x: (parent.width - width) * (slide.value - slide.lo) / Math.max(1, slide.hi - slide.lo)
+                                color: Theme.accent
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                preventStealing: true
+                                onPressed: mouse => { picker.current = index; slide.fromX(mouse.x) }
+                                onPositionChanged: mouse => { if (pressed) slide.fromX(mouse.x) }
+                            }
                         }
                     }
                     HoverHandler { id: rowHover; onHoveredChanged: if (hovered && !(Ui.main && Ui.main.padInUse)) picker.current = index }
@@ -225,6 +271,15 @@ Item {
         case "lb": jumpSection(1, true); break   // LB goes round the sections
         case "next": jumpSection(1, false); break
         case "prev": jumpSection(-1, false); break
+        case "left": case "right": {
+            const it = list.currentItem
+            const e = entries[current]
+            if (e && e.slider && it) {
+                const bar = it.sliderBar
+                if (bar) bar.set(bar.value + (b === "left" ? -1 : 1) * bar.stepBy)
+            }
+            break
+        }
         case "a": pick(); break
         case "b": goBack(); break
         }

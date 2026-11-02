@@ -525,6 +525,11 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         addHistory(from, false, QStringLiteral("missed"), nowMs(), 0);
         return;
     }
+    if (!answeredLocked && hushedFor && hushedFor(from)) {
+        m_handled.insert(id);
+        addHistory(from, false, QStringLiteral("missed"), nowMs(), 0);
+        return;
+    }
     auto *s = new CallSession(m_signal, from, [this](auto done) { getLogin(std::move(done)); }, this);
     prime(s);
     adopt(s);

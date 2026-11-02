@@ -19,6 +19,7 @@ class CallSession;
 class CallSignal;
 class Chime;
 #include <QVideoSink>
+#include <QCapturableWindow>
 class VideoReceiver;
 class VideoSender;
 struct TurnLogin;
@@ -60,6 +61,11 @@ class RoomManager : public QObject
     Q_PROPERTY(bool canShare READ canShare CONSTANT)
     Q_PROPERTY(bool sharing READ sharing NOTIFY changed)
     Q_PROPERTY(QString sharerName READ sharerName NOTIFY changed)
+    // What this computer shares: an app window's title or "Screen 2" ("" when not sharing).
+    Q_PROPERTY(QString shareTitle READ shareTitle NOTIFY changed)
+    // Huginn asks what to share first (an app window or a full screen). False on Wayland and in the Flatpak, where the
+    // desktop's own picker does the choosing.
+    Q_PROPERTY(bool sharePicker READ sharePicker CONSTANT)
 
 public:
     using LoginFetcher = std::function<void(std::function<void(const TurnLogin &, const QString &)>)>;
@@ -69,6 +75,12 @@ public:
     std::function<bool(const QString &key)> canRoom;              // caps v1, or not known yet; not blocked
     std::function<bool(const QString &key)> lacksRooms;           // caps known, without v1
     std::function<QString(const QString &g, const QString &key)> memberName;
+    // Cap g2: someone timed out or banned in g. Their room messages and offers are refused, and they're taken out of
+    // a room they're in. barred(g, me) keeps me out with joinBlock's words.
+    std::function<bool(const QString &g, const QString &key)> barred;
+    std::function<QString(const QString &g)> joinBlock;
+    // The group's chat is muted: a group call into it doesn't ring, it is kept as a missed call in the group.
+    std::function<bool(const QString &g)> hushedFor;
 
     RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher login, QObject *parent = nullptr);
     ~RoomManager() override;
@@ -97,6 +109,8 @@ public:
     bool canShare() const;
     bool sharing() const { return m_share != nullptr; }
     QString sharerName() const;
+    QString shareTitle() const { return m_share ? m_shareTitle : QString(); }
+    bool sharePicker() const;
 
     // "" when joined, otherwise what to tell the person.
     Q_INVOKABLE QString join(const QString &g, const QString &ch);
@@ -110,15 +124,24 @@ public:
     Q_INVOKABLE QString callGroup(const QString &g, const QStringList &keys = QStringList());
     Q_INVOKABLE QString answerRing();
     Q_INVOKABLE void declineRing();
-    // Who is in a room right now: [{key, name, me, speaking}], for the voice room rows.
+    // Who is in a room right now: [{key, name, me, speaking, state}], for the voice room rows. state: "live", or
+    // "reconnecting" while their app went quiet (cap v2, 6.8) or their call is reconnecting.
     Q_INVOKABLE QVariantList whoIn(const QString &g, const QString &ch) const;
     // Group calls going on in g: [{ch, count, names}].
     Q_INVOKABLE QVariantList groupCalls(const QString &g) const;
     // Members that can't take part yet (their app has no voice rooms).
     Q_INVOKABLE bool needsUpdate(const QString &key) const { return lacksRooms && lacksRooms(key); }
     Q_INVOKABLE bool isIn(const QString &g, const QString &ch) const { return !m_g.isEmpty() && m_g == g && m_ch == ch; }
-    // Starts or stops sharing this computer's screen with everyone in the room.
+    // Stops sharing; not sharing yet: asks what to share (pickShare()), or on Wayland and in the Flatpak starts at once
+    // and the desktop's picker chooses.
     Q_INVOKABLE void toggleShare();
+    // What can be shared, for the picker: [{i, title, window}] (window: the QCapturableWindow for a live thumbnail) and
+    // [{i, name, size, primary}].
+    Q_INVOKABLE QVariantList shareWindows();
+    Q_INVOKABLE QVariantList shareScreens() const;
+    // Starts sharing one app window or one whole screen (an index from the lists above). "" when sharing, else why not.
+    Q_INVOKABLE QString shareWindow(int i);
+    Q_INVOKABLE QString shareScreen(int i);
     // Where someone else's shared screen is shown (a QML VideoOutput's videoSink).
     Q_INVOKABLE void setScreenSink(QObject *videoSink);
 
@@ -131,6 +154,8 @@ Q_SIGNALS:
     // A group call ended here, or one rang and was missed: main.cpp puts it in the group's timeline (a missed one
     // also raises a notification that opens the group).
     void logged(const QString &g, const QString &text, bool missed);
+    // Share was pressed: the picker opens (RoomBar.qml).
+    void pickShare();
 
 private:
     struct Peer {
@@ -172,6 +197,11 @@ private:
     AudioDsp::Speaking m_mySpeaking;
     QElapsedTimer m_clock;
     QTimer m_announce, m_ticker, m_presenceTick, m_clear, m_ringer;
+    // Cap v2 (6.8): vjoin every 10 s to members with v2 while in a room; whose app has it; when each was last offered.
+    QTimer m_beat;
+    bool beats(const QString &key) const;
+    void heartbeat();
+    QHash<QString, qint64> m_offered;
     QString m_ringG, m_ringCh, m_ringFrom;
     qint64 m_ringSince = 0;
     Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
@@ -181,7 +211,10 @@ private:
     void shareTo(CallSession *s, bool on);
     void pickSharer();
     void stopShare();
+    QString startShare(const std::function<void(VideoSender *)> &aim, const QString &title);
     VideoSender *m_share = nullptr;
+    QString m_shareTitle;
+    QList<QCapturableWindow> m_windows;
     VideoReceiver *m_view = nullptr;
     QString m_sharer;
     QPointer<QVideoSink> m_screenSink;

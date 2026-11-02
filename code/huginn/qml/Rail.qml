@@ -61,6 +61,26 @@ Rectangle {
         return ""
     }
 
+    // First setup's tour: where a part of the rail is in the window, {x, y, width, height} ("groups": Chats and the
+    // groups; otherwise an item's id, like "settings"), or null when it isn't on show.
+    function spotRect(what) {
+        if (!visible) return null
+        if (what === "groups") {
+            const p = rail.mapToItem(null, 0, 0)
+            const bottom = groupView.y + Math.max(Theme.px(48), Math.min(groupView.height, groupCol.implicitHeight))
+            return { x: p.x, y: p.y, width: rail.width, height: bottom }
+        }
+        for (const rep of [groupRep, bottomRep]) {
+            for (let i = 0; i < rep.count; ++i) {
+                const b = rep.itemAt(i)
+                if (!b || b.entry.id !== what) continue
+                const q = b.mapToItem(null, 0, 0)
+                return { x: q.x, y: q.y, width: b.width, height: b.height }
+            }
+        }
+        return null
+    }
+
     readonly property var withIndex: items.map((e, i) => Object.assign({ idx: i }, e))
     readonly property var ravenItems: withIndex.filter(e => !e.bottom && e.kind === "raven")
     readonly property var groupItems: withIndex.filter(e => !e.bottom && e.kind !== "raven")
@@ -157,6 +177,7 @@ Rectangle {
         spacing: Theme.px(8)
         Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: Theme.px(30); height: 2; color: Theme.seam }
         Repeater {
+            id: bottomRep
             model: rail.bottomItems
             RailButton { entry: modelData }
         }
@@ -376,6 +397,16 @@ Rectangle {
             }
             HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
             TapHandler { onTapped: rail.activated(rb.entry.idx) }
+            // A right click (or a long press on a touch screen): its own small menu where it was clicked (Main.railMenu;
+            // a group's: Open, Mute, Notifications, Mark as read, Copy invite, Group settings, Leave).
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: (point, button) => { if (Ui.main) Ui.main.railMenu(rb.entry, face, point.position.x, point.position.y, false) }
+            }
+            TapHandler {
+                acceptedDevices: PointerDevice.TouchScreen
+                onLongPressed: { if (Ui.main) Ui.main.railMenu(rb.entry, face, point.position.x, point.position.y, false) }
+            }
         }
         // Its name, beside the rail while the pointer is on it (drawn by the rail, over the page).
         Connections {

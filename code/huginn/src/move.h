@@ -80,6 +80,10 @@ public:
 
     // POST kPath on this computer's Wi-Fi port: status code and the answer.
     QPair<int, QByteArray> handle(const QByteArray &body);
+    // Backups (Vault, shared/docs/backup.md): the shared form of what's here (18.4), and Huginn's files made from one
+    // (a backup made in Muninn). Empty with error when it can't be read.
+    QByteArray sharedForm() const;
+    Vault::Files fromSharedForm(const QByteArray &form, QString *error) const;
 
 Q_SIGNALS:
     void changed();

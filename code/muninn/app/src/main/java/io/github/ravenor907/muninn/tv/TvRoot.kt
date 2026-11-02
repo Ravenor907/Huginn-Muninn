@@ -170,12 +170,17 @@ fun TvRoot(app: Muninn) {
 
 @Composable
 private fun TvStarting(app: Muninn) {
-    TvNote("Starting…")
+    val trouble by app.vault.trouble.collectAsState()
+    if (trouble == null) TvNote("Starting…") else TvNote("Muninn can't open its data", "Nothing was deleted. Trying again…")
     LaunchedEffect(Unit) {
         delay(1500)
-        // Without a password the vault opens with its data key from Muninn's private files. If that key is gone,
-        // nothing saved can be read: start the TV over so a parent can pair it again.
-        if (!app.ready.value) { if (app.vault.openDefault()) app.start() else KidTv.startOver(app) }
+        // Without a password the vault opens with its data key from Muninn's private files. If that key or the keys
+        // file can't be read, nothing is erased or made new: it keeps trying (a read can fail for a moment).
+        while (!app.ready.value) {
+            if (kotlinx.coroutines.withContext(Dispatchers.IO) { app.vault.openDefault() }) { kotlinx.coroutines.withContext(Dispatchers.Default) { app.start() }; break }
+            if (app.vault.trouble.value == null) { KidTv.startOver(app); break }
+            delay(5000)
+        }
     }
 }
 

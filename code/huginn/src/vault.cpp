@@ -1,7 +1,9 @@
 #include "vault.h"
 #include "busy.h"
 #include "settings.h"
+#include "system.h"
 #include "platform/crashlog.h"
+#include "platform/portable.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
 
@@ -10,6 +12,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
+#include <QFileDialog>
+#include <QJsonArray>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -25,9 +29,12 @@
 #include <QThread>
 #include <QVariant>
 #include <QLocale>
+#include <QDeadlineTimer>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QWaitCondition>
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <memory>
 
@@ -135,7 +142,7 @@ qint64 sinceStart()
 
 QString dataDir()
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/chat");
+    const QString dir = System::dataDir() + QStringLiteral("/chat");
     QDir().mkpath(dir);
     return dir;
 }
@@ -149,7 +156,7 @@ QByteArray random(int n)
 
 QSettings &settings()
 {
-    static QSettings s(Settings::org(), QStringLiteral("Huginn"));
+    static QSettings s = Settings::store();
     return s;
 }
 
@@ -170,9 +177,148 @@ struct Vault::Shared
     QByteArray key;
 };
 
+// The saving thread ("huginn-saving"): sealing and writing the files Chat saves often (Vault::writeLater), so the
+// window never waits on them. One thread, one queue: a file's saves are written in the order they were asked for (a
+// newer one still waiting takes the older one's place). It stops only once the queue is empty, so nothing asked of it is
+// lost when Huginn closes. It never waits on the window's thread; the window's thread waits on it only with a limit.
+class SaveQueue : public QThread
+{
+public:
+    struct Job {
+        QString name, file;
+        QByteArray key;
+        std::function<QByteArray()> make;
+    };
+    SaveQueue() { setObjectName(QStringLiteral("huginn-saving")); }
+
+    void put(Job job)
+    {
+        QMutexLocker l(&m_lock);
+        for (Job &q : m_jobs)
+            if (q.name == job.name) {
+                q = std::move(job);   // the newest wins and keeps the older one's place
+                Busy::count("saves replaced by a newer one before they were written");
+                return;
+            }
+        m_jobs.push_back(std::move(job));
+        m_wake.wakeOne();
+    }
+    // Until nothing for name (empty: anything) waits or is being written, at most ms. False when time ran out.
+    bool waitFor(const QString &name, int ms)
+    {
+        QDeadlineTimer deadline(ms);
+        QMutexLocker l(&m_lock);
+        while (busyWith(name))
+            if (!m_idle.wait(&m_lock, deadline))
+                return !busyWith(name);
+        return true;
+    }
+    bool pending(const QString &name)
+    {
+        QMutexLocker l(&m_lock);
+        return busyWith(name);
+    }
+    // Erase everything, a restore, a move: what waits is dropped (it would only be replaced), the one being written ends.
+    void dropAll(int ms)
+    {
+        {
+            QMutexLocker l(&m_lock);
+            m_jobs.clear();
+        }
+        waitFor(QString(), ms);
+    }
+    // Writes everything still waiting, then ends. False when it hadn't ended within ms.
+    bool finish(int ms)
+    {
+        {
+            QMutexLocker l(&m_lock);
+            m_stopping = true;
+            m_wake.wakeAll();
+        }
+        return wait(QDeadlineTimer(ms));
+    }
+    int failures()
+    {
+        QMutexLocker l(&m_lock);
+        return m_failures;
+    }
+protected:
+    void run() override
+    {
+        for (;;) {
+            Job job;
+            {
+                QMutexLocker l(&m_lock);
+                while (m_jobs.empty() && !m_stopping)
+                    m_wake.wait(&m_lock);
+                if (m_jobs.empty())
+                    return;   // stopping, and nothing left
+                job = std::move(m_jobs.front());
+                m_jobs.erase(m_jobs.begin());
+                m_current = job.name;
+            }
+            const bool ok = writeNow(job);
+            QMutexLocker l(&m_lock);
+            m_current.clear();
+            if (!ok)
+                ++m_failures;
+            m_idle.wakeAll();
+        }
+    }
+
+private:
+    bool busyWith(const QString &name) const
+    {
+        if (name.isEmpty())
+            return !m_jobs.empty() || !m_current.isEmpty();
+        if (m_current == name)
+            return true;
+        for (const Job &j : m_jobs)
+            if (j.name == name)
+                return true;
+        return false;
+    }
+    static bool writeNow(const Job &job)
+    {
+        Busy::ThreadScope busy("saving thread: making, sealing and writing files");
+        if (const int ms = s_slow(); ms > 0)
+            QThread::msleep(ms);
+        QByteArray data = job.make ? job.make() : QByteArray();
+        const QByteArray sealed = kMagic + Vault::seal(job.key, data);
+        data.fill(0);
+        // A file another program holds for a moment gets a second try.
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            QDir().mkpath(QFileInfo(job.file).absolutePath());
+            QSaveFile f(job.file);
+            if (f.open(QIODevice::WriteOnly) && f.write(sealed) >= 0 && f.commit())
+                return true;
+            QThread::msleep(150);
+        }
+        qWarning("vault: the saving thread couldn't write a file");
+        Busy::count("saves that couldn't be written");
+        return false;
+    }
+    static int s_slow();
+
+    QMutex m_lock;
+    QWaitCondition m_wake, m_idle;
+    std::vector<Job> m_jobs;
+    QString m_current;
+    bool m_stopping = false;
+    int m_failures = 0;
+};
+
+namespace
+{
+std::atomic<int> s_slowWrites{0};   // --perf-selftest only
+}
+int SaveQueue::s_slow() { return s_slowWrites.load(); }
+
 Vault::Vault(QObject *parent)
     : QObject(parent), m_shared(std::make_shared<Shared>())
 {
+    m_saves = new SaveQueue;
+    m_saves->start();
     // Every change of the key (unlock, panic, erase, restore) is followed by changed(): the copy for other threads follows.
     connect(this, &Vault::changed, this, &Vault::shareKey);
     // Huginn never locks on its own: Lock now, the panic lock and Lock and close do. An old "Lock when I leave"
@@ -188,6 +334,21 @@ Vault::Vault(QObject *parent)
         connect(pad, &Gamepad::released, this, [this](const QString &b) { button(b, false); });
         connect(pad, &Gamepad::connectedChanged, this, [this] { m_l3 = m_r3 = false; m_combo.stop(); });
     }
+}
+
+Vault::~Vault()
+{
+    // An unlock still working out the key posts its answer here: it is waited for (a second or two at most).
+    if (m_unlockThread)
+        m_unlockThread->wait();
+    // Everything asked of the saving thread is written before Huginn ends; one stuck on a file for half a minute is
+    // left behind rather than waited on forever (destroying a running thread would end Huginn badly).
+    if (m_saves->finish(30000))
+        delete m_saves;
+    else
+        qWarning("vault: the saving thread didn't finish in time");
+    for (auto it = m_prefetched.begin(); it != m_prefetched.end(); ++it)
+        it.value().fill(0);
 }
 
 QString Vault::keyFile() const { return dataDir() + QStringLiteral("/vault.key"); }
@@ -252,6 +413,24 @@ void Vault::openWithoutLock()
     Q_EMIT opened();
 }
 
+bool Vault::startWithoutLock()
+{
+    if (exists() || !m_key.isEmpty() || m_restarting)
+        return false;
+    m_key = random(32);
+    const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(m_key.toBase64())}};
+    if (!writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact))) {
+        m_key.fill(0);
+        m_key.clear();
+        return false;
+    }
+    m_weak = false;
+    m_screenLocked = false;
+    Q_EMIT changed();
+    Q_EMIT opened();
+    return true;
+}
+
 bool Vault::usesPattern() const
 {
     QFile f(keyFile());
@@ -311,6 +490,90 @@ bool Vault::unlock(const QString &secret)
     return true;
 }
 
+void Vault::unlockInBackground(const QString &secret)
+{
+    if (m_unlocking)
+        return;
+    const auto fail = [this] { QMetaObject::invokeMethod(this, [this] { Q_EMIT unlockFinished(false); }, Qt::QueuedConnection); };
+    if (m_restarting || waitSeconds() > 0)
+        return fail();
+    QFile f(keyFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return fail();
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    f.close();
+    // The first unlock reads and opens the saved chat files there too (not pictures: they are read when shown).
+    const bool first = m_key.isEmpty();
+    const QString dir = dataDir();
+    m_unlocking = true;
+    Q_EMIT changed();
+    // The thread uses only what it was given and answers with a queued call; ~Vault waits for it, so "this" is
+    // still here when the answer comes.
+    QThread *t = QThread::create([this, o, secret, first, dir] {
+        Busy::ThreadScope busy("unlock thread: working out the key and reading files");
+        bool ok = false;
+        const QByteArray key = openLock(o, secret, &ok);
+        const bool good = ok && key.size() == 32;
+        Files read;
+        if (good && first) {
+            qint64 total = 0;
+            QDirIterator it(dir, {QStringLiteral("*.json")}, QDir::Files);
+            while (it.hasNext()) {
+                const QFileInfo fi(it.next());
+                if (fi.fileName() == QLatin1String("vault.key") || total + fi.size() > (qint64(96) << 20))
+                    continue;
+                QFile in(fi.filePath());
+                if (!in.open(QIODevice::ReadOnly))
+                    continue;
+                bool opened = false;
+                const QByteArray plain = openSealed(key, in.readAll(), &opened);
+                if (opened) {
+                    total += fi.size();
+                    read.emplace_back(fi.fileName(), plain);
+                }
+            }
+        }
+        const bool weak = !strongSecret(secret);
+        QMetaObject::invokeMethod(this, [this, good, key, weak, read] { finishUnlock(good, key, weak, read); }, Qt::QueuedConnection);
+    });
+    t->setObjectName(QStringLiteral("huginn-unlock"));
+    connect(t, &QThread::finished, t, &QObject::deleteLater);
+    m_unlockThread = t;
+    t->start();
+}
+
+void Vault::finishUnlock(bool ok, const QByteArray &key, bool weak, const Files &read)
+{
+    m_unlocking = false;
+    if (m_restarting || !ok) {
+        if (!ok)
+            wrongTry();
+        Q_EMIT changed();
+        Q_EMIT unlockFinished(false);
+        return;
+    }
+    settings().setValue(QStringLiteral("vault/fails"), 0);
+    settings().remove(QStringLiteral("vault/wait"));
+    settings().remove(QStringLiteral("vault/at"));
+    settings().remove(QStringLiteral("vault/started"));
+    const bool first = m_key.isEmpty();
+    m_key = key;
+    m_weak = weak;
+    m_screenLocked = false;
+    // Only for the first unlock, and only while opened() runs: what the thread read is what is on disk (nothing
+    // can be saved while there is no key). Whatever nobody asked for is wiped.
+    if (first)
+        for (const auto &e : read)
+            m_prefetched.insert(e.first, e.second);
+    Q_EMIT changed();
+    if (first)
+        Q_EMIT opened();
+    for (auto it = m_prefetched.begin(); it != m_prefetched.end(); ++it)
+        it.value().fill(0);
+    m_prefetched.clear();
+    Q_EMIT unlockFinished(true);
+}
+
 void Vault::wrongTry()
 {
     // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
@@ -343,6 +606,7 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     if (first) {
         m_key = random(32);
     } else if (wasOff) {
+        drainSaves(30000);   // everything sealed with the old key is on disk before it is sealed again
         old = m_key;
         files = collect(old, dataDir());
         const QByteArray fresh = random(32);
@@ -433,9 +697,14 @@ bool Vault::askStronger()
 
 void Vault::eraseAll()
 {
+    // What waits to be saved would only bring files back: dropped (the one being written ends first).
+    m_saves->dropAll(30000);
     QDir(dataDir()).removeRecursively();
+    // Copies kept before a restore (keepCopy) go too.
+    for (const QFileInfo &fi : QDir(System::dataDir()).entryInfoList({QStringLiteral("chat-kept-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
+        QDir(fi.absoluteFilePath()).removeRecursively();
     // Files waiting in the cache (downloads, parts of a move) and a move's saved state go too.
-    QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation)).removeRecursively();
+    QDir(System::cacheDir()).removeRecursively();
     settings().remove(QStringLiteral("move"));
     settings().remove(QStringLiteral("chatlock/strongerAsked"));
     m_key.fill(0);
@@ -448,8 +717,12 @@ void Vault::eraseAll()
     settings().remove(QStringLiteral("nostr"));
     settings().remove(QStringLiteral("chat"));
     settings().remove(QStringLiteral("restore"));
+    // An erased computer starts over: first setup runs again at the next start.
+    settings().remove(QStringLiteral("setup"));
     // Written now, so what Move saves right after (its "Moved to" note, through its own QSettings) isn't removed later.
     settings().sync();
+    // The Windows portable build: the whole data folder beside Huginn.exe is emptied (every setting too).
+    Portable::eraseAll();
     Q_EMIT erased();
     Q_EMIT changed();
 }
@@ -478,6 +751,8 @@ bool Vault::write(const QString &name, const QByteArray &data) const
         qWarning("vault: not saving over a file that couldn't be read");
         return false;
     }
+    // A save of the same file still waiting on the saving thread goes first: a file's saves stay in order.
+    m_saves->waitFor(name, 10000);
     QDir().mkpath(QFileInfo(path(name)).absolutePath());
     QSaveFile f(path(name));
     if (!f.open(QIODevice::WriteOnly))
@@ -487,10 +762,38 @@ bool Vault::write(const QString &name, const QByteArray &data) const
     return f.commit();
 }
 
+void Vault::writeLater(const QString &name, std::function<QByteArray()> make) const
+{
+    Busy::count(QStringLiteral("files saved on the saving thread: ") + kindOf(name));
+    if (m_key.isEmpty() || m_restarting)
+        return;
+    // Loaded as empty because it couldn't be read: saving now would replace what is really there.
+    if (m_unreadable.contains(name)) {
+        qWarning("vault: not saving over a file that couldn't be read");
+        return;
+    }
+    SaveQueue::Job job;
+    job.name = name;
+    job.file = path(name);
+    job.key = m_key;
+    job.make = std::move(make);
+    m_saves->put(std::move(job));
+}
+
+bool Vault::drainSaves(int ms) const
+{
+    Busy::Scope busy("waiting for the saving thread");
+    const bool done = m_saves->waitFor(QString(), ms);
+    if (!done)
+        qWarning("vault: the saving thread is still writing");
+    return done;
+}
+
 Vault::ReadStatus Vault::readOnly(const QString &name) const
 {
     if (m_key.isEmpty())
         return ReadFailed;
+    m_saves->waitFor(name, 10000);
     QFile f(path(name));
     if (!f.exists())
         return ReadMissing;
@@ -510,6 +813,19 @@ QByteArray Vault::read(const QString &name, ReadStatus *status) const
         *status = ReadFailed;
     if (m_key.isEmpty())
         return {};   // locked: nothing is noted (the files are fine)
+    // Read and opened already by the unlock's own thread (only while opened() runs).
+    const auto pre = m_prefetched.find(name);
+    if (pre != m_prefetched.end()) {
+        const QByteArray plain = pre.value();
+        m_prefetched.erase(pre);
+        if (status)
+            *status = ReadOk;
+        if (m_unreadable.remove(name) && m_unreadable.isEmpty())
+            QMetaObject::invokeMethod(const_cast<Vault *>(this), [v = const_cast<Vault *>(this)] { Q_EMIT v->changed(); }, Qt::QueuedConnection);
+        return plain;
+    }
+    // A save of it still on the saving thread is written first, so what is read is what was last saved.
+    m_saves->waitFor(name, 10000);
     const QString file = path(name);
     // A few short tries: another program (a virus scanner, a copy of Huginn closing) may hold it for a moment.
     for (int attempt = 0; attempt < 3; ++attempt) {
@@ -594,7 +910,11 @@ std::function<QByteArray(const QString &)> Vault::anyThreadReader() const
     };
 }
 
-void Vault::remove(const QString &name) const { QFile::remove(path(name)); }
+void Vault::remove(const QString &name) const
+{
+    m_saves->waitFor(name, 10000);   // a save of it still waiting never brings it back
+    QFile::remove(path(name));
+}
 
 std::function<QByteArray()> Vault::reader(const QString &name) const
 {
@@ -661,6 +981,52 @@ const int kMaxName = 4096;
 // Huginn's own chat settings (name, public key, inbox) ride along under this name; Muninn skips it.
 const QString kSettingsEntry = QStringLiteral("huginn-settings.dat");
 const QStringList kSettingsGroups{QStringLiteral("chat"), QStringLiteral("nostr")};
+// v3 backups, what both apps write: scrypt with 64 MiB and two lanes (Muninn has no Argon2id), and the tag covers the
+// header too. "@about.json" says which app and device made it; "@move.json" is the shared form (Move).
+const quint64 kBackupN = 65536, kBackupR = 8, kBackupP = 2;
+const QString kAbout = QStringLiteral("@about.json");
+const QString kShared = QStringLiteral("@move.json");
+
+// AES-256-GCM with additional data, in seal()'s layout: nonce, ciphertext, tag.
+QByteArray sealWith(const QByteArray &key, const QByteArray &plain, const QByteArray &aad)
+{
+    const QByteArray iv = random(12);
+    QByteArray out(plain.size() + 16, 0);
+    int len = 0, total = 0;
+    EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit_ex(c, EVP_aes_256_gcm(), nullptr, reinterpret_cast<const unsigned char *>(key.constData()), reinterpret_cast<const unsigned char *>(iv.constData()));
+    EVP_EncryptUpdate(c, nullptr, &len, reinterpret_cast<const unsigned char *>(aad.constData()), int(aad.size()));
+    EVP_EncryptUpdate(c, reinterpret_cast<unsigned char *>(out.data()), &len, reinterpret_cast<const unsigned char *>(plain.constData()), int(plain.size()));
+    total = len;
+    EVP_EncryptFinal_ex(c, reinterpret_cast<unsigned char *>(out.data()) + total, &len);
+    total += len;
+    EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_GET_TAG, 16, out.data() + total);
+    EVP_CIPHER_CTX_free(c);
+    out.resize(total + 16);
+    return iv + out;
+}
+
+QByteArray openWith(const QByteArray &key, const QByteArray &data, const QByteArray &aad, bool *ok)
+{
+    *ok = false;
+    if (key.size() != 32 || data.size() < 12 + 16)
+        return {};
+    const QByteArray iv = data.left(12), tag = data.right(16), ct = data.mid(12, data.size() - 28);
+    QByteArray out(ct.size(), 0);
+    int len = 0;
+    EVP_CIPHER_CTX *c = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit_ex(c, EVP_aes_256_gcm(), nullptr, reinterpret_cast<const unsigned char *>(key.constData()), reinterpret_cast<const unsigned char *>(iv.constData()));
+    EVP_DecryptUpdate(c, nullptr, &len, reinterpret_cast<const unsigned char *>(aad.constData()), int(aad.size()));
+    EVP_DecryptUpdate(c, reinterpret_cast<unsigned char *>(out.data()), &len, reinterpret_cast<const unsigned char *>(ct.constData()), int(ct.size()));
+    EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_TAG, 16, const_cast<char *>(tag.constData()));
+    const bool good = EVP_DecryptFinal_ex(c, reinterpret_cast<unsigned char *>(out.data()) + len, &len) > 0;
+    EVP_CIPHER_CTX_free(c);
+    *ok = good;
+    return good ? out : QByteArray();
+}
+
+// The suggested name: "Huginn backup 2026-11-02.hmbak".
+QString backupName() { return QStringLiteral("Huginn backup ") + QDate::currentDate().toString(Qt::ISODate) + QStringLiteral(".hmbak"); }
 
 void put32(QByteArray &out, quint32 v)
 {
@@ -675,13 +1041,6 @@ bool get32(const QByteArray &in, qsizetype at, quint32 *v)
     const auto *p = reinterpret_cast<const unsigned char *>(in.constData() + at);
     *v = (quint32(p[0]) << 24) | (quint32(p[1]) << 16) | (quint32(p[2]) << 8) | quint32(p[3]);
     return true;
-}
-
-QString sizeText(qint64 n)
-{
-    if (n < 1024 * 1024)
-        return QString::number(qMax<qint64>(1, n / 1024)) + QStringLiteral(" KB");
-    return QString::number(double(n) / (1024.0 * 1024.0), 'f', 1) + QStringLiteral(" MB");
 }
 
 // The backup key from its header (see vault.h). The header isn't protected, so anything weaker than what the apps
@@ -776,6 +1135,7 @@ Vault::Files Vault::everything() const
         return {};
     if (beforeBackup)
         beforeBackup();
+    drainSaves(30000);
     Files files = collect(m_key, dataDir());
     files.emplace_back(kSettingsEntry, settingsBlob());
     return files;
@@ -787,6 +1147,7 @@ bool Vault::takeEverything(const Files &files, QString *error)
         *error = QStringLiteral("Open Chat and unlock it first.");
         return false;
     }
+    m_saves->dropAll(30000);   // the old chats' saves still waiting never land on the new files
     if (!replaceAll(m_key, dataDir(), files, error))
         return false;
     for (const auto &e : files)
@@ -848,27 +1209,22 @@ QByteArray Vault::packBackup(const QString &password, const Files &files, const 
     QJsonObject h{{QStringLiteral("salt"), QString::fromLatin1(salt.toBase64())},
                   {QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}, {QStringLiteral("app"), app}};
     QByteArray key;
+    int v = 3;
     if (kdf == QLatin1String("pbkdf2")) {
-        h.insert(QStringLiteral("v"), 1);
+        v = 1;
         h.insert(QStringLiteral("rounds"), kRounds);
         key = derive(password, salt, kRounds);
     } else {
-        // Argon2id like the lock when this OpenSSL has it, scrypt otherwise: both slow to guess on a graphics card.
-        h.insert(QStringLiteral("v"), 2);
-        key = argon2id(password.toUtf8(), salt, kArgonMem, kArgonIter, kArgonLanes);
-        if (!key.isEmpty()) {
-            h.insert(QStringLiteral("kdf"), QStringLiteral("argon2id"));
-            h.insert(QStringLiteral("m"), int(kArgonMem));
-            h.insert(QStringLiteral("t"), int(kArgonIter));
-            h.insert(QStringLiteral("p"), int(kArgonLanes));
-        } else {
-            key = scrypt(password.toUtf8(), salt, kScryptN, kScryptR, kScryptP);
-            h.insert(QStringLiteral("kdf"), QStringLiteral("scrypt"));
-            h.insert(QStringLiteral("N"), double(kScryptN));
-            h.insert(QStringLiteral("r"), int(kScryptR));
-            h.insert(QStringLiteral("p"), int(kScryptP));
-        }
+        // v3: scrypt, which both apps have. "v2" (older, no header in the tag) only for the self-test.
+        v = kdf == QLatin1String("v2") ? 2 : 3;
+        const quint64 p = v == 2 ? 1 : kBackupP;
+        key = scrypt(password.toUtf8(), salt, kBackupN, kBackupR, p);
+        h.insert(QStringLiteral("kdf"), QStringLiteral("scrypt"));
+        h.insert(QStringLiteral("N"), double(kBackupN));
+        h.insert(QStringLiteral("r"), int(kBackupR));
+        h.insert(QStringLiteral("p"), int(p));
     }
+    h.insert(QStringLiteral("v"), v);
     if (key.isEmpty())
         return {};
     const QByteArray header = QJsonDocument(h).toJson(QJsonDocument::Compact);
@@ -883,13 +1239,14 @@ QByteArray Vault::packBackup(const QString &password, const Files &files, const 
     QByteArray out = kBackupMagic;
     put32(out, quint32(header.size()));
     out.append(header);
-    out.append(seal(key, body));
+    out.append(v >= 3 ? sealWith(key, body, out) : seal(key, body));
     key.fill(0);
     body.fill(0);
     return out;
 }
 
-int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const QString &app, Files *files, QString *created, QString *error)
+int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const QString &app, Files *files, QString *created, QString *error,
+                        QJsonObject *header)
 {
     const auto damaged = [error] {
         *error = QStringLiteral("This backup is damaged.");
@@ -905,7 +1262,7 @@ int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const 
         return damaged();
     const QJsonObject h = QJsonDocument::fromJson(bytes.mid(kBackupMagic.size() + 4, len)).object();
     const int v = h.value(QStringLiteral("v")).toInt();
-    if (v != 1 && v != 2) {
+    if (v < 1 || v > 3) {
         *error = h.isEmpty() ? QStringLiteral("This backup is damaged.") : QStringLiteral("This backup is from a newer version. Update Huginn first.");
         return 1;
     }
@@ -914,13 +1271,15 @@ int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const 
     const QByteArray salt = QByteArray::fromBase64(h.value(QStringLiteral("salt")).toString().toLatin1());
     const qint64 rounds = h.value(QStringLiteral("rounds")).toInteger();
     if (salt.size() < 16 || (v == 1 && (rounds < 100000 || rounds > 10000000))
-        || (v == 2 && kdf != QLatin1String("argon2id") && kdf != QLatin1String("scrypt")))
+        || (v == 2 && kdf != QLatin1String("argon2id") && kdf != QLatin1String("scrypt")) || (v == 3 && kdf != QLatin1String("scrypt")))
         return damaged();
     if (created)
         *created = h.value(QStringLiteral("created")).toString();
+    // A v3 backup opens in either app; an older one only where it was made.
     const QString from = h.value(QStringLiteral("app")).toString();
-    if (from != app) {
-        *error = from == QLatin1String("muninn") ? QStringLiteral("This is a Muninn backup. Restore it in Muninn.") : QStringLiteral("This isn't a Huginn backup.");
+    if (v < 3 && from != app) {
+        *error = from == QLatin1String("muninn") ? QStringLiteral("This older backup was made in Muninn. Restore it in Muninn.")
+                                                 : QStringLiteral("This isn't a Huginn or Muninn backup.");
         return 3;
     }
     const qsizetype at = kBackupMagic.size() + 4 + qsizetype(len);
@@ -935,7 +1294,7 @@ int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const 
         return 1;
     }
     bool ok = false;
-    QByteArray plain = open(key, bytes.mid(at), &ok);
+    QByteArray plain = v >= 3 ? openWith(key, bytes.mid(at), bytes.left(at), &ok) : open(key, bytes.mid(at), &ok);
     key.fill(0);
     if (!ok) {
         *error = QStringLiteral("That password doesn't open this backup.");   // or the file was changed: GCM can't tell which
@@ -958,7 +1317,58 @@ int Vault::unpackBackup(const QByteArray &bytes, const QString &password, const 
         files->clear();
         return damaged();
     }
+    if (header)
+        *header = h;
     return 0;
+}
+
+QVariantMap Vault::backupSummary(const Files &files, const QJsonObject &header)
+{
+    QJsonObject about, shared;
+    int items = 0;
+    for (const auto &e : files) {
+        if (e.first == kAbout)
+            about = QJsonDocument::fromJson(e.second).object();
+        else if (e.first == kShared)
+            shared = QJsonDocument::fromJson(e.second).object();
+        else if (!e.first.startsWith(QLatin1Char('@')) && e.first != kSettingsEntry)
+            ++items;
+    }
+    const auto count = [&shared](const QJsonValue &v) { return shared.isEmpty() ? -1 : int(v.isArray() ? v.toArray().size() : v.toObject().size()); };
+    const QString app = about.value(QStringLiteral("app")).toString(header.value(QStringLiteral("app")).toString());
+    return {{QStringLiteral("app"), app}, {QStringLiteral("device"), about.value(QStringLiteral("device")).toString()},
+            {QStringLiteral("created"), about.value(QStringLiteral("created")).toString(header.value(QStringLiteral("created")).toString())},
+            {QStringLiteral("v"), header.value(QStringLiteral("v")).toInt()},
+            // "yes", "no", or "" when the backup doesn't say (older ones).
+            {QStringLiteral("files"), about.contains(QStringLiteral("files")) ? (about.value(QStringLiteral("files")).toBool() ? QStringLiteral("yes") : QStringLiteral("no")) : QString()},
+            {QStringLiteral("contacts"), count(shared.value(QStringLiteral("contacts")))}, {QStringLiteral("chats"), count(shared.value(QStringLiteral("chats")))},
+            {QStringLiteral("groups"), count(shared.value(QStringLiteral("groups")))},
+            {QStringLiteral("folders"), count(shared.value(QStringLiteral("folders")).toObject().value(QStringLiteral("folders")))},
+            {QStringLiteral("items"), items}};
+}
+
+bool Vault::isMedia(const QString &name)
+{
+    return name.startsWith(QLatin1String("photos/")) || name.startsWith(QLatin1String("mirror-media/"));
+}
+
+QString Vault::keepCopy(const QString &dir)
+{
+    const QString kept = QDir::cleanPath(dir) + QStringLiteral("-kept-") + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
+    if (!QDir().mkpath(kept))
+        return {};
+    const QDir base(dir);
+    QDirIterator it(dir, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString from = it.next();
+        const QString to = kept + QLatin1Char('/') + base.relativeFilePath(from);
+        QDir().mkpath(QFileInfo(to).absolutePath());
+        if (!QFile::copy(from, to)) {
+            QDir(kept).removeRecursively();
+            return {};
+        }
+    }
+    return kept;
 }
 
 Vault::Files Vault::collect(const QByteArray &key, const QString &dir)
@@ -1031,12 +1441,52 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
     return all;
 }
 
-void Vault::backup(const QString &password)
+QVariantMap Vault::backupInfo() const
+{
+    qint64 all = 0, media = 0;
+    const QString dir = dataDir();
+    const QDir base(dir);
+    QDirIterator it(dir, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString full = it.next();
+        const qint64 n = it.fileInfo().size();
+        all += n;
+        if (isMedia(base.relativeFilePath(full)))
+            media += n;
+    }
+    return {{QStringLiteral("name"), backupName()}, {QStringLiteral("folder"), QDir::toNativeSeparators(backupFolder())},
+            {QStringLiteral("all"), double(all)}, {QStringLiteral("media"), double(media)}};
+}
+
+QString Vault::pickBackupSave(const QString &name) const
+{
+    QString f = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Save the backup"),
+                                             backupFolder() + QLatin1Char('/') + (name.isEmpty() ? backupName() : name),
+                                             QStringLiteral("Backups (*.hmbak);;All files (*)"));
+    if (f.isEmpty())
+        return {};
+    if (QFileInfo(f).suffix().isEmpty())
+        f += QStringLiteral(".hmbak");
+    return f;
+}
+
+QString Vault::pickBackupOpen() const
+{
+    // Any file, any name: a backup made in Muninn and copied over keeps whatever name it was given.
+    return QFileDialog::getOpenFileName(nullptr, QStringLiteral("Choose the backup file"), backupFolder(),
+                                        QStringLiteral("All files (*);;Backups (*.hmbak *.mbk)"));
+}
+
+void Vault::backupTo(const QString &path, const QString &password, bool withFiles)
 {
     if (m_busy)
         return;
     if (locked() || screenLocked()) {
         Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Unlock Huginn first."));
+        return;
+    }
+    if (path.isEmpty()) {
+        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Choose where to save it."));
         return;
     }
     if (password.size() < kMinBackupPassword) {
@@ -1045,72 +1495,63 @@ void Vault::backup(const QString &password)
     }
     if (beforeBackup)
         beforeBackup();
-    const QString folder = backupFolder();
-    const QString file = folder + QStringLiteral("/huginn-backup-") + QDate::currentDate().toString(Qt::ISODate) + QStringLiteral(".mbk");
+    drainSaves(30000);   // the backup reads the files from disk
     const QByteArray key = m_key;
     const QString dir = dataDir();
     const QByteArray extra = settingsBlob();
+    // Read here, on the window's thread: the shared form comes from Chat.
+    const QByteArray shared = sharedForm ? sharedForm() : QByteArray();
+    const QByteArray about = QJsonDocument(QJsonObject{{QStringLiteral("v"), 1}, {QStringLiteral("app"), QStringLiteral("huginn")},
+                                                       {QStringLiteral("device"), deviceName ? deviceName() : QString()},
+                                                       {QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+                                                       {QStringLiteral("files"), withFiles}}).toJson(QJsonDocument::Compact);
     auto result = std::make_shared<QString>();
     auto good = std::make_shared<bool>(false);
+    auto size = std::make_shared<qint64>(0);
     m_busy = true;
+    m_lastBackup.clear();
     Q_EMIT changed();
     QThread *t = QThread::create([=] {
-        Files files = collect(key, dir);
+        Files all = collect(key, dir);
+        Files files;
+        for (auto &e : all)
+            if (e.first != QLatin1String("move-out.bin") && (withFiles || !isMedia(e.first)))
+                files.push_back(std::move(e));
         files.emplace_back(kSettingsEntry, extra);
+        if (!shared.isEmpty())
+            files.emplace_back(kShared, shared);
+        files.emplace_back(kAbout, about);
         const QByteArray bytes = packBackup(password, files, QStringLiteral("huginn"));
+        for (auto &e : files)
+            e.second.fill(0);
         if (bytes.isEmpty()) {
-            *result = QStringLiteral("Couldn't make the backup's key on this device.");
+            *result = QStringLiteral("Couldn't make the backup's key on this computer.");
             return;
         }
-        QDir().mkpath(folder);
-        QSaveFile f(file);
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QSaveFile f(path);
         if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) {
-            *result = QStringLiteral("Couldn't save the backup in ") + folder + QStringLiteral(". Is the disk full?");
+            *result = QStringLiteral("Couldn't save it there. Is the disk full, or the folder read-only?");
             return;
         }
+        *size = bytes.size();
         *good = true;
-        *result = QStringLiteral("Backed up to Documents as ") + QFileInfo(file).fileName() + QStringLiteral(" (") + sizeText(bytes.size()) + QStringLiteral(").");
     });
     t->setObjectName(QStringLiteral("huginn-backup"));
     QPointer<Vault> self(this);
-    connect(t, &QThread::finished, this, [self, t, result, good] {
+    connect(t, &QThread::finished, this, [self, t, result, good, size, path, withFiles] {
         t->deleteLater();
         if (!self)
             return;
+        if (*good)
+            self->m_lastBackup = {{QStringLiteral("path"), QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath())},
+                                  {QStringLiteral("folder"), QDir::toNativeSeparators(QFileInfo(path).absolutePath())},
+                                  {QStringLiteral("size"), double(*size)}, {QStringLiteral("files"), withFiles}};
         self->m_busy = false;
         Q_EMIT self->changed();
-        Q_EMIT self->done(QStringLiteral("backup"), *good, *result);
+        Q_EMIT self->done(QStringLiteral("backup"), *good, *good ? QStringLiteral("Backup saved.") : *result);
     });
     t->start();
-}
-
-QVariantList Vault::backups() const
-{
-    QVariantList out;
-    const QFileInfoList list = QDir(backupFolder()).entryInfoList({QStringLiteral("*.mbk")}, QDir::Files, QDir::Time);
-    for (const QFileInfo &fi : list) {
-        // Only the header is readable without the password: which app made it, and when.
-        QString app, when;
-        QFile f(fi.absoluteFilePath());
-        if (f.open(QIODevice::ReadOnly)) {
-            const QByteArray head = f.read(kBackupMagic.size() + 4 + kMaxHeader);
-            quint32 len = 0;
-            if (head.startsWith(kBackupMagic) && get32(head, kBackupMagic.size(), &len) && len <= quint32(kMaxHeader)) {
-                const QJsonObject h = QJsonDocument::fromJson(head.mid(kBackupMagic.size() + 4, len)).object();
-                app = h.value(QStringLiteral("app")).toString();
-                const QDateTime c = QDateTime::fromString(h.value(QStringLiteral("created")).toString(), Qt::ISODate);
-                if (c.isValid())
-                    when = QLocale().toString(c.toLocalTime(), QStringLiteral("d MMM yyyy, h:mm AP"));
-            }
-        }
-        QString detail = app == QLatin1String("huginn") ? QStringLiteral("Huginn backup") : app == QLatin1String("muninn") ? QStringLiteral("Muninn backup (restore it in Muninn)") : QStringLiteral("Not a backup Huginn can read");
-        if (!when.isEmpty())
-            detail += QStringLiteral(" · ") + when;
-        detail += QStringLiteral(" · ") + sizeText(fi.size());
-        out.append(QVariantMap{{QStringLiteral("name"), fi.fileName()}, {QStringLiteral("detail"), detail}, {QStringLiteral("url"), fi.absoluteFilePath()},
-                             {QStringLiteral("app"), app}});
-    }
-    return out;
 }
 
 void Vault::openBackup(const QString &file, const QString &password)
@@ -1118,13 +1559,15 @@ void Vault::openBackup(const QString &file, const QString &password)
     if (m_busy)
         return;
     forgetOpened();
-    if (locked() || screenLocked()) {
+    // First setup can restore before there is a lock; otherwise Huginn must be open.
+    if (exists() && (locked() || screenLocked())) {
         Q_EMIT done(QStringLiteral("open"), false, QStringLiteral("Unlock Huginn first."));
         return;
     }
     auto files = std::make_shared<Files>();
+    auto header = std::make_shared<QJsonObject>();
     auto result = std::make_shared<QString>();
-    auto good = std::make_shared<bool>(false);
+    auto code = std::make_shared<int>(1);
     m_busy = true;
     Q_EMIT changed();
     QThread *t = QThread::create([=] {
@@ -1133,28 +1576,24 @@ void Vault::openBackup(const QString &file, const QString &password)
             *result = QStringLiteral("Couldn't open ") + QFileInfo(file).fileName() + QLatin1Char('.');
             return;
         }
-        QString created;
-        if (unpackBackup(f.readAll(), password, QStringLiteral("huginn"), files.get(), &created, result.get()) != 0)
-            return;
-        int count = 0;
-        for (const auto &e : *files)
-            count += e.first == kSettingsEntry ? 0 : 1;
-        const QDateTime c = QDateTime::fromString(created, Qt::ISODate);
-        *good = true;
-        *result = QStringLiteral("Backup from ") + (c.isValid() ? QLocale().toString(c.toLocalTime(), QStringLiteral("d MMM yyyy, h:mm AP")) : QStringLiteral("an unknown date"))
-            + QStringLiteral(", ") + QString::number(count) + (count == 1 ? QStringLiteral(" file.") : QStringLiteral(" files."));
+        *code = unpackBackup(f.readAll(), password, QStringLiteral("huginn"), files.get(), nullptr, result.get(), header.get());
     });
     t->setObjectName(QStringLiteral("huginn-restore"));
     QPointer<Vault> self(this);
-    connect(t, &QThread::finished, this, [self, t, files, result, good] {
+    connect(t, &QThread::finished, this, [self, t, files, header, result, code] {
         t->deleteLater();
         if (!self)
             return;
-        if (*good)
+        if (*code == 0) {
             self->m_opened = std::move(*files);
+            self->m_openedHeader = *header;
+            self->m_openedInfo = backupSummary(self->m_opened, self->m_openedHeader);
+        } else {
+            self->m_openedInfo = {{QStringLiteral("error"), *code == 2 ? QStringLiteral("password") : QStringLiteral("other")}};
+        }
         self->m_busy = false;
         Q_EMIT self->changed();
-        Q_EMIT self->done(QStringLiteral("open"), *good, *result);
+        Q_EMIT self->done(QStringLiteral("open"), *code == 0, *code == 0 ? QString() : *code == 2 ? QStringLiteral("Wrong password. Try again.") : *result);
     });
     t->start();
 }
@@ -1164,23 +1603,63 @@ void Vault::forgetOpened()
     for (auto &e : m_opened)
         e.second.fill(0);
     m_opened.clear();
+    m_openedHeader = {};
+    m_openedInfo.clear();
 }
 
 void Vault::restoreOpened()
 {
-    if (m_busy || m_opened.empty() || locked() || screenLocked()) {
+    if (m_busy || m_opened.empty()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Open the backup again first."));
         return;
     }
+    // First setup: no lock yet, so Huginn starts without one (a lock can be set in Settings after).
+    if (!exists() && !startWithoutLock()) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Couldn't start Huginn's storage. Nothing changed."));
+        return;
+    }
+    if (locked() || screenLocked()) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Unlock Huginn first."));
+        return;
+    }
+    // A Muninn backup: Huginn's own files made from its shared form (text, contacts, groups, folders, profile).
+    Files files;
+    if (m_openedInfo.value(QStringLiteral("app")).toString() != QLatin1String("huginn")) {
+        QByteArray shared;
+        for (const auto &e : m_opened)
+            if (e.first == kShared)
+                shared = e.second;
+        QString why;
+        if (!shared.isEmpty() && fromSharedForm)
+            files = fromSharedForm(shared, &why);
+        if (files.empty()) {
+            Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("This backup has nothing Huginn can read. Nothing changed."));
+            return;
+        }
+    } else {
+        for (const auto &e : m_opened)
+            if (!e.first.startsWith(QLatin1Char('@')))
+                files.push_back(e);
+    }
+    // Nothing is lost: a copy of what's here now goes next to the chat folder first.
+    drainSaves(30000);
+    const QString kept = keepCopy(dataDir());
+    if (kept.isEmpty()) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Couldn't keep a copy of what's here, so nothing changed. Is the disk full?"));
+        return;
+    }
     QString error;
-    if (!replaceAll(m_key, dataDir(), m_opened, &error)) {
+    m_saves->dropAll(30000);   // the old chats' saves still waiting never land on the restored files
+    if (!replaceAll(m_key, dataDir(), files, &error)) {
         forgetOpened();
         Q_EMIT done(QStringLiteral("restore"), false, error);
         return;
     }
-    for (const auto &e : m_opened)
+    for (const auto &e : files)
         if (e.first == kSettingsEntry)
             applySettingsBlob(e.second);
+    for (auto &e : files)
+        e.second.fill(0);
     forgetOpened();
     // The backup's day keys may be older than the ones contacts hold: Chat makes a new one and announces it at the
     // next start (restore/announce), and wrappings for day keys it no longer has wait 7 days (restore/at).
@@ -1194,7 +1673,8 @@ void Vault::restoreOpened()
     m_restarting = true;
     m_busy = true;
     Q_EMIT changed();
-    Q_EMIT done(QStringLiteral("restore"), true, QStringLiteral("Restored. Huginn restarts to load your chats."));
+    Q_EMIT done(QStringLiteral("restore"), true, QStringLiteral("Restored. What was here is kept in ") + QDir::toNativeSeparators(kept)
+                                                     + QStringLiteral(". Huginn restarts to load your chats."));
     QTimer::singleShot(1500, this, [this] { restartHuginn(QStringLiteral("Restored. Close Huginn and open it again to load your chats.")); });
 }
 
@@ -1231,10 +1711,9 @@ bool Vault::backupSelfTest()
     const bool lenOk = bytes.startsWith("MUNB1") && get32(bytes, 5, &len) && len > 0 && len <= 4096;
     const QJsonObject h = QJsonDocument::fromJson(bytes.mid(9, len)).object();
     const QString kdf = h.value(QStringLiteral("kdf")).toString();
-    check("header", lenOk && h.value(QStringLiteral("v")).toInt() == 2 && !h.contains(QStringLiteral("rounds"))
-                        && ((kdf == QLatin1String("argon2id") && h.value(QStringLiteral("m")).toInt() == int(kArgonMem)
-                             && h.value(QStringLiteral("t")).toInt() == int(kArgonIter) && h.value(QStringLiteral("p")).toInt() == int(kArgonLanes))
-                            || (kdf == QLatin1String("scrypt") && h.value(QStringLiteral("N")).toInteger() == qint64(kScryptN)))
+    check("header", lenOk && h.value(QStringLiteral("v")).toInt() == 3 && !h.contains(QStringLiteral("rounds"))
+                        && kdf == QLatin1String("scrypt") && h.value(QStringLiteral("N")).toInteger() == qint64(kBackupN)
+                        && h.value(QStringLiteral("r")).toInt() == int(kBackupR) && h.value(QStringLiteral("p")).toInt() == int(kBackupP)
                         && h.value(QStringLiteral("app")).toString() == QLatin1String("huginn")
                         && QByteArray::fromBase64(h.value(QStringLiteral("salt")).toString().toLatin1()).size() == 16
                         && QDateTime::fromString(h.value(QStringLiteral("created")).toString(), Qt::ISODate).isValid());
@@ -1243,10 +1722,20 @@ bool Vault::backupSelfTest()
     Files back;
     QString created;
     check("wrong password refused", unpackBackup(bytes, QStringLiteral("wrong horse"), QStringLiteral("huginn"), &back, &created, &error) == 2 && back.empty());
-    check("Muninn reader refuses a Huginn backup", unpackBackup(bytes, QStringLiteral("correct horse"), QStringLiteral("muninn"), &back, &created, &error) == 3);
+    check("opens where Muninn reads it too", unpackBackup(bytes, QStringLiteral("correct horse"), QStringLiteral("muninn"), &back, &created, &error) == 0 && back == want);
     QByteArray changedBytes = bytes;
     changedBytes[changedBytes.size() - 20] = char(changedBytes.at(changedBytes.size() - 20) ^ 1);
     check("changed file refused", unpackBackup(changedBytes, QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 2);
+    {
+        // The tag covers the header: a changed date (or app) is refused like a changed body.
+        QByteArray changedHead = bytes;
+        const qsizetype at = changedHead.indexOf("\"created\":\"") + 11;
+        changedHead[at + 3] = char(changedHead.at(at + 3) == '9' ? '8' : changedHead.at(at + 3) + 1);
+        QByteArray otherApp = bytes;
+        otherApp.replace(otherApp.indexOf("\"huginn\""), 8, "\"muninn\"");
+        check("changed header refused", unpackBackup(changedHead, QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 2
+                                            && unpackBackup(otherApp, QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 2);
+    }
     check("not a backup refused", unpackBackup(QByteArrayLiteral("MUNV1 something else"), QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 1);
     check("round trip", unpackBackup(bytes, QStringLiteral("correct horse"), QStringLiteral("huginn"), &back, &created, &error) == 0 && back == want);
     // A PBKDF2 backup (v1) still restores.
@@ -1258,6 +1747,31 @@ bool Vault::backupSelfTest()
         check("PBKDF2 backup restores", h1.value(QStringLiteral("v")).toInt() == 1 && h1.value(QStringLiteral("rounds")).toInt() == 310000
                                             && unpackBackup(v1, QStringLiteral("correct horse"), QStringLiteral("huginn"), &v1back, &created, &error) == 0
                                             && v1back == want);
+        // And an older scrypt one (v2, the header outside the tag), only where it was made.
+        const QByteArray v2 = packBackup(QStringLiteral("correct horse"), got, QStringLiteral("huginn"), QStringLiteral("v2"));
+        quint32 l2 = 0;
+        const QJsonObject h2 = get32(v2, 5, &l2) ? QJsonDocument::fromJson(v2.mid(9, l2)).object() : QJsonObject();
+        Files v2back;
+        check("older scrypt backup restores", h2.value(QStringLiteral("v")).toInt() == 2
+                                                  && unpackBackup(v2, QStringLiteral("correct horse"), QStringLiteral("huginn"), &v2back, &created, &error) == 0
+                                                  && v2back == want
+                                                  && unpackBackup(v2, QStringLiteral("correct horse"), QStringLiteral("muninn"), &v2back, &created, &error) == 3);
+    }
+    // What the screen before Restore shows, from @about.json and @move.json; older backups have no list.
+    {
+        Files withAbout = want;
+        withAbout.emplace_back(kAbout, QByteArrayLiteral("{\"v\":1,\"app\":\"muninn\",\"device\":\"Pixel\",\"created\":\"2026-11-02T10:00:00Z\",\"files\":false}"));
+        withAbout.emplace_back(kShared, QByteArrayLiteral("{\"v\":1,\"contacts\":[{},{}],\"chats\":{\"a\":[]},\"groups\":[],\"folders\":{\"folders\":[{}],\"top\":[]}}"));
+        const QVariantMap m = backupSummary(withAbout, h);
+        check("summary", m.value(QStringLiteral("app")).toString() == QLatin1String("muninn") && m.value(QStringLiteral("device")).toString() == QLatin1String("Pixel")
+                             && m.value(QStringLiteral("files")).toString() == QLatin1String("no") && m.value(QStringLiteral("contacts")).toInt() == 2
+                             && m.value(QStringLiteral("chats")).toInt() == 1 && m.value(QStringLiteral("groups")).toInt() == 0
+                             && m.value(QStringLiteral("folders")).toInt() == 1 && m.value(QStringLiteral("items")).toInt() == int(want.size())
+                             && m.value(QStringLiteral("v")).toInt() == 3);
+        const QVariantMap old = backupSummary(want, h);
+        check("older summary has no list", old.value(QStringLiteral("contacts")).toInt() == -1 && old.value(QStringLiteral("files")).toString().isEmpty()
+                                               && old.value(QStringLiteral("app")).toString() == QLatin1String("huginn"));
+        check("files and pictures", isMedia(QStringLiteral("photos/abc")) && isMedia(QStringLiteral("mirror-media/x")) && !isMedia(QStringLiteral("chats.json")));
     }
     // Weakened settings in the (unprotected) header are refused, not used.
     {
@@ -1298,8 +1812,72 @@ bool Vault::backupSelfTest()
     check("restore keeps this computer's lock", kept.open(QIODevice::ReadOnly) && kept.readAll() == "other lock");
     check("restored files open with this computer's key", collect(keyB, dst) == want);
     check("old files removed", !QFile::exists(dst + QStringLiteral("/photos/old")));
+    // Before a restore, a copy of what's there is kept beside it (the lock too), and it still opens.
+    const QString keptDir = keepCopy(dst);
+    QFile keptKey(keptDir + QStringLiteral("/vault.key"));
+    check("copy kept first", !keptDir.isEmpty() && keptDir.startsWith(dst + QStringLiteral("-kept-")) && keptKey.open(QIODevice::ReadOnly)
+                                 && keptKey.readAll() == "other lock" && collect(keyB, keptDir) == want);
     check("unsafe names refused", !safeName(QStringLiteral("../x")) && !safeName(QStringLiteral("/etc/x")) && !safeName(QStringLiteral("a//b"))
                                       && safeName(QStringLiteral("photos/abc")));
+    return all;
+}
+
+bool Vault::backupVectorTest(const QString &path)
+{
+    bool all = true;
+    const auto check = [&all](const QString &what, bool ok) {
+        std::printf("backup vectors %s: %s\n", qPrintable(what), ok ? "ok" : "FAILED");
+        all &= ok;
+    };
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        check(QStringLiteral("read ") + path, false);
+        return false;
+    }
+    const QJsonObject v = QJsonDocument::fromJson(f.readAll()).object();
+    const QString pw = v.value(QStringLiteral("password")).toString(), wrong = v.value(QStringLiteral("wrong")).toString();
+    const QJsonObject sum = v.value(QStringLiteral("summary")).toObject();
+    const auto fileOf = [&v](const char *k) { return QByteArray::fromBase64(v.value(QLatin1String(k)).toObject().value(QStringLiteral("file")).toString().toLatin1()); };
+    const auto wantOf = [&v](const char *k) {
+        Files out;
+        for (const QJsonValue &e : v.value(QLatin1String(k)).toObject().value(QStringLiteral("files")).toArray())
+            out.emplace_back(e.toObject().value(QStringLiteral("name")).toString(),
+                             QByteArray::fromBase64(e.toObject().value(QStringLiteral("data")).toString().toLatin1()));
+        return out;
+    };
+    QString error, created;
+    // Made as Huginn and as Muninn: both open here, the same files come out, with the same summary.
+    for (const char *k : {"v3huginn", "v3muninn"}) {
+        const QJsonObject e = v.value(QLatin1String(k)).toObject();
+        Files got;
+        QJsonObject header;
+        const bool opens = unpackBackup(fileOf(k), pw, QStringLiteral("huginn"), &got, &created, &error, &header) == 0 && got == wantOf(k);
+        check(QLatin1String(k) + QStringLiteral(" opens"), opens);
+        const QVariantMap m = backupSummary(got, header);
+        check(QLatin1String(k) + QStringLiteral(" summary"),
+              m.value(QStringLiteral("app")).toString() == e.value(QStringLiteral("app")).toString()
+                  && m.value(QStringLiteral("device")).toString() == e.value(QStringLiteral("device")).toString()
+                  && m.value(QStringLiteral("created")).toString() == sum.value(QStringLiteral("created")).toString()
+                  && m.value(QStringLiteral("contacts")).toInt() == sum.value(QStringLiteral("contacts")).toInt()
+                  && m.value(QStringLiteral("chats")).toInt() == sum.value(QStringLiteral("chats")).toInt()
+                  && m.value(QStringLiteral("groups")).toInt() == sum.value(QStringLiteral("groups")).toInt()
+                  && m.value(QStringLiteral("folders")).toInt() == sum.value(QStringLiteral("folders")).toInt()
+                  && m.value(QStringLiteral("items")).toInt() == sum.value(QStringLiteral("items")).toInt()
+                  && m.value(QStringLiteral("files")).toString() == QLatin1String("yes"));
+        Files none;
+        check(QLatin1String(k) + QStringLiteral(" wrong password refused"), unpackBackup(fileOf(k), wrong, QStringLiteral("huginn"), &none, &created, &error) == 2);
+        QByteArray changed = fileOf(k);
+        changed[changed.size() - 20] = char(changed.at(changed.size() - 20) ^ 1);
+        check(QLatin1String(k) + QStringLiteral(" changed file refused"), unpackBackup(changed, pw, QStringLiteral("huginn"), &none, &created, &error) == 2);
+        QByteArray head = fileOf(k);
+        head.replace(head.indexOf("2026-11-02"), 4, "2027");
+        check(QLatin1String(k) + QStringLiteral(" changed header refused"), unpackBackup(head, pw, QStringLiteral("huginn"), &none, &created, &error) == 2);
+    }
+    // The old format: an older Huginn backup opens; an older Muninn one says to restore it in Muninn.
+    Files old;
+    check(QStringLiteral("older Huginn backup opens"), unpackBackup(fileOf("v2huginn"), pw, QStringLiteral("huginn"), &old, &created, &error) == 0 && old == wantOf("v2huginn"));
+    check(QStringLiteral("older Muninn backup goes to Muninn"), unpackBackup(fileOf("v1muninn"), pw, QStringLiteral("huginn"), &old, &created, &error) == 3
+                                                                    && error.contains(QLatin1String("Muninn")));
     return all;
 }
 
@@ -1475,5 +2053,111 @@ bool Vault::stabilitySelfTest()
     check("not locked on its own", !v.screenLocked());
     v.lockScreen();
     check("locks when asked", v.screenLocked() == v.hasLock());
+    return all;
+}
+
+bool Vault::saveQueueSelfTest()
+{
+    bool all = true;
+    const auto check = [&all](const char *what, bool ok) {
+        std::printf("perf self-test: %s: %s\n", what, ok ? "ok" : "FAILED");
+        all = all && ok;
+    };
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) {
+        check("a temporary folder", false);
+        return false;
+    }
+    const QByteArray key = random(32);
+    const auto readBack = [&key](const QString &file) {
+        QFile f(file);
+        if (!f.open(QIODevice::ReadOnly))
+            return QByteArray();
+        bool ok = false;
+        const QByteArray plain = openSealed(key, f.readAll(), &ok);
+        return ok ? plain : QByteArray();
+    };
+    const auto job = [&](SaveQueue &q, const QString &name, const QByteArray &data) {
+        SaveQueue::Job j;
+        j.name = name;
+        j.file = tmp.filePath(name);
+        j.key = key;
+        j.make = [data] { return data; };
+        q.put(std::move(j));
+    };
+    QThread *const gui = QThread::currentThread();
+
+    // Order per file: many saves of two files, interleaved; each file ends with its last save, never an older one.
+    {
+        SaveQueue q;
+        q.start();
+        std::atomic<QThread *> madeOn{nullptr};
+        for (int i = 1; i <= 200; ++i) {
+            job(q, QStringLiteral("a.json"), "a" + QByteArray::number(i));
+            job(q, QStringLiteral("b.json"), "b" + QByteArray::number(i));
+        }
+        SaveQueue::Job j;
+        j.name = QStringLiteral("c.json");
+        j.file = tmp.filePath(j.name);
+        j.key = key;
+        j.make = [&madeOn] { madeOn = QThread::currentThread(); return QByteArray("c"); };
+        q.put(std::move(j));
+        const bool drained = q.waitFor(QString(), 10000);
+        check("saves of a file are written in order (the last one wins)",
+              drained && readBack(tmp.filePath(QStringLiteral("a.json"))) == "a200" && readBack(tmp.filePath(QStringLiteral("b.json"))) == "b200");
+        check("files are made and sealed on the saving thread", madeOn.load() && madeOn.load() != gui);
+        check("the saving thread stops", q.finish(5000));
+    }
+
+    // A flush waits until the queue is empty: slow writes are on disk when waitFor returns, and a short limit says
+    // when it isn't yet.
+    {
+        s_slowWrites = 150;
+        SaveQueue q;
+        q.start();
+        job(q, QStringLiteral("slow1.json"), "one");
+        job(q, QStringLiteral("slow2.json"), "two");
+        const bool early = q.waitFor(QString(), 20);
+        QElapsedTimer t;
+        t.start();
+        const bool drained = q.waitFor(QString(), 10000);
+        check("a flush waits for the queue to drain (and says when time ran out)",
+              !early && drained && t.elapsed() >= 100 && readBack(tmp.filePath(QStringLiteral("slow1.json"))) == "one"
+                  && readBack(tmp.filePath(QStringLiteral("slow2.json"))) == "two");
+        job(q, QStringLiteral("slow3.json"), "three");
+        check("waiting for one file waits for its save", q.waitFor(QStringLiteral("slow3.json"), 10000) && readBack(tmp.filePath(QStringLiteral("slow3.json"))) == "three");
+        q.finish(5000);
+        s_slowWrites = 0;
+    }
+
+    // Closing: everything still waiting is written before the thread ends.
+    {
+        s_slowWrites = 20;
+        SaveQueue q;
+        q.start();
+        for (int i = 0; i < 10; ++i)
+            job(q, QStringLiteral("exit%1.json").arg(i), "x" + QByteArray::number(i));
+        const bool ended = q.finish(10000);
+        bool every = true;
+        for (int i = 0; i < 10; ++i)
+            every = every && readBack(tmp.filePath(QStringLiteral("exit%1.json").arg(i))) == "x" + QByteArray::number(i);
+        check("nothing waiting is lost when the saving thread stops", ended && every);
+        s_slowWrites = 0;
+    }
+
+    // Dropped saves (Erase everything, a restore) never land afterwards.
+    {
+        s_slowWrites = 100;
+        SaveQueue q;
+        q.start();
+        job(q, QStringLiteral("drop1.json"), "1");
+        job(q, QStringLiteral("drop2.json"), "2");
+        job(q, QStringLiteral("drop3.json"), "3");
+        QThread::msleep(30);
+        q.dropAll(10000);
+        q.finish(5000);
+        check("dropped saves are never written", !QFile::exists(tmp.filePath(QStringLiteral("drop3.json"))));
+        s_slowWrites = 0;
+    }
     return all;
 }

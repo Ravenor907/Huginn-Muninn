@@ -1,4 +1,5 @@
 #include "callmedia.h"
+#include "../modwire.h"
 #include "../busy.h"
 
 #include "audioio.h"
@@ -315,9 +316,12 @@ void CallMedia::onPull(qint16 *pcm)
     }
     if (ok)
         ++m_stats.decoded;
+    // The speaking ring follows what they said, whatever their volume here.
     const bool was = m_speaking.on();
     if (m_speaking.frame(AudioDsp::levelDb(pcm, AudioDsp::kFrame)) != was)
         Q_EMIT speakingChanged();
+    if (gain)
+        ModWire::applyGain(pcm, AudioDsp::kFrame, gain());
 }
 
 void CallMedia::onLan()

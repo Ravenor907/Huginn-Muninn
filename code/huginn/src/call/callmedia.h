@@ -86,6 +86,9 @@ public:
     void start(bool devices = true);
     void stop();
     void setMuted(bool on) { m_muted = on; }
+    // Their volume here in percent (0 to 200, cap g2's menus; 0 while muted for me), asked for every 20 ms frame of
+    // their decoded sound before it's played or mixed. Unset: 100.
+    std::function<int()> gain;
     bool muted() const { return m_muted; }
     AudioIO *audio() const { return m_audio; }
 

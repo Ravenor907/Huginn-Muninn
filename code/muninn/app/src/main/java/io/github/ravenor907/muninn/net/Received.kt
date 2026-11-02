@@ -65,15 +65,20 @@ object Received {
         } catch (_: Exception) { false }
     }
 
+    /** A saved file is still there (Files: "Moved or deleted" when it isn't). */
+    fun exists(context: Context, uri: String): Boolean = uri.isNotEmpty() && try {
+        context.contentResolver.openInputStream(Uri.parse(uri))?.use { true } ?: false
+    } catch (_: Exception) { false }
+
     /** Show in folder: the system's Downloads list. False when this device has none (some TVs). */
     fun showFolder(context: Context): Boolean = try {
         context.startActivity(android.content.Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         true
     } catch (_: Exception) { false }
 
-    /** Saves [bytes] in Downloads as [name]: the name it got and its URI, or null. */
-    fun save(context: Context, name: String, bytes: ByteArray): Pair<String, String>? = try {
-        val t = create(context, name)
+    /** Saves [bytes] in Downloads (under [under], a chat's folder) as [name]: the name it got and its URI, or null. */
+    fun save(context: Context, name: String, bytes: ByteArray, under: String = ""): Pair<String, String>? = try {
+        val t = create(context, name, under)
         try { t.out.write(bytes); t.finish(); t.name to shareUri(context, t) } catch (e: Exception) { t.discard(); null }
     } catch (_: Exception) { null }
 
@@ -106,10 +111,12 @@ object Received {
      * Starts saving a file. [path] is the name the sender gave; folders in it ("Photos/a.jpg") are kept
      * under Downloads, and nothing in it can climb out of Downloads.
      */
-    fun create(context: Context, path: String): Target {
+    fun create(context: Context, path: String, under: String = ""): Target {
         val parts = path.split('/', '\\').map { it.trim() }.filter { it.isNotEmpty() && it != "." && it != ".." }.ifEmpty { listOf("from-phone") }
+            .map { Sharing.safeName(it, "file") }
         val name = parts.last()
-        val folders = parts.dropLast(1)
+        // Cap f2: a chat's files go in Download/Muninn/<chat name> ([under], already made safe by Sharing.folderFor).
+        val folders = under.split('/').filter { it.isNotEmpty() }.map { Sharing.safeName(it, "Chat") } + parts.dropLast(1)
         if (Build.VERSION.SDK_INT >= 29) {
             val resolver = context.contentResolver
             val ext = name.substringAfterLast('.', "").lowercase()

@@ -21,6 +21,8 @@ Item {
     property bool cancelable: false
     property string cancelText: "Cancel"
     property string lead: ""
+    // First setup's practice (Labs › Replay first setup): a pattern or password is checked as usual but never saved.
+    property bool practice: false
     signal finished(string how)   // "setup", "unlock", "change", "off" or "own": what just finished
     signal cancelled()
 
@@ -31,16 +33,35 @@ Item {
     Timer { interval: 500; repeat: true; running: panel.wait > 0; onTriggered: panel.wait = Vault.waitSeconds }
 
     function saveSecret(secret, pattern) {
+        if (practice) {
+            Ui.say("Practice: no lock was set.")
+            first = null; note = ""; bad = false
+            finished("practice")
+            return
+        }
         if (Vault.setSecret(secret, pattern)) {
             Ui.say(pattern ? "Pattern set." : "Password set.")
             first = null; note = ""; bad = false
             finished(mode === "setup" ? "setup" : "change")
         } else { note = "That didn't save. Try again."; bad = true }
     }
+    // Unlocking works out the key (and reads the chats) off the window's thread: a ring turns until it's done.
+    property bool unlockAsked: false
     function tryUnlock(secret) {
+        if (Vault.unlocking) return
         if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
-        if (Vault.unlock(secret)) { note = ""; bad = false; finished("unlock") }
-        else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
+        unlockAsked = true
+        note = ""; bad = false
+        Vault.unlockInBackground(secret)
+    }
+    Connections {
+        target: Vault
+        function onUnlockFinished(ok) {
+            if (!panel.unlockAsked) return
+            panel.unlockAsked = false
+            if (ok) { panel.note = ""; panel.bad = false; panel.finished("unlock") }
+            else { panel.note = "That's not it. Try again."; panel.bad = true; panel.wait = Vault.waitSeconds; pad.shake() }
+        }
     }
     function tryOff(secret) {
         if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
@@ -141,7 +162,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: Math.min(Theme.px(260), room.height, parent.width); height: width
                 error: panel.bad
-                enabled: panel.wait === 0
+                enabled: panel.wait === 0 && !Vault.unlocking
                 onDone: d => panel.onPattern(d)
             }
             Column {
@@ -152,7 +173,40 @@ Item {
                 spacing: Theme.px(8)
                 PwField { id: pw; placeholder: panel.asks ? "Password" : "New password (6 or more)"; onEnter: panel.asks ? panel.submitPassword() : pw2.forceActiveFocus() }
                 PwField { id: pw2; visible: !panel.asks; placeholder: "Type it again"; onEnter: panel.submitPassword() }
-                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : panel.mode === "own" ? "Open" : "Save"; enabled: panel.wait === 0; onClicked: panel.submitPassword() }
+                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : panel.mode === "own" ? "Open" : "Save"; enabled: panel.wait === 0 && !Vault.unlocking; onClicked: panel.submitPassword() }
+            }
+            // The progress ring while Huginn unlocks: an arc drawn once, turned (still when motion is off).
+            Item {
+                id: ring
+                visible: Vault.unlocking && panel.unlockAsked
+                anchors.centerIn: parent
+                width: Theme.px(56); height: width
+                Rectangle { anchors.fill: parent; radius: width / 2; color: Theme.groundDeep; opacity: 0.85 }
+                Canvas {
+                    id: arc
+                    anchors.fill: parent
+                    anchors.margins: Theme.px(8)
+                    property color tint: Theme.accent
+                    onTintChanged: requestPaint()
+                    onPaint: {
+                        const c = getContext("2d")
+                        c.reset()
+                        const w = Theme.px(4)
+                        c.lineWidth = w
+                        c.lineCap = "round"
+                        c.strokeStyle = tint
+                        c.beginPath()
+                        c.arc(width / 2, height / 2, width / 2 - w, 0, Math.PI * 1.5)
+                        c.stroke()
+                    }
+                    RotationAnimator on rotation {
+                        from: 0; to: 360; duration: 900
+                        loops: Animation.Infinite
+                        running: ring.visible && Theme.motion
+                    }
+                }
+                Accessible.role: Accessible.ProgressBar
+                Accessible.name: "Unlocking"
             }
         }
     }
@@ -192,6 +246,7 @@ Item {
         border.color: input.activeFocus ? Theme.accent : Theme.line
         TextInput {
             id: input
+            FieldMenu {}   // right click: Cut, Copy, Paste, Select all
             anchors.fill: parent; anchors.leftMargin: Theme.px(10); anchors.rightMargin: Theme.px(10)
             verticalAlignment: TextInput.AlignVCenter
             echoMode: TextInput.Password

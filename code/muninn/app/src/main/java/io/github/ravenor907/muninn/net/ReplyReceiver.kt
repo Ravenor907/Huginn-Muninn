@@ -25,6 +25,8 @@ class ReplyReceiver : BroadcastReceiver() {
         // Checked again here: the lock may have come due (or Kids' TV mode come on) since the notification showed.
         if (text.isEmpty()) { nm.cancel(key.hashCode()); return }
         // Not sent: say so in its place, so the reply doesn't look sent (nothing about the chat shows on it).
+        // Muninn may have just restarted for this: everything is running before it's checked (starting goes off the main thread now).
+        try { app.ensureStarted() } catch (_: Exception) {}
         if (!app.canReply()) { notSent(context, key); return }
         val pending = goAsync()
         Thread {

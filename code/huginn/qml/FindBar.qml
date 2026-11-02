@@ -75,6 +75,7 @@ Rectangle {
     }
     TextField {
         id: field
+        FieldMenu {}   // right click: Cut, Copy, Paste, Select all
         anchors.left: lens.right; anchors.leftMargin: Theme.px(4)
         anchors.right: countText.left; anchors.rightMargin: Theme.px(8)
         anchors.verticalCenter: parent.verticalCenter

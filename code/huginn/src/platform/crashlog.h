@@ -2,7 +2,7 @@
 
 #include <QString>
 
-// crash.log in Huginn's app data folder (Windows and Linux): what a crash handler saw, a fatal error or abort,
+// crash.log in Huginn's data folder (beside Huginn.exe on Windows, the app data folder on Linux): what a crash handler saw, a fatal error or abort,
 // graphics failures and runs that ended without closing. Only Huginn's own workings go in: never message text,
 // names or network addresses (note() takes out the home folder and anything that looks like an address).
 // Kept to the last ~200 KB. Settings › Labs › Report a bug attaches its last lines only when the person ticks it.

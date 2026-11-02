@@ -26,19 +26,24 @@ import io.github.ravenor907.muninn.R
 
 /**
  * Settings › Look and text size, and its accessibility choices. Read by the theme, so every screen follows at once:
- * size scales everything, text scales only text, high contrast brightens text and outlines, color-blind friendly
- * swaps the warning color for one that doesn't depend on red/green, and reduce motion turns animations off.
+ * size scales everything, text scales only text, high contrast brightens text and outlines, Color vision remaps every
+ * color that means something ([ColorVision]), and reduce motion turns animations off.
  */
 object Access {
     var size by androidx.compose.runtime.mutableFloatStateOf(1f)
     var text by androidx.compose.runtime.mutableFloatStateOf(1f)
     var contrast by androidx.compose.runtime.mutableStateOf(false)
-    var colorBlind by androidx.compose.runtime.mutableStateOf(false)
+    /** Settings › Look › Color vision: one of [ColorVision.ALL]'s keys. */
+    var colorVision by androidx.compose.runtime.mutableStateOf(ColorVision.TYPICAL)
+    /** Any Color vision but typical (setting it on picks green-weak, as the older Color-blind friendly switch did). */
+    var colorBlind: Boolean
+        get() = colorVision != ColorVision.TYPICAL
+        set(v) { colorVision = if (v) ColorVision.DEUTAN else ColorVision.TYPICAL }
     var reduceMotion by androidx.compose.runtime.mutableStateOf(false)
-    /** The look: [Looks.DARK] (the usual), [Looks.BLACK], [Looks.LIGHT] (parchment) or [Looks.SEASONAL] (by the time of year). */
+    /** The look: [Looks.DARK] (the usual), [Looks.BLACK] or [Looks.LIGHT] (parchment). */
     var look by androidx.compose.runtime.mutableStateOf(Looks.DARK)
-    /** Seasonal's season: [Seasons.AUTO] (by the date) or one season's key. */
-    var season by androidx.compose.runtime.mutableStateOf(Seasons.AUTO)
+    /** Seasonal, over any look: [Seasons.OFF], [Seasons.AUTO] (by the date) or one season's key. */
+    var season by androidx.compose.runtime.mutableStateOf(Seasons.OFF)
     /** Seasonal's background: "" (the season's own) or one of [Seasons.GROUNDS]. */
     var seasonGround by androidx.compose.runtime.mutableStateOf("")
     /** Seasonal's falling leaves or snow: [Seasons.OFF] or on ([Seasons.FULL]). */
@@ -119,18 +124,29 @@ object Accents {
 }
 
 /**
- * The four looks. Their keys are what Settings saves; an unknown saved key means Dark, and a saved season's own
- * key (like "autumn") means Seasonal.
+ * The three looks. Their keys are what Settings saves; an unknown saved key means Dark. Seasonal goes over any of
+ * them ([Seasons]); it used to be a look of its own, saved as [SEASONAL] or a season's own key, which [migrate] turns
+ * into Dark with Seasonal on.
  */
 object Looks {
     const val DARK = "dark"
     const val BLACK = "black"
     const val LIGHT = "light"
-    /** Seasonal: the look of the season it is now ([Seasons]). */
+    /** The older Seasonal look's saved key. */
     const val SEASONAL = "seasonal"
-    val ALL = listOf(DARK to "Dark", BLACK to "True black", LIGHT to "Light", SEASONAL to "Seasonal")
-    fun of(key: String?): String = if (Seasons.NAMES.any { it.first == key }) SEASONAL else ALL.firstOrNull { it.first == key }?.first ?: DARK
+    val ALL = listOf(DARK to "Dark", BLACK to "True black", LIGHT to "Light")
+    fun of(key: String?): String = ALL.firstOrNull { it.first == key }?.first ?: DARK
     fun name(key: String): String = ALL.firstOrNull { it.first == key }?.second ?: "Dark"
+
+    /**
+     * An older saved [look] and season ([season], "auto" or a season's key) as today's look and Seasonal choice: the
+     * Seasonal look (or a season's own key) is Dark with Seasonal on, the same season; any other look keeps Seasonal off.
+     */
+    fun migrate(look: String?, season: String?): Pair<String, String> = when {
+        look == SEASONAL -> DARK to Seasons.choice(season ?: Seasons.AUTO).let { if (it == Seasons.OFF) Seasons.AUTO else it }
+        Seasons.NAMES.any { it.first == look } -> DARK to look!!
+        else -> of(look) to Seasons.OFF
+    }
 }
 
 /**
@@ -142,18 +158,18 @@ object Looks {
 object Seasons {
     const val AUTUMN = "autumn"
     const val SNOW = "snow"
-    /** Season: by the date. */
+    /** Seasonal: by the date. */
     const val AUTO = "auto"
-    /** Every season, in the order the Season choices show them. */
+    /** Every season, in the order the Seasonal choices show them. */
     val NAMES = listOf(AUTUMN to "Autumn", SNOW to "Snow")
-    /** The Season choices: Auto, then every season. */
-    val CHOICES = listOf(AUTO to "Auto") + NAMES
+    /** The Seasonal choices: Off ([OFF], the same key as Animation's Off), Auto by date, then every season. */
+    val CHOICES = listOf(OFF to "Off", AUTO to "Auto by date") + NAMES
 
-    /** A saved Season choice, or Auto when it isn't one. */
-    fun choice(key: String?): String = CHOICES.firstOrNull { it.first == key }?.first ?: AUTO
-    fun name(key: String): String = CHOICES.firstOrNull { it.first == key }?.second ?: "Auto"
-    /** The choice after [key]: tapping Seasonal again steps Auto, Autumn, Snow and back to Auto. */
-    fun next(key: String): String = CHOICES[(CHOICES.indexOfFirst { it.first == key } + 1) % CHOICES.size].first
+    /** A saved Seasonal choice, or Off when it isn't one. */
+    fun choice(key: String?): String = CHOICES.firstOrNull { it.first == key }?.first ?: OFF
+    fun name(key: String): String = CHOICES.firstOrNull { it.first == key }?.second ?: "Off"
+    /** Seasonal is on: something falls, over any look. */
+    fun on(key: String?): Boolean = choice(key) != OFF
 
     /** [season] from [fromMonth]/[fromDay] to [toMonth]/[toDay] (months 1 to 12). */
     data class Span(val season: String, val fromMonth: Int, val fromDay: Int, val toMonth: Int, val toDay: Int) {
@@ -172,8 +188,8 @@ object Seasons {
     fun at(month: Int, day: Int, spans: List<Span> = SPANS): String =
         spans.firstOrNull { it.covers(month, day) }?.season ?: spans.first().season
 
-    /** The season shown for the choice [pick] on [month]/[day]: the date's season for Auto, else the one picked. */
-    fun shown(pick: String, month: Int, day: Int): String = choice(pick).let { if (it == AUTO) at(month, day) else it }
+    /** The season shown for the choice [pick] on [month]/[day]: the date's season for Auto (and Off), else the one picked. */
+    fun shown(pick: String, month: Int, day: Int): String = choice(pick).let { if (it == AUTO || it == OFF) at(month, day) else it }
 
     @Volatile private var day = -1L
     @Volatile private var season = AUTUMN
@@ -190,14 +206,14 @@ object Seasons {
     }
 
     /** The season on screen: the one picked, or today's for Auto. */
-    val current: String get() = choice(Access.season).let { if (it == AUTO) now else it }
+    val current: String get() = choice(Access.season).let { if (it == AUTO || it == OFF) now else it }
 
-    /** Background: the season's own (""), or one of these dark grounds; panels and lines are shaded from it. */
+    /** Background (Seasonal on Dark): the season's own (""), or one of these dark grounds; panels and lines are shaded from it. */
     val GROUNDS = listOf("#0C1724", "#13201A", "#0E1C1E", "#1E1522", "#22140F", "#221B10", "#17191E", "#111111")
     val GROUND_NAMES = listOf("Night", "Pine", "Teal", "Plum", "Bark", "Umber", "Slate", "Charcoal")
     fun ground(key: String?): String = if (key != null && key in GROUNDS) key else ""
 
-    /** Animation: whether anything falls behind the Seasonal look. How much and how big is [LeafPrefs]. */
+    /** Animation: whether anything falls behind the Seasonal look. How much and how big is [LeafPrefs]. Also Seasonal's Off. */
     const val OFF = "off"
     /** An older saved choice for about half as many; it reads as on, and [LeafPrefs] keeps the half. */
     const val LIGHT = "light"
@@ -211,23 +227,32 @@ object Seasons {
 
 /**
  * Huginn's stone and iron grays and its aged gold, so the two apps share one house style; Muninn's one accent is
- * silver. Light is Huginn's parchment. Autumn is warm bark and ember over falling leaves; Snow is white on a dark
- * night blue under falling snow. A Seasonal background picked in Settings replaces the season's ground, and the
- * panels and lines are shaded from it. High contrast wins over every look.
+ * silver. Light is Huginn's parchment. Seasonal goes over any look: on Dark, Autumn is warm bark and ember over
+ * falling leaves and Snow is white on a dark night blue under falling snow (a Seasonal background picked in Settings
+ * replaces the season's ground, and the panels and lines are shaded from it); on True black, Light and high contrast
+ * their own shades stay and only what falls is added. High contrast wins over every look. Color vision remaps every
+ * color that means something ([ColorVision]).
  */
 object Palette {
     private val hc get() = Access.contrast
     /** The parchment look is on (and high contrast is off): dark text on light paper. */
     val light get() = Access.look == Looks.LIGHT && !hc
     private val black get() = Access.look == Looks.BLACK && !hc
-    /** Seasonal, in any season (and high contrast is off): rounded shapes, frosted panels, something falling behind. */
-    val seasonal get() = Access.look == Looks.SEASONAL && !hc
-    /** Seasonal in Snow. */
+    /** Seasonal is on, over any look: rounded shapes, frosted panels, something falling behind. */
+    val seasonal get() = Seasons.on(Access.season)
+    /** Seasonal in Snow: snow falls. */
     val snow get() = seasonal && Seasons.current == Seasons.SNOW
-    /** Seasonal in Autumn (any season without its own shades looks like Autumn). */
+    /** Seasonal in Autumn (any season without its own shapes drops leaves). */
     val autumn get() = seasonal && !snow
+    /** Seasonal on Dark: the season brings its own shades too. */
+    val tinted get() = seasonal && Access.look == Looks.DARK && !hc
+    private val snowTint get() = tinted && snow
+    private val autumnTint get() = tinted && !snow
+    /** Color vision, and which of its sets: 0 on a dark ground, 1 on Light, 2 in high contrast. */
+    val vision get() = Access.colorVision
+    private val tone get() = ColorVision.tone(light, hc)
     /** The Seasonal background picked in Settings, or null for the season's own. */
-    private val customGround: Color? get() = if (seasonal) parse(Seasons.ground(Access.seasonGround).ifEmpty { null }) else null
+    private val customGround: Color? get() = if (tinted) parse(Seasons.ground(Access.seasonGround).ifEmpty { null }) else null
 
     /**
      * Picks the shade for the look in use: dark, true black, parchment, autumn, high contrast, snow. A shade with a
@@ -238,7 +263,7 @@ object Palette {
         if (hc) return Color(contrast)
         if (light) return Color(parchment)
         if (black) return Color(deep)
-        if (!seasonal) return Color(dark)
+        if (!tinted) return Color(dark)
         val g = customGround
         if (g != null && !lift.isNaN()) return shade(g, lift)
         return Color(if (snow) winter else fall)
@@ -259,10 +284,12 @@ object Palette {
     val text get() = pick(0xFFE4E1DA, 0xFFE4E1DA, 0xFF1F1C17, 0xFFECDCC4, 0xFFFFFFFF, 0xFFE6EEF8)
     val textSoft get() = pick(0xFFC4C0B7, 0xFFC4C0B7, 0xFF3B362E, 0xFFD9C6AD, 0xFFFFFFFF, 0xFFC9D6E6)
     // On a picked Seasonal background, muted and faint text are a little brighter, so they still read at 4.5:1.
-    val textMuted get() = if (customGround != null && autumn) Color(0xFFB9A080)
+    val textMuted get() = if (vision == ColorVision.MONO && !hc) Color(if (light) 0xFF3A3A3A else 0xFFC4C4C4)
+        else if (customGround != null && autumnTint) Color(0xFFB9A080)
         else pick(0xFF9C978D, 0xFF9C978D, 0xFF615A4E, 0xFFA88C6C, 0xFFE0E0E0, 0xFF93A7C0)
     // Faint text (hints, times) still reads at 4.5:1 on parchment, on Autumn's bark and on Snow's night blue.
-    val textFaint get() = if (customGround != null) Color(if (snow) 0xFF8EA5C0 else 0xFFAD9474)
+    val textFaint get() = if (vision == ColorVision.MONO && !hc) Color(if (light) 0xFF555555 else 0xFFA6A6A6)
+        else if (customGround != null) Color(if (snowTint) 0xFF8EA5C0 else 0xFFAD9474)
         else pick(0xFF6E6A62, 0xFF6E6A62, 0xFF746C5F, 0xFF9A7F5E, 0xFFC8C8C8, 0xFF8299B5)
     /** Text that is brighter than the usual text: names in a list. */
     val textBright get() = pick(0xFFF2F0EA, 0xFFF2F0EA, 0xFF14120E, 0xFFF3E2C7, 0xFFFFFFFF, 0xFFF4F8FD)
@@ -273,13 +300,19 @@ object Palette {
     val onAccent: Color get() = onAccentOf(accent)
     val focusFill: Color get() = if (hc) Color(0xFF2A2A2A) else Color(Accents.focus(argb(accent), light))
 
-    /** The accent [key] (a name or "#RRGGBB") as this look shows it; "" or nothing valid is the app's own accent. */
+    /**
+     * The accent [key] (a name or "#RRGGBB") as this look shows it; "" or nothing valid is the app's own accent. Color
+     * vision: the nearest accent that suits it ([ColorVision.safeAccent]); no color: gray.
+     */
     fun accentOf(key: String?): Color {
         if (hc) return Color(0xFFFFFFFF)
-        val k = if (key.isNullOrEmpty()) Access.accent else key
-        val c = Accents.base(k, autumn, snow)
+        if (vision == ColorVision.MONO) return Color(if (light) 0xFF5E5E5E else 0xFFD0D0D0)
+        val k = ColorVision.safeAccent(if (key.isNullOrEmpty()) Access.accent else key, vision)
+        val c = Accents.base(k, autumnTint, snowTint)
         return Color(if (light) Accents.darker(c) else c)
     }
+    /** The accent shown for the saved one: itself, or with Color vision the nearest that suits it. */
+    val accentKey: String get() = ColorVision.safeAccent(Access.accent, vision)
     /** The fill behind something in [c] (a selected choice, a button). */
     fun fillOf(c: Color): Color = if (hc) Color(0xFF333333) else Color(Accents.fill(argb(c), light))
     /** A soft tint of [c] (my bubbles in a chat with its own color, my avatar, highlights). */
@@ -289,19 +322,20 @@ object Palette {
     /** Text and icons on a solid [c]: dark on a light accent, light on a dark one (a dark picked color, or Light's). */
     fun onAccentOf(c: Color): Color = when {
         hc -> Color(0xFF000000)
-        Accents.luminance(argb(c)) > 0.2f -> if (snow) Color(0xFF0A1424) else if (autumn) Color(0xFF2A1608) else Color(0xFF101112)
+        Accents.luminance(argb(c)) > 0.2f -> if (snowTint) Color(0xFF0A1424) else if (autumnTint) Color(0xFF2A1608) else Color(0xFF101112)
         else -> Color(0xFFF3EFE6)
     }
     private fun argb(c: Color): Long = c.toArgb().toLong() and 0xFFFFFFFFL
     /** Section headings. */
     val section get() = pick(0xFFC8CDD3, 0xFFC8CDD3, 0xFF4F5862, 0xFFB08A5E, 0xFFFFFFFF, 0xFF8FB0D4)
-    // Color-blind friendly: amber instead of rose, so warnings never depend on telling red from green.
-    val danger get() = if (Access.colorBlind) (if (light) Color(0xFF8A5A00) else Color(0xFFF2B33D))
-        else pick(0xFFD9A79E, 0xFFD9A79E, 0xFFA23B2C, 0xFFE0A89E, 0xFFFFB4A8, 0xFFF0A8A0)
-    val dangerLine get() = if (Access.colorBlind) (if (light) Color(0xFFC79A45) else Color(0xFF7A5A1E))
-        else if (light) Color(0xFFD9A79E) else Color(0xFF5A3A34)
-    val dangerFill get() = if (Access.colorBlind) (if (light) Color(0xFFF6EBD4) else Color(0xFF221B0E))
-        else if (light) Color(0xFFF5E2DD) else Color(0xFF1E1716)
+    // Color vision: a danger color that suits it (never told from success by red against green alone).
+    private val dangerSet get() = ColorVision.danger(vision, tone)
+    val danger get() = dangerSet?.let { Color(it[0]) } ?: pick(0xFFD9A79E, 0xFFD9A79E, 0xFFA23B2C, 0xFFE0A89E, 0xFFFFB4A8, 0xFFF0A8A0)
+    val dangerLine get() = dangerSet?.let { Color(it[1]) } ?: if (light) Color(0xFFD9A79E) else Color(0xFF5A3A34)
+    val dangerFill get() = dangerSet?.let { Color(it[2]) } ?: if (light) Color(0xFFF5E2DD) else Color(0xFF1E1716)
+    /** The call screen's answer (green) and hang-up (red) buttons; Color vision's own pair. */
+    val answer get() = ColorVision.calls(vision)?.let { Color(it.first) } ?: Color(0xFF3E8A55)
+    val hangUp get() = ColorVision.calls(vision)?.let { Color(it.second) } ?: Color(0xFFC4553F)
 
     // Chat ("Quiet" look): the accent marks the few things you act on (new chat, play, record, unread). These
     // were gold before the accent could be picked; they follow it now.
@@ -321,20 +355,21 @@ object Palette {
     /** The thin line under a conversation's top bar. */
     val hairline get() = pick(0xFF1F2125, 0xFF16181A, 0xFFD9D2C4, 0xFF3A2718, 0xFF9A9A9A, 0xFF1E2E48, 0.08f)
     /**
-     * The status dots (online, away, do not disturb) and the encrypted shield. Color-blind friendly uses blue, yellow
-     * and vermilion, which stay apart without telling red from green; high contrast makes each brighter on black. The
-     * status is always said in words too, and do not disturb has a bar across its dot.
+     * The status dots (online, away, do not disturb, offline) and the encrypted shield. Color vision uses its own set
+     * ([ColorVision.status]); high contrast makes each brighter on black. The status is always said in words too, and
+     * each dot has its own shape ([StatusDot]).
      */
-    val online get() = if (Access.colorBlind) Color(if (hc) 0xFF9FD3FF else if (light) 0xFF2F5F9E else 0xFF6FB3F0)
-        else pick(0xFF7FB08A, 0xFF7FB08A, 0xFF2F7D46, 0xFF3FB27F, 0xFF9BE0A8, 0xFF4FC08D)
-    /** The away status dot (amber; yellow when color-blind friendly). */
-    val away get() = if (Access.colorBlind) Color(if (hc) 0xFFFFF176 else if (light) 0xFF7A6200 else 0xFFF0E442)
-        else pick(0xFFD9A440, 0xFFD9A440, 0xFF9A6B00, 0xFFE0B44C, 0xFFFFD84D, 0xFFE0B44C)
-    /** The do-not-disturb status dot (red; vermilion when color-blind friendly). */
-    val dnd get() = if (Access.colorBlind) Color(if (hc) 0xFFFF9E66 else if (light) 0xFFB34700 else 0xFFE8743B)
-        else pick(0xFFD9534F, 0xFFD9534F, 0xFFA23B2C, 0xFFD9534F, 0xFFFF7A7A, 0xFFE06A66)
+    private val statusSet get() = ColorVision.status(vision, tone)
+    val online get() = statusSet?.let { Color(it[0]) } ?: pick(0xFF7FB08A, 0xFF7FB08A, 0xFF2F7D46, 0xFF3FB27F, 0xFF9BE0A8, 0xFF4FC08D)
+    /** The away status dot (amber). */
+    val away get() = statusSet?.let { Color(it[1]) } ?: pick(0xFFD9A440, 0xFFD9A440, 0xFF9A6B00, 0xFFE0B44C, 0xFFFFD84D, 0xFFE0B44C)
+    /** The do-not-disturb status dot (red). */
+    val dnd get() = statusSet?.let { Color(it[2]) } ?: pick(0xFFD9534F, 0xFFD9534F, 0xFFA23B2C, 0xFFD9534F, 0xFFFF7A7A, 0xFFE06A66)
     /** The offline status dot. */
-    val offline get() = pick(0xFF6E6A62, 0xFF6E6A62, 0xFF877F71, 0xFF7E6548, 0xFFC8C8C8, 0xFF7E90A8)
+    val offline get() = statusSet?.let { Color(it[3]) } ?: pick(0xFF6E6A62, 0xFF6E6A62, 0xFF877F71, 0xFF7E6548, 0xFFC8C8C8, 0xFF7E90A8)
+    /** Done or working (green), and a warning (amber), in the same sets. */
+    val success get() = online
+    val warning get() = away
 
     /**
      * A person's avatar disc and the initial on it, picked from their name so it never changes (the same five tones
@@ -342,7 +377,7 @@ object Palette {
      */
     fun avatarTone(name: String): Pair<Color, Color> {
         if (hc) return Color(0xFF1F1F1F) to Color(0xFFFFFFFF)
-        val tones = if (light) LIGHT_TONES else if (snow) SNOW_TONES else if (seasonal) AUTUMN_TONES else DARK_TONES
+        val tones = ColorVision.tones(vision, light) ?: if (light) LIGHT_TONES else if (snowTint) SNOW_TONES else if (tinted) AUTUMN_TONES else DARK_TONES
         var h = 0
         for (ch in name) h = (h * 31 + ch.code) % 9973
         val t = tones[h % tones.size]
@@ -366,6 +401,9 @@ object Palette {
     }
     /** Text that reads on [bg]: near-black on a light disc, cream on a dark one. */
     fun onDisc(bg: Color): Color = if (bg.luminance() > 0.45f) Color(0xFF1A1208) else Color(0xFFF3E2C7)
+    /** A disc in a color someone picked ([c]) and its initial; with Color vision, the nearest disc of its set. */
+    fun disc(c: Color): Pair<Color, Color> =
+        ColorVision.disc(argb(c), vision, light)?.let { Color(it.first) to Color(it.second) } ?: (c to onDisc(c))
 }
 
 /**
@@ -396,7 +434,7 @@ fun androidx.compose.ui.Modifier.bar(fill: Color = Color.Unspecified, top: Boole
     if (!Palette.seasonal) { if (fill.isSpecified) this.background(fill) else this }
     else {
         val shape = if (top) LookShapes.barTopShape else LookShapes.bar
-        val tint = (if (fill.isSpecified) fill else Palette.panelLow).copy(alpha = if (top) 0.92f else 0.78f)
+        val tint = (if (fill.isSpecified) fill else Palette.panelLow).copy(alpha = if (top || Access.contrast) 0.92f else 0.78f)
         (if (top) this else this.padding(horizontal = 10.dp, vertical = 4.dp)).clip(shape).background(tint)
     }
 
@@ -406,7 +444,8 @@ fun androidx.compose.ui.Modifier.bar(fill: Color = Color.Unspecified, top: Boole
  */
 fun androidx.compose.ui.Modifier.frosted(): androidx.compose.ui.Modifier =
     if (!Palette.seasonal) this
-    else this.padding(start = 10.dp, end = 10.dp, top = 8.dp).clip(LookShapes.barTopShape).background(Palette.panel.copy(alpha = 0.8f))
+    else this.padding(start = 10.dp, end = 10.dp, top = 8.dp).clip(LookShapes.barTopShape)
+        .background(Palette.panel.copy(alpha = if (Access.contrast) 0.92f else if (Palette.light) 0.86f else 0.8f))
 
 object Type {
     val display = FontFamily(Font(R.font.cinzel, FontWeight.Bold))

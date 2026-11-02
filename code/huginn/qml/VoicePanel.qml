@@ -97,7 +97,7 @@ Rectangle {
                     readonly property var p: modelData || ({})
                     width: Theme.px(34); height: width
                     Accessible.role: Accessible.StaticText
-                    Accessible.name: who.p.name + (who.p.speaking ? ", speaking" : "") + (who.p.muted ? ", muted" : "")
+                    Accessible.name: who.p.name + (who.p.speaking ? ", speaking" : "") + (who.p.muted ? ", muted" : "") + (who.p.state === "reconnecting" ? ", reconnecting" : "")
                     Rectangle {
                         anchors.fill: parent
                         radius: width / 2
@@ -117,6 +117,13 @@ Rectangle {
                     }
                     HoverHandler { cursorShape: who.p.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
                     TapHandler { onTapped: if (!who.p.me && !panel.tour) Ui.showProfile(who.p.key, who.p.name, {}) }
+                    // A right click: Mute for me, Volume, and for admins Timeout and Ban (cap g2).
+                    TapHandler {
+                        id: whoMenu
+                        acceptedButtons: Qt.RightButton
+                        onTapped: (point, button) => { if (!who.p.me && !panel.tour) Ui.menuAt(whoMenu.parent, point.position.x, point.position.y,
+                            () => PeopleActions.memberMenu({ key: who.p.key, name: who.p.name, contact: Chat.isContact(who.p.key) }, { group: Rooms.group })) }
+                    }
                 }
             }
         }
@@ -125,7 +132,7 @@ Rectangle {
             width: parent.width
             elide: Text.ElideRight
             text: panel.others.length === 0 ? "Nobody else here yet"
-                : "With " + panel.others.map(p => p.name).join(", ")
+                : "With " + panel.others.map(p => p.name + (p.state === "reconnecting" ? " (reconnecting)" : "")).join(", ")
             color: Theme.textMuted
             font.family: Theme.body; font.pixelSize: Theme.fs(13)
         }

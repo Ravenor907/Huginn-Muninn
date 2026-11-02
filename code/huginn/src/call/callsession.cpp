@@ -9,6 +9,8 @@
 #include <QDateTime>
 #include <QUdpSocket>
 
+std::function<int(const QString &key)> CallSession::gainFor;
+
 namespace
 {
 const char kCodec[] = "opus16";
@@ -593,6 +595,10 @@ bool CallSession::startMedia()
     connect(m_media, &CallMedia::speakingChanged, this, &CallSession::speakingChanged);
     connect(m_media, &CallMedia::firstMedia, this, [this] { m_watch.start(); });
     m_media->setMuted(m_muted);
+    if (gainFor) {
+        const QString peer = m_peer;
+        m_media->gain = [peer] { return gainFor ? gainFor(peer) : 100; };
+    }
     m_media->start(useDevices);
     // Media that reached the socket while it rang (their first pings).
     for (int i = 0; i < m_early.size(); ++i)

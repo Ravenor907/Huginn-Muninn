@@ -96,6 +96,8 @@ object LinkWire {
      */
     fun internetOk(o: JSONObject): Boolean = when (o.optString("t")) {
         "me" -> !o.has("pic")
+        // Cap l1 (15.1): a small change without a picture; the full account only on the home Wi-Fi.
+        "acct" -> LinkAccount.internetOk(o)
         "msg", "send", "hello", "unlink", "result", "sync", "setme" -> true
         else -> false
     }
@@ -177,7 +179,8 @@ object Link {
 
     /** A device linked to this one: on the phone, a companion; on the companion, the phone. */
     /** [ok]: both screens showed the same 4 emoji and the person said so (nothing is mirrored before). */
-    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = false)
+    /** [l1]: on the phone, the companion's "sync" said "caps": "l1": it takes the whole account (15.1). */
+    data class Device(val key: String, val mailbox: String, val name: String, val ok: Boolean = false, val l1: Boolean = false)
     /** A photo, voice message, video or file on the phone: its SHA-256 (hex), size, kind and name. */
     data class Media(val h: String, val s: Long, val k: String, val nm: String)
     /** One mirrored message on the companion. [f]: its photo or file, fetched on the home Wi-Fi. */
@@ -219,6 +222,14 @@ object Link {
         fun myProfile(): JSONObject = JSONObject().put("n", myName()).put("st", "online")
         /** On the phone: a companion's "setme" (an empty name or status leaves that one as it is). */
         fun setMyProfile(name: String, status: String, custom: String) {}
+        /** Cap l1 (15.1), on the phone: the account as it is now, "k|id" to its value (LinkAccount.KINDS). */
+        fun account(): Map<String, JSONObject> = emptyMap()
+        /** Cap l1: a companion's change that won (a nickname, a block, a removed contact, a folder, my name or status). */
+        fun applyAccount(item: LinkAccount.Item) {}
+        /** Cap l1: the group chats, "g:" + group id to (name, items as in "chat" pages, with "fn" the sender's name), oldest first. */
+        fun groupChats(): Map<String, Pair<String, List<JSONObject>>> = emptyMap()
+        /** Cap l1: post [text] in group [g] (its main channel) as me. False when I can't post there. */
+        fun sendToGroup(g: String, text: String): Boolean = false
     }
 
     @Volatile var host: Host? = null
@@ -370,7 +381,7 @@ object Link {
         _companions.value.firstOrNull { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()) }
         _phone.value?.takeIf { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()); dropPhone() }
         _companions.value = _companions.value.filterNot { it.key == key }
-        owed.remove(key); meOwed.remove(key)
+        owed.remove(key); meOwed.remove(key); acctOwed.remove(key)
         save()
     }
 
@@ -378,6 +389,7 @@ object Link {
     /** On the phone: my profile to every checked companion, when it changed since it last went ([force]: anyway). */
     fun sendMe(force: Boolean = false) {
         val h = host ?: return
+        accountChanged()   // cap l1: my name, status or picture is in the account too
         val to = _companions.value.filter { it.ok }
         if (to.isEmpty()) return
         later {
@@ -403,11 +415,12 @@ object Link {
     /** Devices that just came onto the home Wi-Fi: history and pictures that waited for it go now. */
     fun lanCame(keys: Set<String>) {
         val h = host ?: return
-        val back = _companions.value.filter { it.ok && it.key in keys && (it.key in owed || it.key in meOwed) }
+        val back = _companions.value.filter { it.ok && it.key in keys && (it.key in owed || it.key in meOwed || it.key in acctOwed) }
         if (back.isEmpty()) return
         later {
             for (d in back) {
                 if (d.key in owed) syncAll(d)
+                if (d.key in acctOwed) sendAccount(h, d, full = true)
                 if (d.key in meOwed) sendMeTo(h, d, h.myProfile().put("t", "me"))
             }
         }
@@ -462,6 +475,16 @@ object Link {
                     lan.removeAll { d -> !h.sendLan(d, json).also { ok -> if (!ok) owed.add(d.key) } }
                 }
                 if (lan.isEmpty()) break
+            }
+            // Cap l1: the group chats too, to the companions that take the whole account.
+            val l1 = lan.filter { it.l1 }
+            if (l1.isNotEmpty()) for ((peer, chat) in h.groupChats()) {
+                val pages = LinkWire.pages(chat.second)
+                pages.forEachIndexed { i, pg ->
+                    val json = JSONObject().put("t", "chat").put("peer", peer).put("n", chat.first).put("msgs", JSONArray(pg))
+                        .put("d", Limits.DEFAULT).put("pg", i).put("pgs", pages.size).toString()
+                    l1.forEach { d -> if (!h.sendLan(d, json)) owed.add(d.key) }
+                }
             }
             saveHashes()
         }
@@ -644,7 +667,9 @@ object Link {
             ph != null && t == "part" -> if (lan) takePart(p)
             // Not checked here yet: a "send" is answered, so the companion doesn't wait for nothing.
             comp != null && !comp.ok && t == "send" -> answerSend(h, comp, p.optString("id"), false, "confirm")
-            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme") -> {}
+            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct") -> {}
+            // Cap l1: a companion's account changes. The later one wins per item; what won here goes to the other companions.
+            comp != null && t == "acct" -> if (comp.l1) later { takeAccount(h, comp, p) }
             // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
             comp != null && t == "setme" -> {
                 val q = JSONObject(p.toString()).apply { if (p.optString("n").isBlank()) put("n", h.myProfile().optString("n")) }
@@ -657,9 +682,16 @@ object Link {
                 // Each "send" once, by its own id: the same one again (a copy, or one sent on) never goes out twice. Always
                 // answered ("result"), so the companion shows what happened.
                 later {
+                    val peer = p.optString("peer")
                     when {
                         text.isEmpty() -> answerSend(h, comp, id, false, "empty")
-                        !h.isContactHere(p.optString("peer")) -> answerSend(h, comp, id, false, "not a contact")
+                        // Cap l1: a group chat ("g:" + its id), posted as the same member.
+                        comp.l1 && peer.startsWith("g:") -> when {
+                            !firstSend(id) -> answerSend(h, comp, id, true, "")
+                            h.sendToGroup(peer.removePrefix("g:"), text.take(LinkWire.TEXT_MAX)) -> answerSend(h, comp, id, true, "")
+                            else -> answerSend(h, comp, id, false, "not in group")
+                        }
+                        !h.isContactHere(peer) -> answerSend(h, comp, id, false, "not a contact")
                         !firstSend(id) -> answerSend(h, comp, id, true, "")
                         else -> {
                             val mid = h.sendAsMeId(p.optString("peer"), text.take(LinkWire.TEXT_MAX))
@@ -671,13 +703,132 @@ object Link {
             // Refresh at most once in 10 minutes per companion; the first one after the emoji ("f") always.
             comp != null && t == "sync" -> {
                 val now = System.currentTimeMillis()
-                if (p.optBoolean("f") || LinkWire.syncDue(synced[comp.key] ?: 0L, now)) { synced[comp.key] = now; syncAll(comp); sendMe(true) }
+                // Cap l1: "caps" with "l1" says the companion takes the whole account (an old one leaves it out).
+                val d = if (LinkAccount.says(p.optString("caps")) && !comp.l1) comp.copy(l1 = true).also { c ->
+                    _companions.value = _companions.value.map { if (it.key == c.key) c else it }; save()
+                } else comp
+                if (p.optBoolean("f") || LinkWire.syncDue(synced[d.key] ?: 0L, now)) {
+                    synced[d.key] = now; syncAll(d); sendMe(true)
+                    if (d.l1) later { sendAccount(h, d, full = true) }
+                } else if (d.l1 && !comp.l1) later { sendAccount(h, d, full = true) }   // it just said l1: the account goes now
             }
             // Photos and files only on the home Wi-Fi: asked any other way, nothing is sent.
             comp != null && t == "get" -> if (lan) p.optString("h").takeIf { it.length == 64 }?.let { serve(comp, it) }
             else -> return comp != null || ph != null
         }
         return true
+    }
+
+    // ------------------------------------------------------------------ cap l1: the whole account (15.1), the phone's side
+
+    private const val ACCOUNT = "link-account.json"
+    private val acctLock = Any()
+    @Volatile private var acct: Map<String, LinkAccount.Item>? = null
+    /** Companions whose full account (or a picture in it) waits for the home Wi-Fi. */
+    private val acctOwed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    @Volatile private var acctSoon = false
+    /** Per group: the newest message time already sent to the companions (live group messages, l1 only). */
+    private val groupSent = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun acctNow(h: Host): Map<String, LinkAccount.Item> = acct ?: LinkAccount.load(h.read(ACCOUNT)).also { acct = it }
+
+    /** What the account is now against what was last said: changed items get a new ts, gone ones a tombstone. */
+    private fun observe(h: Host): Pair<Map<String, LinkAccount.Item>, List<LinkAccount.Item>> = synchronized(acctLock) {
+        val now = System.currentTimeMillis()
+        val (set, changed) = LinkAccount.observe(acctNow(h), h.account(), now)
+        val kept = LinkAccount.prune(set, now)
+        if (changed.isNotEmpty() || kept.size != set.size) { acct = kept; h.write(ACCOUNT, LinkAccount.save(kept)) }
+        kept to changed
+    }
+
+    /** Something in the account may have changed (contacts, folders, groups, blocks, my profile): a moment later it goes. */
+    fun accountChanged() {
+        if (host == null || _companions.value.none { it.ok && it.l1 }) return
+        if (acctSoon) return
+        acctSoon = true
+        clock.schedule({
+            acctSoon = false
+            later {
+                val h = host ?: return@later
+                val to = _companions.value.filter { it.ok && it.l1 }
+                if (to.isEmpty()) return@later
+                val changed = observe(h).second
+                if (changed.isNotEmpty()) to.forEach { sendItems(h, it, changed.map { i -> i.json() }, full = false) }
+            }
+        }, 1500L, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    /** The whole account to [d] (on "They match", a sync, or once it's on the home Wi-Fi again). */
+    private fun sendAccount(h: Host, d: Device, full: Boolean) {
+        val set = observe(h).first
+        sendItems(h, d, set.values.map { it.json() }, full)
+    }
+
+    /**
+     * Items to [d]. The full set, and anything with a picture, only over the home Wi-Fi (owed until it's there); a small
+     * change without one may use the internet like any live frame.
+     */
+    private fun sendItems(h: Host, d: Device, items: List<JSONObject>, full: Boolean) {
+        if (items.isEmpty() && !full) return
+        val pics = items.filter { it.optString("k") == "pic" && !it.optBoolean("del") }
+        val rest = items - pics.toSet()
+        if (!full) {
+            for (pg in LinkAccount.pages(rest, LinkAccount.LIVE_BYTES - 512)) {
+                val o = JSONObject().put("t", "acct").put("items", JSONArray(pg))
+                if (LinkAccount.internetOk(o)) h.send(d, o.toString()) else if (!h.sendLan(d, o.toString())) acctOwed.add(d.key)
+            }
+            if (pics.isNotEmpty()) {
+                if (!h.onLan(d.key)) { acctOwed.add(d.key); return }
+                for (pg in LinkAccount.pages(pics)) if (!h.sendLan(d, JSONObject().put("t", "acct").put("items", JSONArray(pg)).toString())) acctOwed.add(d.key)
+            }
+            return
+        }
+        if (!h.onLan(d.key)) { acctOwed.add(d.key); return }
+        val pages = LinkAccount.pages(rest + pics).ifEmpty { listOf(emptyList()) }
+        var ok = true
+        pages.forEachIndexed { i, pg ->
+            val json = JSONObject().put("t", "acct").put("full", true).put("items", JSONArray(pg)).put("pg", i).put("pgs", pages.size).toString()
+            if (ok && !h.sendLan(d, json)) ok = false
+        }
+        if (ok) acctOwed.remove(d.key) else acctOwed.add(d.key)
+    }
+
+    /** A companion's changes: merged (the later one wins; a tie stays with the phone), applied, and sent to the others. */
+    private fun takeAccount(h: Host, from: Device, p: JSONObject) {
+        val items = LinkAccount.readAll(p.optJSONArray("items")).filter { it.k != "group" && it.k != "pic" }   // groups and pictures change only here
+        if (items.isEmpty()) return
+        val base = observe(h).first   // what's here now first, so a change made here a moment ago counts
+        val won = synchronized(acctLock) {
+            val (set, w) = LinkAccount.merge(base, items, winTies = false)
+            acct = set; h.write(ACCOUNT, LinkAccount.save(set))
+            w
+        }
+        if (won.isEmpty()) return
+        won.forEach { try { h.applyAccount(it) } catch (_: Exception) {} }
+        // What the phone made of it (a value it can't take, like a verified mark, comes back corrected).
+        val again = observe(h).second
+        val json = won.map { it.json() }
+        _companions.value.filter { it.ok && it.l1 && it.key != from.key }.forEach { sendItems(h, it, json, full = false) }
+        if (again.isNotEmpty()) _companions.value.filter { it.ok && it.l1 }.forEach { sendItems(h, it, again.map { i -> i.json() }, full = false) }
+        if (won.any { it.k == "me" }) sendMe(true)
+    }
+
+    /** Cap l1: group [g]'s messages changed. The new ones (after the last sent) go to the companions as "msg". */
+    fun onGroupMessages(g: String, name: String, items: List<JSONObject>) {
+        val h = host ?: return
+        val to = _companions.value.filter { it.ok && it.l1 }
+        val newest = items.maxOfOrNull { it.optLong("t") } ?: return
+        val last = groupSent.put(g, newest)
+        // The first look at a group only sets where it stands: its history goes in the pages.
+        if (last == null || to.isEmpty()) return
+        val fresh = items.filter { it.optLong("t") > last }
+        if (fresh.isEmpty()) return
+        later {
+            for (m in fresh) {
+                val json = JSONObject().put("t", "msg").put("peer", "g:$g").put("n", name).put("m", m).put("d", Limits.DEFAULT).toString()
+                to.forEach { h.send(it, json) }
+            }
+        }
     }
 
     /** Ids of companions' "send" already sent (kept two days, on disk), so none goes out twice. */
@@ -803,8 +954,8 @@ object Link {
 
     // ------------------------------------------------------------------ storage
 
-    private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name).put("ok", d.ok)
-    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", false))
+    private fun devJson(d: Device) = JSONObject().put("k", d.key).put("p", d.mailbox).put("n", d.name).put("ok", d.ok).apply { if (d.l1) put("l", true) }
+    private fun dev(o: JSONObject) = Device(o.getString("k"), o.optString("p"), o.optString("n"), o.optBoolean("ok", false), o.optBoolean("l", false))
     private fun mOf(o: JSONObject) = M(o.optString("id"), o.optString("x").take(LinkWire.TEXT_MAX), o.optBoolean("me"), o.optLong("t"), LinkWire.media(o.optJSONObject("f")))
     private fun msgsOf(a: JSONArray?) = if (a == null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let { o -> mOf(o) } }
     private fun daysOf(o: JSONObject) = o.optInt("d", Limits.DEFAULT).coerceIn(Limits.DEFAULT, Limits.LONGEST)

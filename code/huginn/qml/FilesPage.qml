@@ -1,10 +1,10 @@
 import QtQuick
 import Huginn
 
-// Files: share with phones and PCs. Middle column: one Send files button, then the devices nearby
-// with Muninn or the free LocalSend app (A sends to one). The three dots (or LT) hold Look again,
-// Direct connect (for when there's no shared Wi-Fi) and Clear. Main column: what's ready to send
-// and what came in.
+// Files: share with phones and PCs. Middle column: Send a file (pick it, then a person, a group or a LocalSend
+// device nearby, the same picker everywhere), then the devices nearby with Muninn or the free LocalSend app (A
+// picks a file for one). The three dots (or LT) hold Look again and Direct connect (for when there's no shared
+// Wi-Fi). Main column: what came in. Transfers (the top bar) shows everything on its way.
 Rectangle {
     id: page
     color: Theme.ground
@@ -16,21 +16,15 @@ Rectangle {
     readonly property var incoming: LocalSend.items
     // Rows in the middle column: Send files, then one per device.
     readonly property int actionCount: 1
-    readonly property var rows: [{ kind: "pick", name: "Send files", detail: Transfer.sharedCount > 0 ? (Transfer.sharedCount === 1 ? "1 file ready" : Transfer.sharedCount + " files ready") : "" }]
+    readonly property var rows: [{ kind: "pick", name: "Send a file", detail: "To a person, a group or a device nearby" }]
         .concat(devices.map(d => ({ kind: "device", id: d.id, name: d.alias, type: d.type,
                                     detail: d.model ? d.model : d.app === "muninn" ? "Muninn" : d.app === "huginn" ? "Huginn" : d.type === "mobile" ? "Phone" : "Computer" })))
-    readonly property var sharedNames: {
-        const out = []
-        const list = Transfer.shared
-        for (let i = 0; i < list.length; ++i) out.push(String(list[i]).substring(String(list[i]).lastIndexOf("/") + 1))
-        return out
-    }
 
     function setArgs(a) { tour = !!a.tour }
     Component.onCompleted: LocalSend.refresh()
 
     readonly property var prompts: LocalSend.busy ? [{ key: "b", label: cancelArmed ? "Cancel now" : "Cancel" }]
-        : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send" : "Pick files" },
+        : [{ key: "a", label: page.rows[page.current] && page.rows[page.current].kind === "device" ? "Send to it" : "Pick a file" },
            { key: "y", label: "Look again" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
     // B while files go: the first press says to press again, a second one within 3 s cancels.
     property bool cancelArmed: false
@@ -254,28 +248,7 @@ Rectangle {
                     HButton { id: lastDone; anchors.right: parent.right; anchors.rightMargin: Theme.px(8); anchors.verticalCenter: parent.verticalCenter; text: "Done"; height: Theme.px(34); fontSize: 13; onClicked: LocalSend.clearResult() }
                 }
 
-                SectionLabel { text: "READY TO SEND"; detail: Transfer.sharedCount > 0 ? "Pick a device" : "" }
-                Text {
-                    textFormat: Text.PlainText
-                    visible: Transfer.sharedCount === 0
-                    width: parent.width
-                    wrapMode: Text.WordWrap
-                    text: "Nothing picked yet."
-                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
-                }
-                Repeater {
-                    model: page.sharedNames.slice(0, 4)
-                    Text { textFormat: Text.PlainText; width: lists.width; elide: Text.ElideMiddle; text: modelData; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16) }
-                }
-                Text {
-                    textFormat: Text.PlainText
-                    visible: page.sharedNames.length > 4
-                    text: "and " + (page.sharedNames.length - 4) + " more"
-                    color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
-                }
-
-                Item { width: 1; height: Theme.px(8) }
-                SectionLabel { text: "RECEIVED"; detail: "Saved in " + Transfer.saveName }
+                SectionLabel { text: "RECEIVED"; detail: "Saved in " + Transfer.saveName + "/Huginn" }
                 Repeater {
                     model: page.incoming.slice(0, 4)
                     Rectangle {
@@ -378,15 +351,19 @@ Rectangle {
     }
 
     // ============================================================= actions
+    // Send a file: pick it, then who gets it (PeopleActions.sendPicker: people, groups, LocalSend devices nearby).
     function pickFiles() {
         if (page.tour) return
         const paths = System.pickFiles()
-        if (!paths.length) return
-        Transfer.share(paths)
-        Ui.say((Transfer.sharedCount === 1 ? "1 file" : Transfer.sharedCount + " files") + " ready. Pick a device.")
+        if (paths.length) PeopleActions.sendPicker(paths)
     }
+    // A device nearby: pick a file for it. A PIN, when it asks for one, sends the same files again.
     function sendTo(d) {
-        if (Transfer.sharedCount === 0) { Ui.say("Pick files first: Send files.", true); return }
+        if (page.tour) return
+        const paths = System.pickFiles()
+        if (!paths.length) return
+        Transfer.clearShared()
+        Transfer.share(paths)
         LocalSend.send(d.id, Transfer.shared)
     }
     function choose() {
@@ -395,15 +372,13 @@ Rectangle {
         if (r.kind === "pick") pickFiles()
         else sendTo(r)
     }
-    // The three dots: Look again, Direct connect and Clear.
+    // The three dots: Look again and Direct connect.
     function filesMenu() {
         const items = [{ name: "Look again", icon: "search", url: "look" },
                        { name: "Direct connect", icon: "qr", url: "direct", check: Direct.on }]
-        if (Transfer.sharedCount > 0) items.push({ name: "Clear", url: "clear", danger: true })
         Ui.pickFrom("Files", [{ header: "", items: items }], a => {
             if (a === "look") LocalSend.refresh()
             else if (a === "direct") toggleDirect()
-            else if (a === "clear") { Transfer.clearShared(); Ui.say("Cleared.") }
         })
     }
 

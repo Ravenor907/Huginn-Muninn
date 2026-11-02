@@ -309,8 +309,11 @@ class Power(private val app: Muninn) {
         try {
             cm.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
                 // Back on a network: connect again once (catching up does it, or only that with "Only when open").
+                // At once the first time; a network that keeps flapping waits a little longer each time (capped).
                 override fun onAvailable(network: Network) {
-                    main.post { caughtUpAt = 0L; if (check == PowerLogic.Check.OPEN || extreme) app.nostr.reconnectNow() else catchUp() }
+                    app.nostr.networkChanged {
+                        main.post { caughtUpAt = 0L; if (check == PowerLogic.Check.OPEN || extreme) app.nostr.reconnectNow() else catchUp() }
+                    }
                 }
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     val w = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)

@@ -6,6 +6,7 @@
 #include "link.h"
 #include "localsend.h"
 #include "trust.h"
+#include "system.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -518,7 +519,7 @@ void Move::publish()
     Q_EMIT changed();
 }
 
-QString Move::partsDir() const { return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/move-in"); }
+QString Move::partsDir() const { return System::cacheDir() + QStringLiteral("/move-in"); }
 
 QStringList Move::missing() const
 {
@@ -542,15 +543,15 @@ QString Move::showCode()
     QByteArray secret(16, 0);
     for (char &c : secret)
         c = char(QRandomGenerator::system()->bounded(256));
+    // The Wi-Fi side must be up to be reached (and its port known: the first free one from 53318).
+    if (!m_net->running())
+        m_net->start();
     QStringList addrs;
     for (const auto &[ip, prefix] : mine())
-        addrs << ip + QStringLiteral(":53317");
+        addrs << ip + QStringLiteral(":") + QString::number(m_net->serverPort());
     // Never the computer's name: the person's own chat name.
     const QString c = addrs.isEmpty() ? QString() : MoveWire::code({addrs, b64(kp.publicDer), secret, m_chat->username().left(40), QStringLiteral("huginn")});
     QDir(partsDir()).removeRecursively();
-    // The Wi-Fi side must be up to be reached.
-    if (!m_net->running())
-        m_net->start();
     store(QStringLiteral("in"), {{QStringLiteral("state"), QStringLiteral("shown")}, {QStringLiteral("code"), c}, {QStringLiteral("priv"), b64(kp.privateDer)},
                                  {QStringLiteral("pub"), b64(kp.publicDer)}, {QStringLiteral("s"), b64(secret)}});
     return c;
@@ -1084,6 +1085,21 @@ QJsonObject Move::common() const
         out.insert(QStringLiteral("profile"), QJsonObject{{QStringLiteral("v"), p.value(QStringLiteral("v")).toInteger()}, {QStringLiteral("col"), jstr(p, "col")},
                                                           {QStringLiteral("pic"), jstr(p, "pic")}, {QStringLiteral("st"), jstr(p, "st")}, {QStringLiteral("cs"), jstr(p, "cs")}});
     return out;
+}
+
+QByteArray Move::sharedForm() const
+{
+    return compact(common());
+}
+
+Vault::Files Move::fromSharedForm(const QByteArray &form, QString *error) const
+{
+    const QJsonObject o = QJsonDocument::fromJson(form).object();
+    if (o.isEmpty()) {
+        *error = QStringLiteral("it is damaged.");
+        return {};
+    }
+    return fromCommon(o, error);
 }
 
 Vault::Files Move::fromCommon(const QJsonObject &o, QString *error) const

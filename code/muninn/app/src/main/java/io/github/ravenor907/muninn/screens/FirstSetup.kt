@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.R
+import io.github.ravenor907.muninn.net.Backup
 import io.github.ravenor907.muninn.net.Contacts
 import io.github.ravenor907.muninn.screens.SetupFlow.Step
 import io.github.ravenor907.muninn.ui.Ask
@@ -138,6 +139,9 @@ object Setup {
         run = SetupFlow.Run(practice, SetupFlow.steps(facts))
         tick++
     }
+
+    /** First setup's Restore from a backup worked: setup is done, so the restored Muninn starts on its chats. */
+    fun restored(app: Muninn) { prefs(app).edit().putBoolean(STARTED, true).putBoolean(DONE, true).putBoolean("nameAsked", true).commit() }
 
     fun next() { val r = run ?: return; if (!r.next()) finish(false) else tick++ }
     fun back() { run?.back(); tick++ }
@@ -236,7 +240,7 @@ fun FirstSetup(app: Muninn) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 androidx.compose.runtime.key(run.index) {
                     when (run.step) {
-                        Step.WELCOME -> WelcomePage()
+                        Step.WELCOME -> WelcomePage(app)
                         Step.LOCK -> LockPage(app)
                         Step.NAME -> NamePage(app)
                         Step.ALLOW -> AllowPage(app)
@@ -298,13 +302,29 @@ private fun PracticeQr(size: androidx.compose.ui.unit.Dp) {
     }
 }
 
+/** Welcome, with Restore from a backup (a backup made in Huginn or Muninn; in practice nothing is opened). */
 @Composable
-private fun WelcomePage() = Page {
-    Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(96.dp))
-        Text("Welcome to Muninn", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
-        Text("Private messages, calls and files with family. No phone number, no account.", style = Type.normal,
-            textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+private fun WelcomePage(app: Muninn) {
+    var restoring by remember { mutableStateOf(false) }
+    if (restoring) {
+        Page(next = null) {
+            RestoreFlow(app, practice = !Setup.writes.live, onCancel = { restoring = false }) { o ->
+                Backup.restoreKeeping(app, o)
+                Setup.restored(app)
+                "Restored. Set a lock any time in Settings › Lock and privacy. Muninn is restarting."
+            }
+        }
+        return
+    }
+    Page {
+        Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(96.dp))
+            Text("Welcome to Muninn", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 16.dp).semantics { heading() })
+            Text("Private messages, calls and files with family. No phone number, no account.", style = Type.normal,
+                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+            Text("Have a backup from Huginn or Muninn?", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 24.dp))
+            MButton("Restore from a backup", Modifier.padding(top = 8.dp)) { restoring = true }
+        }
     }
 }
 

@@ -286,11 +286,13 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, actions: @Composa
 @Composable
 internal fun AlbumGrid(photos: List<Chat.Msg>, bytes: (Chat.Msg) -> ByteArray?, onTap: (Chat.Msg) -> Unit) {
     val rows = photos.chunked(if (photos.size <= 4) 2 else 3)
+    val albumCtx = LocalContext.current
     Column(Modifier.widthIn(max = 260.dp).padding(4.dp)) {
         rows.forEach { row ->
             Row(Modifier.fillMaxWidth()) {
                 row.forEach { m ->
-                    val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { decode(bytes(m), 360) } }
+                    val bmp by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) {
+                        bytes(m)?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(albumCtx, "${m.id}:360:${b.size}") { decode(b, 360) } } } }
                     Box(Modifier.weight(1f).aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
                         .clickable(role = Role.Image) { onTap(m) }, contentAlignment = Alignment.Center) {
                         bmp?.let { Image(it, contentDescription = "Photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
@@ -351,7 +353,10 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
                 items(media.take(shown).size, key = { media[it].id }) { i ->
                     val m = media[i]
                     val bmp by produceState<ImageBitmap?>(null, m.id) {
-                        value = withContext(Dispatchers.IO) { if (m.video > 0) videoFrame(bytes(m)) else decode(bytes(m), 360) }
+                        value = withContext(Dispatchers.IO) {
+                            if (m.video > 0) videoFrame(bytes(m))
+                            else bytes(m)?.let { b -> io.github.ravenor907.muninn.ui.PhotoCache.get(context, "${m.id}:360:${b.size}") { decode(b, 360) } }
+                        }
                     }
                     Box(Modifier.aspectRatio(1f).padding(2.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
                         .clickable(role = Role.Image) { onOpen(m) }, contentAlignment = Alignment.Center) {
@@ -506,59 +511,20 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?) {
 }
 
 /**
- * Files on their way straight to or from this person, and files of theirs coming over the internet route: each with its
- * type icon, name, size, a bar while it moves and what it's doing ("Waiting for Ana to accept", "Sending 42%",
- * "Receiving 42%"). Cancel while it runs; Accept and Decline when it asks; Open and Folder once saved; Retry and
- * Close after a failure.
+ * Files on their way in this chat or group ([peer]: their key, or "g:<group>"), and files of theirs coming over the
+ * internet route: the same cards as Transfers (TransferCard). A file of mine going as a message shows on the message.
  */
 @Composable
 internal fun DirectFiles(peer: String, who: String = "them", resend: (String, java.io.File, String) -> Unit = { _, _, _ -> }) {
-    val context = LocalContext.current
     val all by io.github.ravenor907.muninn.net.FileLink.all.collectAsState()
-    val mine = all.values.filter { it.peer == peer }
+    val mine = all.values.filter { it.where == peer && !it.relay }.sortedBy { it.time }
     if (mine.isEmpty()) return
+    val app = LocalContext.current.applicationContext as? io.github.ravenor907.muninn.Muninn
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         mine.forEach { f ->
-            val failed = f.state == "failed"
-            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.panel).padding(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.coolTint), contentAlignment = Alignment.Center) {
-                        MIcon(FileText.icon(f.name), if (failed) Palette.danger else Palette.accent, 22.dp)
-                    }
-                    Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                        Text(f.name, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(FileText.size(f.size) + " · " + FileText.line(f.state, f.mine, f.done, f.size, f.note, who),
-                            style = Type.small.copy(color = if (failed) Palette.danger else Palette.textMuted), maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                if (f.state == "sending") io.github.ravenor907.muninn.ui.Bar(if (f.size > 0) f.done.toFloat() / f.size else 0f, Modifier.padding(top = 8.dp), Palette.gold)
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val link = io.github.ravenor907.muninn.net.FileLink
-                    when {
-                        f.state == "waiting" || f.state == "asking" -> {
-                            MButton(if (f.state == "asking") "Accept" else "Download", kind = Kind.Accent) { link.accept(f.id) }
-                            MButton("Decline") { link.decline(f.id) }
-                        }
-                        // A file coming over the internet route can't be stopped from here; it just arrives.
-                        link.canCancel(f.id) ->
-                            MButton("Cancel", kind = Kind.Danger) { link.cancel(f.id) }
-                        f.state == "done" && !f.mine && f.uri.isNotEmpty() -> {
-                            val kids = io.github.ravenor907.muninn.tv.KidMode.saved(context)
-                            if (!(kids && FileText.isApp(f.name))) MButton("Open", kind = Kind.Accent) {
-                                if (!io.github.ravenor907.muninn.net.Received.open(context, f.uri, f.name)) Ui.say("Nothing on this device opens this kind of file.", true)
-                            }
-                            MButton("Folder", icon = "folder") {
-                                if (!io.github.ravenor907.muninn.net.Received.showFolder(context)) Ui.say("It's in Downloads. Open it from your Files app.")
-                            }
-                            MButton("Close") { link.dismiss(f.id) }
-                        }
-                        failed && link.canRetry(f.id) -> {
-                            MButton("Retry", kind = Kind.Accent, icon = "refresh") { link.takeRetry(f.id)?.let { (p, file, n) -> resend(p, file, n) } }
-                            MButton("Close") { link.dismiss(f.id) }
-                        }
-                        !FileText.running(f.state) -> MButton("Close") { link.dismiss(f.id) }
-                    }
-                }
+            TransferCard(f, showChat = false) { p, file, n, g ->
+                if (g.isEmpty() || app == null) resend(p, file, n) else resendFile(app, scope)(p, file, n, g)
             }
         }
     }

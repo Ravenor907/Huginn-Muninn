@@ -64,7 +64,7 @@ object GroupLinks {
     /** Whether I may make links for [g]: an admin, or anyone when the group lets members invite. */
     fun canInvite(app: Muninn, g: String): Boolean {
         val grp = app.chat.groups.group(g) ?: return false
-        if (grp.readOnly) return false
+        if (grp.readOnly || !io.github.ravenor907.muninn.net.Limits.linksAllowed(grp.state)) return false   // Family: no links
         return grp.state.isAdmin(app.identity.publicKey) || membersCanInvite(app, g)
     }
 
@@ -82,7 +82,7 @@ object GroupLinks {
 
     fun revoke(app: Muninn, g: String, id: String) { app.chat.groups.revokeLink(g, id)?.let { Ui.say(it, true) } }
 
-    fun membersCanInvite(app: Muninn, g: String): Boolean = app.chat.groups.group(g)?.state?.mi == true
+    fun membersCanInvite(app: Muninn, g: String): Boolean = app.chat.groups.group(g)?.state?.let { io.github.ravenor907.muninn.net.Limits.membersMayInvite(it) } == true
     fun setMembersCanInvite(app: Muninn, g: String, on: Boolean): String? = app.chat.groups.setMembersInvite(g, on)
 
     /** What a pasted or scanned link says, or null if it isn't one. Falls back to a group code. */

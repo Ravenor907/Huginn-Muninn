@@ -91,6 +91,7 @@ Item {
                 Text { textFormat: Text.PlainText; text: dlg.title.toUpperCase(); color: Theme.textMuted; font.family: Theme.display; font.pixelSize: Theme.fs(17); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(2) }
                 TextField {
                     id: question
+                    FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                     width: parent.width; height: Theme.px(52)
                     placeholderText: "Question"
                     maximumLength: 200
@@ -107,6 +108,7 @@ Item {
                     model: dlg.answers.length
                     delegate: TextField {
                         required property int index
+                        FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                         width: col.width - (dlg.answers.length > 2 ? Theme.px(52) : 0); height: Theme.px(48)
                         placeholderText: "Answer " + (index + 1)
                         maximumLength: 100

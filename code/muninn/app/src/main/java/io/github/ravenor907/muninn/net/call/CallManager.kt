@@ -306,6 +306,10 @@ object CallManager {
             if (a.chat.blocked.value.contains(fromKey)) return@execute
             // Extreme battery saver: calls ring only while Muninn is open. Otherwise it's in the call history as missed.
             if (a.quietUntilOpen()) { addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed")); return@execute }
+            // Their chat is muted: no ringing and no notification, just a missed call in the call history (section 26.1).
+            if (try { a.chat.flags.muted(fromKey) } catch (e: Exception) { false }) {
+                addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed")); return@execute
+            }
             val ns = CallSession(s.call, fromKey, false, host, exec, work)
             CallVideo.attach(a, ns, false)
             session = ns

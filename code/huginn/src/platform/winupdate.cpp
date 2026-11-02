@@ -279,6 +279,8 @@ void tidyOldLayout()
     // Huginn.exe at the top is the app; a copy in lib\ (a launcher layout) goes.
     if (QFileInfo::exists(lib + QStringLiteral("/Huginn.exe")))
         QFile::remove(lib + QStringLiteral("/Huginn.exe"));
+    // The start log lives in the data folder now; one left beside Huginn.exe by an older version goes.
+    QFile::remove(root + QStringLiteral("/Huginn-start.log"));
 #endif
 }
 

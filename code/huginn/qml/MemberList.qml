@@ -27,6 +27,15 @@ Rectangle {
         Rooms.groupCalls(gid).forEach(c => Rooms.whoIn(gid, c.ch).forEach(p => out[p.me ? "me" : p.key] = "Group call"))
         return out
     }
+    // Someone in a room who went quiet (their app stopped saying it's there): "Reconnecting" until they're back or gone.
+    readonly property var voiceQuiet: {
+        const out = {}
+        if (!host || tour || host.locked || gid === "") return out
+        Rooms.presence; Rooms.people
+        host.channels.filter(c => c.type === "voice").forEach(c => Rooms.whoIn(gid, c.id).forEach(p => { if (p.state === "reconnecting") out[p.key] = true }))
+        Rooms.groupCalls(gid).forEach(c => Rooms.whoIn(gid, c.ch).forEach(p => { if (p.state === "reconnecting") out[p.key] = true }))
+        return out
+    }
     readonly property var tourStatus: ({ "t": "idle", "m": "online" })
     function statusOf(m) {
         const k = m.me ? "me" : m.key
@@ -37,7 +46,7 @@ Rectangle {
         return Ui.main.presenceOf(m.key)
     }
     function statusText(m, st) {
-        if (st === "voice") return "In " + voiceIn[m.me ? "me" : m.key]
+        if (st === "voice") return !m.me && voiceQuiet[m.key] ? "Reconnecting" : "In " + voiceIn[m.me ? "me" : m.key]
         if (st === "online") return m.me ? "Online (you)" : "Online"
         if (st === "idle") return "Idle"
         return ""
@@ -119,7 +128,7 @@ Rectangle {
         border.width: on ? Theme.focusWidth : 0
         border.color: Theme.accent
         Accessible.role: Accessible.ListItem
-        Accessible.name: (person.name || "") + (person.owner ? ", owner" : person.admin ? ", admin" : "")
+        Accessible.name: (person.name || "") + (person.owner ? ", owner" : person.admin ? ", admin" : "") + (person.checked && !!list.host && list.host.family ? ", checked" : "")
                          + (line !== "" ? ", " + line : list.statusOn ? ", offline" : "")
         Avatar {
             id: mface
@@ -152,7 +161,7 @@ Rectangle {
         }
         Column {
             anchors.left: mface.right; anchors.leftMargin: Theme.px(12)
-            anchors.right: crown.visible ? crown.left : memMore.left; anchors.rightMargin: Theme.px(6)
+            anchors.right: checkedMark.visible ? checkedMark.left : crown.visible ? crown.left : memMore.left; anchors.rightMargin: Theme.px(6)
             anchors.verticalCenter: parent.verticalCenter
             spacing: 0
             Text {
@@ -173,6 +182,15 @@ Rectangle {
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }
         }
+        // A Family group: this member's safety code was matched.
+        Icon {
+            id: checkedMark
+            visible: !!list.host && !!list.host.family && !!mr.person.checked
+            anchors.right: crown.visible ? crown.left : memMore.left; anchors.rightMargin: Theme.px(4)
+            anchors.verticalCenter: parent.verticalCenter
+            name: "check"; size: Theme.px(15)
+            color: Theme.online
+        }
         Icon {
             id: crown
             visible: !!mr.person.owner || !!mr.person.admin
@@ -183,10 +201,17 @@ Rectangle {
         }
         HoverHandler { id: memHover; cursorShape: Qt.PointingHandCursor }
         // A click, a right click or a hold: the member's menu, the same as the three dots and LT.
+        // A right click or a long press: the small right-click menu where it was (Profile, Message, Mute for me, Volume...).
         TapHandler {
             acceptedButtons: Qt.LeftButton | Qt.RightButton
-            onTapped: mr.openMenu()
-            onLongPressed: mr.openMenu()
+            onTapped: (point, button) => { if (button === Qt.RightButton) mr.contextAt(point.position); else mr.openMenu() }
+            onLongPressed: mr.contextAt(point.position)
+        }
+        function contextAt(p) {
+            if (!list.host) return
+            list.host.zone = "members"; list.host.memRow = mr.at
+            if (typeof list.host.memberMenuAt === "function") list.host.memberMenuAt(mr, p, mr.person)
+            else list.host.memberMenu(mr.person)
         }
         function openMenu() {
             if (!list.host) return

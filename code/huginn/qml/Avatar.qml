@@ -69,14 +69,13 @@ Item {
         source: av.hasPicture ? av.pictureUrl : ""
         opacity: av.dim ? 0.5 : 1
     }
-    // The status dot, cut out of the corner.
-    Rectangle {
+    // The status dot, cut out of the corner: filled, a ring or a minus (StatusDot).
+    StatusDot {
         visible: av.showDot && av.status !== ""
         anchors.right: parent.right; anchors.bottom: parent.bottom
         anchors.rightMargin: -Math.round(av.size * 0.06); anchors.bottomMargin: -Math.round(av.size * 0.06)
-        width: Math.max(Theme.px(10), Math.round(av.size * 0.36)); height: width; radius: width / 2
-        color: av.status === "online" ? Theme.online : av.status === "away" ? Theme.away : av.status === "dnd" ? Theme.dnd : Theme.offline
-        border.width: Math.max(2, Math.round(width * 0.2))
-        border.color: av.backdrop
+        width: Math.max(Theme.px(10), Math.round(av.size * 0.36))
+        status: av.status
+        backdrop: av.backdrop
     }
 }

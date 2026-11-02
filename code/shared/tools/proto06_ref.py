@@ -114,8 +114,11 @@ def check_state(s):
     need = {"g", "v", "owner", "by", "name", "admins", "members", "channels", "ts", "sig"}
     # Cap d1 (section 16): "kind" and "days" may be there too, only for a Family or Work group.
     # Cap j1 (section 17.1): "mi" (members can invite) may be there too, only ever true.
-    if not need <= set(s) <= need | {"kind", "days", "mi"}: raise ValueError("fields")
+    # Cap f2 (section 27.3): the group's file rules, "fs" and "fm", each left out when not set.
+    if not need <= set(s) <= need | {"kind", "days", "mi", "fs", "fm"}: raise ValueError("fields")
     if "mi" in s and s["mi"] is not True: raise ValueError("mi")
+    if "fs" in s and s["fs"] not in ("admins", "nobody"): raise ValueError("fs")
+    if "fm" in s and (type(s["fm"]) is not int or not 1 <= s["fm"] <= 4096): raise ValueError("fm")
     if "kind" in s and s["kind"] not in ("family", "work"): raise ValueError("kind")
     if "days" in s:
         d = s["days"]

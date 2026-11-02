@@ -115,7 +115,7 @@ object Proto06 {
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
     // Tokens Huginn reads come first and the Kids' TV ones last: a Huginn may keep only the first 16.
-    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 p1"
+    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1"
     /** Cap j1: group invite links and "Members can invite" (section 17). */
     const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()
@@ -132,6 +132,8 @@ object Proto06 {
         val kind: String = "", val days: Int = 0,
         /** Cap j1 (section 17): members (not only admins) may make invite links. Left out when off. */
         val mi: Boolean = false,
+        /** Cap f2 (section 27.3): who may send files ("admins", "nobody"; "" everyone) and the size limit in MB (0: none). */
+        val fs: String = "", val fm: Int = 0,
     ) {
         private fun tree(withSig: Boolean): Map<String, Any> = LinkedHashMap<String, Any>().apply {
             put("g", g); put("v", v); put("owner", owner); put("by", by); put("name", name); put("admins", admins)
@@ -141,6 +143,8 @@ object Proto06 {
             if (kind.isNotEmpty()) put("kind", kind)
             if (days > 0) put("days", days)
             if (mi) put("mi", true)
+            if (fs.isNotEmpty()) put("fs", fs)
+            if (fm > 0) put("fm", fm)
             if (withSig) put("sig", sig)
         }
         fun canonUnsigned() = canon(tree(false))
@@ -171,11 +175,13 @@ object Proto06 {
     private val LIMIT_FIELDS = setOf("kind", "days")
     /** Cap j1: "Members can invite" (section 17.1). */
     private val LINK_FIELDS = setOf("mi")
+    /** Cap f2: the group's file rules (section 27.3). */
+    private val FILE_FIELDS = setOf("fs", "fm")
 
     /** Reads a state exactly as it came. Throws [Refused] on wrong fields or types (shape and limits: [check]). */
     fun parseState(o: JSONObject): State {
         val have = o.keys().asSequence().toSet()
-        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS + LINK_FIELDS).containsAll(have)) throw Refused("fields")
+        if (!have.containsAll(STATE_FIELDS) || !(STATE_FIELDS + LIMIT_FIELDS + LINK_FIELDS + FILE_FIELDS).containsAll(have)) throw Refused("fields")
         // Only ever true: off is left out, so a group that never turned it on keeps exactly the state apps without j1 take.
         if (o.has("mi") && o.opt("mi") != true) throw Refused("mi")
         val admins = arr(o, "admins").let { a -> (0 until a.length()).map { a.opt(it) as? String ?: throw Refused("admins") } }
@@ -191,8 +197,11 @@ object Proto06 {
         } }
         val kind = if (o.has("kind")) str(o, "kind").also { if (it.isEmpty()) throw Refused("kind") } else ""
         val days = if (o.has("days")) int(o, "days").also { if (it !in 1..Limits.LONGEST) throw Refused("days") }.toInt() else 0
+        val fs = if (o.has("fs")) str(o, "fs") else null
+        val fm = if (o.has("fm")) int(o, "fm") else null
+        Sharing.checkRules(fs, fm).let { if (it.isNotEmpty()) throw Refused(it) }
         return State(str(o, "g"), int(o, "v"), str(o, "owner"), str(o, "by"), str(o, "name"), admins, members, channels, int(o, "ts"), str(o, "sig"),
-            kind, days, o.has("mi"))
+            kind, days, o.has("mi"), fs.orEmpty(), (fm ?: 0L).toInt())
     }
 
     /** Shape and limits (reference check_state); throws [Refused]. Does not check the signature. */
@@ -222,6 +231,7 @@ object Proto06 {
         }
         if (s.kind.isNotEmpty() && s.kind !in Limits.KINDS) throw Refused("kind")
         if (s.days != 0 && (s.kind.isEmpty() || s.days !in Limits.DEFAULT..Limits.LONGEST)) throw Refused("days")
+        Sharing.checkRules(s.fs.ifEmpty { null }, s.fm.takeIf { it != 0 }?.toLong()).let { if (it.isNotEmpty()) throw Refused(it) }
         if (s.canonSigned().toByteArray(Charsets.UTF_8).size > MAX_STATE_BYTES) throw Refused("too big")
     }
 

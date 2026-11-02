@@ -291,6 +291,8 @@ int Profile::pictureVersion(const QString &key) const
     if (key == kMe && m_phoneOn)
         return m_phonePic.isEmpty() ? 0 : int(qMin<qint64>(m_phoneV, INT_MAX));
     const Entry e = key == kMe ? m_me : m_peers.value(key);
+    if (e.pic.isEmpty() && key != kMe && m_linked.contains(key))
+        return int(qMin<qint64>(m_linkedV, INT_MAX));   // a linked phone's picture of them (cap l1)
     return e.pic.isEmpty() ? 0 : int(qMin<qint64>(e.v, INT_MAX));
 }
 
@@ -309,7 +311,9 @@ QImage Profile::picture(const QString &key)
     const auto hit = m_cache.constFind(key);
     if (hit != m_cache.cend())
         return *hit;
-    const QByteArray bytes = key == kMe ? (m_phoneOn ? m_phonePic : m_me.pic) : m_peers.value(key).pic;
+    QByteArray bytes = key == kMe ? (m_phoneOn ? m_phonePic : m_me.pic) : m_peers.value(key).pic;
+    if (bytes.isEmpty() && key != kMe)
+        bytes = m_linked.value(key);
     if (bytes.isEmpty())
         return {};
     const QImage img = QImage::fromData(bytes, "JPEG");
@@ -350,7 +354,34 @@ QImage Profile::pictureById(const QString &id)
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
         if (hashOf(it.key()) == id)
             return picture(it.key());
+    for (auto it = m_linked.cbegin(); it != m_linked.cend(); ++it)
+        if (hashOf(it.key()) == id)
+            return picture(it.key());
     return {};
+}
+
+void Profile::setLinkedPictures(const QHash<QString, QByteArray> &pics)
+{
+    QHash<QString, QByteArray> ok;
+    for (auto it = pics.cbegin(); it != pics.cend(); ++it)
+        if (pictureOk(it.value()))
+            ok.insert(it.key(), it.value());
+    if (ok == m_linked)
+        return;
+    QSet<QString> touched;
+    for (auto it = m_linked.cbegin(); it != m_linked.cend(); ++it)
+        touched.insert(it.key());
+    for (auto it = ok.cbegin(); it != ok.cend(); ++it)
+        touched.insert(it.key());
+    m_linked = ok;
+    // A new version each time, so a picture URL shown before never stands for these.
+    ++m_linkedV;
+    for (const QString &k : std::as_const(touched)) {
+        m_cache.remove(k);
+        Q_EMIT pictureChanged(k);
+    }
+    share();
+    Q_EMIT changed();
 }
 
 void Profile::share()
@@ -360,6 +391,8 @@ void Profile::share()
         all.insert(kMe, m_me.pic);
     if (m_phoneOn)
         all.insert(QStringLiteral("phone"), m_phonePic);   // may be empty: then no picture stands for mine
+    for (auto it = m_linked.cbegin(); it != m_linked.cend(); ++it)
+        all.insert(hashOf(it.key()), it.value());   // a linked phone's, unless their own is here (below)
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
         if (!it->pic.isEmpty())
             all.insert(hashOf(it.key()), it->pic);

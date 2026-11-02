@@ -38,7 +38,6 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material3.minimumInteractiveComponentSize
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.ui.Avatar
-import io.github.ravenor907.muninn.ui.Access
 import io.github.ravenor907.muninn.ui.Corner
 import io.github.ravenor907.muninn.ui.Field
 import io.github.ravenor907.muninn.ui.Kind
@@ -77,7 +76,7 @@ internal fun saveName(app: Muninn, name: String) {
 /** The color of a status's square and dot. */
 private fun statusColour(s: Status): Color = when (s) {
     Status.ONLINE -> Palette.online
-    Status.AWAY -> if (Access.colorBlind) Palette.gold else Palette.away
+    Status.AWAY -> Palette.away
     Status.DND -> Palette.danger
     Status.INVISIBLE -> Palette.textFaint
 }

@@ -1,4 +1,5 @@
 #include "scratch.h"
+#include "portable.h"
 
 #include <QDir>
 #include <QFile>
@@ -10,7 +11,7 @@ namespace Scratch
 QString dir()
 {
 #ifdef Q_OS_WIN
-    QString d = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    QString d = Portable::localDir();
     if (d.isEmpty())
         d = QDir::tempPath();
     d += QStringLiteral("/scratch");

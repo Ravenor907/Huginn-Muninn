@@ -1,34 +1,41 @@
 import QtQuick
 import Huginn
 
-// Files on their way to or from one person (cap f1), each as a card at the bottom of the chat: type icon,
-// name, size and what it's doing ("Waiting for Ana to accept", "Sending 42%", "Receiving 42%"), with a bar
-// while it moves. Buttons: Accept and Decline when a file asks first, Cancel while it runs, Open, Folder and
-// Close once saved, Retry (or Send on Wi-Fi when it's too big for the internet route) and Close after a
-// failure. Empty (and no height) when there are none. The D-pad reaches the buttons: Down past the last
-// message (ChatPage), Left and Right between them, Up and Down between cards, A to choose, B to leave.
+// Files on their way in one chat or group (caps f1 and f2), each as a card at the bottom of the chat: type icon,
+// name, size and kind, what it's doing ("Waiting for Ana to accept", "Sending 42%") with its route ("Direct" or
+// "Over the internet") and speed, and a bar while it moves. The same cards as Transfers. Buttons: Accept, Always from
+// this person and Decline when a file asks first, Pause or Resume and Cancel while it runs, Open, Folder and Close once
+// saved, Retry and Close after a failure. A file of mine going as a message shows on the message itself. Empty (and no
+// height) when there are none. The D-pad reaches the buttons: Down past the last message, Left and Right between them,
+// Up and Down between cards, A to choose, B to leave.
 Column {
     id: strip
     property string peer: ""
-    readonly property var items: peer === "" ? [] : FileLink.transfers.filter(t => t.peer === peer)
+    // The chat these cards belong to: their key, or "g:<group>".
+    property string where: peer
+    readonly property var items: where === "" ? [] : FileLink.transfers.filter(t => t.where === where && !t.relay)
     property int focusIndex: -1       // the card the controller is on (-1: none)
     property int focusButton: 0
     visible: items.length > 0
     spacing: Theme.px(6)
-    onPeerChanged: focusIndex = -1
+    onWhereChanged: focusIndex = -1
 
-    // A card's buttons: [{ label, act, kind }].
+    // A card's buttons: [{ label, act, kind }]. The same as Transfers (TransfersPanel.acts).
     function acts(t) {
         if (!t) return []
         const out = []
         if (t.state === "asking" && !t.mine) {
-            out.push({ label: "Accept", act: "accept", kind: "primary" }, { label: "Decline", act: "decline", kind: "normal" })
+            out.push({ label: "Accept", act: "accept", kind: "primary" })
+            if (Chat.isContact(t.peer)) out.push({ label: "Always from this person", act: "always", kind: "normal" })
+            out.push({ label: "Decline", act: "decline", kind: "normal" })
+        } else if (FileLink.canResume(t.id)) {
+            out.push({ label: "Resume", act: "resume", kind: "accent" }, { label: "Cancel", act: "cancel", kind: "danger" })
+        } else if (FileLink.canPause(t.id)) {
+            out.push({ label: "Pause", act: "pause", kind: "normal" }, { label: "Cancel", act: "cancel", kind: "danger" })
         } else if (FileLink.canCancel(t.id)) {
             out.push({ label: "Cancel", act: "cancel", kind: "danger" })
         } else if (t.state === "done" && !t.mine && t.path) {
             out.push({ label: "Open", act: "open", kind: "accent" }, { label: "Folder", act: "folder", kind: "normal" }, { label: "Close", act: "close", kind: "normal" })
-        } else if (t.state === "failed" && t.mine && t.wifi && t.path) {
-            out.push({ label: "Send on Wi-Fi", act: "wifi", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "failed" && FileLink.canRetry(t.id)) {
             out.push({ label: "Retry", act: "retry", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
         } else if (t.state === "done" || t.state === "failed") {
@@ -38,18 +45,27 @@ Column {
     }
     function run(t, a) {
         if (a === "accept") FileLink.accept(t.id)
+        else if (a === "always") FileLink.acceptAlways(t.id)
         else if (a === "decline") FileLink.decline(t.id)
+        else if (a === "pause") FileLink.pause(t.id)
+        else if (a === "resume") FileLink.resume(t.id)
         else if (a === "cancel") FileLink.cancel(t.id)
         else if (a === "open") { if (!FileLink.openFile(t.path)) Ui.say("Nothing on this computer opens this kind of file.", true) }
-        else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It's in Downloads.", true) }
+        else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It's in " + t.folder + ".", true) }
         else if (a === "retry") FileLink.retry(t.id)
-        else if (a === "wifi") {
-            Transfer.share([t.path])
-            FileLink.dismiss(t.id)
-            Ui.say("Ready in Files: pick their device on the same Wi-Fi.")
-            Ui.openPage("files", {})
-        }
         else if (a === "close") FileLink.dismiss(t.id)
+    }
+    // The line under a card's name: size, kind, what it's doing, its route and pace.
+    function line(t) {
+        const parts = [FileLink.size(t.size), t.kind, FileLink.text(t)]
+        if (t.route !== "" && t.state !== "failed") parts.push(t.route)
+        if (t.pace !== "") parts.push(t.pace)
+        return parts.join(" · ")
+    }
+    // Who it's from or to, and where it goes.
+    function whereLine(t) {
+        if (t.mine) return "To " + t.chat
+        return "From " + Chat.nameOf(t.peer) + (t.folder !== "" ? " · Saves to " + t.folder : "")
     }
     // What A does now, for the prompt bar.
     function focusLabel() {
@@ -92,6 +108,8 @@ Column {
         model: strip.items
         delegate: Rectangle {
             id: card
+            required property var modelData
+            required property int index
             readonly property var t: modelData
             readonly property int at: index
             readonly property bool moving: t.state === "sending"
@@ -99,20 +117,20 @@ Column {
             readonly property var buttons: strip.acts(t)
             readonly property int pct: t.size > 0 ? Math.floor(100 * Math.min(1, t.done / t.size)) : 0
             width: strip.width
-            height: Math.max(Theme.px(60), info.implicitHeight + Theme.px(20))
+            height: Math.max(Theme.px(64), info.implicitHeight + Theme.px(20))
             radius: Theme.radius
             color: Theme.panel
             border.color: strip.focusIndex === at ? Theme.text : failed ? Theme.dangerLine : Theme.line
             border.width: strip.focusIndex === at ? Theme.focusWidth : 1
             Accessible.role: Accessible.StaticText
-            Accessible.name: t.name + ", " + FileLink.text(t)
+            Accessible.name: t.name + ", " + strip.line(t)
             // How far it got, as a bar along the bottom edge.
             Rectangle {
                 anchors.left: parent.left; anchors.bottom: parent.bottom
                 anchors.leftMargin: 1; anchors.bottomMargin: 1
                 height: Theme.px(4)
                 width: (parent.width - 2) * card.pct / 100
-                color: Theme.accent
+                color: card.t.paused || card.t.held ? Theme.textMuted : Theme.accent
                 visible: card.moving
             }
             Rectangle {
@@ -143,9 +161,17 @@ Column {
                 Text {
                     textFormat: Text.PlainText
                     width: parent.width; wrapMode: Text.Wrap; maximumLineCount: 3; elide: Text.ElideRight
-                    text: FileLink.size(card.t.size) + " · " + FileLink.text(card.t)
+                    text: strip.line(card.t)
                     color: card.failed ? Theme.danger : Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                }
+                Text {
+                    textFormat: Text.PlainText
+                    width: parent.width; elide: Text.ElideRight
+                    visible: !card.t.mine
+                    text: strip.whereLine(card.t)
+                    color: Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(12)
                 }
             }
             Row {

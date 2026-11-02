@@ -3,6 +3,7 @@ package io.github.ravenor907.muninn.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -30,8 +31,9 @@ import io.github.ravenor907.muninn.Muninn
 
 /**
  * A person's round picture, or a round disc in their colour with their initial. Pictures are round in every look.
- * [key] is the chat key, or "me". [showDot] adds the status dot on the corner: green online, amber away, red do not
- * disturb (with a bar across it, so it never depends on colour alone), grey offline, none when nothing is known.
+ * [key] is the chat key, or "me". [showDot] adds the status dot on the corner ([StatusDot]): filled online, a hollow
+ * ring away, a minus for do not disturb (so it never depends on colour alone), grey offline, none when nothing is known.
+ * Color vision draws a picked disc colour as the nearest disc of its own set ([Palette.disc]).
  * [active]: they're active now (cap m1) and nothing else is known, so the dot shows green and says "Active now".
  * TalkBack hears the status in words; the name is read from the text beside the avatar, as before.
  */
@@ -44,9 +46,9 @@ fun Avatar(key: String, name: String, size: Dp, showDot: Boolean = false, modifi
     val version = versions[key]
     val picture = remember(profile, key, version) { if (profile == null || version == null) null else runCatching { profile.picture(key) }.getOrNull() }
     val myColour by (profile?.myColour ?: EMPTY).collectAsState()
-    val (bg, fg) = if (key == "me") (Palette.parse(myColour)?.let { it to Palette.onDisc(it) } ?: (Palette.goldTint to Palette.goldBright))
+    val (bg, fg) = if (key == "me") (Palette.parse(myColour)?.let { Palette.disc(it) } ?: (Palette.goldTint to Palette.goldBright))
         else (if (profile != null && key.isNotEmpty() && !Access.contrast) runCatching { Palette.parse(profile.colourOf(key)) }.getOrNull() else null)
-            ?.let { it to Palette.onDisc(it) } ?: Palette.avatarTone(name)
+            ?.let { Palette.disc(it) } ?: Palette.avatarTone(name)
     Box(modifier.size(size)) {
         if (picture != null) Image(picture.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop,
             modifier = Modifier.size(size).clip(CircleShape))
@@ -66,7 +68,11 @@ fun Avatar(key: String, name: String, size: Dp, showDot: Boolean = false, modifi
     }
 }
 
-/** The status dot: [status] is "online", "away", "dnd", "offline" or "active" (active now); anything else draws nothing. */
+/**
+ * The status dot: [status] is "online", "away", "dnd", "offline" or "active" (active now); anything else draws nothing.
+ * Each has its own shape, so it never depends on color alone: online (and active) filled, away a hollow ring, do not
+ * disturb a minus, offline a plain gray dot.
+ */
 @Composable
 fun StatusDot(status: String, size: Dp, modifier: Modifier = Modifier) {
     val (colour, words) = when (status) {
@@ -80,6 +86,8 @@ fun StatusDot(status: String, size: Dp, modifier: Modifier = Modifier) {
     Box(modifier.size(size).clip(CircleShape).background(Palette.ground).padding(size * 0.14f).clip(CircleShape).background(colour)
         .semantics { contentDescription = words }, contentAlignment = Alignment.Center) {
         if (status == "dnd") Box(Modifier.fillMaxWidth(0.6f).height((size.value * 0.14f).coerceAtLeast(1.5f).dp).background(Palette.ground))
+        // Away: the middle cut out, leaving a ring.
+        if (status == "away") Box(Modifier.fillMaxSize(0.5f).clip(CircleShape).background(Palette.ground))
     }
 }
 

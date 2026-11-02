@@ -24,6 +24,7 @@ Item {
             ["Hide members", "Ctrl+Shift+U"],
             ["Settings", "Ctrl+,"],
             ["Scroll a screenful", "Page Up"],
+            ["Right-click menu", "Shift+F10"],
             ["Back", "Esc"] ] },
          { title: "MESSAGES", keys: [
             ["Send", "Enter"],

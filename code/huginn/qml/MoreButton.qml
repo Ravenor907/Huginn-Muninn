@@ -17,7 +17,7 @@ Rectangle {
     border.color: Theme.lineMuted
     Accessible.role: Accessible.Button
     Accessible.name: label
-    Accessible.onPressAction: btn.clicked()
+    Accessible.onPressAction: Ui.menuAt(btn, 0, btn.height, () => btn.clicked())
 
     Icon {
         anchors.centerIn: parent
@@ -32,6 +32,7 @@ Rectangle {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        onClicked: btn.clicked()
+        // The menu opens as the small right-click menu, under the dots (above them near the bottom of the window).
+        onClicked: Ui.menuAt(btn, 0, btn.height, () => btn.clicked())
     }
 }

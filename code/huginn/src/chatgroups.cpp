@@ -8,7 +8,9 @@
 #include "morewire.h"
 #include "ble.h"
 #include "groupwire.h"
+#include "sharing.h"
 #include "msglimits.h"
+#include "moderation.h"
 #include "localsend.h"
 #include "nostr.h"
 #include "photos.h"
@@ -160,6 +162,7 @@ QVariantMap Chat::groupInfo(const QString &g) const
                                {QStringLiteral("owner"), k == owner},
                                {QStringLiteral("me"), k == me},
                                {QStringLiteral("contact"), isContact(k)},
+                               {QStringLiteral("checked"), k != me && isVerified(k)},   // safety code matched (Family)
                                {QStringLiteral("route"), k == me ? QString() : route(k)}};
     // The owner first, then admins, then everyone else, each by name.
     std::stable_sort(members.begin(), members.end(), [](const QVariant &a, const QVariant &b) {
@@ -188,6 +191,7 @@ QVariantMap Chat::groupInfo(const QString &g) const
             {QStringLiteral("removed"), it->removed},
             {QStringLiteral("left"), it->left},
             {QStringLiteral("count"), int(members.size())},
+            {QStringLiteral("type"), Limits::groupType(s)},   // "folk" or "family" (16.2)
             {QStringLiteral("members"), members},
             {QStringLiteral("channels"), channels}};
 }
@@ -222,6 +226,9 @@ QVariantList Chat::groupMessages(const QString &g, const QString &ch) const
         } else if (!m.value(QStringLiteral("system")).toBool()) {
             const QString shown = memberName(g, str(m, "from"));
             m.insert(QStringLiteral("name"), shown);
+            // Muted for me with Hide messages: folded as "Muted, tap to show" (cap g2's menus, only here).
+            if (m_mod && m_mod->foldMessages(str(m, "from")))
+                m.insert(QStringLiteral("folded"), true);
             if (!str(m, "unsent").isEmpty())
                 m.insert(QStringLiteral("unsent"), shown);
         }
@@ -247,7 +254,9 @@ QString Chat::createGroup(const QString &name, const QString &kind)
                                                                       {QStringLiteral("t"), QStringLiteral("text")}}}}};
     s = GroupWire::withAdmins(s, {me});
     s = GroupWire::withMembers(s, {GroupWire::member(me, username(), mailbox())});
-    s = Limits::withLimit(s, kind, Limits::kDefault);   // cap d1: Standard, Family or Work
+    // Cap d1 (16.2): Folk (no "kind", members can invite) or Family ("kind":"family", only admins add people).
+    s = Limits::withType(s, kind == QLatin1String(Limits::kFamily) ? QString::fromLatin1(Limits::kFamily) : QString::fromLatin1(Limits::kFolk),
+                         Limits::kDefault, true);
     bool ok = false;
     s = GroupWire::sign(m_priv, QLatin1String(GroupWire::kDomain), s, &ok);
     if (!ok || !GroupWire::checkState(s).isEmpty())
@@ -406,13 +415,21 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         next.insert(QStringLiteral("owner"), k);
         next = GroupWire::withAdmins(next, GroupWire::adminsOf(cur) << k);
     } else if (what == QLatin1String("limit")) {
-        // Cap d1 (section 16.2): the group's type and how many days messages stay, the same for everyone.
-        const QString kind = op.value(QStringLiteral("kind")).toString();
-        const QString why = limitBlocked(g, kind);
+        // Cap d1 (section 16.2): the group's type, Folk or Family, and how many days messages stay, the same for everyone.
+        const QString type = op.value(QStringLiteral("kind")).toString() == QLatin1String(Limits::kFamily) ? QString::fromLatin1(Limits::kFamily)
+                                                                                                           : QString::fromLatin1(Limits::kFolk);
+        const QString why = limitBlocked(g, type == QLatin1String(Limits::kFamily) ? type : QString());
         if (!why.isEmpty())
             return why;
-        const QJsonObject want = Limits::withLimit(next, kind, op.value(QStringLiteral("days")).toInt());
-        if (want.value(QStringLiteral("kind")) == cur.value(QStringLiteral("kind")) && want.value(QStringLiteral("days")) == cur.value(QStringLiteral("days")))
+        // Folk: members can invite, when every other member's app takes it (17.1).
+        bool miOk = true;
+        for (const QJsonObject &m : std::as_const(members))
+            if (m.value(QStringLiteral("k")).toString() != me && !hasJ1(m.value(QStringLiteral("k")).toString()))
+                miOk = false;
+        const bool wasFolk = Limits::groupType(cur) == QLatin1String(Limits::kFolk);
+        const QJsonObject want = Limits::withType(next, type, op.value(QStringLiteral("days")).toInt(), miOk && !(wasFolk && type == QLatin1String(Limits::kFolk)));
+        if (want.value(QStringLiteral("kind")) == cur.value(QStringLiteral("kind")) && want.value(QStringLiteral("days")) == cur.value(QStringLiteral("days"))
+            && want.value(QStringLiteral("mi")) == cur.value(QStringLiteral("mi")))
             return QString();
         next = want;
     } else if (what == QLatin1String("invites")) {
@@ -420,6 +437,8 @@ QString Chat::change(const QString &g, const QJsonObject &op)
         const bool on = op.value(QStringLiteral("on")).toBool();
         if (on == cur.value(QStringLiteral("mi")).toBool())
             return QString();
+        if (on && !Limits::linksAllowed(cur))
+            return QStringLiteral("In a Family group only admins add people.");
         if (on) {
             QStringList old;
             for (const QJsonObject &m : std::as_const(members))
@@ -436,6 +455,9 @@ QString Chat::change(const QString &g, const QJsonObject &op)
             return QString();
         if (cur.value(QStringLiteral("mi")).toBool() && !hasJ1(k))
             return QStringLiteral("They need an update to join, because members can invite in this group.");
+        // Cap f2 (27.3): an app without f2 refuses a state with file rules.
+        if (Sharing::hasRules(cur) && !hasCap(k, QLatin1String(Sharing::kCap)))
+            return QStringLiteral("They need an update to join, because this group has file rules.");
         // An app without d1 refuses a Family or Work group's state.
         if (cur.contains(QStringLiteral("kind")) && !hasD1(k))
             return QStringLiteral("They need an update to be in a %1 group.").arg(Limits::kindName(cur.value(QStringLiteral("kind")).toString()));
@@ -516,6 +538,8 @@ void Chat::forgetGroup(const QString &g)
         m_gidx.remove(str(m, "id"));
     }
     m_groups.remove(g);
+    if (m_mod)
+        m_mod->forgetGroup(g);
     for (const QString &id : m_gout.keys())
         if (m_gout.value(id).g == g) {
             m_gout.remove(id);
@@ -547,6 +571,8 @@ QString Chat::inviteToGroup(const QString &g, const QString &key)
         return QStringLiteral("Only the group's admins can invite people.");
     if (GroupWire::isMember(it->state, key))
         return QStringLiteral("%1 is already in %2.").arg(nameOf(key), groupName(g));
+    if (m_mod && m_mod->isBanned(g, key))
+        return QStringLiteral("%1 is banned from %2. Unban them in the group's settings first.").arg(nameOf(key), groupName(g));
     if (!isContact(key))
         return QStringLiteral("Only contacts can be invited. Show them the group code instead.");
     if (!canGroup(key)) {
@@ -816,6 +842,11 @@ void Chat::sendGroupWith(const QString &g, const QString &ch, const QString &tex
         Q_EMIT notice(QStringLiteral("You're no longer in this group."));
         return;
     }
+    // Cap g2: timed out or banned here, nothing goes out.
+    if (m_mod && !m_mod->postBlock(g).isEmpty()) {
+        Q_EMIT notice(m_mod->postBlock(g));
+        return;
+    }
     const QJsonObject s = it->state;
     const QJsonObject c = GroupWire::channel(s, ch);
     const QString channel = c.value(QStringLiteral("t")).toString() == QLatin1String("text") ? ch : QStringLiteral("main");
@@ -956,6 +987,11 @@ QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArra
         return QString();
     if (it->removed || it->left) {
         Q_EMIT notice(QStringLiteral("You're no longer in this group."));
+        return QString();
+    }
+    // Cap g2: no photos, voice messages or files while timed out or banned.
+    if (m_mod && !m_mod->postBlock(g).isEmpty()) {
+        Q_EMIT notice(m_mod->postBlock(g));
         return QString();
     }
     const QJsonObject s = it->state;
@@ -1311,6 +1347,8 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
             }
             if (!list.isEmpty())
                 sendControl(g, fromKey, {{QStringLiteral("t"), QStringLiteral("states")}, {QStringLiteral("list"), list}});
+            if (m_mod)
+                m_mod->sendRecords(g, fromKey);   // cap g2: timeouts and bans in force, to a member who was behind
         }
     } else if (t == QLatin1String("invite")) {
         const QJsonObject st = p.value(QStringLiteral("state")).toObject();
@@ -1334,7 +1372,10 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
         // Cap j1: an invite link this computer counts (17.3).
         const bool byLink = !tokenOk(inv, g) && !liveLink(inv, g).isEmpty();
         if (have && GroupWire::isAdmin(git->state, me) && (byLink || (tokenOk(inv, g) && (str(tok, "for").isEmpty() || str(tok, "for") == fromKey)))) {
-            if (GroupWire::isMember(git->state, fromKey)) {
+            if (m_mod && m_mod->isBanned(g, fromKey)) {
+                // Cap g2: banned people don't get back in by a code, a link or an invite until they're unbanned.
+                Q_EMIT notice(QStringLiteral("%1 tried to join %2, but they're banned.").arg(name, groupName(g)));
+            } else if (GroupWire::isMember(git->state, fromKey)) {
                 sendStateTo(g, fromKey);   // they missed it: once more
             } else {
                 QString pm = p.value(QStringLiteral("p")).toString();
@@ -1349,6 +1390,8 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
                     Q_EMIT notice(QStringLiteral("%1 tried to join %2: %3").arg(name, groupName(g), err));
                 else if (byLink && m_groups.contains(g) && GroupWire::isMember(m_groups.value(g).state, fromKey))
                     linkUsed(inv, g);
+                if (err.isEmpty() && m_mod)
+                    m_mod->sendRecords(g, fromKey);   // cap g2: so their app knows who is timed out
             }
             if (!str(tok, "for").isEmpty())
                 m_gtokens.remove(inv);   // a contact's invite is used once; a group code lasts its hour
@@ -1366,17 +1409,21 @@ int Chat::receiveGroup(const QJsonObject &o, const QString &fromKey, const QStri
     } else if (t == QLatin1String("leave")) {
         if (member && GroupWire::isAdmin(git->state, me))
             change(g, {{QStringLiteral("op"), QStringLiteral("leave")}, {QStringLiteral("k"), fromKey}});
+    } else if (t == QLatin1String("mod")) {
+        // Cap g2: timeouts and bans an admin signed (moderation.cpp checks each against the current state).
+        if (!m_mod || !m_mod->receive(g, fromKey, p))
+            return 400;
     } else if (t == QLatin1String("react") || t == QLatin1String("edit")) {
-        // Cap m1: only from someone in the current state.
+        // Cap m1: only from someone in the current state (cap g2: not timed out or banned).
         if (!RichWire::ok(QStringLiteral("group"), p))
             return 400;
-        if (member && !git->removed && !git->left)
+        if (member && !git->removed && !git->left && !(m_mod && m_mod->barred(g, fromKey)))
             takeGroupChange(g, fromKey, p);
     } else if (t == QLatin1String("vote")) {
         // Cap m2: a vote on a poll, only from someone in the current state.
         if (!MoreWire::ok(QStringLiteral("group"), p))
             return 400;
-        if (member && !git->removed && !git->left)
+        if (member && !git->removed && !git->left && !(m_mod && m_mod->barred(g, fromKey)))
             takeGroupVote(g, fromKey, p);
     } else if (t == QLatin1String("unsend")) {
         const QString gone = p.value(QStringLiteral("msg")).toString();
@@ -1441,6 +1488,11 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
         saveGroupsSoon();
         return 200;
     }
+    // Cap g2: someone timed out or banned. Dropped, and answered so their app stops sending it again.
+    if (m_mod && m_mod->barred(g, from)) {
+        groupReceipt(g, from, {id}, QStringLiteral("delivered"));
+        return 200;
+    }
     // A channel that was removed, or a voice room: shown in the first channel.
     if (c.value(QStringLiteral("t")).toString() != QLatin1String("text"))
         ch = QStringLiteral("main");
@@ -1488,7 +1540,8 @@ int Chat::receiveGroupPiece(const QJsonObject &o, const QString &fromKey, const 
     const auto git = m_groups.constFind(g);
     if (git == m_groups.cend() || git->state.isEmpty() || git->removed || git->left || !GroupWire::isMember(git->state, fromKey))
         return 403;
-    if (gmsgKnown(gid) || m_unsentBy.value(gid) == fromKey) {
+    // Cap g2: no photos, voice messages or files from someone timed out or banned (never opened or kept).
+    if (gmsgKnown(gid) || m_unsentBy.value(gid) == fromKey || (m_mod && m_mod->barred(g, fromKey))) {
         groupReceipt(g, fromKey, {gid}, QStringLiteral("delivered"));
         return 200;
     }
@@ -1637,7 +1690,13 @@ void Chat::stateAccepted(const QString &g, const QJsonObject &old, bool first)
             groupNote(g, QStringLiteral("The group is now called %1.").arg(name));
         if (old.value(QStringLiteral("owner")).toString() != s.value(QStringLiteral("owner")).toString())
             groupNote(g, QStringLiteral("%1 owns the group now.").arg(memberName(g, s.value(QStringLiteral("owner")).toString())));
+        const QString type = Limits::groupType(s);
+        if (!old.isEmpty() && Limits::groupType(old) != type)
+            groupNote(g, QStringLiteral("This is a %1 group now.").arg(Limits::typeName(type)));
     }
+    // A Family group has no invite links: the ones this computer counts stop (17.1).
+    if (!Limits::linksAllowed(s))
+        familyLinksOff(g);
     Group &gr = m_groups[g];
     if (inIt) {
         gr.removed = false;
@@ -1650,6 +1709,7 @@ void Chat::stateAccepted(const QString &g, const QJsonObject &old, bool first)
     refreshGroupPeers();
     processHeld(g);
     saveGroups();
+    familySync();   // members of a Family group go in the Family folder
     noteChanged();
 }
 
@@ -1716,6 +1776,8 @@ void Chat::flushSaves()
         saveGroupChats();
     if (m_seen.dirty())
         m_vault->write(QStringLiteral("seen.json"), m_seen.save());
+    // Before a restart, an update, a backup or closing: everything handed to the saving thread is on disk.
+    m_vault->drainSaves(10000);
 }
 
 void Chat::saveSoon()
@@ -1835,10 +1897,16 @@ void Chat::saveGroupChats()
     m_gchatsDirty = false;
     if (!m_ready)
         return;
-    QJsonObject o;
+    // Copies of each group's messages: made into JSON, sealed and written on the saving thread.
+    QHash<QString, QVariantList> all;
     for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it)
-        o.insert(it.key(), QJsonArray::fromVariantList(it->messages));
-    m_vault->write(QStringLiteral("gchats.json"), compact(o));
+        all.insert(it.key(), it->messages);
+    m_vault->writeLater(QStringLiteral("gchats.json"), [all] {
+        QJsonObject o;
+        for (auto it = all.cbegin(); it != all.cend(); ++it)
+            o.insert(it.key(), QJsonArray::fromVariantList(it.value()));
+        return compact(o);
+    });
 }
 
 void Chat::loadGroups()

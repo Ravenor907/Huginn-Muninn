@@ -84,13 +84,14 @@ class Contacts(context: Context, private val vault: Vault) {
     private fun save() {
         val a = JSONArray()
         _all.value.forEach { a.put(ChatWire.contactToJson(it)) }
-        vault.write(file, a.toString())
+        // Refused when the saved list didn't load: the list in memory isn't the whole one, so it never replaces it.
+        try { vault.write(file, a.toString()) } catch (_: VaultCore.Refused) {}
     }
 
     private fun load(): List<Contact> = try {
         val a = JSONArray(vault.read(file) ?: return emptyList())
         (0 until a.length()).map { ChatWire.contactFromJson(a.getJSONObject(it)) }
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) { vault.loadFailed(file, e); emptyList() }
 
     companion object {
         const val PREFIX = ChatWire.PREFIX
@@ -209,6 +210,16 @@ class Folders(private val read: () -> String?, private val write: (String) -> Un
     /** Deletes the folder only: the chats in it stay. */
     @Synchronized
     fun delete(id: String) = set(_all.value.filterNot { it.id == id })
+
+    /** A linked computer's folder (cap l1): made with that id, or renamed and given those chats. */
+    @Synchronized
+    fun putWhole(id: String, name: String, keys: List<String>) {
+        val n = name.trim().take(MAX_NAME).ifEmpty { return }
+        if (id.isEmpty()) return
+        val old = _all.value.firstOrNull { it.id == id }
+        if (old == null) set(_all.value + Folder(id, n, keys.distinct()))
+        else if (old.name != n || old.keys != keys.distinct()) set(_all.value.map { if (it.id == id) it.copy(name = n, keys = keys.distinct()) else it })
+    }
 
     @Synchronized
     fun put(id: String, key: String, on: Boolean) = set(_all.value.map { f ->
@@ -340,7 +351,13 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
                      /** The chat's own color: "#RRGGBB" (Chat color), or a [COLORS] name saved before; none is the accent. */
                      val colors: Map<String, String> = emptyMap(),
                      /** Pinned to the top of the chat list, in the order shown there. */
-                     val pinned: List<String> = emptyList())
+                     val pinned: List<String> = emptyList(),
+                     /** Someone nearby who isn't a contact, put out of the Nearby list with Hide. Stays hidden. */
+                     val hidden: Set<String> = emptySet(),
+                     /** Delete chat: the row stays off the chat list until a message comes or goes again. */
+                     val cleared: Set<String> = emptySet(),
+                     /** How a chat notifies: [EVERY], [ONE] or [MENTIONS] (groups). None: as Settings › Notifications says. */
+                     val notify: Map<String, String> = emptyMap())
 
     private val _all = MutableStateFlow(load())
     val all: StateFlow<State> = _all.asStateFlow()
@@ -351,9 +368,12 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         fun set(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }.orEmpty()
         val c = o.optJSONObject("colors")
         val p = o.optJSONArray("pinned")
+        val n = o.optJSONObject("notify")
         State(m?.keys()?.asSequence()?.associateWith { m.getLong(it) }.orEmpty(), set("archived"), set("unread"),
             c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { colorOk(it) }.orEmpty(),
-            if (p == null) emptyList() else (0 until p.length()).map { p.getString(it) }.distinct())
+            if (p == null) emptyList() else (0 until p.length()).map { p.getString(it) }.distinct(),
+            set("hidden"), set("cleared"),
+            n?.keys()?.asSequence()?.associateWith { n.optString(it) }?.filterValues { it in MODES }.orEmpty())
     } catch (e: Exception) { State() }
 
     private fun set(s: State) {
@@ -361,7 +381,8 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         try {
             write(JSONObject().put("muted", JSONObject(s.muted as Map<*, *>)).put("archived", JSONArray(s.archived.toList()))
                 .put("unread", JSONArray(s.unread.toList())).put("colors", JSONObject(s.colors as Map<*, *>))
-                .put("pinned", JSONArray(s.pinned)).toString())
+                .put("pinned", JSONArray(s.pinned)).put("hidden", JSONArray(s.hidden.toList())).put("cleared", JSONArray(s.cleared.toList()))
+                .put("notify", JSONObject(s.notify as Map<*, *>)).toString())
         } catch (_: Exception) {}
     }
 
@@ -383,8 +404,11 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         if ((key in s.unread) != on) set(s.copy(unread = if (on) s.unread + key else s.unread - key))
     }
 
-    /** The chat was opened. */
-    fun read(key: String) = markUnread(key, false)
+    /** The chat was opened: its dot goes, and the next message notifies again (Reduce notifications). */
+    fun read(key: String) {
+        synchronized(notified) { notified.remove(key) }
+        markUnread(key, false)
+    }
 
     /** [key]'s chat color: "#RRGGBB" (or one of [COLORS]), or "" for the accent. Only I see it. */
     @Synchronized
@@ -408,17 +432,69 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         return !quiet
     }
 
+    /** Hide (someone nearby who isn't a contact): off the Nearby list, and no notifications from them. */
+    @Synchronized
+    fun hide(key: String, on: Boolean) = set(_all.value.let { it.copy(hidden = if (on) it.hidden + key else it.hidden - key) })
+
+    fun hidden(key: String) = key in _all.value.hidden
+
+    /** Delete chat: the row leaves the chat list until a message comes or goes again (false: it shows again). */
+    @Synchronized
+    fun clear(key: String, on: Boolean) {
+        val s = _all.value
+        if ((key in s.cleared) != on) set(s.copy(cleared = if (on) s.cleared + key else s.cleared - key))
+    }
+
+    /** [key]'s own notifications ([EVERY], [ONE] or [MENTIONS]); "" follows Settings › Notifications. */
+    @Synchronized
+    fun setNotify(key: String, mode: String) = set(_all.value.let { it.copy(notify = if (mode in MODES) it.notify + (key to mode) else it.notify - key) })
+
+    /** How [key] notifies now: its own choice, else [ONE] with Reduce notifications on, else [EVERY]. */
+    fun notifyMode(key: String, reduce: Boolean): String = modeFor(_all.value.notify[key], reduce, key.startsWith("g:"))
+
+    /** Chats that notified since they were last opened ([ONE] makes no more until then). */
+    private val notified = HashSet<String>()
+
+    /**
+     * Whether a message that got past [arrived] notifies: [ONE] once per chat until it's opened ([read]), [MENTIONS]
+     * only for an @mention or a reply to me ([toMe]). Calls aren't messages: they ring as before.
+     */
+    fun alert(key: String, reduce: Boolean, toMe: Boolean): Boolean {
+        val mode = notifyMode(key, reduce)
+        if (mode == MENTIONS) return toMe
+        if (mode != ONE) return true
+        return synchronized(notified) { notified.add(key) }
+    }
+
     /** A chat that's gone (deleted contact, left group) loses its flags. */
     @Synchronized
     fun forget(key: String) {
         val s = _all.value
-        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors || key in s.pinned)
-            set(State(s.muted - key, s.archived - key, s.unread - key, s.colors - key, s.pinned - key))
+        synchronized(notified) { notified.remove(key) }
+        if (key in s.muted || key in s.archived || key in s.unread || key in s.colors || key in s.pinned || key in s.hidden || key in s.cleared || key in s.notify)
+            set(s.copy(muted = s.muted - key, archived = s.archived - key, unread = s.unread - key, colors = s.colors - key, pinned = s.pinned - key,
+                hidden = s.hidden - key, cleared = s.cleared - key, notify = s.notify - key))
     }
 
     companion object {
         const val FOREVER = Long.MAX_VALUE
         const val HOUR = 3_600_000L
+        const val MINUTE = 60_000L
+        /** A notification for every message. */
+        const val EVERY = "every"
+        /** One notification per chat until it's opened. */
+        const val ONE = "one"
+        /** Groups: only @mentions and replies to my messages. */
+        const val MENTIONS = "mentions"
+        val MODES = setOf(EVERY, ONE, MENTIONS)
+
+        /** [own]: the chat's choice, if any. [MENTIONS] is for groups only (a person's chat then notifies for every message). */
+        fun modeFor(own: String?, reduce: Boolean, group: Boolean): String = when {
+            own == MENTIONS && !group -> EVERY
+            own != null && own in MODES -> own
+            reduce -> ONE
+            else -> EVERY
+        }
         /** A chat color that can be kept: "#RRGGBB" or one of [COLORS]. */
         fun colorOk(v: String): Boolean = v in COLORS || Regex("^#[0-9A-Fa-f]{6}$").matches(v.trim())
 

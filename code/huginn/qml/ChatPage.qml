@@ -3,8 +3,9 @@ import Huginn
 
 // Chats, the same as Muninn's. Middle column: the title with + (add someone, my code, a one-time
 // link) and the list's three dots (New folder, Trash, and the Labs entries), then requests, people in no folder, each
-// folder as a section that folds away (like Discord categories), and at the very bottom the Nearby
-// room and people around you. Every person has one menu (PeopleActions.contactMenu): their three
+// folder as a section that folds away (like Discord categories), and at the very bottom a small Nearby section: the
+// Nearby room and everyone nearby who isn't a contact (PeopleActions.nearbyMenu: Hide, Block, Mute, Delete chat).
+// Every contact has one menu (PeopleActions.contactMenu): their three
 // dots, a right click, LT or X. Main column: the open conversation (name, Call and the same menu in
 // its header) and its message box, with a thread or the pins beside it. A portrait window shows one
 // at a time. Locked with a pattern or password like Muninn.
@@ -70,7 +71,9 @@ Rectangle {
     readonly property bool tinted: Theme.validColor(chatColor)
     // The conversation header's buttons for a controller (Up from the first message): Call, Video and the menu.
     property int headSel: 0
-    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(["find", "menu"])
+    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(tour ? [] : ["mute"]).concat(["find", "menu"])
+    // The open chat is muted (its header's bell, struck through).
+    readonly property bool openMuted: openKey !== "" && !tour && !locked && (Chat.chats, Chat.isMuted(openKey))
     // Find in this chat (the search icon or Ctrl+F).
     function openFind() { if (picked && !locked) { zone = "messages"; sel = -1; finder.open() } }
 
@@ -110,9 +113,11 @@ Rectangle {
         // Introductions, group members asking and Family offers (i1); a linked phone's chats (companion).
         PeopleActions.pendingEntries().forEach(e => out.push(Object.assign({ unread: true, tag: e.pendingKind === "intro" ? "Intro" : "Request" }, e)))
         // Archived chats wait behind one Archived row; pinned ones sit at the top.
-        const all = Chat.chats, chats = all.filter(c => !c.archived), byKey = {}
+        // Contacts only: anyone else is in the Nearby section at the bottom.
+        const all = Chat.chats, chats = all.filter(c => !c.archived && c.contact), byKey = {}
         chats.forEach(c => byKey[c.key] = c)
-        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, route: c.route, section: section, tag: c.pinned && section === "" ? "Pinned" : "" })
+        const person = (c, section) => ({ kind: "chat", key: c.key, name: c.name, unread: c.unread, route: c.route, section: section,
+                                          tag: c.pinned && section === "" ? "Pinned" : "", muted: !!c.muted })
         const order = Chat.topOrder
         const loose = chats.filter(c => !(c.folders || []).length)
         loose.filter(c => c.pinned).forEach(c => out.push(person(c, "")))
@@ -126,10 +131,13 @@ Rectangle {
         })
         const archived = all.filter(c => c.archived)
         if (archived.length) out.push({ kind: "archived", name: "Archived", tag: String(archived.length), unread: archived.some(c => c.unread) })
-        // Nearby always last, in its own section. Hidden from people nearby: none of it.
+        // Nearby always last, in a small section of its own below every chat and folder, never mixed in: the room, then
+        // everyone who isn't a contact (chatted with, then just around). Nearby off: none of it.
         if (Chat.visibleNearby) {
             out.push({ kind: "nearby", name: "Nearby room", label: "Nearby", tag: Chat.nearbyOn ? "" : "Off" })
-            Chat.around.forEach((p, i) => out.push({ kind: "stranger", key: p.key, name: p.name, label: i === 0 ? "Around you" : "", route: p.route }))
+            all.filter(c => !c.contact && !c.archived).forEach(c => out.push({ kind: "near", key: c.key, name: c.name, unread: c.unread, route: c.route,
+                                                                               hasChat: true, muted: !!c.muted }))
+            Chat.around.forEach(p => out.push({ kind: "near", key: p.key, name: p.shown, alt: p.name, route: p.route, hasChat: false, muted: Chat.isMuted(p.key) }))
         }
         return out
     }
@@ -153,7 +161,9 @@ Rectangle {
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
-        : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu" : "Call" }, { key: "b", label: "Back" }]
+        : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu"
+                                                                                  : headButtons[headSel] === "mute" ? (openMuted ? "Unmute" : "Mute")
+                                                                                  : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
@@ -285,6 +295,20 @@ Rectangle {
             currentIndex: page.row
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: positionViewAtIndex(currentIndex, ListView.Contain)
+            // A right click (or a long press) on the empty space under the rows: New chat, New group and New folder.
+            MouseArea {
+                id: spaceArea
+                z: -1
+                y: listPane.originY
+                width: listPane.width
+                height: Math.max(listPane.contentHeight, listPane.height)
+                acceptedButtons: Qt.RightButton
+                onClicked: mouse => page.spaceMenuAt(spaceArea, Qt.point(mouse.x, mouse.y))
+                TapHandler {
+                    acceptedDevices: PointerDevice.TouchScreen
+                    onLongPressed: page.spaceMenuAt(spaceArea, point.position)
+                }
+            }
             delegate: Item {
                 id: entry
                 readonly property bool on: page.active && page.zone === "list" && page.row === index
@@ -350,8 +374,10 @@ Rectangle {
                     }
                     HoverHandler { id: headHover }
                     TapHandler {
+                        id: headTap
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.listOptions(); else page.choose() }
+                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.rowContextAt(headTap.parent, point.position, modelData); else page.choose() }
+                        onLongPressed: { page.zone = "list"; page.row = index; page.rowContextAt(headTap.parent, point.position, modelData) }
                     }
                     MoreButton {
                         id: folderMore
@@ -366,7 +392,7 @@ Rectangle {
                 Rectangle {
                     readonly property bool on: entry.on
                     readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
-                    readonly property bool person: modelData.kind === "chat" || modelData.kind === "stranger" || modelData.kind === "request"
+                    readonly property bool person: modelData.kind === "chat" || modelData.kind === "near" || modelData.kind === "request"
                     visible: !entry.isHeader
                     anchors.bottom: parent.bottom
                     width: parent.width
@@ -378,7 +404,7 @@ Rectangle {
                     border.width: on ? Theme.focusWidth : 0
                     border.color: Theme.accent
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.unread ? ", unread" : "")
+                    Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.muted ? ", muted" : "") + (modelData.unread ? ", unread" : "")
                     Rectangle {
                         id: ava
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
@@ -415,11 +441,21 @@ Rectangle {
                     Text {
                         textFormat: Text.PlainText
                         anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                        anchors.right: tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
+                        anchors.right: mutedIcon.visible ? mutedIcon.left : tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left
+                        anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         elide: Text.ElideRight; text: modelData.name || ""
                         color: parent.on || parent.here || modelData.unread ? Theme.text : Theme.textSoft
                         font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: modelData.unread ? Font.DemiBold : Font.Medium
+                    }
+                    // A muted chat: a bell struck through.
+                    Icon {
+                        id: mutedIcon
+                        visible: !!modelData.muted
+                        anchors.right: tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "belloff"; size: Theme.px(14)
+                        color: Theme.textMuted
                     }
                     Rectangle {
                         id: tagChip
@@ -449,9 +485,13 @@ Rectangle {
                         visible: !!modelData.unread
                     }
                     HoverHandler { id: rowHover }
+                    // Someone nearby and the other rows: a right click or a long press for their menu (rowContext).
                     TapHandler {
+                        id: rowTap
                         enabled: modelData.kind !== "chat"
-                        onTapped: { page.zone = "list"; page.row = index; page.choose() }
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.rowContextAt(rowTap.parent, point.position, modelData); else page.choose() }
+                        onLongPressed: { page.zone = "list"; page.row = index; page.rowContextAt(rowTap.parent, point.position, modelData) }
                     }
                     // People: a click opens, a right click shows their options, and a mouse drag moves
                     // them up or down or into another folder. Touch still scrolls the list.
@@ -490,16 +530,16 @@ Rectangle {
                         onClicked: mouse => {
                             if (moved) return
                             page.zone = "list"; page.row = index
-                            if (mouse.button === Qt.RightButton) page.rowMenu(modelData); else page.choose()
+                            if (mouse.button === Qt.RightButton) page.rowContextAt(dragArea, Qt.point(mouse.x, mouse.y), modelData); else page.choose()
                         }
-                        // Press and hold: the person panel too (a touch screen has no right click).
-                        onPressAndHold: mouse => { if (!moved && mouse.source !== Qt.MouseEventNotSynthesized) { page.row = index; page.rowMenu(modelData) } }
+                        // Press and hold: the same menu (a touch screen has no right click).
+                        onPressAndHold: mouse => { if (!moved && mouse.source !== Qt.MouseEventNotSynthesized) { page.row = index; page.rowContextAt(dragArea, Qt.point(mouse.x, mouse.y), modelData) } }
                         Component.onDestruction: if (moved) page.cancelDrag()
                     }
                     // A person's one menu (only people have one; the rest answer A or a click).
                     MoreButton {
                         id: rowMore
-                        visible: modelData.kind === "chat"
+                        visible: modelData.kind === "chat" || modelData.kind === "near"
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(4)
                         anchors.verticalCenter: parent.verticalCenter
                         width: visible ? implicitWidth : 0
@@ -590,7 +630,7 @@ Rectangle {
             title: page.locked ? "Locked" : !page.picked ? "Chats" : page.openKey === "" ? "Nearby room" : page.openName
             // How they're reached (never an address), Active, and Verified or a changed security key.
             subtitle: page.locked || !page.picked ? "" : page.openKey === "" ? "People close by"
-                    : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active"] : [])
+                    : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active"] : []).concat(page.openMuted ? ["Muted"] : [])
                       .concat([page.keyWarning ? "Security key changed" : (Chat.chats, Chat.isVerified(page.openKey)) ? "Verified" : "Not verified"]).join(" · ")
             warn: !page.locked && page.picked && page.keyWarning
             accent: page.tinted && page.picked ? page.tint : "transparent"
@@ -610,6 +650,22 @@ Rectangle {
                 implicitHeight: Theme.px(30); fontSize: 13; kind: page.tinted ? "accent" : "plain"; accent: page.tint
                 focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "video"
                 onClicked: page.startVideo()
+            }
+            // Mute this chat (15 minutes to until turned back on), or unmute it: a bell, struck through while muted.
+            Rectangle {
+                visible: !page.locked && page.openKey !== "" && !page.tour
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(28); height: width
+                radius: Theme.radius
+                color: muteHover.hovered ? Theme.raised : "transparent"
+                border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "mute" ? Theme.focusWidth : 0
+                border.color: Theme.text
+                Accessible.role: Accessible.Button
+                Accessible.name: page.openMuted ? "Unmute " + page.openName : "Mute " + page.openName
+                Accessible.onPressAction: page.muteOpen()
+                Icon { anchors.centerIn: parent; name: page.openMuted ? "belloff" : "bell"; size: Theme.px(18); color: page.openMuted ? Theme.accent : muteHover.hovered ? Theme.text : Theme.textMuted }
+                HoverHandler { id: muteHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: page.muteOpen() }
             }
             // Find in this chat (Ctrl+F too).
             Rectangle {
@@ -912,7 +968,7 @@ Rectangle {
                         onThread: page.openThread(modelData.id)
                         onPin: page.togglePin(modelData.id)
                         onEdit: page.startEdit(modelData)
-                        onMore: { page.zone = "messages"; page.sel = index; page.options() }
+                        onMore: { page.zone = "messages"; page.sel = index; Ui.menuAt(tools, tools.width, tools.height, () => page.options()) }
                     }
                     HoverHandler { id: msgHover }
                     // A click (a mouse or the right stick's pointer) picks it and opens a photo; a
@@ -924,14 +980,14 @@ Rectangle {
                             // The tools over the corner answer their own clicks.
                             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
                             page.zone = "messages"; page.sel = index
-                            if (button === Qt.RightButton) page.options()
+                            if (button === Qt.RightButton) Ui.menuAt(msg, point.position.x, point.position.y, () => page.options())
                             else if (modelData.mine && modelData.failed && page.openKey !== "") Chat.retry(page.openKey, modelData.id)
                             else if (modelData.photo && !modelData.voice && !modelData.unsent && !modelData.video && !modelData.album) page.viewing = modelData.photo
                         }
                     }
                     TapHandler {
                         acceptedDevices: PointerDevice.TouchScreen
-                        onTapped: { page.zone = "messages"; page.sel = index; page.options() }
+                        onTapped: (point, button) => { page.zone = "messages"; page.sel = index; Ui.menuAt(msg, point.position.x, point.position.y, () => page.options()) }
                     }
                 }
             }
@@ -1297,9 +1353,52 @@ Rectangle {
                 })
         })
     }
+    // ------------------------------------------------------------- right-click menus (Ui.menuAt)
+    // A row's right-click menu, at p in item: a person's (PeopleActions.personMenu), a folder's, or Open and the list's own.
+    function rowContextAt(item, p, e) { Ui.menuAt(item, p.x, p.y, () => page.rowContext(e)) }
+    function rowContext(e) {
+        if (!e || locked) return
+        if (e.kind === "chat" || e.kind === "near") {
+            const k = e.key, at = entries.indexOf(e)
+            PeopleActions.personMenu(k, e.name, { tour: tour, near: e.kind === "near", hasChat: !!e.hasChat, alt: e.alt || "",
+                                                  section: e.section, keys: e.kind === "chat" ? sectionKeys(e.section) : [],
+                                                  removed: () => page.closeChatWith(k),
+                                                  open: () => { if (at >= 0) page.row = at; page.choose() } })
+            return
+        }
+        if (e.kind === "folder") { folderOptions(e); return }
+        spaceMenu(true)
+    }
+    // The empty space under the rows (a row there has its own menu).
+    function spaceMenuAt(area, p) {
+        if (locked || listPane.indexAt(p.x + area.x, p.y + area.y) >= 0) return
+        Ui.menuAt(area, p.x, p.y, () => page.spaceMenu(false))
+    }
+    // New chat, New group and New folder (withOpen: Open first, for a row with no menu of its own).
+    function spaceMenu(withOpen) {
+        if (locked) return
+        const items = withOpen ? [{ name: "Open", icon: "thread", url: "open" }] : []
+        items.push({ name: "New chat", icon: "plus", url: "chat" }, { name: "New group", icon: "people", url: "group" },
+                   { name: "New folder", icon: "folder", url: "folder" })
+        Ui.pickFrom("Chats", [{ header: "", items: items }], a => {
+            if (tour) return
+            if (a === "open") choose()
+            else if (a === "chat") addSomeone()
+            else if (a === "group") { if (Ui.main) Ui.main.newGroup() }
+            else if (a === "folder") newFolder("")
+        })
+    }
+    // The Menu key and Shift+F10 (Main.menuKey): the right-click menu for the focus, at menuAnchor().
+    function contextMenu() { if (zone === "list") rowContext(entries[row]); else handleButton("x") }
+    function menuAnchor() { return zone === "list" ? listPane.itemAtIndex(row) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
     // A person's one menu (PeopleActions.contactMenu), from their row: Move up and Down follow the
     // section they were opened in.
     function rowMenu(e) {
+        if (e && e.kind === "near") {
+            const n = e.key
+            PeopleActions.nearbyMenu(n, e.name, { hasChat: !!e.hasChat, alt: e.alt || "", removed: () => page.closeChatWith(n) })
+            return
+        }
         if (!e || e.kind !== "chat") { listOptions(); return }
         const k = e.key
         PeopleActions.contactMenu(k, e.name, { section: e.section, keys: sectionKeys(e.section), removed: () => page.closeChatWith(k) })
@@ -1311,6 +1410,8 @@ Rectangle {
         PeopleActions.contactMenu(k, openName, { tour: tour, section: e ? e.section : "", keys: e ? sectionKeys(e.section) : [], removed: () => page.closeChatWith(k) })
     }
     function closeChatWith(k) { if (openKey === k) { openKey = ""; picked = false; zone = "list" } }
+    // The header's bell: mute the open chat (asks how long), or unmute it.
+    function muteOpen() { if (openKey !== "" && !tour) PeopleActions.muteMenu(openKey, openName) }
     function checkCode(k) { PeopleActions.checkCode(k) }
     function startCall() {
         const w = Calls.call(openKey)
@@ -1330,7 +1431,7 @@ Rectangle {
         case "a": {
             const w = headButtons[Math.min(headSel, n - 1)]
             zone = "messages"
-            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else chatMenu()
+            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else if (w === "mute") muteOpen(); else chatMenu()
             return true
         }
         case "down": case "b": zone = "messages"; return true
@@ -1362,7 +1463,7 @@ Rectangle {
     function listOptions() {
         const e = entries[row]
         if (!e) return
-        if (e.kind === "chat") { rowMenu(e); return }
+        if (e.kind === "chat" || e.kind === "near") { rowMenu(e); return }
         if (e.kind === "folder") { folderOptions(e); return }
         listMenu()
     }
@@ -1371,10 +1472,19 @@ Rectangle {
         const items = [{ name: e.collapsed ? "Expand" : "Collapse", url: "fold" }]
         if (at > 0) items.push({ name: "Move up", url: "up" })
         if (at >= 0 && at < ids.length - 1) items.push({ name: "Move down", url: "down" })
+        // Mute all: everyone in it, until turned back on (Unmute all when they all are).
+        const keys = tour ? [] : ((Chat.folders.find(f => f.id === id) || {}).keys || [])
+        const allMuted = keys.length > 0 && keys.every(k => Chat.isMuted(k))
         items.push({ name: "Rename", icon: "edit", url: "rename" },
+                   { name: allMuted ? "Unmute all" : "Mute all", icon: allMuted ? "bell" : "belloff", url: "muteall" },
                    { name: "Delete folder", url: "delete", danger: true })
         Ui.pickFrom(e.name, [{ header: "", items: items }], a => {
-            if (a === "fold") Chat.setCollapsed(id, !e.collapsed)
+            if (a === "muteall") {
+                if (!keys.length) { Ui.say("No one in " + e.name + " yet."); return }
+                keys.forEach(k => Chat.muteChat(k, allMuted ? 0 : 8640000000000000))   // the huge one: until unmuted
+                Ui.say(allMuted ? e.name + " isn't muted." : e.name + " is muted.")
+            }
+            else if (a === "fold") Chat.setCollapsed(id, !e.collapsed)
             else if (a === "up" || a === "down") { Chat.moveFolder(id, a === "up" ? -1 : 1); focusEntry(x => x.kind === "folder" && x.id === id) }
             else if (a === "rename") Ui.ask("Rename " + e.name, "Only you see it", e.name, "Save", t => Chat.renameFolder(id, t), false, true)
             else if (a === "delete") Ui.sure("Delete " + e.name + "?", "The people in it stay.", "Delete", () => Chat.deleteFolder(id), false, true)
@@ -1504,7 +1614,7 @@ Rectangle {
                     () => { Chat.acceptRequest(e.key); openKey = e.key; picked = true; zone = "messages" }, false, false, () => Chat.declineRequest(e.key))
             Ui.confirm.cancelText = "Decline"   // backing out means no, so say so
             return
-        case "stranger": Chat.meet(e.key, e.name); openKey = e.key; picked = true; zone = "messages"; return
+        case "near": if (!e.hasChat) Chat.meet(e.key, e.alt); openKey = e.key; picked = true; zone = "messages"; return
         case "intro": PeopleActions.answer(e); return
         case "mirror": mirror.open(e.peer || ""); return
         case "archived": openArchived(); return
@@ -1537,13 +1647,18 @@ Rectangle {
         if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "Only on this device.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
         const items = []
         if (openKey !== "" && !m.unsent && !m.failed) {
-            items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react" })
+            items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react", sub: () => pickReaction(m) })
             items.push({ name: "Reply", icon: "reply", url: "reply" })
             items.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
         }
         if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
+        // Right-click extras: the link, Forward (its text) and the saved file's folder.
+        const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
+        if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
+        if (m.text && !m.unsent && !m.failed && !tour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMenu(m.text) })
+        if (m.saved && !m.unsent) items.push({ name: "Open in folder", icon: "folder", url: "folder" })
         if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", icon: "file", url: "savefile" })
         else if (m.photo && !m.voice && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
@@ -1559,6 +1674,9 @@ Rectangle {
             else if (a === "pin") togglePin(m.id)
             else if (a === "edit") startEdit(m)
             else if (a === "copy") { Chat.copyText(m.text); Ui.say("Copied.") }
+            else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
+            else if (a === "forward") PeopleActions.forwardMenu(m.text)
+            else if (a === "folder") { if (!FileLink.showInFolder(m.saved)) Ui.say("That file isn't there anymore.", true) }
             else if (a === "view") viewing = m.photo
             else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
             else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
@@ -1676,15 +1794,13 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", icon: "send", url: "send" }, { name: "Emoji", icon: "smile", url: "emoji" }]
-        if (openKey !== "") items.push({ name: "Pictures, video or poll", icon: "image", url: "picture" })
-        if (openKey !== "" && Chat.isContact(openKey)) items.push({ name: "Send a file", icon: "attach", url: "file" })
+        if (openKey !== "") items.push({ name: "Send file, pictures, video or poll", icon: "attach", url: "picture" })
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
             if (a === "send") box.enter()
             else if (a === "emoji") box.toggleEmoji()
             else if (a === "picture") pickPicture()
-            else if (a === "file") PeopleActions.sendFile(openKey)
             else if (a === "cancel") box.cancelBanner()
             else if (a === "leave") box.leave()
         })

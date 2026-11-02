@@ -93,6 +93,8 @@ public:
     // Both trust each other: the Direct path is tried (5.8.2).
     bool directTried() const { return m_directOn; }
 
+    // Set by main.cpp: someone's volume here in percent (cap g2: 0 to 200, 0 while muted for me). Every call's media asks it.
+    static std::function<int(const QString &key)> gainFor;
     bool useDevices = true;   // false: no microphone or speaker (self-test, voice rooms)
     QJsonObject offerExtra;   // added to the offer: a voice room's "g" and "ch" (section 6)
     std::function<QString(const QString &)> lanHostOverride;   // self-test: where the peer's "Wi-Fi" is

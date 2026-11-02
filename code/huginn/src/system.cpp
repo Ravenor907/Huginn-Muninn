@@ -3,6 +3,7 @@
 
 #include "platform/crashlog.h"
 #include "platform/keepawake.h"
+#include "platform/portable.h"
 #include "platform/singleinstance.h"
 #include "platform/winstart.h"
 
@@ -678,6 +679,13 @@ void System::openSteamUrl(const QString &url)
     QDesktopServices::openUrl(QUrl(url));
 }
 
+QString System::dataDir() { return Portable::dataDir(); }
+QString System::cacheDir() { return Portable::cacheDir(); }
+
+bool System::startsFullScreen() const
+{
+    return !m_windowed && (m_settings->fullScreen() || m_gameMode || m_handheld);
+}
 
 void System::minimize(QQuickWindow *window)
 {

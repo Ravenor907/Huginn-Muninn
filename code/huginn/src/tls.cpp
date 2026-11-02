@@ -1,4 +1,5 @@
 #include "tls.h"
+#include "system.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -126,7 +127,7 @@ Tls::Identity Tls::throwaway()
 
 Tls::Identity Tls::load()
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/tls");
+    const QString dir = System::dataDir() + QStringLiteral("/tls");
     const QString keyPath = dir + QStringLiteral("/key.pem");
     const QString certPath = dir + QStringLiteral("/cert.pem");
 

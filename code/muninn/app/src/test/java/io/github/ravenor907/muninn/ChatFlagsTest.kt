@@ -82,4 +82,69 @@ class ChatFlagsTest {
         assertEquals("", io.github.ravenor907.muninn.ui.Accents.chatHex("neon"))
         assertEquals("", io.github.ravenor907.muninn.ui.Accents.chatHex(null))
     }
+
+    @Test
+    fun reduceNotificationsMakesOnePerChatUntilItIsOpened() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        // Off (the default): every message notifies.
+        assertTrue(f.alert("a", reduce = false, toMe = false))
+        assertTrue(f.alert("a", reduce = false, toMe = false))
+        // On: the first one only, until the chat is opened.
+        assertTrue(f.alert("b", reduce = true, toMe = false))
+        assertFalse(f.alert("b", reduce = true, toMe = false))
+        assertTrue(f.alert("c", reduce = true, toMe = false))
+        f.read("b")
+        assertTrue(f.alert("b", reduce = true, toMe = false))
+        // A chat's own choice wins over Settings, both ways.
+        f.setNotify("d", ChatFlags.EVERY)
+        assertTrue(f.alert("d", reduce = true, toMe = false))
+        assertTrue(f.alert("d", reduce = true, toMe = false))
+        f.setNotify("e", ChatFlags.ONE)
+        assertTrue(f.alert("e", reduce = false, toMe = false))
+        assertFalse(f.alert("e", reduce = false, toMe = false))
+        assertEquals(ChatFlags.ONE, ChatFlags({ stored }, { stored = it }).notifyMode("e", reduce = false))
+        f.setNotify("e", "")
+        assertEquals(ChatFlags.EVERY, f.notifyMode("e", reduce = false))
+    }
+
+    @Test
+    fun aGroupCanNotifyOnlyForMentionsAndRepliesToMe() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.setNotify("g:x", ChatFlags.MENTIONS)
+        assertFalse(f.alert("g:x", reduce = false, toMe = false))
+        assertTrue(f.alert("g:x", reduce = false, toMe = true))
+        assertTrue(f.alert("g:x", reduce = true, toMe = true))
+        // Only groups have it: a person's chat set that way notifies as usual.
+        assertEquals(ChatFlags.EVERY, ChatFlags.modeFor(ChatFlags.MENTIONS, reduce = false, group = false))
+        assertEquals(ChatFlags.ONE, ChatFlags.modeFor(null, reduce = true, group = true))
+        assertEquals(ChatFlags.EVERY, ChatFlags.modeFor("nonsense", reduce = false, group = true))
+    }
+
+    @Test
+    fun hiddenNearbyAndDeletedChatsAreKeptAcrossARestartAndForgotten() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.hide("n", true)
+        f.clear("k", true)
+        val again = ChatFlags({ stored }, { stored = it })
+        assertTrue(again.hidden("n"))
+        assertEquals(setOf("k"), again.all.value.cleared)
+        again.clear("k", false)
+        assertTrue(again.all.value.cleared.isEmpty())
+        again.forget("n")
+        assertFalse(again.hidden("n"))
+        assertFalse(ChatFlags({ stored }, { stored = it }).hidden("n"))
+    }
+
+    @Test
+    fun aQuarterHourMuteRunsOut() {
+        var stored: String? = null
+        val f = ChatFlags({ stored }, { stored = it })
+        f.mute("k", 15 * ChatFlags.MINUTE)
+        assertTrue(f.muted("k", 15 * ChatFlags.MINUTE - 1))
+        assertFalse(f.muted("k", 15 * ChatFlags.MINUTE))
+        assertEquals("Muted for less than an hour", ChatFlags.mutedText(15 * ChatFlags.MINUTE, 0))
+    }
 }

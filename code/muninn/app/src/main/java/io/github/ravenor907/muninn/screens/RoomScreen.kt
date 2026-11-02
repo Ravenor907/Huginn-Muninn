@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.aspectRatio
@@ -58,9 +59,13 @@ import kotlinx.coroutines.delay
  * while muted), how long, and Mute, Speaker and Leave. Ringing, it offers Join and Decline instead.
  * Never shows an address. [hideNames]: panic-locked or previews off on the lock screen.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = false) {
+    // Cap g2: someone pressed and held (or tapped): Mute for me, Volume, and for admins Timeout and Ban.
+    val roomCtx = androidx.compose.ui.platform.LocalContext.current
+    val app = roomCtx.applicationContext as? io.github.ravenor907.muninn.Muninn
+    var modFor by remember { mutableStateOf<RoomManager.Person?>(null) }
     val room by RoomManager.room.collectAsState()
     val ring by RoomManager.ring.collectAsState()
     val screen by RoomManager.screen.collectAsState()
@@ -144,7 +149,10 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 r.people.forEach { p ->
                     val name = if (hideNames && !p.me) "?" else p.name
-                    Column(Modifier.width(96.dp).semantics {
+                    Column(Modifier.width(96.dp).clip(io.github.ravenor907.muninn.ui.Corner)
+                        .combinedClickable(enabled = !p.me && !hideNames && app != null, onClickLabel = "Menu", onLongClickLabel = "Menu",
+                            onLongClick = { modFor = p }) { modFor = p }
+                        .semantics {
                         contentDescription = name + (if (p.speaking) ", speaking" else "") + (if (p.muted) ", muted" else "") +
                             (if (p.state == "connecting") ", connecting" else if (p.state == "reconnecting") ", reconnecting" else "")
                     }, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -162,6 +170,9 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             Text("Up to ${RoomLogic.MAX_PEOPLE} people. Sound goes over the internet through Muninn's server, so nobody here sees anyone's internet address.",
                 style = Type.small.copy(fontSize = 13.sp), textAlign = TextAlign.Center)
         }
+        val who = modFor
+        if (who != null && app != null) PersonModDialog(app, r.g, who.key, who.name,
+            { t, _ -> android.widget.Toast.makeText(roomCtx, t, android.widget.Toast.LENGTH_LONG).show() }) { modFor = null }
         // Wraps onto a second line when the four buttons don't fit (a small phone, large text or a long Bluetooth name).
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -24,6 +24,9 @@ Item {
         "hangup": "M3 15c5-5 13-5 18 0l-2.5 2.5-3.5-1.5v-2.5a10 10 0 0 0-6 0V16l-3.5 1.5z",
         "hash": "M10 4l-2 16 M16 4l-2 16 M4.5 9h15 M3.5 15h15",
         "speaker": "M4 9h4l5-4v14l-5-4H4z M16 9a4 4 0 0 1 0 6",
+        // Notifications: a bell, and struck through for a muted chat.
+        "bell": "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z M10 20a2 2 0 0 0 4 0",
+        "belloff": "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z M10 20a2 2 0 0 0 4 0 M3 3l18 18",
         "crown": "M4 17l-1-9 5 4 4-7 4 7 5-4-1 9z M4 20h16",
         "tag": "M3 12V4h8l10 10-8 8z M7.5 8a0.5 0.5 0 1 0 0.01 0",
         "gear": "M12 9a3 3 0 1 0 0.01 0 M12 2v3 M12 19v3 M2 12h3 M19 12h3 M4.9 4.9l2.1 2.1 M17 17l2.1 2.1 M4.9 19.1L7 17 M17 7l2.1-2.1",

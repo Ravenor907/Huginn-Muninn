@@ -41,8 +41,9 @@ import javax.net.ssl.SSLSocket
 
 /**
  * LocalSend protocol v2 (github.com/localsend/protocol), so Muninn works with Huginn and with the
- * LocalSend apps: multicast discovery on 224.0.0.167:53317, an HTTPS server on port 53317, and
- * uploads to other devices. Every incoming transfer waits for the person to accept it.
+ * LocalSend apps: multicast discovery on 224.0.0.167:53317 (shared, so the LocalSend app runs beside
+ * Muninn), an HTTPS server on the first free port from 53318 (announced as "port"), and uploads to
+ * other devices. Every incoming transfer waits for the person to accept it.
  *
  * Encryption is LocalSend's HTTPS mode: our server uses our own self-signed certificate (see
  * [Tls]) and we announce its SHA-256 as our fingerprint. When sending, the other device's
@@ -101,6 +102,21 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
     /** Cap s1: the contact's chat key a hidden device's hint stands for, if it's one of mine. */
     var hintKey: ((String) -> String?)? = null
+
+    /** Whether a chat key is one of my contacts: with Nearby off only they are listed and answered. */
+    var isContact: ((String) -> Boolean)? = null
+
+    /**
+     * Nearby off: where contacts were last reached on the home Wi-Fi, so they're asked straight there instead of
+     * anything being announced. Chat keeps it sealed in the vault ([loadPeers], [keepPeers]); never shown.
+     */
+    var keepPeers: ((String) -> Unit)? = null
+    private val peers = ConcurrentHashMap<String, KnownPeer>()
+    private data class KnownPeer(val ip: String, val port: Int, val protocol: String, val seen: Long)
+
+    /** Our own server's port: the first free one from [SERVER_FIRST]. LocalSend's own app keeps 53317. */
+    @Volatile var serverPort = SERVER_FIRST
+        private set
 
     /** Cap s1: my chat key vouching for my certificate, made once (the certificate never changes). */
     private val proof: String? by lazy { tls?.let { Proof.route(identity.keys.private, identity.publicKey, it.fingerprint) } }
@@ -164,7 +180,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         .put("deviceModel", "Muninn")
         .put("deviceType", "mobile")
         .put("fingerprint", fingerprint)
-        .put("port", PORT)
+        .put("port", serverPort)
         .put("protocol", if (tls != null) "https" else "http")
         .put("download", false)
         .put("chatApp", "muninn")
@@ -183,21 +199,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (running) return
         running = true
         _error.value = null
-        try {
-            val t = tls
-            server = if (t != null) {
-                (t.serverContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
-                    // Ask for the sender's certificate but don't require it (some Huginn and Muninn apps have
-                    // none): when one is shown, the fingerprint the sender claims must match it.
-                    wantClientAuth = true
-                    reuseAddress = true
-                    bind(InetSocketAddress(PORT))
-                }
-            } else {
-                ServerSocket().apply { reuseAddress = true; bind(InetSocketAddress(PORT)) }
-            }
-        } catch (e: Exception) {
-            _error.value = "Nearby sharing couldn't start. Is the LocalSend app running on this phone too? Close it and try again."
+        // Our server takes the first free port from 53318, so the LocalSend app (53317) can run beside Muninn.
+        server = null
+        for (port in SERVER_FIRST until SERVER_FIRST + SERVER_TRIES) {
+            server = try { listen(port) } catch (e: Exception) { null }
+            if (server != null) { serverPort = port; break }
+        }
+        if (server == null) {
+            _error.value = "Nearby sharing couldn't start. Restart Muninn and try again."
             running = false
             return
         }
@@ -205,8 +214,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
         try {
             val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             lock = wifi.createMulticastLock("muninn").apply { setReferenceCounted(false); if (wifiLevel == PowerLogic.Radio.FULL) acquire() }
-            udp = MulticastSocket(PORT).apply {
+            // Shared with the LocalSend app and Huginn on the same device: the address is reused, then bound.
+            udp = MulticastSocket(null as java.net.SocketAddress?).apply {
                 reuseAddress = true
+                bind(InetSocketAddress(PORT))
                 for (nif in lanInterfaces()) {
                     try { joinGroup(InetSocketAddress(GROUP, PORT), nif) } catch (_: Exception) {}
                 }
@@ -216,6 +227,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             // Discovery falls back to scanning the network.
         }
         announce()
+        askContacts()
         pool.execute {
             var quietFor = 0
             while (running) {
@@ -229,6 +241,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 if (w == PowerLogic.Radio.OFF || (w == PowerLogic.Radio.LOW && ++quietFor < 5)) continue
                 quietFor = 0
                 announce()
+                askContacts()
                 val cutoff = System.currentTimeMillis() - 10 * 60_000
                 found.entries.removeIf { it.value.seen < cutoff }
                 publish()
@@ -251,7 +264,21 @@ class LocalSend(private val context: Context, val identity: Identity) {
             if (r == PowerLogic.Radio.FULL) { lock?.let { if (!it.isHeld) it.acquire() }; if (running) announce() }
             else lock?.let { if (it.isHeld) it.release() }
         } catch (_: Exception) {}
-        if (was == PowerLogic.Radio.OFF && r != PowerLogic.Radio.OFF && running) announce()   // back on Wi-Fi: say hello now
+        if (was == PowerLogic.Radio.OFF && r != PowerLogic.Radio.OFF && running) { announce(); askContacts() }   // back on Wi-Fi: say hello now
+    }
+
+    /** Our HTTPS server (plain HTTP without a certificate) on [port]. */
+    private fun listen(port: Int): ServerSocket {
+        val t = tls
+        return if (t != null) {
+            (t.serverContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
+                // Ask for the sender's certificate but don't require it (some Huginn and Muninn apps have
+                // none): when one is shown, the fingerprint the sender claims must match it.
+                wantClientAuth = true
+                reuseAddress = true
+                try { bind(InetSocketAddress(port)) } catch (e: Exception) { try { close() } catch (_: Exception) {}; throw e }
+            }
+        } else ServerSocket().apply { reuseAddress = true; try { bind(InetSocketAddress(port)) } catch (e: Exception) { try { close() } catch (_: Exception) {}; throw e } }
     }
 
     fun stop() {
@@ -269,6 +296,67 @@ class LocalSend(private val context: Context, val identity: Identity) {
      */
     private fun silent(): Boolean = !identity.visibleNearby
 
+    /** Nearby off ([Identity.nearbyOff]): no scans, nobody but contacts listed or answered. */
+    private fun off(): Boolean = identity.nearbyOff
+
+    /** The contact a device's info stands for (its chat key, or the hint of a hidden one), or null. */
+    private fun contactIn(o: JSONObject): String? {
+        val k = o.optString("chatKey").ifEmpty { null } ?: o.optString("hint").ifEmpty { null }?.let { hintKey?.invoke(it) } ?: return null
+        return k.takeIf { isContact?.invoke(it) == true }
+    }
+
+    /**
+     * Nearby was turned on or off. Off: everyone who isn't a contact leaves the list at once, and contacts are asked
+     * straight where they were last seen. On: announced again.
+     */
+    fun nearbyChanged() {
+        if (off()) {
+            found.entries.removeIf { e -> e.value.chatKey?.let { isContact?.invoke(it) } != true }
+            publish()
+            askContacts()
+        } else announce()
+    }
+
+    /**
+     * Nearby off: each contact last seen on this Wi-Fi (and not heard from in the last 2 minutes) is asked straight at
+     * that address, with this phone's info (its hint, never its name). Its answer only counts if it proves a contact.
+     */
+    fun askContacts() {
+        if (!running || !off() || wifiLevel == PowerLogic.Radio.OFF) return
+        val fresh = System.currentTimeMillis() - 120_000
+        for ((k, p) in peers.entries.toList()) {
+            if (found.values.any { it.chatKey == k && it.seen > fresh } || !asking(p.ip)) continue
+            pool.execute { register(p.ip, p.port, p.protocol, scan = false) }
+        }
+    }
+
+    /** The contacts' last addresses as Chat kept them (JSON from [keepPeers]). */
+    fun loadPeers(json: String?) {
+        val o = try { JSONObject(json ?: return) } catch (_: Exception) { return }
+        for (k in o.keys()) {
+            val p = o.optJSONObject(k) ?: continue
+            val ip = p.optString("ip")
+            if (ip.isEmpty() || !isNeighbourText(ip)) continue
+            peers[k] = KnownPeer(ip, p.optInt("port", SERVER_FIRST), p.optString("protocol", "https"), p.optLong("seen"))
+        }
+        askContacts()
+    }
+
+    /** A contact was reached at this address: kept for when Nearby is off (at most [MAX_PEERS], the newest). */
+    private fun keepPeer(key: String, d: Device) {
+        if (isContact?.invoke(key) != true) return
+        val old = peers[key]
+        if (old != null && old.ip == d.ip && old.port == d.port && old.protocol == d.protocol && d.seen - old.seen < 6 * 3_600_000L) return
+        peers[key] = KnownPeer(d.ip, d.port, d.protocol, d.seen)
+        while (peers.size > MAX_PEERS) peers.entries.minByOrNull { it.value.seen }?.let { peers.remove(it.key) } ?: break
+        val o = JSONObject()
+        peers.forEach { (k, p) -> o.put(k, JSONObject().put("ip", p.ip).put("port", p.port).put("protocol", p.protocol).put("seen", p.seen)) }
+        try { keepPeers?.invoke(o.toString()) } catch (_: Exception) {}
+    }
+
+    /** A kept address that is still a private one (anything else was never this home network). */
+    private fun isNeighbourText(ip: String): Boolean = try { Lan.isPrivate(InetAddress.getByName(ip)) && ip.none { it.isLetter() } } catch (_: Exception) { false }
+
     fun announce() {
         if (silent()) return
         val msg = info().put("announce", true).toString().toByteArray()
@@ -285,8 +373,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
         }
     }
 
-    /** Multicast plus asking every address on this network, for routers that drop multicast. */
+    /**
+     * Multicast plus asking every address on this network, for routers that drop multicast: LocalSend apps on 53317,
+     * Huginn and Muninn on 53318 (the first port they try). Nearby off: no scan, only the contacts asked straight.
+     */
     fun refresh() {
+        if (off()) { askContacts(); return }
         announce()
         if (_scanning.value) return
         val me = localAddress() ?: return
@@ -298,7 +390,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             val ip = prefix + i
             if (ip == me) continue
             scan.execute {
-                register(ip, PORT, "https", scan = true) || register(ip, PORT, "http", scan = true)
+                register(ip, PORT, "https", scan = true) || register(ip, PORT, "http", scan = true) || register(ip, SERVER_FIRST, "https", scan = true)
                 if (left.decrementAndGet() <= 0L) _scanning.value = false
             }
         }
@@ -321,6 +413,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 val announce = o.optBoolean("announce", o.optBoolean("announcement", false))
                 // A multicast message proves nothing: a device is only listed once its certificate answered (register).
                 if (!announce && known(ip, fp)) continue
+                // Nearby off: only a contact's own announcement is answered, straight to it (never on multicast).
+                if (off() && (!announce || contactIn(o) == null)) continue
                 if (!asking(ip)) continue
                 pool.execute {
                     if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp) && announce && !silent()) {
@@ -339,7 +433,10 @@ class LocalSend(private val context: Context, val identity: Identity) {
      * scan, which can't know it yet: then the certificate it shows becomes its identity.
      */
     private fun register(ip: String, port: Int, protocol: String, scan: Boolean, expected: String = ""): Boolean = try {
-        val quiet = silent()
+        // Nearby off: only ever sent to a contact (their announcement or their last address), so it says who this is
+        // (the hint, never the name) and shows the certificate the contact checks. A Kids' TV hidden from people
+        // nearby only asks.
+        val quiet = silent() && !off()
         // Hidden: only asks for their info, without saying who this phone is or showing its certificate.
         val c = open("$protocol://$ip:$port$API/" + (if (quiet) "info" else "register"), if (scan) 1500 else 5000, expected.ifEmpty { null }, anonymous = quiet)
         if (quiet) c.requestMethod = "GET"
@@ -384,11 +481,15 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val sig = o.optString("chatProof")
         val ok = claimed != null && proven != null && sig.isNotEmpty() && Proof.routeOk(claimed, proven, sig)
         val key = if (ok || sig.isEmpty()) claimed else null
-        found[id] = Device(
+        // Nearby off: nobody but contacts is listed.
+        if (off() && (key == null || isContact?.invoke(key) != true)) return
+        val d = Device(
             id, deviceName(o), o.optString("deviceModel", ""), o.optString("deviceType", "mobile"),
             ip, o.optInt("port", PORT), protocol,
             key, o.optString("chatName").ifEmpty { null }, o.optString("chatApp").ifEmpty { null }, proven = ok,
         )
+        found[id] = d
+        if (key != null && ok) keepPeer(key, d)   // only a route its chat key proved is asked again with Nearby off
         publish()
     }
 
@@ -483,6 +584,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         // One that showed none proves nothing: it's asked for its certificate instead (register), never just believed.
         val learn = { o: JSONObject, ip: String ->
             when {
+                // Nearby off: nobody is asked back on their word alone.
+                peerFp == null && off() -> {}
                 peerFp == null -> if (o.optString("protocol", "https") == "https" && asking(ip))
                     pool.execute { register(ip, o.optInt("port", PORT), "https", scan = false, expected = o.optString("fingerprint")) }
                     else remember(o, ip, "http")
@@ -516,9 +619,14 @@ class LocalSend(private val context: Context, val identity: Identity) {
 
         when (r.path) {
             "$API/register", "/api/localsend/v1/register" -> {
-                try { learn(JSONObject(text), ip) } catch (_: Exception) {}
+                val o = try { JSONObject(text) } catch (_: Exception) { null }
+                // Nearby off: answered only for a contact whose chat key proved the certificate it showed here.
+                val friend = off() && peerFp != null && o != null && contactIn(o)?.let { k ->
+                    Tls.same(o.optString("fingerprint"), peerFp) && Proof.routeOk(k, peerFp, o.optString("chatProof"))
+                } == true
+                if (o != null && (!off() || friend)) learn(o, ip)
                 // Hidden: no answer that says anything about this phone.
-                if (silent()) reply(out, 404) else reply(out, 200, info().toString())
+                if (silent() && !friend) reply(out, 404) else reply(out, 200, info().toString())
             }
             "$API/info", "/api/localsend/v1/info" -> if (silent()) reply(out, 404) else reply(out, 200, info().toString())
             "$API/prepare-upload" -> prepare(text, ip, out, learn)
@@ -623,7 +731,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (length > f.size) { reply(out, 413); return }
         // Saved into Downloads (MediaStore, where any Files app sees it), keeping folders the sender included
         // ("Photos/a.jpg"). Every file, an app too, on a phone or a TV: nothing received is opened or installed by itself.
-        val target = try { Received.create(context, f.name) } catch (e: Exception) { null }
+        // Cap f2: in Download/Muninn/<the device's name>, like a chat's files (a Kids' TV keeps its own place for apps).
+        val target = try { Received.create(context, f.name, if (sess.kids) "" else Sharing.folderFor("Muninn", sess.from)) } catch (e: Exception) { null }
         f.savedAs = target
         f.received = 0
         f.failed = false
@@ -916,7 +1025,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
     }
 
     companion object {
+        /** LocalSend's port: multicast discovery (shared), and where plain LocalSend apps serve. */
         const val PORT = 53317
+        /** Where Huginn's and Muninn's own server starts looking for a free port (up to [SERVER_TRIES] of them). */
+        const val SERVER_FIRST = 53318
+        const val SERVER_TRIES = 20
+        /** Contacts' last addresses kept for Nearby off. */
+        const val MAX_PEERS = 64
         const val GROUP = "224.0.0.167"
         const val API = "/api/localsend/v2"
         /** A chat envelope (64 KB, protocol 9) with room to spare; and any other request's JSON (a long file list). */

@@ -22,11 +22,270 @@ Rectangle {
     readonly property string sharer: Rooms.sharerName
     onSharerChanged: screenShown = true
 
-    // Someone else's shared screen, above the bar.
+    // Sharing this computer: always on show while it lasts, with Stop.
+    Rectangle {
+        id: sharingStrip
+        visible: Rooms.inRoom && Rooms.sharing
+        anchors.bottom: parent.top
+        anchors.left: parent.left; anchors.right: parent.right
+        height: visible ? Theme.px(44) : 0
+        color: Theme.accentFill
+        border.width: 1; border.color: Theme.accent
+        Accessible.role: Accessible.StatusBar
+        Accessible.name: "You're sharing: " + Rooms.shareTitle
+        Icon {
+            id: sharingIcon
+            anchors.left: parent.left; anchors.leftMargin: Theme.px(14)
+            anchors.verticalCenter: parent.verticalCenter
+            name: "screen"; size: Theme.px(18); color: Theme.accent
+        }
+        Text {
+            textFormat: Text.PlainText
+            anchors.left: sharingIcon.right; anchors.leftMargin: Theme.px(10)
+            anchors.right: stopShare.left; anchors.rightMargin: Theme.px(10)
+            anchors.verticalCenter: parent.verticalCenter
+            elide: Text.ElideRight
+            text: "You're sharing: " + Rooms.shareTitle
+            color: Theme.text
+            font.family: Theme.body; font.pixelSize: Theme.fs(14); font.weight: Font.DemiBold
+        }
+        HButton {
+            id: stopShare
+            anchors.right: parent.right; anchors.rightMargin: Theme.px(8)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Stop"; kind: "danger"; fontSize: 13; implicitHeight: Theme.px(32)
+            onClicked: Rooms.toggleShare()
+        }
+    }
+
+    // Share pressed: what to share, an app window or a full screen, each with a live picture (Wayland and the Flatpak
+    // skip this: the desktop's own picker asks). Over the whole window; Main.qml's overlay() hands it the controller.
+    property alias sharePicker: picker
+    Connections {
+        target: Rooms
+        function onPickShare() { picker.open() }
+    }
+    Item {
+        id: picker
+        parent: bar.parent
+        anchors.fill: parent
+        z: 60
+        visible: false
+        property string mode: "window"          // "window" or "screen"
+        property var windows: []
+        property var screens: []
+        property int at: 0
+        readonly property var list: mode === "window" ? windows : screens
+        function open() {
+            windows = Rooms.shareWindows()
+            screens = Rooms.shareScreens()
+            mode = windows.length ? "window" : "screen"
+            at = 0
+            visible = true
+            forceActiveFocus()
+        }
+        function close() { visible = false }
+        function choose(i) {
+            const why = mode === "window" ? Rooms.shareWindow(list[i].i) : Rooms.shareScreen(list[i].i)
+            if (why !== "") { Ui.say(why, true); return }
+            close()
+        }
+        function handleButton(b) {
+            const cols = Math.max(1, Math.floor(grid.width / grid.cellWidth))
+            switch (b) {
+            case "a": case "start": if (list.length) choose(at); return true
+            case "b": close(); return true
+            case "lb": case "rb": case "x": case "y":
+                if (windows.length) { mode = mode === "window" ? "screen" : "window"; at = 0 }
+                return true
+            case "left": at = Math.max(0, at - 1); return true
+            case "right": at = Math.min(list.length - 1, at + 1); return true
+            case "up": at = Math.max(0, at - cols); return true
+            case "down": at = Math.min(list.length - 1, at + cols); return true
+            }
+            return true
+        }
+        Keys.onPressed: event => {
+            const map = { [Qt.Key_Escape]: "b", [Qt.Key_Return]: "a", [Qt.Key_Enter]: "a", [Qt.Key_Left]: "left", [Qt.Key_Right]: "right",
+                          [Qt.Key_Up]: "up", [Qt.Key_Down]: "down", [Qt.Key_Tab]: "x" }
+            if (map[event.key] !== undefined) { picker.handleButton(map[event.key]); event.accepted = true }
+        }
+        Rectangle { anchors.fill: parent; color: "#000000"; opacity: 0.55 }
+        MouseArea { anchors.fill: parent; onClicked: picker.close() }
+        Rectangle {
+            id: pickBox
+            anchors.centerIn: parent
+            width: Math.min(parent.width - Theme.px(40), Theme.px(760))
+            height: Math.min(parent.height - Theme.px(40), Theme.px(560))
+            radius: Theme.radius
+            color: Theme.panel
+            border.color: Theme.line
+            clip: true
+            MouseArea { anchors.fill: parent }   // a click inside doesn't close it
+            Text {
+                id: pickTitle
+                textFormat: Text.PlainText
+                x: Theme.px(20); y: Theme.px(18)
+                text: "SHARE WHAT?"
+                color: Theme.text
+                font.family: Theme.display; font.pixelSize: Theme.fs(18); font.weight: Font.Bold; font.letterSpacing: Theme.px(2)
+            }
+            Row {
+                id: modes
+                x: Theme.px(20); anchors.top: pickTitle.bottom; anchors.topMargin: Theme.px(12)
+                spacing: Theme.px(6)
+                HButton {
+                    visible: picker.windows.length > 0
+                    text: "An app window"; kind: picker.mode === "window" ? "accent" : "normal"; implicitHeight: Theme.px(36)
+                    onClicked: { picker.mode = "window"; picker.at = 0 }
+                }
+                HButton {
+                    text: "A full screen"; kind: picker.mode === "screen" ? "accent" : "normal"; implicitHeight: Theme.px(36)
+                    onClicked: { picker.mode = "screen"; picker.at = 0 }
+                }
+            }
+            // Two lists, one per kind, so each picture's source always matches its row.
+            GridView {
+                id: grid
+                visible: picker.mode === "window"
+                anchors.top: modes.bottom; anchors.topMargin: Theme.px(14)
+                anchors.left: parent.left; anchors.leftMargin: Theme.px(20)
+                anchors.right: parent.right; anchors.rightMargin: Theme.px(12)
+                anchors.bottom: pickFoot.top; anchors.bottomMargin: Theme.px(8)
+                clip: true
+                cellWidth: Theme.px(176); cellHeight: Theme.px(136)
+                boundsBehavior: Flickable.StopAtBounds
+                model: picker.windows
+                currentIndex: picker.mode === "window" ? picker.at : -1
+                delegate: Item {
+                    id: wtile
+                    required property var modelData
+                    required property int index
+                    width: grid.cellWidth; height: grid.cellHeight
+                    readonly property bool on: picker.mode === "window" && picker.at === index
+                    Rectangle {
+                        anchors.fill: parent; anchors.rightMargin: Theme.px(8); anchors.bottomMargin: Theme.px(8)
+                        radius: Theme.radius
+                        color: wtile.on ? Theme.tile : wHover.hovered ? Theme.raised : "transparent"
+                        border.width: wtile.on ? Theme.focusWidth : 1
+                        border.color: wtile.on ? Theme.accent : Theme.line
+                        Accessible.role: Accessible.Button
+                        Accessible.name: wtile.modelData.title
+                        Rectangle {
+                            x: Theme.px(6); y: Theme.px(6)
+                            width: parent.width - Theme.px(12); height: parent.height - Theme.px(40)
+                            color: "#000000"
+                            // That window, live, while the picker shows windows.
+                            CaptureSession {
+                                windowCapture: WindowCapture { window: wtile.modelData.window; active: picker.visible && picker.mode === "window" }
+                                videoOutput: wOut
+                            }
+                            VideoOutput { id: wOut; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
+                        }
+                        Text {
+                            textFormat: Text.PlainText
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.margins: Theme.px(8)
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(8)
+                            elide: Text.ElideRight
+                            text: wtile.modelData.title
+                            color: Theme.text
+                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                        }
+                        HoverHandler { id: wHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: { picker.at = wtile.index; picker.choose(wtile.index) } }
+                    }
+                }
+            }
+            GridView {
+                id: screenGrid
+                visible: picker.mode === "screen"
+                anchors.fill: grid
+                clip: true
+                cellWidth: grid.cellWidth; cellHeight: grid.cellHeight
+                boundsBehavior: Flickable.StopAtBounds
+                model: picker.screens
+                currentIndex: picker.mode === "screen" ? picker.at : -1
+                delegate: Item {
+                    id: stile
+                    required property var modelData
+                    required property int index
+                    width: screenGrid.cellWidth; height: screenGrid.cellHeight
+                    readonly property bool on: picker.mode === "screen" && picker.at === index
+                    Rectangle {
+                        anchors.fill: parent; anchors.rightMargin: Theme.px(8); anchors.bottomMargin: Theme.px(8)
+                        radius: Theme.radius
+                        color: stile.on ? Theme.tile : sHover.hovered ? Theme.raised : "transparent"
+                        border.width: stile.on ? Theme.focusWidth : 1
+                        border.color: stile.on ? Theme.accent : Theme.line
+                        Accessible.role: Accessible.Button
+                        Accessible.name: stile.modelData.name
+                        Rectangle {
+                            x: Theme.px(6); y: Theme.px(6)
+                            width: parent.width - Theme.px(12); height: parent.height - Theme.px(40)
+                            color: "#000000"
+                            // That screen, live, while the picker shows screens.
+                            CaptureSession {
+                                screenCapture: ScreenCapture { screen: Qt.application.screens[stile.modelData.i] || null; active: picker.visible && picker.mode === "screen" }
+                                videoOutput: sOut
+                            }
+                            VideoOutput { id: sOut; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
+                        }
+                        Text {
+                            textFormat: Text.PlainText
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.margins: Theme.px(8)
+                            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(8)
+                            elide: Text.ElideRight
+                            text: stile.modelData.name + (stile.modelData.primary ? " (main)" : "") + " · " + stile.modelData.size
+                            color: Theme.text
+                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                        }
+                        HoverHandler { id: sHover; cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: { picker.at = stile.index; picker.choose(stile.index) } }
+                    }
+                }
+            }
+            Text {
+                textFormat: Text.PlainText
+                visible: picker.list.length === 0
+                anchors.centerIn: grid
+                text: "Nothing to share here."
+                color: Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(14)
+            }
+            Rectangle {
+                id: pickFoot
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: Theme.px(64)
+                color: Theme.panelLow
+                Rectangle { width: parent.width; height: 1; color: Theme.line }
+                Text {
+                    textFormat: Text.PlainText
+                    anchors.left: parent.left; anchors.leftMargin: Theme.px(20)
+                    anchors.right: pickButtons.left; anchors.rightMargin: Theme.px(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    elide: Text.ElideRight
+                    text: picker.mode === "window" ? "Only that window is shared, even when another is in front." : "Everything on that screen is shared."
+                    color: Theme.textMuted
+                    font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                }
+                Row {
+                    id: pickButtons
+                    anchors.right: parent.right; anchors.rightMargin: Theme.px(20)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.px(8)
+                    HButton { text: "Cancel"; kind: "plain"; onClicked: picker.close() }
+                    HButton { text: "Share"; kind: "primary"; enabled: picker.list.length > 0; onClicked: picker.choose(picker.at) }
+                }
+            }
+        }
+    }
+
+    // Someone else's shared screen, above the bar (above the sharing strip while this computer shares too).
     Rectangle {
         id: screenPanel
         visible: Rooms.inRoom && Rooms.sharerName !== "" && bar.screenShown
-        anchors.bottom: parent.top
+        anchors.bottom: sharingStrip.visible ? sharingStrip.top : parent.top
         anchors.left: parent.left; anchors.right: parent.right
         height: Math.min(Theme.px(560), (bar.parent ? bar.parent.height : 800) * 0.6)
         color: "#000000"
@@ -117,6 +376,14 @@ Rectangle {
                     key: modelData.me ? "me" : modelData.key || ""
                     name: modelData.name
                     opacity: modelData.state === "live" ? (modelData.muted ? 0.55 : 1) : 0.4
+                }
+                // A click or right click: Mute for me, Volume, and for admins Timeout and Ban (cap g2).
+                HoverHandler { cursorShape: modelData.me ? Qt.ArrowCursor : Qt.PointingHandCursor }
+                TapHandler {
+                    id: personTap
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    onTapped: (point, button) => { if (!modelData.me) Ui.menuAt(personTap.parent, point.position.x, point.position.y,
+                        () => PeopleActions.memberMenu({ key: modelData.key, name: modelData.name, contact: Chat.isContact(modelData.key) }, { group: Rooms.group })) }
                 }
                 Rectangle {
                     visible: modelData.muted

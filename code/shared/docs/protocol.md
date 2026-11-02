@@ -16,7 +16,8 @@ does otherwise still interoperates.
 - Envelope, on every route:
   `{room, fromKey, fromName, fromId, mailbox, id, cap:"r1", caps, [invite], (nonce, data) | (rh, data)}`
   (`caps` is 1.1). Unknown fields are ignored.
-- Routes: Bluetooth LE (BleFrames), local Wi-Fi `POST /api/huginn/v1/message`, internet as a Nostr kind 1059
+- Routes: Bluetooth LE (BleFrames), local Wi-Fi `POST /api/huginn/v1/message` (to the `port` the device announced,
+  21.7), internet as a Nostr kind 1059
   event whose content is the envelope sealed to the recipient's chat key with a one-off key (to someone whose caps
   include `e1`, also to one of their day keys, 23.1).
 - Pairwise sealing: the message ratchet per contact (`code/shared/tools/ratchet_ref.py`), or v1 (static shared key)
@@ -51,6 +52,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `c1` | 1:1 calls (section 5) |
 | `c2` | call extras (5.8): the direct path between trusted contacts, receiver reports and the higher Opus bitrate, video calls and screen share. Implies `c1`. |
 | `v1` | voice rooms and group calls (section 6). Implies `c1`. |
+| `v2` | room heartbeats (6.8): `vjoin` every 10 s while in a room, and presence that ends 60 s after the last one. Muninn and Huginn. |
 | `k1` | kids' TV management (section 7). A parent app and a TV both send it. |
 | `k2` | kids' TV config fields `calls` and `mic`, the `update` message and `app` in `applied` (7.5). Muninn only. |
 | `k3` | kids' TV `status`, `usage` and `clear` (7.7): the level set on the TV, its storage, Clear history. Muninn only. |
@@ -74,6 +76,9 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `b1` | the ring key (section 23.2): `rk` and `rp` in receipts, ring envelopes for 1:1 offers. Muninn and Huginn. |
 | `e1` | the relay wrapping sealed to a day key too, and room `file` through the ratchet (section 23.1): `wk` and `wt` in receipts. Muninn and Huginn. |
 | `a1` | animated GIFs: photo pieces with `kind:"gif"` (section 25). Muninn and Huginn. |
+| `l1` | the whole account on a linked companion (section 15.1). Not in envelope `caps`: it goes in room `link`, in the companion's `sync`. Muninn as the phone, Huginn as the companion. |
+| `g2` | group timeouts and bans (section 26): signed records in room `group` (`t:"mod"`), and posts from someone timed out or banned dropped. Muninn and Huginn. |
+| `f2` | file sharing (section 27): the `lan` candidate, group files (`g` on an offer), the group's file rules (`fs` and `fm` in the state), `why` on a decline, and the Hold packet. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -759,6 +764,11 @@ fragments to everyone; a keyframe request from anyone makes the next frame a key
 bitrate are the lowest any peer allows (the relay profile as soon as one peer is on the relay). A peer
 without `c2` keeps hearing the room and simply doesn't see the screen.
 
+What is shared is chosen first, on the sharer's device only (nothing changes on the wire): **an app window** (a list of
+open windows with live pictures; only that window is captured, even when another window is in front) or **a full
+screen** (which monitor, with a live picture). On Wayland and in the Flatpak the desktop's own ScreenCast picker asks
+instead. While sharing, a bar says "You're sharing: <window title or Screen N>" with **Stop**.
+
 #### 5.8.8 Timing
 
 - Offer: sent once the relay and the STUN answer are in, or after 400 ms with what is there.
@@ -798,7 +808,7 @@ without `c2` keeps hearing the room and simply doesn't see the screen.
 
 | t | sent by, to | meaning |
 |---|---|---|
-| `vjoin` | someone joining (and every 10 minutes while in), to every member | I'm in this room |
+| `vjoin` | someone joining (and every 10 minutes while in, every 10 s to members with `v2`, 6.8), to every member | I'm in this room |
 | `vleave` | someone leaving, to every member | I left |
 | `vring` | whoever starts a group call, to each person it rings | join my group call |
 | `vdecline` | someone who was rung, to the ringer | not now |
@@ -859,7 +869,8 @@ the sender's `ts`, and when it was seen by its own clock (reference `presence_ap
 - While you are in a room, everyone you have a live call with there counts as in as well.
 
 Shown to everyone in the group, in or out of the room: "Raven, Moose" under the voice room with **Join**,
-and a group call as "Group call" with **Join** while anyone is in it. Vectors: `room.presence`.
+and a group call as "Group call" with **Join** while anyone is in it. Vectors: `room.presence`. A sender whose caps
+include `v2` goes by 6.8 instead of the 25 minutes.
 
 ### 6.5 Group calls (ringing people into a room)
 
@@ -887,6 +898,28 @@ Apps without `v1` (caps `r1 g1 c1`) drop every room "call" message that has `cal
 so nothing breaks; they show voice channels as "coming soon" and can't join. Apps with `v1` send them
 nothing for rooms, and show "Needs an update to join calls" next to members known to lack `v1`. Probing caps
 (1.2) when a group opens finds out for members whose caps aren't known.
+
+### 6.8 Heartbeats (cap `v2`)
+
+A phone that loses its connection or dies never sends `vleave`, so without more it would stay "in" for 25 minutes.
+
+- While in a room, an app with `v2` sends `vjoin` (the same message, 6.2, a new `ts` each time) every **10 s** to every
+  member whose caps include `v2`. Members without it still get the 10-minute re-send of 6.3 step 5, so nothing new
+  reaches an older app.
+- The receiver keeps presence (6.4) as before and notes that the sender has `v2`. For such a sender: in while the last
+  `vjoin` was seen at most **20 s** ago; **Reconnecting** from 20 s to **60 s**; out after 60 s (reference
+  `heard(quietMs, heartbeats)`: 1 in, 2 reconnecting, 0 gone). A stale (6.2 step 5) `vjoin` from a `v2` sender counts as
+  seen 60 s ago, so a late copy never brings someone back. Senders without `v2` keep the 25 minutes.
+- In the room: someone whose pair call dropped but whose heartbeats still come shows as Reconnecting; someone with `v2`
+  not heard from for 60 s whose pair call isn't up is taken out of the room (their call is dropped without a word).
+  A live pair call always counts as in.
+- A `vjoin` from someone in the room with no call here is answered with an offer (6.3 step 2) at most every 30 s per
+  sender, so a pair that can't connect doesn't retry every 10 s; a `vleave` clears that.
+- The same rule is the group's "in a voice room" presence for members outside the room (member list, the rows under a
+  voice room, group calls).
+
+Cost: one small envelope per `v2` member every 10 s while in a room. Huginn `RoomWire::heard` and `Presence::state`,
+Muninn `RoomLogic.heard` and `Presence.state`; checked in Huginn's `--call-selftest` and Muninn's `RoomTest`.
 
 ## 7. Kids' TV
 
@@ -1658,12 +1691,76 @@ the phone's chats (and their files) off the companion.
 
 Anything in room `link` from a device that isn't paired (and isn't a `hello` answering a live token) is answered 403.
 
+### 15.1 The whole account on the companion (cap `l1`)
+
+With `l1` the companion is the same account as the phone: its name, picture and status, every contact (names,
+pictures, verified marks, blocks), every group (the signed state, so its members, and the person's role) and every
+folder. Changes made on either device go to the other. Everything still goes in room `link`, sealed between the two
+devices only with the keys the pairing set up; nothing new reaches contacts or relays beyond what section 15 allows.
+Messages stay as in section 15 (`chat`, `msg`, `send`), and calls stay on the phone (the companion's call button says
+"Calls ring on your phone").
+
+**The gate.** The companion puts `"caps": "l1"` in every `sync` it sends (on "They match", on Refresh, and once a run to
+a phone linked before it had `l1`). A phone with `l1` marks that companion and answers with `acct` frames; a phone
+without it ignores the field, and the pair stays as in section 15. The companion treats the phone as `l1` from the
+first `acct` that comes from it, and only then sends its own changes. Huginn takes the companion side and Muninn the
+phone side; Huginn as a phone and Muninn as a companion leave `l1` out and link the old way.
+
+**Items.** The account is a set of items, `{"k": kind, "id", "ts": ms, "v": {...}}`, or once deleted a tombstone
+`{"k", "id", "ts", "del": true}`. `id` is 1 to 200 characters; `ts` > 0. Kinds:
+
+| `k` | `id` | `v` |
+|---|---|---|
+| `me` | `"me"` | `{n, st, cs}` as in `me` (section 15) |
+| `pic` | `"me"` or a contact's chat key | `{"pic": base64 JPEG}`, a picture as section 22 takes it (anything else shows none) |
+| `contact` | the chat key | `{n: their name, nn: my nickname for them (omitted when none), p: mailbox, vf: verified, bl: blocked}` |
+| `group` | the group id | `{n: name, role: "owner" \| "admin" \| "member", gone: "" \| "left" \| "removed" (omitted when ""), st: the signed group state (3.2)}` |
+| `folder` | the folder id | `{n: name (at most 24 characters), k: [chat keys and "g:" + group id]}` (section 4) |
+
+Unknown kinds and items without a good `id`, `ts` or `v` are dropped.
+
+**Merging: last writer wins, per item.** Each device keeps the last item it knows for every (`k`, `id`). An item that
+comes in replaces it when its `ts` is later; at the same `ts` the phone's copy wins (the companion takes the phone's,
+the phone keeps its own); the very same item changes nothing. A delete is a tombstone with its own `ts`, so an older
+copy coming in late never brings it back, and a later one (added again) does. Tombstones are kept 30 days, then
+dropped. The phone gives an item a new `ts` (now, and always later than the one before) whenever its value changes,
+and a tombstone when it's gone from the account. A companion that changes an item gives it `ts` = now (later than the
+one it had).
+
+**Who changes what.** The companion may change a contact's `nn` and `bl`, remove a contact (a tombstone; the phone
+removes the contact, the chat stays), add, rename, delete and fill folders, and change `me` (`setme` as in section 15
+also still works). `group` and `pic` items change only on the phone, which drops them from a companion. A change the
+phone can't take (a verified mark, say) comes back from it as its own later item, so both end the same.
+
+**Frames.** `{"t": "acct", "items": [item, ...]}` carries changes, either way, as they happen (the phone waits about
+1.5 s so many changes go together). `{"t": "acct", "full": true, "items", "pg": i, "pgs": n}` is the phone's whole
+account, in pages of at most 200 KB of UTF-8 JSON, on every `sync` it takes from an `l1` companion and when one first
+says `l1`. Routes as in section 15: a full set, and any frame with a `pic` item, only over the home Wi-Fi (the phone
+owes it until the companion is there again); a change of at most 16 KB with no picture may use the internet, to at
+most 2 relays.
+
+**Linking replaces the companion's account.** After a `hello` (a new phone, or the same one linked again), the
+companion's next full set replaces everything it kept from the phone instead of merging, and the phone's name,
+status and picture become the companion's own (with no picture when the phone has none, on the last page). Nothing
+of the companion's old name or picture is left in use. A plain merge would keep a name written later on the companion,
+which is why the first full set is taken whole.
+
+**Groups.** To an `l1` companion the phone also sends its group chats as chats with `peer` = `"g:"` + group id (the
+last 500 messages each, in `chat` pages, and new ones as `msg`), each item with `"fn"`: the name of who wrote it. A
+`send` with `peer` `"g:"` + id from an `l1` companion is posted in that group's main channel as the phone's own
+message (the same member), each `id` once, answered with `result` (`err` `"not in group"` when it can't be posted).
+
+**Unlinking.** The companion asks: keep a copy or remove it. Keeping sends `unlink` and leaves the chats, contacts,
+groups and folders on the companion, read only (nothing is sent, fetched or taken from that phone until it's linked
+again, which then replaces the copy). Removing takes everything that came from the phone off the companion. A phone
+that unlinks the companion removes it all, as in section 15.
+
 ## 16. Message limits (cap `d1`)
 
 Messages don't stay forever. Every chat, 1:1 and group, has a **limit in days**: messages older than that are deleted on
 every device, with everything that belongs to them (photos, voice clips, videos, files, album photos, poll votes, link
-previews, cached copies), and an encrypted backup never holds anything past it. The limit is **7 days** unless a Family or
-Work group, or two people who keep each other in their Family or Work folder, choose longer, **at most 30**.
+previews, cached copies), and an encrypted backup never holds anything past it. The limit is **7 days** unless a Family
+group, or two people who keep each other in their Family or Work folder, choose longer, **at most 30**.
 `code/shared/tools/d1_ref.py` is the reference and writes `code/shared/vectors/d1-vectors.json`; Muninn checks it in `LimitsTest`, Huginn in
 `--chat-selftest` (the file next to `chat-vectors.json`).
 
@@ -1679,22 +1776,39 @@ Work group, or two people who keep each other in their Family or Work folder, ch
 
 ### 16.2 Groups: the type and limit in the signed state
 
-A group has a **type**: Standard, Family or Work. The state (3.2) gets two optional fields:
+A group has a **type**: **Folk** or **Family**. The state (3.2) carries it in two optional fields:
 
 ```json
 {"g": "...", "v": 5, ..., "kind": "family", "days": 30}
 ```
 
-- `kind`: `"family"` or `"work"`. Left out: a Standard group.
+- `kind`: `"family"` for a Family group. Left out: a Folk group.
 - `days`: 7 to 30, only next to `kind`. Left out: 7.
-- A Standard group's state has neither field, so it is exactly the state an app without `d1` takes.
+- A Folk group's state has neither field, so it is exactly the state an app without `d1` takes.
+- `"work"` stays valid on the wire (groups made before Folk and Family): such a group is shown and treated as **Folk**
+  and keeps its `days`. Apps no longer make one; making it Folk changes nothing, making it Family replaces the kind.
 - The limit (vectors: `states`, `days`) is the same for everyone in the group. Only an admin changes it, by signing the
   next state as for any change (3.4, `op` hint `"limit"`); a group can be made with a type from the start.
 
-An app without `d1` refuses a state with `kind` (3.2 "exactly these fields"). So an admin's app makes a group Family or
-Work only when the caps of every other member include `d1`, invites or adds to a Family or Work group only people whose
-caps include `d1` (others: "Needs an update"), and moving back to Standard works with everyone. In a Standard
-group, members without `d1` keep their messages; the group's info says so.
+What each type means (the same in both apps; Huginn `Limits::typeRules`, Muninn `Limits.typeRules`):
+
+| | Folk | Family |
+|---|---|---|
+| One line | Friends and acquaintances. Easy to join, light to keep. | Your closest, most trusted people. Invite only, checked in person, kept longer. |
+| Who adds people | Anyone in the group, by a link or a code: made with `"mi": true` (17.1) | Only admins, face to face (the code's QR) or by a code they hand over; no links (17.1) |
+| Checking | | Each member's safety code (13.5) is matched once; the member list marks them Checked and the group asks to check the rest |
+| Messages | 7 days | Up to 30 days (an admin picks 7 to 30) |
+| Files from members | Small ones arrive by themselves, big ones ask first (14.1) | All arrive by themselves (14.1, Data saver still asks) |
+| Contacts | Members aren't added to your contacts (3.7 group peers) | Members who are contacts go in your Family folder, once each (moved out by hand, they stay out) |
+
+Changing the type is an admin's signed `"limit"` state: to Family, `kind` and `days` go in and `mi` comes out; to Folk,
+`kind` and `days` come out and `mi` goes in when every other member's caps include `j1`. Huginn `Limits::withType`,
+Muninn `Limits.withType`; checked in `--chat-selftest` and `LimitsTest`, `GroupsTest`.
+
+An app without `d1` refuses a state with `kind` (3.2 "exactly these fields"). So an admin's app makes a group Family
+only when the caps of every other member include `d1`, invites or adds to a Family group only people whose caps include
+`d1` (others: "Needs an update"), and moving back to Folk works with everyone. In a Folk group, members without `d1` keep
+their messages; the group's info says so.
 
 ### 16.3 1:1 chats: `days` in the envelope
 
@@ -1726,8 +1840,16 @@ Admins always may. A group state may carry `"mi": true` ("Members can invite"): 
 only ever `true`; off is left out, so a group that never turned it on keeps exactly the state an app without `j1` takes
 (vectors: `mi`). An app without `j1` refuses a state with `mi`, so an admin's app turns it on only when every other member's caps
 include `j1`, and while it is on only people whose caps include `j1` are added (others: "Needs an update").
-The change is an admin's signed state like any other (3.4, `op` hint `invites`). Family and Work groups also need `d1`
+The change is an admin's signed state like any other (3.4, `op` hint `invites`). A Folk group is made with `mi` on
 (16.2).
+
+**Family groups have no links.** In a group whose state has `"kind": "family"`:
+
+- nobody makes a link (the apps hide it and refuse), `mi` is never set (turning it on is refused), and a `link` control
+  message is taken but never kept;
+- the counting admin lets nobody in by a link (`link_ok` is false whatever the link says), so every link stops at once
+  when a group becomes Family, and the counting admin sends its `links` list again (empty) so the screens drop them;
+- group codes (3.5) still work: an admin shows one (its QR face to face, or hands the code over).
 
 ### 17.2 The link and who counts it
 
@@ -1848,8 +1970,13 @@ is the person's own profile picture, colour and status (22.3), left out when the
 
 Set on the press-and-hold sheet, kept in the encrypted contacts, never on the wire: calls and video allowed (off: a
 1:1 `offer` or a group `vring` from them is dropped), files allowed (off: their room `file` and `kind:"file"` pieces are
-dropped), and whether they see my active status (off: no `active` goes to them). Pin, archive, mute and mark unread
-are kept per chat beside them.
+dropped), and whether they see my active status (off: no `active` goes to them). Pin, archive, mute (15 minutes, 1
+hour, 8 hours or until turned back on) and mark unread are kept per chat beside them, and so are: how a chat notifies
+(every message; one until it's opened, which Settings › Notifications › Reduce notifications makes the default; or,
+for a group, only @mentions and replies to me; calls are not messages and ring as before), Hide (someone nearby who
+isn't a contact leaves the Nearby list for good, with no notifications) and Delete chat (the conversation and its
+messages go from this device, and its row leaves the list until a message comes or goes; a contact stays one, and a
+Kids' TV's settings on the parent's phone are untouched). Nothing of this goes on the wire.
 
 A new key that carries an existing contact's mailbox (from nearby, Keep in touch, an invite link, an introduction or a
 group) is never a quiet key change: it becomes a request that says "says it replaces [name]", and only the person's
@@ -1938,14 +2065,38 @@ A proof is a signed object (2.2) by the chat key, without the object itself on t
   never stand in for each other.
 - Someone whose caps include `s1` always proves: for them an unproven route is never used at all.
 
-### 21.3 Hidden from people nearby
+### 21.3 Nearby off (hidden from people nearby)
 
-Hidden, a device sends nothing about itself close by. On the Wi-Fi it makes no announcement and answers no scan or
-`info` request: `register` and `info` get 404. A `register` it sends shows no client certificate. Huginn's HTTPS
-server shows a throwaway certificate made for that time while hidden, never its lasting one, which anyone close by
-could follow. On Bluetooth LE it is silent: Muninn doesn't advertise, serves nothing on HELLO and lets go of any
-connection; Huginn doesn't scan (an active scan names its adapter), doesn't connect and sends no hello. Anyone close
-by learns nothing they can follow from place to place; contacts still reach it over the internet.
+Settings › Privacy › Nearby is one switch (Muninn: Settings › Lock and privacy). Off, a device sends nothing about
+itself close by on its own, looks for nobody and lists nobody nearby:
+
+- **Wi-Fi.** No multicast announcement, no answer on multicast, and no scan of the home network ("Look again" and
+  Refresh only ask contacts, below). `info` gets 404, and `register` gets 404 unless it comes from a contact (below).
+  Only contacts are listed; everyone else already listed is dropped when it is turned off.
+- **Bluetooth LE.** Silent: Muninn doesn't advertise, serves nothing on HELLO and lets go of any connection; Huginn
+  doesn't scan (an active scan names its adapter), doesn't connect and sends no hello.
+- **The chat list.** No Nearby section (no Nearby room, nobody who isn't a contact), and nobody new can message over
+  Bluetooth or the Wi-Fi.
+- Huginn's HTTPS server shows a throwaway certificate made for that time while off, never its lasting one, which
+  anyone close by could follow. Its `register`s show that same certificate, and its info's `fingerprint` and
+  `chatProof` are about it, so contacts can still prove the route (21.2).
+
+Contacts keep the private home Wi-Fi route, with nothing announced to strangers:
+
+- Each device remembers where each contact was last reached over a **proven** route (address, port, protocol; at
+  most 64, kept in the vault, never shown). Off, every minute on the Wi-Fi (and when it comes back), each contact
+  not heard from in the last 2 minutes is sent a `register` straight to that address (at most one every 10 s per
+  address). Its answer is only taken if it proves a contact (21.2); anyone else is ignored.
+- A contact's own multicast announcement (its `chatKey`, or a hint that matches a contact) is answered the same way,
+  straight to it.
+- The info such a device sends has no name (`alias` is "Huginn" or "Muninn") and no `chatKey` or `mailbox`: only the
+  `hint` below, its `fingerprint` and `chatProof`. It goes only to contacts (or to whoever claims a contact's key,
+  who learns only the hint and the proof, which nobody without the chat key can match).
+- A `register` to a device with Nearby off is answered (with that info) only when its body's key (`chatKey`, or a
+  hint matching a contact) is a contact, its `fingerprint` is the client certificate it showed, and `chatProof`
+  verifies against that certificate. The device is then listed like any proven route.
+
+A Kids' TV keeps its own behaviour whatever the switch says (Muninn on a TV in kids' mode ignores it).
 
 A hello or announce may still carry
 `"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]` in place of the name,
@@ -1992,6 +2143,21 @@ is answered only for members of the current state.
   else is stopped, not written.
 - The Nearby room: at most 10 messages in 10 seconds from one address or connection, whatever keys it uses.
 - A stranger's private message close by shows as `"Name" · Not a contact · nearby`, in lists and notifications.
+
+### 21.7 Ports: sharing 53317 with the LocalSend app
+
+LocalSend's own app needs port 53317, so Huginn and Muninn leave it free and can run beside it on one device:
+
+- **Discovery** stays on UDP 224.0.0.167:53317, shared: the socket sets `SO_REUSEADDR` (Huginn: `ShareAddress` and
+  `ReuseAddressHint`) before it binds, then joins the group on each home-network interface. Every app on the device
+  hears the multicast.
+- **The server** (HTTPS, or HTTP without a certificate) takes the first free TCP port from **53318** (up to 53337),
+  the same on every home-network address. It is announced as `port` in the announcement, the `register` body and
+  answer, `info` and `prepare-upload`'s `info`, as LocalSend v2 defines, so LocalSend, Huginn and Muninn find and
+  send to each other as before. Every request goes to the `port` a device announced (53317 when it says none).
+- **A scan** of the home network (Nearby on) asks each address on 53317 (HTTPS, then HTTP: LocalSend apps and older
+  Huginn and Muninn) and on 53318 (HTTPS: Huginn and Muninn).
+- A move code (18.1) carries `address:port` with the server's real port.
 
 ## 22. Profile pictures and status (cap `p1`)
 
@@ -2262,3 +2428,160 @@ A received GIF is decoded only after it cleaned, off the main thread, at no more
 decoder failure leaves the first frame or the word "GIF". It moves in the chat, in the viewer and on the Kids' TV.
 With Less motion (or the system's animations off) it holds its first frame with a play button. It stops when it's
 off screen or the app is in the background. The chat list and notifications say "GIF".
+
+## 26. Mute for me, volume, timeouts and bans (cap `g2`)
+
+`code/shared/tools/g2_ref.py` is the reference and writes `code/shared/vectors/g2-vectors.json`; Huginn checks it in
+`--chat-selftest` (all of it) and `--call-selftest` (the volume), Muninn in `ModTest`. Huginn `ModWire` and
+`Moderation`, Muninn `ModLogic` and `PeopleSound` (net/Mod.kt) with `Groups`.
+
+### 26.1 Mute for me and volume (on the device only)
+
+Set from a person's menu in a voice room, a group's member list or one of their group messages (right click on
+Huginn, press and hold on Muninn). Kept per person in the encrypted store, never on the wire, and the same in every
+call, room and group:
+
+- **Mute for me**: their voice is silent here (gain 0). With **Fold their messages** (on by default) their group
+  messages show as "Muted, tap to show". Unmute is in the same menu.
+- **Volume**: 0 to 200 % (whole numbers; anything else is 100, vectors `volume`). Every 20 ms frame of their decoded
+  sound is multiplied by it before it is mixed or played: `sample * pct / 100`, truncated toward zero and clipped to
+  16 bits (vectors `gain`). Their speaking ring follows what they said, not the volume. It is read again for every
+  frame, so it holds across reconnects and new calls.
+
+A 1:1 call or a group call into a chat that is **muted** (its own Mute, section 19) doesn't ring:
+it is kept as a missed call in that chat, without a sound or a notification ("Always right away" still rings).
+
+### 26.2 Records
+
+An admin's timeout or ban is a signed object (2.2) with the domain `huginn-muninn gmod v1`:
+
+```json
+{"a": "timeout", "g": "<group id>", "k": "<chat key of who>", "by": "<chat key of the admin>",
+ "ts": 1762000000000, "until": 1762000600000, "sig": "<base64 DER>"}
+```
+
+- `a`: `ban`, `unban`, `timeout` or `untimeout`. Exactly the fields `a`, `g`, `k`, `by`, `ts`, `sig`, plus `until`
+  only for `timeout`.
+- `g` a group id, `k` and `by` 1 to 200 characters and different, `ts` an integer above 0 (the admin's clock, ms).
+- `until` (ms): `ts < until <= ts + 7 days + 1 minute`. The apps offer 10 minutes, 1 hour, 1 day and 1 week.
+
+Taking one (reference `mod_accept`, vectors `records`, `refuse`, `admins`), against the receiver's current state of `g`:
+
+1. Well-formed, as above.
+2. `sig` verifies with `by`.
+3. The receiver has group `g`, and `by` is in its `admins`.
+4. `k` isn't the owner; if `k` is an admin, `by` is the owner (as for removing an admin, 3.4).
+
+Each `(g, k)` has two slots, `ban` (ban, unban) and `timeout` (timeout, untimeout), each keeping the record with the
+highest `ts` it took; the same or a lower `ts` changes nothing (vectors `order`). Someone is **banned** while their
+`ban` slot holds `ban`, and **timed out** while their `timeout` slot holds `timeout` and the receiver's clock is below
+`until` (vectors `active`). An admin's app signs a new record with `ts` above the slot's current one, even if its
+clock is behind.
+
+### 26.3 Room `group`: `t:"mod"`
+
+| t | sent by, to | fields | effect |
+|---|---|---|---|
+| `mod` | an admin, to every member of the current state whose caps include `g2`, and to the person it names | `list`: 1 to 50 records | each record is taken as in 26.2; a list that is empty or longer is malformed (400) |
+
+It is sent again, with every record still in force, to a `g2` member who sends `sync` (3.6, after the `states`
+answer) and to someone an admin just added (3.4 `join`). Only to members whose caps include `g2`: an app without it
+answers 400 to an unknown `t`.
+
+What every app with `g2` does while someone is timed out or banned in a group:
+
+- drops their `gmsg`, `gphoto` (photos, voice messages, files) and the `react`, `edit` and `vote` control messages,
+  and answers `greceipt` `delivered` so their app stops sending again; nothing is stored or shown;
+- refuses their room messages for that group (6.2: `vjoin`, `vring`, `vdecline`, `full`; a `vleave` still counts)
+  and declines their room offers, and takes them out of a room it is in with them;
+- an admin's app refuses their `join` by a code, a link or an invite (3.5, 17.3), and won't invite them, until they
+  are unbanned.
+
+**Ban** is a `ban` record, then the admin signs a state without them (3.4 `op:"remove"`) as for Remove. **Unban** is an
+`unban` record; they can then join again by a code, a link or an invite. **Cancel** a timeout is an `untimeout`.
+
+The person's own app shows "You're timed out until 3:40 PM" (posting, files and joining voice rooms are refused with
+those words) or "You were banned from Family". The group's settings list who is banned (with Unban) and who is timed
+out (with the time left and Cancel), for admins.
+
+### 26.4 Apps without `g2`
+
+Nothing changes for them: the state is untouched, so they take it as before, and they get no `mod` messages. Their
+posts during a timeout or a ban are still dropped by every app with `g2`. An admin whose app lacks `g2` can add a
+banned person back; the apps with `g2` go on dropping that person's posts until an admin with `g2` unbans them.
+
+
+## 27. File sharing (cap `f2`)
+
+Builds on section 14. One way to send (the clip in every chat and group, drag and drop on Huginn, the share sheet into
+a chat on Muninn); the app picks the route; every transfer shows in Transfers with its route, and says why when it
+doesn't work. Huginn `Sharing` (sharing.cpp) and `FileLink`, Muninn `Sharing.kt` and `FileLink.kt`; checked in
+`--chat-selftest` and `SharingTest`.
+
+### 27.1 The route
+
+In this order (`Sharing::route`, `Sharing.route`):
+
+1. **Same Wi-Fi** ("Direct"): the other side's app says `f2` and they are on this home Wi-Fi as a device whose chat key
+   proved its certificate (21.2). The offer and the accept carry a candidate `{"t": "lan", "p": port}`: the port of the
+   transfer's own UDP socket and **no address**. The receiver pairs it with the address it already reached that person
+   at on this Wi-Fi; nothing new about either side is learned and no address is ever shown. Between two people who
+   don't trust each other with their addresses (14.1), the `lan` candidate is the only one, no STUN server is asked,
+   and the receiver answers with only its own `lan` candidate.
+2. **Straight over the internet** ("Over the internet"): with trust, as 14.1 (the `lan` candidate comes first when
+   they are also on the same Wi-Fi; whichever answers first is used, and the row says which).
+3. **The relays** ("Over the internet"): a file of 2 MB or less, as 14.2.
+
+Otherwise it can't go, and the row says so. An app without `f2` ignores a `lan` candidate (5.8.2 takes only `srflx`
+and `host`).
+
+### 27.2 Group files
+
+A file sent in a group goes once to each other member, by the best route to that member. Its `offer` carries
+`"g"`: the group's id (2.3). Room `file` is taken from a member who isn't a contact when the offer names a group both
+are in, or when it answers a transfer of mine to them. The receiver saves it under the group's name. A group's file
+goes over the relays (14.2) only to a contact, into the chat with them; to anyone else it needs one of the first two
+routes, and the row says so. Sent only to members whose caps include `f2` (others: "needs the latest Muninn or
+Huginn").
+
+### 27.3 The group's file rules
+
+Two optional fields in the signed state (3.2), changed only by an admin's next state (`op` hint `"files"`):
+
+- `fs`: `"admins"` (only admins can send files) or `"nobody"`. Left out: everyone can.
+- `fm`: a whole number of MB, 1 to 4096: files bigger are refused. Left out: no limit.
+
+Every member's app checks an incoming group file against them (and against membership) before anything moves, and
+answers `decline` with `"why": "rules"`; it shows the dropped file and the reason ("Refused by the group's file rules:
+only admins can send files."). The sender's app checks its own rules first. An app without `f2` refuses a state with
+`fs` or `fm` ("exactly these fields"), so an admin's app sets rules only when every other member's caps include `f2`,
+and adds someone to a group with rules only when theirs do.
+
+### 27.4 Why it was declined
+
+`decline` may carry `"why"`: `"rules"` (the group's file rules), `"space"` (not enough room on the receiver: it checks
+before accepting, with 64 MB to spare) or `"no"` (the person said no). A decline with `why` ends the transfer and the
+sender's row says it in words ("Refused by the group's file rules.", "Not enough space on their device.", "They
+declined."); it is never sent another way. A decline without `why` is as in 14.1.
+
+### 27.5 Pause and Hold
+
+Either side can pause a transfer that is moving. UDP packet type 5, **hold**: payload 1 byte, `1` paused or `0` going
+on, sealed like the others. The side that paused sends hold every second instead of data (the sender) or acks (the
+receiver), and hold `0` three times when it goes on. A sender that hears hold `1` stops sending data and sends a probe
+every second; a receiver that hears it acks once a second. Any authentic packet counts against the 30 s silence limit,
+so an app without `f2` keeps the line open too.
+
+### 27.6 Asking, and where files go
+
+- From a contact: a file under 50 MB arrives by itself, a bigger one asks (14.1). "Always from this person" (on the
+  device only) lets every file from them arrive. In a group, the group's type decides (16.2: Folk small ones, Family
+  all). Data saver still asks.
+- The ask shows who sent it, the name, size and kind, and where it goes, with Accept, Decline and Always from this
+  person.
+- Files are saved in `Downloads/Huginn/<chat name>` (Huginn) and `Download/Muninn/<chat name>` through MediaStore
+  (Muninn), never a hidden app folder. The chat name is made safe: no folders, `..`, control characters, characters
+  Windows refuses, trailing dots or spaces, or reserved names (`CON`, `NUL`, `COM1`...). A received file is never
+  opened by itself; on a Kids' TV an app installs only after a parent approves it (7.15).
+- Each chat's Files lists what was sent and received there (on the device only, kept as long as the longest a chat
+  keeps messages), with Open, Show in folder and Delete.

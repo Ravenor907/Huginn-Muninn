@@ -678,7 +678,11 @@ class CallMedia(
                 send(CallCrypto.AUDIO, p)
             }
         } catch (_: Exception) {
-        } finally { try { rec.stop() } catch (_: Exception) {}; enc.close() }
+        } finally {
+            try { rec.stop() } catch (_: Exception) {}; enc.close()
+            // Hung up while this thread was still inside read(): it lets the microphone go itself (see stop).
+            if (stopped) try { rec.release() } catch (_: Exception) {}
+        }
     }
 
     private fun playLoop(t: AudioTrack) {
@@ -701,11 +705,16 @@ class CallMedia(
                 if (n <= 0) pcm.fill(0)
                 val s = speaking.feed(pcm, Opus.FRAME, System.currentTimeMillis())
                 if (s != wasSpeaking) { wasSpeaking = s; events.onSpeaking(s) }
+                // Their volume here (cap g2: 0 to 200 %, 0 while muted for me), read for every frame after the speaking ring.
+                io.github.ravenor907.muninn.net.ModLogic.applyGain(pcm, Opus.FRAME, io.github.ravenor907.muninn.net.PeopleSound.gainOf(peerKey))
                 val len = if (tv != null) tv.render(pcm, out) else Opus.FRAME
                 t.write(out, 0, len)   // blocking: the audio clock paces this loop
             }
         } catch (_: Exception) {
-        } finally { try { t.stop() } catch (_: Exception) {}; dec.close() }
+        } finally {
+            try { t.stop() } catch (_: Exception) {}; dec.close()
+            if (stopped) try { t.release() } catch (_: Exception) {}
+        }
     }
 
     // ------------------------------------------------------------------ routing
@@ -754,8 +763,10 @@ class CallMedia(
         bluetooth?.onMedia(null)
         // Let the audio threads leave read() and write() before their objects go.
         try { mic?.join(500); player?.join(500) } catch (_: InterruptedException) {}
-        try { record?.release() } catch (_: Exception) {}
-        try { track?.release() } catch (_: Exception) {}
+        // Released here only once its thread has left read() or write(); a thread still in there releases it itself
+        // on the way out. Releasing under a running read is a native crash on some phones (a hang-up race).
+        if (mic?.isAlive != true) try { record?.release() } catch (_: Exception) {}
+        if (player?.isAlive != true) try { track?.release() } catch (_: Exception) {}
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
         if (tvGain != null) io.github.ravenor907.muninn.tv.TvMic.release()
         proximityOn(false)

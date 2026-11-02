@@ -6,6 +6,7 @@
 #include "chatwire.h"
 #include "call/callmanager.h"
 #include "call/callselftest.h"
+#include "call/callsession.h"
 #include "call/callsignal.h"
 #include "call/roommanager.h"
 #include "groupwire.h"
@@ -21,6 +22,7 @@
 #include "platform/chime.h"
 #include "platform/crashlog.h"
 #include "platform/notify.h"
+#include "platform/portable.h"
 #include "platform/scratch.h"
 #include "platform/singleinstance.h"
 #include "platform/winstart.h"
@@ -38,6 +40,7 @@
 #include "appstorage.h"
 #include "perfcheck.h"
 #include "wifiselftest.h"
+#include "sharing.h"
 #include "proof.h"
 #include "move.h"
 #include "morewire.h"
@@ -45,6 +48,8 @@
 #include "videomsg.h"
 #include "thumbs.h"
 #include "msglimits.h"
+#include "moderation.h"
+#include "modwire.h"
 #include "richwire.h"
 #include "filelink.h"
 #include "link.h"
@@ -64,6 +69,7 @@
 #include <QColor>
 #include <QFont>
 #include <QFontDatabase>
+#include <QMessageBox>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
@@ -183,8 +189,11 @@ public:
 
 int main(int argc, char *argv[])
 {
-    // Windows: a start log next to Huginn.exe and cleanup after an update.
+    // Windows: a start log and cleanup after an update.
     Platform::beginStart();
+    // The Windows portable build keeps everything in the data folder beside Huginn.exe (settings as an INI file there,
+    // never the registry): set before anything opens a setting or a folder.
+    Portable::setUp();
     s_previous = qInstallMessageHandler(messages);
     // Labs › Performance check: settings being tried (display mode, drawing, render loop) go in before Qt starts.
     PerfCheck::applyAtStart(argc, argv);
@@ -231,6 +240,8 @@ int main(int argc, char *argv[])
     args.addOption(wifiTest);
     QCommandLineOption stabilityTest(QStringLiteral("stability-selftest"), QStringLiteral("On a throwaway profile: a saved file that can't be read is never written over, a restarted copy waits for the closing one, a stuck one is taken over (for CI), then quit."));
     args.addOption(stabilityTest);
+    QCommandLineOption perfTest(QStringLiteral("perf-selftest"), QStringLiteral("On a throwaway profile: events through the relay thread and back, a shutdown that never hangs, saves in order on the saving thread, a flush that waits for them (for CI), then quit."));
+    args.addOption(perfTest);
     // Started by a copy that is closing (an update, a restore): wait for it to end before starting.
     QCommandLineOption restarted(QStringLiteral("restarted"), QStringLiteral("Wait for the copy that started this one to close."));
     restarted.setFlags(QCommandLineOption::HiddenFromHelp);
@@ -256,8 +267,12 @@ int main(int argc, char *argv[])
             Platform::startClaimed(false);   // a failing one keeps its log, without touching an update
         return ok ? 0 : 1;
     };
-    if (args.isSet(callTest))
-        return selfTested(CallSelfTest::run(args.value(callTest)));
+    if (args.isSet(callTest)) {
+        // Cap g2: the per-person volume is clamped and applied to decoded sound the same way as Muninn (g2-vectors.json).
+        const bool callsOk = CallSelfTest::run(args.value(callTest));
+        const bool volume = ModWire::volumeSelfTest(QFileInfo(args.value(callTest)).absoluteDir().filePath(QStringLiteral("g2-vectors.json")));
+        return selfTested(callsOk && volume);
+    }
     if (args.isSet(chatTest)) {
         const bool a = ChatCrypto::selfTest(args.value(chatTest)), b = ChatWire::selfTest();
         const bool c = GroupWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("proto06-vectors.json")));
@@ -273,7 +288,13 @@ int main(int argc, char *argv[])
         const bool k = Profile::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("p1-vectors.json")));
         // The ring key and the relay wrapping (b1, e1).
         const bool l = RingWire::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("e1b1-vectors.json")));
-        return selfTested(a && b && c && d && e && f && g && h && i && j && k && l);
+        // Group timeouts and bans (g2): signed records, forged ones refused, expiry, volume.
+        const bool m = Moderation::selfTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("g2-vectors.json")));
+        // File sharing (f2): routes, group file rules, safe folder and file names.
+        const bool n = Sharing::selfTest();
+        // Backups made by the reference as Huginn and as Muninn (shared/docs/backup.md).
+        const bool o = Vault::backupVectorTest(QFileInfo(args.value(chatTest)).absoluteDir().filePath(QStringLiteral("backup-vectors.json")));
+        return selfTested(a && b && c && d && e && f && g && h && i && j && k && l && m && n && o);
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
@@ -286,13 +307,20 @@ int main(int argc, char *argv[])
     if (args.isSet(stabilityTest)) {
         WifiSelfTest::isolate();
         const bool a = Vault::stabilitySelfTest(), b = SingleInstance::selfTest(), c = Chat::keySelfTest();
+        // Everything in the data folder beside Huginn.exe (Windows): its place, moving old data in, Erase everything.
+        const bool e = Portable::selfTest();
         // crash.log lines never carry the home folder (the account name) or a network address.
         const QString home = QDir::homePath();
         const QString scrubbed = CrashLog::scrub(QStringLiteral("at 192.168.1.20 and fe80::1 in ") + home + QStringLiteral("/x QQuickWindow::sceneGraphError"));
         const bool d = !scrubbed.contains(QLatin1String("192.168")) && !scrubbed.contains(QLatin1String("fe80"))
             && (home.size() <= 1 || !scrubbed.contains(home)) && scrubbed.contains(QLatin1String("QQuickWindow::sceneGraphError"));
         std::printf("crash log keeps out addresses and the home folder: %s\n", d ? "ok" : "FAILED");
-        return selfTested(a && b && c && d);
+        return selfTested(a && b && c && d && e);
+    }
+    if (args.isSet(perfTest)) {
+        WifiSelfTest::isolate();
+        const bool a = Nostr::threadSelfTest(), b = Vault::saveQueueSelfTest();
+        return selfTested(a && b);
     }
     if (args.isSet(privacyTest)) {
         const bool a = Vault::selfTest(), b = Photos::selfTest(), c = BleFrames::selfTest();
@@ -305,9 +333,26 @@ int main(int argc, char *argv[])
         return selfTested(a && b && c && d && e && f);
     }
 
+    // Said on screen when Huginn can't keep its data where it is (Windows: a folder it can't write, like Program
+    // Files): it never falls back to somewhere else.
+    auto stopWith = [](const QString &text) {
+        QMessageBox::warning(nullptr, QStringLiteral("Huginn"), text);
+        Platform::noStartLog();
+        PerfCheck::notStarting();   // nothing was drawn: no failed start to count
+        return 1;
+    };
+    if (!quiet) {
+        const QString problem = Portable::folderProblem();
+        if (!problem.isEmpty())
+            return stopWith(problem);
+    }
     // crash.log (Windows and Linux): crashes, fatal errors, graphics failures and runs that never closed.
     if (!quiet)
         CrashLog::start();
+    // Windows: a Huginn from before the data folder keeps its lock in AppData. One that is closing (it started this
+    // copy to update) is waited for; one still open stays the only copy.
+    if (!quiet && !Portable::oldCopyClosed(args.isSet(restarted) ? SingleInstance::kRestartWaitMs : 1000))
+        return stopWith(QStringLiteral("An older Huginn is still open. Close it, then open Huginn again."));
     // One copy at a time: two would share the same chat folder and vault files. A restarted copy waits here
     // until the copy that started it has saved and closed.
     auto *one = new SingleInstance(&app);
@@ -322,6 +367,13 @@ int main(int argc, char *argv[])
         Platform::noStartLog();
         PerfCheck::notStarting();
         return 0;
+    }
+    // Windows, first start of this version: Huginn's AppData folders and registry settings move into the data folder.
+    // Nothing starts on an empty folder while the old data is still elsewhere.
+    if (!quiet) {
+        QString why;
+        if (!Portable::moveOldData(&why))
+            return stopWith(why);
     }
     if (!quiet) {
         CrashLog::claimed();
@@ -376,6 +428,7 @@ int main(int argc, char *argv[])
     if (quiet && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // the throwaway profile only: no lock to draw
     auto *updater = new Updater(settings, &app);
+    updater->saving = [system] { return system->batterySaving(); };   // Battery saver: timed update checks every 12 hours
     // The internet inbox's key lives in the vault; empty while locked (the inbox still says "new message").
     auto *nostr = new Nostr([vault] {
         if (vault->locked())
@@ -406,6 +459,11 @@ int main(int argc, char *argv[])
     // The internet inbox's list of events already taken: in the vault too.
     nostr->keepSeen = [vault](const QByteArray &stored) {
         return !vault->locked() && vault->write(QStringLiteral("nostrseen.json"), stored);
+    };
+    // Made and written on the saving thread (the list can be large).
+    nostr->keepSeenLater = [vault](std::function<QByteArray()> make) {
+        if (!vault->locked())
+            vault->writeLater(QStringLiteral("nostrseen.json"), std::move(make));
     };
     QObject::connect(vault, &Vault::opened, nostr, [vault, nostr] { nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json"))); });
     if (!vault->locked())
@@ -444,7 +502,7 @@ int main(int argc, char *argv[])
     Busy::addStatus(calls, [calls] { return QStringList{QStringLiteral("calls: ") + (calls->inCall() ? calls->state() : QStringLiteral("none"))}; });
     // Cap b1: the ring key lives in Huginn's own data folder but outside the vault (never an OS key store), so a call
     // rings even while Huginn is locked: only "Incoming call", no name, until it's unlocked.
-    auto *ringKey = new RingKey(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ring-key.json"));
+    auto *ringKey = new RingKey(System::dataDir() + QStringLiteral("/ring-key.json"));
     chat->setRingKey(ringKey);
     nostr->ringMailboxes = [ringKey] { return ringKey->mailboxes(); };
     nostr->ringSecrets = [ringKey] { return ringKey->nostrSecrets(); };
@@ -473,6 +531,18 @@ int main(int argc, char *argv[])
     rooms->lacksRooms = [chat](const QString &k) { return chat->lacksRooms(k); };
     rooms->memberName = [chat](const QString &g, const QString &k) { return chat->groupMemberName(g, k); };
     calls->busyElsewhere = [rooms] { return rooms->inRoom(); };
+    // Mute for me, volume, group timeouts and bans (cap g2).
+    auto *mod = new Moderation(chat, &app);
+    chat->setModeration(mod);
+    CallSession::gainFor = [mod](const QString &k) { return mod->gainFor(k); };
+    rooms->barred = [mod](const QString &g, const QString &k) { return mod->barred(g, k); };
+    rooms->joinBlock = [mod](const QString &g) { return mod->postBlock(g); };
+    // A muted chat or group: its calls don't ring (kept as missed in that chat, without a notification).
+    calls->hushedFor = [chat](const QString &k) { return chat->isMuted(k) && !chat->isRightAway(k); };
+    rooms->hushedFor = [chat](const QString &g) {
+        const QString k = QStringLiteral("g:") + g;
+        return chat->isMuted(k) && !chat->isRightAway(k);
+    };
     // Caps i1 and f1 and linked devices: introductions, files straight between trusted contacts
     // ("Direct calls" on for each other, as calls decide it) and a phone's companion.
     auto *trust = new Trust(chat, &app);
@@ -503,6 +573,15 @@ int main(int argc, char *argv[])
     };
     auto phoneMe = [linked, profile] { profile->setPhoneMe(!linked->me().isEmpty(), linked->mePicture(), linked->meStatus()); };
     QObject::connect(linked, &Link::changed, profile, phoneMe);
+    // Cap l1: the phone is the whole account here: its picture becomes this device's own, its contacts' pictures show.
+    linked->setMyPicture = [profile](const QByteArray &jpeg) {
+        const QImage img = jpeg.isEmpty() ? QImage() : QImage::fromData(jpeg, "JPEG");
+        if (img.isNull())
+            profile->clearMyPicture();
+        else
+            profile->setMyPicture(img);
+    };
+    QObject::connect(linked, &Link::picturesChanged, profile, [linked, profile] { profile->setLinkedPictures(linked->contactPictures()); });
     QObject::connect(profile, &Profile::changed, linked, [linked] { linked->sendMe(false); });
     // Labs mode: bug reports, and the channel back to Stable before the stable release is installed.
     auto *labs = new Labs(chat, vault, settings, &app);
@@ -517,6 +596,10 @@ int main(int argc, char *argv[])
     updater->beforeGoingBack = [labs] { return labs->beforeGoingBack(); };
     // Moving to another device (cap x1): on the Wi-Fi port, and locked while it moves.
     auto *mover = new Move(chat, vault, linked, localSend, &app);
+    // Backups carry the shared form, so one made in Muninn restores here (shared/docs/backup.md).
+    vault->sharedForm = [mover] { return mover->sharedForm(); };
+    vault->fromSharedForm = [mover](const QByteArray &form, QString *error) { return mover->fromSharedForm(form, error); };
+    vault->deviceName = [settings] { return settings->deviceName(); };
     localSend->moveReceive = [mover](const QByteArray &body) { return mover->handle(body); };
     QObject::connect(vault, &Vault::panicked, rooms, &RoomManager::leave);
     // The raven call: for new messages, and once when something arrives while Chat is locked.
@@ -548,9 +631,10 @@ int main(int argc, char *argv[])
     // A message arrived: the raven call, and a desktop notification unless that chat is on screen.
     QObject::connect(chat, &Chat::arrived, &app, [chat, sound, vault, linked](const QString &name, const QString &text, const QString &key) {
         const bool looking = QGuiApplication::applicationState() == Qt::ApplicationActive && chat->property("openChat").toString() == key;
-        // A muted chat makes no sound; an archived one comes back to the list.
+        // A muted chat makes no sound, nor someone nearby put away with Hide; an archived one comes back to the list.
+        // Reduce notifications: one per chat until it's opened (a group: mentions and replies only, when set so).
         // Do not disturb: no sound and no notification either.
-        if (!chat->notifyFor(key) || looking || Settings::silenced())
+        if (!chat->notifyFor(key, name) || looking || Settings::silenced())
             return;
         // Quiet hours and Settings › Notifications › Message sound: the notification still shows.
         if (!Settings::hushed() && Settings::messageSoundOn())
@@ -585,12 +669,12 @@ int main(int argc, char *argv[])
         else
             text = result == QLatin1String("Declined") ? QStringLiteral("You declined a call") : QStringLiteral("Incoming call");
         chat->noteCall(key, text, missed);
-        if (missed)
+        if (missed && !(chat->isMuted(key) && !chat->isRightAway(key)))
             missedNote(key, chat->nameOf(key), QStringLiteral("From %1").arg(chat->nameOf(key)));
     });
     QObject::connect(rooms, &RoomManager::logged, chat, [chat, missedNote](const QString &g, const QString &text, bool missed) {
         chat->noteCall(QStringLiteral("g:") + g, text, missed);
-        if (missed)
+        if (missed && !(chat->isMuted(QStringLiteral("g:") + g) && !chat->isRightAway(QStringLiteral("g:") + g)))
             missedNote(QStringLiteral("g:") + g, QString(), text);
     });
     auto *direct = new Direct(&app);
@@ -658,6 +742,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Calls", calls);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Rooms", rooms);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Trust", trust);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "Mod", mod);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "FileLink", files);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Linked", linked);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Mover", mover);

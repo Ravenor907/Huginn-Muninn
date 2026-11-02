@@ -512,13 +512,17 @@ int Chat::receiveExtra(const QString &room, const QString &fromKey, const QStrin
     if (room == QLatin1String("intro"))
         return m_trust ? m_trust->receive(fromKey, name, mailbox, p) : 400;
     if (room == QLatin1String("file")) {
-        // Only between contacts (14.1); at most 30 in 10 seconds each.
-        if (!isContact(fromKey))
+        // Between contacts (14.1), and between members of a group for that group's files (cap f2, 27.2): their offer
+        // names the group, their answer is to a file of mine on its way to them. At most 30 in 10 seconds each.
+        const QString g = p.value(QStringLiteral("g")).toString();
+        const bool member = (!g.isEmpty() && groupFileMembers(g).contains(fromKey))
+            || (m_files && m_files->expects(fromKey, p.value(QStringLiteral("id")).toString()));
+        if (!isContact(fromKey) && !member)
             return 403;
         if (!m_files || !FileLink::ok(p))
             return 400;
         // Files turned off for them: their offers are dropped quietly.
-        if (!filesAllowed(fromKey))
+        if (isContact(fromKey) && !filesAllowed(fromKey))
             return 200;
         if (!rateOk(m_recentCall, QStringLiteral("file|") + fromKey, 30))
             return 429;

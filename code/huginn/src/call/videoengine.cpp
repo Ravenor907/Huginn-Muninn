@@ -9,6 +9,7 @@
 #include <QMediaDevices>
 #include <QScreen>
 #include <QScreenCapture>
+#include <QWindowCapture>
 #include <QVideoFrameFormat>
 #include <QVideoSink>
 #include <algorithm>
@@ -213,12 +214,26 @@ bool VideoSender::start()
         connect(m_camera, &QCamera::errorOccurred, this, [this](QCamera::Error, const QString &text) { Q_EMIT failed(text); });
         m_capture->setCamera(m_camera);
         m_camera->start();
+    } else if (m_useWindow) {
+        // One app window: only it is captured, wherever it is and whatever is in front of it.
+        if (!m_window.isValid())
+            return false;
+        if (!m_windowCap) {
+            m_windowCap = new QWindowCapture(this);
+            connect(m_windowCap, &QWindowCapture::errorOccurred, this, [this](QWindowCapture::Error, const QString &text) { Q_EMIT failed(text); });
+        }
+        m_windowCap->setWindow(m_window);
+        m_capture->setWindowCapture(m_windowCap);
+        m_windowCap->start();
     } else {
         if (!m_screen) {
             m_screen = new QScreenCapture(this);
             connect(m_screen, &QScreenCapture::errorOccurred, this, [this](QScreenCapture::Error, const QString &text) { Q_EMIT failed(text); });
         }
-        m_screen->setScreen(QGuiApplication::primaryScreen());
+        QScreen *screen = m_target ? m_target.data() : QGuiApplication::primaryScreen();
+        if (!screen)
+            return false;
+        m_screen->setScreen(screen);
         m_capture->setScreenCapture(m_screen);
         m_screen->start();
     }
@@ -236,6 +251,8 @@ void VideoSender::stop()
         m_camera->stop();
     if (m_screen)
         m_screen->stop();
+    if (m_windowCap)
+        m_windowCap->stop();
     if (m_preview)
         m_preview->setVideoFrame(QVideoFrame());
 }

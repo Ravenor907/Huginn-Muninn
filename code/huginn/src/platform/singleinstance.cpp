@@ -1,4 +1,5 @@
 #include "singleinstance.h"
+#include "portable.h"
 #include "../busy.h"
 #include "winstart.h"
 
@@ -84,7 +85,7 @@ SingleInstance::SingleInstance(QObject *parent, const QString &where)
     : QObject(parent)
 {
     // Per user: the app data folder differs per account, so its hash names the socket.
-    const QString dir = where.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) : where;
+    const QString dir = where.isEmpty() ? Portable::dataDir() : where;
     QDir().mkpath(dir);
     const QByteArray h = QCryptographicHash::hash(dir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
     m_name = QStringLiteral("io.github.ravenor907.Huginn-") + QString::fromLatin1(h);

@@ -42,7 +42,10 @@ class GroupsTest {
         override fun deleteBlob(id: String) {}
         override fun hasM1(k: String) = k !in noM1
         override fun hasD1(k: String) = k !in noD1
+        override fun hasJ1(k: String) = k !in noJ1
     }
+    /** Phones whose app doesn't have j1 (no links, and "Members can invite" can't be on with them in). */
+    private val noJ1 = HashSet<String>()
     /** Phones whose app doesn't have d1 (they can't be in a Family or Work group). */
     private val noD1 = HashSet<String>()
     /** Phones whose app doesn't have m1 (reactions and edits aren't sent to them). */
@@ -402,10 +405,10 @@ class GroupsTest {
         same(g, a, b, c)
         phones.forEach { assertEquals(30, Limits.groupDays(it.state(g))); assertEquals("family", it.state(g).kind) }
         // Only admins change it.
-        assertNotNull(c.groups.setLimit(g, "work", 14))
+        assertNotNull(c.groups.setLimit(g, "folk", 14))
         // An app without d1 can't be invited into a Family group.
-        val d = a.groups.create("Other", "work")!!
-        assertEquals("work", a.state(d).kind)
+        val d = a.groups.create("Other", "family")!!
+        assertEquals("family", a.state(d).kind)
         noD1.add(b.key)
         assertNotNull(a.groups.invite(d, b.key))
         noD1.clear()
@@ -421,9 +424,44 @@ class GroupsTest {
         // A late copy of what went doesn't come back.
         val old = a.groups.messages.value[g].orEmpty().first { it.text == "Old news" }
         assertNotNull(b.groups.knownEnvelope(old.id + "-00000000"))
-        // Back to Standard: the fields go and apps without d1 take the state again.
-        assertNull(a.groups.setLimit(g, "", 7)); pump()
+        // Back to Folk: the fields go and apps without d1 take the state again.
+        assertNull(a.groups.setLimit(g, "folk", 7)); pump()
         assertEquals(Limits.DEFAULT, Limits.groupDays(b.state(g)))
         assertFalse(b.state(g).canonSigned().contains("kind"))
+    }
+
+    /** Group types (16.2, 17.1): Folk lets members invite by default; Family has no links and only admins add people. */
+    @Test
+    fun folkAndFamilyRules() {
+        val g = family()   // made as Folk (the default)
+        assertEquals(Limits.FOLK, Limits.groupType(a.state(g)))
+        assertTrue(a.state(g).mi)
+        assertTrue(Limits.membersMayInvite(b.state(g)))
+        // A member's link and an admin's link work in a Folk group.
+        val (link, err) = a.groups.createLink(g, 0, 0)
+        assertNotNull(link); assertNull(err); pump()
+        assertEquals(1, a.groups.links(g).size)
+        // Family: the links stop, "Members can invite" goes, and new ones are refused.
+        assertNull(a.groups.setLimit(g, Limits.FAMILY, 30)); pump()
+        same(g, a, b, c)
+        phones.forEach { assertEquals(Limits.FAMILY, Limits.groupType(it.state(g))); assertFalse(it.state(g).mi) }
+        assertTrue(a.groups.links(g).isEmpty())
+        assertNotNull(a.groups.createLink(g, 0, 0).second)
+        assertNotNull(a.groups.setMembersInvite(g, true))
+        assertNotNull(b.groups.createLink(g, 0, 0).second)
+        // An admin's group code still works.
+        assertNotNull(a.groups.code(g))
+        // Back to Folk: 7 days, members can invite again.
+        assertNull(a.groups.setLimit(g, Limits.FOLK, 7)); pump()
+        assertEquals(Limits.DEFAULT, Limits.groupDays(c.state(g)))
+        assertTrue(c.state(g).mi)
+        // Someone without j1: Folk is made without "Members can invite".
+        assertNull(a.groups.setLimit(g, Limits.FAMILY, 14)); pump()
+        noJ1.add(c.key)
+        assertNull(a.groups.setLimit(g, Limits.FOLK, 7)); pump()
+        assertFalse(a.state(g).mi)
+        noJ1.clear()
+        // A new Family group: no "mi" from the start.
+        assertFalse(a.state(a.groups.create("Kin", Limits.FAMILY)!!).mi)
     }
 }

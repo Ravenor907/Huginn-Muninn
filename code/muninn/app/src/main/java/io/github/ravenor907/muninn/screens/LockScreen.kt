@@ -46,6 +46,9 @@ import androidx.compose.runtime.collectAsState
 /** Shown while Muninn is locked with a password. Nothing else is readable until it's typed. */
 @Composable
 fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
+    // The lock file or the keys can't be read: never a new key over what's here, the way back instead.
+    val trouble by app.vault.trouble.collectAsState()
+    trouble?.let { VaultTrouble(app, it, done); return }
     var pw by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }

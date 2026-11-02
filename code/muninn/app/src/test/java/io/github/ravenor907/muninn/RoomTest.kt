@@ -100,4 +100,36 @@ class RoomTest {
         val s = CallLogic.parse("x", """{"t":"vring","call":"-","g":"a","ch":"b","ts":1,"sig":"x"}""")
         assertTrue(s.voiceRoom)
     }
+
+    /** Cap v2 (6.8): heartbeats every 10 s; Reconnecting after 20 s without news, gone after 60 s. Without v2: 25 minutes. */
+    @Test
+    fun heartbeats() {
+        val join = msg("joinB")
+        val who = keys.getString("B")
+        val g = join.getString("g"); val ch = join.getString("ch"); val t0 = RoomLogic.ts(join)
+        val p = RoomLogic.Presence()
+        assertTrue(p.apply(who, join, t0, beats = true, fresh = true))
+        assertEquals(1, p.state(g, ch, who, t0 + 10_000))
+        assertEquals(2, p.state(g, ch, who, t0 + RoomLogic.QUIET_MS + 1))
+        assertEquals(listOf(who), p.inRoom(g, ch, t0 + RoomLogic.QUIET_MS + 1))
+        assertEquals(0, p.state(g, ch, who, t0 + RoomLogic.GONE_MS + 1))
+        assertTrue(p.inRoom(g, ch, t0 + RoomLogic.GONE_MS + 1).isEmpty())
+        assertTrue(p.rooms(g, t0 + RoomLogic.GONE_MS + 1).isEmpty())
+        // The next heartbeat keeps them in.
+        assertTrue(p.apply(who, JSONObject(join.toString()).put("ts", t0 + RoomLogic.HEARTBEAT_MS), t0 + 55_000, beats = true))
+        assertEquals(1, p.state(g, ch, who, t0 + 70_000))
+        // A late copy brings nobody back.
+        val late = RoomLogic.Presence()
+        assertTrue(late.apply(who, join, t0, beats = true, fresh = false))
+        assertEquals(0, late.state(g, ch, who, t0))
+        // An app without v2: 25 minutes, as before.
+        val old = RoomLogic.Presence()
+        old.apply(who, join, t0)
+        assertEquals(1, old.state(g, ch, who, t0 + 20 * 60_000L))
+        assertEquals(0, old.state(g, ch, who, t0 + 26 * 60_000L))
+        assertEquals(1, RoomLogic.heard(5_000, true)); assertEquals(2, RoomLogic.heard(25_000, true))
+        assertEquals(0, RoomLogic.heard(61_000, true)); assertEquals(1, RoomLogic.heard(61_000, false))
+        assertTrue(RoomLogic.HEARTBEAT_CAP in Proto06.caps(Proto06.CAPS))
+    }
 }
+

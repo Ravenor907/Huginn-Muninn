@@ -1,5 +1,6 @@
 #include "appstorage.h"
 #include "updater.h"
+#include "system.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -98,8 +99,8 @@ bool AppStorage::allowed(const QString &id) { return spotOf(id) != nullptr; }
 AppStorage::Roots AppStorage::roots()
 {
     Roots r;
-    const QString c = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-    const QString d = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString c = System::cacheDir();
+    const QString d = System::dataDir();
     if (!c.isEmpty()) r.insert(QLatin1Char('c'), c);
     if (!d.isEmpty()) r.insert(QLatin1Char('d'), d);
     return r;

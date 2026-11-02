@@ -18,6 +18,7 @@ QProcessEnvironment childEnvironment() { return QProcessEnvironment::systemEnvir
 #else
 
 #include "crashlog.h"
+#include "portable.h"
 #include "singleinstance.h"
 #include "winupdate.h"
 
@@ -76,11 +77,12 @@ QString exeDir()
     return QFileInfo(QDir::fromNativeSeparators(QString::fromStdWString(self))).absolutePath();
 }
 
-// Opens Huginn-start.log next to Huginn.exe (the temp folder if that can't be written) and writes
-// what waited. mode: L"w" for a fresh log, L"a" to add to one (a crash before startClaimed).
+// Opens Huginn-start.log in the data folder beside Huginn.exe (next to Huginn.exe on a development build; the temp
+// folder if that can't be written) and writes what waited. mode: L"w" for a fresh log, L"a" to add to one (a crash
+// before startClaimed).
 void openLog(const wchar_t *mode)
 {
-    for (const QString &where : {exeDir(), QDir::tempPath()}) {
+    for (const QString &where : {Portable::on() ? Portable::dataDir() : exeDir(), QDir::tempPath()}) {
         if (where.isEmpty())
             continue;
         s_logPath = where + QStringLiteral("/Huginn-start.log");

@@ -121,10 +121,11 @@ object RoomManager {
 
     fun init(app: Muninn) {
         this.app = app
-        // Who is in a room ages out: a screen showing it looks again every minute, only while one is showing it.
+        // Who is in a room ages out (25 minutes, or 20 s and 60 s for an app with heartbeats): a screen showing it looks
+        // again every 5 s, only while one is showing it.
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default).launch {
             _presence.subscriptionCount.map { it > 0 }.distinctUntilChanged().collectLatest { watched ->
-                while (watched) { delay(60_000); _presence.value = _presence.value + 1 }
+                while (watched) { delay(5_000); _presence.value = _presence.value + 1 }
             }
         }
     }
@@ -144,6 +145,32 @@ object RoomManager {
         val c = try { a.chat.contacts.get(k) } catch (e: Exception) { null } ?: return false
         if (try { a.chat.blocked.value.contains(k) } catch (e: Exception) { false }) return false
         return c.caps.isEmpty() || "v1" in c.caps
+    }
+
+    /** Cap g2: [k] is timed out or banned in [group]. */
+    private fun barred(group: String, k: String): Boolean = try { app?.chat?.groups?.barred(group, k) == true } catch (e: Exception) { false }
+
+    /** Cap v2 (6.8): [k]'s app says "still here" every 10 s while in a room. */
+    private fun beats(k: String): Boolean = try { app?.chat?.contacts?.get(k)?.caps?.contains(RoomLogic.HEARTBEAT_CAP) == true } catch (e: Exception) { false }
+
+    /** When a heartbeat last led to an offer, per person: at most every 30 s, so a pair that can't connect doesn't retry every 10 s. */
+    private val offered = HashMap<String, Long>()
+
+    /** Every 10 s in a room: vjoin to members with v2; someone with v2 quiet for 60 s whose call isn't up leaves the room. */
+    private fun heartbeat() {
+        if (g.isEmpty()) return
+        // Cap g2: timed out or banned while in the room: out of it; anyone else timed out or banned leaves it here.
+        app?.chat?.groups?.myStatus(g)?.takeIf { it.isNotEmpty() }?.let { doLeave(it); return }
+        val out = peers.keys.filter { barred(g, it) }
+        if (out.isNotEmpty()) { out.forEach { drop(it); speaking.remove(it) }; publish() }
+        for (k in members(g)) if (beats(k)) sendRoom("vjoin", k, g, ch)
+        if (now() - joinedAt < RoomLogic.GONE_MS) return
+        var gone = false
+        for ((k, p) in peers.entries.toList()) {
+            if (!beats(k) || p.s.phase == CallSession.Phase.LIVE) continue
+            if (presenceTable.state(g, ch, k, now()) == 0) { drop(k); speaking.remove(k); gone = true }
+        }
+        if (gone) publish()
     }
 
     /** Known to have an app without voice rooms. */
@@ -177,6 +204,8 @@ object RoomManager {
         if (!RoomLogic.isRoomId(room)) return "That isn't a voice room."
         val st = state(group) ?: return "You're not in this group anymore."
         if (!st.has(me())) return "You're not in this group anymore."
+        // Cap g2: timed out or banned here.
+        app?.chat?.groups?.myStatus(group)?.takeIf { it.isNotEmpty() }?.let { return it }
         if (!RoomLogic.isGroupCall(room) && st.channel(room)?.t != "voice") return "That isn't a voice room."
         if (g == group && ch == room) return null
         busy = true
@@ -201,6 +230,8 @@ object RoomManager {
             if (state(g) == null) { doLeave("You're not in this group anymore"); return@scheduleWithFixedDelay }
             announce(false)
         }, RoomLogic.ANNOUNCE_MS, RoomLogic.ANNOUNCE_MS, TimeUnit.MILLISECONDS)
+        // Cap v2 (6.8): "still here" every 10 s.
+        timers += exec.scheduleWithFixedDelay({ if (my == gen) heartbeat() }, RoomLogic.HEARTBEAT_MS, RoomLogic.HEARTBEAT_MS, TimeUnit.MILLISECONDS)
         RoomService.start(a)
         bumpPresence()
         publish()
@@ -214,6 +245,7 @@ object RoomManager {
         for (k in members(group)) sendRoom("vleave", k, group, room)
         gen++
         g = ""; ch = ""
+        offered.clear()
         timers.forEach { it.cancel(false) }; timers.clear()
         val all = peers.values.toList()
         peers.clear()
@@ -303,7 +335,12 @@ object RoomManager {
         if (mine) peers.keys.forEach { if (it !in keys) keys += it }
         val out = ArrayList<Person>()
         if (mine) out += Person(me(), "You", true, speaking = mySpeaking && !muted, muted = muted)
-        for (k in keys) if (k != me()) out += Person(k, nameOf(group, k), false, speaking = mine && speaking[k] == true)
+        val t = now()
+        for (k in keys) if (k != me()) {
+            val s = if (mine) peers[k]?.s else null
+            val quiet = s?.phase != CallSession.Phase.LIVE && (s?.phase == CallSession.Phase.RECONNECTING || presenceTable.state(group, room, k, t) == 2)
+            out += Person(k, nameOf(group, k), false, speaking = mine && speaking[k] == true, state = if (quiet) "reconnecting" else "live")
+        }
         return out
     }
 
@@ -330,6 +367,8 @@ object RoomManager {
             people += Person(k, nameOf(g, k), false, speaking = speaking[k] == true, muted = s.peerMuted,
                 state = if (live) "live" else if (s.phase == CallSession.Phase.RECONNECTING) "reconnecting" else "connecting")
         }
+        // Cap v2 (6.8): still saying they're here, but their call dropped: Reconnecting until it's back or they're gone.
+        for (k in presenceTable.inRoom(g, ch, now())) if (k != me() && peers[k] == null && beats(k)) people += Person(k, nameOf(g, k), false, state = "reconnecting")
         val sorted = listOf(people.first()) + people.drop(1).sortedBy { it.name.lowercase() }
         val title = if (RoomLogic.isGroupCall(ch)) "Group call" else st?.channel(ch)?.n ?: "Voice room"
         _room.value = Ui(g, ch, title, st?.name ?: "", sorted, muted, speakerOn, joinedAt, connected, RoomLogic.isGroupCall(ch), note)
@@ -436,15 +475,18 @@ object RoomManager {
         val verdict = RoomLogic.accept(state(group), me(), from, o, now())
         val fresh = verdict == "ok"
         if (!fresh && verdict != "stale") return
+        // Cap g2: someone timed out or banned doesn't join, ring or show up in this group's rooms (a leave still counts).
+        if (t != "vleave" && barred(group, from)) return
         val here = g == group && ch == room
         when (t) {
             "vjoin", "vleave" -> {
-                if (presenceTable.apply(from, o, now())) bumpPresence()
+                if (presenceTable.apply(from, o, now(), beats(from), fresh)) bumpPresence()
                 if (t == "vjoin") {
-                    if (fresh && here && !peers.containsKey(from)) {
-                        if (RoomLogic.full(peers.size)) sendRoom("full", from, group, room) else offerTo(from)
+                    if (fresh && here && !peers.containsKey(from) && now() - (offered[from] ?: 0L) >= 30_000) {
+                        if (RoomLogic.full(peers.size)) sendRoom("full", from, group, room) else { offered[from] = now(); offerTo(from) }
                     }
                 } else {
+                    offered.remove(from)
                     if (here) peers.remove(from)?.let { p -> p.s.hangup(); medias.remove(p.s.callId); speaking.remove(from); publish() }
                     val r = _ring.value
                     if (r != null && r.g == group && r.ch == room && presenceTable.inRoom(group, room, now()).isEmpty()) {
@@ -462,6 +504,8 @@ object RoomManager {
                 if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
                 // Extreme battery saver: group calls ring only while Muninn is open.
                 if (a.quietUntilOpen()) return
+                // A muted group: no ringing and no notification; its voice rooms show who is in the call.
+                if (try { a.chat.flags.muted(io.github.ravenor907.muninn.net.Folders.groupKey(group)) } catch (e: Exception) { false }) return
                 _ring.value = Ring(group, room, from, who, grp, now())
                 RoomRinger.ring(a, who, grp)
                 ringTimer = exec.schedule(Runnable {
@@ -489,7 +533,7 @@ object RoomManager {
         val s = try { CallLogic.parse(from, plain.toString()) } catch (e: CallLogic.Bad) { return }
         if (!CallLogic.fresh(s.ts, now())) return
         val st = state(group)
-        if (g != group || ch != room || st == null || !st.has(from) || s.codec != CallCrypto.CODEC) {
+        if (g != group || ch != room || st == null || !st.has(from) || s.codec != CallCrypto.CODEC || barred(group, from)) {
             CallManager.host.send(from, CallLogic.simple("decline", call))
             return
         }
@@ -602,12 +646,14 @@ object RoomManager {
                             Play.Silence -> { one.fill(0); Opus.FRAME }
                         }
                         if (n <= 0) one.fill(0)
-                        for (i in 0 until Opus.FRAME) mix[i] += one[i].toInt()
                         val key = peers.entries.firstOrNull { it.value.s.callId == id }?.key
                         if (key != null) {
                             val s = talk.getOrPut(id) { CallLogic.Speaking() }.feed(one, Opus.FRAME, nowMs)
                             if (s != (speaking[key] == true)) { speaking[key] = s; exec.execute { publish() } }
+                            // Their volume here (cap g2: 0 to 200 %, 0 while muted for me), before the mix.
+                            io.github.ravenor907.muninn.net.ModLogic.applyGain(one, Opus.FRAME, io.github.ravenor907.muninn.net.PeopleSound.gainOf(key))
                         }
+                        for (i in 0 until Opus.FRAME) mix[i] += one[i].toInt()
                     }
                     // Peers that left: their decoders go.
                     decoders.keys.filter { !medias.containsKey(it) }.forEach { decoders.remove(it)?.close(); talk.remove(it) }

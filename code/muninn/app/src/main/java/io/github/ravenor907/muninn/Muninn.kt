@@ -54,7 +54,7 @@ class Muninn : Application() {
         identity = Identity(this, vault)
         io.github.ravenor907.muninn.ui.Access.apply {
             size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
-            colorBlind = identity.colorBlind; reduceMotion = identity.reduceMotion; look = io.github.ravenor907.muninn.ui.Looks.of(identity.look)
+            colorVision = identity.colorVision; reduceMotion = identity.reduceMotion; look = io.github.ravenor907.muninn.ui.Looks.of(identity.look)
             season = io.github.ravenor907.muninn.ui.Seasons.choice(identity.season)
             seasonGround = io.github.ravenor907.muninn.ui.Seasons.ground(identity.seasonGround)
             seasonAnim = io.github.ravenor907.muninn.ui.Seasons.anim(identity.seasonAnim)
@@ -99,7 +99,8 @@ class Muninn : Application() {
         vault.onErase = {
             ring.forget()
             nostr.forgetHeld()
-            if (ready.value) try { chat.forgetKeys() } catch (_: Exception) {}
+            if (ready.value) try { chat.forgetKeys(); chat.forgetKeyCache() } catch (_: Exception) {}
+            io.github.ravenor907.muninn.ui.PhotoCache.clear()
         }
         // Screen, charging, Battery Saver, Doze, calls and the network decide how connected to stay.
         // (It also reconnects to the relays at once when the network comes back.)
@@ -107,11 +108,30 @@ class Muninn : Application() {
         power.install()
         // Moving to another device (cap x1): one under way goes on, and this device stays locked until it's done.
         io.github.ravenor907.muninn.net.Move.init(this)
-        if (vault.openDefault()) start()
+        // Reading the stores takes a moment: off the main thread, with the window showing "Opening" meanwhile.
+        if (vault.openDefault()) startAsync()
         io.github.ravenor907.muninn.net.MessageService.start(this)
         // Check the internet inbox even when Muninn is closed: every 15 minutes (Android's shortest) or every
         // hour, as Settings › Check for messages says; never for "Only when open".
         power.schedule()
+    }
+
+    /**
+     * [start] on a background thread (app start, and right after unlocking), so the window never waits on the stores.
+     * [then] runs on the main thread once everything is running.
+     */
+    fun startAsync(then: (() -> Unit)? = null) {
+        if (ready.value) { then?.invoke(); return }
+        scope.launch {
+            kotlinx.coroutines.withContext(Dispatchers.Default) { start() }
+            then?.invoke()
+        }
+    }
+
+    /** Everything running now if the vault is open (waits for a start under way). For a reply right after a restart. */
+    fun ensureStarted(): Boolean {
+        if (!ready.value && !vault.locked.value) start()
+        return ready.value
     }
 
     /** Called once the vault is open. */
@@ -123,6 +143,8 @@ class Muninn : Application() {
         ble = io.github.ravenor907.muninn.net.Ble(this) { chat.hello() }
         // Hidden from people nearby: Bluetooth is silent too (section 21.3).
         ble.hidden = { !identity.visibleNearby }
+        // A Kids' TV keeps its own nearby behavior: the Nearby switch is for everyone else.
+        identity.kidsTv = { try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { false } }
         contacts = Contacts(this, vault)
         chat = Chat(this, net, ble, nostr, contacts, vault)
         chat.ringKey = nostr.ring
@@ -138,18 +160,22 @@ class Muninn : Application() {
             if (io.github.ravenor907.muninn.net.NetLogic.opensTalk(key)) power.talk()
             // Muted chats stay quiet; an archived chat comes back to the list (unless muted).
             if (!chat.flags.arrived(key)) return@collect
-            if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { buzz(); return@collect }
+            // Someone nearby put away with Hide (not a contact) stays quiet too.
+            if (chat.flags.hidden(key) && !chat.isContact(key)) return@collect
+            if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) { coalesce.drop(key); buzz(); return@collect }
+            // Reduce notifications: one per chat until it's opened; a group can also be set to mentions and replies only.
+            if (!chat.flags.alert(key, identity.reduceNotifications, toMe(key, name))) return@collect
             // Extreme battery saver: no notifications; the chat list shows what's new.
             if (power.extreme) return@collect
             // Quiet hours kept open for the "Always right away" list: everyone else's messages wait quietly.
             when (power.alert(key)) {
-                io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD -> notify(name, text, key, quiet = doNotDisturb())
-                io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET -> notify(name, text, key, quiet = true)
+                io.github.ravenor907.muninn.net.PowerLogic.Alert.LOUD -> notifySoon(name, text, key, quiet = doNotDisturb())
+                io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET -> notifySoon(name, text, key, quiet = true)
                 io.github.ravenor907.muninn.net.PowerLogic.Alert.NONE -> {}
             }
         } }
-        // Unsent: take its notification down too, so the text doesn't linger there.
-        scope.launch { chat.recalls.collect { key -> NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
+        // Unsent: take its notification down too, so the text doesn't linger there (and nothing held goes out after).
+        scope.launch { chat.recalls.collect { key -> coalesce.drop(key); NotificationManagerCompat.from(this@Muninn).cancel(key.hashCode()) } }
         ready.value = true
         // Kids' TV: a file on its way shows over other apps too (TvRoot shows it in Muninn).
         if (io.github.ravenor907.muninn.tv.KidMode.isTv(this)) scope.launch { io.github.ravenor907.muninn.tv.TvBanner.watch(this@Muninn) }
@@ -159,8 +185,40 @@ class Muninn : Application() {
         power.ready()
         watchIdle()
         // Unlocked again later (the lock came due while Muninn was running): the same catching up.
-        scope.launch { vault.locked.drop(1).collect { locked -> if (!locked) unlocked() } }
+        scope.launch { vault.locked.drop(1).collect { locked -> if (!locked) unlocked() else lockedNow() } }
         unlocked()
+        // The message service asked to listen before everything was running: the Wi-Fi side starts now too.
+        if (nostr.keepAlive) listen()
+    }
+
+    /** Locked: the pair keys and decoded pictures kept in memory go, and nothing held back is posted. */
+    private fun lockedNow() {
+        try { chat.forgetKeyCache() } catch (_: Exception) {}
+        io.github.ravenor907.muninn.ui.PhotoCache.clear()
+        coalesce.clear()
+    }
+
+    /** Rapid messages in one chat make one notification ([io.github.ravenor907.muninn.net.NotifyCoalescer]). */
+    private val coalesce = io.github.ravenor907.muninn.net.NotifyCoalescer<Held>()
+    private class Held(val name: String?, val text: String?, val quiet: Boolean)
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** The first message in a quiet spell notifies at once; more in the same chat right after it make one update. */
+    private fun notifySoon(name: String?, text: String?, key: String, quiet: Boolean) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        when (val o = coalesce.offer(key, Held(name, text, quiet), now)) {
+            is io.github.ravenor907.muninn.net.NotifyCoalescer.Offer.Now -> notify(name, text, key, quiet)
+            is io.github.ravenor907.muninn.net.NotifyCoalescer.Offer.Later ->
+                if (o.first) mainHandler.postDelayed({ flushNotice(key) }, (o.flushAt - now).coerceAtLeast(0L))
+        }
+    }
+
+    /** The window for [key] ended: the newest message held goes out as one update, unless that chat is open now. */
+    private fun flushNotice(key: String) {
+        val (h, _) = coalesce.flush(key, android.os.SystemClock.elapsedRealtime()) ?: return
+        if (visible && openChat == key && !io.github.ravenor907.muninn.ui.Panic.locked.value) return
+        if (power.extreme || vault.locked.value) return
+        notify(h.name, h.text, key, h.quiet)
     }
 
     /**
@@ -232,14 +290,16 @@ class Muninn : Application() {
     private var swept = false
 
     /** Stay reachable: the relays always (even locked, to say "New message"), and the Wi-Fi side once open. */
-    @Synchronized
+    /** The relays don't wait for a [start] under way (start calls this again once ready, for the Wi-Fi side). */
     fun listen() {
         nostr.keepAlive = true
         nostr.connect()
         if (!ready.value) return
-        if (!listening) { listening = true; net.start() }
-        // Asking every address on the Wi-Fi only once Muninn is on screen, never from the background.
-        if (visible && !swept) { swept = true; net.refresh() }
+        synchronized(this) {
+            if (!listening) { listening = true; net.start() }
+            // Asking every address on the Wi-Fi only once Muninn is on screen, never from the background.
+            if (visible && !swept) { swept = true; net.refresh() }
+        }
     }
 
     /** The refresh button on Chats: every relay checked again now, and anything not yet delivered sent again. */
@@ -250,6 +310,15 @@ class Muninn : Application() {
         nostr.checkInbox()
         chat.retryAllNow()
         net.announce()
+    }
+
+    /** A group message for me: an @mention of me, or a reply to one of my messages (the newest one there). */
+    private fun toMe(key: String, title: String): Boolean {
+        if (title.contains(" mentioned you in ")) return true
+        if (!key.startsWith("g:")) return false
+        val msgs = chat.groups.messages.value[key.removePrefix("g:")] ?: return false
+        val last = msgs.lastOrNull { !it.mine } ?: return false
+        return last.re.isNotEmpty() && msgs.any { it.id == last.re && it.mine }
     }
 
     /** The refresh button on Nearby: look again for phones close by, Huginn over Bluetooth, and devices on the Wi-Fi. */

@@ -106,7 +106,18 @@ QString RoomWire::accept(const QJsonObject *state, const QString &me, const QStr
 
 // ------------------------------------------------------------------ presence
 
-bool RoomWire::Presence::apply(const QString &from, const QJsonObject &m, qint64 now)
+const char RoomWire::kHeartbeatCap[] = "v2";
+
+int RoomWire::heard(qint64 quietMs, bool heartbeats)
+{
+    if (!heartbeats)
+        return quietMs <= kPresenceTtlMs ? 1 : 0;
+    if (quietMs > kGoneMs)
+        return 0;
+    return quietMs > kQuietMs ? 2 : 1;
+}
+
+bool RoomWire::Presence::apply(const QString &from, const QJsonObject &m, qint64 now, bool heartbeats, bool fresh)
 {
     const QString t = str(m, "t");
     if (t != QLatin1String("vjoin") && t != QLatin1String("vleave"))
@@ -123,16 +134,23 @@ bool RoomWire::Presence::apply(const QString &from, const QJsonObject &m, qint64
     e.key = from;
     e.in = t == QLatin1String("vjoin");
     e.ts = ts;
-    e.seen = now;
+    e.beats = heartbeats;
+    e.seen = heartbeats && !fresh ? now - kGoneMs - 1 : now;
     m_entries.insert(k, e);
     return true;
+}
+
+int RoomWire::Presence::state(const QString &g, const QString &ch, const QString &key, qint64 now) const
+{
+    const auto it = m_entries.constFind(g + QLatin1Char(' ') + ch + QLatin1Char(' ') + key);
+    return it == m_entries.cend() || !it->in ? 0 : heard(now - it->seen, it->beats);
 }
 
 QStringList RoomWire::Presence::in(const QString &g, const QString &ch, qint64 now) const
 {
     QStringList out;
     for (const Entry &e : m_entries)
-        if (e.g == g && e.ch == ch && e.in && now - e.seen <= kPresenceTtlMs)
+        if (e.g == g && e.ch == ch && e.in && heard(now - e.seen, e.beats) != 0)
             out << e.key;
     std::sort(out.begin(), out.end());
     return out;
@@ -142,7 +160,7 @@ QHash<QString, QStringList> RoomWire::Presence::rooms(const QString &g, qint64 n
 {
     QHash<QString, QStringList> out;
     for (const Entry &e : m_entries)
-        if (e.g == g && e.in && now - e.seen <= kPresenceTtlMs)
+        if (e.g == g && e.in && heard(now - e.seen, e.beats) != 0)
             out[e.ch] << e.key;
     for (auto it = out.begin(); it != out.end(); ++it)
         std::sort(it->begin(), it->end());
@@ -229,6 +247,27 @@ bool RoomWire::selfTest(const QString &vectorsPath)
     }
     expect(glareOk == glare.size() && glareOk > 0, QStringLiteral("glare: the lower chat key's offer wins"));
     expect(!full(6) && full(7), QStringLiteral("full at 7 peers (8 people)"));
+    // Cap v2 (6.8): heartbeats every 10 s; Reconnecting after 20 s quiet, gone after 60 s. Without v2: 25 minutes.
+    {
+        const QJsonObject join = msgs.value(QStringLiteral("joinB")).toObject().value(QStringLiteral("msg")).toObject();
+        const QString who = keys.value(QStringLiteral("B")).toString();
+        const QString jg = str(join, "g"), jch = str(join, "ch");
+        const qint64 t0 = qint64(join.value(QStringLiteral("ts")).toDouble());
+        Presence hb;
+        expect(!join.isEmpty() && hb.apply(who, join, t0, true, true) && hb.state(jg, jch, who, t0 + 10000) == 1
+                   && hb.state(jg, jch, who, t0 + kQuietMs + 1) == 2 && hb.in(jg, jch, t0 + kQuietMs + 1).contains(who)
+                   && hb.state(jg, jch, who, t0 + kGoneMs + 1) == 0 && hb.in(jg, jch, t0 + kGoneMs + 1).isEmpty(),
+               QStringLiteral("heartbeats: in, Reconnecting after 20 s, gone after 60 s"));
+        QJsonObject next = join;
+        next.insert(QStringLiteral("ts"), double(t0 + kHeartbeatMs));
+        expect(hb.apply(who, next, t0 + 55000, true, true) && hb.state(jg, jch, who, t0 + 70000) == 1, QStringLiteral("a heartbeat keeps them in"));
+        Presence late;
+        expect(late.apply(who, join, t0, true, false) && late.state(jg, jch, who, t0) == 0, QStringLiteral("a late copy brings nobody back"));
+        Presence old;
+        expect(old.apply(who, join, t0) && old.state(jg, jch, who, t0 + 20 * 60000) == 1 && old.state(jg, jch, who, t0 + 26 * 60000) == 0,
+               QStringLiteral("without v2: 25 minutes"));
+        expect(heard(5000, true) == 1 && heard(25000, true) == 2 && heard(61000, true) == 0 && heard(61000, false) == 1, QStringLiteral("heard()"));
+    }
     expect(isGroupCall(newGroupCallId()) && isId(str(r, "voiceRoom"), 8) && !isRoomId(QStringLiteral("main")), QStringLiteral("room ids"));
     std::printf("rooms: %s\n", g_fail == 0 ? "all good" : "FAILED");
     return g_fail == 0;

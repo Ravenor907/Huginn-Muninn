@@ -82,6 +82,9 @@ public:
     // my own again.
     void setPhoneMe(bool on, const QByteArray &pic, const QString &status);
     QByteArray myPictureJpeg() const { return m_me.pic; }   // my own picture as sent (empty when none)
+    // Cap l1 (protocol.md 15.1): a linked phone's contacts' pictures (key to JPEG), shown for anyone with none of their own
+    // here. Nothing of them is ever sent from here.
+    void setLinkedPictures(const QHash<QString, QByteArray> &pics);
 
     // The wire parts, shared with the self-test.
     static bool colourOk(const QJsonValue &v);
@@ -133,6 +136,8 @@ private:
     QTimer m_soon, m_every;
     bool m_phoneOn = false;
     QByteArray m_phonePic;
+    QHash<QString, QByteArray> m_linked;   // setLinkedPictures
+    qint64 m_linkedV = 0;
     QString m_phoneStatus;
     qint64 m_phoneV = 0;
     mutable QMutex m_sharedLock;

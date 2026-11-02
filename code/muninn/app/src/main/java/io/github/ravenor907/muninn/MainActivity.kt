@@ -350,7 +350,7 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    /** "Share" › Muninn from another app: copy what was shared so it can be sent, then open Files. */
+    /** "Share" › Muninn from another app: pick who gets it (a person, a group or a LocalSend device nearby: ShareToDialog). */
     private fun handleShare(i: Intent?) {
         if (i == null || (i.action != Intent.ACTION_SEND && i.action != Intent.ACTION_SEND_MULTIPLE)) return
         val uris = if (i.action == Intent.ACTION_SEND) listOfNotNull(if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM))
@@ -366,8 +366,12 @@ class MainActivity : ComponentActivity() {
                 show("chat")
                 Ui.say("Open a chat to send the GIF.")
             } else {
-                val files = Share.copyIn(this, uris, busy)
-                runOnUiThread { Share.pending.addAll(files); show("files") }
+                // Cap f2: into a chat, like the clip there (ShareToDialog); a LocalSend device nearby is in the same list.
+                val handed = uris.filter { Share.handedOver(this, it) }
+                runOnUiThread {
+                    if (handed.isEmpty()) Ui.say("That couldn't be read.", true)
+                    else { io.github.ravenor907.muninn.screens.ShareTo.pending.addAll(handed); show("chat") }
+                }
             }
         }.start()
     }
@@ -399,12 +403,21 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(panic) { if (panic) toList() }
         // Moving to another device (cap x1): locked while it moves, then "Moved to [name]".
         if (io.github.ravenor907.muninn.screens.MoveCover(app)) return
+        val vaultLocked by app.vault.locked.collectAsState()
+        // Open, and everything is still starting off the main thread: a light "Opening" instead of the lock screen.
+        if (!ready && !vaultLocked && !uiLocked && !panic) {
+            LaunchedEffect(Unit) { app.startAsync() }
+            Opening()
+            return
+        }
         if (!ready || uiLocked || panic) {
             // Locked again: a linked tablet's own chats are sealed away again too.
             LaunchedEffect(Unit) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
-            LockScreen(app) { ok -> if (ok) { uiLocked = false; app.start(); startNet(); suggestStronger() } }
+            LockScreen(app) { ok -> if (ok) { uiLocked = false; app.startAsync { startNet(); suggestStronger() } } }
             return
         }
+        // Started in the background (no lock, or unlocked): reachable from here on (startNet runs once).
+        LaunchedEffect(Unit) { startNet() }
         // A fresh phone or tablet: first setup (welcome, lock, name, permissions, people, a tour). It picks up again
         // after a restart; Labs › Replay first setup runs it as practice. Its pages cover everything; the tour sits over the main screen.
         remember { io.github.ravenor907.muninn.screens.Setup.maybeBegin(app, ciSkip) }
@@ -499,6 +512,8 @@ class MainActivity : ComponentActivity() {
             ChatNav.hold = ""; ChatNav.menuGroup = ""
         }
         io.github.ravenor907.muninn.screens.GroupCallPicker(app)
+        // Shared into Muninn from another app: who gets it.
+        if (ready) io.github.ravenor907.muninn.screens.ShareToDialog(app) { where -> show("chat"); ChatNav.open = where }
         // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
         io.github.ravenor907.muninn.screens.LinkCheck()
         ask?.let { AskDialog(it) }
@@ -711,6 +726,16 @@ class MainActivity : ComponentActivity() {
                     Toast(toast, Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp))
                 }
             }
+        }
+    }
+
+    /** While everything starts in the background: the raven and "Opening…", nothing to tap. */
+    @Composable
+    private fun Opening() {
+        Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Brand()
+            Text("Opening…", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
         }
     }
 

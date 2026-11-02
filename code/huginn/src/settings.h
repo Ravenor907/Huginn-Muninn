@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QRect>
 #include <QSettings>
+#include <QStringList>
 #include <QVariantList>
 
 // Everything the person can change, saved as they change it.
@@ -14,6 +15,10 @@ class Settings : public QObject
     Q_PROPERTY(QString accent READ accent WRITE setAccent NOTIFY changed)
     Q_PROPERTY(QString textSize READ textSize WRITE setTextSize NOTIFY changed)
     Q_PROPERTY(bool highContrast READ highContrast WRITE setHighContrast NOTIFY changed)
+    // Settings › Look › Color vision: "typical", "protan" (red-weak or red-blind), "deutan" (green-weak or green-blind),
+    // "tritan" (blue-weak or blue-blind) or "mono" (no color). Theme.qml remaps every color that means something for it.
+    // colorBlind is on for any but typical; an older saved Color-blind friendly opens as "deutan".
+    Q_PROPERTY(QString colorVision READ colorVision WRITE setColorVision NOTIFY changed)
     Q_PROPERTY(bool colorBlind READ colorBlind WRITE setColorBlind NOTIFY changed)
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY changed)
     // Huginn opens in a window unless this is on; F11 switches too.
@@ -59,9 +64,10 @@ class Settings : public QObject
     Q_PROPERTY(int fallCount READ fallCount WRITE setFallCount NOTIFY appearanceChanged)
     Q_PROPERTY(double fallBase READ fallBase NOTIFY appearanceChanged)
     Q_PROPERTY(int fallSize READ fallSize WRITE setFallSize NOTIFY appearanceChanged)
-    // Seasonal: the season ("auto" follows the date, or a season's own name like "snow"), the
-    // background ("" for the season's own, or one of the Look page's "#RRGGBB" swatches) and the
-    // animation ("off" or "full"; an older "light" reads as "full"). Theme.qml checks them.
+    // Settings › Look › Seasonal, on top of any theme: "off", "auto" (follows the date) or a season's own name like
+    // "snow"; the background ("" for the season's own, or one of the Look page's "#RRGGBB" swatches) and the
+    // animation ("off" or "full"; an older "light" reads as "full"). Theme.qml checks them. Seasonal used to be a
+    // theme of its own: that saved theme opens as Dark with Seasonal on and the same season (see the constructor).
     Q_PROPERTY(QString season READ season WRITE setSeason NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonGround READ seasonGround WRITE setSeasonGround NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonAnimation READ seasonAnimation WRITE setSeasonAnimation NOTIFY appearanceChanged)
@@ -90,6 +96,8 @@ class Settings : public QObject
     Q_PROPERTY(bool blockScreenshots READ blockScreenshots WRITE setBlockScreenshots NOTIFY changed)
     // Settings › Data saver: files wait for Accept, and no link previews are made.
     Q_PROPERTY(bool dataSaver READ dataSaver WRITE setDataSaver NOTIFY changed)
+    // First setup (FirstSetup.qml): "" (never run), "started" (picks up again at the next start) or "done".
+    Q_PROPERTY(QString setupState READ setupState WRITE setSetupState NOTIFY changed)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -99,7 +107,14 @@ public:
     QString accent() const { return value("accent", "gold").toString(); }
     QString textSize() const { return value("textSize", "100").toString(); }
     bool highContrast() const { return value("highContrast", false).toBool(); }
-    bool colorBlind() const { return value("colorBlind", false).toBool(); }
+    QString colorVision() const
+    {
+        const QString v = value("colorVision", "").toString();
+        if (colorVisions().contains(v)) return v;
+        return value("colorBlind", false).toBool() ? QStringLiteral("deutan") : QStringLiteral("typical");
+    }
+    static QStringList colorVisions() { return { QStringLiteral("typical"), QStringLiteral("protan"), QStringLiteral("deutan"), QStringLiteral("tritan"), QStringLiteral("mono") }; }
+    bool colorBlind() const { return colorVision() != QLatin1String("typical"); }
     bool reduceMotion() const { return value("reduceMotion", false).toBool(); }
     bool fullScreen() const { return value("fullScreen", false).toBool(); }
     QString handheldMode() const
@@ -126,7 +141,11 @@ public:
     bool internetCalls() const { return saved("internetCalls", true).toBool(); }
     static bool internetCallsOn() { return saved(QStringLiteral("internetCalls"), true).toBool(); }
     // "dark", "black" (true black, for OLED screens) or "light".
-    QString theme() const { return value("theme", "dark").toString(); }
+    QString theme() const
+    {
+        const QString v = value("theme", "dark").toString();
+        return v == QLatin1String("black") || v == QLatin1String("light") ? v : QStringLiteral("dark");
+    }
     // "compact" (more messages on screen, no pictures of people), "cozy" (the default) or "spacious".
     QString density() const { return value("density", "cozy").toString(); }
     QString lockPosition() const
@@ -168,7 +187,7 @@ public:
         const int old = value("leafSize", 100).toInt();
         return old == 100 ? 60 : qBound(15, old, 600);
     }
-    QString season() const { return value("season", "auto").toString(); }
+    QString season() const { return value("seasonal", "off").toString(); }
     QString seasonGround() const { return value("seasonGround", "").toString(); }
     int seasonGradient() const { return qBound(0, value("seasonGradient", 100).toInt(), 200); }
     QString seasonAnimation() const
@@ -203,10 +222,19 @@ public:
     bool blockScreenshots() const { return value("blockScreenshots", false).toBool(); }
     bool dataSaver() const { return value("dataSaver", false).toBool(); }
     static bool dataSaverOn() { return saved(QStringLiteral("dataSaver"), false).toBool(); }
+    QString setupState() const
+    {
+        const QString v = value("setup/state", "").toString();
+        return v == QLatin1String("started") || v == QLatin1String("done") ? v : QString();
+    }
     // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
-    static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(org(), QStringLiteral("Huginn")).value(key, fallback); }
-    // The organization Huginn's settings are kept under (QSettings(Settings::org(), "Huginn")): "Huginn", or the
-    // self-tests' own name on their throwaway profile (WifiSelfTest::isolate), so they never touch the real ones.
+    static QVariant saved(const QString &key, const QVariant &fallback) { return store().value(key, fallback); }
+    // Every QSettings Huginn opens: org()'s "Huginn" in the default format. On the Windows portable build that is an
+    // INI file in the data folder beside Huginn.exe, never the registry (platform/portable.cpp sets it at start);
+    // elsewhere it is the usual settings file.
+    static QSettings store() { return QSettings(QSettings::defaultFormat(), QSettings::UserScope, org(), QStringLiteral("Huginn")); }
+    // The organization Huginn's settings are kept under: "Huginn", or the self-tests' own name on their throwaway
+    // profile (WifiSelfTest::isolate), so they never touch the real ones.
     static QString org()
     {
         const QString o = QCoreApplication::organizationName();
@@ -217,7 +245,8 @@ public:
     void setAccent(const QString &v) { set("accent", v); }
     void setTextSize(const QString &v) { set("textSize", v); }
     void setHighContrast(bool v) { set("highContrast", v); }
-    void setColorBlind(bool v) { set("colorBlind", v); }
+    void setColorVision(const QString &v) { set("colorVision", colorVisions().contains(v) ? v : QStringLiteral("typical")); }
+    void setColorBlind(bool v) { setColorVision(v ? QStringLiteral("deutan") : QStringLiteral("typical")); }
     void setReduceMotion(bool v) { set("reduceMotion", v); }
     void setFullScreen(bool v) { set("fullScreen", v); }
     void setHandheldMode(const QString &v) { set("handheldMode", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
@@ -245,7 +274,7 @@ public:
     // 0 goes back to following the window.
     void setFallCount(int v) { setLook("fallCount", v <= 0 ? 0 : qBound(1, v, 400)); }
     void setFallSize(int v) { setLook("fallSize", qBound(15, v, 600)); }
-    void setSeason(const QString &v) { setLook("season", v); }
+    void setSeason(const QString &v) { setLook("seasonal", v.isEmpty() ? QStringLiteral("off") : v); }
     void setSeasonGround(const QString &v) { setLook("seasonGround", v); }
     void setSeasonGradient(int v) { setLook("seasonGradient", qBound(0, v, 200)); }
     void setSeasonAnimation(const QString &v)
@@ -268,6 +297,7 @@ public:
     void setDeviceName(const QString &v);
     void setBlockScreenshots(bool v) { set("blockScreenshots", v); }
     void setDataSaver(bool v) { set("dataSaver", v); }
+    void setSetupState(const QString &v) { set("setup/state", v == QLatin1String("started") || v == QLatin1String("done") ? v : QString()); }
 
 Q_SIGNALS:
     void changed();

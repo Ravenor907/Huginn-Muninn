@@ -4,6 +4,7 @@
 #include "vpxcodec.h"
 
 #include <QAtomicInt>
+#include <QCapturableWindow>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
@@ -18,6 +19,8 @@
 class QCamera;
 class QMediaCaptureSession;
 class QScreenCapture;
+class QScreen;
+class QWindowCapture;
 
 // Cameras, the screen and the pictures of video calls and screen share (shared/docs/protocol.md 5.8.5
 // to 5.8.7). Frames come from Qt Multimedia (QCamera, QScreenCapture), are scaled to the call's
@@ -78,6 +81,10 @@ public:
     // The next camera (front, back, an external one), when there is more than one.
     bool nextCamera();
     QString cameraName() const;
+    // Screen share: what to capture, set before start(). One app window (only that window, even when another is in
+    // front), or one whole screen (none set: the primary screen; on Wayland the desktop's own picker chooses).
+    void setWindow(const QCapturableWindow &w) { m_window = w; m_useWindow = true; }
+    void setScreen(QScreen *screen) { m_target = screen; m_useWindow = false; }
     // Self-test: encode this picture as if it came from the camera.
     void feed(const I420 &pic);
 
@@ -91,6 +98,10 @@ private:
     QMediaCaptureSession *m_capture = nullptr;
     QCamera *m_camera = nullptr;
     QScreenCapture *m_screen = nullptr;
+    QWindowCapture *m_windowCap = nullptr;
+    QCapturableWindow m_window;
+    bool m_useWindow = false;
+    QPointer<QScreen> m_target;
     QVideoSink *m_sink = nullptr;
     QPointer<QVideoSink> m_preview;
     QThread m_thread;

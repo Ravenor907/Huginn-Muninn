@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import org.json.JSONArray
 import org.json.JSONObject
@@ -127,6 +129,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val nearby: StateFlow<List<Msg>> = _nearby.asStateFlow()
     private val _private = MutableStateFlow<Map<String, List<Msg>>>(emptyMap())
     val conversations: StateFlow<Map<String, List<Msg>>> = _private.asStateFlow()
+
+    /** One chat's messages only: it changes only when that chat does, so a message elsewhere doesn't redraw this chat. */
+    fun messagesOf(key: String): kotlinx.coroutines.flow.Flow<List<Msg>> =
+        _private.map { it[key] ?: emptyList() }.distinctUntilChanged { a, b -> a === b }
     private val _requests = MutableStateFlow<List<Request>>(emptyList())
     val requests: StateFlow<List<Request>> = _requests.asStateFlow()
     private val _met = MutableStateFlow<Map<String, Met>>(emptyMap())
@@ -196,6 +202,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val retryWake = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
     /** My messages still on their way (id to chat key): the only ones the retry loop looks at. */
     private val pending = ConcurrentHashMap<String, String>()
+    /** ECDH keys per peer ([sharedKey]): declared before init, which may already use them. */
+    private val keyCache = Lru<String, ByteArray>(KEY_CACHE.toLong())
 
     /** [msgId] in the chat with [peerKey] waits for a receipt (or an unsend to be confirmed): the retry loop looks after it. */
     private fun queue(peerKey: String, msgId: String) { pending[msgId] = peerKey; wakeRetry() }
@@ -259,6 +267,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     val folders = Folders({ vault.read(File(context.filesDir, "folders.json")) }, { vault.write(File(context.filesDir, "folders.json"), it) })
     /** Muted, archived and marked unread: on this phone only. */
     val flags = ChatFlags({ vault.read(File(context.filesDir, "chatflags.json")) }, { vault.write(File(context.filesDir, "chatflags.json"), it) })
+    /** Mute for me and volume per person (cap g2's menus, section 26.1): on this phone only. */
+    val sound = PeopleSound({ vault.read(File(context.filesDir, "mod.json")) }, { vault.write(File(context.filesDir, "mod.json"), it) }).also { PeopleSound.current = it }
     /** Contacts removed from the list, kept 30 days so they can come back: local only. */
     /** Labs reports to this phone, when its chat key is the Labs key ([LabsWire]). */
     val labs = LabsInbox(context, vault)
@@ -270,7 +280,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val _uploads = MutableStateFlow<Map<String, Float>>(emptyMap())
     /** A file of mine going as a message: how much a route took so far (0 to 1). Gone once it's sent. */
     val uploads: StateFlow<Map<String, Float>> = _uploads.asStateFlow()
-    private fun uploaded(id: String, f: Float) = _uploads.update { m -> if ((m[id] ?: 0f) >= f) m else m + (id to f) }
+    private fun uploaded(id: String, f: Float) {
+        _uploads.update { m -> if ((m[id] ?: 0f) >= f) m else m + (id to f) }
+        FileLink.relayed(id, f, false)   // its card in Transfers follows the message
+    }
 
     init {
         load()
@@ -286,6 +299,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun trusted(peer: String) = io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)
             override fun hasF1(peer: String) = this@Chat.hasF1(peer)
             override fun waitsForAsk(peer: String) = contacts.get(peer)?.caps?.contains(FileLink.ASK_CAP) == true
+            override fun allArrive(peer: String) = inFamilyGroup(peer)
             override fun save(name: String, file: File): FileLink.Saved? = try {
                 val t = Received.create(context, name)
                 try { file.inputStream().use { it.copyTo(t.out) }; t.finish(); FileLink.Saved(t.name, Received.shareUri(context, t)) }
@@ -296,6 +310,24 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun cacheDir(): File = File(context.cacheDir, "files").also { it.mkdirs() }
             override fun notice(text: String) { notices.tryEmit(text) }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
+            // Cap f2 (section 27): the same Wi-Fi first, group files and their rules, where files go.
+            override fun lanAddress(peer: String): java.net.InetAddress? =
+                net.deviceFor(peer, true)?.ip?.let { ip -> try { java.net.InetAddress.getByName(ip.substringBefore('%')) } catch (_: Exception) { null } }
+            override fun hasF2(peer: String) = this@Chat.hasF2(peer)
+            override fun groupRefusal(g: String, from: String, size: Long) = groups.fileRefusal(g, from, size)
+            override fun groupArrives(g: String, size: Long) =
+                groups.group(g)?.let { Limits.filesArrive(Limits.groupType(it.state), size, FileLink.AUTO_BYTES) } == true
+            override fun groupName(g: String) = groups.group(g)?.state?.name ?: "Group"
+            override fun alwaysFrom(peer: String) = filesAlways(peer)
+            override fun setAlways(peer: String) = setFilesAlways(peer, true)
+            override fun isContact(peer: String) = this@Chat.isContact(peer)
+            override fun freeBytes() = Received.freeBytes(context)
+            override fun saveIn(name: String, file: File, folder: String): FileLink.Saved? = try {
+                val t = Received.create(context, name, folder)
+                try { file.inputStream().use { it.copyTo(t.out) }; t.finish(); FileLink.Saved(t.name, Received.shareUri(context, t)) }
+                catch (e: Exception) { t.discard(); null }
+            } catch (e: Exception) { null }
+            override fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) = this@Chat.logFile(where, name, size, uri, mine)
         }
         Link.host = object : Link.Host {
             override fun myKey() = id.publicKey
@@ -344,8 +376,67 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (status.isNotEmpty()) profile?.setStatus(status)
                 profile?.setCustomStatus(custom)
             }
+            // Cap l1 (protocol.md 15.1): the whole account for a linked computer, and its changes back.
+            override fun account(): Map<String, JSONObject> {
+                val out = LinkedHashMap<String, JSONObject>()
+                val b64 = java.util.Base64.getEncoder()
+                out["me|me"] = JSONObject().put("n", id.username).put("st", profile?.myStatus?.value ?: "online")
+                    .apply { profile?.myCustomStatus?.value?.takeIf { it.isNotEmpty() }?.let { put("cs", it) } }
+                profile?.pictureBytes("me")?.takeIf { it.isNotEmpty() }?.let { out["pic|me"] = JSONObject().put("pic", b64.encodeToString(it)) }
+                val blocked = id.muted()
+                for (c in contacts.all.value) {
+                    if (c.groupOnly || trash.has(c.chatKey)) continue
+                    out["contact|${c.chatKey}"] = JSONObject().put("n", c.name).put("vf", c.verified).put("bl", c.chatKey in blocked).apply {
+                        c.nickname?.let { put("nn", it) }
+                        c.mailbox?.let { put("p", it) }
+                    }
+                    profile?.pictureBytes(c.chatKey)?.takeIf { it.isNotEmpty() }?.let { out["pic|${c.chatKey}"] = JSONObject().put("pic", b64.encodeToString(it)) }
+                }
+                for ((g, grp) in groups.all.value) {
+                    val st = grp.state
+                    val role = when { st.owner == id.publicKey -> "owner"; st.isAdmin(id.publicKey) -> "admin"; else -> "member" }
+                    out["group|$g"] = JSONObject().put("n", st.name).put("role", role).put("st", st.json()).apply { if (grp.gone.isNotEmpty()) put("gone", grp.gone) }
+                }
+                for (f in folders.all.value) out["folder|${f.id}"] = JSONObject().put("n", f.name).put("k", JSONArray(f.keys))
+                return out
+            }
+            override fun applyAccount(item: LinkAccount.Item) {
+                val v = item.v
+                when (item.k) {
+                    "me" -> if (v != null) LinkWire.readMe(JSONObject(v.toString()))?.let { m -> setMyProfile(m.name, m.status, m.custom) }
+                    "contact" -> {
+                        val c = contacts.contact(item.id) ?: return
+                        if (item.del || v == null) { removeContact(item.id); return }
+                        val nn = v.optString("nn").trim()
+                        if ((c.nickname ?: "") != nn) rename(item.id, nn)
+                        val bl = v.optBoolean("bl")
+                        if ((item.id in id.muted()) != bl) block(item.id, bl)
+                    }
+                    "folder" -> if (item.del || v == null) folders.delete(item.id) else {
+                        val a = v.optJSONArray("k")
+                        folders.putWhole(item.id, v.optString("n"), if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() })
+                    }
+                }
+            }
+            override fun groupChats(): Map<String, Pair<String, List<JSONObject>>> {
+                val all = groups.messages.value
+                return groups.all.value.mapNotNull { (g, grp) ->
+                    val msgs = all[g].orEmpty().sortedBy { it.time }.takeLast(500)
+                    if (msgs.isEmpty()) null else "g:$g" to (grp.state.name to msgs.map { linkGroupItem(it) })
+                }.toMap()
+            }
+            override fun sendToGroup(g: String, text: String): Boolean = groups.sendText(g, "", text)
         }
         Link.load()
+        // Cap l1: anything in the account changed, a linked computer hears of it (a moment later, once for many changes).
+        retryScope.launch { contacts.all.collect { Link.accountChanged() } }
+        retryScope.launch { folders.all.collect { Link.accountChanged() } }
+        retryScope.launch { groups.all.collect { Link.accountChanged() } }
+        retryScope.launch { groups.messages.collect { m ->
+            if (Link.companions.value.none { it.ok && it.l1 }) return@collect
+            val names = groups.all.value
+            m.forEach { (g, l) -> Link.onGroupMessages(g, names[g]?.state?.name ?: "Group", l.sortedBy { it.time }.takeLast(20).map { linkGroupItem(it) }) }
+        } }
         outbox.sweep()
         net.extraRoute = { method, path, body, ip ->
             when {
@@ -363,17 +454,30 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val hintKey = { h: String -> Proof.keyForHint(h, contacts.all.value.filter { !it.groupOnly }.map { it.chatKey }) }
         net.hintKey = hintKey
         ble.hintKey = hintKey
+        // Nearby off: only contacts are listed and answered, asked straight where they were last seen (kept sealed).
+        net.isContact = { k -> isContact(k) }
+        val lanPeers = File(context.filesDir, "lanpeers.json")
+        net.keepPeers = { json -> bg { vault.write(lanPeers, json) } }
+        bg { net.loadPeers(vault.read(lanPeers)) }
         ble.prove = { n -> Proof.close(id.keys.private, id.publicKey, n) }
         // Someone said yes while out of range: say it again when they're back.
         bg { while (true) { Thread.sleep(30_000); try { resendKeeps() } catch (_: Exception) {} } }
-        // The retry loop: once a second while anything waits to go (or runs out), asleep while nothing does.
+        // The retry loop: asleep until the next thing is due (or something new is queued), never polling.
         retryScope.launch {
             while (true) {
+                val now = System.currentTimeMillis()
                 val busy = try { retryBusy() } catch (_: Exception) { true }
-                if (busy) kotlinx.coroutines.delay(1_000) else retryWake.receive()
+                val next = if (!busy) Long.MAX_VALUE else try { retryNextDue(now) } catch (_: Exception) { now + 1_000 }
+                val wait = RetryClock.sleepMs(busy, next, now)
+                if (wait == null) retryWake.receive() else kotlinx.coroutines.withTimeoutOrNull(wait) { retryWake.receive() }
+                // Many wake-ups close together make one round.
+                val slept = System.currentTimeMillis() - now
+                if (slept < RetryClock.MIN_MS) kotlinx.coroutines.delay(RetryClock.MIN_MS - slept)
                 try { retryLoop() } catch (_: Exception) {}
             }
         }
+        // Someone came close by or onto the Wi-Fi: what waits for them goes now (nearbyNow), without waiting for a timer.
+        retryScope.launch { kotlinx.coroutines.flow.merge<Any>(ble.peers, net.devices).collect { wakeRetry() } }
         nostr.onEnvelope = { content ->
             try {
                 val plain = unwrap(content)
@@ -399,6 +503,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * only a hint that changes every day, which contacts (who have the key) can match (cap s1). So a stranger can't
      * follow this phone from place to place.
      */
+    /** A group message as a linked computer shows it (cap l1): "fn" is who wrote it. */
+    private fun linkGroupItem(m: Groups.GMsg): JSONObject = JSONObject().put("id", m.id).put("me", m.mine).put("t", m.time).put("fn", m.name.take(40))
+        .put("x", when {
+            m.unsent.isNotEmpty() -> "Message deleted"
+            m.voice > 0 -> "Voice message"
+            m.video > 0 -> "Video message"
+            m.photo.isNotEmpty() -> "Photo"
+            else -> m.text
+        }.take(LinkWire.TEXT_MAX))
+
     fun hello(): JSONObject = JSONObject().put("name", if (id.visibleNearby) id.username else Identity.HIDDEN_NAME)
         .apply { if (id.visibleNearby) put("chatKey", id.publicKey).put("mailbox", nostr.publicKey) else put("hint", Proof.hintNow(id.publicKey)) }
         .put("device", if (id.visibleNearby) id.deviceName else Identity.HIDDEN_NAME)
@@ -603,12 +717,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         o.has("w") && RingWire.waitForDayKey(wrapKeys.find(o.getString("w")) != null, prefs.getLong(Backup.RESTORED_AT, 0L), System.currentTimeMillis())
     } catch (e: Exception) { false }
 
-    fun codeWith(peerKey: String): String =
-        ChatCrypto.pairingCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
+    fun codeWith(peerKey: String): String = ChatCrypto.pairingCode(sharedKey(peerKey))
 
     /** The 4 emoji both phones show for this pair: the same on each side means nobody is in between. */
-    fun emojiWith(peerKey: String): String =
-        ChatCrypto.emojiCode(ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(peerKey)))
+    fun emojiWith(peerKey: String): String = ChatCrypto.emojiCode(sharedKey(peerKey))
 
     /** A real contact (a group peer isn't one: they're only reachable for group things). */
     fun isContact(peerKey: String) = contacts.contact(peerKey) != null
@@ -733,6 +845,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         held.remove(peerKey)
         mute(peerKey, on)
         _blocked.value = id.muted()
+        Link.accountChanged()   // cap l1: a linked computer shows the block too
         // Cap b1: what they hold no longer rings this phone. A new ring key and ring mailbox go to the other b1
         // contacts; the old mailbox is listened on 2 more days.
         if (on && !was) ringKey?.let { r ->
@@ -930,7 +1043,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return null
     }
 
-    private fun sharedKey(theirKey: String) = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(theirKey))
+    /**
+     * The ECDH key with [theirKey], worked out once per peer and kept (at most [KEY_CACHE] peers, emptied when Muninn
+     * locks: [forgetKeyCache]). Keyed by my key too, so a new identity never gets an old pair's key. A copy goes out.
+     */
+    private fun sharedKey(theirKey: String): ByteArray {
+        val k = id.publicKey + "|" + theirKey
+        keyCache.get(k)?.let { return it.copyOf() }
+        val key = ChatCrypto.sharedKey(id.keys.private, id.keys.public, ChatCrypto.publicFrom(theirKey))
+        keyCache.put(k, key.copyOf())
+        return key
+    }
+
+    /** Muninn locked (or erased): the cached pair keys are wiped and dropped. */
+    fun forgetKeyCache() = keyCache.clear { it.fill(0) }
 
     /**
      * Opens an envelope (v1, or the ratchet when it has "rh") and hands the plaintext to [then].
@@ -1183,11 +1309,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (!Link.receive(fromKey, p, LinkWire.lanOk(via, directOn()))) return 403 to "{}"
             }
             "file" -> {
-                if (contacts.contact(fromKey) == null) return 403 to "{}"
                 val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                // Contacts, and members of a group for that group's files (cap f2, 27.2): their offer names the group,
+                // their answer is to a file of mine on its way to them.
+                val g = p.optString("g")
+                val member = (g.isNotEmpty() && groups.isMember(g, fromKey)) || FileLink.expects(fromKey, p.optString("id"))
+                if (contacts.contact(fromKey) == null && !member) return 403 to "{}"
                 if (!FileLink.ok(p)) return 400 to "{}"
                 // Files turned off for them: their offers are dropped quietly.
-                if (!filesAllowed(fromKey)) return 200 to "{}"
+                if (contacts.contact(fromKey) != null && !filesAllowed(fromKey)) return 200 to "{}"
                 FileLink.onSignal(fromKey, p)
             }
             "intro" -> {
@@ -1306,7 +1436,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun photo(photoId: String): ByteArray? = vault.readBytes(File(photosDir, photoId))
 
-    fun sendPhoto(peerKey: String, jpeg: ByteArray) = sendBlob(peerKey, jpeg, 0)
+    fun sendPhoto(peerKey: String, jpeg: ByteArray) { sendBlob(peerKey, jpeg, 0) }
 
     /** Several photos at once: an album (cap m2; an app without m2 shows them one by one). */
     fun sendPhotos(peerKey: String, jpegs: List<ByteArray>) {
@@ -1332,7 +1462,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun hasA1(peerKey: String) = Permissions.has(capsOf(peerKey), Gifs.CAP)
 
     /** A recorded voice message (AAC, no container, so nothing but sound). */
-    fun sendVoice(peerKey: String, aac: ByteArray, ms: Int) = sendBlob(peerKey, aac, ms.coerceAtLeast(1))
+    fun sendVoice(peerKey: String, aac: ByteArray, ms: Int) { sendBlob(peerKey, aac, ms.coerceAtLeast(1)) }
 
     /** Their app plays video messages, polls and albums (cap m2). */
     fun hasM2(peerKey: String) = contacts.get(peerKey)?.caps?.contains(More.CAP) == true
@@ -1370,6 +1500,107 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return null
     }
 
+    /** Their app speaks file sharing (cap f2, section 27): the same Wi-Fi route, group files and the group's file rules. */
+    fun hasF2(k: String) = Sharing.CAP in capsOf(k) || envCaps[k]?.contains(Sharing.CAP) == true
+
+    /**
+     * A group's file (cap f2, 27.2): the group's own rules first (as every member's app checks them), then once to each
+     * member by the best route (each with its own card). Null when on their way, else why not.
+     */
+    fun sendGroupFile(g: String, file: File, name: String): String? {
+        val clean = cleanFileName(name)
+        val size = file.length()
+        val members = groups.group(g)?.takeIf { !it.readOnly }?.state?.members?.map { it.k }?.filter { it != id.publicKey }.orEmpty()
+        if (members.isEmpty()) { file.delete(); return "Nobody else is in this group yet." }
+        groups.fileRefusal(g, id.publicKey, size).let { if (it.isNotEmpty()) { file.delete(); return it } }
+        for (k in members) {
+            // One file on the disk for every member (a second name for it where the storage allows, else a copy).
+            val mine = File(file.parentFile, file.name + "-" + k.take(8).filter { it.isLetterOrDigit() } + "-" + System.nanoTime())
+            val ok = try { java.nio.file.Files.createLink(mine.toPath(), file.toPath()); true } catch (_: Exception) {
+                try { file.copyTo(mine, overwrite = true); true } catch (_: Exception) { false }
+            }
+            val card = FileLink.preparing(k, clean, size, g)
+            if (!ok) { FileLink.failed(k, clean, size, "Not enough space on this phone to send it.", card, g); continue }
+            sendMemberFile(k, mine, clean, card, g)
+        }
+        file.delete()
+        return null
+    }
+
+    /** One member's copy of a group's file: straight, or over the relays only to a contact (into the chat with them). */
+    fun sendMemberFile(k: String, file: File, name: String, card: String, g: String) {
+        if (!hasF1(k) || !hasF2(k)) {
+            probeCaps(k)
+            FileLink.failed(k, name, file.length(), "${nameOf(k)} needs the latest Muninn or Huginn for files in groups.", card, g)
+            file.delete(); return
+        }
+        if (FileLink.send(k, file, name, card, g) == null) return
+        val size = file.length()
+        if (isContact(k)) relayFile(k, file, name)?.let { FileLink.failed(k, name, size, it, card, g) } ?: FileLink.handedOff(card)
+        else {
+            FileLink.failed(k, name, size, "Can't reach ${nameOf(k)} straight. Files in a group go when you're on the same Wi-Fi, or with Direct calls on for each other.", card, g)
+            file.delete()
+        }
+    }
+
+    // "Always from this person" (cap f2, on this phone only): their files arrive without asking.
+    private val alwaysStore = File(context.filesDir, "files-always.json")
+    private val always: MutableSet<String> by lazy {
+        java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>()).also { set ->
+            try { vault.read(alwaysStore)?.let { JSONArray(it) }?.let { a -> for (i in 0 until a.length()) set.add(a.getString(i)) } } catch (_: Exception) {}
+        }
+    }
+    fun filesAlways(k: String) = k in always
+    fun setFilesAlways(k: String, on: Boolean) {
+        if ((if (on) always.add(k) else always.remove(k))) try { vault.write(alwaysStore, JSONArray(always.toList()).toString()) } catch (_: Exception) {}
+    }
+
+    /** One file in a chat's Files: sent or received there, and where it is ([uri], empty for a file I sent). */
+    data class SharedFile(val where: String, val name: String, val size: Long, val uri: String, val mine: Boolean, val time: Long)
+    private val filesStore = File(context.filesDir, "files-log.json")
+    private val _files = MutableStateFlow<List<SharedFile>>(emptyList())
+    /** Every chat's Files, oldest first, kept as long as the longest a chat keeps messages (on this phone only). */
+    val sharedFiles: StateFlow<List<SharedFile>> = _files.asStateFlow()
+    private var filesLoaded = false
+    private fun loadFiles() = synchronized(filesStore) {
+        if (filesLoaded) return@synchronized
+        filesLoaded = true
+        val oldest = System.currentTimeMillis() - Limits.LONGEST * 86_400_000L
+        val out = ArrayList<SharedFile>()
+        try {
+            vault.read(filesStore)?.let { JSONArray(it) }?.let { a ->
+                for (i in 0 until a.length()) a.optJSONObject(i)?.let { o ->
+                    val f = SharedFile(o.optString("w"), o.optString("n"), o.optLong("s"), o.optString("u"), o.optBoolean("m"), o.optLong("t"))
+                    if (f.where.isNotEmpty() && f.time >= oldest) out += f
+                }
+            }
+        } catch (_: Exception) {}
+        _files.value = out
+    }
+    private fun saveFiles() {
+        val a = JSONArray()
+        _files.value.forEach { f -> a.put(JSONObject().put("w", f.where).put("n", f.name).put("s", f.size).put("u", f.uri).put("m", f.mine).put("t", f.time)) }
+        try { vault.write(filesStore, a.toString()) } catch (_: Exception) {}
+    }
+    fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) = synchronized(filesStore) {
+        loadFiles()
+        _files.value = (_files.value + SharedFile(where, name, size, uri, mine, System.currentTimeMillis())).takeLast(2000)
+        saveFiles()
+    }
+    /** A chat's Files (their key, or "g:<group>"), newest first. */
+    fun filesIn(where: String): List<SharedFile> { loadFiles(); return _files.value.filter { it.where == where }.reversed() }
+    /** Delete: a received file goes from Downloads too; a sent one only leaves the list. False when it couldn't be. */
+    fun deleteFile(f: SharedFile): Boolean = synchronized(filesStore) {
+        loadFiles()
+        if (!f.mine && f.uri.isNotEmpty()) {
+            val gone = try { context.contentResolver.delete(android.net.Uri.parse(f.uri), null, null) > 0 } catch (_: Exception) { false }
+            if (!gone && Received.exists(context, f.uri)) return@synchronized false
+        }
+        _files.value = _files.value.filter { it != f }
+        saveFiles()
+        true
+    }
+
     /** A file as it may be named on the wire (14.1): no folders or control characters, 1 to 200 characters. */
     fun cleanFileName(name: String) = name.replace('/', '_').replace('\\', '_').filter { it.code >= 0x20 }.take(200).trim().ifBlank { "file" }
 
@@ -1379,12 +1610,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (file.length() > FileText.RELAY_MAX) return FileText.tooBig()
         val bytes = try { file.readBytes() } catch (e: Exception) { return "That file can't be read any more." }
         file.delete()
-        sendBlob(peerKey, bytes, 0, fileName = name)
+        val msgId = sendBlob(peerKey, bytes, 0, fileName = name)
+        FileLink.relayOut(msgId, peerKey, name, bytes.size.toLong())
+        if (_private.value[peerKey]?.firstOrNull { it.id == msgId }?.failed == true) FileLink.relayed(msgId, 0f, true)
         return null
     }
 
     private fun sendBlob(peerKey: String, jpeg: ByteArray, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, fileName: String = "",
-                         gif: Boolean = false) {
+                         gif: Boolean = false): String {
         val name = nameOf(peerKey)
         if (!isContact(peerKey)) meet(peerKey, name)
         val r = route(peerKey)
@@ -1398,9 +1631,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (r.isEmpty() && backupMailbox(mine) == null) {
             replace(peerKey, mine.copy(failed = true))
             notices.tryEmit("$name is out of range. Say yes to Keep in touch to send from anywhere.")
-            return
+            return msgId
         }
         bg { attempt(mine) }
+        return msgId
     }
 
     /** The photo's sealed pieces: made (and encrypted) once, then the same bytes on every try and route. */
@@ -1490,7 +1724,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         var savedAs: Pair<String, String>? = null
         if (fileName.isNotEmpty() && !known(fromKey, msgId)) {
             FileLink.relayInDone(msgId, fromKey, fileName)
-            savedAs = Received.save(context, fileName, jpeg)
+            // Cap f2: in Download/Muninn/<their name>, and in the chat's Files.
+            savedAs = Received.save(context, fileName, jpeg, Sharing.folderFor("Muninn", nameOf(fromKey)))
+            savedAs?.let { logFile(fromKey, it.first, jpeg.size.toLong(), it.second, false) }
         }
         if (contact == null) {
             val m = _met.value[fromKey]
@@ -1973,7 +2209,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** After a try: when the next one is due. */
-    private fun schedule(t: Tries) { t.next = NetLogic.next(t.count, System.currentTimeMillis(), t.heldAt) }
+    private fun schedule(t: Tries) { t.next = NetLogic.next(t.count, System.currentTimeMillis(), t.heldAt); wakeRetry() }
 
     /** Relays hold it now: from here on it waits there, sent to them again only at 1 hour and 6 hours. */
     private fun heldBy(t: Tries): () -> Unit = {
@@ -2051,7 +2287,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (!publishNow(t)) any = true
             else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) any = true
         }
-        if (!any && t.count == 1) update(m.peerKey, m.id) { it.copy(failed = true) }
+        if (!any && t.count == 1) {
+            update(m.peerKey, m.id) { it.copy(failed = true) }
+            if (m.file.isNotEmpty()) FileLink.relayed(m.id, 0f, true)
+        }
     }
 
     private fun richPayload(m: Msg): String = JSONObject(Rich.richText(m.text, m.re)).apply {
@@ -2059,10 +2298,37 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         m.preview?.let { put("lp", More.previewJson(it)) }
     }.toString()
 
-    private fun markSent(m: Msg, how: String) = update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
+    private fun markSent(m: Msg, how: String) {
+        update(m.peerKey, m.id) { if (it.unsent.isEmpty() && rank(it.state) < 2) it.copy(state = "sent", via = if (it.via.isEmpty()) how else it.via, failed = false) else it }
+        if (m.file.isNotEmpty()) FileLink.relayed(m.id, null, false)
+    }
 
     /**
-     * Runs every second while anything waits ([retryBusy]): anything of mine not yet delivered (and under a day old)
+     * When [retryLoop] next has something to do (ms), from the same things it looks at: a try coming due, a message
+     * turning "Not sent" or a day old, typing and active status running out, half a file timing out, group messages.
+     * Long.MAX_VALUE when nothing is scheduled (a try under way: the loop looks again within [RetryClock.MAX_MS]).
+     */
+    private fun retryNextDue(now: Long): Long {
+        var next = groups.nextDue()
+        fun at(t: Long) { if (t < next) next = t }
+        for (e in incoming.values) at(e.started + 15 * 60_000)
+        for ((env, v) in mxOut) { at(v.second + DAY + 1); at(tries[env]?.next ?: now) }
+        _typing.value.values.forEach { at(it + 1) }
+        _active.value.values.forEach { at(it + 1) }
+        if (foreground && id.activeStatus && !invisible()) at(activeSent + Rich.ACTIVE_EVERY_MS + 1)
+        val chats = _private.value
+        for ((msgId, k) in pending) {
+            val m = chats[k]?.firstOrNull { it.id == msgId }
+            if (m == null) { at(now); continue }   // gone: the loop lets it go
+            at(tries[msgId]?.next ?: now)
+            if (m.mine && m.state == "sending" && !m.failed) at(m.time + NOT_SENT_MS + 1)
+            if (m.mine && m.state != "unsending") at(m.time + DAY + 1)
+        }
+        return next
+    }
+
+    /**
+     * Runs whenever something is due ([retryNextDue]) or queued: anything of mine not yet delivered (and under a day old)
      * is tried again. Only what's [pending] is looked at, never every message.
      */
     private fun retryLoop() {
@@ -2113,7 +2379,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * The refresh button (and catching up): everything still waiting goes again on the next round, not when its
      * timer says. Not what relays already hold: it waits there for their phone.
      */
-    fun retryAllNow() { for (t in tries.values) if (t.heldAt == 0L) t.next = 0L }
+    fun retryAllNow() { for (t in tries.values) if (t.heldAt == 0L) t.next = 0L; wakeRetry() }
 
     /** Someone just showed up close by or on the same Wi-Fi: what's still on its way to them goes now. */
     private fun nearbyNow() {
@@ -2279,6 +2545,32 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun hasM2(k: String) = this@Chat.hasM2(k)
         override fun hasD1(k: String) = this@Chat.hasD1(k) || envCaps[k]?.contains(Limits.CAP) == true
         override fun hasJ1(k: String) = Proto06.J1 in capsOf(k) || envCaps[k]?.contains(Proto06.J1) == true
+        override fun hasG2(k: String) = ModLogic.CAP in capsOf(k) || envCaps[k]?.contains(ModLogic.CAP) == true
+        override fun hasF2(k: String) = this@Chat.hasF2(k)
+        override fun typeChanged(g: String, type: String) { if (type == Limits.FAMILY) bg { familySync() } }
+    }
+
+    /** Someone in one of my Family groups (16.2): their files and photos arrive by themselves. */
+    fun inFamilyGroup(k: String): Boolean =
+        groups.all.value.values.any { !it.readOnly && Limits.groupType(it.state) == Limits.FAMILY && it.state.has(k) && k != id.publicKey }
+
+    /**
+     * Members of my Family groups who are contacts go in my Family folder, once each: moved out by hand, they stay out
+     * (remembered in the vault, "family-placed.json"). No Family folder (deleted by hand): nothing is made again.
+     */
+    fun familySync() {
+        val fam = folders.all.value.lastOrNull { it.name == "Family" } ?: return
+        val want = groups.all.value.values.filter { !it.readOnly && Limits.groupType(it.state) == Limits.FAMILY }
+            .flatMap { g -> g.state.members.map { it.k } }.filter { it != id.publicKey && isContact(it) }.toSet()
+        if (want.isEmpty()) return
+        val file = File(context.filesDir, "family-placed.json")
+        val saved: List<String>? = try { vault.read(file)?.let { t -> JSONArray(t).let { a -> (0 until a.length()).map { a.getString(it) } } } } catch (e: Exception) { null }
+        val done = saved.orEmpty().toMutableSet()
+        val fresh = want - done
+        if (fresh.isEmpty()) return
+        fresh.forEach { k -> if (k !in fam.keys) folders.put(fam.id, k, true) }
+        done += fresh
+        try { vault.write(file, JSONArray().apply { done.forEach { put(it) } }.toString()) } catch (_: Exception) {}
     }
 
     /** Invites a contact to group [g]. Null when sent, else what to tell the person. */
@@ -2507,6 +2799,19 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun clearNearby() = synchronized(lock) { _nearby.value = emptyList(); nearbyStore.delete() }
 
+    /**
+     * Delete chat (a person, someone nearby, a Kids' TV): the conversation and every message kept of it go from this
+     * phone, and its row leaves the chat list until a message comes or goes again. Contacts stay contacts, and a Kids'
+     * TV's settings on this phone are untouched. Someone nearby who isn't a contact is forgotten too.
+     */
+    fun deleteChat(peerKey: String) {
+        deleteConversation(peerKey)
+        _unread.update { it - peerKey }
+        flags.read(peerKey)
+        if (isContact(peerKey)) flags.clear(peerKey, true)
+        else synchronized(lock) { if (_met.value.containsKey(peerKey)) { _met.update { it - peerKey }; saveMet() } }
+    }
+
     fun deleteConversation(peerKey: String) {
         edit { map ->
             val gone = map.remove(peerKey) ?: return@edit false
@@ -2527,6 +2832,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val sooner = id.deleteAfter.takeIf { it in 1 until Limits.DEFAULT * DAY }
         fun cutoff(days: Int) = maxOf(Limits.cutoff(now, days), if (sooner != null) now - sooner else 0L)
         groups.pruneOlder(::cutoff)
+        // Family group members who became contacts since go in the Family folder too.
+        try { familySync() } catch (_: Exception) {}
         // The call history goes by the same limit as each chat's messages.
         io.github.ravenor907.muninn.net.call.CallManager.pruneOlder { k -> cutoff(chatDays(k)) }
         val near = cutoff(Limits.DEFAULT)
@@ -2670,6 +2977,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }.also { added ->
         if (added && m.mine && m.state.isNotEmpty()) queue(peer, m.id)
         if (added && isContact(peer)) bg { Link.onMessage(peer, nameOf(peer), m) }
+        // A chat deleted earlier is back on the list now that a message came or went.
+        if (added && flags.all.value.cleared.contains(peer)) flags.clear(peer, false)
     }
 
     private fun replace(peer: String, m: Msg) = update(peer, m.id) { m }
@@ -2727,26 +3036,31 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         try { vault.write(metStore, o.toString()) } catch (_: Exception) {}
     }
 
-    private fun saveNearby() = vault.write(nearbyStore, toJson(_nearby.value).toString())
+    private fun saveNearby() { try { vault.write(nearbyStore, toJson(_nearby.value).toString()) } catch (_: VaultCore.Refused) {} }
+
+    /** Loads [file] with [use]; one that can't be used is never saved over (see [Vault.loadFailed]), and the rest still load. */
+    private fun loadOne(file: File, use: (String) -> Unit) {
+        try { vault.read(file)?.let(use) } catch (e: Exception) { vault.loadFailed(file, e) }
+    }
 
     private fun load() {
+        loadOne(store) { text ->
+            val o = JSONObject(text)
+            _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
+        }
+        loadOne(invitesStore) { text -> val o = JSONObject(text); o.keys().forEach { invites[it] = o.optLong(it) } }
+        loadOne(introsStore) { text -> val a = JSONArray(text); _intros.value = (0 until a.length()).map { Trust.fromJson(a.getJSONObject(it)) } }
+        loadOne(onceStore) { text -> val a = JSONArray(text); for (i in 0 until a.length()) once.add(a.getString(i)) }
+        loadOne(metStore) { text ->
+            val o = JSONObject(text)
+            _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {
+                Met(it.optString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("i"), it.optBoolean("t"), it.optBoolean("d"), it.optBoolean("v"),
+                    Proto06.caps(it.optString("c"))) } }
+        }
+        loadOne(deletedStore) { text -> val o = JSONObject(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
+        loadOne(mxStore) { text -> val o = JSONObject(text); o.keys().forEach { e -> o.getJSONObject(e).let { mxOut[e] = it.getString("k") to it.optLong("t") } } }
+        if (id.keepNearbyHistory) loadOne(nearbyStore) { _nearby.value = fromJson(JSONArray(it)) }
         try {
-            vault.read(store)?.let { text ->
-                val o = JSONObject(text)
-                _private.value = o.keys().asSequence().associateWith { fromJson(o.getJSONArray(it)) }
-            }
-            vault.read(invitesStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { invites[it] = o.optLong(it) } }
-            vault.read(introsStore)?.let { text -> val a = JSONArray(text); _intros.value = (0 until a.length()).map { Trust.fromJson(a.getJSONObject(it)) } }
-            vault.read(onceStore)?.let { text -> val a = JSONArray(text); for (i in 0 until a.length()) once.add(a.getString(i)) }
-            vault.read(metStore)?.let { text ->
-                val o = JSONObject(text)
-                _met.value = o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let {
-                    Met(it.optString("n"), it.optString("p").ifEmpty { null }, it.optBoolean("i"), it.optBoolean("t"), it.optBoolean("d"), it.optBoolean("v"),
-                        Proto06.caps(it.optString("c"))) } }
-            }
-            vault.read(deletedStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { deleted[it] = o.optLong(it) } }
-            vault.read(mxStore)?.let { text -> val o = JSONObject(text); o.keys().forEach { e -> o.getJSONObject(e).let { mxOut[e] = it.getString("k") to it.optLong("t") } } }
-            if (id.keepNearbyHistory) vault.read(nearbyStore)?.let { _nearby.value = fromJson(JSONArray(it)) }
             if (isLabs()) labs.load()
             prune()
         } catch (_: Exception) {}
@@ -2761,6 +3075,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val INVITE_MS = 60 * 60_000L
         /** A message of mine still "sending" this long (no relay said OK, no proven route took it) shows "Not sent, tap to retry". */
         const val NOT_SENT_MS = 60_000L
+        /** Peers whose ECDH key is kept in memory while unlocked. */
+        const val KEY_CACHE = 256
         const val DAY = ChatWire.DAY
         /** Outbox key for a message's unsend envelope. */
         private const val UNSEND = "unsend:"

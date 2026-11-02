@@ -146,7 +146,11 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     private val peers = ConcurrentHashMap<String, Entry>()
     private val sent = ConcurrentHashMap<String, Long>()
     @Volatile private var me = Entry(0, "", ByteArray(0))
-    private val bitmaps = LruCache<String, Bitmap>(48)
+    /** Decoded pictures, up to a sixteenth of the memory Android gives Muninn (by bytes, not by count). */
+    private val bitmaps = object : LruCache<String, Bitmap>(MemoryBudget.bytes(
+        try { context.getSystemService(android.app.ActivityManager::class.java)?.memoryClass ?: 64 } catch (_: Exception) { 64 }, 16).toInt()) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
     /** Keys a live active message ever came from (so they show offline, not nothing, once it runs out). */
     private val heard: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -215,6 +219,9 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
 
     /** My picture as sent (a 256x256 JPEG), empty when none. */
     fun myPicture(): ByteArray = me.pic
+
+    /** [key]'s picture as it came (a 256x256 JPEG; "me" for mine), empty when there is none. For a linked computer (cap l1). */
+    fun pictureBytes(key: String): ByteArray = (if (key == "me") me else peers[key])?.pic ?: ByteArray(0)
 
     fun clearMyPicture() {
         if (me.pic.isEmpty()) return
@@ -374,6 +381,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     }
 
     private fun load() {
+        // One that can't be used is never saved over (see Vault.loadFailed), and the rest still load.
         try {
             vault.read(meFile)?.let { JSONObject(it) }?.let { o ->
                 fromJson(o)?.let { me = it }
@@ -381,7 +389,11 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
                 _myCustomStatus.value = ProfileWire.cleanCustom(o.optString("cs"))
                 _myColour.value = me.col
             }
+        } catch (e: Exception) { vault.loadFailed(meFile, e) }
+        try {
             vault.read(sentFile)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { sent[it] = o.optLong(it) } }
+        } catch (e: Exception) { vault.loadFailed(sentFile, e) }
+        try {
             dir.listFiles()?.forEach { f ->
                 if (f == meFile || f == sentFile || !f.name.endsWith(".json")) return@forEach
                 val o = try { vault.read(f)?.let { JSONObject(it) } } catch (e: Exception) { null } ?: return@forEach
@@ -396,6 +408,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         val m = HashMap<String, Int>()
         peers.forEach { (k, e) -> if (e.pic.isNotEmpty()) m[k] = e.v.coerceAtMost(Int.MAX_VALUE.toLong()).toInt() }
         if (me.pic.isNotEmpty()) m["me"] = me.v.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        if (_pictures.value != m) Link.accountChanged()   // cap l1: a linked computer shows the pictures too
         _pictures.value = m
     }
 }

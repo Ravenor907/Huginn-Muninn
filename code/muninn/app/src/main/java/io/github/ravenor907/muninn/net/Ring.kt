@@ -266,12 +266,20 @@ class RingKey(private val file: File) {
     }
 
     private fun load(): All = held ?: synchronized(this) {
-        held ?: (try {
-            val o = JSONObject(file.readText())
+        held ?: when (val r = SafeFile.read(file) { b ->
+            val o = JSONObject(String(b))
             val old = o.optJSONArray("old")?.let { a -> (0 until a.length()).mapNotNull { try { parse(a.getJSONObject(it)) } catch (e: Exception) { null } } }.orEmpty()
             All(parse(o), old)
-        } catch (e: Exception) { null } ?: All(make(), emptyList()).also { save(it) }).also { held = it }
+        }) {
+            is SafeFile.Read.Ok -> r.value
+            is SafeFile.Read.Missing -> All(make(), emptyList()).also { save(it) }
+            // There but unreadable: a key for now, never saved over the one on disk.
+            is SafeFile.Read.Bad -> { broken = true; All(make(), emptyList()) }
+        }.also { held = it }
     }
+
+    /** The ring key on disk couldn't be read: it's left as it is. */
+    @Volatile private var broken = false
 
     private fun make(): Held {
         val kp = ChatCrypto.newKeyPair()
@@ -284,12 +292,8 @@ class RingKey(private val file: File) {
     private fun save(a: All) {
         val o = json(a.now)
         if (a.old.isNotEmpty()) o.put("old", JSONArray().apply { a.old.forEach { put(json(it).put("u", it.until)) } })
-        try {
-            file.parentFile?.mkdirs()
-            val tmp = File(file.path + ".tmp")
-            tmp.writeText(o.toString())
-            tmp.renameTo(file)
-        } catch (_: Exception) {}
+        if (broken) return
+        try { SafeFile.write(file, o.toString().toByteArray()) } catch (_: Exception) {}
     }
 
     /** The public half, as it goes in "rk". */
@@ -334,7 +338,7 @@ class RingKey(private val file: File) {
     }
 
     /** Erase everything and Move: a new ring key next time. */
-    fun forget() = synchronized(this) { held = null; file.delete(); File(file.path + ".tmp").delete() }
+    fun forget() = synchronized(this) { held = null; broken = false; SafeFile.delete(file) }
 
     companion object {
         /** How long a ring mailbox replaced after a block is still listened on. */

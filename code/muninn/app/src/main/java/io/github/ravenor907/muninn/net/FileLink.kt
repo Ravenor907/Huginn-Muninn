@@ -29,6 +29,8 @@ import javax.crypto.spec.SecretKeySpec
  * (5.8.2). Only between two people who trust each other with their addresses ("Direct calls" on, as for Family).
  * Then the file goes in numbered pieces, each sealed with AES-256-GCM under a key only the two phones know, and the
  * receiver says which pieces it has; lost ones go again. Small files that can't go direct use the relays (Chat).
+ * Cap f2 (section 27): the same Wi-Fi first (a "lan" candidate with no address), group files, why a file was refused,
+ * and Pause.
  */
 object FileLink {
     const val CAP = "f1"
@@ -70,6 +72,8 @@ object FileLink {
     const val DATA: Byte = 2
     const val ACK: Byte = 3
     const val DONE: Byte = 4
+    /** Cap f2 (27.5): 1 byte, 1 paused or 0 going on. Either side sends it every second while paused. */
+    const val HOLD: Byte = 5
 
     // ------------------------------------------------------------------ the parts that are the same everywhere (tested)
 
@@ -145,6 +149,8 @@ object FileLink {
     fun ok(p: JSONObject): Boolean {
         val id = p.opt("id") as? String ?: return false
         if (!Proto06.isLogicalId(id)) return false
+        // Cap f2 (27.2): a group's file names its group.
+        if (p.has("g") && (p.opt("g") as? String)?.let { it.length == 22 && Proto06.lenB64url(it) == 16 } != true) return false
         return when (p.opt("t")) {
             "offer" -> (p.opt("name") as? String)?.let { it.isNotBlank() && it.length <= 200 && it.none { c -> c.code < 0x20 || c == '/' || c == '\\' } } == true &&
                 (p.opt("size") as? Number)?.toLong()?.let { it in 1..MAX_BYTES } == true &&
@@ -159,20 +165,51 @@ object FileLink {
     // ------------------------------------------------------------------ transfers
 
     /**
-     * One transfer, as the chat shows it. [state]: "offered", "asking" (a big file: Accept or Decline), "waiting" (data
-     * saver), "connecting", "sending", "done", "failed".
+     * One transfer, as the chat and Transfers show it. [state]: "offered", "asking" (Accept or Decline), "waiting" (data
+     * saver), "connecting", "sending", "done", "failed". [group]: a group's file (cap f2). [route]: "Direct" or "Over the
+     * internet" (empty until known). [pace]: "2.1 MB/s · 12 s left". [folder]: where theirs goes, as words. [relay]: a
+     * file of mine going as a message over the internet route (its message shows it in the chat).
      */
     data class Progress(val id: String, val peer: String, val name: String, val size: Long, val mine: Boolean, val state: String,
                         val done: Long = 0, val note: String = "",
                         /** Theirs, once saved: where it is in Downloads (a content URI), for Open. */
-                        val uri: String = "")
+                        val uri: String = "",
+                        val group: String = "", val route: String = "", val pace: String = "", val paused: Boolean = false,
+                        val held: Boolean = false, val folder: String = "", val relay: Boolean = false,
+                        val time: Long = System.currentTimeMillis()) {
+        /** The chat it belongs to: their key, or "g:<group>". */
+        val where: String get() = if (group.isEmpty()) peer else "g:$group"
+        val kind: String get() = Sharing.kindOf(name)
+    }
 
     /** A file saved in Downloads: the name it got and its content URI. */
     data class Saved(val name: String, val uri: String)
 
     private val _all = MutableStateFlow<Map<String, Progress>>(emptyMap())
     val all: StateFlow<Map<String, Progress>> = _all.asStateFlow()
-    private fun put(p: Progress) { _all.value = _all.value + (p.id to p) }
+
+    /** Paused here, held by them (27.5), moving, when bytes began to move and for how long it was paused. */
+    private val pausedIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val heldIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val movingIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val resumed: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val started = ConcurrentHashMap<String, Long>()
+    private val pausedAt = ConcurrentHashMap<String, Long>()
+    private val pausedFor = ConcurrentHashMap<String, Long>()
+
+    /** What a card keeps from before (its chat, route, folder, when it began) and what it shows now (paused, pace). */
+    @Synchronized private fun put(p: Progress) {
+        val old = _all.value[p.id]
+        val merged = if (old == null) p else p.copy(group = p.group.ifEmpty { old.group }, route = p.route.ifEmpty { old.route },
+            folder = p.folder.ifEmpty { old.folder }, relay = p.relay || old.relay, time = old.time)
+        val paused = p.id in pausedIds
+        val held = p.id in heldIds
+        val since = started[p.id]
+        val pace = if (merged.state == "sending" && since != null && !paused && !held)
+            FileText.pace(merged.done, merged.size, System.currentTimeMillis() - since - (pausedFor[p.id] ?: 0L)) else ""
+        _all.value = _all.value + (p.id to merged.copy(paused = paused, held = held, pace = pace))
+    }
+    private fun refresh(id: String) { _all.value[id]?.let { put(it) } }
 
     interface Host {
         /** Seal [json] (room "file") for [peer] and send it on every route. */
@@ -181,6 +218,8 @@ object FileLink {
         fun hasF1(peer: String): Boolean
         /** Their app waits for a big file to be accepted ([ASK_CAP]). */
         fun waitsForAsk(peer: String): Boolean = true
+        /** In one of my Family groups (protocol.md 16.2): every file of theirs arrives by itself, whatever its size. */
+        fun allArrive(peer: String): Boolean = false
         /** A whole file arrived and checked out: put it in Downloads. */
         fun save(name: String, file: File): Saved?
         /** No straight path: send a small [file] over the internet route instead (it then shows as a message). Null when on its way. */
@@ -191,41 +230,101 @@ object FileLink {
         fun nameOf(peer: String): String = "Someone"
         /** May it download now (Data saver on mobile data says wait)? */
         fun mayDownload(): Boolean
+        // Cap f2 (section 27).
+        /** Where they are on this Wi-Fi (a device whose chat key proved its certificate): never shown or sent. */
+        fun lanAddress(peer: String): InetAddress? = null
+        fun hasF2(peer: String): Boolean = false
+        /** Empty when a file of [size] from [from] is welcome in group [g] (its file rules), else why not. */
+        fun groupRefusal(g: String, from: String, size: Long): String = "Refused: you aren't in that group."
+        /** A group's own file arrives by itself (its type: Folk small ones, Family all). */
+        fun groupArrives(g: String, size: Long): Boolean = false
+        fun groupName(g: String): String = "Group"
+        /** "Always from this person": their files arrive without asking. */
+        fun alwaysFrom(peer: String): Boolean = false
+        fun setAlways(peer: String) {}
+        fun isContact(peer: String): Boolean = true
+        /** Free space where received files go. */
+        fun freeBytes(): Long = Long.MAX_VALUE
+        /** Saves into Download/Muninn/[folder] (Sharing.folderFor). */
+        fun saveIn(name: String, file: File, folder: String): Saved? = save(name, file)
+        /** The chat's Files list: a file sent or received there. */
+        fun logFile(where: String, name: String, size: Long, uri: String, mine: Boolean) {}
     }
 
     @Volatile var host: Host? = null
     private val work = Executors.newCachedThreadPool { r -> Thread(r, "muninn-file").apply { isDaemon = true } }
     private class Out(val peer: String, val file: File, val name: String, val size: Long, val sha: String, val keys: java.security.KeyPair,
-                      val sock: DatagramSocket, val cands: List<InetSocketAddress>)
-    private class In(val peer: String, val name: String, val size: Long, val sha: String, val theirKey: String, val theirCands: List<InetSocketAddress>)
+                      val sock: DatagramSocket, val cands: List<InetSocketAddress>, val group: String = "", val lanOnly: Boolean = false)
+    private class In(val peer: String, val name: String, val size: Long, val sha: String, val theirKey: String, val theirCands: List<InetSocketAddress>,
+                     val group: String = "", val lanOnly: Boolean = false, val lan: InetSocketAddress? = null)
     private val outs = ConcurrentHashMap<String, Out>()
     private val ins = ConcurrentHashMap<String, In>()
     /** Stopped with Cancel: its threads end quietly. */
     private val stopped: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    /** Mine, while it can be sent again (Retry): who to, the file and its name. */
+    /** Mine, while it can be sent again (Retry): who to, the file and its name, and its group. */
     private val again = ConcurrentHashMap<String, Triple<String, File, String>>()
+    private val againGroup = ConcurrentHashMap<String, String>()
+
+    /** The chat's name for a card: the person, or the group. */
+    fun chatOf(p: Progress): String = if (p.group.isEmpty()) host?.nameOf(p.peer) ?: "Someone" else host?.groupName(p.group) ?: "Group"
 
     /** A file of mine being made ready (copied in): its card shows at once. Returns its id for [send]. */
-    fun preparing(peer: String, name: String, size: Long): String {
+    fun preparing(peer: String, name: String, size: Long, group: String = ""): String {
         val id = Proto06.newLogicalId()
-        put(Progress(id, peer, name, size, true, "connecting"))
+        put(Progress(id, peer, name, size, true, "connecting", group = group))
         return id
     }
 
-    /** A file of mine that can't go at all: its card says why. */
-    fun failed(peer: String, name: String, size: Long, why: String, id: String = Proto06.newLogicalId()) {
-        put(Progress(id, peer, name, size, true, "failed", note = why))
+    /** A file of mine that can't go at all: its card says why, and so does a notice (never silent). */
+    fun failed(peer: String, name: String, size: Long, why: String, id: String = Proto06.newLogicalId(), group: String = "") {
+        put(Progress(id, peer, name, size, true, "failed", note = why, group = group))
+        host?.notice("$name didn't go. $why")
+    }
+
+    /** A file of mine that went as a message over the internet route: its card follows the message ([relayed]). */
+    fun relayOut(msgId: String, peer: String, name: String, size: Long) {
+        put(Progress(msgId, peer, name, size, true, "sending", route = Sharing.routeLabel("relay"), relay = true))
+        host?.logFile(peer, name, size, "", true)
+    }
+
+    /** How far a file of mine going as a message got ([fraction], null once it left), or that it [failed]. */
+    fun relayed(msgId: String, fraction: Float?, failed: Boolean) {
+        val p = _all.value[msgId]?.takeIf { it.relay && it.state == "sending" } ?: return
+        put(when {
+            failed -> p.copy(state = "failed", note = "${host?.nameOf(p.peer) ?: "They"} can't be reached right now. Retry when they're online.")
+            fraction == null -> p.copy(state = "done", done = p.size, note = "Sent · Arrives when they're online")
+            else -> p.copy(done = (p.size * fraction.coerceIn(0f, 1f)).toLong())
+        })
     }
 
     fun isStopped(id: String) = id in stopped
+
+    /** A transfer of mine or theirs is with [peer] (their answers come in even when they aren't a contact). */
+    fun expects(peer: String, id: String) = outs[id]?.peer == peer || ins[id]?.peer == peer
 
     /** Cancel: a file still on its way stops (the other side stops after 30 s of silence). */
     fun cancel(id: String) {
         val p = _all.value[id] ?: return
         if (!FileText.running(p.state) && p.state != "asking" && p.state != "waiting") return
         stopped.add(id)
+        pausedIds.remove(id)
         if (!p.mine) ins.remove(id)?.let { host?.signal(it.peer, JSONObject().put("t", "decline").put("id", id).toString()) }
         put(p.copy(state = "failed", note = "Stopped"))
+    }
+
+    /** Pause and go on (cap f2, 27.5): either side, while it moves. */
+    fun canPause(id: String) = id in movingIds && id !in pausedIds
+    fun canResume(id: String) = id in pausedIds
+    fun pause(id: String) {
+        if (id !in movingIds || !pausedIds.add(id)) return
+        pausedAt[id] = System.currentTimeMillis()
+        refresh(id)
+    }
+    fun resume(id: String) {
+        if (!pausedIds.remove(id)) return
+        pausedAt.remove(id)?.let { at -> pausedFor[id] = (pausedFor[id] ?: 0L) + System.currentTimeMillis() - at }
+        resumed.add(id)
+        refresh(id)
     }
 
     /** Close: a finished or failed card goes. */
@@ -233,31 +332,34 @@ object FileLink {
         val p = _all.value[id] ?: return
         if (FileText.running(p.state)) return
         again.remove(id)?.second?.delete()
+        againGroup.remove(id)
         _all.value = _all.value - id
     }
 
     /** A card of mine whose file went over the internet route instead: the chat's own message takes over from here. */
     fun handedOff(id: String) {
         again.remove(id)
+        againGroup.remove(id)
         _all.value = _all.value - id
     }
 
     /** Cancel shows: mine while it runs, theirs while it comes straight (one over the internet route just arrives). */
-    fun canCancel(id: String) = _all.value[id]?.let { FileText.running(it.state) && (it.mine || ins.containsKey(id)) } == true
+    fun canCancel(id: String) = _all.value[id]?.let { FileText.running(it.state) && !it.relay && (it.mine || ins.containsKey(id)) } == true
 
     fun canRetry(id: String) = again.containsKey(id) && _all.value[id]?.state == "failed"
 
-    /** Retry: the card goes and its file comes back to be sent again (Chat.sendFile). */
+    /** Retry: the card goes and its file comes back to be sent again (Chat.sendFile), with its group. */
     fun takeRetry(id: String): Triple<String, File, String>? {
         if (!canRetry(id)) return null
         val t = again.remove(id) ?: return null
         _all.value = _all.value - id
         return t.takeIf { it.second.isFile }
     }
+    fun retryGroup(id: String): String = againGroup.remove(id).orEmpty()
 
     /** A file of theirs coming over the internet route ([have] of [n] pieces): its card shows how far. */
     fun relayIn(msgId: String, peer: String, name: String, have: Int, n: Int) {
-        put(Progress(msgId, peer, name, n.toLong() * Photos.PIECE, false, "sending", have.toLong() * Photos.PIECE))
+        put(Progress(msgId, peer, name, n.toLong() * Photos.PIECE, false, "sending", have.toLong() * Photos.PIECE, route = Sharing.routeLabel("relay")))
     }
 
     /** It arrived (the chat's message takes over), or half of it was let go. A copy offered straight goes too. */
@@ -269,10 +371,12 @@ object FileLink {
     }
 
     /** No straight path for a file of mine: a small one goes over the internet route instead, else its card says [why]. */
-    private fun fallBack(id: String, peer: String, file: File, name: String, why: String) {
+    private fun fallBack(id: String, peer: String, file: File, name: String, why: String, group: String = "") {
         val h = host
-        if (h != null && file.isFile && file.length() <= FileText.RELAY_MAX) {
+        // A group's file goes over the relays only to a contact, into the chat with them.
+        if (h != null && file.isFile && file.length() <= FileText.RELAY_MAX && (group.isEmpty() || h.isContact(peer))) {
             again.remove(id)
+            againGroup.remove(id)
             _all.value = _all.value - id   // the chat's own message takes over from here
             h.relay(peer, file, name)?.let { failed(peer, name, file.length(), it, id) }
             return
@@ -280,27 +384,59 @@ object FileLink {
         fail(id, why)
     }
 
-    /** Sends [file] to [peer] directly. Null when it started, else why not (then Chat may use the relays for a small one). */
-    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId()): String? {
+    /** The "lan" candidate (27.1): only the port, never an address. */
+    private fun lanCand(port: Int) = JSONObject().put("t", "lan").put("p", port)
+
+    /** Their "lan" candidate paired with where they already are on this Wi-Fi ([at]); null when either is missing. */
+    fun lanTarget(at: InetAddress?, c: JSONArray): InetSocketAddress? {
+        if (at == null) return null
+        for (i in 0 until c.length()) {
+            val o = c.optJSONObject(i) ?: continue
+            if (o.optString("t") != "lan") continue
+            val p = o.opt("p") as? Number ?: continue
+            if (p.toDouble() != p.toInt().toDouble() || p.toInt() !in 1..65535) continue
+            return InetSocketAddress(at, p.toInt())
+        }
+        return null
+    }
+
+    /**
+     * Sends [file] to [peer] directly: on the same Wi-Fi, or straight over the internet with trust (Sharing.route). Null
+     * when it started, else why not ("not trusted": Chat may use the relays for a small one). [group]: a group's file.
+     */
+    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId(), group: String = ""): String? {
         val h = host ?: return "Not ready."
         if (!h.hasF1(peer)) return "needs a newer Muninn"
-        if (!h.trusted(peer)) return "not trusted"
+        if (group.isNotEmpty() && !h.hasF2(peer)) return "needs a newer Muninn"
+        val lan = h.lanAddress(peer)?.takeIf { h.hasF2(peer) }
+        val trust = h.trusted(peer)
+        val route = Sharing.route(lan != null, trust, file.length(), FileText.RELAY_MAX)
+        if (route != "direct" && route != "internet") return "not trusted"
+        val lanOnly = route == "direct" && !trust
         if (id in stopped) { file.delete(); return null }   // Cancel while it was being made ready
         val size = file.length()
         again[id] = Triple(peer, file, name)
-        put(Progress(id, peer, name, size, true, "connecting"))
+        if (group.isNotEmpty()) againGroup[id] = group
+        put(Progress(id, peer, name, size, true, "connecting", group = group, route = if (lanOnly) Sharing.routeLabel("direct") else ""))
         work.execute {
             try {
                 val sha = sha256(file)
                 if (id in stopped) return@execute
                 val sock = DatagramSocket()
-                val cands = candidates(sock)
-                if (cands.isEmpty()) { sock.close(); fallBack(id, peer, file, name, "No internet connection that can go direct. Try on the same Wi-Fi."); return@execute }
+                // Close by without trust: only the "lan" candidate, and no STUN server is asked.
+                val cands = if (lanOnly) emptyList() else candidates(sock)
+                if (cands.isEmpty() && lan == null) { sock.close(); fallBack(id, peer, file, name, "No internet connection that can go direct. Try on the same Wi-Fi.", group); return@execute }
                 val keys = ChatCrypto.newKeyPair()
-                outs[id] = Out(peer, file, name, size, sha, keys, sock, cands)
-                h.signal(peer, JSONObject().put("t", "offer").put("id", id).put("name", name).put("size", size).put("sha", sha)
-                    .put("e", ChatCrypto.b64(keys.public.encoded)).put("c", candsJson(cands)).toString())
-                put(Progress(id, peer, name, size, true, "offered"))
+                outs[id] = Out(peer, file, name, size, sha, keys, sock, cands, group, lanOnly)
+                val c = candsJson(cands)
+                val cs = JSONArray()
+                if (lan != null) cs.put(lanCand(sock.localPort))
+                for (i in 0 until c.length()) cs.put(c.get(i))
+                val offer = JSONObject().put("t", "offer").put("id", id).put("name", name).put("size", size).put("sha", sha)
+                    .put("e", ChatCrypto.b64(keys.public.encoded)).put("c", cs)
+                if (group.isNotEmpty()) offer.put("g", group)
+                h.signal(peer, offer.toString())
+                put(Progress(id, peer, name, size, true, "offered", group = group))
                 // Nothing back in time: a small file goes over the internet route (it arrives when they're back); a
                 // bigger one waits as long as the other phone may ask first.
                 val until = System.currentTimeMillis() + answerMs(size)
@@ -308,11 +444,22 @@ object FileLink {
                 if (id in stopped) { outs.remove(id)?.sock?.close(); return@execute }
                 if (_all.value[id]?.state == "offered") {
                     outs.remove(id)?.sock?.close()
-                    fallBack(id, peer, file, name, "They're offline. Try again when they're back.")
+                    fallBack(id, peer, file, name, "They're offline. Try again when they're back.", group)
                 }
             } catch (e: Exception) { if (id !in stopped) fail(id, "That file couldn't be sent.") }
         }
         return null
+    }
+
+    private fun decline(to: String, id: String, why: String = "") {
+        val o = JSONObject().put("t", "decline").put("id", id)
+        if (why.isNotEmpty()) o.put("why", why)
+        host?.signal(to, o.toString())
+    }
+
+    /** A card of theirs refused before anything moved (group rules, no space): it says why. */
+    private fun refused(from: String, id: String, name: String, size: Long, group: String, why: String) {
+        put(Progress(id, from, name, size, false, "failed", note = why, group = group))
     }
 
     /** A `file` message from [from] (already opened and checked: ok()). */
@@ -321,17 +468,49 @@ object FileLink {
         val id = p.getString("id")
         when (p.getString("t")) {
             "offer" -> {
-                if (!h.trusted(from)) { h.signal(from, JSONObject().put("t", "decline").put("id", id).toString()); return }
-                val inc = In(from, p.getString("name"), p.getLong("size"), p.getString("sha"), p.getString("e"), CallLogic.directOf(p.getJSONArray("c")))
+                if (ins.containsKey(id)) return
+                val name = p.getString("name")
+                val size = p.getLong("size")
+                val g = p.optString("g")
+                val c = p.getJSONArray("c")
+                val trust = h.trusted(from)
+                val lan = lanTarget(h.lanAddress(from), c)
+                // A group's file (27.2, 27.3): only for a group we're both in, within its file rules. Dropped, and said.
+                if (g.isNotEmpty()) {
+                    val why = h.groupRefusal(g, from, size)
+                    if (why.isNotEmpty()) {
+                        decline(from, id, "rules")
+                        refused(from, id, name, size, g, why)
+                        h.notice("A file from ${h.nameOf(from)} in ${h.groupName(g)} was dropped. $why")
+                        return
+                    }
+                }
+                // Addresses are only swapped with someone trusted; on the same Wi-Fi nothing new is learned.
+                if (!trust && lan == null) { decline(from, id); return }
+                if (h.freeBytes() < size + 64L * 1024 * 1024) {
+                    decline(from, id, "space")
+                    refused(from, id, name, size, g, "Not enough space for it on this phone (${FileText.size(h.freeBytes())} free).")
+                    h.notice("${h.nameOf(from)} tried to send you $name, but there isn't enough space.")
+                    return
+                }
+                val theirs = listOfNotNull(lan) + (if (trust) CallLogic.directOf(c) else emptyList())
+                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan)
                 ins[id] = inc
-                val waits = h.waitsForAsk(from)
+                val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
+                // Someone in one of my Family groups, "Always from this person", or a group's own file the group lets
+                // through (16.2): no asking first, whatever the size (Data saver still waits).
+                val free = h.alwaysFrom(from) || (if (g.isEmpty()) h.allArrive(from) else h.groupArrives(g, size))
+                val waits = h.waitsForAsk(from) && !free
+                val routeShown = if (!trust) Sharing.routeLabel("direct") else ""
                 when {
                     arrivesByItself(inc.size, h.mayDownload(), waits) -> accept(id)
                     asksFirst(inc.size, waits) -> {
-                        put(Progress(id, from, inc.name, inc.size, false, "asking", note = "Wants to send you a big file. Accept or decline"))
-                        h.notice("A big file is waiting for you to accept: ${inc.name}")
+                        put(Progress(id, from, inc.name, inc.size, false, "asking", note = "Wants to send you this. Accept or decline", group = g,
+                            folder = "Download/$folder", route = routeShown))
+                        h.notice("${h.nameOf(from)} wants to send you ${inc.name}. Accept or decline it in Transfers.")
                     }
-                    else -> put(Progress(id, from, inc.name, inc.size, false, "waiting", note = "On mobile data: tap to download"))
+                    else -> put(Progress(id, from, inc.name, inc.size, false, "waiting", note = "On mobile data: tap to download", group = g,
+                        folder = "Download/$folder", route = routeShown))
                 }
             }
             "accept" -> {
@@ -339,13 +518,20 @@ object FileLink {
                 if (o.peer != from) return
                 val theirs = try { ChatCrypto.publicFrom(p.getString("e")) } catch (e: Exception) { return }
                 val key = key(ChatCrypto.sharedKey(o.keys.private, o.keys.public, theirs), id)
-                work.execute { runSender(id, o, key, CallLogic.directOf(p.getJSONArray("c"))) }
+                val c = p.getJSONArray("c")
+                val lan = lanTarget(h.lanAddress(from), c)
+                val targets = listOfNotNull(lan) + (if (o.lanOnly) emptyList() else CallLogic.directOf(c))
+                work.execute { runSender(id, o, key, targets, lan) }
             }
             "decline" -> outs[id]?.takeIf { it.peer == from }?.let {
                 outs.remove(id)
                 if (_all.value[id]?.state == "offered") {
                     it.sock.close()
-                    fallBack(id, it.peer, it.file, it.name, "They declined, or Direct calls is off on their side.")
+                    // Refused (group rules, no space, they said no: 27.4) ends it; otherwise a small one can still go
+                    // over the internet route.
+                    val why = p.optString("why")
+                    if (why.isNotEmpty()) fail(id, Sharing.declineText(why))
+                    else fallBack(id, it.peer, it.file, it.name, if (it.lanOnly) "Couldn't reach them on this Wi-Fi." else Sharing.declineText(""), it.group)
                 } else {
                     // Stopped on their side while it was on its way.
                     _all.value[id]?.let { p -> put(p.copy(state = "failed", note = "They stopped it")) }
@@ -359,22 +545,32 @@ object FileLink {
     /** No to a waiting file: the sender hears so, and it's gone from the chat. */
     fun decline(id: String) {
         val inc = ins.remove(id) ?: return
-        host?.signal(inc.peer, JSONObject().put("t", "decline").put("id", id).toString())
+        decline(inc.peer, id, "no")
         _all.value = _all.value - id
+    }
+
+    /** Accept, and from now on their files arrive without asking ("Always from this person"). */
+    fun acceptAlways(id: String) {
+        val inc = ins[id] ?: return
+        host?.let { if (it.isContact(inc.peer)) it.setAlways(inc.peer) }
+        accept(id)
     }
 
     /** Download a waiting file now (tapped, or on Wi-Fi). */
     fun accept(id: String) {
         val inc = ins[id] ?: return
         val h = host ?: return
-        put(Progress(id, inc.peer, inc.name, inc.size, false, "connecting"))
+        put(Progress(id, inc.peer, inc.name, inc.size, false, "connecting", group = inc.group))
         work.execute {
             try {
                 val sock = DatagramSocket()
-                val cands = candidates(sock)
+                val cands = if (inc.lanOnly) emptyList() else candidates(sock)
+                val cs = JSONArray()
+                if (inc.lan != null || h.lanAddress(inc.peer) != null) cs.put(lanCand(sock.localPort))
+                candsJson(cands).let { c -> for (i in 0 until c.length()) cs.put(c.get(i)) }
                 val keys = ChatCrypto.newKeyPair()
                 val key = key(ChatCrypto.sharedKey(keys.private, keys.public, ChatCrypto.publicFrom(inc.theirKey)), id)
-                h.signal(inc.peer, JSONObject().put("t", "accept").put("id", id).put("e", ChatCrypto.b64(keys.public.encoded)).put("c", candsJson(cands)).toString())
+                h.signal(inc.peer, JSONObject().put("t", "accept").put("id", id).put("e", ChatCrypto.b64(keys.public.encoded)).put("c", cs).toString())
                 runReceiver(id, inc, key, sock)
             } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") }
         }
@@ -386,37 +582,61 @@ object FileLink {
         host?.notice(why)
     }
 
+    private fun ended(id: String) {
+        movingIds.remove(id); pausedIds.remove(id); heldIds.remove(id); resumed.remove(id)
+        started.remove(id); pausedAt.remove(id); pausedFor.remove(id)
+    }
+
+    /** Hold (27.5): [on] paused, else going on. */
+    private fun hold(sock: DatagramSocket, key: ByteArray, id: String, dir: Int, seq: Long, on: Boolean, to: InetSocketAddress) {
+        val pk = seal(key, id, HOLD, dir, seq, byteArrayOf(if (on) 1 else 0))
+        try { sock.send(DatagramPacket(pk, pk.size, to)) } catch (_: Exception) {}
+    }
+
     // ------------------------------------------------------------------ the two ends
 
-    private fun runSender(id: String, o: Out, key: ByteArray, theirs: List<InetSocketAddress>) {
+    private fun runSender(id: String, o: Out, key: ByteArray, theirs: List<InetSocketAddress>, lan: InetSocketAddress?) {
         val sock = o.sock
         try {
-            put(Progress(id, o.peer, o.name, o.size, true, "connecting"))
+            put(Progress(id, o.peer, o.name, o.size, true, "connecting", group = o.group))
             val peer = punch(sock, key, id, 0, theirs) ?: run {
-                if (id !in stopped) fallBack(id, o.peer, o.file, o.name, "Couldn't connect straight to them. Try on the same Wi-Fi.")
+                if (id !in stopped) fallBack(id, o.peer, o.file, o.name,
+                    if (o.lanOnly) "Couldn't reach them on this Wi-Fi." else "Couldn't connect straight to them. Try on the same Wi-Fi.", o.group)
                 return
             }
+            val route = Sharing.routeLabel(if (lan != null && peer == lan) "direct" else "internet")
             val n = pieces(o.size)
             val s = Sender(n)
             var seq = 1000L
             sock.soTimeout = 50
             val buf = ByteArray(2048)
             var lastHeard = System.currentTimeMillis()
+            var lastKeep = 0L
             var sent = 0L
+            movingIds.add(id)
+            started[id] = System.currentTimeMillis()
             RandomAccessFile(o.file, "r").use { raf ->
                 val chunk = ByteArray(CHUNK)
-                put(Progress(id, o.peer, o.name, o.size, true, "sending"))
+                put(Progress(id, o.peer, o.name, o.size, true, "sending", route = route, group = o.group))
                 while (!s.done) {
                     if (id in stopped) return
                     val now = System.currentTimeMillis()
-                    if (now - lastHeard > IDLE_MS) { fail(id, "The connection dropped. Try again."); return }
-                    for (i in s.due(now)) {
-                        raf.seek(i.toLong() * CHUNK)
-                        val len = minOf(CHUNK.toLong(), o.size - i.toLong() * CHUNK).toInt()
-                        raf.readFully(chunk, 0, len)
-                        val payload = ByteBuffer.allocate(4 + len).putInt(i).put(chunk, 0, len).array()
-                        val pk = seal(key, id, DATA, 0, seq++, payload)
-                        sock.send(DatagramPacket(pk, pk.size, peer))
+                    if (now - lastHeard > IDLE_MS) { fail(id, "They went offline. Try again."); return }
+                    if (resumed.remove(id)) repeat(3) { hold(sock, key, id, 0, seq++, false, peer) }
+                    when {
+                        // Paused here: Hold every second, no data. Held by them: a probe a second, no data.
+                        id in pausedIds -> if (now - lastKeep >= 1000) { hold(sock, key, id, 0, seq++, true, peer); lastKeep = now }
+                        id in heldIds -> if (now - lastKeep >= 1000) {
+                            val pk = seal(key, id, PROBE, 0, seq++, byteArrayOf(1)); sock.send(DatagramPacket(pk, pk.size, peer)); lastKeep = now
+                        }
+                        else -> for (i in s.due(now)) {
+                            raf.seek(i.toLong() * CHUNK)
+                            val len = minOf(CHUNK.toLong(), o.size - i.toLong() * CHUNK).toInt()
+                            raf.readFully(chunk, 0, len)
+                            val payload = ByteBuffer.allocate(4 + len).putInt(i).put(chunk, 0, len).array()
+                            val pk = seal(key, id, DATA, 0, seq++, payload)
+                            sock.send(DatagramPacket(pk, pk.size, peer))
+                        }
                     }
                     try {
                         val dp = DatagramPacket(buf, buf.size)
@@ -424,28 +644,40 @@ object FileLink {
                             sock.receive(dp)
                             val (t, pl) = open(key, id, 1, dp.data, dp.length) ?: continue
                             lastHeard = System.currentTimeMillis()
+                            if (t == HOLD && pl.isNotEmpty()) {
+                                if (pl[0].toInt() == 1) heldIds.add(id) else heldIds.remove(id)
+                                refresh(id)
+                                continue
+                            }
+                            if (t == ACK && heldIds.remove(id)) refresh(id)
                             if (t == ACK && pl.size >= 12) {
                                 val bb = ByteBuffer.wrap(pl)
                                 val below = bb.int
                                 s.ack(below, bb.long)
                                 sent = minOf(o.size, below.toLong() * CHUNK)
-                                put(Progress(id, o.peer, o.name, o.size, true, "sending", sent))
+                                put(Progress(id, o.peer, o.name, o.size, true, "sending", sent, route = route, group = o.group))
                             }
                             if (t == DONE) { s.ack(n, 0); break }
                         }
                     } catch (_: java.net.SocketTimeoutException) {}
                 }
             }
-            put(Progress(id, o.peer, o.name, o.size, true, "done", o.size))
+            put(Progress(id, o.peer, o.name, o.size, true, "done", o.size, route = route, group = o.group))
+            host?.logFile(if (o.group.isEmpty()) o.peer else "g:${o.group}", o.name, o.size, "", true)
             again.remove(id)?.second?.delete()
-        } catch (e: Exception) { fail(id, "That file couldn't be sent.") } finally { outs.remove(id); sock.close() }
+            againGroup.remove(id)
+        } catch (e: Exception) { fail(id, "That file couldn't be sent.") } finally { outs.remove(id); sock.close(); ended(id) }
     }
 
     private fun runReceiver(id: String, inc: In, key: ByteArray, sock: DatagramSocket) {
         val h = host ?: return
         val tmp = File(h.cacheDir(), "incoming-$id")
         try {
-            val peer = punch(sock, key, id, 1, inc.theirCands) ?: run { fail(id, "Couldn't connect straight to them. It may come another way."); return }
+            val peer = punch(sock, key, id, 1, inc.theirCands) ?: run {
+                fail(id, if (inc.lanOnly) "Couldn't reach them on this Wi-Fi. Ask them to send it again." else "Couldn't connect straight to them. It may come another way.")
+                return
+            }
+            val route = Sharing.routeLabel(if (inc.lan != null && peer == inc.lan) "direct" else "internet")
             val n = pieces(inc.size)
             val r = Receiver(n)
             var seq = 1000L
@@ -454,18 +686,21 @@ object FileLink {
             var lastHeard = System.currentTimeMillis()
             var lastAck = 0L
             var fresh = 0
-            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending"))
+            movingIds.add(id)
+            started[id] = System.currentTimeMillis()
+            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", route = route, group = inc.group))
             RandomAccessFile(tmp, "rw").use { raf ->
                 raf.setLength(inc.size)
                 while (!r.done) {
                     if (id in stopped) return
                     val now = System.currentTimeMillis()
-                    if (now - lastHeard > IDLE_MS) { fail(id, "The connection dropped. Ask them to send it again."); return }
+                    if (now - lastHeard > IDLE_MS) { fail(id, "They went offline. Ask them to send it again."); return }
                     try {
                         val dp = DatagramPacket(buf, buf.size)
                         sock.receive(dp)
                         val (t, pl) = open(key, id, 0, dp.data, dp.length) ?: continue
                         lastHeard = System.currentTimeMillis()
+                        if (t == HOLD && pl.isNotEmpty()) { if (pl[0].toInt() == 1) heldIds.add(id) else heldIds.remove(id); refresh(id) }
                         if (t == DATA && pl.size > 4) {
                             val i = ByteBuffer.wrap(pl).int
                             if (i in 0 until n && pl.size - 4 == minOf(CHUNK.toLong(), inc.size - i.toLong() * CHUNK).toInt() && r.take(i)) {
@@ -474,22 +709,30 @@ object FileLink {
                         }
                     } catch (_: java.net.SocketTimeoutException) {}
                     val t = System.currentTimeMillis()
-                    if (fresh >= 16 || t - lastAck >= 40) {
+                    if (resumed.remove(id)) { repeat(3) { hold(sock, key, id, 1, seq++, false, peer) }; lastAck = 0L }
+                    if (id in pausedIds) {
+                        // Paused here: Hold every second instead of acks.
+                        if (t - lastAck >= 1000) { hold(sock, key, id, 1, seq++, true, peer); lastAck = t }
+                    } else if (fresh >= 16 || t - lastAck >= (if (id in heldIds) 1000L else 40L)) {
                         val (below, bits) = r.ack()
                         val pk = seal(key, id, ACK, 1, seq++, ByteBuffer.allocate(12).putInt(below).putLong(bits).array())
                         sock.send(DatagramPacket(pk, pk.size, peer))
                         lastAck = t; fresh = 0
-                        put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", minOf(inc.size, below.toLong() * CHUNK)))
+                        put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", minOf(inc.size, below.toLong() * CHUNK), route = route, group = inc.group))
                     }
                 }
             }
             repeat(3) { val pk = seal(key, id, DONE, 1, seq++, ByteArray(0)); sock.send(DatagramPacket(pk, pk.size, peer)) }
-            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", inc.size, note = "Checking it"))
+            put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", inc.size, note = "Checking it", route = route, group = inc.group))
             if (sha256(tmp) != inc.sha) { fail(id, "${inc.name} arrived damaged, so it was thrown away."); return }
-            val saved = h.save(inc.name, tmp) ?: run { fail(id, "${inc.name} couldn't be saved. Is the storage full?"); return }
-            put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri))
-            h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved to Downloads")
-        } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally { ins.remove(id); sock.close(); tmp.delete() }
+            // In Download/Muninn/<chat name>, never a hidden app folder.
+            val chat = if (inc.group.isEmpty()) h.nameOf(inc.peer) else h.groupName(inc.group)
+            val folder = Sharing.folderFor("Muninn", chat)
+            val saved = h.saveIn(inc.name, tmp, folder) ?: run { fail(id, "Not enough space to save ${inc.name}."); return }
+            put(Progress(id, inc.peer, saved.name, inc.size, false, "done", inc.size, uri = saved.uri, route = route, group = inc.group, folder = "Download/$folder"))
+            h.logFile(if (inc.group.isEmpty()) inc.peer else "g:${inc.group}", saved.name, inc.size, saved.uri, false)
+            h.notice("File from ${h.nameOf(inc.peer)}: ${saved.name} · Saved in Download/$folder")
+        } catch (e: Exception) { fail(id, "That file didn't arrive. Ask them to send it again.") } finally { ins.remove(id); sock.close(); tmp.delete(); ended(id) }
     }
 
     /**

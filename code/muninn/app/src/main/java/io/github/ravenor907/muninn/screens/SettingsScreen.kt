@@ -250,6 +250,8 @@ private fun NotifyPage(app: Muninn) {
         }
         if (fullOff) PageRow("Full-screen calls", "Off. Tap to turn on") { openFullScreenSetting(ctx) }
         ToggleRow("Show the message", "Off: just “New message”", preview) { preview = it; id.showPreview = it }
+        var reduce by remember { mutableStateOf(id.reduceNotifications) }
+        ToggleRow("Reduce notifications", "One per chat until you open it", reduce) { reduce = it; id.reduceNotifications = it }
         PageRow("Sound and vibration", "") {
             try {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
@@ -274,14 +276,16 @@ private fun NotifyPage(app: Muninn) {
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun AccentChoices(app: Muninn) {
-    val names = io.github.ravenor907.muninn.ui.Accents.NAMES
-    val titles = io.github.ravenor907.muninn.ui.Accents.TITLES
+    // Only the accents that suit the Color vision picked; the saved one shows as the nearest of them.
+    val all = io.github.ravenor907.muninn.ui.Accents.NAMES
+    val names = io.github.ravenor907.muninn.ui.ColorVision.accents(Access.colorVision)
+    val titles = names.map { io.github.ravenor907.muninn.ui.Accents.TITLES[all.indexOf(it)] }
     var custom by remember { mutableStateOf(if (io.github.ravenor907.muninn.ui.Accents.valid(Access.accent)) Access.accent else "") }
     fun pick(v: String) { Access.accent = io.github.ravenor907.muninn.ui.Accents.choice(v); app.identity.accent = Access.accent }
     androidx.compose.foundation.layout.FlowRow(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         names.forEachIndexed { i, n ->
-            val on = Access.accent == n
+            val on = Palette.accentKey == n
             val c = Palette.accentOf(n)
             Column(Modifier.clip(io.github.ravenor907.muninn.ui.Corner).clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { pick(n) }
                 .semantics(mergeDescendants = true) { selected = on; contentDescription = titles[i] }.padding(4.dp),
@@ -293,6 +297,8 @@ private fun AccentChoices(app: Muninn) {
             }
         }
     }
+    // No color: gray is the one accent, so no other color to type.
+    if (Access.colorVision != io.github.ravenor907.muninn.ui.ColorVision.MONO)
     Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
         val ok = io.github.ravenor907.muninn.ui.Accents.valid(custom)
         Box(Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape)
@@ -307,22 +313,17 @@ private fun LookPage(app: Muninn) {
     val id = app.identity
     Framed("Look") {
         val looks = io.github.ravenor907.muninn.ui.Looks.ALL
-        val seasons = io.github.ravenor907.muninn.ui.Seasons
         fun saveSeason() { id.season = Access.season; id.seasonGround = Access.seasonGround; id.seasonAnim = Access.seasonAnim }
-        // Two a line; one a line at a large text size, so no name breaks mid-word.
-        ChoiceRow(looks.size, Modifier.padding(vertical = 8.dp), minWidth = 140.dp, max = 2) { i, m ->
+        // All three on a line; fewer a line at a large text size, so no name breaks mid-word.
+        ChoiceRow(looks.size, Modifier.padding(vertical = 8.dp), minWidth = 100.dp) { i, m ->
             val (k, n) = looks[i]
-            val seasonal = k == io.github.ravenor907.muninn.ui.Looks.SEASONAL
-            // Seasonal names its season ("Seasonal: Snow"); tapping it again steps to the next season.
-            val label = if (seasonal) "$n: ${seasons.name(seasons.choice(Access.season))}" else n
-            MButton(label, m, if (Access.look == k) Kind.Accent else Kind.Normal) {
-                if (seasonal && Access.look == k) { Access.season = seasons.next(seasons.choice(Access.season)); saveSeason() }
-                else { Access.look = k; id.look = k }
-            }
+            MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
         }
-        if (Access.look == io.github.ravenor907.muninn.ui.Looks.SEASONAL) io.github.ravenor907.muninn.ui.SeasonControls { saveSeason() }
+        // Seasonal, over any look: the season, and what falls.
+        io.github.ravenor907.muninn.ui.SeasonControls { saveSeason() }
     }
     Framed("Accent") { AccentChoices(app) }
+    Framed("Color vision") { io.github.ravenor907.muninn.ui.ColorVisionControls { id.colorVision = Access.colorVision } }
     Framed("Size of everything") {
         val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
         ChoiceRow(sizes.size, Modifier.padding(vertical = 8.dp)) { i, m ->
@@ -345,7 +346,6 @@ private fun AccessPage(app: Muninn) {
     val id = app.identity
     Framed {
         ToggleRow("High contrast", "Stronger outlines", Access.contrast) { Access.contrast = it; id.highContrast = it }
-        ToggleRow("Color-blind friendly", "Amber warnings, status in words", Access.colorBlind) { Access.colorBlind = it; id.colorBlind = it }
         ToggleRow("Reduce motion", "No sliding or fading", Access.reduceMotion) { Access.reduceMotion = it; id.reduceMotion = it }
     }
 }
@@ -363,6 +363,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     var previews by remember { mutableStateOf(id.linkPreviews) }
     var trail by remember { mutableStateOf(id.patternTrail) }
     var privateKeys by remember { mutableStateOf(id.privateKeyboard) }
+    var nearbyOn by remember { mutableStateOf(id.visibleNearby) }
     var hasLock by remember { mutableStateOf(app.vault.hasPassword) }
     Framed("Lock") {
         if (hasLock) PageRow("Change lock", if (app.vault.usesPattern) "Pattern" else "Password") { SettingsNav.folder = "lockset" }
@@ -404,6 +405,10 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
         }
     }
     Framed("Privacy") {
+        // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
+        ToggleRow("Nearby", "Off: contacts only, nothing announced", nearbyOn) {
+            nearbyOn = it; id.visibleNearby = it; app.net.nearbyChanged(); app.ble.hiddenChanged()
+        }
         ToggleRow("Send read receipts", "Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
         ToggleRow("Active status", "Off: nobody sees it, both ways", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
         ToggleRow("Block screenshots", "Also hides it in recents", secure) { secure = it; id.secureScreen = it; onSecure() }
@@ -518,15 +523,14 @@ private fun CallsPage() {
 @Composable
 private fun NearbyPage(app: Muninn) {
     val id = app.identity
-    var visible by remember { mutableStateOf(id.visibleNearby) }
+    val visible = id.visibleNearby
     var nearby by remember { mutableStateOf(id.nearbyChat) }
     var keep by remember { mutableStateOf(id.keepNearbyHistory) }
     var device by remember { mutableStateOf(id.deviceName) }
     var closeBy by remember { mutableStateOf(app.power.closeBy) }
     Framed {
-        ToggleRow("Visible to people nearby", "Off: only contacts can reach you", visible) {
-            visible = it; id.visibleNearby = it; app.net.announce(); app.ble.hiddenChanged()
-        }
+        // The switch itself is in Lock and privacy.
+        if (!visible) NavRow("Nearby is off", "Lock and privacy", icon = "lock") { SettingsNav.folder = "lock" }
         if (visible) ToggleRow("Nearby room", "A chat for everyone close by", nearby) {
             nearby = it; id.nearbyChat = it; app.net.announce()
         }

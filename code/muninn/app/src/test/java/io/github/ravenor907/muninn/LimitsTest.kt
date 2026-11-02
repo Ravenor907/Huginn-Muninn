@@ -85,4 +85,32 @@ class LimitsTest {
 
     @Test
     fun capsSayD1() = assertTrue(Limits.CAP in Proto06.caps(Proto06.CAPS))
+
+    /** Group types (16.2): Folk and Family, and old "work" groups shown and treated as Folk keeping their days. */
+    @Test
+    fun folkAndFamily() {
+        val base = Proto06.parseState(v.getJSONObject("states").getJSONObject("standard").getJSONObject("state"))
+        val work = Proto06.parseState(v.getJSONObject("states").getJSONObject("work14").getJSONObject("state"))
+        assertEquals(Limits.FOLK, Limits.groupType(base))
+        assertEquals(Limits.FOLK, Limits.groupType(work))
+        assertEquals(14, Limits.groupDays(work))
+        assertEquals(work, Limits.withType(work, Limits.FOLK, 7, true))
+        val fam = Limits.withType(base.copy(mi = true), Limits.FAMILY, 30, true)
+        assertEquals("family", fam.kind)
+        assertEquals(30, Limits.groupDays(fam))
+        assertTrue(!fam.mi && !Limits.linksAllowed(fam) && !Limits.membersMayInvite(fam))
+        assertEquals(7, Limits.groupDays(Limits.withType(base, Limits.FAMILY, 3, true)))
+        assertEquals(30, Limits.groupDays(Limits.withType(base, Limits.FAMILY, 90, true)))
+        val folk = Limits.withType(fam, Limits.FOLK, 30, true)
+        assertTrue(folk.kind.isEmpty() && folk.days == 0 && folk.mi && Limits.membersMayInvite(folk))
+        assertTrue(!Limits.withType(fam, Limits.FOLK, 30, false).mi)
+        assertTrue(Limits.filesArrive(Limits.FAMILY, 4L shl 30, 50L shl 20))
+        assertTrue(Limits.filesArrive(Limits.FOLK, 1L shl 20, 50L shl 20))
+        assertTrue(!Limits.filesArrive(Limits.FOLK, 50L shl 20, 50L shl 20))
+        assertEquals("Folk", Limits.typeName(Limits.FOLK))
+        assertEquals("Family", Limits.kindName("family"))
+        assertEquals("Folk", Limits.kindName("work"))
+        assertEquals(4, Limits.typeRules(Limits.FOLK).size)
+    }
 }
+

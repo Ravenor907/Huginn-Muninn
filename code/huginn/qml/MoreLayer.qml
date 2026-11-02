@@ -36,12 +36,12 @@ Item {
         if (tour) return
         if (where === "") { Ui.say("Open a chat first.", true); return }
         Ui.pickFrom("Send to " + title, [{ header: "", items: [
+            { name: "Send file", detail: "Any file, any size", url: "file", icon: "attach" },
             { name: "Pictures from this device", detail: "Up to 10 as an album", url: "files", icon: "image" },
             { name: "Recent pictures", url: "recent", icon: "image" },
             { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },
             { name: "Video file", detail: "MP4, up to a minute", url: "videofile", icon: "play" },
-            { name: "Poll", url: "poll", icon: "check" }]
-            .concat(where.indexOf("g:") === 0 || !Chat.isContact(where) ? [] : [{ name: "A file", detail: "Any file", url: "file", icon: "file" }]) }], a => {
+            { name: "Poll", url: "poll", icon: "check" }] }], a => {
                 if (a === "files") pickPictures()
                 else if (a === "recent") recentPicture()
                 else if (a === "record") recordVideo()
@@ -86,7 +86,7 @@ Item {
         Ui.say(r !== "" ? r : "Sending the video message.", r !== "" && r.indexOf("need") < 0)
     }
     // Dropped files: pictures go in the chat (several as an album), MP4 videos as video messages, anything
-    // else to Files, ready to send over the Wi-Fi.
+    // else as a file, by the best route (the same as Send file).
     function dropFiles(urls) {
         const pics = [], others = []
         let videos = 0
@@ -101,13 +101,8 @@ Item {
         }
         if (pics.length) sendPictures(pics, false)
         if (videos) Ui.say(videos === 1 ? "Sending the video message." : "Sending " + videos + " video messages.")
-        // Cap f1: other files go straight to a contact over the internet when they can.
-        if (others.length && where.indexOf("g:") !== 0 && PeopleActions.dropFiles(where, others)) return
-        if (others.length) {
-            Transfer.share(others)
-            Ui.say((others.length === 1 ? "That file is" : "Those files are") + " ready in Files: pick a device on the same Wi-Fi to send.")
-            Ui.openPage("files", {})
-        }
+        // Caps f1 and f2: anything else as a file, to the person or to everyone in the group.
+        if (others.length) PeopleActions.sendFiles(where, others)
     }
     function newPoll() { pollDlg.open("Poll for " + title) }
     function viewPhotos(list, i) { photos = list; photoAt = i }
@@ -213,6 +208,7 @@ Item {
             id: sharedTabs
             anchors.top: sharedHead.bottom; anchors.topMargin: Theme.px(10)
             x: Theme.px(20)
+            width: Math.min(implicitWidth, parent.width - Theme.px(40))
             options: [{ value: "media", label: "Photos and videos" }, { value: "links", label: "Links" }, { value: "voice", label: "Voice" }]
             value: layer.sharedTab
             onPicked: v => { layer.sharedTab = v; layer.sharedSel = -1; layer.sharedShown = layer.pageSize }

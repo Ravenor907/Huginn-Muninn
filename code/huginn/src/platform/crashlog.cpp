@@ -1,4 +1,5 @@
 #include "crashlog.h"
+#include "portable.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -104,7 +105,7 @@ namespace CrashLog
 {
 void start()
 {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dir = Portable::dataDir();
     if (dir.isEmpty())
         return;
     QDir().mkpath(dir);

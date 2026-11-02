@@ -58,13 +58,52 @@ QJsonObject Limits::withLimit(QJsonObject state, const QString &kind, int days)
     return state;
 }
 
-QString Limits::kindName(const QString &kind)
+QString Limits::kindName(const QString &kind) { return typeName(kind == QLatin1String(kFamily) ? QString::fromLatin1(kFamily) : QString()); }
+
+const char Limits::kFolk[] = "folk";
+const char Limits::kFamily[] = "family";
+
+QString Limits::groupType(const QJsonObject &state)
 {
-    if (kind == QLatin1String("family"))
-        return QStringLiteral("Family");
-    if (kind == QLatin1String("work"))
-        return QStringLiteral("Work");
-    return QStringLiteral("Standard");
+    return state.value(QStringLiteral("kind")).toString() == QLatin1String(kFamily) ? QString::fromLatin1(kFamily) : QString::fromLatin1(kFolk);
+}
+
+QString Limits::typeName(const QString &type) { return type == QLatin1String(kFamily) ? QStringLiteral("Family") : QStringLiteral("Folk"); }
+
+QString Limits::typeLine(const QString &type)
+{
+    return type == QLatin1String(kFamily) ? QStringLiteral("Your closest, most trusted people. Invite only, checked in person, kept longer.")
+                                          : QStringLiteral("Friends and acquaintances. Easy to join, light to keep.");
+}
+
+QStringList Limits::typeRules(const QString &type)
+{
+    if (type == QLatin1String(kFamily))
+        return {QStringLiteral("Only admins add people, face to face or by a code they hand over"), QStringLiteral("No invite links"),
+                QStringLiteral("Each new member's safety code is checked once"), QStringLiteral("Messages stay up to 30 days (admins pick 7 to 30)"),
+                QStringLiteral("Files and photos from members arrive by themselves"), QStringLiteral("Members are in your Family folder")};
+    return {QStringLiteral("Anyone in the group can invite, by a link or a code"), QStringLiteral("Messages disappear after 7 days"),
+            QStringLiteral("Small files arrive by themselves, big ones ask first"), QStringLiteral("Members aren't added to your contacts")};
+}
+
+bool Limits::linksAllowed(const QJsonObject &state) { return groupType(state) != QLatin1String(kFamily); }
+
+bool Limits::membersMayInvite(const QJsonObject &state) { return linksAllowed(state) && state.value(QStringLiteral("mi")).toBool(); }
+
+bool Limits::filesArrive(const QString &type, qint64 size, qint64 autoBytes) { return type == QLatin1String(kFamily) || size < autoBytes; }
+
+QJsonObject Limits::withType(QJsonObject state, const QString &type, int days, bool miOk)
+{
+    if (type == QLatin1String(kFamily)) {
+        state.remove(QStringLiteral("mi"));
+        return withLimit(state, QString::fromLatin1(kFamily), days);
+    }
+    if (state.value(QStringLiteral("kind")).toString() == QLatin1String("work"))
+        return state;   // already Folk, keeping its days
+    state = withLimit(state, QString(), kDefault);
+    if (miOk)
+        state.insert(QStringLiteral("mi"), true);
+    return state;
 }
 
 bool Limits::selfTest(const QString &vectorsPath)
@@ -133,6 +172,21 @@ bool Limits::selfTest(const QString &vectorsPath)
     check(groupDays(withLimit(s, QStringLiteral("family"), 30)) == 30 && groupDays(withLimit(s, QStringLiteral("work"), 7)) == 7
               && !withLimit(s, QStringLiteral("work"), 7).contains(QStringLiteral("days")),
           "Family and Work keep their days, 7 is left out");
+    // Group types: Folk and Family (16.2, 17.1).
+    const QJsonObject work{{QStringLiteral("g"), QStringLiteral("x")}, {QStringLiteral("kind"), QStringLiteral("work")}, {QStringLiteral("days"), 14}};
+    const QJsonObject fam = withType(QJsonObject{{QStringLiteral("g"), QStringLiteral("x")}, {QStringLiteral("mi"), true}}, QLatin1String(kFamily), 30);
+    check(groupType(s) == QLatin1String(kFolk) && groupType(work) == QLatin1String(kFolk) && groupType(fam) == QLatin1String(kFamily), "types: no kind and work are Folk");
+    check(groupDays(work) == 14 && withType(work, QLatin1String(kFolk), 7, true) == work, "an old work group is Folk and keeps its days");
+    check(!fam.contains(QStringLiteral("mi")) && groupDays(fam) == 30 && !linksAllowed(fam) && !membersMayInvite(fam), "Family: no links, no members inviting, 30 days");
+    check(groupDays(withType(s, QLatin1String(kFamily), 3)) == 7 && groupDays(withType(s, QLatin1String(kFamily), 90)) == 30, "Family keeps 7 to 30 days");
+    const QJsonObject folk = withType(fam, QLatin1String(kFolk), 30, true);
+    check(!folk.contains(QStringLiteral("kind")) && !folk.contains(QStringLiteral("days")) && membersMayInvite(folk) && linksAllowed(folk),
+          "Folk: 7 days, members can invite");
+    check(!withType(fam, QLatin1String(kFolk), 30, false).contains(QStringLiteral("mi")), "Folk without everyone's update: members can invite stays off");
+    check(filesArrive(QLatin1String(kFamily), 4LL << 30, 50 << 20) && filesArrive(QLatin1String(kFolk), 1 << 20, 50 << 20)
+              && !filesArrive(QLatin1String(kFolk), 50 << 20, 50 << 20), "files: Family all, Folk small ones");
+    check(typeName(QLatin1String(kFamily)) == QLatin1String("Family") && typeName(QString()) == QLatin1String("Folk") && typeRules(QLatin1String(kFolk)).size() == 4,
+          "type names and rules");
     std::printf("d1 self-test: %d passed, %d failed\n", pass, fail);
     return fail == 0;
 }

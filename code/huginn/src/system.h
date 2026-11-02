@@ -112,6 +112,14 @@ public:
     Q_INVOKABLE void tourFinished();
 
     static int s_qmlWarnings;
+    // Where Huginn keeps its own files (the vault and chats, keys, tls, crash.log) and what can be made again (update
+    // downloads, a move's parts). Every file Huginn keeps goes through these: the data folder beside Huginn.exe on the
+    // Windows portable build, Qt's app data and cache folders elsewhere (platform/portable.h).
+    static QString dataDir();
+    static QString cacheDir();
+    // Full screen when the window opens. Read once: after that only F11, Settings › Look › Open full screen and Handheld
+    // mode change it (Main.qml), never another setting.
+    Q_INVOKABLE bool startsFullScreen() const;
 
 Q_SIGNALS:
     void layoutChanged();

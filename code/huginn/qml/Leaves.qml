@@ -2,10 +2,12 @@ import QtQuick
 import QtQuick.Window
 import Huginn
 
-// The Seasonal look's ground (Autumn's warm bark, Snow's night blue, or the background picked on the
-// Look page) and what falls behind the frosted panes. One engine for both seasons; kind only picks
-// the shapes. Autumn: three leaf shapes (maple, oak and a serrated elm) in seven colors, and maple
-// seeds. Snow: six-armed crystals in the leaves' and seeds' places, white and a little see-through.
+// Seasonal, on top of any theme: the ground (on Dark, Autumn's warm bark, Snow's night blue, or the background
+// picked on the Look page; on Light the parchment tinted faintly; on True black and High contrast pure black) and
+// what falls behind the frosted panes, in colors for the theme and Color vision (Theme.leafInk and flakeInk).
+// One engine for both seasons; kind only picks the shapes. Autumn: three leaf shapes (maple, oak and a serrated
+// elm) in seven colors, and maple seeds. Snow: six-armed crystals in the leaves' and seeds' places, white (soft
+// gray-blue on Light) and a little see-through.
 // Each is drawn once on its own small Canvas; Fall (fall.cpp) moves them from C++ at most 30 times a
 // second (15 in the background), no script per frame: they glide sideways as they fall, rock and tumble,
 // flip edge-on and back, and lean into a gust now and then; the seeds spin and orbit as they drop. It
@@ -82,19 +84,21 @@ Item {
     Timer { id: sizeSoon; interval: 250; onTriggered: leaves.groundSize = Qt.size(Math.round(leaves.width), Math.round(leaves.height)) }
     Rectangle {
         anchors.fill: parent
-        visible: !ground.shown
+        visible: !ground.shown && !Theme.flatGround
         gradient: Gradient {
             GradientStop { position: 0.0; color: leaves.towards(Theme.groundMid, Theme.groundTop, leaves.gradientK) }
             GradientStop { position: 0.45; color: Theme.groundMid }
             GradientStop { position: 1.0; color: leaves.towards(Theme.groundMid, Theme.groundDeep, leaves.gradientK) }
         }
     }
+    // True black and High contrast: pure black, nothing lit behind what falls.
+    Rectangle { anchors.fill: parent; visible: Theme.flatGround; color: "#000000" }
     Image {
         id: ground
         readonly property bool shown: status === Image.Ready && leaves.gradientK > 0
         anchors.fill: parent
         visible: shown
-        source: leaves.visible && leaves.gradientK > 0 && leaves.groundSize.width > 0 ? "image://ground/" + leaves.groundId : ""
+        source: leaves.visible && !Theme.flatGround && leaves.gradientK > 0 && leaves.groundSize.width > 0 ? "image://ground/" + leaves.groundId : ""
         sourceSize: leaves.groundSize
         asynchronous: true
         cache: false
@@ -156,6 +160,9 @@ Item {
                 onSymChanged: requestPaint()
                 readonly property string kind: leaves.kind
                 onKindChanged: requestPaint()
+                // A new theme or Color vision repaints it in the new colors.
+                readonly property var inks: leaves.inks
+                onInksChanged: requestPaint()
                 onPaint: {
                     const ctx = getContext("2d")
                     ctx.reset()
@@ -182,6 +189,10 @@ Item {
         ["#f0a26c", "#d6763a", "#7f3a16"], ["#dd7a56", "#b9452a", "#5e2010"], ["#cf9a55", "#a86a2a", "#5a3512"],
         ["#f2d57a", "#d9a93f", "#8c6a1d"]
     ]
+    // The colors drawn for this theme and Color vision (see Theme.leafInk), as "#rrggbb": the leaves' and seeds'
+    // tones, the seed's glint and the flakes.
+    function ink(c) { return String(Theme.leafInk(c)) }
+    readonly property var inks: ({ leaves: tones.map(t => t.map(ink)), seeds: seedTones.map(t => t.map(ink)), glint: ink("#9a7a44"), flake: String(Theme.flakeInk) })
     readonly property var seedTones: [
         ["#6a4a22", "#b89a5c", "#e9d9a8"], ["#6a4a22", "#b89a5c", "#e9d9a8"], ["#7a5a2a", "#c9a86a", "#e9d9a8"],
         ["#7a5a2a", "#c9a86a", "#e9d9a8"], ["#8a6a33", "#d4b67a", "#e9d9a8"], ["#7a5a2a", "#c9a86a", "#e9d9a8"]
@@ -222,8 +233,8 @@ Item {
     // One radial gradient per color for drawLeaf, lit from near the stem.
     function leafFills(ctx) {
         const out = []
-        for (let i = 0; i < tones.length; ++i) {
-            const tone = tones[i]
+        for (let i = 0; i < inks.leaves.length; ++i) {
+            const tone = inks.leaves[i]
             const g = ctx.createRadialGradient(7.2, -2.4, 0, 7.2, -2.4, 31.2)
             g.addColorStop(0, tone[0]); g.addColorStop(0.55, tone[1]); g.addColorStop(1, tone[2])
             out.push(g)
@@ -235,7 +246,7 @@ Item {
     function drawLeaf(ctx, sym, a, fills) {
         const shape = leafShape[sym] || 0
         const t = leafTone[sym] || 0
-        const tone = tones[t]
+        const tone = inks.leaves[t]
         const dark = tone[2]
         ctx.globalAlpha = a
         // The stem.
@@ -264,7 +275,7 @@ Item {
         const ln = flakeLines[type]
         if (at !== 0) ctx.translate(at, 0)
         ctx.globalAlpha = 0.85 * a
-        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.8
+        ctx.strokeStyle = inks.flake; ctx.lineWidth = 1.8
         ctx.beginPath()
         for (let i = 0; i < ln.length; i += 4) { ctx.moveTo(ln[i], ln[i + 1]); ctx.lineTo(ln[i + 2], ln[i + 3]) }
         ctx.stroke()
@@ -290,7 +301,7 @@ Item {
     }
     // A maple seed, the seed itself at the origin; a is its opacity.
     function drawSeed(ctx, n, a) {
-        const tone = seedTones[n] || seedTones[0]
+        const tone = inks.seeds[n] || inks.seeds[0]
         const g = ctx.createLinearGradient(2, 0, 38, 0)
         g.addColorStop(0, tone[0]); g.addColorStop(0.25, tone[1]); g.addColorStop(1, tone[2])
         // The wing.
@@ -309,7 +320,7 @@ Item {
         // The seed itself, with a glint.
         ctx.globalAlpha = a; ctx.fillStyle = tone[0]
         ctx.beginPath(); ctx.ellipse(1 - 4.2, -3, 8.4, 6); ctx.fill()
-        ctx.globalAlpha = 0.7 * a; ctx.fillStyle = "#9a7a44"
+        ctx.globalAlpha = 0.7 * a; ctx.fillStyle = inks.glint
         ctx.beginPath(); ctx.ellipse(-2.2, -2, 4.4, 2.4); ctx.fill()
         ctx.globalAlpha = 1
     }

@@ -11,8 +11,21 @@ bool Settings::s_quiet = false;
 
 Settings::Settings(QObject *parent)
     : QObject(parent)
-    , m_settings(Settings::org(), QStringLiteral("Huginn"))
+    , m_settings(QSettings::defaultFormat(), QSettings::UserScope, Settings::org(), QStringLiteral("Huginn"))
 {
+    // Seasonal was a theme of its own (saved as "seasonal", or a season's name, with the season under "season"). It is
+    // now on top of any theme: that look opens as Dark with Seasonal on, the same season and the rest of its settings.
+    if (!m_settings.contains(QStringLiteral("seasonal"))) {
+        const QString t = m_settings.value(QStringLiteral("theme")).toString();
+        QString season = QStringLiteral("off");
+        if (t == QLatin1String("seasonal")) season = m_settings.value(QStringLiteral("season"), QStringLiteral("auto")).toString();
+        else if (t == QLatin1String("autumn") || t == QLatin1String("snow")) season = t;
+        m_settings.setValue(QStringLiteral("seasonal"), season.isEmpty() ? QStringLiteral("auto") : season);
+        if (season != QLatin1String("off")) m_settings.setValue(QStringLiteral("theme"), QStringLiteral("dark"));
+    }
+    // An older Color-blind friendly switch: Color vision's green-weak set, the closest to what it showed.
+    if (!m_settings.contains(QStringLiteral("colorVision")) && m_settings.value(QStringLiteral("colorBlind"), false).toBool())
+        m_settings.setValue(QStringLiteral("colorVision"), QStringLiteral("deutan"));
 }
 
 QString Settings::transferFolder() const

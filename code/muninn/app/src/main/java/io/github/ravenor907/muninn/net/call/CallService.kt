@@ -39,6 +39,8 @@ class CallService : Service() {
     private var foreground = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Cleared before the call is looked at: a hang-up from here on stops the service as usual (see stop).
+        starting = false
         val ui = CallManager.call.value
         if (intent?.action == UPDATE && foreground && lastPhase == ui?.phase) return START_NOT_STICKY
         lastPhase = ui?.phase
@@ -51,9 +53,12 @@ class CallService : Service() {
         }
         try { ServiceCompat.startForeground(this, Ringer.ONGOING_ID, n, types); foreground = true }
         catch (e: Exception) {
-            // Android said no to the phone-call type: keep the microphone at least.
-            try { if (Build.VERSION.SDK_INT >= 30) { ServiceCompat.startForeground(this, Ringer.ONGOING_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE); foreground = true } }
-            catch (e2: Exception) {}
+            // Android said no to one of the types (the microphone needs Muninn on screen): keep the phone call, else
+            // the microphone. Going foreground at all matters most: a service that never does closes Muninn.
+            if (Build.VERSION.SDK_INT >= 30) for (t in intArrayOf(ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)) {
+                if (foreground) break
+                try { ServiceCompat.startForeground(this, Ringer.ONGOING_ID, n, t); foreground = true } catch (_: Exception) {}
+            }
         }
         if (ui == null || ui.phase == CallSession.Phase.ENDED || !foreground) {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -70,13 +75,26 @@ class CallService : Service() {
     companion object {
         private const val UPDATE = "io.github.ravenor907.muninn.call.UPDATE"
 
+        /** A foreground start is on its way and hasn't reached [onStartCommand] yet. */
+        @Volatile private var starting = false
+
         /** Call from a visible screen (starting or answering a call): Android only allows the microphone then. */
-        fun start(c: Context) { try { ContextCompat.startForegroundService(c, Intent(c, CallService::class.java)) } catch (_: Exception) {} }
+        fun start(c: Context) {
+            starting = true
+            try { ContextCompat.startForegroundService(c, Intent(c, CallService::class.java)) } catch (_: Exception) { starting = false }
+        }
         fun update(c: Context) {
             if (CallManager.call.value?.phase == CallSession.Phase.INCOMING) return
             try { c.startService(Intent(c, CallService::class.java).setAction(UPDATE)) } catch (_: Exception) {}
         }
-        fun stop(c: Context) { try { c.stopService(Intent(c, CallService::class.java)) } catch (_: Exception) {} }
+        /**
+         * A call that ends right after it started (a quick hang-up, busy, no path) must not stop the service before it
+         * went foreground: Android then closes Muninn. The start on its way sees the call ended and stops by itself.
+         */
+        fun stop(c: Context) {
+            if (starting) return
+            try { c.stopService(Intent(c, CallService::class.java)) } catch (_: Exception) {}
+        }
     }
 }
 

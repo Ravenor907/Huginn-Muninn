@@ -48,6 +48,10 @@ class Link : public QObject
     // On a companion: the phone's own profile, shown here as "you" while it's linked and checked:
     // {name, status, custom, picture (bool)}; empty when no checked phone is linked or it hasn't said yet.
     Q_PROPERTY(QVariantMap me READ me NOTIFY changed)
+    // Cap l1 (section 15.1), on a companion: the phone's whole account, kept in step both ways:
+    // {on (the phone takes part), contacts: [{key, name, nick, shown, verified, blocked, picture}],
+    //  groups: [{id, name, role, gone, members: [{key, name, role}]}], folders: [{id, name, keys}]}.
+    Q_PROPERTY(QVariantMap account READ account NOTIFY changed)
 
 public:
     static const char kPrefix[];                       // "MUNINNL1:"
@@ -72,6 +76,9 @@ public:
     QVariantMap me() const;
     QByteArray mePicture() const;           // the phone's picture (JPEG), empty when none
     QString meStatus() const;               // the phone's status ("online", "away", "dnd", "invisible"), "" when none
+    QVariantMap account() const;
+    // Cap l1: the phone's contacts' pictures (key to JPEG), for Profile to show (empty when none or no l1 phone).
+    QHash<QString, QByteArray> contactPictures() const;
 
     // A new link code for a phone to take (a new token each time).
     Q_INVOKABLE QString newCode();
@@ -85,6 +92,18 @@ public:
     Q_INVOKABLE QVariantList unchecked() const;
     Q_INVOKABLE void confirm(const QString &key);
     Q_INVOKABLE void unlink(const QString &key);
+    // On a companion: unlink the phone. keep: its chats, contacts, groups and folders stay here, read only (Unlink
+    // again, or linking another phone, takes them away); else everything that came from it goes now.
+    Q_INVOKABLE void unlinkPhone(bool keep);
+    // Cap l1, on a companion: changes to the phone's account, made here and sent to it (the later change wins on both).
+    // "" when done, else what to tell the person.
+    Q_INVOKABLE QString renameContact(const QString &key, const QString &nickname);
+    Q_INVOKABLE QString blockContact(const QString &key, bool on);
+    Q_INVOKABLE QString removeContact(const QString &key);
+    Q_INVOKABLE QString addFolder(const QString &name);
+    Q_INVOKABLE QString renameFolder(const QString &id, const QString &name);
+    Q_INVOKABLE QString deleteFolder(const QString &id);
+    Q_INVOKABLE QString putInFolder(const QString &id, const QString &key, bool on);
     // On a companion: one mirrored chat's messages, oldest first:
     // [{id, text, mine, time, kind ("" or photo, voice, video, file), media (an id for Chat.blob, "" until it's here), name, size}],
     // then what was sent from here and not answered yet: {id, text, mine, time, pending: true, failed, err}.
@@ -121,6 +140,8 @@ public:
     // and what a companion's "setme" changes here (name, status, custom status; an empty one stays as it is).
     std::function<QJsonObject()> myProfile;
     std::function<void(const QString &, const QString &, const QString &)> setMyProfile;
+    // Set by main.cpp, on a companion with an l1 phone: the phone's picture becomes this device's own (empty: none).
+    std::function<void(const QByteArray &)> setMyPicture;
     // On the phone: my profile to every checked companion, when it changed since it last went (force: anyway).
     void sendMe(bool force = false);
     // A "me" frame as the companion takes it: {name, status, custom, pic (JPEG bytes)}, or empty when it isn't one.
@@ -137,6 +158,7 @@ public:
         qint64 time = 0;
         QString hash, kind, name;           // a photo, voice, video or file: its SHA-256 (hex), kind and name
         qint64 size = 0;
+        QString from;                       // cap l1, a group chat: who wrote it
     };
     // Merges a page into a chat's messages by id (a later copy wins), oldest first; never drops one that's there.
     static void merge(QList<M> &into, const QList<M> &page);
@@ -161,13 +183,41 @@ public:
     // A code shown until it has less than kRefreshMs left, then a new one.
     static bool codeDue(qint64 at, qint64 until);
 
+    // Cap l1 (section 15.1), the same as Muninn's LinkAccount: the account is items {k, id, ts, v} or tombstones
+    // {k, id, ts, del: true}; per (k, id) the later ts wins, a tie goes to the phone's copy, tombstones stay 30 days.
+    static const char kAcctCap[];                      // "l1"
+    static constexpr qint64 kTombMs = 30LL * 86400000;
+    static constexpr int kAcctLiveBytes = 16 * 1024;   // a change frame that may use the internet, at most
+    struct Item {
+        QString k, id;
+        qint64 ts = 0;
+        bool del = false;
+        QJsonObject v;
+        QString key() const { return k + QLatin1Char('|') + id; }
+        QJsonObject json() const;
+    };
+    // One item as it came; ok false when it isn't one.
+    static Item readItem(const QJsonObject &o, bool *ok);
+    static bool itemWins(const Item *local, const Item &in, bool winTies);
+    // Merges incoming into set; returns the items that won (to apply).
+    static QList<Item> mergeItems(QHash<QString, Item> &set, const QList<Item> &incoming, bool winTies);
+    // The first full set from a phone just linked: it replaces everything here (its name, never a leftover one).
+    static void adoptItems(QHash<QString, Item> &set, const QList<Item> &incoming);
+    static void pruneItems(QHash<QString, Item> &set, qint64 now);
+    static bool acctInternetOk(const QJsonObject &msg);
+    static bool saysL1(const QString &caps);
+
 Q_SIGNALS:
     void changed();
+    // Cap l1: the phone's contacts' pictures changed (contactPictures).
+    void picturesChanged();
 
 private:
     struct Device {
         QString key, mailbox, name;
         bool ok = true;                     // the 4 emoji were checked (true when stored without "ok")
+        bool l1 = false;                    // the phone sends its whole account (cap l1, 15.1)
+        bool gone = false;                  // unlinked, its copy kept here read only
     };
     struct Mirror {
         QString peer, name;
@@ -255,6 +305,18 @@ private:
     mutable QString m_meName, m_meStatus, m_meCustom;
     mutable QByteArray m_mePic;
     void forgetPhone();                     // the phone unlinked or was unlinked: what came with it goes
+    // Cap l1, the companion's side: the phone's account (link-account.json), and whether the next full set replaces it.
+    mutable QHash<QString, Item> m_acct;
+    mutable bool m_acctFresh = false;
+    bool m_capsAsked = false;                // this run asked an older link's phone about l1 once
+    void saveAcct();
+    mutable QHash<QString, QByteArray> m_pics;   // contactPictures, decoded once
+    void rebuildPics() const;
+    void takeAcct(const QJsonObject &p);
+    void applyMe(const QString &name, const QString &status, const QString &custom);
+    QString changeItem(const QString &k, const QString &id, bool del, const QJsonObject &v);
+    QJsonObject syncFrame(bool first) const;
+    bool acctOn() const { return !m_phone.key.isEmpty() && m_phone.ok && !m_phone.gone && m_phone.l1; }
     // The phone's side: the last "me" sent (compact JSON), so a change goes once.
     QByteArray m_meSent;
     QTimer m_meSoon;

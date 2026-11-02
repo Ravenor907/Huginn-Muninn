@@ -30,9 +30,11 @@ class Settings;
 
 // Nearby sharing that speaks the LocalSend protocol (v2), so the free LocalSend app on a phone,
 // tablet or PC finds the handheld by itself and sends or receives with no codes to type.
-// Discovery: UDP multicast 224.0.0.167:53317 plus a scan of the home network.
-// Receiving: a small HTTPS server on port 53317 with our own self-signed certificate, whose
-// SHA-256 is the fingerprint we announce; every incoming transfer is accepted on screen.
+// Discovery: UDP multicast 224.0.0.167:53317 (shared with the LocalSend app on the same device) plus a scan
+// of the home network.
+// Receiving: a small HTTPS server on the first free port from 53318 (announced as "port", so the LocalSend
+// app keeps 53317) with our own self-signed certificate, whose SHA-256 is the fingerprint we announce;
+// every incoming transfer is accepted on screen.
 // Sending: HTTPS to the other device (HTTP only for devices that have encryption off), checking
 // that its certificate matches the fingerprint it announced.
 class LocalSend : public QObject
@@ -105,19 +107,29 @@ private:
     struct Device {
         QString id, alias, model, type, ip, protocol;
         QString chatKey, chatName, app;   // set by Huginn and Muninn; plain LocalSend apps don't chat
-        int port = 53317;
+        int port = 53318;
         QDateTime seen;
         bool proven = false;              // cap s1: its chat key signed this certificate (false: no s1 proof, only extra)
     };
 public:
     // Chat (see chat.h) rides on the same port: what to add to our info, and who can be messaged.
     std::function<QJsonObject()> chatInfo;
-    // Hidden from people nearby (Chat's setting): no multicast announcement at all, no answer to anyone
-    // else's, and no chat proof or hint in what is sent. Look again still finds devices and files still go out.
+    // Nearby off (Chat's setting, Settings › Privacy › Nearby): no multicast announcement at all, no scan of the home
+    // network, nobody but contacts listed or answered. A contact's own announcement, and each contact where it was last
+    // seen (askContacts), get this computer's info straight: the daily hint, never a name (protocol.md 21.3).
     std::function<bool()> silent;
-    // Hidden changed (Chat): from now on the server shows a throwaway certificate while hidden (never the lasting one,
-    // which anyone close by could follow), and the lasting one again once visible.
+    // Whether a chat key is one of my contacts (with Nearby off only they are listed and answered).
+    std::function<bool(const QString &key)> isContact;
+    // Nearby off: where contacts were last reached on the home Wi-Fi, kept sealed in the vault by Chat. Never shown.
+    std::function<void(const QByteArray &json)> keepPeers;
+    void loadPeers(const QByteArray &json);
+    // Nearby off: each contact last seen on the home Wi-Fi (and not heard from lately) is asked straight there.
+    void askContacts();
+    // Nearby changed (Chat): from now on the server shows a throwaway certificate while off (never the lasting one,
+    // which anyone close by could follow), and the lasting one again once on. Off: nobody but contacts stays listed.
     void hiddenChanged();
+    // Our own server's port: the first free one from 53318.
+    int serverPort() const { return m_port; }
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
     // Moving to another device (cap x1): its own path on the same port, with an answer.
     std::function<QPair<int, QByteArray>(const QByteArray &body)> moveReceive;
@@ -199,6 +211,8 @@ private:
     void uploadNext();
     void endSend(bool ok, const QString &message);
     QString savePath(const QString &name) const;
+    // Where files from the device sending now are saved: Downloads/Huginn/<its name>.
+    QString folder() const;
     void bindLan();
 
     Settings *m_settings;
@@ -206,7 +220,19 @@ private:
     bool m_secure = false;      // false only if no certificate could be made: then plain HTTP
     QSslConfiguration m_serverTls;
     QSslConfiguration m_hiddenTls;   // while hidden: a certificate made for this time only, kept in memory
+    QString m_hiddenFp;              // its fingerprint (empty while visible)
     QSslConfiguration serverTls();
+    void applyTls();   // the servers show serverTls() (the throwaway certificate while Nearby is off)
+    bool off() const { return silent && silent(); }
+    // The certificate this computer shows now: the throwaway one while Nearby is off.
+    QString myFingerprint() const { return off() && !m_hiddenFp.isEmpty() ? m_hiddenFp : m_fingerprint; }
+    bool mine(const QString &fp) const;
+    // The contact a device's info stands for (its chat key, or a hidden one's hint), or empty.
+    QString contactIn(const QJsonObject &o) const;
+    struct KnownPeer { QString ip, protocol; int port = 0; qint64 seen = 0; };
+    QHash<QString, KnownPeer> m_peers;   // contact's chat key -> where it was last reached
+    void keepPeer(const QString &key, const Device &d);
+    int m_port = 53318;                 // our server's port (the same on every home-network address)
     bool m_on = false;
     std::vector<std::pair<QHostAddress, QTcpServer *>> m_servers;   // one per home-network address
     QStringList m_joined;                                           // interfaces in the multicast group

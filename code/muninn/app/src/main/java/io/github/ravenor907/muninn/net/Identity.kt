@@ -40,9 +40,8 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putBoolean("nearbyChat", v).apply()
 
     /**
-     * Off: hidden from strangers close by. No Nearby room, nobody new can message over Bluetooth or Wi-Fi, and
-     * the name isn't sent out (Nearby, Bluetooth, LocalSend). Contacts still reach this phone, so its chat key
-     * keeps being announced. File sharing has its own switch.
+     * Settings › Lock and privacy › Nearby. Off: no Nearby room or Nearby list, nobody new can message over Bluetooth
+     * or Wi-Fi, and nothing about this phone goes out on its own ([nearbyOff]). Contacts still reach it.
      */
     var visibleNearby: Boolean
         get() = prefs.getBoolean("visibleNearby", true)
@@ -50,6 +49,21 @@ class Identity(context: Context, private val vault: Vault) {
 
     /** The Nearby room is on: its own switch, and only while visible to people nearby. */
     val nearbyRoom: Boolean get() = nearbyChat && visibleNearby
+
+    /** A Kids' TV keeps its own nearby behavior whatever the Nearby switch says (Muninn sets this when it starts). */
+    @Volatile var kidsTv: () -> Boolean = { false }
+
+    /**
+     * Settings › Lock and privacy › Nearby is off: nothing is announced on the Wi-Fi or Bluetooth, nothing is scanned
+     * for, nobody nearby is listed and only contacts are answered. Contacts still reach this phone on the home Wi-Fi
+     * where they were last seen (shared/docs/protocol.md 21.3). Never on a Kids' TV.
+     */
+    val nearbyOff: Boolean get() = !visibleNearby && !kidsTv()
+
+    /** Settings › Notifications › Reduce notifications: one per chat until it's opened, instead of one per message. */
+    var reduceNotifications: Boolean
+        get() = prefs.getBoolean("reduceNotifications", false)
+        set(v) = prefs.edit().putBoolean("reduceNotifications", v).apply()
 
     /** Checks GitHub for a new Muninn when it opens. Off: only "Check now" does. */
     var autoUpdate: Boolean
@@ -75,13 +89,17 @@ class Identity(context: Context, private val vault: Vault) {
         set(v) = prefs.edit().putBoolean("keepNearby", v).apply()
 
     /** What the vault keeps in secrets.json (empty when there's nothing yet). */
-    private fun sealed(): org.json.JSONObject = vault.read(secrets)?.let { try { org.json.JSONObject(it) } catch (_: Exception) { null } } ?: org.json.JSONObject()
+    private fun sealed(): org.json.JSONObject = vault.read(secrets)?.let {
+        try { org.json.JSONObject(it) } catch (e: Exception) { vault.loadFailed(secrets, e); null }
+    } ?: org.json.JSONObject()
 
     /** Secret keys, kept only in the encrypted vault (one found in the plain settings is moved there). */
     @Synchronized
     private fun secret(name: String, make: () -> String): String {
         val o = sealed()
         o.optString(name).ifEmpty { null }?.let { return it }
+        // The keys file is there but didn't load (or Muninn is locked): never a new key in place of the saved one.
+        if (!vault.core.loadedOk(secrets)) throw IllegalStateException("secrets.json didn't load")
         val v = prefs.getString(name, null) ?: make()
         o.put(name, v)
         vault.write(secrets, o.toString())
@@ -125,16 +143,17 @@ class Identity(context: Context, private val vault: Vault) {
     var highContrast: Boolean
         get() = prefs.getBoolean("highContrast", false)
         set(v) = prefs.edit().putBoolean("highContrast", v).apply()
-    var colorBlind: Boolean
-        get() = prefs.getBoolean("colorBlind", false)
-        set(v) = prefs.edit().putBoolean("colorBlind", v).apply()
+    /** Settings › Look › Color vision ([io.github.ravenor907.muninn.ui.ColorVision]); an older Color-blind friendly switch opens as green-weak. */
+    var colorVision: String
+        get() = io.github.ravenor907.muninn.ui.ColorVision.of(prefs.getString("colorVision", null), prefs.getBoolean("colorBlind", false))
+        set(v) = prefs.edit().putString("colorVision", io.github.ravenor907.muninn.ui.ColorVision.of(v)).apply()
     var reduceMotion: Boolean
         get() = prefs.getBoolean("reduceMotion", false)
         set(v) = prefs.edit().putBoolean("reduceMotion", v).apply()
 
-    /** The look: "dark", "black" (true black), "light" or "seasonal" ("autumn" opens as "seasonal"). Any other saved value opens as "dark". */
+    /** The look: "dark", "black" (true black) or "light". Any other saved value opens as "dark" (see [seasonal]). */
     var look: String
-        get() = prefs.getString("look", null) ?: "dark"
+        get() { migrateSeasonal(); return prefs.getString("look", null) ?: "dark" }
         set(v) = prefs.edit().putString("look", v).apply()
     /** The accent (Settings › Look): "gold" and the other names in [io.github.ravenor907.muninn.ui.Accents], or any "#RRGGBB". */
     var accent: String
@@ -144,10 +163,21 @@ class Identity(context: Context, private val vault: Vault) {
     var nameAsked: Boolean
         get() = prefs.getBoolean("nameAsked", false)
         set(v) = prefs.edit().putBoolean("nameAsked", v).apply()
-    /** Seasonal's season: "auto" (by the date) or a season's key, like "snow". */
+    /** Seasonal, over any look: "off", "auto" (by the date) or a season's key, like "snow". */
     var season: String
-        get() = prefs.getString("season", null) ?: "auto"
-        set(v) = prefs.edit().putString("season", v).apply()
+        get() { migrateSeasonal(); return prefs.getString("seasonal", null) ?: "off" }
+        set(v) = prefs.edit().putString("seasonal", v).apply()
+    /**
+     * Seasonal used to be a look of its own (saved as "seasonal", or a season's key, with the season under "season"):
+     * once, that opens as Dark with Seasonal on, the same season and the rest of its settings.
+     */
+    private fun migrateSeasonal() {
+        if (prefs.contains("seasonal")) return
+        val (look, seasonal) = io.github.ravenor907.muninn.ui.Looks.migrate(prefs.getString("look", null), prefs.getString("season", null))
+        val edit = prefs.edit().putString("seasonal", seasonal)
+        if (seasonal != "off") edit.putString("look", look)
+        edit.apply()
+    }
     /** Seasonal's background: "" (the season's own) or a "#RRGGBB" from the Look page's swatches. */
     var seasonGround: String
         get() = prefs.getString("seasonGround", null) ?: ""

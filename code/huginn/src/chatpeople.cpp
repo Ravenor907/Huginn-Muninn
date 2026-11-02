@@ -16,6 +16,15 @@ namespace {
 qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
 QString str(const QVariantMap &m, const char *k) { return m.value(QLatin1String(k)).toString(); }
 const QString kFlags = QStringLiteral("chatflags.json");
+// How a chat notifies, the same words as Muninn's ChatFlags.
+const QString kEvery = QStringLiteral("every");
+const QString kOne = QStringLiteral("one");
+const QString kMentions = QStringLiteral("mentions");
+// A key as flags keep it: a contact's, or "g:<group>" for any of a group's channels ("g:<group>:<channel>").
+QString flagKey(const QString &key)
+{
+    return key.startsWith(QLatin1String("g:")) ? QStringLiteral("g:") + key.mid(2).section(QLatin1Char(':'), 0, 0) : key;
+}
 }
 
 // Tokens that bring others with them (shared/docs/protocol.md 1.1): c2 and v1 mean c1, m2 means m1.
@@ -116,21 +125,39 @@ void Chat::loadFlags()
     const QJsonObject co = o.value(QStringLiteral("colors")).toObject();
     for (auto it = co.begin(); it != co.end(); ++it)
         m_chatColors.insert(it.key(), it.value().toString());
+    m_hiddenNearby.clear();
+    for (const QJsonValue &v : o.value(QStringLiteral("hidden")).toArray())
+        m_hiddenNearby.insert(v.toString());
+    m_clearedChats.clear();
+    for (const QJsonValue &v : o.value(QStringLiteral("cleared")).toArray())
+        m_clearedChats.insert(v.toString());
+    m_notifyMode.clear();
+    const QJsonObject nm = o.value(QStringLiteral("notify")).toObject();
+    for (auto it = nm.begin(); it != nm.end(); ++it) {
+        const QString mode = it.value().toString();
+        if (mode == kEvery || mode == kOne || mode == kMentions)
+            m_notifyMode.insert(it.key(), mode);
+    }
 }
 
 void Chat::saveFlags()
 {
-    QJsonObject mu, co;
+    QJsonObject mu, co, nm;
     for (auto it = m_mutedUntil.cbegin(); it != m_mutedUntil.cend(); ++it)
         mu.insert(it.key(), it.value());
     for (auto it = m_chatColors.cbegin(); it != m_chatColors.cend(); ++it)
         co.insert(it.key(), it.value());
+    for (auto it = m_notifyMode.cbegin(); it != m_notifyMode.cend(); ++it)
+        nm.insert(it.key(), it.value());
     const QJsonObject o{{QStringLiteral("pinned"), QJsonArray::fromStringList(m_pinnedChats)},
                         {QStringLiteral("archived"), QJsonArray::fromStringList(QStringList(m_archived.cbegin(), m_archived.cend()))},
                         {QStringLiteral("unread"), QJsonArray::fromStringList(QStringList(m_markedUnread.cbegin(), m_markedUnread.cend()))},
                         {QStringLiteral("muted"), mu},
                         {QStringLiteral("rightAway"), QJsonArray::fromStringList(QStringList(m_rightAway.cbegin(), m_rightAway.cend()))},
-                        {QStringLiteral("colors"), co}};
+                        {QStringLiteral("colors"), co},
+                        {QStringLiteral("hidden"), QJsonArray::fromStringList(QStringList(m_hiddenNearby.cbegin(), m_hiddenNearby.cend()))},
+                        {QStringLiteral("cleared"), QJsonArray::fromStringList(QStringList(m_clearedChats.cbegin(), m_clearedChats.cend()))},
+                        {QStringLiteral("notify"), nm}};
     m_vault->write(kFlags, QJsonDocument(o).toJson(QJsonDocument::Compact));
     Q_EMIT changed();
 }
@@ -200,9 +227,15 @@ void Chat::setChatColor(const QString &key, const QString &color)
 
 void Chat::forgetFlags(const QString &key)
 {
+    m_notified.remove(key);
+    m_alerted.remove(key);
     if (!m_pinnedChats.contains(key) && !m_archived.contains(key) && !m_markedUnread.contains(key) && !m_mutedUntil.contains(key)
-        && !m_rightAway.contains(key) && !m_chatColors.contains(key))
+        && !m_rightAway.contains(key) && !m_chatColors.contains(key) && !m_hiddenNearby.contains(key) && !m_clearedChats.contains(key)
+        && !m_notifyMode.contains(key))
         return;
+    m_hiddenNearby.remove(key);
+    m_clearedChats.remove(key);
+    m_notifyMode.remove(key);
     m_rightAway.remove(key);
     m_chatColors.remove(key);
     m_pinnedChats.removeAll(key);
@@ -213,15 +246,88 @@ void Chat::forgetFlags(const QString &key)
 }
 
 // A message arrived for key (a contact, or "g:<group>:<channel>"): an archived chat comes back unless it's
-// muted. Returns whether to make a sound and a notification.
-bool Chat::notifyFor(const QString &key)
+// muted. Returns whether to make a sound and a notification: not while muted, not from someone nearby put away with
+// Hide, and with Reduce notifications only the first one until the chat is opened (a group set to mentions only: just
+// those and replies to me). Calls never come this way, so they still ring.
+bool Chat::notifyFor(const QString &key, const QString &name)
 {
-    QString k = key;
-    if (k.startsWith(QLatin1String("g:")))
-        k = QStringLiteral("g:") + k.mid(2).section(QLatin1Char(':'), 0, 0);
-    if (isMuted(k) && !m_rightAway.contains(k))
+    const QString k = flagKey(key);
+    bool alert = true;
+    if (isMuted(k) && !m_rightAway.contains(k)) {
+        alert = false;
+    } else if (m_hiddenNearby.contains(k) && !isContact(k)) {
+        alert = false;
+    } else {
+        if (m_archived.contains(k))
+            archiveChat(k, false);
+        const QString mode = notifyMode(k);
+        if (mode == kMentions) {
+            alert = toMe(key, name);
+        } else if (mode == kOne) {
+            alert = !m_notified.contains(k);
+            m_notified.insert(k);
+        }
+    }
+    m_alerted.insert(key, alert);
+    return alert;
+}
+
+QString Chat::notifyMode(const QString &key) const
+{
+    const QString k = flagKey(key);
+    const QString own = m_notifyMode.value(k);
+    if (own == kMentions && !k.startsWith(QLatin1String("g:")))
+        return kEvery;   // only groups have it
+    if (!own.isEmpty())
+        return own;
+    return reduceNotifications() ? kOne : kEvery;
+}
+
+void Chat::setNotifyMode(const QString &key, const QString &mode)
+{
+    const QString k = flagKey(key);
+    if (mode == kEvery || mode == kOne || mode == kMentions)
+        m_notifyMode.insert(k, mode);
+    else
+        m_notifyMode.remove(k);
+    saveFlags();
+}
+
+void Chat::hideNearby(const QString &key)
+{
+    if (key.isEmpty() || m_hiddenNearby.contains(key))
+        return;
+    m_hiddenNearby.insert(key);
+    m_unread.remove(key);
+    saveFlags();
+}
+
+// A group message (key "g:<group>:<channel>") that is for me: an @mention (name says so), or the newest message from
+// someone else in that channel answers one of mine.
+bool Chat::toMe(const QString &key, const QString &name) const
+{
+    if (name.contains(QLatin1String(" mentioned you in ")))
+        return true;
+    if (!key.startsWith(QLatin1String("g:")))
         return false;
-    if (m_archived.contains(k))
-        archiveChat(k, false);
-    return true;
+    const QString g = key.mid(2).section(QLatin1Char(':'), 0, 0), ch = key.mid(2).section(QLatin1Char(':'), 1);
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.constEnd())
+        return false;
+    const QVariantList &msgs = it->messages;
+    for (qsizetype i = msgs.size() - 1; i >= 0; --i) {
+        const QVariantMap m = msgs.at(i).toMap();
+        if (m.value(QStringLiteral("mine")).toBool() || m.value(QStringLiteral("system")).toBool() || (!ch.isEmpty() && str(m, "ch") != ch))
+            continue;
+        const QString re = str(m, "re");
+        if (re.isEmpty())
+            return false;
+        for (const QVariant &v : msgs) {
+            const QVariantMap x = v.toMap();
+            if (str(x, "id") == re)
+                return x.value(QStringLiteral("mine")).toBool();
+        }
+        return false;
+    }
+    return false;
 }

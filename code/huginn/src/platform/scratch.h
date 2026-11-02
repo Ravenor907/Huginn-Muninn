@@ -4,7 +4,7 @@
 
 // Where a voice note, a video note or a pasted picture is written for the moment it takes to read it
 // back into memory. Linux: the runtime folder (memory-backed and private to the sandbox). Windows: a
-// "scratch" folder inside Huginn's own app data folder, never the home folder.
+// "scratch" folder inside Huginn's own data folder (beside Huginn.exe), never the home folder.
 namespace Scratch
 {
 // The folder (made if it isn't there yet), ending without a slash.

@@ -1,4 +1,5 @@
 #include "groupwire.h"
+#include "sharing.h"
 
 #include <QCryptographicHash>
 #include <QFile>
@@ -293,6 +294,11 @@ QString GroupWire::checkState(const QJsonObject &s)
     base.remove(QStringLiteral("mi"));
     if (s.contains(QStringLiteral("mi")) && s.value(QStringLiteral("mi")) != QJsonValue(true))
         return QStringLiteral("mi");
+    // Cap f2 (27.3): the group's file rules, "fs" and "fm", each left out when not set.
+    base.remove(QStringLiteral("fs"));
+    base.remove(QStringLiteral("fm"));
+    if (const QString rules = Sharing::checkRules(s); !rules.isEmpty())
+        return rules;
     if (!sameFields(base, {QStringLiteral("g"), QStringLiteral("v"), QStringLiteral("owner"), QStringLiteral("by"), QStringLiteral("name"),
                            QStringLiteral("admins"), QStringLiteral("members"), QStringLiteral("channels"), QStringLiteral("ts"), QStringLiteral("sig")}))
         return QStringLiteral("fields");

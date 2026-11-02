@@ -58,7 +58,35 @@ private:
     bool m_outer = false;
 };
 
-// How often something happened during a check ("relay EVENTs received"), on the window's thread. Off, one check of a flag.
+// Work on Huginn's own worker threads (the relay thread, the saving thread): timed while a check runs, apart from the
+// window's thread, so the report shows what moved off it and how long it takes there. Safe from any thread; on the
+// window's thread it does nothing (Scope counts that). Off, one check of a flag.
+void addThread(const char *what, qint64 ns);
+class ThreadScope
+{
+public:
+    explicit ThreadScope(const char *what)
+    {
+        if (!on || QThread::isMainThread())
+            return;
+        m_what = what;
+        m_start = clockNs();
+    }
+    ~ThreadScope()
+    {
+        if (m_what)
+            addThread(m_what, clockNs() - m_start);
+    }
+    ThreadScope(const ThreadScope &) = delete;
+    ThreadScope &operator=(const ThreadScope &) = delete;
+
+private:
+    const char *m_what = nullptr;
+    qint64 m_start = 0;
+};
+
+// How often something happened during a check ("relay EVENTs received"). From a worker thread it is kept apart and
+// joined in at the end. Off, one check of a flag.
 void count(const char *what, int n = 1);
 void count(const QString &what, int n = 1);
 // Gives a socket (or server, or QWebSocket) its name for reports and lists it among the open sockets at the end of a
@@ -80,6 +108,8 @@ void stop();
 QList<Entry> sorted();
 // Every part, nested ones too: most time first.
 QList<Entry> allParts();
+// Work timed on the worker threads (ThreadScope): most time first.
+QList<Entry> threadParts();
 // Everything count() was told, by name.
 QList<QPair<QString, qint64>> counts();
 // Each socket the window's thread handled events for: who owns it, its events, time and bytes.

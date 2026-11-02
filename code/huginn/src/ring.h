@@ -88,6 +88,11 @@ public:
     // The key pair a wrapping's "w" names, while it's kept (empty when gone).
     ChatCrypto::KeyPair find(const QString &id, qint64 nowS);
     void prune(qint64 nowS);
+    // Copies of the day keys kept now, for the relay thread (Nostr::opener).
+    QList<Day> kept(qint64 nowS);
+    // Chat::unwrap with copies of the keys: my chat key and the day keys (kept()). Safe on any thread: it uses only what
+    // it is given. ok only when it opened (or the content wasn't sealed) and there is something in it.
+    static QByteArray openEnvelope(const QString &content, const ChatCrypto::KeyPair &me, const QList<Day> &days, qint64 nowS, bool *ok);
 
 private:
     void load();

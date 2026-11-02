@@ -30,8 +30,10 @@ Window {
     minimumWidth: 480
     minimumHeight: 360
     visible: true
-    visibility: System.windowed ? Window.Windowed
-              : (Settings.fullScreen || System.gameMode || System.handheld) ? Window.FullScreen : Window.Windowed
+    // Full screen or a window, decided once as it opens (System.startsFullScreen reads no setting that changes later).
+    // After that only F11, Settings › Look › Open full screen and Handheld mode switch it (applyWindowMode below):
+    // a change to any other setting never touches it.
+    visibility: System.startsFullScreen() ? Window.FullScreen : Window.Windowed
     title: "Huginn"
     color: Theme.ground
 
@@ -47,7 +49,17 @@ Window {
         padInUse = System.handheld
         legend = System.handheld && Gamepad.connected
     }
-    Connections { target: System; function onHandheldChanged() { app.controllerFirst() } }
+    Connections { target: System; function onHandheldChanged() { app.controllerFirst(); app.applyWindowMode() } }
+    // The window's mode as last set: full screen or not. Only a change to what it should be switches it.
+    property bool fullNow: System.startsFullScreen()
+    function wantFullScreen() { return !System.windowed && (Settings.fullScreen || System.gameMode || System.handheld) }
+    function applyWindowMode() {
+        const want = wantFullScreen()
+        if (want === fullNow) return
+        fullNow = want
+        app.visibility = want ? Window.FullScreen : Window.Windowed
+    }
+    Connections { target: Settings; function onChanged() { app.applyWindowMode() } }
     // Taller than wide: one column at a time.
     readonly property bool portrait: height > width
     Binding { target: Ui; property: "portrait"; value: app.portrait }
@@ -109,15 +121,18 @@ Window {
     function newGroup() {
         if (!Vault.exists) { Ui.say("Set a lock first.", true); openPage("dms", {}); return }
         if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); openPage("dms", {}); return }
-        // Family and Work groups can keep messages up to 30 days (set later under Messages).
+        // Two types: Folk and Family, each a card with its one line; "What's the difference?" shows the rules.
+        const types = Chat.groupTypes()
         Ui.askWith("New group", "Everyone in it sees the name", "", "Make the group",
-                   [{ value: "standard", label: "Standard" }, { value: "family", label: "Family" }, { value: "work", label: "Work" }], "standard",
-                   "Type", (t, kind) => {
-            const g = Chat.createGroup(t, kind === "standard" ? "" : kind)
+                   types.map(t => ({ value: t.type, label: t.name, detail: t.line })), "folk",
+                   "Type", (t, type) => {
+            const g = Chat.createGroup(t, type)
             if (g === "") { Ui.say(Chat.saveFailed() ? "Couldn't save. Try again." : Chat.ready ? "Give the group a name." : "Unlock Huginn first.", true); return }
             Ui.say("Made " + t + ".")
             openPage("g:" + g, {})
         })
+        prompt.moreLabel = "What's the difference?"
+        prompt.moreText = types.map(t => t.name + "\n" + t.rules.map(r => "· " + r).join("\n")).join("\n\n")
         prompt.label = "Group name"
     }
     // A person dragged with the mouse: the group in the rail under a point of the window ("" when none), and its outline.
@@ -170,12 +185,13 @@ Window {
         app.requestExit()
     }
 
-    // The slim bar along the top: the raven, search (Ctrl+K) and the shortcuts (Ctrl+/).
+    // The slim bar along the top: HUGINN, search (Ctrl+K) and the shortcuts (Ctrl+/).
     TopBar {
         id: topBar
         width: parent.width
         onSearch: if (!app.touring) switcher.open()
         onShortcuts: shortcutsPanel.open()
+        onTransfers: transfersPanel.open(app.touring)
     }
 
     Rail {
@@ -331,7 +347,7 @@ Window {
     PromptBar {
         id: hints
         anchors.bottom: parent.bottom
-        z: callPage.visible || incomingCall.visible || moveCover.visible || linkPhone.visible ? 38 : 0   // a call's, a move's or Link your phone's buttons stay on show over it
+        z: callPage.visible || incomingCall.visible || moveCover.visible || linkPhone.visible || setup.visible || backupPanel.visible ? 38 : 0   // a call's, a move's, Link your phone's or first setup's buttons stay on show over it
         width: parent.width
         visible: (app.legend && Gamepad.connected) || LocalSend.busy
         showKeys: app.legend && Gamepad.connected
@@ -342,6 +358,8 @@ Window {
             if (callPage.visible) return callPage.prompts
             if (moveCover.visible && !prompt.visible && !confirm.visible) return moveCover.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (linkPhone.visible && !prompt.visible && !confirm.visible) return linkPhone.prompts.concat([{ key: "back", label: "Hide buttons" }])
+            if (backupPanel.visible && !prompt.visible && !confirm.visible) return backupPanel.prompts.concat([{ key: "back", label: "Hide buttons" }])
+            if (setup.visible && !prompt.visible && !confirm.visible) return setup.prompts.concat([{ key: "back", label: "Hide buttons" }])
             const lb = [{ key: "lb", label: "Next section" }]
             // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
             const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
@@ -356,16 +374,18 @@ Window {
 
     // ------------------------------------------------------------- overlays
     ListPicker { id: picker; z: 25 }
+    // The right-click menu (Ui.menuAt), over everything a right click can reach.
+    RightClickMenu { id: ctxMenu }
     // Ctrl+K (desktop): jump to any chat or channel by typing part of its name.
     QuickSwitcher { id: switcher; z: 26 }
     Shortcut {
         sequence: "Ctrl+K"
         context: Qt.ApplicationShortcut
-        enabled: !app.touring && !updating.visible
+        enabled: !app.touring && !updating.visible && !setup.visible
         onActivated: switcher.visible ? switcher.close() : switcher.open()
     }
     // The rest of the keyboard shortcuts (all listed in ShortcutsPanel.qml).
-    readonly property bool keysOn: !app.touring && !updating.visible
+    readonly property bool keysOn: !app.touring && !updating.visible && !setup.visible
     Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode && !System.handheld; onActivated: Settings.fullScreen = !Settings.fullScreen }
     // The window's place and size, kept a moment after it stops moving (only while it's a normal window).
     Timer { id: keepRect; interval: 800; onTriggered: if (app.placed && app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
@@ -388,6 +408,86 @@ Window {
     Shortcut { sequence: "Ctrl+0"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(0) }
     Shortcut { sequence: "Ctrl+,"; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.openPage("settings", {}) }
     function showShortcuts() { shortcutsPanel.open() }
+    // The Menu key and Shift+F10: the right-click menu for what has the focus, where it is (a text box: Cut, Copy,
+    // Paste, Select all at its cursor; a rail button; the page's current row; else the page's own menu).
+    Shortcut { sequences: ["Menu", "Shift+F10"]; context: Qt.ApplicationShortcut; enabled: !app.touring && !updating.visible; onActivated: app.menuKey() }
+    function menuKey() {
+        if (ctxMenu.visible) { ctxMenu.close(); return }
+        const f = app.activeFocusItem
+        if (ctxMenu.isField(f)) { ctxMenu.forField(f, -1, -1, true); return }
+        if (overlay() || setup.visible) return
+        if (focusZone === "rail") {
+            const e = railItems[railIndex], r = e ? rail.spotRect(e.id) : null
+            if (e) railMenu(e, null, r ? r.x + r.width - Theme.px(8) : rail.width - Theme.px(8), r ? r.y + r.height / 2 : Theme.px(28), true)
+            return
+        }
+        const p = page()
+        const a = p && typeof p.menuAnchor === "function" ? p.menuAnchor() : null
+        const item = a || pageLoader
+        const x = a ? Math.min(a.width / 2, Theme.px(140)) : pageLoader.width / 2
+        const y = a ? a.height / 2 : pageLoader.height / 3
+        ctxMenu.openAt(item, x, y, () => { if (p && typeof p.contextMenu === "function") p.contextMenu(); else press("x") }, true)
+    }
+    // A rail button's right-click menu: a group's (PeopleActions.groupRowMenu) or a short one for each section.
+    function railMenu(e, item, x, y, viaKey) {
+        if (!e) return
+        ctxMenu.openAt(item, x, y, () => {
+            if (e.kind === "group") { PeopleActions.groupRowMenu(String(e.id).substring(2), e.label, { tour: app.touring }); return }
+            const later = f => Qt.callLater(() => { const p = page(); if (p && typeof p[f] === "function") p[f]() })
+            let items = []
+            if (e.id === "dms") items = [{ name: "Open", icon: "thread", url: "open" }, { name: "New chat", icon: "plus", url: "chat" },
+                                         { name: "New group", icon: "people", url: "group" }, { name: "New folder", icon: "folder", url: "folder" }]
+            else if (e.id === "newgroup") items = [{ name: "New group", icon: "people", url: "group" }, { name: "Join with a code", icon: "qr", url: "chat" }]
+            else if (e.id === "contacts") items = [{ name: "Open", icon: "person", url: "open" }, { name: "Add someone", icon: "plus", url: "chat" },
+                                                   { name: "One-time link", icon: "attach", url: "once" }]
+            else if (e.id === "files") items = [{ name: "Open", icon: "folder", url: "open" }, { name: "Look again", icon: "search", url: "look" }]
+            else if (e.id === "settings") items = [{ name: "Look", icon: "image", url: "s:look" }, { name: "Notifications", icon: "bell", url: "s:notify" },
+                                                   { name: "Privacy and lock", icon: "lock", url: "s:privacy" }, { name: "Devices", icon: "phone", url: "s:devices" },
+                                                   { name: "Keyboard shortcuts", icon: "keyboard", url: "keys" }]
+            else if (e.id === "exit") items = rail.menuItems.map(m => ({ name: m.label, icon: m.icon, url: m.id, danger: !!m.danger }))
+            Ui.pickFrom(e.label || "", [{ header: "", items: items }], a => {
+                if (app.touring) return
+                if (a === "open") openPage(e.id, {})
+                else if (a === "group") newGroup()
+                else if (a === "chat") { openPage("dms", {}); later("addSomeone") }
+                else if (a === "folder") { openPage("dms", {}); later("newFolder") }
+                else if (a === "once") PeopleActions.inviteLink()
+                else if (a === "look") { openPage("files", {}); LocalSend.refresh() }
+                else if (a.indexOf("s:") === 0) openPage("settings", { section: a.substring(2) })
+                else if (a === "keys") shortcutsPanel.open()
+                else if (a === "lock" || a === "exit") rail.runMenu(a)
+            })
+        }, !!viaKey)
+    }
+    // The screenshot tour's right-click menus (nothing they offer is done in the tour).
+    function tourMenu(what) {
+        const p = page()
+        const at = (x, y, f) => ctxMenu.openAt(null, x, y, f, false)
+        const left = rail.width + Theme.px(140)
+        if (what === "person") {
+            at(left, Theme.px(160), () => PeopleActions.personMenu("tour", "Mira", { tour: true }))
+            ctxMenu.openSubNamed("Mute")
+        } else if (what === "group") {
+            const r = rail.spotRect("g:tour-crew")
+            at(r ? r.x + r.width / 2 : Theme.px(36), r ? r.y + r.height / 2 : Theme.px(140), () => PeopleActions.groupRowMenu("tour-crew", "Gaming Crew", { tour: true }))
+        } else if (what === "folder" && p && typeof p.folderOptions === "function")
+            at(left, Theme.px(140), () => p.folderOptions({ id: "tour-family", name: "Family", collapsed: false }))
+        else if (what === "message" && p && typeof p.messageOptions === "function" && p.messages.length) {
+            p.sel = p.messages.length - 1
+            at(app.width * 0.55, app.height * 0.6, () => p.messageOptions())
+        } else if (what === "member" && p && p.members) {
+            const m = p.members.find(x => x.key === "s") || p.members.find(x => !x.me)
+            if (m) at(app.width - Theme.px(200), Theme.px(220), () => PeopleActions.memberMenu(m, { group: p.gid, host: p, member: m, tour: true }))
+        } else if (what === "settings") {
+            const e = railItems.find(x => x.id === "settings"), r = rail.spotRect("settings")
+            railMenu(e, null, r ? r.x + r.width / 2 : Theme.px(36), r ? r.y + r.height / 2 : app.height - Theme.px(120), false)
+        } else if (what === "field") {
+            prompt.open("Rename Family", "Only you see it", "Family", "Save", null, false, true)
+            const f = app.activeFocusItem
+            if (ctxMenu.isField(f)) { f.selectAll(); ctxMenu.forField(f, -1, -1, true) }
+        } else if (what === "space" && p && typeof p.spaceMenu === "function")
+            at(left, app.height - Theme.px(220), () => p.spaceMenu(false))
+    }
     // Size of everything, like a web browser's zoom; saved at once.
     readonly property var sizes: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200]
     function stepSize(dir) {
@@ -404,6 +504,10 @@ Window {
     PersonPanel { id: personPanel; z: 24 }
     // Ctrl+/: every keyboard shortcut.
     ShortcutsPanel { id: shortcutsPanel; z: 27 }
+    // Every file coming or going (the top bar's Transfers), and a chat's Files (cap f2).
+    TransfersPanel { id: transfersPanel; z: 27 }
+    ChatFiles { id: chatFiles; z: 27 }
+    function openFiles(where, title) { chatFiles.open(where, title, app.touring) }
     // Labs: Report a bug (its screenshot is taken first, so the report screen isn't in it), and on the Huginn
     // with the Labs key, Labs reports.
     LabsReport { id: labsReport; z: 28 }
@@ -438,18 +542,65 @@ Window {
     }
     // Link your phone (linked devices): the QR code, the 4 emoji and Linked, over the whole window.
     LinkPhone { id: linkPhone; z: 28.5 }
-    function showLinkPhone(first) {
+    // sample: first setup's practice shows the screen with a sample code (nothing is linked or made).
+    function showLinkPhone(first, sample) {
+        if (sample) { if (!linkPhone.visible) linkPhone.open(first, "code"); return }
         if (app.touring || linkPhone.visible || moveCover.visible || Vault.screenLocked) return
         app.closePanels()
         linkPhone.open(first)
     }
+    // First setup on a fresh install (and Labs › Replay first setup, practice: nothing is saved). Under Link your phone,
+    // questions, calls and toasts; over the pages and panels.
+    FirstSetup { id: setup; z: 28.3 }
+    // Settings › Backup and first setup's Restore from a backup (over first setup; questions show above it).
+    BackupPanel { id: backupPanel; z: 28.6 }
+    function openBackup(mode, fromSetup, sample) {
+        if (backupPanel.visible || (app.touring && !sample)) return
+        if (!fromSetup) app.closePanels()
+        backupPanel.open(mode, !!fromSetup, !!sample)
+    }
+    function openSetup(practice) {
+        if (app.touring || setup.visible) return
+        app.closePanels()
+        setup.open(!!practice)
+    }
+    // Runs by itself only on a fresh install (no lock or chats yet), or to finish one that was started; never over the lock.
+    property bool setupWaits: false
+    function setupAtStart() {
+        if (app.touring || Settings.setupState === "done") return
+        if (!Vault.exists) { openSetup(false); return }
+        if (Settings.setupState !== "started") return
+        if (Vault.screenLocked) setupWaits = true
+        else openSetup(false)
+    }
+    Connections {
+        target: Vault
+        function onChanged() { if (app.setupWaits && !Vault.screenLocked) { app.setupWaits = false; app.openSetup(false) } }
+    }
+    // The tour's stops on the real screen, in window coordinates ({x, y, width, height}), or null when not on show.
+    function tourSpot(id) {
+        const left = rail.visible ? rail.width : 0, top = topBar.height
+        if (id === "groups" || id === "settings") return rail.spotRect(id)
+        if (id === "chats") return app.pageList ? { x: left, y: top, width: app.pageListEdge, height: Math.max(0, pageLoader.height - Ui.dock) } : null
+        if (id === "add") return app.pageList ? { x: left + app.pageListEdge - Theme.px(80), y: top, width: Theme.px(80), height: Theme.headerHeight } : null
+        if (id === "attach") return { x: left + (app.pageList ? app.pageListEdge : 0), y: pageLoader.y + pageLoader.height - Theme.px(60), width: Theme.px(60), height: Theme.px(60) }
+        if (id === "card") {
+            if (!voicePanel.visible) return null
+            const p = voicePanel.mapToItem(null, 0, 0)
+            return { x: p.x, y: p.y, width: voicePanel.width, height: voicePanel.height }
+        }
+        return null
+    }
     // keepReport: Report a bug stays (the panic lock): it hides behind its own lock, and what was written stays.
     function closePanels(keepReport) {
         if (picker.visible) picker.close()
+        if (ctxMenu.visible) ctxMenu.close()
         if (switcher.visible) switcher.close()
         if (profileCard.visible) profileCard.close()
         if (personPanel.visible) personPanel.close()
         if (shortcutsPanel.visible) shortcutsPanel.close()
+        if (transfersPanel.visible) transfersPanel.close()
+        if (chatFiles.visible) chatFiles.close()
         if (labsReport.visible && !keepReport) labsReport.close()
         if (labsInbox.visible) labsInbox.close()
         if (appStorage.visible) appStorage.close()
@@ -457,6 +608,7 @@ Window {
         if (meCard.visible) meCard.close()
         if (rail.menuOpen) rail.closeMenu()
         if (linkPhone.visible) linkPhone.close()
+        if (backupPanel.visible) backupPanel.close()
     }
     // Linked devices: always says where this computer's chats are mirrored.
     Rectangle {
@@ -598,11 +750,13 @@ Window {
         Ui.confirm = confirm
         Ui.toast = toast
         Ui.picker = picker
+        Ui.menu = ctxMenu
         Ui.profile = profileCard
         Ui.person = personPanel
         if (touring) tour.start()
         // Labs › Performance check: settings being tried kept Huginn from starting last time.
         else if (Perf.droppedNow) Qt.callLater(() => Ui.say("Tried settings didn't start. Back to Automatic.", true))
+        if (!touring) Qt.callLater(app.setupAtStart)
     }
 
     // ------------------------------------------------------------- nearby sharing (LocalSend)
@@ -619,7 +773,7 @@ Window {
             return
         }
         confirm.open(r.from + " wants to send " + (r.count === 1 ? "a file" : r.count + " files"),
-                     r.names + " (" + r.sizeText + "). They'll be saved in " + Transfer.saveName + ".",
+                     r.names + " (" + r.sizeText + "). They'll be saved in " + (r.folder || Transfer.saveName) + ".",
                      "Accept", () => LocalSend.accept(), false, false, () => LocalSend.decline(), "localsend")
         confirm.cancelText = "Decline"
     }
@@ -641,6 +795,8 @@ Window {
         }
         function onArrived(name, text, key) {
             if (Chat.openChat === key && (app.pageName === "dms" || app.pageName.startsWith("g:"))) return
+            // Muted, hidden or reduced (Chat.notifyFor): no toast either.
+            if (!Chat.alerted(key)) return
             // An @mention always says so (without the text unless previews are on).
             const mention = name.indexOf(" mentioned you in ") > 0
             const hidden = Vault.screenLocked
@@ -662,6 +818,8 @@ Window {
         target: Vault
         function onPanicked() {
             if (prompt.visible) prompt.cancel()
+            // First setup goes too (a real one picks up again after the next unlock or start).
+            if (setup.visible) { setup.visible = false; app.setupWaits = Settings.setupState === "started" }
             app.closePanels(true)
             Ui.say("Huginn locked.")
         }
@@ -689,15 +847,21 @@ Window {
     // ------------------------------------------------------------- input
     function overlay() {
         if (updating.visible) return updating
+        if (ctxMenu.visible) return ctxMenu
         if (confirm.visible) return confirm
         if (incomingCall.visible) return incomingCall
         if (callPage.visible) return callPage
+        if (roomBar.sharePicker.visible) return roomBar.sharePicker   // Share screen: what to share
         if (prompt.visible) return prompt
         if (moveCover.visible) return moveCover
         if (linkPhone.visible) return linkPhone
+        if (backupPanel.visible) return backupPanel
+        if (setup.visible) return setup
         if (picker.visible) return picker
         if (switcher.visible) return switcher
         if (shortcutsPanel.visible) return shortcutsPanel
+        if (chatFiles.visible) return chatFiles
+        if (transfersPanel.visible) return transfersPanel
         if (labsReport.visible) return labsReport
         if (labsInbox.visible) return labsInbox
         if (appStorage.visible) return appStorage
@@ -874,7 +1038,8 @@ Window {
         id: tour
         property int step: 0
         property string savedTheme: "dark"
-        property string savedSeason: "auto"
+        property string savedSeason: "off"
+        property string savedText: "100"
         property string savedDensity: "cozy"
         property string savedSize: "100"
         property bool savedLabs: false
@@ -903,7 +1068,7 @@ Window {
             { page: "settings", section: "devices", file: "22-devices" },
             { page: "g:tour-crew", zone: "messages", theme: "light", density: "compact", voicePanel: true, file: "23-light-compact" },
             { page: "dms", zone: "messages", theme: "black", file: "24-true-black" },
-            { page: "g:tour-crew", zone: "messages", theme: "seasonal", season: "autumn", density: "spacious", file: "25-autumn" },
+            { page: "g:tour-crew", zone: "messages", theme: "dark", season: "autumn", density: "spacious", file: "25-autumn" },
             { page: "g:tour-crew", zone: "messages", size: "150", file: "26-size-150" },
             { page: "dms", zone: "messages", portrait: true, file: "27-portrait" },
             { page: "dms", zone: "list", portrait: true, file: "28-portrait-list" },
@@ -918,38 +1083,78 @@ Window {
             { page: "settings", section: "about", labs: true, report: true, file: "34-labs-report" },
             { page: "dms", labsInbox: true, file: "35-labs-reports" },
             // Seasonal in Snow: the Look page with the season's settings, then a conversation.
-            { page: "settings", section: "look", theme: "seasonal", season: "snow", file: "36-snow-look" },
-            { page: "g:tour-crew", zone: "messages", theme: "seasonal", season: "snow", file: "37-snow" },
+            { page: "settings", section: "look", theme: "dark", season: "snow", file: "36-snow-look" },
+            { page: "g:tour-crew", zone: "messages", theme: "dark", season: "snow", file: "37-snow" },
             // Link your phone: the code, the 4 emoji and Linked (the code on the Snow ground too).
             { page: "dms", linkPhone: "code", file: "38-link-phone" },
             { page: "dms", linkPhone: "match", file: "39-link-match" },
             { page: "dms", linkPhone: "linked", file: "40-linked" },
-            { page: "dms", linkPhone: "code", theme: "seasonal", season: "snow", file: "41-link-phone-snow" },
+            { page: "dms", linkPhone: "code", theme: "dark", season: "snow", file: "41-link-phone-snow" },
             // Settings › Notifications, and Find in a channel with its matches lit.
             { page: "settings", section: "notify", file: "42-notifications" },
             { page: "g:tour-crew", zone: "messages", find: "in", file: "43-find" },
             // Labs › App storage (sample files: nothing on this computer is touched).
             { page: "settings", section: "about", labs: true, appStorage: true, file: "44-app-storage" },
             // Labs › Performance check with sample results (nothing is measured).
-            { page: "settings", section: "about", labs: true, perf: true, file: "45-performance-check" }
+            { page: "settings", section: "about", labs: true, perf: true, file: "45-performance-check" },
+            // Seasonal over True black: the Look page with leaves falling on pure black.
+            { page: "settings", section: "look", theme: "black", season: "autumn", file: "46-look-seasonal-black" },
+            // Look at the largest text size: the pickers stay whole, under their names or as a dropdown.
+            { page: "settings", section: "look", textSize: "150", file: "47-look-largest-text" },
+            { page: "settings", section: "look", textSize: "150", small: true, file: "48-look-largest-small" },
+            // A member's menu with Mute for me, Volume, Timeout and Ban (an admin's), and the Volume slider.
+            { page: "g:tour-crew", zone: "members", memberMenu: true, file: "49-member-menu" },
+            { page: "g:tour-crew", zone: "messages", volume: true, file: "50-volume" },
+            // First setup: each page, two stops of the tour on the real screen, and Done.
+            // Transfers (sample rows: Direct, asking first, paused, saved, refused by a group's rules) and a group's Files.
+            { page: "dms", zone: "messages", transfers: true, file: "49-transfers" },
+            { page: "g:tour-crew", zone: "messages", chatFiles: true, file: "50-files-section" },
+            // Right-click menus, each where a right click opens it: a person (with Mute open beside it), a group on the rail,
+            // a folder, a message, a member, Settings on the rail, a text box, and the empty list.
+            { page: "dms", folders: true, ctx: "person", file: "70-menu-person" },
+            { page: "dms", ctx: "group", file: "71-menu-group" },
+            { page: "dms", folders: true, ctx: "folder", file: "72-menu-folder" },
+            { page: "g:tour-crew", zone: "messages", ctx: "message", file: "73-menu-message" },
+            { page: "g:tour-crew", zone: "members", ctx: "member", file: "74-menu-member" },
+            { page: "dms", ctx: "settings", file: "75-menu-settings" },
+            { page: "dms", ctx: "field", file: "76-menu-text" },
+            { page: "dms", ctx: "space", small: true, file: "77-menu-empty-list" },
+            // Settings › Backup: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
+            { page: "settings", section: "backup", backup: "what", file: "80-backup" },
+            { page: "settings", section: "backup", backup: "password", file: "81-backup-password" },
+            { page: "settings", section: "backup", backup: "saved", file: "82-backup-saved" },
+            { page: "settings", section: "backup", restore: "pick", file: "83-restore-choose" },
+            { page: "settings", section: "backup", restore: "password", file: "84-restore-password" },
+            { page: "settings", section: "backup", restore: "summary", file: "85-restore-summary" },
+            { page: "dms", setup: "welcome", file: "60-setup-welcome" },
+            { page: "dms", setup: "lock", file: "61-setup-lock" },
+            { page: "dms", setup: "name", file: "62-setup-name" },
+            { page: "dms", setup: "link", file: "63-setup-link" },
+            { page: "dms", setup: "people", file: "64-setup-people" },
+            { page: "dms", setup: "tour", stop: 0, file: "65-setup-tour-rail" },
+            { page: "dms", setup: "tour", stop: 5, voicePanel: true, file: "66-setup-tour-card" },
+            { page: "dms", setup: "done", file: "67-setup-done" }
         ]
         interval: 1500
         repeat: true
         onTriggered: {
             if (step > 0) System.grab(app, steps[step - 1].file)
-            prompt.visible = false; confirm.visible = false; picker.visible = false
+            prompt.visible = false; confirm.visible = false; picker.visible = false; ctxMenu.close()
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
+            transfersPanel.visible = false; chatFiles.visible = false
             labsReport.visible = false; labsInbox.visible = false; appStorage.visible = false; perfPanel.visible = false; linkPhone.visible = false
-            if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs }
+            setup.visible = false; backupPanel.visible = false
+            if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs; savedText = Settings.textSize }
             if (step >= steps.length) {
-                Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs
+                Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs; Settings.textSize = savedText
                 app.width = 1920; app.height = 1080
                 stop(); System.tourFinished(); return
             }
             const s = steps[step]
             // The look changes once the new page is in (not while the old one is being taken down).
             const theme = s.theme || savedTheme, season = s.season || savedSeason, density = s.density || savedDensity, size = s.size || savedSize
-            Qt.callLater(() => { Settings.theme = theme; Settings.season = season; Settings.density = density; Settings.uiSize = size })
+            const textSize = s.textSize || savedText
+            Qt.callLater(() => { Settings.theme = theme; Settings.season = season; Settings.density = density; Settings.uiSize = size; Settings.textSize = textSize })
             // A portrait window: the one-column layout.
             if (s.portrait) { app.width = 900; app.height = 1200 } else if (s.small) { app.width = 1024; app.height = 768 } else { app.width = 1920; app.height = 1080 }
             app.tourVoice = !!s.voicePanel
@@ -968,6 +1173,8 @@ Window {
             if (s.prompt) prompt.open("Message everyone nearby", "You're " + Ui.myName, "", "Send", null, false, true)
             if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Lounge", note: "Hosts raid night on Fridays. Bring snacks." })
             if (s.shortcuts) shortcutsPanel.open()
+            if (s.transfers) transfersPanel.open(true)
+            if (s.chatFiles) chatFiles.open("g:tour-crew", "Gaming Crew", true)
             if (s.person) personPanel.show("tour", "Mira", { tour: true, page: s.personPage || "can" })
             if (s.filesMenu) Qt.callLater(() => { const p = app.page(); if (p && p.filesMenu) p.filesMenu() })
             if (s.newGroup) app.newGroup()
@@ -976,7 +1183,14 @@ Window {
             if (s.appStorage) app.openAppStorage()
             if (s.perf) app.openPerf()
             if (s.linkPhone) linkPhone.open(true, s.linkPhone)
+            // First setup's pages and two tour stops, as practice (nothing is saved).
+            if (s.setup) Qt.callLater(() => setup.open(false, s.setup, s.stop || 0))
+            if (s.backup) Qt.callLater(() => backupPanel.open("backup", false, true, s.backup))
+            if (s.restore) Qt.callLater(() => backupPanel.open("restore", false, true, s.restore))
             if (s.find) Qt.callLater(() => { const p = app.page(); if (p && p.openFind) p.openFind(s.find) })
+            if (s.memberMenu) Qt.callLater(() => { const p = app.page(); if (p && p.memberMenu) p.memberMenu(p.members.find(m => m.key === "s")) })
+            if (s.volume) Qt.callLater(() => ModActions.volumeMenu("s", "Sam", null, true))
+            if (s.ctx) Qt.callLater(() => app.tourMenu(s.ctx))
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
             step++
         }

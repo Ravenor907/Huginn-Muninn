@@ -75,6 +75,7 @@ Rectangle {
     // ------------------------------------------------------------- what's shown
     readonly property var tourInfo: ({
         g: gid, name: gid === "tour-family" ? "Family" : gid === "tour-folk" ? "Folk" : "Gaming Crew", amAdmin: true, amOwner: true, readOnly: false, count: 6,
+        type: gid === "tour-family" ? "family" : "folk",
         channels: [{ id: "main", name: "general", type: "text", unread: 0 }, { id: "s", name: "screenshots", type: "text", unread: 2, mentions: 1 },
                    { id: "p", name: "plans", type: "text", unread: 0 }, { id: "l", name: "Lounge", type: "voice", unread: 0 },
                    { id: "r", name: "Raid night", type: "voice", unread: 0 }],
@@ -129,6 +130,11 @@ Rectangle {
         return (Chat.groups, Chat.groupMessages(gid, channelId))
     }
     readonly property string chatKey: "g:" + gid + ":" + channelId
+    // Cap g2: "You're timed out until 3:40 PM" or "You were banned from Family" (looked at again every 30 s, so a
+    // timeout that ended goes away by itself).
+    property int modTick: 0
+    Timer { interval: 30000; repeat: true; running: !page.isTour && page.exists; onTriggered: page.modTick++ }
+    readonly property string modStatus: isTour || locked || !exists ? "" : (Mod.serial, modTick, Mod.myStatus(gid))
 
     readonly property var prompts: finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
@@ -272,7 +278,12 @@ Rectangle {
                         mentions: modelData.mentions || 0
                     }
                     HoverHandler { id: catHover; cursorShape: Qt.PointingHandCursor }
-                    TapHandler { onTapped: { page.zone = "channels"; page.chRow = index; page.foldCat(modelData.cat) } }
+                    TapHandler {
+                        id: catTap
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.groupMenu()); else page.foldCat(modelData.cat) }
+                        onLongPressed: { page.zone = "channels"; page.chRow = index; Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.groupMenu()) }
+                    }
                 }
                 Rectangle {
                     id: chanTile
@@ -314,7 +325,8 @@ Rectangle {
                     HoverHandler { id: chanHover }
                     TapHandler {
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) page.groupMenu(); else page.openRow() }
+                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) Ui.menuAt(chanTile, point.position.x, point.position.y, () => page.groupMenu()); else page.openRow() }
+                        onLongPressed: { page.zone = "channels"; page.chRow = index; Ui.menuAt(chanTile, point.position.x, point.position.y, () => page.groupMenu()) }
                     }
                 }
                 // Who's in a voice room, one under the other like Discord.
@@ -327,9 +339,20 @@ Rectangle {
                     Repeater {
                         model: rowItem.people
                         Row {
+                            id: roomPerson
                             spacing: Theme.px(8)
+                            // A right click (or a long press): their member menu, with Mute for me and Volume.
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: (point, button) => page.memberMenuAt(roomPerson, point.position, modelData)
+                            }
+                            TapHandler {
+                                acceptedDevices: PointerDevice.TouchScreen
+                                onLongPressed: page.memberMenuAt(roomPerson, point.position, modelData)
+                            }
                             Accessible.role: Accessible.StaticText
-                            Accessible.name: modelData.name + (modelData.speaking ? ", speaking" : "")
+                            Accessible.name: modelData.name + (modelData.speaking ? ", speaking" : "") + (modelData.state === "reconnecting" ? ", reconnecting" : "")
+                            opacity: modelData.state === "reconnecting" ? 0.55 : 1
                             Item {
                                 width: Theme.px(24); height: width
                                 Avatar {
@@ -348,7 +371,7 @@ Rectangle {
                                     border.color: Theme.online
                                 }
                             }
-                            Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: modelData.name; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                            Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: modelData.name + (modelData.state === "reconnecting" ? " · Reconnecting" : ""); color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                         }
                     }
                 }
@@ -421,7 +444,7 @@ Rectangle {
             // Removed or left: say so, and what to do with it.
             Rectangle {
                 id: gone
-                visible: page.readOnly
+                visible: page.readOnly || page.modStatus !== ""
                 anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
                 anchors.margins: Theme.px(12)
                 height: visible ? goneText.implicitHeight + Theme.px(20) : 0
@@ -431,7 +454,8 @@ Rectangle {
                     id: goneText
                     x: Theme.px(14); y: Theme.px(10); width: parent.width - Theme.px(28)
                     wrapMode: Text.WordWrap
-                    text: (page.info.left ? "You left " : "You were removed from ") + (page.info.name || "this group") + "."
+                    text: page.modStatus !== "" ? page.modStatus + "."
+                        : (page.info.left ? "You left " : "You were removed from ") + (page.info.name || "this group") + "."
                     color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                 }
             }
@@ -448,10 +472,17 @@ Rectangle {
             }
             // Messages change in place (LiveList): a new one adds a row instead of redrawing them all.
             LiveList { id: messageModel; keys: ["id"]; items: page.messages }
+            // Files on their way in this group (cap f2), the same cards as in Transfers.
+            FileStrip {
+                id: groupFileStrip
+                where: page.isTour || page.gid === "" ? "" : "g:" + page.gid
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14)
+            }
             ListView {
                 id: list
                 anchors.top: finder.visible ? finder.bottom : gone.visible ? gone.bottom : parent.top
-                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: groupFileStrip.visible ? groupFileStrip.top : parent.bottom
                 anchors.topMargin: Theme.px(12); anchors.bottomMargin: Theme.px(12)
                 spacing: 0
                 model: messageModel
@@ -573,7 +604,7 @@ Rectangle {
             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
             anchors.leftMargin: Theme.px(16); anchors.rightMargin: Theme.px(16); anchors.bottomMargin: Theme.px(24)
             height: implicitHeight
-            placeholder: "Message #" + page.channel.name
+            placeholder: page.modStatus !== "" ? page.modStatus : "Message #" + page.channel.name
             target: page.isTour ? "" : page.chatKey
             voiceTo: page.isTour || page.readOnly ? "" : page.chatKey
             micShown: true
@@ -822,9 +853,14 @@ Rectangle {
             items.push({ name: "Call everyone", icon: "call", url: "callall" })
             if (isTour || info.count > 2) items.push({ name: "Call some people", icon: "call", url: "callsome" })
         }
+        // Family: each member's safety code is checked once.
+        const unchecked = family && !readOnly && !isTour ? members.filter(m => !m.me && !m.checked).length : 0
+        if (unchecked) items.push({ name: "Check safety codes", icon: "check", detail: unchecked + " to check", url: "check" })
         items.push({ name: "Find in this channel", icon: "search", url: "find" })
         items.push({ name: "People", icon: "people", url: "people" })
         if (isTour || canInvite || (!readOnly && info.amAdmin)) items.push({ name: "Add people", icon: "plus", url: "add" })
+        items.push({ name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute" : "Mute", icon: "bell", url: "mute" },
+                   { name: "Notifications", icon: "bell", url: "notify" })
         items.push({ name: "Channels", icon: "hash", url: "channels" },
                    { name: "Group settings", icon: "gear", url: "settings" })
         items.push(readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true })
@@ -833,9 +869,12 @@ Rectangle {
     function groupAction(a) {
         const g = gid
         if (a === "people") { peopleMenu(); return }
+        if (a === "check") { checkMenu(); return }
         if (a === "find") { openFind(); return }
         if (isTour) return
-        if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone.")
+        if (a === "mute") PeopleActions.muteMenu("g:" + g, info.name || "Group", () => page.groupMenu())
+        else if (a === "notify") PeopleActions.notifyMenu("g:" + g, () => page.groupMenu())
+        else if (a === "callall") tell(Rooms.callGroup(g, []), "Ringing everyone.")
         else if (a === "callsome") pickCallees([])
         else if (a === "add") addMenu()
         else if (a === "channels") channelsMenu()
@@ -848,10 +887,18 @@ Rectangle {
                     () => { Chat.forgetGroup(g); Ui.openPage("dms", {}) }, true, true)
         }
     }
+    // A Family group: who to check the safety code with, face to face (their row says Checked after).
+    readonly property bool family: !!info.type && info.type === "family"
+    function checkMenu() {
+        const left = members.filter(m => !m.me && !m.checked)
+        if (!left.length) { Ui.say("Everyone is checked."); return }
+        Ui.pickFrom("Check safety codes", [{ header: "Match the code with each one, in person", items: left.map(m => ({ name: m.name, icon: "check", url: m.key })) }],
+                    k => PeopleActions.checkCode(k), () => page.groupMenu())
+    }
     // People: everyone in the group; each opens their member menu.
     function peopleMenu() {
         Ui.pickFrom("People", [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.me ? "me" : m.key,
-            detail: m.owner ? "Owner" : m.admin ? "Admin" : "" })) }],
+            detail: [m.owner ? "Owner" : m.admin ? "Admin" : "", family && !m.me ? (m.checked ? "Checked" : "Not checked") : ""].filter(x => x).join(" · ") })) }],
             k => { const m = members.find(x => (x.me ? "me" : x.key) === k); if (m) memberMenu(m, () => page.peopleMenu()) },
             () => page.groupMenu())
     }
@@ -875,20 +922,22 @@ Rectangle {
     function addMenu() {
         const items = []
         if (!readOnly && info.amAdmin) items.push({ name: "From contacts", icon: "person", url: "contacts" })
-        if (canInvite || info.amAdmin) items.push({ name: "Link or code", icon: "qr", url: "link" })
-        if (!readOnly && info.amAdmin && invitePanel.has("groupLinks")) items.push({ name: "Active links", icon: "attach", url: "links" })
+        // Family: no links, only an admin's code (or face to face).
+        if (family) { if (!readOnly && info.amAdmin) items.push({ name: "Show a code", icon: "qr", url: "link" }) }
+        else if (canInvite || info.amAdmin) items.push({ name: "Link or code", icon: "qr", url: "link" })
+        if (!family && !readOnly && info.amAdmin && invitePanel.has("groupLinks")) items.push({ name: "Active links", icon: "attach", url: "links" })
         Ui.pickFrom("Add people", [{ header: "", items: items }], a => {
             if (a === "contacts") invite()
             else if (a === "link") linkOrCode()
             else if (a === "links") invitePanel.openList()
         }, () => page.groupMenu())
     }
-    function linkOrCode() { if (invitePanel.ready && canInvite) invitePanel.openCreate(); else showCode() }
+    function linkOrCode() { if (!family && invitePanel.ready && canInvite) invitePanel.openCreate(); else showCode() }
     function invite() {
         const inGroup = members.map(m => m.key)
         const contacts = Chat.people.filter(p => p.contact && !p.blocked)
         // No contacts here (a linked computer's contacts stay on the phone): the link or code instead.
-        if (!contacts.length) { Ui.say("No contacts on this computer yet. Share the group's link or code instead."); linkOrCode(); return }
+        if (!contacts.length) { Ui.say(family ? "No contacts on this computer yet. Show the group's code instead." : "No contacts on this computer yet. Share the group's link or code instead."); linkOrCode(); return }
         const people = contacts.filter(p => inGroup.indexOf(p.key) < 0)
         if (!people.length) { Ui.say("Every contact is already here.", true); return }
         const g = gid
@@ -899,7 +948,8 @@ Rectangle {
     // Channels: pins and what was shared in this one; admins add, rename and remove.
     function channelsMenu() {
         const items = [{ name: "Pinned in #" + channel.name, icon: "pin", url: "pins" },
-                       { name: "Shared in #" + channel.name, icon: "image", url: "shared" }]
+                       { name: "Shared in #" + channel.name, icon: "image", url: "shared" },
+                       { name: "Files in this group", icon: "file", url: "files" }]
         if (!readOnly && info.amAdmin) {
             items.push({ name: "Add a text channel", icon: "hash", url: "addtext" },
                        { name: "Add a voice room", icon: "speaker", url: "addvoice" },
@@ -910,6 +960,7 @@ Rectangle {
         Ui.pickFrom("Channels", [{ header: "", items: items }], a => {
             if (a === "pins") openPins()
             else if (a === "shared") more.openShared()
+            else if (a === "files") { if (!isTour) PeopleActions.openFiles("g:" + gid, info.name) }
             else if (a === "addtext" || a === "addvoice") {
                 const voice = a === "addvoice"
                 Ui.ask(voice ? "New voice room" : "New text channel", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, voice), "Added."), false, true)
@@ -930,17 +981,30 @@ Rectangle {
     function pickChannel(title, list, cb, back) {
         Ui.pickFrom(title, [{ header: "", items: list.map(c => ({ name: (c.type === "voice" ? "" : "#") + c.name, icon: c.type === "voice" ? "speaker" : "hash", url: c.id })) }], cb, back)
     }
-    // Group settings: its name, how long messages stay, and who can invite (admins change them).
+    // Group settings: its name, its type, how long messages stay, and who can invite (admins change them).
     function settingsMenu() {
         const l = Chat.groupLimit(gid), admin = !readOnly && !!info.amAdmin
         const items = []
         if (admin) items.push({ name: "Name", icon: "edit", detail: info.name, url: "name" })
+        items.push({ name: "Type", icon: "people", detail: l.typeName, url: "type" })
         items.push({ name: "Message days", icon: "moon", detail: l.days + " days", url: "days" })
-        if (admin && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
+        if (admin && l.links && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
+        // Cap f2: who can send files and the size limit (admins change them).
+        items.push({ name: "Files", icon: "file", detail: isTour ? "Everyone can send files" : (Chat.groupFiles(gid).line || ""), url: "files" })
+        // Cap g2: who is banned (Unban) and who is timed out (time left, Cancel). Admins only.
+        if (admin || (isTour && !locked)) {
+            const banned = isTour ? [] : Mod.bannedList(gid), outs = isTour ? [] : Mod.timeoutList(gid)
+            items.push({ name: "Banned", icon: "shield", detail: banned.length ? banned.length + (banned.length === 1 ? " person" : " people") : "Nobody", url: "banned" },
+                       { name: "Timeouts", icon: "moon", detail: outs.length ? outs.length + (outs.length === 1 ? " person" : " people") : "Nobody", url: "timeouts" })
+        }
         const g = gid, back = () => page.settingsMenu()
         Ui.pickFrom("Group settings", [{ header: "", items: items }], a => {
+            if (a === "banned") { if (!isTour) bannedMenu(back); return }
+            if (a === "timeouts") { if (!isTour) timeoutsMenu(back); return }
+            if (a === "files") { if (!isTour) PeopleActions.groupFilesMenu(g, back); return }
             if (a === "name") Ui.ask("Group name", "Everyone sees it", info.name, "Save", t => tell(Chat.renameGroup(g, t), "Renamed."), false, true)
             else if (a === "days") pickGroupLimit(back)
+            else if (a === "type") pickGroupType(back)
             else if (a === "invite") {
                 const r = Chat.setMembersInvite(g, !invitePanel.membersCanInvite)
                 if (r) Ui.say(r, true)
@@ -949,21 +1013,54 @@ Rectangle {
             }
         }, () => page.groupMenu())
     }
-    // Cap d1: the group's type and how many days messages stay, the same for everyone. Only admins change it.
+    // Cap g2: the Banned list, each with Unban; they can rejoin by a code, a link or an invite after.
+    function bannedMenu(back) {
+        const g = gid, list = Mod.bannedList(g), again = () => page.bannedMenu(back)
+        if (!list.length) { Ui.say("Nobody is banned."); if (back) Qt.callLater(back); return }
+        Ui.pickFrom("Banned", [{ header: "Pick someone to unban", items: list.map(b => ({ name: b.name, detail: "Unban", url: b.key })) }], k => {
+            const b = list.find(x => x.key === k)
+            const name = b ? b.name : "them"
+            Ui.sure("Unban " + name + "?", "They can join again by a code, a link or an invite.", "Unban",
+                    () => { tell(Mod.unban(g, k), name + " is unbanned."); Qt.callLater(again) }, false, false, () => Qt.callLater(again))
+        }, back)
+    }
+    // Cap g2: timeouts in force, with their time left; Cancel ends one now.
+    function timeoutsMenu(back) {
+        const g = gid, list = Mod.timeoutList(g), again = () => page.timeoutsMenu(back)
+        if (!list.length) { Ui.say("Nobody is timed out."); if (back) Qt.callLater(back); return }
+        Ui.pickFrom("Timeouts", [{ header: "Pick one to cancel", items: list.map(t => ({ name: t.name, detail: t.left, url: t.key })) }], k => {
+            const t = list.find(x => x.key === k)
+            const name = t ? t.name : "them"
+            Ui.sure("Cancel the timeout for " + name + "?", "They can post again now.", "Cancel timeout",
+                    () => { tell(Mod.cancelTimeout(g, k), name + " can post again."); Qt.callLater(again) }, false, false, () => Qt.callLater(again))
+        }, back)
+    }
+    // Cap d1: the group's type (Folk or Family) and how many days messages stay, the same for everyone. Only admins change it.
     function limitDetail() {
         const l = Chat.groupLimit(gid)
-        return l.kindName + " group: " + l.days + " days"
+        return l.typeName + " group: " + l.days + " days"
+    }
+    function pickGroupType(back) {
+        const g = gid, l = Chat.groupLimit(g), admin = !readOnly && !!info.amAdmin
+        const items = Chat.groupTypes().map(t => ({ name: t.name, detail: t.line, check: l.type === t.type, url: t.type }))
+        items.push({ name: "What's the difference?", icon: "info", url: "rules" })
+        Ui.pickFrom("Type", [{ header: admin ? "" : "Only admins change it", items: items }], a => {
+            if (a === "rules") {
+                Ui.note("Folk and Family", Chat.groupTypes().map(t => t.name + "\n" + t.rules.map(r => "· " + r).join("\n")).join("\n\n"))
+                return
+            }
+            if (!admin || a === l.type) { Qt.callLater(() => page.pickGroupType(back)); return }
+            const go = () => tell(Chat.setGroupLimit(g, a, l.days), "This is a " + (a === "family" ? "Family" : "Folk") + " group now.")
+            if (a === "family") Ui.sure("Make it Family?", "Invite links stop. Only admins add people.", "Make it Family", go)
+            else Ui.sure("Make it Folk?", "Messages disappear after 7 days. Members can invite.", "Make it Folk", go)
+        }, back)
     }
     function pickGroupLimit(back) {
         const g = gid, l = Chat.groupLimit(g)
-        if (readOnly || !info.amAdmin) { Ui.say(limitDetail() + "."); return }
-        const items = [{ name: "Standard · 7 days", check: l.kind === "", url: ":7" }]
-        for (const k of ["family", "work"])
-            for (const d of l.choices)
-                items.push({ name: (k === "family" ? "Family" : "Work") + " · " + d + " days", check: l.kind === k && l.days === d, url: k + ":" + d })
+        if (readOnly || !info.amAdmin || l.type !== "family") { Ui.say(limitDetail() + (l.type === "family" ? "." : ". Family groups keep up to 30.")); return }
+        const items = l.choices.map(d => ({ name: d + " days", check: l.days === d, url: String(d) }))
         Ui.pickFrom("Message days", [{ header: l.older.length ? "Some apps keep all until updated" : "", items: items }], a => {
-            const p = a.split(":")
-            tell(Chat.setGroupLimit(g, p[0], Number(p[1])), p[1] + " days.")
+            tell(Chat.setGroupLimit(g, "family", Number(a)), a + " days.")
         }, back)
     }
     // A member's one menu: Message · Add as contact · Make or remove admin · Make owner · Remove from
@@ -974,17 +1071,24 @@ Rectangle {
         const items = []
         if (m.contact) items.push({ name: "Message", icon: "thread", url: "dm" })
         else if (!readOnly) items.push({ name: "Add as contact", icon: "plus", url: "add" })
+        if (family && !readOnly && !isTour) items.push({ name: "Check safety code", icon: "check", detail: m.checked ? "Checked" : "Not checked", url: "check" })
+        // Cap g2: Mute for me and Volume for everyone; Timeout and Ban for admins (Ban goes last, with the red rows).
+        const mod = ModActions.items(gid, m.key, isTour)
+        mod.filter(x => !x.danger).forEach(x => items.push(x))
         if (!readOnly && (info.amAdmin || isTour)) {
             if (!m.admin) items.push({ name: "Make admin", icon: "shield", url: "admin" })
             else if (info.amOwner && !m.owner) items.push({ name: "Remove admin", icon: "shield", url: "unadmin" })
             if (info.amOwner && !m.owner) items.push({ name: "Make owner", icon: "crown", url: "owner" })
             if (!m.owner && (!m.admin || info.amOwner)) items.push({ name: "Remove from group", url: "remove", danger: true })
         }
+        mod.filter(x => x.danger).forEach(x => items.push(x))
         if (!items.length) { Ui.say(m.name + (m.owner ? " owns the group." : m.admin ? " is an admin." : " is in the group.")); return }
         const g = gid
         Ui.pickFrom(m.name, [{ header: m.owner ? "Owner" : m.admin ? "Admin" : "", items: items }], a => {
             if (isTour) return
+            if (ModActions.handle(a, g, m.key, m.name, () => page.memberMenu(m, back))) return
             if (a === "dm") Ui.openPage("dms", { open: m.key })
+            else if (a === "check") PeopleActions.checkCode(m.key)
             else if (a === "add") PeopleActions.askToAdd(g, m)
             else if (a === "admin") tell(Chat.setAdmin(g, m.key, true), m.name + " is an admin now.")
             else if (a === "unadmin") tell(Chat.setAdmin(g, m.key, false), m.name + " isn't an admin now.")
@@ -998,31 +1102,73 @@ Rectangle {
         const w = Rooms.callGroup(gid, [])
         Ui.say(w !== "" ? w : "Ringing everyone.", w !== "")
     }
+    // ------------------------------------------------------------- right-click menus (Ui.menuAt)
+    // A member's right-click menu (the member list, voice room people): PeopleActions.memberMenu with this group's people
+    // controls (ModActions) and More (memberMenu above). who: their member entry or a voice room's { key, name, me }.
+    function memberMenuAt(item, p, who) {
+        if (!who) return
+        const m = members.find(x => who.me ? !!x.me : x.key === who.key) || null
+        const w = Object.assign({}, m || who, { key: who.me ? "me" : (m ? m.key : who.key) })
+        Ui.menuAt(item, p.x, p.y, () => PeopleActions.memberMenu(w, { group: gid, host: page, member: m, tour: isTour }))
+    }
+    // The Menu key and Shift+F10 (Main.menuKey): the right-click menu for the focus, at menuAnchor().
+    function contextMenu() {
+        if (zone === "members") {
+            const m = memberCol.ordered[memRow]
+            if (m) PeopleActions.memberMenu(Object.assign({}, m, { key: m.me ? "me" : m.key }), { group: gid, host: page, member: m, tour: isTour })
+            return
+        }
+        handleButton("x")
+    }
+    function menuAnchor() { return zone === "channels" ? chanList.itemAtIndex(chRow) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
+    // Report to admins: the message goes to each admin who is a contact, in a private message.
+    function reportToAdmins(m) {
+        const admins = members.filter(x => !x.me && (x.admin || x.owner) && x.contact)
+        if (!admins.length) { Ui.say("No admin here is a contact yet.", true); return }
+        const where = (info.name || "the group") + " #" + (channel.name || "general")
+        Ui.sure("Report this message?", "The admins get it in a private message.", "Report", () => {
+            admins.forEach(a => Chat.sendPrivate(a.key, "Report from " + where + ". " + (m.name || "Someone") + " wrote: " + (m.text || "(a photo or file)")))
+            Ui.say(admins.length === 1 ? "Sent to 1 admin." : "Sent to " + admins.length + " admins.")
+        }, false, false)
+    }
     function messageOptions() {
         const m = messages[sel]
         if (!m || m.system) { groupMenu(); return }
         const items = []
         if (!m.unsent && !readOnly) {
-            items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react" })
+            items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react", sub: () => pickReaction(m) })
             items.push({ name: "Reply", icon: "reply", url: "reply" })
             items.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
         }
         if (m.mine && !m.unsent && !m.photo && !readOnly) items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (!m.unsent) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
+        // Right-click extras: the link, Forward (its text) and Report to admins (in a private message to each).
+        const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
+        if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
+        if (m.text && !m.unsent && !isTour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMenu(m.text) })
+        if (!m.mine && !m.unsent && !isTour) items.push({ name: "Report to admins", icon: "shield", url: "report" })
         if (m.photo && !m.voice && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", url: "save" })
         if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
+        // Cap g2: the person who wrote it: Mute for me and Volume, and for admins Timeout and Ban.
+        const who = !m.mine && !m.system && m.from ? ModActions.items(gid, m.from, isTour) : []
+        who.filter(x => !x.danger).forEach(x => items.push(x))
         if (m.mine && !m.unsent && !readOnly) items.push({ name: "Unsend", detail: "Removes it for everyone", url: "unsend", danger: true })
         items.push({ name: "Delete for me", url: "delete", danger: true })
+        who.filter(x => x.danger).forEach(x => items.push(x))
         const g = gid
         Ui.pickFrom("Message", [{ header: "", items: items }], a => {
+            if (!isTour && ModActions.handle(a, g, m.from, m.name, null)) return
             if (a === "react") pickReaction(m)
             else if (a === "reply") startReply(m.id)
             else if (a === "thread") openThread(m.id)
             else if (a === "edit") startEdit(m)
             else if (a === "pin") togglePin(m.id)
             else if (a === "copy") { Chat.copyText(m.text); Ui.say("Copied.") }
+            else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
+            else if (a === "forward") PeopleActions.forwardMenu(m.text)
+            else if (a === "report") reportToAdmins(m)
             else if (a === "view") viewing = m.photo
             else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
             else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }

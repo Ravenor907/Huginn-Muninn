@@ -30,11 +30,15 @@ Rectangle {
         else Ui.showProfile(k, who, {})
     }
     property string who: m.name || "Someone"
+    // Muted for me with their messages folded (cap g2's menus): "Muted, tap to show" until it's tapped.
+    property string shownId: ""
+    readonly property bool folded: !!m && !!m.folded && shownId !== (m.id || "")
+    function unfold() { shownId = m.id || "" }
     // Safe while a list takes the row away (its message is gone by then) and the theme changes.
     readonly property bool mine: !!m && !!m.mine
     // Settings › Look: Compact drops the pictures and the room between messages; Spacious adds room.
     readonly property int pad: grouped ? Theme.px(1) : Theme.px(Theme.compact ? 2 : Theme.spacious ? 8 : 5)
-    height: m.system ? note.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
+    height: m.system ? note.height + Theme.px(12) : folded ? lineH + foldBox.height + Theme.px(12) : lineH + Math.max(face.visible ? face.height : 0, col.implicitHeight) + pad * 2
     radius: 0
     // Find in this chat: 1 a match, 2 the match shown (the page's find bar).
     property int found: 0
@@ -82,9 +86,31 @@ Rectangle {
         HoverHandler { id: noteHover; enabled: !!msg.m.call; cursorShape: Qt.PointingHandCursor }
         TapHandler { enabled: !!msg.m.call; onTapped: msg.callBack() }
     }
+    Rectangle {
+        id: foldBox
+        visible: msg.folded && !msg.m.system
+        x: Theme.px(Theme.compact ? 16 : 72); y: msg.lineH + Theme.px(6)
+        width: foldText.implicitWidth + Theme.px(24)
+        height: foldText.implicitHeight + Theme.px(10)
+        radius: Theme.radius
+        color: Theme.panel
+        border.width: 1
+        border.color: foldHover.hovered ? msg.accent : Theme.line
+        Accessible.role: Accessible.Button
+        Accessible.name: "Muted, tap to show"
+        Accessible.onPressAction: msg.unfold()
+        Text {
+            textFormat: Text.PlainText
+            id: foldText
+            anchors.centerIn: parent
+            text: "Muted, tap to show"
+            color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+        }
+        HoverHandler { id: foldHover; cursorShape: Qt.PointingHandCursor }
+    }
     Avatar {
         id: face
-        visible: !msg.m.system && !Theme.compact && !msg.grouped
+        visible: !msg.m.system && !msg.folded && !Theme.compact && !msg.grouped
         x: Theme.px(16); y: msg.lineH + msg.pad
         size: visible ? Theme.px(40) : 0
         key: msg.m.mine ? "me" : (msg.host && msg.host.isTour ? "" : (msg.m.from || (msg.host && msg.host.openKey) || ""))
@@ -98,7 +124,7 @@ Rectangle {
     }
     Column {
         id: col
-        visible: !msg.m.system
+        visible: !msg.m.system && !msg.folded
         x: Theme.px(Theme.compact ? 16 : 72)
         width: parent.width - x - Theme.px(16)
         y: msg.lineH + msg.pad
@@ -335,7 +361,7 @@ Rectangle {
         onThread: host.openThread(msg.m.id)
         onEdit: host.startEdit(msg.m)
         onPin: host.togglePin(msg.m.id)
-        onMore: msg.options()
+        onMore: Ui.menuAt(tools, tools.width, tools.height, () => msg.options())
     }
     HoverHandler { id: msgHover }
     // A click (a mouse or the right stick's pointer) picks it and opens a photo; a right click opens
@@ -347,13 +373,14 @@ Rectangle {
             // The tools over the corner answer their own clicks.
             if (tools.visible && tools.contains(tools.mapFromItem(msg, point.position.x, point.position.y))) return
             msg.chosen()
-            if (button === Qt.RightButton) msg.options()
+            if (msg.folded && button !== Qt.RightButton) { msg.unfold(); return }
+            if (button === Qt.RightButton) Ui.menuAt(msg, point.position.x, point.position.y, () => msg.options())
             else if (msg.m.mine && msg.m.failed && msg.host && msg.host.openKey) Chat.retry(msg.host.openKey, msg.m.id)
             else if (msg.m.photo && !msg.m.voice && !msg.m.file && !msg.m.unsent && !msg.m.video && !msg.m.album) host.viewing = msg.m.photo
         }
     }
     TapHandler {
         acceptedDevices: PointerDevice.TouchScreen
-        onTapped: { msg.chosen(); msg.options() }
+        onTapped: (point, button) => { msg.chosen(); if (msg.folded) msg.unfold(); else Ui.menuAt(msg, point.position.x, point.position.y, () => msg.options()) }
     }
 }

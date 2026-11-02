@@ -4,8 +4,11 @@
 #include "call/directpath.h"
 #include "call/turnclient.h"
 #include "groupwire.h"
+#include "localsend.h"
+#include "msglimits.h"
 #include "photos.h"
 #include "settings.h"
+#include "sharing.h"
 #include "vault.h"
 
 #include <QCryptographicHash>
@@ -21,6 +24,7 @@
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QStandardPaths>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
@@ -111,6 +115,28 @@ QList<Stun::Address> directOf(const QJsonArray &a)
     return out;
 }
 
+// Cap f2 (27.1): the "lan" candidate of the other side, paired with where they already are on this Wi-Fi (host, from
+// a device whose chat key proved its certificate). The candidate itself never carries an address. Invalid when either
+// is missing.
+Stun::Address lanTarget(const QString &host, const QJsonArray &a)
+{
+    QHostAddress h;
+    if (host.isEmpty() || !h.setAddress(host))
+        return {};
+    for (const QJsonValue &v : a) {
+        const QJsonObject c = v.toObject();
+        if (jstr(c, "t") != QLatin1String("lan"))
+            continue;
+        const double p = c.value(QStringLiteral("p")).toDouble(-1);
+        if (p < 1 || p > 65535 || p != double(int(p)))
+            continue;
+        return CallNet::fromHost(h, quint16(p));
+    }
+    return {};
+}
+
+QJsonObject lanCandidate(quint16 port) { return QJsonObject{{QStringLiteral("t"), QStringLiteral("lan")}, {QStringLiteral("p"), int(port)}}; }
+
 // SHA-256 of a file in lowercase hex, off the main thread; empty when it can't be read.
 void hashFile(QObject *ctx, const QString &path, std::function<void(QString)> done)
 {
@@ -155,6 +181,10 @@ QString FileLink::statusText(const QVariantMap &t, const QString &who)
         return QStringLiteral("Wants to send you this");
     if (state == QLatin1String("waiting"))
         return QStringLiteral("On mobile data. Download it?");
+    if (state == QLatin1String("sending") && t.value(QStringLiteral("paused")).toBool())
+        return QStringLiteral("Paused");
+    if (state == QLatin1String("sending") && t.value(QStringLiteral("held")).toBool())
+        return QStringLiteral("Paused on their side");
     if (state == QLatin1String("sending")) {
         if (!mine && !note.isEmpty())
             return note;
@@ -343,6 +373,9 @@ bool FileLink::ok(const QJsonObject &p)
 {
     if (!GroupWire::isLogicalId(jstr(p, "id")))
         return false;
+    // Cap f2 (27.2): a group's file names its group.
+    if (p.contains(QStringLiteral("g")) && !GroupWire::isGroupId(p.value(QStringLiteral("g")).toString()))
+        return false;
     const QString t = jstr(p, "t");
     if (t == QLatin1String("offer")) {
         const QJsonValue size = p.value(QStringLiteral("size")), sha = p.value(QStringLiteral("sha"));
@@ -386,6 +419,14 @@ struct FileLink::Xfer {
     std::unique_ptr<Receiver> r;
     QSet<int> dropped;                  // self-test only
     std::function<void(QJsonArray)> afterStun;
+    // Cap f2 (section 27): the group it's for, its route ("direct" or "internet", empty until known), where theirs is
+    // saved, and the same Wi-Fi: lan is their address there (never sent), lanOnly when no internet address is swapped.
+    QString group, route, folder;
+    Stun::Address lan;
+    bool lanOnly = false;
+    // Paused here, or held on their side (Hold, 27.5).
+    bool paused = false, held = false;
+    qint64 started = 0, pausedAt = 0, pausedFor = 0, lastHold = 0;
 };
 
 FileLink::FileLink(Chat *chat, QObject *parent)
@@ -398,8 +439,23 @@ FileLink::FileLink(Chat *chat, QObject *parent)
     signal = [chat](const QString &peer, const QJsonObject &msg) { chat->sendEverywhere(peer, QStringLiteral("file"), msg, QString()); };
     peerHasF1 = [chat](const QString &peer) { return chat->hasCap(peer, QString::fromLatin1(kCap)); };
     waitsForAsk = [chat](const QString &peer) { return chat->hasCap(peer, QString::fromLatin1(RingWire::kWrapCap)); };
+    allArrive = [chat](const QString &peer) { return chat->inFamilyGroup(peer); };
     relay = [chat](const QString &peer, const QByteArray &bytes, const QString &name) { return chat->sendFileBlob(peer, bytes, name); };
     nameOf = [chat](const QString &peer) { return chat->nameOf(peer); };
+    // Cap f2 (section 27): the same Wi-Fi first, group files and their rules, "Always from this person".
+    lanHost = [chat](const QString &peer) { return chat->m_net ? QUrl(chat->m_net->baseFor(peer, true)).host() : QString(); };
+    hasF2 = [chat](const QString &peer) { return chat->hasCap(peer, QLatin1String(Sharing::kCap)); };
+    groupRefusal = [chat](const QString &g, const QString &from, qint64 size) { return chat->groupFileRefusal(g, from, size); };
+    groupArrives = [chat](const QString &g, qint64 size) { return chat->groupFilesArrive(g, size); };
+    groupName = [chat](const QString &g) { return chat->groupName(g); };
+    groupMembers = [chat](const QString &g) { return chat->groupFileMembers(g); };
+    myKey = [chat] { return chat->myKey(); };
+    alwaysFrom = [chat](const QString &peer) { return chat->filesAlways(peer); };
+    setAlways = [chat](const QString &peer) { chat->setFilesAlways(peer, true); };
+    isContact = [chat](const QString &peer) { return chat->isContact(peer); };
+    // A file of mine going as a message: its card follows the message (how far, then sent or not).
+    connect(chat, &Chat::uploadsChanged, this, &FileLink::relayTick);
+    connect(chat, &Chat::changed, this, &FileLink::relayTick);
     connect(this, &FileLink::notice, chat, &Chat::notice);
     // Labs › Performance check: the transfers going on at the end of a check (no names, no file names).
     Busy::addStatus(this, [this] {
@@ -430,15 +486,76 @@ QVariantList FileLink::transfers() const
     return out;
 }
 
+namespace
+{
+// One card's fields (FileLink::transfers): every card has all of them.
+QVariantMap cardOf(const QString &id, const QString &peer, const QString &group, const QString &chat, const QString &name, qint64 size, bool mine,
+                   const QString &state, qint64 done, const QString &note, const QString &path)
+{
+    return {{QStringLiteral("id"), id}, {QStringLiteral("peer"), peer}, {QStringLiteral("group"), group},
+            {QStringLiteral("where"), group.isEmpty() ? peer : QStringLiteral("g:") + group}, {QStringLiteral("chat"), chat},
+            {QStringLiteral("name"), name}, {QStringLiteral("size"), double(size)}, {QStringLiteral("mine"), mine},
+            {QStringLiteral("state"), state}, {QStringLiteral("done"), double(done)}, {QStringLiteral("note"), note},
+            {QStringLiteral("path"), path}, {QStringLiteral("route"), QString()}, {QStringLiteral("pace"), QString()},
+            {QStringLiteral("paused"), false}, {QStringLiteral("held"), false}, {QStringLiteral("kind"), Sharing::kindOf(name)},
+            {QStringLiteral("folder"), QString()}, {QStringLiteral("relay"), false}, {QStringLiteral("wifi"), false},
+            {QStringLiteral("time"), double(QDateTime::currentMSecsSinceEpoch())}};
+}
+}
+
+QString FileLink::chatOf(const QString &peer, const QString &group) const
+{
+    if (group.isEmpty())
+        return who(peer);
+    const QString n = groupName ? groupName(group) : QString();
+    return n.isEmpty() ? QStringLiteral("Group") : n;
+}
+
+QString FileLink::folderOf(const QString &peer, const QString &group) const
+{
+    if (!nameOf)
+        return saveDir;   // the self-test: straight into its own folder
+    return Sharing::folderFor(saveDir, QStringLiteral("Huginn"), chatOf(peer, group));
+}
+
+QString FileLink::shownFolder(const QString &dir) const
+{
+    return QDir::toNativeSeparators(QFileInfo(saveDir).dir().relativeFilePath(dir));
+}
+
+int FileLink::activeCount() const
+{
+    int n = 0;
+    for (const QVariantMap &e : m_list) {
+        const QString st = e.value(QStringLiteral("state")).toString();
+        if (st == QLatin1String("connecting") || st == QLatin1String("offered") || st == QLatin1String("asking") || st == QLatin1String("sending"))
+            n++;
+    }
+    return n;
+}
+
+bool FileLink::expects(const QString &peer, const QString &id) const
+{
+    const Xfer *x = m_x.value(id);
+    return x && x->peer == peer;
+}
+
 void FileLink::put(Xfer *x, bool force)
 {
-    const QVariantMap m{{QStringLiteral("id"), x->id}, {QStringLiteral("peer"), x->peer}, {QStringLiteral("name"), x->name},
-                        {QStringLiteral("size"), double(x->size)}, {QStringLiteral("mine"), x->mine}, {QStringLiteral("state"), x->state},
-                        {QStringLiteral("done"), double(x->done)}, {QStringLiteral("note"), x->note},
-                        {QStringLiteral("path"), x->mine || x->state == QLatin1String("done") ? x->path : QString()}};
+    QVariantMap m = cardOf(x->id, x->peer, x->group, chatOf(x->peer, x->group), x->name, x->size, x->mine, x->state, x->done, x->note,
+                           x->mine || x->state == QLatin1String("done") ? x->path : QString());
+    if (!x->route.isEmpty())
+        m.insert(QStringLiteral("route"), Sharing::routeLabel(x->route));
+    if (x->state == QLatin1String("sending") && x->started > 0 && !x->paused && !x->held)
+        m.insert(QStringLiteral("pace"), paceText(x->done, x->size, now() - x->started - x->pausedFor));
+    m.insert(QStringLiteral("paused"), x->paused);
+    m.insert(QStringLiteral("held"), x->held);
+    if (!x->mine)
+        m.insert(QStringLiteral("folder"), shownFolder(x->folder.isEmpty() ? folderOf(x->peer, x->group) : x->folder));
     bool found = false;
     for (QVariantMap &e : m_list)
         if (e.value(QStringLiteral("id")).toString() == x->id) {
+            m.insert(QStringLiteral("time"), e.value(QStringLiteral("time")));
             e = m;
             found = true;
         }
@@ -465,7 +582,7 @@ void FileLink::dismiss(const QString &id)
         }
 }
 
-QString FileLink::send(const QString &peer, const QString &path)
+QString FileLink::send(const QString &peer, const QString &path, const QString &group)
 {
     const QFileInfo fi(path);
     if (!fi.isFile() || !fi.isReadable())
@@ -473,42 +590,66 @@ QString FileLink::send(const QString &peer, const QString &path)
     if (fi.size() < 1)
         return QStringLiteral("That file is empty.");
     if (fi.size() > kMaxBytes)
-        return QStringLiteral("Files over the internet can be up to 4 GB.");
+        return QStringLiteral("Files can be up to 4 GB.");
     QString name;
     for (const QChar c : fi.fileName())
         name += c.unicode() < 0x20 || c == QLatin1Char('/') || c == QLatin1Char('\\') ? QLatin1Char('_') : c;
     name = name.left(200).trimmed();
     if (name.isEmpty())
         name = QStringLiteral("file");
-    // From here on its card in the chat says how it goes; nothing fails out of sight.
-    if (!hasF1(peer)) {
+    // From here on its card says how it goes; nothing fails out of sight.
+    if (!hasF1(peer) || (!group.isEmpty() && !(hasF2 && hasF2(peer)))) {
         if (m_chat)
             m_chat->probeCaps(peer);   // their app may just not have said yet: it answers with its caps
-        addFailed(peer, name, fi.size(), QStringLiteral("%1 needs the latest Muninn or Huginn for files.").arg(who(peer)), path);
+        addFailed(peer, name, fi.size(), QStringLiteral("%1 needs the latest Muninn or Huginn for %2.").arg(who(peer), group.isEmpty() ? QStringLiteral("files")
+                                                                                                                                     : QStringLiteral("files in groups")),
+                  path, false, QString(), group);
         return QString();
     }
-    if (!trusted || !trusted(peer)) {
-        // No direct path without trust: a small file goes through the relays as sealed pieces (its own message).
-        if (fi.size() <= kRelayMax && relay) {
-            QFile f(path);
-            if (!f.open(QIODevice::ReadOnly))
-                return QStringLiteral("That file can't be read.");
-            const QString why = relay(peer, f.readAll(), name);
-            if (!why.isEmpty())
-                addFailed(peer, name, fi.size(), why, path);
+    // The route (27.1): the same Wi-Fi first (their app must know the "lan" candidate), then straight over the
+    // internet with trust, then the relays for a small file.
+    const bool trust = trusted && trusted(peer);
+    const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
+    const QString route = Sharing::route(sameWifi, trust, fi.size(), kRelayMax);
+    if (route == QLatin1String("relay")) {
+        // A group's file goes over the relays only to a contact, into the chat with them.
+        if (!group.isEmpty() && !(isContact && isContact(peer))) {
+            addFailed(peer, name, fi.size(), QStringLiteral("Can't reach %1 straight. Files in a group go when you're on the same Wi-Fi, or with Direct calls on for each other.").arg(who(peer)),
+                      path, false, QString(), group);
             return QString();
         }
-        addFailed(peer, name, fi.size(), tooBig(), path, true);
+        if (!relay) {
+            addFailed(peer, name, fi.size(), tooBig(), path, true, QString(), group);
+            return QString();
+        }
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly))
+            return QStringLiteral("That file can't be read.");
+        lastRelayId.clear();
+        const QString why = relay(peer, f.readAll(), name);
+        if (!why.isEmpty())
+            addFailed(peer, name, fi.size(), why, path);
+        else
+            addRelay(peer, QString(), name, fi.size(), path);
+        return QString();
+    }
+    if (route.isEmpty()) {
+        addFailed(peer, name, fi.size(), tooBig(), path, true, QString(), group);
         return QString();
     }
     auto *x = new Xfer;
     x->id = GroupWire::newLogicalId();
     x->peer = peer;
+    x->group = group;
     x->name = name;
     x->path = path;
     x->size = fi.size();
     x->mine = true;
     x->dir = 0;
+    // Close by and not trusted with each other's internet addresses: only the same Wi-Fi.
+    x->lanOnly = route == QLatin1String("direct") && !trust;
+    if (x->lanOnly)
+        x->route = route;
     x->state = QStringLiteral("connecting");
     x->note = QStringLiteral("Getting ready");
     m_x.insert(x->id, x);
@@ -529,6 +670,45 @@ QString FileLink::send(const QString &peer, const QString &path)
         });
     });
     return QString();
+}
+
+QString FileLink::sendTo(const QString &where, const QVariantList &urls)
+{
+    QStringList paths;
+    for (const QVariant &v : urls) {
+        const QUrl u = v.toUrl();
+        const QString p = u.isLocalFile() ? u.toLocalFile() : v.toString();
+        if (!p.isEmpty() && !paths.contains(p))
+            paths << p;
+    }
+    if (paths.isEmpty())
+        return QStringLiteral("Pick a file first.");
+    QStringList why;
+    if (!where.startsWith(QLatin1String("g:"))) {
+        for (const QString &p : std::as_const(paths))
+            if (const QString w = send(where, p); !w.isEmpty() && !why.contains(w))
+                why << w;
+        return why.join(QLatin1Char(' '));
+    }
+    // A group's file: the group's own rules first (as every member's app checks them), then once to each member.
+    const QString g = where.mid(2).section(QLatin1Char(':'), 0, 0);
+    const QStringList members = groupMembers ? groupMembers(g) : QStringList();
+    if (members.isEmpty())
+        return QStringLiteral("Nobody else is in this group yet.");
+    const QString me = myKey ? myKey() : QString();
+    for (const QString &p : std::as_const(paths)) {
+        const QFileInfo fi(p);
+        if (!fi.isFile())
+            return QStringLiteral("That file can't be read.");
+        if (groupRefusal) {
+            if (const QString w = groupRefusal(g, me, fi.size()); !w.isEmpty())
+                return w;
+        }
+        for (const QString &k : members)
+            if (const QString w = send(k, p, g); !w.isEmpty() && !why.contains(w))
+                why << w;
+    }
+    return why.join(QLatin1Char(' '));
 }
 
 // A new UDP socket for this transfer, and its candidates: what the STUN server saw and the global IPv6
@@ -555,7 +735,19 @@ void FileLink::startSocket(Xfer *x, std::function<void(QJsonArray)> ready)
         ready(QJsonArray{QJsonObject{{QStringLiteral("t"), QStringLiteral("srflx")}, {QStringLiteral("a"), QStringLiteral("127.0.0.1")}, {QStringLiteral("p"), int(port)}}});
         return;
     }
-    x->afterStun = ready;
+    // Cap f2 (27.1): on the same Wi-Fi, a "lan" candidate (the port only) comes first. Without trust it's the only
+    // one, and no STUN server is asked.
+    if (x->lanOnly) {
+        ready(QJsonArray{lanCandidate(port)});
+        return;
+    }
+    if (!lanOf(x->peer).isEmpty() && hasF2 && hasF2(x->peer))
+        x->afterStun = [ready, port](QJsonArray c) {
+            c.prepend(lanCandidate(port));
+            ready(c);
+        };
+    else
+        x->afterStun = ready;
     x->probe = new StunProbe(x->sock, this);
     connect(x->probe, &StunProbe::finished, this, [this, id, port] {
         Xfer *x = m_x.value(id);
@@ -583,9 +775,12 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
         return;
     }
     x->eph = ChatCrypto::newKeyPair();
-    signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("offer")}, {QStringLiteral("id"), x->id}, {QStringLiteral("name"), x->name},
-                                {QStringLiteral("size"), double(x->size)}, {QStringLiteral("sha"), x->sha},
-                                {QStringLiteral("e"), QString::fromLatin1(x->eph.publicDer.toBase64())}, {QStringLiteral("c"), cands}});
+    QJsonObject offer{{QStringLiteral("t"), QStringLiteral("offer")}, {QStringLiteral("id"), x->id}, {QStringLiteral("name"), x->name},
+                      {QStringLiteral("size"), double(x->size)}, {QStringLiteral("sha"), x->sha},
+                      {QStringLiteral("e"), QString::fromLatin1(x->eph.publicDer.toBase64())}, {QStringLiteral("c"), cands}};
+    if (!x->group.isEmpty())
+        offer.insert(QStringLiteral("g"), x->group);   // cap f2 (27.2): the group it's for
+    signal(x->peer, offer);
     x->state = QStringLiteral("offered");
     x->note.clear();
     put(x, true);
@@ -606,33 +801,76 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
 {
     const QString id = jstr(p, "id"), t = jstr(p, "t");
     if (t == QLatin1String("offer")) {
-        if (!trusted || !trusted(from)) {
+        if (m_x.contains(id))
+            return;
+        const QJsonArray cands = p.value(QStringLiteral("c")).toArray();
+        const bool trust = trusted && trusted(from);
+        // Cap f2 (27.1): close by on the same Wi-Fi it can come straight without trust (no internet address swapped).
+        const Stun::Address lan = lanTarget(lanOf(from), cands);
+        const QString g = jstr(p, "g");
+        const QString name = jstr(p, "name");
+        const qint64 size = qint64(p.value(QStringLiteral("size")).toDouble());
+        auto refuse = [&](const QString &why, const QString &shown) {
+            signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}, {QStringLiteral("why"), why}});
+            addRefused(from, g, id, name, size, shown);
+        };
+        // A group's file (27.2, 27.3): only for a group we're both in, and only within its file rules. Dropped, and said.
+        if (!g.isEmpty()) {
+            const QString why = groupRefusal ? groupRefusal(g, from, size) : QStringLiteral("Refused: you aren't in that group.");
+            if (!why.isEmpty()) {
+                refuse(QStringLiteral("rules"), why);
+                Q_EMIT notice(QStringLiteral("A file from %1 in %2 was dropped. %3").arg(who(from), chatOf(from, g), why));
+                return;
+            }
+        }
+        if (!trust && !lan.valid()) {
             // Addresses are only swapped with someone trusted: say no, and the sender knows why.
             signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}});
             return;
         }
-        if (m_x.contains(id))
+        // Not enough room for it (and a little to spare): said on both sides, never a half file.
+        const QString folder = folderOf(from, g);
+        QDir().mkpath(folder);
+        const QStorageInfo disk(folder);
+        if (!testLocal && disk.isValid() && disk.bytesAvailable() >= 0 && size + 64LL * 1024 * 1024 > disk.bytesAvailable()) {
+            refuse(QStringLiteral("space"), QStringLiteral("Not enough space for it on this computer (%1 free).").arg(sizeText(disk.bytesAvailable())));
+            Q_EMIT notice(QStringLiteral("%1 tried to send you %2, but there isn't enough space.").arg(who(from), name));
             return;
+        }
         auto *x = new Xfer;
         x->id = id;
         x->peer = from;
-        x->name = jstr(p, "name");
-        x->size = qint64(p.value(QStringLiteral("size")).toDouble());
+        x->group = g;
+        x->folder = folder;
+        x->name = name;
+        x->size = size;
         x->sha = jstr(p, "sha");
         x->theirE = jstr(p, "e");
-        x->theirs = directOf(p.value(QStringLiteral("c")).toArray());
+        if (trust)
+            x->theirs = directOf(cands);
+        if (lan.valid()) {
+            x->lan = lan;
+            x->theirs.prepend(lan);
+        }
+        x->lanOnly = !trust;
+        if (x->lanOnly)
+            x->route = QStringLiteral("direct");
         x->mine = false;
         x->dir = 1;
         m_x.insert(id, x);
         // Settings › Data saver: every file asks first (only when their app waits for the answer).
         const bool saving = !testLocal && Settings::dataSaverOn();
-        if ((x->size >= kAutoBytes || saving) && (!waitsForAsk || waitsForAsk(from))) {
+        // Someone in one of my Family groups, or "Always from this person": every file arrives by itself. A group's own
+        // file follows the group's type (16.2: Folk small ones, Family all). Data saver still asks.
+        const bool always = alwaysFrom && alwaysFrom(from);
+        const bool big = g.isEmpty() ? x->size >= kAutoBytes && !(allArrive && allArrive(from)) && !always
+                                     : !(groupArrives && groupArrives(g, x->size)) && !always;
+        if ((big || saving) && (!waitsForAsk || waitsForAsk(from))) {
             // A big file asks first, as from anyone else. The sender gives up after kAskAnswerMs.
             x->state = QStringLiteral("asking");
-            x->note = x->size >= kAutoBytes ? QStringLiteral("Wants to send you a big file. Accept or decline")
-                                            : QStringLiteral("Wants to send you a file. Accept or decline");
+            x->note = QStringLiteral("Wants to send you this. Accept or decline");
             put(x, true);
-            Q_EMIT notice(QStringLiteral("%1 wants to send you %2. Accept or decline it in your chat with them.").arg(who(from), x->name));
+            Q_EMIT notice(QStringLiteral("%1 wants to send you %2. Accept or decline it in Transfers.").arg(who(from), x->name));
             x->wait = new QTimer(this);
             x->wait->setSingleShot(true);
             connect(x->wait, &QTimer::timeout, this, [this, id] {
@@ -658,13 +896,25 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         if (shared.isEmpty())
             return;
         x->key = key(shared, id);
-        x->theirs = directOf(p.value(QStringLiteral("c")).toArray());
+        const QJsonArray cands = p.value(QStringLiteral("c")).toArray();
+        x->theirs = x->lanOnly ? QList<Stun::Address>() : directOf(cands);
+        // Cap f2 (27.1): their "lan" candidate, where they are on this Wi-Fi, comes first.
+        const Stun::Address lan = lanTarget(lanOf(from), cands);
+        if (lan.valid()) {
+            x->lan = lan;
+            x->theirs.prepend(lan);
+        }
         if (x->wait)
             x->wait->stop();
         startPunch(x);
     } else if (t == QLatin1String("decline") && x->state == QLatin1String("offered")) {
-        // They said no, or don't trust me with their address. A small file can still go through the relays.
-        fallBack(x, QStringLiteral("They declined, or Direct calls is off on their side."));
+        // Refused (the group's file rules, no space, they said no: 27.4) ends it. Otherwise they don't trust me with
+        // their address: a small file can still go through the relays.
+        const QString why = jstr(p, "why");
+        if (!why.isEmpty())
+            fail(x, Sharing::declineText(why));
+        else
+            fallBack(x, x->lanOnly ? QStringLiteral("Couldn't reach them on this Wi-Fi.") : Sharing::declineText(QString()));
     } else if (t == QLatin1String("decline")) {
         fail(x, QStringLiteral("They stopped it."));   // stopped on their side while it was on its way
     }
@@ -686,12 +936,15 @@ void FileLink::acceptOffer(Xfer *x)
         x->key = key(shared, id);
         signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("accept")}, {QStringLiteral("id"), id},
                                     {QStringLiteral("e"), QString::fromLatin1(x->eph.publicDer.toBase64())}, {QStringLiteral("c"), cands}});
-        // Written straight into Downloads as name.part, renamed once it all arrived and checked out.
-        QDir().mkpath(saveDir);
-        x->path = QDir(saveDir).filePath(freeName(x->name) + QStringLiteral(".part"));
+        // Written straight into the chat's folder (Downloads/Huginn/<chat>) as name.part, renamed once it all arrived and
+        // checked out. Never a hidden app folder.
+        if (x->folder.isEmpty())
+            x->folder = folderOf(x->peer, x->group);
+        QDir().mkpath(x->folder);
+        x->path = QDir(x->folder).filePath(freeName(x->folder, x->name) + QStringLiteral(".part"));
         x->file = new QFile(x->path);
         if (!x->file->open(QIODevice::ReadWrite | QIODevice::Truncate) || !x->file->resize(x->size)) {
-            fail(x, QStringLiteral("%1 couldn't be saved: is Downloads full?").arg(x->name));
+            fail(x, QStringLiteral("Not enough space to save %1.").arg(x->name));
             return;
         }
         startPunch(x);
@@ -710,7 +963,7 @@ void FileLink::startPunch(Xfer *x)
         return;
     }
     x->state = QStringLiteral("connecting");
-    x->note = QStringLiteral("Connecting straight to %1").arg(who(x->peer));
+    x->note = x->lanOnly ? QStringLiteral("Connecting to %1 on this Wi-Fi").arg(who(x->peer)) : QStringLiteral("Connecting straight to %1").arg(who(x->peer));
     put(x, true);
     x->punching = true;
     x->until = now() + kPunchMs;
@@ -730,9 +983,10 @@ void FileLink::punchTick(Xfer *x)
         if (x->found)
             startData(x);
         else if (x->mine)
-            fallBack(x, QStringLiteral("Couldn't connect straight to them. Try on the same Wi-Fi."));
+            fallBack(x, x->lanOnly ? QStringLiteral("Couldn't reach them on this Wi-Fi.") : QStringLiteral("Couldn't connect straight to them. Try on the same Wi-Fi."));
         else
-            fail(x, QStringLiteral("Couldn't connect straight to them. It may come another way."));
+            fail(x, x->lanOnly ? QStringLiteral("Couldn't reach them on this Wi-Fi. Ask them to send it again.")
+                               : QStringLiteral("Couldn't connect straight to them. It may come another way."));
         return;
     }
     const QList<Stun::Address> targets = x->found ? QList<Stun::Address>{x->to} : x->theirs;
@@ -752,6 +1006,7 @@ bool FileLink::startData(Xfer *x)
     x->punching = false;
     x->moving = true;
     x->lastHeard = now();
+    x->started = now();
     x->lastAck = 0;
     const int n = pieces(x->size);
     if (x->mine)
@@ -777,12 +1032,29 @@ void FileLink::dataTick(Xfer *x)
 {
     const qint64 t = now();
     if (t - x->lastHeard > kIdleMs) {
-        fail(x, x->mine ? QStringLiteral("The connection dropped. Try again.") : QStringLiteral("The connection dropped. Ask them to send it again."));
+        fail(x, x->mine ? QStringLiteral("They went offline. Try again.") : QStringLiteral("They went offline. Ask them to send it again."));
+        return;
+    }
+    // Paused here (27.5): Hold every second instead of data or acks.
+    if (x->paused) {
+        if (t - x->lastHold >= 1000) {
+            sendPacket(x, Hold, QByteArray(1, 1), x->to);
+            x->lastHold = t;
+        }
         return;
     }
     if (!x->mine) {
-        if (x->fresh >= 16 || t - x->lastAck >= 40)
+        // Paused on their side: an ack a second keeps the line open.
+        if (x->fresh >= 16 || t - x->lastAck >= (x->held ? 1000 : 40))
             sendAck(x);
+        return;
+    }
+    // Held by them: no data, a probe a second so they know this side is still here.
+    if (x->held) {
+        if (t - x->lastHold >= 1000) {
+            sendPacket(x, Probe, QByteArray(1, 1), x->to);
+            x->lastHold = t;
+        }
         return;
     }
     QByteArray chunk;
@@ -829,6 +1101,8 @@ void FileLink::onDatagram(Xfer *x)
                 h = QHostAddress(a4);   // ::ffff:a.b.c.d from a dual-stack socket
             x->to = CallNet::fromHost(h, port);
             x->found = true;
+            // Cap f2: their address on this Wi-Fi answered, so it goes Direct; anything else is over the internet.
+            x->route = x->lan.valid() && x->to == x->lan ? QStringLiteral("direct") : QStringLiteral("internet");
             // Data or an ack already means the other side found this one too.
             if ((type != Probe || ++x->heardBack >= 3) && !startData(x))
                 return;
@@ -838,7 +1112,17 @@ void FileLink::onDatagram(Xfer *x)
         if (!x->moving)
             continue;
         x->lastHeard = now();
+        // Cap f2 (27.5): they paused, or go on again.
+        if (type == Hold && !payload.isEmpty()) {
+            x->held = payload.at(0) == 1;
+            put(x, true);
+            continue;
+        }
         if (x->mine) {
+            if (type == Ack && x->held) {
+                x->held = false;   // acks again: they went on (their Hold 0 may have been lost)
+                put(x, true);
+            }
             if (type == Ack && payload.size() >= 12) {
                 x->s->ack(int(qFromBigEndian<quint32>(payload.constData())), qFromBigEndian<quint64>(payload.constData() + 4));
                 x->done = qMin(x->size, qint64(x->s->confirmedBelow()) * kChunk);
@@ -857,10 +1141,11 @@ void FileLink::onDatagram(Xfer *x)
             const qint64 at = qint64(i) * kChunk;
             if (i >= 0 && i < n && payload.size() - 4 == qMin<qint64>(kChunk, x->size - at) && x->r->take(i)) {
                 if (!x->file->seek(at) || x->file->write(payload.constData() + 4, payload.size() - 4) != payload.size() - 4) {
-                    fail(x, QStringLiteral("%1 couldn't be saved: is Downloads full?").arg(x->name));
+                    signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), x->id}});
+                    fail(x, QStringLiteral("Not enough space to save %1.").arg(x->name));
                     return;
                 }
-                if (++x->fresh >= 16)
+                if (++x->fresh >= 16 && !x->paused)
                     sendAck(x);
             }
             if (x->r->done()) {
@@ -911,22 +1196,23 @@ void FileLink::receivedAll(Xfer *x)
         }
         // The name its .part was given, unless something took that name meanwhile.
         const QString planned = x->path.chopped(5);
-        const QString final = QFile::exists(planned) ? QDir(saveDir).filePath(freeName(x->name)) : planned;
+        const QString final = QFile::exists(planned) ? QDir(x->folder).filePath(freeName(x->folder, x->name)) : planned;
         if (!QFile::rename(x->path, final)) {
+            QFile::remove(x->path);
             fail(x, QStringLiteral("%1 couldn't be saved.").arg(x->name));
             return;
         }
         x->name = QFileInfo(final).fileName();
         x->path = final;
         x->note.clear();
-        Q_EMIT notice(QStringLiteral("File from %1: %2 · Saved to Downloads").arg(who(x->peer), x->name));
+        Q_EMIT notice(QStringLiteral("File from %1: %2 · Saved in %3").arg(who(x->peer), x->name, shownFolder(x->folder)));
         finish(x);
     });
 }
 
-QString FileLink::freeName(const QString &name) const
+QString FileLink::freeName(const QString &folder, const QString &name) const
 {
-    const QDir dir(saveDir);
+    const QDir dir(folder);
     if (!dir.exists(name) && !dir.exists(name + QStringLiteral(".part")))
         return name;
     const QFileInfo fi(name);
@@ -943,7 +1229,10 @@ QString FileLink::freeName(const QString &name) const
 void FileLink::finish(Xfer *x)
 {
     x->state = QStringLiteral("done");
+    x->paused = x->held = false;
     put(x, true);
+    // The chat's Files list: what was sent from where, what came and where it was saved.
+    logFile(x->group.isEmpty() ? x->peer : QStringLiteral("g:") + x->group, x->name, x->size, x->path, x->mine);
     end(x);
 }
 
@@ -1000,7 +1289,7 @@ void FileLink::decline(const QString &id)
     Xfer *x = m_x.value(id);
     if (!x || x->mine || x->state != QLatin1String("asking"))
         return;
-    signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}});
+    signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}, {QStringLiteral("why"), QStringLiteral("no")}});
     end(x);
     dismiss(id);
 }
@@ -1019,7 +1308,9 @@ void FileLink::cancel(const QString &id)
 void FileLink::fallBack(Xfer *x, const QString &why)
 {
     QFile f(x->path);
-    if (!x->mine || x->moving || x->size > kRelayMax || !relay || !f.open(QIODevice::ReadOnly)) {
+    // A group's file goes over the relays only to a contact (into the chat with them).
+    const bool groupOk = x->group.isEmpty() || (isContact && isContact(x->peer));
+    if (!x->mine || x->moving || x->size > kRelayMax || !relay || !groupOk || !f.open(QIODevice::ReadOnly)) {
         fail(x, why);
         return;
     }
@@ -1027,10 +1318,13 @@ void FileLink::fallBack(Xfer *x, const QString &why)
     const qint64 size = x->size;
     const QByteArray bytes = f.readAll();
     end(x);
-    drop(id);   // the chat's own message takes over from here
+    drop(id);   // the chat's own message takes over from here; its card follows it
+    lastRelayId.clear();
     const QString r = relay(peer, bytes, name);
     if (!r.isEmpty())
         addFailed(peer, name, size, r, path, false, id);
+    else
+        addRelay(peer, QString(), name, size, path);
 }
 
 void FileLink::drop(const QString &id)
@@ -1043,26 +1337,100 @@ void FileLink::drop(const QString &id)
         }
 }
 
-void FileLink::addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path, bool wifi, const QString &id)
+void FileLink::addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path, bool wifi, const QString &id,
+                         const QString &group)
 {
     const QString key = id.isEmpty() ? GroupWire::newLogicalId() : id;
     drop(key);
-    m_list << QVariantMap{{QStringLiteral("id"), key}, {QStringLiteral("peer"), peer}, {QStringLiteral("name"), name},
-                          {QStringLiteral("size"), double(size)}, {QStringLiteral("mine"), true}, {QStringLiteral("state"), QStringLiteral("failed")},
-                          {QStringLiteral("done"), 0.0}, {QStringLiteral("note"), why}, {QStringLiteral("path"), path}, {QStringLiteral("wifi"), wifi}};
+    QVariantMap m = cardOf(key, peer, group, chatOf(peer, group), name, size, true, QStringLiteral("failed"), 0, why, path);
+    m.insert(QStringLiteral("wifi"), wifi);
+    m_list << m;
+    while (m_list.size() > 50)
+        m_list.removeFirst();
+    Q_EMIT changed();
+    Q_EMIT notice(QStringLiteral("%1 didn't go to %2. %3").arg(name, who(peer), why));
+}
+
+void FileLink::addRefused(const QString &peer, const QString &group, const QString &id, const QString &name, qint64 size, const QString &why)
+{
+    drop(id);
+    QVariantMap m = cardOf(id, peer, group, chatOf(peer, group), name, size, false, QStringLiteral("failed"), 0, why, QString());
+    m_list << m;
     while (m_list.size() > 50)
         m_list.removeFirst();
     Q_EMIT changed();
 }
 
+void FileLink::addRelay(const QString &peer, const QString &group, const QString &name, qint64 size, const QString &path)
+{
+    const QString id = lastRelayId;
+    lastRelayId.clear();
+    if (id.isEmpty())
+        return;
+    QVariantMap m = cardOf(id, peer, group, chatOf(peer, group), name, size, true, QStringLiteral("sending"), 0, QString(), path);
+    m.insert(QStringLiteral("relay"), true);
+    m.insert(QStringLiteral("route"), Sharing::routeLabel(QStringLiteral("relay")));
+    drop(id);
+    m_list << m;
+    while (m_list.size() > 50)
+        m_list.removeFirst();
+    Q_EMIT changed();
+    logFile(group.isEmpty() ? peer : QStringLiteral("g:") + group, name, size, path, true);
+}
+
+void FileLink::relayTick()
+{
+    if (!m_chat)
+        return;
+    bool moved = false;
+    for (QVariantMap &e : m_list) {
+        if (!e.value(QStringLiteral("relay")).toBool() || e.value(QStringLiteral("state")).toString() != QLatin1String("sending"))
+            continue;
+        const QString id = e.value(QStringLiteral("id")).toString(), peer = e.value(QStringLiteral("peer")).toString();
+        QString state;
+        bool failed = false, found = false;
+        for (const QVariant &v : m_chat->m_private.value(peer)) {
+            const QVariantMap msg = v.toMap();
+            if (msg.value(QStringLiteral("id")).toString() == id) {
+                state = msg.value(QStringLiteral("state")).toString();
+                failed = msg.value(QStringLiteral("failed")).toBool();
+                found = true;
+                break;
+            }
+        }
+        const double size = e.value(QStringLiteral("size")).toDouble();
+        QVariantMap next = e;
+        if (!found) {
+            next.insert(QStringLiteral("state"), QStringLiteral("failed"));
+            next.insert(QStringLiteral("note"), QStringLiteral("Its message was deleted before it went."));
+        } else if (failed) {
+            next.insert(QStringLiteral("state"), QStringLiteral("failed"));
+            next.insert(QStringLiteral("note"), QStringLiteral("%1 can't be reached right now. Retry when they're online.").arg(who(peer)));
+        } else if (state == QLatin1String("sent") || state == QLatin1String("delivered") || state == QLatin1String("read")) {
+            next.insert(QStringLiteral("state"), QStringLiteral("done"));
+            next.insert(QStringLiteral("done"), size);
+            next.insert(QStringLiteral("note"), relayText(state, false, 1));
+        } else if (m_chat->uploads().contains(id)) {
+            next.insert(QStringLiteral("done"), size * qBound(0.0, m_chat->uploads().value(id).toDouble(), 1.0));
+        }
+        if (next != e) {
+            e = next;
+            moved = true;
+        }
+    }
+    if (moved)
+        Q_EMIT changed();
+}
+
 void FileLink::relayIn(const QString &msgId, const QString &peer, const QString &name, int have, int n)
 {
-    const QVariantMap m{{QStringLiteral("id"), msgId}, {QStringLiteral("peer"), peer}, {QStringLiteral("name"), name},
-                        {QStringLiteral("size"), double(qint64(n) * Photos::kPiece)}, {QStringLiteral("mine"), false},
-                        {QStringLiteral("state"), QStringLiteral("sending")}, {QStringLiteral("done"), double(qint64(have) * Photos::kPiece)},
-                        {QStringLiteral("note"), QString()}, {QStringLiteral("path"), QString()}};
+    QVariantMap m = cardOf(msgId, peer, QString(), chatOf(peer, QString()), name, qint64(n) * Photos::kPiece, false, QStringLiteral("sending"),
+                           qint64(have) * Photos::kPiece, QString(), QString());
+    m.insert(QStringLiteral("route"), Sharing::routeLabel(QStringLiteral("relay")));
+    m.insert(QStringLiteral("folder"), shownFolder(folderOf(peer, QString())));
     for (QVariantMap &e : m_list)
         if (e.value(QStringLiteral("id")).toString() == msgId) {
+            m.insert(QStringLiteral("time"), e.value(QStringLiteral("time")));
             e = m;
             Q_EMIT changed();
             return;
@@ -1090,17 +1458,20 @@ void FileLink::relayInDone(const QString &msgId, const QString &peer, const QStr
     }
 }
 
-QString FileLink::saveBytes(const QByteArray &bytes, const QString &name)
+QString FileLink::saveBytes(const QByteArray &bytes, const QString &name, const QString &peer)
 {
     if (bytes.isEmpty() || !nameOk(name))
         return {};
-    QDir().mkpath(saveDir);
-    const QString path = QDir(saveDir).filePath(freeName(name));
+    const QString dir = peer.isEmpty() ? saveDir : folderOf(peer, QString());
+    QDir().mkpath(dir);
+    const QString path = QDir(dir).filePath(freeName(dir, name));
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size()) {
         f.remove();
         return {};
     }
+    if (!peer.isEmpty())
+        logFile(peer, QFileInfo(path).fileName(), bytes.size(), path, false);
     return path;
 }
 
@@ -1117,7 +1488,7 @@ bool FileLink::canRetry(const QString &id) const
     for (const QVariantMap &e : m_list)
         if (e.value(QStringLiteral("id")).toString() == id)
             return e.value(QStringLiteral("mine")).toBool() && e.value(QStringLiteral("state")).toString() == QLatin1String("failed")
-                && !e.value(QStringLiteral("wifi")).toBool() && QFileInfo(e.value(QStringLiteral("path")).toString()).isFile();
+                && QFileInfo(e.value(QStringLiteral("path")).toString()).isFile();
     return false;
 }
 
@@ -1125,14 +1496,15 @@ void FileLink::retry(const QString &id)
 {
     if (!canRetry(id))
         return;
-    QString peer, path;
+    QString peer, path, group;
     for (const QVariantMap &e : std::as_const(m_list))
         if (e.value(QStringLiteral("id")).toString() == id) {
             peer = e.value(QStringLiteral("peer")).toString();
             path = e.value(QStringLiteral("path")).toString();
+            group = e.value(QStringLiteral("group")).toString();
         }
     drop(id);
-    const QString why = send(peer, path);
+    const QString why = send(peer, path, group);
     if (!why.isEmpty())
         Q_EMIT notice(why);
 }
@@ -1156,6 +1528,144 @@ bool FileLink::showInFolder(const QString &path) const
 #endif
 }
 
+// ------------------------------------------------------------------ pause, always, and each chat's Files (cap f2)
+
+bool FileLink::canPause(const QString &id) const
+{
+    const Xfer *x = m_x.value(id);
+    return x && x->moving && !x->paused;
+}
+
+bool FileLink::canResume(const QString &id) const
+{
+    const Xfer *x = m_x.value(id);
+    return x && x->paused;
+}
+
+void FileLink::pause(const QString &id)
+{
+    Xfer *x = m_x.value(id);
+    if (!x || !x->moving || x->paused)
+        return;
+    x->paused = true;
+    x->pausedAt = now();
+    x->lastHold = now();
+    sendPacket(x, Hold, QByteArray(1, 1), x->to);
+    put(x, true);
+}
+
+void FileLink::resume(const QString &id)
+{
+    Xfer *x = m_x.value(id);
+    if (!x || !x->paused)
+        return;
+    x->paused = false;
+    x->pausedFor += now() - x->pausedAt;
+    x->lastHeard = now();
+    for (int i = 0; i < 3; ++i)
+        sendPacket(x, Hold, QByteArray(1, 0), x->to);
+    if (!x->mine)
+        sendAck(x);
+    put(x, true);
+}
+
+void FileLink::acceptAlways(const QString &id)
+{
+    const Xfer *x = m_x.value(id);
+    if (!x || x->mine || x->state != QLatin1String("asking"))
+        return;
+    if (setAlways && isContact && isContact(x->peer))
+        setAlways(x->peer);
+    accept(id);
+}
+
+QString FileLink::folderText(const QString &where) const
+{
+    if (where.startsWith(QLatin1String("g:")))
+        return shownFolder(folderOf(QString(), where.mid(2).section(QLatin1Char(':'), 0, 0)));
+    return shownFolder(folderOf(where, QString()));
+}
+
+QString FileLink::kind(const QString &name) const { return Sharing::kindOf(name); }
+
+void FileLink::loadLog()
+{
+    if (m_logLoaded || !m_chat || !m_chat->ready() || !m_chat->m_vault)
+        return;
+    m_logLoaded = true;
+    const QJsonArray a = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("fileslog.json"))).array();
+    // Kept as long as the longest a chat keeps its messages (16): after that only the files themselves stay.
+    const qint64 oldest = now() - qint64(Limits::kLongest) * Limits::kDay;
+    for (const QJsonValue &v : a) {
+        const QVariantMap m = v.toObject().toVariantMap();
+        if (qint64(m.value(QStringLiteral("time")).toDouble()) >= oldest && !m.value(QStringLiteral("where")).toString().isEmpty())
+            m_log << m;
+    }
+}
+
+void FileLink::saveLog()
+{
+    if (!m_chat || !m_chat->ready() || !m_chat->m_vault)
+        return;
+    QJsonArray a;
+    for (const QVariantMap &m : std::as_const(m_log))
+        a << QJsonObject::fromVariantMap(m);
+    m_chat->m_vault->write(QStringLiteral("fileslog.json"), QJsonDocument(a).toJson(QJsonDocument::Compact));
+}
+
+void FileLink::logFile(const QString &where, const QString &name, qint64 size, const QString &path, bool mine)
+{
+    if (where.isEmpty() || path.isEmpty())
+        return;
+    loadLog();
+    m_log << QVariantMap{{QStringLiteral("where"), where}, {QStringLiteral("name"), name}, {QStringLiteral("size"), double(size)},
+                         {QStringLiteral("path"), path}, {QStringLiteral("mine"), mine}, {QStringLiteral("time"), double(now())}};
+    while (m_log.size() > 2000)
+        m_log.removeFirst();
+    saveLog();
+    Q_EMIT changed();
+}
+
+QVariantList FileLink::filesIn(const QString &where)
+{
+    loadLog();
+    QVariantList out;
+    for (int i = int(m_log.size()) - 1; i >= 0; --i) {
+        QVariantMap m = m_log.at(i);
+        if (m.value(QStringLiteral("where")).toString() != where)
+            continue;
+        const QString path = m.value(QStringLiteral("path")).toString();
+        m.insert(QStringLiteral("there"), QFileInfo(path).isFile());
+        m.insert(QStringLiteral("folder"), shownFolder(QFileInfo(path).absolutePath()));
+        m.insert(QStringLiteral("icon"), iconFor(m.value(QStringLiteral("name")).toString()));
+        out << m;
+    }
+    return out;
+}
+
+bool FileLink::deleteFile(const QString &where, const QString &path)
+{
+    loadLog();
+    bool mine = true, found = false;
+    for (const QVariantMap &m : std::as_const(m_log))
+        if (m.value(QStringLiteral("where")).toString() == where && m.value(QStringLiteral("path")).toString() == path) {
+            found = true;
+            mine = m.value(QStringLiteral("mine")).toBool();
+        }
+    if (!found)
+        return false;
+    // A received file is deleted from the disk, and only from inside the save folder; a sent one stays where it was.
+    if (!mine && QFileInfo(path).isFile()) {
+        const QString base = QDir(saveDir).absolutePath() + QLatin1Char('/');
+        if (!QFileInfo(path).absoluteFilePath().startsWith(base) || !QFile::remove(path))
+            return false;
+    }
+    m_log.removeIf([&](const QVariantMap &m) { return m.value(QStringLiteral("where")).toString() == where && m.value(QStringLiteral("path")).toString() == path; });
+    saveLog();
+    Q_EMIT changed();
+    return true;
+}
+
 // ------------------------------------------------------------------ files that came through the relays
 
 QString FileLink::saveReceived(const QString &peer, const QString &msgId)
@@ -1173,9 +1683,9 @@ QString FileLink::saveReceived(const QString &peer, const QString &msgId)
     const QByteArray bytes = m_chat->blob(blobId);
     if (name.isEmpty() || bytes.isEmpty())
         return QStringLiteral("That file isn't here any more.");
-    const QString path = saveBytes(bytes, name);
+    const QString path = saveBytes(bytes, name, peer);
     if (path.isEmpty())
-        return QStringLiteral("Couldn't save it. Is Downloads full?");
+        return QStringLiteral("Not enough space to save it.");
     // Its card shows Open and Folder from now on.
     m_chat->update(peer, msgId, [path](QVariantMap &m) { m.insert(QStringLiteral("saved"), path); });
     return QString();
@@ -1197,6 +1707,8 @@ QString Chat::sendFileBlob(const QString &key, const QByteArray &bytes, const QS
     mine.insert(QStringLiteral("file"), name);
     mine.insert(QStringLiteral("size"), double(bytes.size()));
     m_tries.insert(id, Tries{0, QDateTime::currentMSecsSinceEpoch() + 5000});
+    if (m_files)
+        m_files->lastRelayId = id;   // its card in Transfers follows this message
     addPrivate(key, mine);
     if (r.isEmpty() && backupMailbox(mine).isEmpty()) {
         // Its message shows "Not sent · Tap to retry".
@@ -1366,6 +1878,67 @@ bool FileLink::selfTest(const QJsonObject &v, const QByteArray &shared)
         QFile got(QDir(b.saveDir).filePath(QStringLiteral("report.bin")));
         check(got.open(QIODevice::ReadOnly) && got.readAll() == data, QStringLiteral("the file arrived whole"));
         check(!QFile::exists(QDir(b.saveDir).filePath(QStringLiteral("report.bin.part"))), QStringLiteral("no .part left behind"));
+        DirectPath::g_testLocal = false;
+    }
+    // Cap f2 (27.1): the "lan" candidate carries only a port, and pairs with where they already are on this Wi-Fi.
+    {
+        const QJsonArray c{lanCandidate(5000)};
+        check(!c.at(0).toObject().contains(QStringLiteral("a")), QStringLiteral("lan: no address on the wire"));
+        const Stun::Address a = lanTarget(QStringLiteral("192.168.1.20"), c);
+        check(a.valid() && a.port == 5000 && CallNet::toHost(a) == QHostAddress(QStringLiteral("192.168.1.20")), QStringLiteral("lan: paired"));
+        check(!lanTarget(QString(), c).valid() && !lanTarget(QStringLiteral("192.168.1.20"), QJsonArray()).valid(), QStringLiteral("lan: needs both"));
+        QJsonObject offer{{QStringLiteral("t"), QStringLiteral("offer")}, {QStringLiteral("id"), GroupWire::newLogicalId()},
+                          {QStringLiteral("name"), QStringLiteral("a.txt")}, {QStringLiteral("size"), 10}, {QStringLiteral("sha"), QString(64, QLatin1Char('a'))},
+                          {QStringLiteral("e"), QStringLiteral("x")}, {QStringLiteral("c"), c}};
+        check(ok(offer), QStringLiteral("offer with a lan candidate"));
+        offer.insert(QStringLiteral("g"), GroupWire::newGroupId());
+        check(ok(offer), QStringLiteral("offer for a group"));
+        offer.insert(QStringLiteral("g"), QStringLiteral("../x"));
+        check(!ok(offer), QStringLiteral("offer for a bad group id"));
+    }
+
+    // Cap f2 (27.3): a group's file outside its rules is dropped by the receiving member, and the sender hears why.
+    {
+        QTemporaryDir tmp;
+        DirectPath::g_testLocal = true;
+        FileLink a(nullptr), b(nullptr);
+        a.testLocal = b.testLocal = true;
+        a.saveDir = tmp.filePath(QStringLiteral("a"));
+        b.saveDir = tmp.filePath(QStringLiteral("b"));
+        a.peerHasF1 = b.peerHasF1 = [](const QString &) { return true; };
+        a.hasF2 = b.hasF2 = [](const QString &) { return true; };
+        a.trusted = b.trusted = [](const QString &) { return true; };
+        b.groupRefusal = [](const QString &, const QString &, qint64) { return QStringLiteral("Refused by the group's file rules: only admins can send files."); };
+        a.signal = [&b](const QString &, const QJsonObject &m) { QTimer::singleShot(0, &b, [&b, m] { if (ok(m)) b.onSignal(QStringLiteral("A"), m); }); };
+        b.signal = [&a](const QString &, const QJsonObject &m) { QTimer::singleShot(0, &a, [&a, m] { if (ok(m)) a.onSignal(QStringLiteral("B"), m); }); };
+        const QString src = tmp.filePath(QStringLiteral("notes.txt"));
+        QFile out(src);
+        check(out.open(QIODevice::WriteOnly) && out.write("group file") == 10, QStringLiteral("write the group test file"));
+        out.close();
+        const QString g = GroupWire::newGroupId();
+        check(a.send(QStringLiteral("B"), src, g).isEmpty(), QStringLiteral("group send starts"));
+        QEventLoop loop;
+        QTimer give;
+        give.setSingleShot(true);
+        QObject::connect(&give, &QTimer::timeout, &loop, &QEventLoop::quit);
+        auto failed = [](const FileLink &l) {
+            const QVariantList t = l.transfers();
+            return !t.isEmpty() && t.last().toMap().value(QStringLiteral("state")).toString() == QLatin1String("failed");
+        };
+        auto watch = [&] { if (failed(a) && failed(b)) loop.quit(); };
+        QObject::connect(&a, &FileLink::changed, &loop, watch);
+        QObject::connect(&b, &FileLink::changed, &loop, watch);
+        give.start(15000);
+        loop.exec();
+        const QVariantMap ca = a.transfers().isEmpty() ? QVariantMap() : a.transfers().last().toMap();
+        const QVariantMap cb = b.transfers().isEmpty() ? QVariantMap() : b.transfers().last().toMap();
+        check(ca.value(QStringLiteral("state")).toString() == QLatin1String("failed")
+                  && ca.value(QStringLiteral("note")).toString() == Sharing::declineText(QStringLiteral("rules")),
+              QStringLiteral("group rules: the sender hears why (%1)").arg(ca.value(QStringLiteral("note")).toString()));
+        check(ca.value(QStringLiteral("where")).toString() == QStringLiteral("g:") + g, QStringLiteral("group rules: the card is the group's"));
+        check(cb.value(QStringLiteral("state")).toString() == QLatin1String("failed") && cb.value(QStringLiteral("note")).toString().startsWith(QLatin1String("Refused")),
+              QStringLiteral("group rules: the receiver says why"));
+        check(!QFile::exists(QDir(b.saveDir).filePath(QStringLiteral("notes.txt"))), QStringLiteral("group rules: nothing saved"));
         DirectPath::g_testLocal = false;
     }
     std::fprintf(stderr, "f1: %s\n", bad == 0 ? "all checks passed" : "FAILED");

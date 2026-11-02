@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -112,8 +113,8 @@ object LeafPrefs {
 enum class Fall { LEAVES, SNOW }
 
 /**
- * What falls behind everything in the Seasonal look: leaves in Autumn, snowflakes in Snow. Nothing is drawn in the
- * other looks. One engine moves both, so snow falls exactly as the leaves do and only the shapes differ: maple, oak
+ * What falls behind everything while Seasonal is on, over any look: leaves in Autumn, snowflakes in Snow. Nothing is
+ * drawn while it's off. The colors follow the look and Color vision ([Inks]): darker leaves and gray-blue snow on Light. One engine moves both, so snow falls exactly as the leaves do and only the shapes differ: maple, oak
  * and birch leaves tumble, sway and glide on a slow wind with the odd gust, and maple seeds (samaras) spin as they
  * drop; in Snow every flake is a six-armed crystal that rocks, tumbles and flips the way a leaf does.
  *
@@ -139,6 +140,9 @@ fun SeasonFall() {
         val seeds = FallScale.seeds(n)
         Scene(n - seeds, seeds, kind)
     }
+    val vision = Access.colorVision
+    val light = Palette.light
+    val inks = remember(vision, light) { Inks(vision, light) }
     val still = Access.reduceMotion || remember(context) { systemStill(context) }
     var now by remember { mutableLongStateOf(0L) }
     val owner = LocalLifecycleOwner.current
@@ -153,9 +157,10 @@ fun SeasonFall() {
             }
         }
     }
-    Canvas(Modifier.fillMaxSize()) {
+    // Drawn on a layer of its own: each frame of falling redraws only this layer, never the screen behind or over it.
+    Canvas(Modifier.fillMaxSize().graphicsLayer {}) {
         val t = if (still) 37f else now / 1_000_000_000f
-        scene.draw(this, t, sizePct / 100f * density)
+        scene.draw(this, t, sizePct / 100f * density, inks)
     }
 }
 
@@ -199,7 +204,7 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
         }
     }
 
-    fun draw(d: DrawScope, t: Float, unit: Float) {
+    fun draw(d: DrawScope, t: Float, unit: Float, inks: Inks) {
         val w = d.size.width
         val h = d.size.height
         // The wind: a slow breath left and right, with a gust now and then that carries everything sideways.
@@ -232,10 +237,10 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
                 // A samara: spins steadily and swings round a small circle as it drops.
                 val oy = sin(tt / l.orbitT * TAU) * l.orbit * 0.5f * unit
                 d.withTransform({ translate(x, y + oy); rotate(l.rps * 360f * tt, Offset.Zero); scale(s, s, Offset.Zero) }) {
-                    drawPath(SAMARA, SEED_BRUSHES[l.tint], alpha = alpha * 0.95f)
-                    drawPath(SAMARA, SEED_EDGE, alpha = alpha * 0.6f, style = THIN)
-                    drawPath(SAMARA_VEINS, SEED_EDGE, alpha = alpha * 0.55f, style = HAIR)
-                    drawOval(SEED_EDGE, Offset(-3.2f, -3f), androidx.compose.ui.geometry.Size(8.4f, 6f), alpha = alpha)
+                    drawPath(SAMARA, inks.seedBrushes[l.tint], alpha = alpha * 0.95f)
+                    drawPath(SAMARA, inks.seedEdge, alpha = alpha * 0.6f, style = THIN)
+                    drawPath(SAMARA_VEINS, inks.seedEdge, alpha = alpha * 0.55f, style = HAIR)
+                    drawOval(inks.seedEdge, Offset(-3.2f, -3f), androidx.compose.ui.geometry.Size(8.4f, 6f), alpha = alpha)
                 }
                 continue
             }
@@ -252,18 +257,18 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
                 // A snowflake in the leaf's place: six-armed crystals in three sizes, so each one shows its turn and flip.
                 d.withTransform({ translate(x, y); rotate(rot, Offset.Zero); scale(s * flip, s, Offset.Zero) }) {
                     when (l.kind) {
-                        0 -> drawPath(CRYSTAL, Color.White, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE)
-                        1 -> scale(0.78f, 0.78f, Offset.Zero) { drawPath(CRYSTAL, Color.White, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE) }
-                        else -> drawPath(SMALL_CRYSTAL, Color.White, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE)
+                        0 -> drawPath(CRYSTAL, inks.flake, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE)
+                        1 -> scale(0.78f, 0.78f, Offset.Zero) { drawPath(CRYSTAL, inks.flake, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE) }
+                        else -> drawPath(SMALL_CRYSTAL, inks.flake, alpha = alpha * FLAKE_ALPHA, style = FLAKE_STROKE)
                     }
                 }
                 continue
             }
             val path = when (l.kind) { 0 -> MAPLE; 1 -> OAK; else -> BIRCH }
             val veins = when (l.kind) { 0 -> MAPLE_VEINS; 1 -> OAK_VEINS; else -> BIRCH_VEINS }
-            val edge = EDGES[l.tint]
+            val edge = inks.edges[l.tint]
             d.withTransform({ translate(x, y); rotate(rot, Offset.Zero); scale(s * flip, s, Offset.Zero) }) {
-                drawPath(path, BRUSHES[l.tint], alpha = alpha)
+                drawPath(path, inks.brushes[l.tint], alpha = alpha)
                 drawPath(path, edge, alpha = alpha * 0.9f, style = THIN)
                 drawPath(veins, edge, alpha = alpha * 0.8f, style = HAIR)
                 drawPath(STEM, edge, alpha = alpha, style = STEM_STROKE)
@@ -275,9 +280,7 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
         private val THIN = Stroke(0.35f)
         private val HAIR = Stroke(0.7f)
         private val STEM_STROKE = Stroke(1.2f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-        private val SEED_EDGE = Color(0xFF6A4A22)
-
-        /** Snowflakes: white, a little see-through. */
+        /** Snowflakes: a little see-through ([Inks.flake]). */
         private const val FLAKE_ALPHA = 0.85f
         private val FLAKE_STROKE = Stroke(1.8f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
         /** Soft round flakes: white in the middle, fading out at the edge. */
@@ -301,20 +304,14 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
         private val CRYSTAL = crystal(14f, true)
         private val SMALL_CRYSTAL = crystal(9f, false)
 
-        /** Leaf colours (light centre, body, dark edge): gold, orange, rust, red, tan, straw. */
-        private val TINTS = listOf(
+        /** Leaf colours (light centre, body, dark edge): gold, orange, rust, red, tan, straw. [Inks] draws them for the look. */
+        val TINTS = listOf(
             Triple(0xFFF7D994, 0xFFE8B45A, 0xFF9A6A22), Triple(0xFFF6C384, 0xFFE59A4C, 0xFF8D4F1C),
             Triple(0xFFE88A5E, 0xFFC45A2E, 0xFF6E2C12), Triple(0xFFDD7A56, 0xFFB9452A, 0xFF5E2010),
             Triple(0xFFCF9A55, 0xFFA86A2A, 0xFF5A3512), Triple(0xFFF2D57A, 0xFFD9A93F, 0xFF8C6A1D),
         )
-        private val BRUSHES = TINTS.map { (a, b, c) ->
-            Brush.radialGradient(0f to Color(a), 0.55f to Color(b), 1f to Color(c), center = Offset(14f, -2f), radius = 26f)
-        }
-        private val EDGES = TINTS.map { Color(it.third) }
-        private val SEED_TINTS = listOf(Triple(0xFF6A4A22, 0xFFB89A5C, 0xFFE9D9A8), Triple(0xFF7A5A2A, 0xFFC9A86A, 0xFFE9D9A8), Triple(0xFF8A6A33, 0xFFD4B67A, 0xFFE9D9A8))
-        private val SEED_BRUSHES = SEED_TINTS.map { (a, b, c) ->
-            Brush.horizontalGradient(0f to Color(a), 0.25f to Color(b), 1f to Color(c), startX = 0f, endX = 38f)
-        }
+        val SEED_TINTS = listOf(Triple(0xFF6A4A22, 0xFFB89A5C, 0xFFE9D9A8), Triple(0xFF7A5A2A, 0xFFC9A86A, 0xFFE9D9A8), Triple(0xFF8A6A33, 0xFFD4B67A, 0xFFE9D9A8))
+        const val SEED_EDGE = 0xFF6A4A22
 
         /** The stem, from just left of the leaf's base. */
         private val STEM = Path().apply { moveTo(-7f, 1.2f); quadraticTo(-3.5f, 0.4f, 0f, 0f) }
@@ -385,4 +382,21 @@ private class Scene(leaves: Int, seeds: Int, private val fall: Fall) {
             close()
         }
     }
+}
+
+/**
+ * The colors what falls is drawn in, for a Color vision [kind] and the look ([light]: Light): the leaves' and seeds'
+ * gradients and edges ([ColorVision.leafInk]) and the snow's color. Made once per change, so nothing is built per frame.
+ */
+private class Inks(kind: String, light: Boolean) {
+    private fun ink(c: Long) = Color(ColorVision.leafInk(c, kind, light))
+    val brushes = Scene.TINTS.map { (a, b, c) ->
+        Brush.radialGradient(0f to ink(a), 0.55f to ink(b), 1f to ink(c), center = Offset(14f, -2f), radius = 26f)
+    }
+    val edges = Scene.TINTS.map { ink(it.third) }
+    val seedBrushes = Scene.SEED_TINTS.map { (a, b, c) ->
+        Brush.horizontalGradient(0f to ink(a), 0.25f to ink(b), 1f to ink(c), startX = 0f, endX = 38f)
+    }
+    val seedEdge = ink(Scene.SEED_EDGE)
+    val flake = Color(ColorVision.flakeInk(kind, light))
 }

@@ -252,6 +252,44 @@ ChatCrypto::KeyPair WrapKeys::find(const QString &id, qint64 nowS)
     return {};
 }
 
+QList<WrapKeys::Day> WrapKeys::kept(qint64 nowS)
+{
+    load();
+    QList<Day> out;
+    for (const Day &d : std::as_const(m_days))
+        if (RingWire::keep(d.t, nowS))
+            out << d;
+    return out;
+}
+
+QByteArray WrapKeys::openEnvelope(const QString &content, const ChatCrypto::KeyPair &me, const QList<Day> &days, qint64 nowS, bool *ok)
+{
+    *ok = false;
+    const QByteArray raw = QByteArray::fromBase64(content.toLatin1());
+    const QJsonObject o = QJsonDocument::fromJson(raw).object();
+    if (!o.contains(QStringLiteral("e"))) {
+        *ok = !raw.isEmpty();   // not sealed
+        return raw;
+    }
+    bool opened = false;
+    QByteArray plain;
+    if (o.contains(QStringLiteral("w"))) {
+        plain = RingWire::openWrap(o, me, [&days, nowS](const QString &id) {
+            for (const Day &d : days)
+                if (d.id == id && RingWire::keep(d.t, nowS))
+                    return ChatCrypto::KeyPair{d.priv, QByteArray::fromBase64(d.pub.toLatin1())};
+            return ChatCrypto::KeyPair();
+        }, &opened);
+    } else {
+        const QByteArray key = ChatCrypto::sharedKey(me.privateDer, me.publicDer, QByteArray::fromBase64(o.value(QStringLiteral("e")).toString().toLatin1()));
+        if (!key.isEmpty())
+            plain = ChatCrypto::open(key, QByteArray::fromBase64(o.value(QStringLiteral("n")).toString().toLatin1()),
+                                     QByteArray::fromBase64(o.value(QStringLiteral("d")).toString().toLatin1()), &opened);
+    }
+    *ok = opened && !plain.isEmpty();
+    return *ok ? plain : QByteArray();
+}
+
 void WrapKeys::prune(qint64 nowS)
 {
     load();

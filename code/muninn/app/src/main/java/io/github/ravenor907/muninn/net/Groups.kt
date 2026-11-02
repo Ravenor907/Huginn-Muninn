@@ -48,6 +48,12 @@ class Groups(
         fun hasD1(k: String): Boolean = false
         /** Their app said "j1": invite links and "Members can invite" (section 17). */
         fun hasJ1(k: String): Boolean = false
+        /** Group [g] became [type] ("folk" or "family"): the Family folder is looked at again. */
+        fun typeChanged(g: String, type: String) {}
+        /** Their app said "g2": timeouts and bans go to them (section 26). */
+        fun hasG2(k: String): Boolean = false
+        /** Their app said "f2": group files and the group's file rules (section 27). */
+        fun hasF2(k: String): Boolean = false
     }
 
     /**
@@ -113,10 +119,14 @@ class Groups(
             "owner" -> if (!s.has(a) || a == s.owner) null else s.copy(owner = a, admins = (s.admins + a).toSortedSet().toList())
             "remove", "leave" -> if (!s.has(a) || a == s.owner) null else s.copy(members = s.members.filter { it.k != a }, admins = s.admins - a)
             "join", "add" -> if (s.has(a)) null else s.copy(members = Proto06.sortedMembers(s.members + Member(a, b, c)))
-            // Cap d1: a = "family", "work" or "" (Standard), b = the days.
-            "limit" -> Limits.withLimit(s, a, b.toIntOrNull() ?: Limits.DEFAULT).takeIf { it != s }
+            // Cap d1: a = "family" or "folk" ("" and "work" are Folk too), b = the days, c = "mi" when members may invite
+            // in a Folk group (everyone's app takes it).
+            "limit" -> Limits.withType(s, if (a == Limits.FAMILY) Limits.FAMILY else Limits.FOLK, b.toIntOrNull() ?: Limits.DEFAULT, c == "mi").takeIf { it != s }
             // Cap j1: a = "on" lets members make invite links.
             "invites" -> s.copy(mi = a == "on").takeIf { it != s }
+            // Cap f2: a = who may send files ("everyone", "admins", "nobody"), b = the size limit in MB ("0": none).
+            "files" -> s.copy(fs = Sharing.whoMaySend(a).takeIf { it != Sharing.EVERYONE }.orEmpty(),
+                fm = (b.toIntOrNull() ?: 0).takeIf { it in 1..Sharing.MAX_LIMIT_MB } ?: 0).takeIf { it != s }
             else -> null
         }
     }
@@ -148,10 +158,26 @@ class Groups(
     private val unread = HashSet<String>()
     private val held = HashMap<String, MutableList<Held>>()
     private val tries = HashMap<String, Pair<Int, Long>>()
+    /** What each store file last held, so a save that changes nothing writes nothing (see [writeIfChanged]). */
+    private val written = ChangedOnly()
+
+    /** Writes [name] only when [text] differs from what was last written there (a failed write is tried again next time). */
+    private fun writeIfChanged(name: String, text: String) {
+        if (!written.changed(name, text)) return
+        write(name, text)
+        written.done(name, text)
+    }
     /** "g|key" to when: syncs asked of them (their states are welcome) and states sent back (not again at once). */
     private val asked = HashMap<String, Long>()
     private val answered = HashMap<String, Long>()
     private val queue = ArrayList<Out>()
+    /** Cap g2 (section 26): group to person to slot ("ban" or "timeout") to the newest signed record taken. */
+    private val mods = HashMap<String, HashMap<String, HashMap<String, JSONObject>>>()
+    /** The last name seen for someone a record names (a banned person leaves the state). */
+    private val modNames = HashMap<String, String>()
+    private val _modSerial = MutableStateFlow(0L)
+    /** Bumps whenever a timeout or ban changes, for the screens. */
+    val modSerial: StateFlow<Long> = _modSerial.asStateFlow()
 
     private val _groups = MutableStateFlow<Map<String, Group>>(emptyMap())
     val all: StateFlow<Map<String, Group>> = _groups.asStateFlow()
@@ -193,8 +219,9 @@ class Groups(
         val n = clean(name, Proto06.MAX_NAME)
         if (n.isBlank()) return@act null
         val g = Proto06.newGroupId()
-        val s = Limits.withLimit(State(g, 1, me, me, n, listOf(me), listOf(Member(me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox))),
-            listOf(Channel(MAIN, "general", "text")), now()), kind.takeIf { it in Limits.KINDS } ?: "", days).signedBy(keys.private, me)
+        // Folk (members can invite) or Family (only admins add people), section 16.2.
+        val s = Limits.withType(State(g, 1, me, me, n, listOf(me), listOf(Member(me, clean(host.myName, Proto06.MAX_NAME), mailbox(host.myMailbox))),
+            listOf(Channel(MAIN, "general", "text")), now()), if (kind == Limits.FAMILY) Limits.FAMILY else Limits.FOLK, days, true).signedBy(keys.private, me)
         Proto06.check(s)
         groups[g] = Group(s)
         g
@@ -208,11 +235,27 @@ class Groups(
     fun setAdmin(g: String, k: String, on: Boolean) = change(g, Change(if (on) "admin" else "unadmin", k))
     fun handOver(g: String, k: String) = change(g, Change("owner", k))
     fun remove(g: String, k: String) = change(g, Change("remove", k))
-    /** Cap d1: the group's type ("family", "work" or "" for Standard) and how many days messages stay (7 to 30). */
-    fun setLimit(g: String, kind: String, days: Int) = change(g, Change("limit", kind.takeIf { it in Limits.KINDS } ?: "", days.toString()))
+    /** Cap d1: the group's type ("family" or "folk") and how many days messages stay (7 to 30, Family only). */
+    fun setLimit(g: String, kind: String, days: Int) = act {
+        val type = if (kind == Limits.FAMILY) Limits.FAMILY else Limits.FOLK
+        val cur = groups[g]?.state
+        // Folk: members can invite, when every other member's app takes it (17.1) and it wasn't Folk already.
+        val miOk = type == Limits.FOLK && cur != null && Limits.groupType(cur) != Limits.FOLK && cur.members.all { it.k == me || host.hasJ1(it.k) }
+        changeLocked(g, Change("limit", type, days.toString(), if (miOk) "mi" else ""))
+    }
 
     /** Cap j1: "Members can invite" on or off (an admin's signed change). */
     fun setMembersInvite(g: String, on: Boolean) = change(g, Change("invites", if (on) "on" else ""))
+
+    /** Cap f2: who may send files in the group and the size limit (an admin's signed change, section 27.3). */
+    fun setFiles(g: String, who: String, mb: Int) = change(g, Change("files", Sharing.whoMaySend(who), mb.coerceIn(0, Sharing.MAX_LIMIT_MB).toString()))
+
+    /** Cap f2: empty when a file of [size] from [from] is welcome in group [g], else why not (every member's app checks). */
+    fun fileRefusal(g: String, from: String, size: Long): String = synchronized(lock) {
+        val grp = groups[g]
+        if (grp == null || grp.readOnly) "Refused: you aren't in that group."
+        else Sharing.refusal(grp.state.members.map { it.k }, grp.state.admins, grp.state.fs, grp.state.fm, from, size)
+    }
 
     /** Null when done (or nothing to do), else why not, in words for the person. */
     private fun change(g: String, c: Change): String? = act { changeLocked(g, c) }
@@ -232,11 +275,19 @@ class Groups(
         // An app without j1 refuses a state with "Members can invite" on (section 17.1).
         if ((c.op == "join" || c.op == "add") && cur.mi && !host.hasJ1(c.a))
             return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} Muninn or Huginn 0.95 to join, because members can invite in ${cur.name}."
+        // An app without f2 refuses a state with file rules (section 27.3).
+        if ((c.op == "join" || c.op == "add") && (cur.fs.isNotEmpty() || cur.fm > 0) && !host.hasF2(c.a))
+            return "${c.b.ifBlank { "They" }} need${if (c.b.isBlank()) "" else "s"} the latest Muninn or Huginn to join, because ${cur.name} has file rules."
+        if (c.op == "files" && (c.a != Sharing.EVERYONE || (c.b.toIntOrNull() ?: 0) > 0)) {
+            val old = cur.members.filter { it.k != me && !host.hasF2(it.k) }
+            if (old.isNotEmpty()) return "Everyone needs the latest Muninn or Huginn first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
+        }
+        if (c.op == "invites" && c.a == "on" && !Limits.linksAllowed(cur)) return "In a Family group only admins add people."
         if (c.op == "invites" && c.a == "on" && !cur.mi) {
             val old = cur.members.filter { it.k != me && !host.hasJ1(it.k) }
             if (old.isNotEmpty()) return "Everyone needs Muninn or Huginn 0.95 first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
         }
-        if (c.op == "limit" && c.a.isNotEmpty() && cur.kind.isEmpty()) {
+        if (c.op == "limit" && c.a == Limits.FAMILY && cur.kind.isEmpty()) {
             val old = cur.members.filter { it.k != me && !host.hasD1(it.k) }
             if (old.isNotEmpty()) return "Everyone needs Muninn or Huginn 0.94 first. Still waiting for: " + old.joinToString(", ") { it.n.ifBlank { "Someone" } } + "."
         }
@@ -265,6 +316,7 @@ class Groups(
         val s = grp.state
         if (grp.readOnly || !s.isAdmin(me)) return@act "Only admins can invite people."
         if (s.has(k)) return@act null
+        if (bannedLocked(g, k)) return@act "They're banned from ${s.name}. Unban them in Group settings first."
         if (s.members.size >= Proto06.MAX_MEMBERS) return@act "${s.name} is full (${Proto06.MAX_MEMBERS} people)."
         if (s.kind.isNotEmpty() && !host.hasD1(k)) return@act "They need Muninn or Huginn 0.94 to be in a ${Limits.kindName(s.kind)} group."
         val t = Token(Proto06.newToken(), g, now() / 1000 + Proto06.CODE_MS / 1000, false)
@@ -347,7 +399,7 @@ class Groups(
         groups.remove(g)
         chats.remove(g)?.forEach { if (it.photo.isNotEmpty()) host.deleteBlob(it.photo) }
         outs.removeAll { (it.g == g).also { gone -> if (gone) host.drop(it.env) } }
-        unread.remove(g); last.remove(g); held.remove(g)
+        unread.remove(g); last.remove(g); held.remove(g); mods.remove(g)
         true
     }
 
@@ -402,6 +454,8 @@ class Groups(
     private fun target(g: String, ch: String): Pair<State, String>? {
         val grp = groups[g] ?: return null
         if (grp.readOnly) return null
+        // Cap g2: timed out or banned here, nothing goes out (no text, photos, voice or files).
+        statusLocked(g).takeIf { it.isNotEmpty() }?.let { host.notice(it); return null }
         val s = grp.state
         return s to (if (s.channel(ch)?.t == "text") ch else MAIN)
     }
@@ -467,6 +521,121 @@ class Groups(
         if (host.readReceipts) fresh.groupBy { it.from }.forEach { (k, l) -> l.map { it.id }.chunked(Proto06.MAX_RECEIPT_IDS).forEach { receipt(k, g, it, "read") } }
     }
 
+    // ------------------------------------------------------------------ timeouts and bans (cap g2, section 26)
+
+    data class Barred(val key: String, val name: String, val until: Long = 0)
+
+    private fun modRec(g: String, k: String, slot: String): JSONObject? = mods[g]?.get(k)?.get(slot)
+    private fun bannedLocked(g: String, k: String) = ModLogic.banned(modRec(g, k, "ban"))
+    private fun untilLocked(g: String, k: String): Long = modRec(g, k, "timeout").let { if (ModLogic.timedOut(it, now())) ModLogic.until(it) else 0L }
+    private fun barredLocked(g: String, k: String) = bannedLocked(g, k) || untilLocked(g, k) > 0
+
+    fun isBanned(g: String, k: String) = synchronized(lock) { bannedLocked(g, k) }
+    /** When their timeout ends (ms), 0 when they aren't timed out. */
+    fun timedOutUntil(g: String, k: String) = synchronized(lock) { untilLocked(g, k) }
+    /** Timed out or banned: their posts are dropped, and they stay out of the group's voice rooms. */
+    fun barred(g: String, k: String) = synchronized(lock) { barredLocked(g, k) }
+
+    /** "You're timed out until 3:40 PM", "You were banned from Family", or "". */
+    fun myStatus(g: String): String = synchronized(lock) { statusLocked(g) }
+
+    private fun statusLocked(g: String): String {
+        val name = groups[g]?.state?.name ?: "this group"
+        if (bannedLocked(g, me)) return "You were banned from $name"
+        val until = untilLocked(g, me)
+        return if (until > 0) "You're timed out until ${whenText(until)}" else ""
+    }
+
+    /** I may time out or ban [k] in [g]: I'm an admin, they aren't me or the owner, and an admin only by the owner. */
+    fun canModerate(g: String, k: String): Boolean = synchronized(lock) {
+        val grp = groups[g] ?: return@synchronized false
+        val s = grp.state
+        !grp.readOnly && k.isNotEmpty() && k != me && k != s.owner && s.isAdmin(me) && (!s.isAdmin(k) || s.owner == me)
+    }
+
+    fun bannedList(g: String): List<Barred> = synchronized(lock) {
+        mods[g].orEmpty().filter { (_, slots) -> ModLogic.banned(slots["ban"]) }.map { (k, _) -> Barred(k, modName(g, k)) }.sortedBy { it.name.lowercase() }
+    }
+
+    fun timeoutList(g: String): List<Barred> = synchronized(lock) {
+        val t = now()
+        mods[g].orEmpty().filter { (_, slots) -> ModLogic.timedOut(slots["timeout"], t) && !ModLogic.banned(slots["ban"]) }
+            .map { (k, slots) -> Barred(k, modName(g, k), ModLogic.until(slots["timeout"])) }.sortedBy { it.until }
+    }
+
+    private fun modName(g: String, k: String) = groups[g]?.state?.member(k)?.n?.ifBlank { null } ?: modNames[k] ?: "Someone"
+
+    /** 10 minutes to a week ([ms] one of [ModLogic.TIMEOUTS]). Null when done, else why not. */
+    fun timeout(g: String, k: String, ms: Long): String? = act {
+        if (ms <= 0 || ms > 7 * ModLogic.DAY) return@act "Pick 10 minutes, 1 hour, 1 day or 1 week."
+        modLocked(g, k, "timeout", now() + ms)
+    }
+
+    fun cancelTimeout(g: String, k: String): String? = act { if (untilLocked(g, k) == 0L) null else modLocked(g, k, "untimeout", 0) }
+
+    /** Bans [k] and takes them out of the group (a signed state, 3.4). */
+    fun ban(g: String, k: String): String? = act {
+        modLocked(g, k, "ban", 0) ?: if (groups[g]?.state?.has(k) == true) changeLocked(g, Change("remove", k)) else null
+    }
+
+    fun unban(g: String, k: String): String? = act { if (!bannedLocked(g, k)) null else modLocked(g, k, "unban", 0) }
+
+    private fun modLocked(g: String, k: String, action: String, until0: Long): String? {
+        val grp = groups[g] ?: return "That group isn't here any more."
+        val s = grp.state
+        if (grp.readOnly || k.isEmpty() || k == me || k == s.owner || !s.isAdmin(me) || (s.isAdmin(k) && s.owner != me))
+            return "Only the group's admins can do that."
+        val slot = if (action == "ban" || action == "unban") "ban" else "timeout"
+        // Above the record it replaces, even if this phone's clock is behind the last admin's.
+        val ts = maxOf(now(), (ModLogic.whole(modRec(g, k, slot)?.opt("ts")) ?: 0L) + 1)
+        val until = if (action == "timeout") maxOf(until0, ts + 1) else 0L
+        val rec = try { ModLogic.make(keys.private, action, g, k, me, ts, until) } catch (e: Exception) { return "That couldn't be signed." }
+        if (ModLogic.accept(s, rec) != "ok") return "That couldn't be signed."
+        takeMod(g, rec, announce = true)
+        val id = Proto06.newLogicalId()
+        val plain = JSONObject().put("t", "mod").put("g", g).put("id", id).put("list", JSONArray().put(rec)).toString()
+        (s.members.map { it.k } + k).toSet().filter { it != me && host.hasG2(it) }.forEach { out(it, "group", plain, id, g) }
+        return null
+    }
+
+    /** Keeps [rec] (already checked) when it's newer in its slot. Tells me when it names me. */
+    private fun takeMod(g: String, rec: JSONObject, announce: Boolean): Boolean {
+        val k = rec.getString("k"); val slot = ModLogic.slot(rec)
+        if (!ModLogic.newer(modRec(g, k, slot), rec)) return false
+        mods.getOrPut(g) { HashMap() }.getOrPut(k) { HashMap() }[slot] = rec
+        groups[g]?.state?.member(k)?.n?.takeIf { it.isNotBlank() }?.let { modNames[k] = it }
+        _modSerial.value = _modSerial.value + 1
+        if (!announce || k != me) return true
+        val name = groups[g]?.state?.name ?: "the group"
+        host.notice(when (rec.getString("a")) {
+            "ban" -> "You were banned from $name"
+            "unban" -> "You were unbanned from $name. You can join again."
+            "timeout" -> "You're timed out in $name until ${whenText(ModLogic.until(rec))}"
+            else -> "Your timeout in $name ended"
+        })
+        return true
+    }
+
+    /** Every record still in force for [g], to [to] (after a sync, or when an admin just added them). */
+    private fun sendMods(g: String, to: String) {
+        if (!host.hasG2(to)) return
+        val t = now()
+        val list = mods[g].orEmpty().values.flatMap { slots ->
+            listOfNotNull(slots["ban"]?.takeIf { ModLogic.banned(it) }, slots["timeout"]?.takeIf { ModLogic.timedOut(it, t) })
+        }
+        list.chunked(ModLogic.MAX_LIST).forEach { part ->
+            val id = Proto06.newLogicalId()
+            out(to, "group", JSONObject().put("t", "mod").put("g", g).put("id", id).put("list", JSONArray().apply { part.forEach { put(it) } }).toString(), id, g)
+        }
+    }
+
+    private fun whenText(ms: Long): String {
+        val d = java.util.Date(ms)
+        val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(d)
+        val sameDay = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.US).let { it.format(d) == it.format(java.util.Date(now())) }
+        return if (sameDay) time else java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(d) + ", " + time
+    }
+
     // ------------------------------------------------------------------ receiving
 
     /**
@@ -504,6 +673,8 @@ class Groups(
             "react", "edit" -> grp != null && !grp.readOnly && grp.state.has(from)
             // Cap m2: votes, likewise.
             "vote" -> grp != null && !grp.readOnly && grp.state.has(from)
+            // Cap g2: timeouts and bans, each checked against the current state (an admin signed it).
+            "mod" -> grp != null && inGroup
             else -> return 400
         }
         if (!allowed) return 403
@@ -523,6 +694,12 @@ class Groups(
                 val lnk = if (tok == null) liveLink(p.optString("inv"), g) else null
                 val cur = grp?.state
                 if (grp == null || cur == null || grp.readOnly || !cur.isAdmin(me)) return 200
+                // Cap g2: someone banned doesn't get back in by a code, a link or an invite until they're unbanned.
+                if (bannedLocked(g, from)) {
+                    host.notice("${clean(fromName, Proto06.MAX_NAME).ifBlank { "Someone" }} tried to join ${cur.name}, but they're banned.")
+                    receipt(from, g, listOf(id), "delivered")
+                    return 200
+                }
                 if (tok != null && !tok.multi) tokens.remove(tok)
                 val n = clean(p.optString("n"), Proto06.MAX_NAME).ifBlank { clean(fromName, Proto06.MAX_NAME) }.ifBlank { "Someone" }
                 val mb = p.optString("p").takeIf { Proto06.isMailbox(it) } ?: envMailbox?.takeIf { Proto06.isMailbox(it) } ?: ""
@@ -533,6 +710,7 @@ class Groups(
                 } else {
                     val why = changeLocked(g, Change("join", from, n, mb))
                     if (why != null) host.notice(why)
+                    else sendMods(g, from)   // cap g2: so their app knows who is timed out
                     // Cap j1: one more use, counted only here (this admin is the link's only counter).
                     else if (lnk != null && groups[g]?.state?.has(from) == true) {
                         links.replaceAll { if (it.i == lnk.i) it.copy(uses = it.uses + 1) else it }
@@ -543,10 +721,11 @@ class Groups(
             "link" -> {
                 // A member (or another admin) made a link that names this phone as its counter.
                 val cur = grp!!.state
-                if (!cur.isAdmin(me) || !(cur.isAdmin(from) || cur.mi)) return 403
+                if (!cur.isAdmin(me) || !(cur.isAdmin(from) || Limits.membersMayInvite(cur))) return 403
                 val inv = p.optString("inv"); val x = p.optLong("lx", -1); val max = p.optInt("max", -1)
                 if (Proto06.lenB64url(inv) != 16 || x < 0 || max !in 0..Proto06.MAX_LINK_USES) return 400
-                if (links.none { it.i == inv }) links.add(LinkRec(inv, g, from, x, max))
+                // A Family group takes nobody by a link (17.1): the link is never kept.
+                if (Limits.linksAllowed(cur) && links.none { it.i == inv }) links.add(LinkRec(inv, g, from, x, max))
                 sendLinks(g)
             }
             "linkoff" -> {
@@ -584,6 +763,7 @@ class Groups(
                     val rid = Proto06.newLogicalId()
                     out(from, "group", JSONObject().put("t", "states").put("g", g).put("id", rid).put("list", JSONArray().apply { list.forEach { put(it.json()) } }).toString(), rid, g)
                 }
+                sendMods(g, from)   // cap g2: timeouts and bans in force
             }
             "leave" -> {
                 val cur = grp!!.state
@@ -604,11 +784,20 @@ class Groups(
             }
             "react", "edit" -> {
                 if (!Rich.ok("group", p)) return 400
-                takeChange(grp!!, from, fromName, p)
+                if (!barredLocked(g, from)) takeChange(grp!!, from, fromName, p)
+            }
+            "mod" -> {
+                val a = p.optJSONArray("list") ?: return 400
+                if (a.length() < 1 || a.length() > ModLogic.MAX_LIST) return 400
+                val s = grp!!.state
+                for (i in 0 until a.length()) {
+                    val rec = a.optJSONObject(i) ?: continue
+                    if (rec.optString("g") == g && ModLogic.accept(s, rec) == "ok") takeMod(g, rec, announce = true)
+                }
             }
             "vote" -> {
                 if (!More.ok("group", p)) return 400
-                val m = chats[g]?.firstOrNull { it.id == p.getString("msg") && it.unsent.isEmpty() }
+                val m = chats[g]?.firstOrNull { it.id == p.getString("msg") && it.unsent.isEmpty() }?.takeIf { !barredLocked(g, from) }
                 val poll = m?.poll
                 if (m != null && poll != null) {
                     val a = p.getJSONArray("v")
@@ -632,13 +821,15 @@ class Groups(
     private fun liveLink(inv: String, g: String): LinkRec? {
         val rec = links.firstOrNull { it.i == inv && it.g == g } ?: return null
         val s = groups[g]?.state ?: return null
-        return rec.takeIf { Proto06.linkOk(it.x, it.max, it.uses, it.off, s.has(it.by), s.isAdmin(it.by) || s.mi, now()) }
+        if (!Limits.linksAllowed(s)) return null   // a Family group takes nobody by a link (17.1)
+        return rec.takeIf { Proto06.linkOk(it.x, it.max, it.uses, it.off, s.has(it.by), s.isAdmin(it.by) || Limits.membersMayInvite(s), now()) }
     }
 
     /** The links this phone counts for [g], to every admin and to each link's maker (their own), with j1. */
     private fun sendLinks(g: String) {
         val s = groups[g]?.state ?: return
-        val mine = links.filter { it.g == g && Proto06.linkOk(it.x, it.max, it.uses, it.off, s.has(it.by), s.isAdmin(it.by) || s.mi, now()) }
+        val mine = links.filter { it.g == g && Limits.linksAllowed(s)
+            && Proto06.linkOk(it.x, it.max, it.uses, it.off, s.has(it.by), s.isAdmin(it.by) || Limits.membersMayInvite(s), now()) }
         fun json(l: List<LinkRec>) = JSONArray().apply { l.forEach { put(JSONObject().put("lid", Proto06.linkId(it.i)).put("by", it.by).put("x", it.x)
             .put("max", it.max).put("uses", it.uses)) } }
         linkLists[g] = linkLists[g].orEmpty().filter { it.counter != me } + mine.map {
@@ -660,7 +851,8 @@ class Groups(
         val grp = groups[g] ?: return@act null to "That group isn't here any more."
         val s = grp.state
         if (grp.readOnly) return@act null to "You're not in ${s.name} any more."
-        if (!s.isAdmin(me) && !s.mi) return@act null to "Only admins can make invite links in ${s.name}."
+        if (!Limits.linksAllowed(s)) return@act null to "Family groups have no links. Admins add people with a code."
+        if (!s.isAdmin(me) && !Limits.membersMayInvite(s)) return@act null to "Only admins can make invite links in ${s.name}."
         if (ttlMs < 0 || maxUses !in 0..Proto06.MAX_LINK_USES) return@act null to "Pick how long and how many people."
         val counter = if (s.isAdmin(me)) me else s.owner
         if (counter != me && !host.hasJ1(counter)) return@act null to "${nameIn(s, counter, "The owner")} needs Muninn or Huginn 0.95 first."
@@ -739,6 +931,13 @@ class Groups(
         }
         if (rejoin) joining.remove(s.g)
         groups[s.g] = Group(s, (grp.history + cur).filter { it.hash != s.hash }.takeLast(Proto06.HISTORY), gone)
+        // Became Family: every link this phone counts stops, and none are shown (17.1).
+        if (!Limits.linksAllowed(s) && (links.any { it.g == s.g && !it.off } || linkLists[s.g].orEmpty().isNotEmpty())) {
+            links.replaceAll { if (it.g == s.g) it.copy(off = true) else it }
+            linkLists.remove(s.g)
+            sendLinks(s.g)
+        }
+        if (Limits.groupType(cur) != Limits.groupType(s)) host.typeChanged(s.g, Limits.groupType(s))
         peers(s)
         // Stop sending messages to anyone who isn't in it any more.
         val gone2 = cur.members.map { it.k }.filter { !s.has(it) }.toSet()
@@ -794,6 +993,8 @@ class Groups(
             }
             return 200
         }
+        // Cap g2: someone timed out or banned. Dropped, and answered so their app stops sending it again.
+        if (barredLocked(g, from)) { receipt(from, g, listOf(id), "delivered"); return 200 }
         val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN   // a removed channel's messages show in main
         if (sv < s.v) sendStateBack(g, from) else if (sv > s.v) askSync(g, from, s.v)
         val name = nameIn(s, from, fromName)
@@ -812,7 +1013,9 @@ class Groups(
                      videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false): Boolean = act {
         val grp = groups[g]
         if (grp == null || grp.readOnly || !grp.state.has(from) || !Proto06.isLogicalId(gid)) return@act false
-        if (deleted.containsKey(gid) || unsentBy[gid]?.first == from || chats[g]?.any { it.id == gid } == true) { receipt(from, g, listOf(gid), "delivered"); return@act false }
+        if (deleted.containsKey(gid) || unsentBy[gid]?.first == from || chats[g]?.any { it.id == gid } == true || barredLocked(g, from)) {
+            receipt(from, g, listOf(gid), "delivered"); return@act false
+        }
         val s = grp.state
         val name = nameIn(s, from, fromName)
         addMsg(GMsg(gid, g, s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN, from, name, "", false, now(), photo = blob, voice = voiceMs,
@@ -945,6 +1148,9 @@ class Groups(
     /** Anything still waiting for a receipt: the retry loop keeps running while there is. */
     fun busy(): Boolean = synchronized(lock) { outs.isNotEmpty() }
 
+    /** When [due] next has something to send (ms; 0: now), Long.MAX_VALUE for nothing waiting. */
+    fun nextDue(): Long = synchronized(lock) { outs.minOfOrNull { tries[it.env]?.second ?: 0L } ?: Long.MAX_VALUE }
+
     /** Envelopes for [to] still waiting for a receipt (tests, and the "sending" state). */
     fun waiting(to: String? = null) = synchronized(lock) { outs.filter { to == null || it.to == to }.map { it.copy() } }
 
@@ -1003,7 +1209,7 @@ class Groups(
     /** Erase all. */
     fun clear() = act {
         groups.clear(); chats.clear(); outs.clear(); tokens.clear(); invites.clear(); joining.clear(); last.clear()
-        links.clear(); linkLists.clear(); madeLinks.clear()
+        links.clear(); linkLists.clear(); madeLinks.clear(); mods.clear(); modNames.clear()
         deleted.clear(); unsentBy.clear(); unread.clear(); held.clear(); tries.clear(); heldAt.clear(); publishedAt.clear(); receipted.clear()
     }
 
@@ -1034,13 +1240,16 @@ class Groups(
             o.put("links", JSONArray().apply { links.forEach { put(JSONObject().put("i", it.i).put("g", it.g).put("by", it.by).put("x", it.x)
                 .put("max", it.max).put("uses", it.uses).put("off", it.off)) } })
             o.put("made", JSONObject().apply { madeLinks.forEach { (k, v) -> put(k, v) } })
+            o.put("mods", JSONObject().apply { mods.forEach { (g, who) -> put(g, JSONObject().apply { who.forEach { (k, slots) ->
+                put(k, JSONObject().apply { slots.forEach { (slot, rec) -> put(slot, rec) } }) } }) } })
+            o.put("modNames", JSONObject().apply { modNames.forEach { (k, v) -> put(k, v) } })
             o.put("lists", JSONObject().apply { linkLists.forEach { (g, l) -> put(g, JSONArray().apply { l.forEach { put(JSONObject().put("id", it.id)
                 .put("by", it.by).put("bn", it.byName).put("x", it.x).put("max", it.max).put("uses", it.uses).put("c", it.counter)) } }) } })
-            write(FILE, o.toString())
+            writeIfChanged(FILE, o.toString())
             val c = JSONObject()
             chats.forEach { (g, l) -> c.put(g, JSONArray().apply { l.forEach { put(msgJson(it)) } }) }
-            write(CHATS, c.toString())
-            write(OUTS, JSONArray().apply { outs.forEach { put(JSONObject().put("e", it.env).put("to", it.to).put("r", it.room).put("p", it.plain).put("id", it.id)
+            writeIfChanged(CHATS, c.toString())
+            writeIfChanged(OUTS, JSONArray().apply { outs.forEach { put(JSONObject().put("e", it.env).put("to", it.to).put("r", it.room).put("p", it.plain).put("id", it.id)
                 .put("g", it.g).put("t", it.t).put("ph", it.photo).put("vo", it.voice).put("ch", it.ch)
                 .apply { if (it.video > 0) put("vd", it.video); if (it.album.isNotEmpty()) put("al", it.album).put("ai", it.albumAt).put("an", it.albumOf)
                     if (it.gif) put("gif", true) }) } }.toString())
@@ -1085,6 +1294,14 @@ class Groups(
                 o.optJSONObject("unsentBy")?.let { j -> j.keys().forEach { k -> j.optJSONArray(k)?.let { a -> unsentBy[k] = a.optString(0) to a.optLong(1) } } }
                 unread.addAll(strings(o.optJSONArray("unread")))
                 o.optJSONObject("made")?.let { j -> j.keys().forEach { madeLinks[it] = j.getString(it) } }
+                // Cap g2: kept as they were taken (the signature was checked when each came); the shape is checked again.
+                o.optJSONObject("mods")?.let { j -> j.keys().forEach { g -> val who = j.getJSONObject(g); who.keys().forEach { k ->
+                    val slots = who.getJSONObject(k)
+                    slots.keys().forEach { slot -> val rec = slots.getJSONObject(slot)
+                        if (ModLogic.check(rec).isEmpty() && ModLogic.slot(rec) == slot && rec.getString("g") == g && rec.getString("k") == k)
+                            mods.getOrPut(g) { HashMap() }.getOrPut(k) { HashMap() }[slot] = rec }
+                } } }
+                o.optJSONObject("modNames")?.let { j -> j.keys().forEach { modNames[it] = j.getString(it) } }
                 o.optJSONArray("links")?.let { a -> for (i in 0 until a.length()) a.getJSONObject(i).let {
                     links.add(LinkRec(it.getString("i"), it.getString("g"), it.getString("by"), it.optLong("x"), it.optInt("max"), it.optInt("uses"), it.optBoolean("off"))) } }
                 o.optJSONObject("lists")?.let { j -> j.keys().forEach { g -> val a = j.getJSONArray(g); linkLists[g] = (0 until a.length()).map { a.getJSONObject(it) }.map {

@@ -13,13 +13,19 @@ Rectangle {
     property int row: 0
     function setArgs(a) {}
 
+    // A linked phone's contacts too (cap l1): changes made here go to the phone.
+    readonly property var phonePeople: page.tour ? [] : (Linked.account.contacts || []).map(c => ({ key: c.key, name: c.shown, nick: c.nick, phone: true, contact: true,
+                                                                                                    verified: c.verified, blocked: c.blocked }))
+    readonly property bool tour: !!Ui.main && !!Ui.main.touring
     readonly property var people: Chat.people.concat(Chat.trash.map(t => ({ key: t.key, name: t.name, trashed: true, daysLeft: t.daysLeft, contact: false, verified: false, blocked: false })))
+                                     .concat(phonePeople)
     readonly property var person: people[row] || null
     readonly property var prompts: [{ key: "a", label: "Menu" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
     readonly property string status: ""
 
     function stateText(p) {
         if (p.trashed) return "In the Trash"
+        if (p.phone) return (p.blocked ? "Blocked" : "On your phone") + (p.verified ? " · Verified" : "")
         return p.blocked ? "Blocked" : (p.contact ? "Contact" : "Met close by") + (p.verified ? " · Verified" : "")
     }
 
@@ -90,10 +96,12 @@ Rectangle {
                     Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: page.stateText(modelData); color: modelData.blocked ? Theme.danger : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                 }
                 HoverHandler { id: hover }
+                // A click, a right click or a long press: their menu, where it was clicked.
                 TapHandler {
+                    id: personTap
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
-                    onTapped: { page.row = index; page.choose() }
-                    onLongPressed: { page.row = index; page.choose() }
+                    onTapped: (point, button) => { page.row = index; Ui.menuAt(personTap.parent, point.position.x, point.position.y, () => page.choose()) }
+                    onLongPressed: { page.row = index; Ui.menuAt(personTap.parent, point.position.x, point.position.y, () => page.choose()) }
                 }
                 MoreButton {
                     id: rowMore
@@ -153,6 +161,8 @@ Rectangle {
         }
     }
 
+    // The Menu key and Shift+F10 (Main.menuKey): the menu opens at the current row.
+    function menuAnchor() { return list.itemAtIndex(row) }
     // A person's one menu (the same as in Chats); someone in the Trash gets Restore or Delete for good.
     function choose() {
         const p = people[row]
@@ -167,7 +177,39 @@ Rectangle {
             })
             return
         }
+        if (p.phone) { phoneMenu(p); return }
         PeopleActions.contactMenu(p.key, p.name, {})
+    }
+    // Someone on the linked phone: what's changed here goes to the phone too.
+    function phoneMenu(p) {
+        const said = r => { if (r !== "") Ui.say(r, true) }
+        Ui.pickFrom(p.name, [{ header: "On your phone", items: [
+            { name: "Nickname", url: "nick" },
+            { name: "Folders", url: "folders" },
+            { name: p.blocked ? "Unblock" : "Block", url: "block", danger: !p.blocked },
+            { name: "Remove", url: "remove", danger: true }] }], a => {
+            if (a === "nick") Ui.ask("Nickname for " + p.name, "Your phone shows it too", p.nick || "", "Save", t => said(Linked.renameContact(p.key, t)))
+            else if (a === "folders") phoneFolders(p)
+            else if (a === "block") said(Linked.blockContact(p.key, !p.blocked))
+            else if (a === "remove") Ui.sure("Remove " + p.name + "?", "From your phone too.", "Remove", () => said(Linked.removeContact(p.key)), false, true)
+        })
+    }
+    function phoneFolders(p) {
+        const items = (Linked.account.folders || []).map(f => ({ name: f.name, detail: f.keys.indexOf(p.key) >= 0 ? "In it" : "", url: f.id }))
+        items.push({ name: "New folder", url: "+" })
+        Ui.pickFrom("Folders for " + p.name, [{ header: "", items: items }], a => {
+            if (a === "+") {
+                Ui.ask("New folder", "On your phone too", "", "Add", t => {
+                    const r = Linked.addFolder(t)
+                    if (r !== "") Ui.say(r, true)
+                })
+                return
+            }
+            const f = (Linked.account.folders || []).find(x => x.id === a)
+            if (!f) return
+            const r = Linked.putInFolder(f.id, p.key, f.keys.indexOf(p.key) < 0)
+            if (r !== "") Ui.say(r, true)
+        })
     }
     function handleButton(b) {
         switch (b) {

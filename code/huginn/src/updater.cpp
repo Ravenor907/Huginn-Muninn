@@ -20,6 +20,9 @@
 #include <QTimer>
 #include <QStringList>
 #include <QVariantMap>
+#include <QDateTime>
+#include <QRandomGenerator>
+#include <limits>
 #include <openssl/evp.h>
 #include <cstdio>
 
@@ -71,12 +74,61 @@ Updater::Updater(Settings *settings, QObject *parent)
     , m_current(QCoreApplication::applicationVersion())
     , m_status(QStringLiteral("Up to date as far as Huginn knows"))
 {
+    m_every.setSingleShot(true);
+    connect(&m_every, &QTimer::timeout, this, [this] {
+        periodicCheck();
+        scheduleNext();
+    });
+    // Sleep stops the clock ticks: one that comes far later than asked means the computer just woke. A minute later
+    // (the network is back by then) Huginn checks, and the timed check starts over from there.
+    m_wake.setInterval(60000);
+    connect(&m_wake, &QTimer::timeout, this, [this] {
+        const qint64 wall = QDateTime::currentMSecsSinceEpoch();
+        const bool slept = m_wakeWall > 0 && sleptBetween(m_wakeWall + m_wake.interval(), wall);
+        m_wakeWall = wall;
+        if (slept)
+            QTimer::singleShot(60000, this, [this] {
+                periodicCheck();
+                scheduleNext();
+            });
+    });
+}
+
+qint64 Updater::nextCheckMs(bool savingNow, double jitter)
+{
+    const double j = qBound(-1.0, jitter, 1.0);
+    return (savingNow ? kEverySavingMs : kEveryMs) + qint64(j * double(kJitterMs));
+}
+
+void Updater::scheduleNext()
+{
+    if (!m_periodic)
+        return;
+    const double j = QRandomGenerator::global()->generateDouble() * 2.0 - 1.0;
+    const bool s = saving && saving();
+    m_every.start(int(qMin<qint64>(nextCheckMs(s, j), std::numeric_limits<int>::max())));
+}
+
+void Updater::periodicCheck()
+{
+    // "Check for updates automatically" off, a check or download already going, an update waiting for Restart now,
+    // or installing: nothing to do now.
+    if (!m_periodic || (m_settings && !m_settings->autoUpdate()) || m_busy || m_installing || !m_readyPath.isEmpty() || m_goingBack)
+        return;
+    fetch(false, true);
 }
 
 void Updater::startAutoUpdate()
 {
     if (!System::inFlatpak() && !WinUpdate::supported())
         return;   // a development build updates by rebuilding
+    // Timed checks run from here on; each one looks at the setting again, so turning it on later is enough.
+    if (!m_periodic) {
+        m_periodic = true;
+        m_wakeWall = QDateTime::currentMSecsSinceEpoch();
+        m_wake.start();
+        scheduleNext();
+    }
     if (m_settings && !m_settings->autoUpdate())
         return;   // "Check for updates automatically" is off: nothing asks GitHub until Check now
     m_goingBack = false;
@@ -389,7 +441,7 @@ void Updater::download(const QString &url, const QString &tag)
             Q_EMIT changed();
             return;
         }
-        const QString dir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+        const QString dir = System::cacheDir();
         QDir().mkpath(dir);
         const QString path = dir + QStringLiteral("/Huginn-") + tag + (WinUpdate::supported() ? QStringLiteral(".zip") : QStringLiteral(".flatpak"));
         QFile f(path);
@@ -718,6 +770,17 @@ bool Updater::selfTest(const QString &vectorsPath)
     const QJsonArray cases = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("cases")).toArray();
     auto b = [](const QJsonObject &o, const char *k) { return QByteArray::fromHex(o.value(QLatin1String(k)).toString().toLatin1()); };
     bool ok = !cases.isEmpty();
+    // Timed checks: every 6 hours, 12 with Battery saver, within 30 minutes either way; a late tick means sleep.
+    {
+        const bool tok = nextCheckMs(false, 0) == kEveryMs && nextCheckMs(true, 0) == kEverySavingMs
+            && nextCheckMs(false, -1) == kEveryMs - kJitterMs && nextCheckMs(false, 1) == kEveryMs + kJitterMs
+            && nextCheckMs(true, 5) == kEverySavingMs + kJitterMs && nextCheckMs(false, -5) > 0
+            && !sleptBetween(1000, 1000 + 60000) && sleptBetween(1000, 1000 + 10 * 60000);
+        if (!tok) {
+            fprintf(stderr, "release-sig self-test: timed update checks\n");
+            ok = false;
+        }
+    }
     for (const QJsonValue &v : cases) {
         const QJsonObject c = v.toObject();
         const bool want = c.value(QStringLiteral("valid")).toBool();

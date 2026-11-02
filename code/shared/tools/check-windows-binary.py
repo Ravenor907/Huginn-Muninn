@@ -11,6 +11,9 @@ Fails (exit 1, with GitHub annotations) when Huginn.exe:
     (ResumeThread, CreateProcess, WinExec, ShellExecute, WriteProcessMemory...), for opening or ending other
     programs (OpenProcess), or for redirecting the registry (RegOverridePredefKey). Huginn starts its new copy after
     an update with Qt's QProcess, which lives in Qt6Core.dll, not in Huginn.exe.
+  - imports Windows functions for writing the registry (RegCreateKey, RegSetValue, RegSetKeyValue...): the portable
+    build keeps its settings in an INI file in the data folder beside Huginn.exe. Moving an older version's settings
+    out of the registry once goes through Qt (Qt6Core.dll), not Huginn.exe.
   - lacks version details (VERSIONINFO) or an application manifest.
   - lacks the hardening Windows looks for: Control Flow Guard, CET shadow stack support, a random
     load address (high entropy, 64-bit) and no running code from data (DEP).
@@ -27,7 +30,10 @@ FORBIDDEN_IMPORTS = {"resumethread", "createprocessa", "createprocessw", "create
                      "winexec", "shellexecutea", "shellexecutew", "shellexecuteexa", "shellexecuteexw",
                      "writeprocessmemory", "virtualallocex", "createremotethread", "createremotethreadex",
                      "setthreadcontext", "ntunmapviewofsection", "queueuserapc", "setwindowshookexa", "setwindowshookexw",
-                     "openprocess", "regoverridepredefkey", "queryfullprocessimagenamew"}
+                     "openprocess", "regoverridepredefkey", "queryfullprocessimagenamew",
+                     "regcreatekeya", "regcreatekeyw", "regcreatekeyexa", "regcreatekeyexw", "regcreatekeytransacteda",
+                     "regcreatekeytransactedw", "regsetvaluea", "regsetvaluew", "regsetvalueexa", "regsetvalueexw",
+                     "regsetkeyvaluea", "regsetkeyvaluew"}
 
 
 def find_text(data):
@@ -172,7 +178,7 @@ def main():
             elif hits:
                 print("note: %s: %s" % (rel, "; ".join(hits)))
             elif ours:
-                print("Huginn.exe: no script, hidden-window or process-injection traces; has version details and a manifest; "
+                print("Huginn.exe: no script, hidden-window, process-injection or registry-writing traces; has version details and a manifest; "
                       "built with CFG, CET, ASLR (high entropy) and DEP")
     if not os.path.exists(main_exe):
         annotate("error", "Binary check", "No Huginn.exe at the top of " + folder)

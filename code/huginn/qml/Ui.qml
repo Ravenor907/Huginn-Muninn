@@ -10,6 +10,8 @@ QtObject {
     property var toast: null
     property var picker: null
     property var profile: null
+    // The small right-click menu (RightClickMenu.qml).
+    property var menu: null
 
     // Panel widths while they're dragged (Settings keeps them once let go), and how much room the
     // voice panel takes at the foot of the list column (0 when it isn't there).
@@ -89,7 +91,17 @@ QtObject {
     // Back out of a page: to the rail, or from Contacts back to Settings.
     function closePage() { main.closePage() }
     // back: the menu a sub-page came from (B and the arrow go back to it).
-    function pickFrom(title, sections, cb, back) { picker.openList(title, sections, cb, back) }
+    // While a right-click menu is being built (menuAt), the list shows there instead, as a small menu.
+    function pickFrom(title, sections, cb, back) {
+        if (menu && menu.wants()) { menu.take(title, sections, cb, back); return }
+        picker.openList(title, sections, cb, back)
+    }
+    // Right click, a long press, the Menu key or Shift+F10: what build() opens with pickFrom shows as a small menu at (x, y)
+    // in item (null: the window), inside the window and flipped at its edges. A row may have sub: a function that opens
+    // its side menu with pickFrom (the big list ignores sub and answers its url as usual).
+    function menuAt(item, x, y, build) { if (menu) menu.openAt(item, x, y, build, false); else if (build) build() }
+    // A text box's menu: Cut, Copy, Paste and Select all (FieldMenu.qml).
+    function fieldMenu(field, x, y) { if (menu) menu.forField(field, x, y, false) }
     function say(text, bad) { if (toast) toast.show(text, bad) }
     function ask(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) { prompt.open(title, ctx, initial, confirmText, cb, isPassword, keepSpaces) }
     // The same with a row of choices under the field: cb(text, choice).

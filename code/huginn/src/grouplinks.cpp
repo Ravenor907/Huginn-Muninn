@@ -4,6 +4,7 @@
 
 #include "chat.h"
 #include "groupwire.h"
+#include "msglimits.h"
 #include "vault.h"
 
 #include <QDateTime>
@@ -64,10 +65,11 @@ QString Chat::liveLink(const QString &token, const QString &g) const
 {
     const QVariantMap l = m_glinks.value(token);
     const auto it = m_groups.constFind(g);
-    if (l.isEmpty() || str(l, "g") != g || it == m_groups.cend() || it->state.isEmpty())
+    // A Family group takes nobody by a link (17.1).
+    if (l.isEmpty() || str(l, "g") != g || it == m_groups.cend() || it->state.isEmpty() || !Limits::linksAllowed(it->state))
         return QString();
     const QString by = str(l, "by");
-    const bool may = GroupWire::isAdmin(it->state, by) || it->state.value(QStringLiteral("mi")).toBool();
+    const bool may = GroupWire::isAdmin(it->state, by) || Limits::membersMayInvite(it->state);
     return GroupWire::linkOk(l.value(QStringLiteral("x")).toLongLong(), l.value(QStringLiteral("max")).toInt(), l.value(QStringLiteral("uses")).toInt(),
                              l.value(QStringLiteral("off")).toBool(), GroupWire::isMember(it->state, by), may, nowMs())
                ? token : QString();
@@ -123,9 +125,11 @@ bool Chat::takeLinkControl(const QString &g, const QString &from, const QJsonObj
     const QJsonObject s = it->state;
     const QString t = p.value(QStringLiteral("t")).toString(), me = myKey();
     if (t == QLatin1String("link")) {
-        // A member (or another admin) made a link that names this computer as its counter.
-        if (!GroupWire::isAdmin(s, me) || !(GroupWire::isAdmin(s, from) || s.value(QStringLiteral("mi")).toBool()))
+        // A member (or another admin) made a link that names this computer as its counter. A Family group has none.
+        if (!GroupWire::isAdmin(s, me) || !(GroupWire::isAdmin(s, from) || Limits::membersMayInvite(s)))
             return false;
+        if (!Limits::linksAllowed(s))
+            return true;
         const QString inv = p.value(QStringLiteral("inv")).toString();
         const qint64 x = p.value(QStringLiteral("lx")).toInteger(-1);
         const int max = int(p.value(QStringLiteral("max")).toInteger(-1));
@@ -184,7 +188,9 @@ QVariantMap Chat::createGroupLink(const QString &g, qint64 ttlMs, int maxUses)
         return fail(QStringLiteral("You're no longer in this group."));
     const QJsonObject s = it->state;
     const QString me = myKey();
-    if (!GroupWire::isAdmin(s, me) && !s.value(QStringLiteral("mi")).toBool())
+    if (!Limits::linksAllowed(s))
+        return fail(QStringLiteral("Family groups have no links. Admins add people with a code."));
+    if (!GroupWire::isAdmin(s, me) && !Limits::membersMayInvite(s))
         return fail(QStringLiteral("Only admins can make invite links in %1.").arg(groupName(g)));
     if (ttlMs < 0 || maxUses < 0 || maxUses > GroupWire::kMaxLinkUses)
         return fail(QStringLiteral("Pick how long and how many people."));
@@ -295,5 +301,20 @@ QString Chat::setMembersInvite(const QString &g, bool on)
 bool Chat::membersInvite(const QString &g) const
 {
     const auto it = m_groups.constFind(g);
-    return it != m_groups.cend() && it->state.value(QStringLiteral("mi")).toBool();
+    return it != m_groups.cend() && Limits::membersMayInvite(it->state);
+}
+
+// A group that became Family: every link this computer counts for it stops, and none are shown (17.1).
+void Chat::familyLinksOff(const QString &g)
+{
+    bool any = !m_glinkLists.value(g).isEmpty();
+    for (auto l = m_glinks.begin(); l != m_glinks.end(); ++l)
+        if (str(l.value(), "g") == g && !l.value().value(QStringLiteral("off")).toBool()) {
+            l.value().insert(QStringLiteral("off"), true);
+            any = true;
+        }
+    if (!any)
+        return;
+    m_glinkLists.remove(g);
+    sendLinks(g);
 }

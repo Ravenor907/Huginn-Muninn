@@ -1,6 +1,7 @@
 #include "chat.h"
 #include "busy.h"
 #include "settings.h"
+#include "system.h"
 #include "profile.h"
 #include "proof.h"
 #include "richwire.h"
@@ -90,12 +91,15 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     , m_vault(vault)
     , m_nostr(nostr)
     , m_ble(ble)
-    , m_settings(Settings::org(), QStringLiteral("Huginn"))
+    , m_settings(QSettings::defaultFormat(), QSettings::UserScope, Settings::org(), QStringLiteral("Huginn"))
 {
     // First of all: chats() is made again after any change (everything else reads it after this).
     connect(this, &Chat::changed, this, [this] {
         m_chatsAge.invalidate();
         Busy::count("chat changes");
+        // A group on screen in front counts as opened: its next message notifies again (Reduce notifications).
+        if (m_front && m_openChat.startsWith(QLatin1String("g:")))
+            m_notified.remove(QStringLiteral("g:") + m_openChat.mid(2).section(QLatin1Char(':'), 0, 0));
     });
     // Link previews are off for new installs. An install that already has chat settings keeps them on unless it turned them off.
     if (m_settings.contains(QStringLiteral("chat/pub")) && !m_settings.contains(QStringLiteral("chat/linkPreviews")))
@@ -194,13 +198,15 @@ void Chat::start()
     }
     m_net->chatInfo = [this] {
         QJsonObject o{{QStringLiteral("chatApp"), QStringLiteral("huginn")}};
-        // Hidden from people nearby: no name at all, not even the computer's (LocalSend's alias), no chat key,
-        // no mailbox and no hint either. Nearby sharing announces nothing then (LocalSend::silent).
+        // Nearby off: no name at all, not even the computer's (LocalSend's alias), no chat key and no mailbox, only
+        // the daily hint a contact can match. Nearby sharing announces nothing then and only answers contacts
+        // (LocalSend::silent), so this only ever goes to them.
         if (visibleNearby()) {
             o.insert(QStringLiteral("chatKey"), myKey());
             o.insert(QStringLiteral("mailbox"), m_nostr->publicKey());
         } else {
             o.insert(QStringLiteral("alias"), QStringLiteral("Huginn"));
+            o.insert(QStringLiteral("hint"), Proof::hintNow(myKey()));
         }
         if (nearbyOn())
             o.insert(QStringLiteral("chatName"), username());
@@ -216,6 +222,10 @@ void Chat::start()
     };
     m_net->hintKey = [this](const QString &h) { return Proof::keyForHint(h, m_contacts.keys(), now()); };
     m_ble->hintKey = m_net->hintKey;
+    // Nearby off: only contacts are listed and answered, asked straight where they were last seen (kept in the vault).
+    m_net->isContact = [this](const QString &k) { return m_contacts.contains(k) && !isBlocked(k) && !isTrashed(k); };
+    m_net->keepPeers = [this](const QByteArray &json) { m_vault->write(QStringLiteral("lanpeers.json"), json); };
+    m_net->loadPeers(m_vault->read(QStringLiteral("lanpeers.json")));
     m_ble->prove = [this](const QString &n) { return Proof::close(m_priv, myKey(), n); };
     m_net->chatReceive = [this](const QByteArray &body, const QString &ip) { return receive(body, QStringLiteral("wifi"), QStringLiteral("ip:") + ip); };
     // Network noise (a device nearby, Bluetooth, a relay coming and going) is told once for a burst, not every time.
@@ -232,6 +242,19 @@ void Chat::start()
         // seen for 7 days (it is tried again each time a relay sends it).
         else if (unknownDay && justRestored())
             return false;
+        return true;
+    };
+    // The relay thread opens the wrapping itself, with copies of my chat key and day keys taken here (nothing of
+    // Chat's is touched there); what it couldn't open still comes through onEnvelope above.
+    m_nostr->opener = [this]() -> Nostr::Opener {
+        const ChatCrypto::KeyPair me{m_priv, m_pub};
+        const QList<WrapKeys::Day> days = m_wrapKeys ? m_wrapKeys->kept(now() / 1000) : QList<WrapKeys::Day>();
+        return [me, days](const QString &content, bool *ok) {
+            return WrapKeys::openEnvelope(content, me, days, QDateTime::currentSecsSinceEpoch(), ok);
+        };
+    };
+    m_nostr->onOpened = [this](const QByteArray &body) {
+        receive(body, QStringLiteral("internet"));
         return true;
     };
     // Cap m1: what's on the way, pins, and saying "active" while Huginn is in front.
@@ -2305,7 +2328,7 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     QString savedAs;
     if (!fileName.isEmpty() && m_files) {
         m_files->relayInDone(id, fromKey, fileName);
-        savedAs = m_files->saveBytes(joined, fileName);
+        savedAs = m_files->saveBytes(joined, fileName, fromKey);   // Downloads/Huginn/<their name>
     }
     if (!contact) {
         QVariantMap m = m_met.value(fromKey);
@@ -2697,6 +2720,7 @@ void Chat::receipt(const QString &key, const QStringList &ids, const QString &st
 void Chat::markRead(const QString &key)
 {
     m_openChat = key;
+    m_notified.remove(key);   // opened: the next message notifies again (Reduce notifications)
     if (m_unread.remove(key))
         Q_EMIT changed();
     if (m_markedUnread.contains(key))
@@ -2929,6 +2953,9 @@ bool Chat::addPrivate(const QString &peer, const QVariantMap &m)
     while (l.size() > 1000)
         l.removeFirst();
     saveSoon();   // once for a burst of messages (and at once when Huginn closes)
+    // A chat deleted earlier is back on the list now that a message came or went.
+    if (m_clearedChats.remove(peer))
+        saveFlags();
     if (m_linked)
         m_linked->onMessage(peer, m);   // a linked companion gets it too
     noteChanged();
@@ -2987,6 +3014,36 @@ void Chat::deleteMessage(const QString &key, const QString &id)
     Q_EMIT changed();
 }
 
+void Chat::deleteChat(const QString &key)
+{
+    if (key.isEmpty() || key.startsWith(QLatin1String("g:")))
+        return;
+    // Every message of the chat goes, with its photos and voice; late copies stay gone (the deleted list).
+    QStringList ids;
+    for (const QVariant &v : m_private.take(key)) {
+        const QVariantMap m = v.toMap();
+        ids << str(m, "id");
+        if (!str(m, "photo").isEmpty())
+            m_vault->remove(QStringLiteral("photos/") + str(m, "photo"));
+        m_tries.remove(str(m, "id"));
+        dropSealed(str(m, "id"));
+    }
+    if (!ids.isEmpty())
+        forget(ids);
+    if (m_pins.remove(key))
+        savePins();
+    m_unread.remove(key);
+    m_markedUnread.remove(key);
+    m_notified.remove(key);
+    if (isContact(key)) {
+        m_clearedChats.insert(key);   // a contact (a Kids' TV too) stays one: only its row goes for now
+    } else if (m_met.remove(key)) {
+        saveMet();                    // someone nearby: forgotten, and listed again only while around
+    }
+    save();
+    saveFlags();   // says changed
+}
+
 void Chat::deleteNearbyMessage(const QString &id)
 {
     forget({id});
@@ -3028,12 +3085,18 @@ void Chat::save()
 {
     Busy::Scope busy("saving chats");
     m_chatsDirty = false;
-    QJsonObject priv;
-    for (auto it = m_private.begin(); it != m_private.end(); ++it)
-        priv.insert(it.key(), QJsonArray::fromVariantList(it.value()));
-    m_vault->write(QStringLiteral("chats.json"), QJsonDocument(priv).toJson(QJsonDocument::Compact));
-    if (keepNearby())
-        m_vault->write(QStringLiteral("nearby.json"), QJsonDocument(QJsonArray::fromVariantList(m_nearby)).toJson(QJsonDocument::Compact));
+    // Copies (shared until either side changes): made into JSON, sealed and written on the saving thread.
+    const QHash<QString, QVariantList> priv = m_private;
+    m_vault->writeLater(QStringLiteral("chats.json"), [priv] {
+        QJsonObject o;
+        for (auto it = priv.cbegin(); it != priv.cend(); ++it)
+            o.insert(it.key(), QJsonArray::fromVariantList(it.value()));
+        return QJsonDocument(o).toJson(QJsonDocument::Compact);
+    });
+    if (keepNearby()) {
+        const QVariantList nearby = m_nearby;
+        m_vault->writeLater(QStringLiteral("nearby.json"), [nearby] { return QJsonDocument(QJsonArray::fromVariantList(nearby)).toJson(QJsonDocument::Compact); });
+    }
 }
 
 void Chat::saveMet()
@@ -3067,7 +3130,7 @@ void Chat::load()
     for (auto it = priv.begin(); it != priv.end(); ++it)
         m_private.insert(it.key(), it.value().toArray().toVariantList());
     // Chats in a plain file (with a "private" section) are brought into the vault.
-    const QString old = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/chats.json");
+    const QString old = System::dataDir() + QStringLiteral("/chats.json");
     if (QFile::exists(old)) {
         QFile f(old);
         if (f.open(QIODevice::ReadOnly)) {
@@ -3136,6 +3199,9 @@ QVariantList Chat::chats() const
     for (const QString &k : keys) {
         if (isBlocked(k) || isTrashed(k))
             continue;
+        // Delete chat: off the list until a message comes or goes again. Hide: someone nearby put away for good.
+        if ((m_clearedChats.contains(k) && m_private.value(k).isEmpty()) || (m_hiddenNearby.contains(k) && !isContact(k)))
+            continue;
         const QVariantList msgs = m_private.value(k);
         const QVariantMap last = msgs.isEmpty() ? QVariantMap() : msgs.last().toMap();
         QString preview;
@@ -3163,7 +3229,7 @@ QVariantList Chat::chats() const
                            {QStringLiteral("time"), last.value(QStringLiteral("time"), 0)}, {QStringLiteral("route"), route(k)},
                            {QStringLiteral("unread"), m_unread.contains(k) || m_markedUnread.contains(k) || shouldAskKeep(k)}, {QStringLiteral("contact"), isContact(k)},
                            {QStringLiteral("folders"), foldersOf(k)}, {QStringLiteral("pinned"), m_pinnedChats.contains(k)},
-                           {QStringLiteral("archived"), m_archived.contains(k)}};
+                           {QStringLiteral("archived"), m_archived.contains(k)}, {QStringLiteral("muted"), isMuted(k)}};
     }
     // Pinned chats first, in the order they were pinned (the last one pinned on top); then the newest first.
     const QStringList pins = m_pinnedChats;
@@ -3216,23 +3282,28 @@ QVariantList Chat::messagesWith(const QString &key) const
 
 QVariantList Chat::around() const
 {
-    // Everyone reachable right now that there's no chat with yet: Bluetooth first, then Wi-Fi.
+    // Everyone reachable right now that there's no chat with yet: Bluetooth first, then Wi-Fi. "shown": the name
+    // marked as not a contact's (the Nearby section's rows), "name" the one they chose.
     QVariantList out;
     if (!visibleNearby())
         return out;   // hidden from them, so they're hidden here too
     QSet<QString> seen;
     for (const QVariant &v : m_ble->peers()) {
         const QString k = str(v.toMap(), "chatKey");
-        if (k.isEmpty() || seen.contains(k) || isBlocked(k) || isTrashed(k) || isContact(k) || !m_private.value(k).isEmpty())
+        if (k.isEmpty() || seen.contains(k) || isBlocked(k) || isTrashed(k) || isContact(k) || !m_private.value(k).isEmpty() || m_hiddenNearby.contains(k))
             continue;
         seen.insert(k);
-        out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), str(v.toMap(), "name")}, {QStringLiteral("route"), QStringLiteral("bluetooth")}};
+        out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), str(v.toMap(), "name")}, {QStringLiteral("shown"), stranger(str(v.toMap(), "name"))},
+                           {QStringLiteral("route"), QStringLiteral("bluetooth")}};
     }
     for (const LocalSend::Peer &p : m_net->chatPeers()) {
-        if (p.chatKey.isEmpty() || seen.contains(p.chatKey) || isBlocked(p.chatKey) || isTrashed(p.chatKey) || isContact(p.chatKey) || !m_private.value(p.chatKey).isEmpty())
+        if (p.chatKey.isEmpty() || seen.contains(p.chatKey) || isBlocked(p.chatKey) || isTrashed(p.chatKey) || isContact(p.chatKey) || !m_private.value(p.chatKey).isEmpty()
+            || m_hiddenNearby.contains(p.chatKey))
             continue;
         seen.insert(p.chatKey);
-        out << QVariantMap{{QStringLiteral("key"), p.chatKey}, {QStringLiteral("name"), p.chatName.isEmpty() ? p.alias : p.chatName}, {QStringLiteral("route"), QStringLiteral("wifi")}};
+        const QString name = p.chatName.isEmpty() ? p.alias : p.chatName;
+        out << QVariantMap{{QStringLiteral("key"), p.chatKey}, {QStringLiteral("name"), name}, {QStringLiteral("shown"), stranger(name)},
+                           {QStringLiteral("route"), QStringLiteral("wifi")}};
     }
     return out;
 }

@@ -1,4 +1,5 @@
 #include "localsend.h"
+#include "sharing.h"
 #include "busy.h"
 #include "proof.h"
 #include "lan.h"
@@ -29,7 +30,12 @@
 
 namespace
 {
+// LocalSend's port: multicast discovery (shared with the LocalSend app on the same device) and where plain LocalSend
+// apps serve. Our own server takes the first free port from kServerFirst instead, announced as "port".
 constexpr quint16 kPort = 53317;
+constexpr int kServerFirst = 53318;
+constexpr int kServerTries = 20;
+constexpr int kMaxPeers = 64;
 const QHostAddress kGroup(QStringLiteral("224.0.0.167"));
 const QString kApi = QStringLiteral("/api/localsend/v2");
 
@@ -97,6 +103,7 @@ LocalSend::LocalSend(Settings *settings, QObject *parent)
     m_announceTimer.setObjectName(QStringLiteral("lan announce"));
     connect(&m_announceTimer, &QTimer::timeout, this, [this] {
         announce();
+        askContacts();
         // Forget devices not heard from in 10 minutes.
         const QDateTime cutoff = QDateTime::currentDateTime().addSecs(-600);
         bool changed = false;
@@ -133,8 +140,8 @@ QJsonObject LocalSend::info(bool withAnnounce, bool announceFlag) const
                   {QStringLiteral("version"), QStringLiteral("2.1")},
                   {QStringLiteral("deviceModel"), QStringLiteral("Huginn")},
                   {QStringLiteral("deviceType"), QStringLiteral("desktop")},
-                  {QStringLiteral("fingerprint"), m_fingerprint},
-                  {QStringLiteral("port"), int(kPort)},
+                  {QStringLiteral("fingerprint"), myFingerprint()},
+                  {QStringLiteral("port"), m_port},
                   {QStringLiteral("protocol"), m_secure ? QStringLiteral("https") : QStringLiteral("http")},
                   {QStringLiteral("download"), false}};
     const bool hidden = silent && silent();
@@ -144,8 +151,9 @@ QJsonObject LocalSend::info(bool withAnnounce, bool announceFlag) const
         const QJsonObject extra = chatInfo();
         for (auto it = extra.begin(); it != extra.end(); ++it)
             o.insert(it.key(), it.value());
-        // Cap s1: the chat key vouches for this certificate (never while hidden).
-        const QString proof = m_secure && chatProve && !hidden ? chatProve(m_fingerprint) : QString();
+        // Cap s1: the chat key vouches for the certificate shown now. Nearby off, this info only goes to contacts
+        // (their announcements, their last addresses, their proven registers), so it carries the proof too.
+        const QString proof = m_secure && chatProve ? chatProve(myFingerprint()) : QString();
         if (!proof.isEmpty())
             o.insert(QStringLiteral("chatProof"), proof);
     }
@@ -231,11 +239,12 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected,
     c.setPeerVerifyMode(QSslSocket::VerifyNone);
     // Peers are addressed by IP, and the name below is not a real host name: send none.
     c.setSslOption(QSsl::SslOptionDisableServerNameIndication, true);
-    // Show our certificate: some LocalSend apps require one, and use it to prove our fingerprint. Not on a register
-    // sent while hidden (anonymous): nothing that names this computer.
+    // Show our certificate: some LocalSend apps require one, and use it to prove our fingerprint. Nearby off, the
+    // throwaway one the server shows too (what the proof in our info is for). None at all when anonymous.
     if (m_secure && !anonymous) {
-        c.setLocalCertificate(m_tls.cert);
-        c.setPrivateKey(m_tls.key);
+        const bool hidden = off() && !m_hiddenTls.localCertificate().isNull();
+        c.setLocalCertificate(hidden ? m_hiddenTls.localCertificate() : m_tls.cert);
+        c.setPrivateKey(hidden ? m_hiddenTls.privateKey() : m_tls.key);
     }
     req.setSslConfiguration(c);
     // Qt reuses open connections by host, port and this name. A name per expected fingerprint
@@ -292,8 +301,9 @@ void LocalSend::start()
 
 QSslConfiguration LocalSend::serverTls()
 {
-    if (!(silent && silent())) {
+    if (!off()) {
         m_hiddenTls = QSslConfiguration();   // visible again: the next time hidden gets a new one
+        m_hiddenFp.clear();
         return m_serverTls;
     }
     if (m_hiddenTls.localCertificate().isNull()) {
@@ -303,11 +313,12 @@ QSslConfiguration LocalSend::serverTls()
         m_hiddenTls = m_serverTls;
         m_hiddenTls.setLocalCertificate(id.cert);
         m_hiddenTls.setPrivateKey(id.key);
+        m_hiddenFp = id.fingerprint;
     }
     return m_hiddenTls;
 }
 
-void LocalSend::hiddenChanged()
+void LocalSend::applyTls()
 {
     if (!m_secure)
         return;
@@ -317,13 +328,97 @@ void LocalSend::hiddenChanged()
             tls->setSslConfiguration(cfg);
 }
 
+void LocalSend::hiddenChanged()
+{
+    applyTls();
+    if (!off())
+        return;
+    // Nearby off: nobody but contacts stays listed, and contacts are asked straight where they were last seen.
+    const auto before = m_devices.size();
+    m_devices.removeIf([this](const QHash<QString, Device>::iterator it) { return it->chatKey.isEmpty() || !isContact || !isContact(it->chatKey); });
+    if (m_devices.size() != before)
+        Q_EMIT devicesChanged();
+    askContacts();
+}
+
+bool LocalSend::mine(const QString &fp) const
+{
+    return Tls::sameFingerprint(fp, m_fingerprint) || (!m_hiddenFp.isEmpty() && Tls::sameFingerprint(fp, m_hiddenFp));
+}
+
+QString LocalSend::contactIn(const QJsonObject &o) const
+{
+    QString k = o.value(QStringLiteral("chatKey")).toString();
+    if (k.isEmpty() && hintKey)
+        k = hintKey(o.value(QStringLiteral("hint")).toString());
+    return !k.isEmpty() && isContact && isContact(k) ? k : QString();
+}
+
+void LocalSend::loadPeers(const QByteArray &json)
+{
+    const QJsonObject o = QJsonDocument::fromJson(json).object();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonObject p = it.value().toObject();
+        const QString ip = p.value(QStringLiteral("ip")).toString();
+        QHostAddress a;
+        // Only an address on a home network was ever kept; anything else is left out.
+        if (ip.isEmpty() || !a.setAddress(ip) || !Lan::isPrivate(a))
+            continue;
+        m_peers.insert(it.key(), KnownPeer{ip, p.value(QStringLiteral("protocol")).toString(QStringLiteral("https")),
+                                           p.value(QStringLiteral("port")).toInt(kServerFirst), qint64(p.value(QStringLiteral("seen")).toDouble())});
+    }
+    askContacts();
+}
+
+void LocalSend::keepPeer(const QString &key, const Device &d)
+{
+    if (!isContact || !isContact(key))
+        return;
+    const qint64 t = d.seen.toMSecsSinceEpoch();
+    const auto old = m_peers.constFind(key);
+    if (old != m_peers.constEnd() && old->ip == d.ip && old->port == d.port && old->protocol == d.protocol && t - old->seen < 6 * 3600000LL)
+        return;
+    m_peers.insert(key, KnownPeer{d.ip, d.protocol, d.port, t});
+    while (m_peers.size() > kMaxPeers) {
+        auto oldest = m_peers.begin();
+        for (auto it = m_peers.begin(); it != m_peers.end(); ++it)
+            if (it->seen < oldest->seen)
+                oldest = it;
+        m_peers.erase(oldest);
+    }
+    if (!keepPeers)
+        return;
+    QJsonObject o;
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
+        o.insert(it.key(), QJsonObject{{QStringLiteral("ip"), it->ip}, {QStringLiteral("port"), it->port}, {QStringLiteral("protocol"), it->protocol},
+                                       {QStringLiteral("seen"), double(it->seen)}});
+    keepPeers(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+void LocalSend::askContacts()
+{
+    if (!running() || !listening() || !off())
+        return;
+    const QDateTime fresh = QDateTime::currentDateTime().addSecs(-120);
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        bool heard = false;
+        for (const Device &d : std::as_const(m_devices))
+            heard = heard || (d.chatKey == it.key() && d.seen > fresh);
+        // Only on this very home network, at most once every 10 seconds per address.
+        QHostAddress a;
+        if (heard || !a.setAddress(it->ip) || !Lan::isNeighbour(a) || !asking(it->ip))
+            continue;
+        registerWith(it->ip, it->port, it->protocol, false);
+    }
+}
+
 void LocalSend::bindLan()
 {
     if (!m_on)
         return;
     Busy::Scope busy("nearby sharing: addresses");
     Lan::refresh();
-    hiddenChanged();
+    applyTls();
     const QList<QHostAddress> want = Lan::addresses();
     bool changed = false;
     // Addresses that went away (Wi-Fi off, another network): stop listening there.
@@ -356,7 +451,16 @@ void LocalSend::bindLan()
             connect(server, &QTcpServer::newConnection, this, [this, server] { onConnection(server); });
         }
         Busy::nameSocket(server, "lan server");
-        if (!server->listen(a, kPort)) {
+        // Our own port, the same on every address: the first free one from 53318 (LocalSend's app keeps 53317).
+        bool up = server->listen(a, quint16(m_port));
+        for (int p = kServerFirst; !up && m_servers.empty() && p < kServerFirst + kServerTries; ++p) {
+            if (p == m_port)
+                continue;
+            up = server->listen(a, quint16(p));
+            if (up)
+                m_port = p;
+        }
+        if (!up) {
             if (a.protocol() == QAbstractSocket::IPv4Protocol)
                 failed = a.toString();
             delete server;
@@ -377,7 +481,7 @@ void LocalSend::bindLan()
     m_joined = joined;
 
     const QString error = !failed.isEmpty() && m_servers.empty()
-                              ? QStringLiteral("Nearby sharing couldn't start. Is the LocalSend app already running on this handheld?")
+                              ? QStringLiteral("Nearby sharing couldn't start. Restart Huginn and try again.")
                               : want.isEmpty() ? QStringLiteral("Waiting for Wi-Fi: nearby sharing works on a home network only.") : QString();
     if (error != m_error) {
         m_error = error;
@@ -385,6 +489,7 @@ void LocalSend::bindLan()
     }
     if (changed) {
         announce();
+        askContacts();
         Q_EMIT stateChanged();
     }
 }
@@ -408,8 +513,8 @@ void LocalSend::stop()
 
 void LocalSend::announce()
 {
-    // Hidden from people nearby: nothing goes out on its own.
-    if (!running() || !listening() || (silent && silent()))
+    // Nearby off: nothing goes out on its own.
+    if (!running() || !listening() || off())
         return;
     Busy::Scope busy("nearby sharing: announcing");
     Busy::count("LAN announcements sent");
@@ -426,6 +531,11 @@ void LocalSend::refresh()
 {
     if (!running())
         return;
+    // Nearby off: no scan, only the contacts asked straight where they were last seen.
+    if (off()) {
+        askContacts();
+        return;
+    }
     announce();
     // Some routers drop multicast, so also ask every address on the home network directly.
     const QString me = Lan::firstIPv4();
@@ -436,8 +546,10 @@ void LocalSend::refresh()
         const QString ip = prefix + QString::number(i);
         if (ip == me)
             continue;
-        ++m_scanLeft;
+        // LocalSend apps on 53317, Huginn and Muninn on 53318 (the first port they try).
+        m_scanLeft += 2;
         registerWith(ip, kPort, QStringLiteral("https"), true);
+        registerWith(ip, kServerFirst, QStringLiteral("https"), true);
     }
     Q_EMIT devicesChanged();
 }
@@ -446,8 +558,9 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
 {
     // expected: the fingerprint the device announced (empty for a scan, which can't know it yet).
     const QString pinTo = protocol == QLatin1String("https") ? expected : QString();
-    QNetworkRequest req = makeRequest(QUrl(QStringLiteral("%1://%2:%3%4/register").arg(protocol, Lan::urlHost(ip)).arg(port).arg(kApi)), pinTo,
-                                      silent && silent());
+    // Nearby off, a register only ever goes to a contact (its announcement or its last address): it shows the certificate
+    // the proof in our info is about.
+    QNetworkRequest req = makeRequest(QUrl(QStringLiteral("%1://%2:%3%4/register").arg(protocol, Lan::urlHost(ip)).arg(port).arg(kApi)), pinTo);
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(scan ? 2500 : 5000);
     QNetworkReply *r = m_net.post(req, QJsonDocument(info(false, false)).toJson(QJsonDocument::Compact));
@@ -478,8 +591,8 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
             // The device answers, just not over HTTPS: its encryption is off.
             registerWith(ip, port, QStringLiteral("http"), scan);
             return;
-        } else if (!scan) {
-            // Couldn't reach it over HTTP: answer on multicast instead, as the protocol allows.
+        } else if (!scan && !off()) {
+            // Couldn't reach it over HTTP: answer on multicast instead, as the protocol allows (never with Nearby off).
             const QByteArray msg = QJsonDocument(info(true, false)).toJson(QJsonDocument::Compact);
             m_udp.writeDatagram(msg, kGroup, kPort);
         }
@@ -504,7 +617,7 @@ void LocalSend::onDatagrams()
             continue;   // only devices on the same home network (not a VPN or anything farther away)
         const QJsonObject o = QJsonDocument::fromJson(data).object();
         const QString fp = o.value(QStringLiteral("fingerprint")).toString();
-        if (o.isEmpty() || Tls::sameFingerprint(fp, m_fingerprint))   // our own announcement
+        if (o.isEmpty() || mine(fp))   // our own announcement
             continue;
         const QString ip = Lan::text(from);
         // A multicast message proves nothing: a device is only listed once its certificate answered (register).
@@ -514,8 +627,8 @@ void LocalSend::onDatagrams()
         const auto known = m_devices.constFind(fp.toUpper());
         if (!announce && known != m_devices.constEnd() && known->ip == ip)
             continue;
-        // Hidden: no answer to anyone's announcement (Look again still asks devices directly).
-        if (silent && silent())
+        // Nearby off: only a contact's own announcement is answered, straight to it (never on multicast).
+        if (off() && (!announce || contactIn(o).isEmpty()))
             continue;
         if (asking(ip))
             registerWith(ip, o.value(QStringLiteral("port")).toInt(kPort), o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")), !announce, fp);
@@ -532,7 +645,7 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     if (protocol == QLatin1String("https") && provenFp.isEmpty())
         return;
     QString id = provenFp.isEmpty() ? o.value(QStringLiteral("fingerprint")).toString() : provenFp;
-    if (id.isEmpty() || Tls::sameFingerprint(id, m_fingerprint))
+    if (id.isEmpty() || mine(id))
         return;
     if (protocol == QLatin1String("https"))
         id = id.toUpper();   // certificate hashes: one spelling, so a device is listed once
@@ -560,10 +673,15 @@ void LocalSend::remember(const QJsonObject &o, const QString &ip, const QString 
     const QString sig = o.value(QStringLiteral("chatProof")).toString();
     d.proven = !claimed.isEmpty() && !provenFp.isEmpty() && !sig.isEmpty() && Proof::routeOk(claimed, provenFp, sig);
     d.chatKey = d.proven || sig.isEmpty() ? claimed : QString();
+    // Nearby off: nobody but contacts is listed.
+    if (off() && (d.chatKey.isEmpty() || !isContact || !isContact(d.chatKey)))
+        return;
     d.chatName = o.value(QStringLiteral("chatName")).toString();
     d.app = o.value(QStringLiteral("chatApp")).toString();
     d.seen = QDateTime::currentDateTime();
     m_devices.insert(id, d);
+    if (d.proven)
+        keepPeer(d.chatKey, d);   // only a route its chat key proved is asked again with Nearby off
     Q_EMIT devicesChanged();
 }
 
@@ -794,7 +912,7 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             for (const InFile &x : std::as_const(m_session.files))
                 if (x.done && first.isEmpty())
                     first = QFileInfo(x.savedAs).fileName();
-            const QString where = System::displayPath(QUrl::fromLocalFile(m_settings->transferFolder()));
+            const QString where = System::displayPath(QUrl::fromLocalFile(folder()));
             endSession(!anyFailed, anyFailed ? QStringLiteral("%1 of %2 files from %3 arrived. The rest didn't make it; send them again.")
                                                    .arg(done).arg(m_session.files.size()).arg(m_session.from)
                                  : done == 1 ? QStringLiteral("File from %1: %2 · Saved to %3").arg(m_session.from, first, where)
@@ -837,6 +955,8 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
     // One that showed none proves nothing: it's asked for its certificate instead (register), never just believed.
     const QString peerFp = c.peerFp;
     const auto learn = [this, ip, peerFp](const QJsonObject &o) {
+        if (peerFp.isEmpty() && off())
+            return;   // Nearby off: nobody is asked back on their word alone
         if (peerFp.isEmpty()) {
             if (o.value(QStringLiteral("protocol")).toString(QStringLiteral("https")) != QLatin1String("https"))
                 remember(o, ip, QStringLiteral("http"));
@@ -846,12 +966,18 @@ void LocalSend::onBody(QTcpSocket *s, Conn &c)
             remember(o, ip, QStringLiteral("https"), peerFp);
         }
     };
-    // Hidden from people nearby (21.3): no answer to a scan or an info request, as if nothing were here.
-    const bool hidden = silent && silent();
-    if (hidden && (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")
-                   || path == kApi + QStringLiteral("/info") || path == QStringLiteral("/api/localsend/v1/info"))) {
-        reply(s, 404);
-        return;
+    // Nearby off (21.3): no answer to a scan or an info request, as if nothing were here. Only a contact whose
+    // chat key proved the certificate it showed here is answered (and listed).
+    const bool hidden = off();
+    const bool isRegister = path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register");
+    if (hidden && (isRegister || path == kApi + QStringLiteral("/info") || path == QStringLiteral("/api/localsend/v1/info"))) {
+        const QString k = isRegister && !peerFp.isEmpty() ? contactIn(body) : QString();
+        const bool friendly = !k.isEmpty() && Tls::sameFingerprint(body.value(QStringLiteral("fingerprint")).toString(), peerFp)
+                              && Proof::routeOk(k, peerFp, body.value(QStringLiteral("chatProof")).toString());
+        if (!friendly) {
+            reply(s, 404);
+            return;
+        }
     }
     if (path == kApi + QStringLiteral("/register") || path == QStringLiteral("/api/localsend/v1/register")) {
         {
@@ -936,7 +1062,8 @@ QVariantMap LocalSend::request() const
         shown += QStringLiteral(" and %1 more").arg(names.size() - 3);
     return {{QStringLiteral("active"), true}, {QStringLiteral("from"), m_pending.from},
             {QStringLiteral("count"), int(m_pending.files.size())}, {QStringLiteral("sizeText"), System::formatSize(total)},
-            {QStringLiteral("names"), shown}};
+            {QStringLiteral("names"), shown},
+            {QStringLiteral("folder"), System::displayPath(QUrl::fromLocalFile(Sharing::folderFor(m_settings->transferFolder(), QStringLiteral("Huginn"), m_pending.from)))}};
 }
 
 void LocalSend::accept()
@@ -1042,11 +1169,20 @@ bool LocalSend::selfTest()
         && is(QStringLiteral(".."), QStringLiteral("from-phone"));
 }
 
+QString LocalSend::folder() const
+{
+    // Like a chat's files (cap f2): Downloads/Huginn/<the device's name>, never a hidden app folder.
+    return Sharing::folderFor(m_settings->transferFolder(), QStringLiteral("Huginn"),
+                              m_session.active ? m_session.from : !m_pending.from.isEmpty() ? m_pending.from : QStringLiteral("Nearby"));
+}
+
 QString LocalSend::savePath(const QString &name) const
 {
     QStringList parts = safeParts(name);
+    for (QString &p : parts)
+        p = Sharing::safeName(p, QStringLiteral("file"));
     const QString file = parts.takeLast();
-    const QString dir = QDir(m_settings->transferFolder()).filePath(parts.join(QLatin1Char('/')));
+    const QString dir = QDir(folder()).filePath(parts.join(QLatin1Char('/')));
     QString path = QDir(dir).filePath(file);
     const QFileInfo fi(file);
     for (int n = 1; QFileInfo::exists(path); ++n) {
@@ -1092,7 +1228,9 @@ QVariantList LocalSend::items() const
     // In progress first, then the finished ones, newest first.
     for (const InFile &f : m_session.files) {
         const double frac = f.size > 0 ? double(f.received) / f.size : (f.done ? 1.0 : 0.0);
-        out << QVariantMap{{QStringLiteral("name"), QFileInfo(f.name).fileName()},
+        out << QVariantMap{{QStringLiteral("name"), QFileInfo(f.name).fileName()}, {QStringLiteral("from"), m_session.from},
+                           {QStringLiteral("size"), double(f.size)}, {QStringLiteral("done"), f.done ? double(f.size) : double(f.received)},
+                           {QStringLiteral("running"), !f.done && !f.failed},
                            {QStringLiteral("status"), f.done ? QStringLiteral("Done") : f.failed ? QStringLiteral("Didn't arrive")
                                                      : f.received == 0 ? QStringLiteral("Waiting")
                                                      : QStringLiteral("%1 of %2").arg(System::formatSize(f.received), System::formatSize(f.size))},
@@ -1131,7 +1269,8 @@ QVariantList LocalSend::outgoing() const
         const bool done = !m_send.sessionId.isEmpty() && i < m_send.next;
         const bool now = !m_send.sessionId.isEmpty() && i == m_send.next;
         const double frac = done ? 1.0 : now && f.size > 0 ? double(m_send.current) / f.size : 0.0;
-        out << QVariantMap{{QStringLiteral("name"), QFileInfo(f.path).fileName()},
+        out << QVariantMap{{QStringLiteral("name"), QFileInfo(f.path).fileName()}, {QStringLiteral("to"), m_send.alias},
+                           {QStringLiteral("size"), double(f.size)}, {QStringLiteral("done"), double(frac * f.size)},
                            {QStringLiteral("status"), done ? QStringLiteral("Sent") : now ? QStringLiteral("Sending %1%").arg(int(frac * 100)) : QStringLiteral("Waiting")},
                            {QStringLiteral("fraction"), frac}};
     }

@@ -7,9 +7,11 @@
 #include "localsend.h"
 #include "platform/chime.h"
 #include "platform/notify.h"
+#include "platform/portable.h"
 #include "settings.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QJsonArray>
@@ -29,8 +31,6 @@
 
 namespace
 {
-constexpr int kPort = 53317;
-
 struct Run {
     Chat *chat = nullptr;
     LocalSend *net = nullptr;
@@ -61,7 +61,7 @@ struct Run {
     }
     QNetworkRequest request(const QString &path) const
     {
-        QNetworkRequest r(QUrl(QStringLiteral("https://%1:%2%3").arg(ip).arg(kPort).arg(path)));
+        QNetworkRequest r(QUrl(QStringLiteral("https://%1:%2%3").arg(ip).arg(net->serverPort()).arg(path)));
         QSslConfiguration c = QSslConfiguration::defaultConfiguration();
         c.setPeerVerifyMode(QSslSocket::VerifyNone);
         r.setSslConfiguration(c);
@@ -171,6 +171,8 @@ void begin(Run *run)
 #endif
     run->check("raven call loaded", run->chime->ready());
     run->check("Huginn is listening on the home network", run->net->listening());
+    // LocalSend's own app keeps 53317 (discovery stays shared): Huginn's server is on the first free port from 53318.
+    run->check("Huginn's server leaves 53317 to the LocalSend app", run->net->serverPort() >= 53318 && run->net->serverPort() < 53338);
     run->ip = Lan::firstIPv4();
     std::printf("wifi home network address: %s\n", run->ip.isEmpty() ? "none" : qPrintable(run->ip));
     if (run->ip.isEmpty()) {
@@ -181,7 +183,7 @@ void begin(Run *run)
     // Nothing but the home network: 127.0.0.1 must not answer.
     {
         QTcpSocket probe;
-        probe.connectToHost(QHostAddress::LocalHost, kPort);
+        probe.connectToHost(QHostAddress::LocalHost, quint16(run->net->serverPort()));
         run->check("not listening on 127.0.0.1", !probe.waitForConnected(2000));
         probe.abort();
     }
@@ -208,6 +210,29 @@ void begin(Run *run)
         run->check("a forgotten group and a deleted folder are gone from disk",
                    (g.isEmpty() || !c->savedFile(QStringLiteral("groups.json")).contains(g.toUtf8()))
                        && (f.isEmpty() || !c->savedFile(QStringLiteral("folders.json")).contains(f.toUtf8())));
+        // Mute, Reduce notifications, mentions only and Hide (chatpeople.cpp), the same rules as Muninn's ChatFlags.
+        const QString k = QStringLiteral("self-test-quiet");
+        c->muteChat(k, QDateTime::currentMSecsSinceEpoch() + 15 * 60000);
+        run->check("a chat muted for 15 minutes is muted and makes no notification", c->isMuted(k) && c->mutedUntil(k) > 0 && !c->notifyFor(k));
+        c->muteChat(k, 0);
+        run->check("unmuted, every message notifies", !c->isMuted(k) && c->notifyMode(k) == QLatin1String("every") && c->notifyFor(k) && c->notifyFor(k));
+        c->setReduceNotifications(true);
+        const bool first = c->notifyFor(k), second = c->notifyFor(k);
+        c->markRead(k);
+        run->check("Reduce notifications: one per chat until it's opened", c->notifyMode(k) == QLatin1String("one") && first && !second && c->notifyFor(k));
+        c->setNotifyMode(k, QStringLiteral("every"));
+        run->check("a chat's own choice wins over Reduce notifications", c->notifyFor(k) && c->notifyFor(k));
+        c->setNotifyMode(k, QString());
+        c->setReduceNotifications(false);
+        c->setNotifyMode(QStringLiteral("g:self-test"), QStringLiteral("mentions"));
+        run->check("a group set to mentions only: an @mention notifies, the rest don't",
+                   !c->notifyFor(QStringLiteral("g:self-test:main"), QStringLiteral("Ann in Test"))
+                       && c->notifyFor(QStringLiteral("g:self-test:main"), QStringLiteral("Ann mentioned you in Test")));
+        run->check("mentions only is for groups", c->notifyMode(k) == QLatin1String("every"));
+        c->setNotifyMode(QStringLiteral("g:self-test"), QString());
+        c->hideNearby(k);
+        run->check("someone nearby put away with Hide stays hidden, with no notifications", c->isHiddenNearby(k) && !c->notifyFor(k)
+                   && c->savedFile(QStringLiteral("chatflags.json")).size() > 0);
     } else {
         std::printf("wifi groups and folders: chat not open, not checked\n");
     }
@@ -235,6 +260,7 @@ void begin(Run *run)
         if (r->error() != QNetworkReply::NoError)
             std::printf("wifi register error: %s\n", qPrintable(r->errorString()));
         run->check("HTTPS register answered with Huginn's chat key", o.value(QStringLiteral("chatKey")).toString() == run->huginnKey);
+        run->check("the register answer says where Huginn's server is", o.value(QStringLiteral("port")).toInt() == run->net->serverPort());
         sendFirst(run);
     });
 }
@@ -244,11 +270,12 @@ namespace WifiSelfTest
 {
 void isolate()
 {
-    // Settings::org(): the settings (the registry on Windows) under their own name, emptied first. Set before the
-    // folders below, whose names follow it.
+    // Settings::org(): the settings under their own name, emptied first. Set before the folders below, whose names
+    // follow it. The Windows portable build's data folder (its settings file too) goes to the temp folder instead.
     QCoreApplication::setOrganizationName(QStringLiteral("HuginnSelfTest"));
     QStandardPaths::setTestModeEnabled(true);
-    QSettings(Settings::org(), QStringLiteral("Huginn")).clear();
+    Portable::isolate();
+    Settings::store().clear();
     for (const auto where : {QStandardPaths::AppDataLocation, QStandardPaths::AppLocalDataLocation})
         QDir(QStandardPaths::writableLocation(where)).removeRecursively();
     QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QLatin1Char('/') + Settings::org()).removeRecursively();

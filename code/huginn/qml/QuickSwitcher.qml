@@ -69,6 +69,7 @@ Item {
             Text { textFormat: Text.PlainText; id: askText; width: parent.width; elide: Text.ElideRight; text: "Go to a chat or channel"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14) }
             TextField {
                 id: field
+                FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                 width: parent.width
                 height: Math.max(Theme.px(46), implicitHeight)
                 leftPadding: Theme.px(14)

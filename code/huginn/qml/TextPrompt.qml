@@ -20,6 +20,12 @@ Item {
     property var choices: []
     property string choice: ""
     property string choicesLabel: ""
+    // Optional, set after opening: a small link under the choices that shows more words in place (like the rules of
+    // each group type). Choices with a "detail" show as cards with that line under the name.
+    property string moreLabel: ""
+    property string moreText: ""
+    property bool moreOpen: false
+    readonly property bool cards: choices.some(c => !!c.detail)
     signal accepted(string text)
     signal cancelled()
 
@@ -43,6 +49,9 @@ Item {
         choices = opts || []
         choice = pick || (choices.length ? choices[0].value : "")
         choicesLabel = optsLabel || ""
+        moreLabel = ""
+        moreText = ""
+        moreOpen = false
         draftKey = t + "|" + (ctx || "") + "|" + (initial || "")
         const draft = isPassword ? "" : (drafts[draftKey] || "")
         field.text = draft || initial || ""
@@ -149,6 +158,7 @@ Item {
             }
             TextField {
                 id: field
+                FieldMenu {}   // right click: Cut, Copy, Paste, Select all
                 width: parent.width
                 height: Math.max(Theme.px(40), implicitHeight)
                 leftPadding: Theme.px(10)
@@ -187,27 +197,67 @@ Item {
                     Rectangle {
                         readonly property bool on: prompt.choice === modelData.value
                         width: (parent.width - Theme.px(6) * (prompt.choices.length - 1)) / Math.max(1, prompt.choices.length)
-                        height: Theme.px(36)
+                        height: prompt.cards ? Math.max(Theme.px(84), cardCol.implicitHeight + Theme.px(16)) : Theme.px(36)
                         radius: Theme.radius
                         color: on ? Theme.accentFill : chHover.hovered ? Theme.raised : "transparent"
                         border.color: on ? Theme.accent : Theme.line
                         Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.label
+                        Accessible.description: modelData.detail || ""
                         Accessible.checked: on
-                        Text {
-                            textFormat: Text.PlainText
+                        Column {
+                            id: cardCol
                             anchors.centerIn: parent
-                            width: parent.width - Theme.px(8)
-                            horizontalAlignment: Text.AlignHCenter
-                            elide: Text.ElideRight
-                            text: modelData.label
-                            color: parent.on ? Theme.accent : Theme.textSoft
-                            font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                            width: parent.width - Theme.px(prompt.cards ? 16 : 8)
+                            spacing: Theme.px(4)
+                            Text {
+                                textFormat: Text.PlainText
+                                width: parent.width
+                                horizontalAlignment: prompt.cards ? Text.AlignLeft : Text.AlignHCenter
+                                elide: Text.ElideRight
+                                text: modelData.label
+                                color: cardCol.parent.on ? Theme.accent : prompt.cards ? Theme.text : Theme.textSoft
+                                font.family: Theme.body; font.pixelSize: Theme.fs(prompt.cards ? 15 : 13)
+                                font.bold: prompt.cards
+                            }
+                            Text {
+                                textFormat: Text.PlainText
+                                visible: prompt.cards
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: modelData.detail || ""
+                                color: Theme.textMuted
+                                font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                            }
                         }
                         HoverHandler { id: chHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler { onTapped: prompt.choice = modelData.value }
                     }
                 }
+            }
+            Text {
+                textFormat: Text.PlainText
+                visible: prompt.moreLabel.length > 0
+                topPadding: Theme.px(8)
+                text: prompt.moreLabel
+                color: moreHover.hovered ? Theme.accent : Theme.textSoft
+                font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                font.underline: true
+                Accessible.role: Accessible.Button
+                Accessible.name: text
+                HoverHandler { id: moreHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: prompt.moreOpen = !prompt.moreOpen }
+            }
+            Text {
+                textFormat: Text.PlainText
+                visible: prompt.moreOpen && prompt.moreText.length > 0
+                width: parent.width
+                wrapMode: Text.WordWrap
+                topPadding: Theme.px(6)
+                text: prompt.moreText
+                color: Theme.textSoft
+                font.family: Theme.body; font.pixelSize: Theme.fs(12)
+                lineHeight: 1.2
             }
             Item { width: 1; height: Theme.px(14) }
         }
@@ -233,6 +283,7 @@ Item {
         case "a": case "start": accept(); return true
         case "b": cancel(); return true
         case "y": field.forceActiveFocus(); System.showSteamKeyboard(); return true
+        case "x": if (moreLabel.length) moreOpen = !moreOpen; return true
         case "left": case "right":
             if (choices.length) {
                 const i = Math.max(0, choices.findIndex(c => c.value === choice))

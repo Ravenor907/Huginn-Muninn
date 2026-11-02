@@ -17,6 +17,8 @@
 
 #include <QDateTime>
 #include <QGuiApplication>
+#include <QScreen>
+#include <QWindowCapture>
 #include <QJsonArray>
 #include <QUrl>
 #include <algorithm>
@@ -53,10 +55,13 @@ RoomManager::RoomManager(CallSignal *signal, CallManager *calls, LoginFetcher lo
         }
         announce(false);
     });
+    // Cap v2 (6.8): "still here" every 10 s while in a room, so someone whose app died leaves within a minute.
+    m_beat.setInterval(int(RoomWire::kHeartbeatMs));
+    connect(&m_beat, &QTimer::timeout, this, &RoomManager::heartbeat);
     m_ticker.setInterval(1000);
     connect(&m_ticker, &QTimer::timeout, this, &RoomManager::tick);
-    // Presence ages out after 25 minutes without news: look again now and then.
-    m_presenceTick.setInterval(60000);
+    // Presence ages out (25 minutes without news, or 20 s and 60 s for an app that sends heartbeats): look again often.
+    m_presenceTick.setInterval(5000);
     connect(&m_presenceTick, &QTimer::timeout, this, [this] {
         ++m_serial;
         Q_EMIT presenceChanged();
@@ -90,6 +95,49 @@ RoomManager::~RoomManager()
 }
 
 QString RoomManager::me() const { return m_signal->myKey(); }
+
+bool RoomManager::beats(const QString &key) const { return m_signal->hasCap(key, QString::fromLatin1(RoomWire::kHeartbeatCap)); }
+
+void RoomManager::heartbeat()
+{
+    if (!inRoom())
+        return;
+    // Cap g2: timed out or banned here while in the room: out of it.
+    if (barred && barred(m_g, me())) {
+        m_endText = joinBlock ? joinBlock(m_g) : QString();
+        const QString text = m_endText;
+        leave();
+        if (!text.isEmpty())
+            Q_EMIT finished(text);
+        return;
+    }
+    for (const QString &k : members(m_g))
+        if (beats(k))
+            sendRoom(QStringLiteral("vjoin"), k, m_g, m_ch);
+    // Someone with v2 who hasn't been heard from for 60 s and whose call isn't up is out of the room.
+    const qint64 t = now();
+    bool gone = false;
+    for (const QString &k : m_peers.keys()) {
+        const Peer p = m_peers.value(k);
+        if (!beats(k) || (p.s && p.s->state() == CallSession::Active) || now() - m_joinedAt < RoomWire::kGoneMs)
+            continue;
+        if (m_presence.state(m_g, m_ch, k, t) == 0) {
+            dropSession(k);
+            gone = true;
+        }
+    }
+    // Cap g2: someone timed out or banned while in the room leaves it here.
+    for (const QString &k : m_peers.keys())
+        if (barred && barred(m_g, k)) {
+            dropSession(k);
+            gone = true;
+        }
+    if (gone) {
+        ++m_serial;
+        Q_EMIT presenceChanged();
+        Q_EMIT changed();
+    }
+}
 
 QString RoomManager::nameOf(const QString &g, const QString &key) const
 {
@@ -151,6 +199,14 @@ QVariantList RoomManager::people() const
         others << QVariantMap{{QStringLiteral("key"), it.key()}, {QStringLiteral("name"), nameOf(m_g, it.key())}, {QStringLiteral("me"), false},
                               {QStringLiteral("speaking"), s->media() && s->media()->speaking()}, {QStringLiteral("muted"), s->peerMuted()},
                               {QStringLiteral("state"), state}};
+    }
+    // Cap v2 (6.8): still saying they're here, but their call dropped: Reconnecting until it's back or they're gone.
+    const qint64 t = now();
+    for (const QString &k : m_presence.in(m_g, m_ch, t)) {
+        if (k == me() || (m_peers.value(k).s && m_peers.value(k).s->state() != CallSession::Ended) || !beats(k))
+            continue;
+        others << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), nameOf(m_g, k)}, {QStringLiteral("me"), false},
+                              {QStringLiteral("speaking"), false}, {QStringLiteral("muted"), false}, {QStringLiteral("state"), QStringLiteral("reconnecting")}};
     }
     std::sort(others.begin(), others.end(), [](const QVariant &a, const QVariant &b) {
         return a.toMap().value(QStringLiteral("name")).toString().toLower() < b.toMap().value(QStringLiteral("name")).toString().toLower();
@@ -215,6 +271,11 @@ QString RoomManager::join(const QString &g, const QString &ch)
     const QJsonObject st = groupState ? groupState(g) : QJsonObject();
     if (st.isEmpty() || !GroupWire::isMember(st, me()))
         return QStringLiteral("You're not in this group anymore.");
+    if (joinBlock) {
+        const QString why = joinBlock(g);
+        if (!why.isEmpty())
+            return why;   // timed out or banned (cap g2)
+    }
     if (!RoomWire::isGroupCall(ch) && str(GroupWire::channel(st, ch), "t") != QLatin1String("voice"))
         return QStringLiteral("That isn't a voice room.");
     if (inRoom()) {
@@ -254,6 +315,7 @@ QString RoomManager::join(const QString &g, const QString &ch)
                 announce(true);
         });
     m_announce.start();
+    m_beat.start();
     m_ticker.start();
     ++m_serial;
     Q_EMIT presenceChanged();
@@ -282,6 +344,8 @@ void RoomManager::leave()
             p.s->deleteLater();
         }
     m_announce.stop();
+    m_beat.stop();
+    m_offered.clear();
     m_ticker.stop();
     m_clock.invalidate();
     stopShare();
@@ -458,13 +522,17 @@ QVariantList RoomManager::whoIn(const QString &g, const QString &ch) const
     QVariantList out;
     if (mine)
         out << QVariantMap{{QStringLiteral("key"), me()}, {QStringLiteral("name"), QStringLiteral("You")}, {QStringLiteral("me"), true},
-                           {QStringLiteral("speaking"), !m_muted && m_mySpeaking.on()}};
+                           {QStringLiteral("speaking"), !m_muted && m_mySpeaking.on()}, {QStringLiteral("state"), QStringLiteral("live")}};
+    const qint64 t = now();
     for (const QString &k : keys) {
         if (k == me())
             continue;
         const Peer p = m_peers.value(k);
+        const bool live = mine && p.s && p.s->state() == CallSession::Active;
+        const bool quiet = !live && ((mine && p.s && p.s->state() == CallSession::Reconnecting) || m_presence.state(g, ch, k, t) == 2);
         out << QVariantMap{{QStringLiteral("key"), k}, {QStringLiteral("name"), nameOf(g, k)}, {QStringLiteral("me"), false},
-                           {QStringLiteral("speaking"), mine && p.s && p.s->media() && p.s->media()->speaking()}};
+                           {QStringLiteral("speaking"), mine && p.s && p.s->media() && p.s->media()->speaking()},
+                           {QStringLiteral("state"), quiet ? QStringLiteral("reconnecting") : QStringLiteral("live")}};
     }
     return out;
 }
@@ -631,20 +699,28 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
     const bool fresh = verdict == QLatin1String("ok");
     if (!fresh && verdict != QLatin1String("stale"))
         return;   // refused (6.2)
+    // Cap g2: someone timed out or banned doesn't join, ring or show up in this group's rooms (a leave still counts).
+    if (barred && barred(g, from) && t != QLatin1String("vleave"))
+        return;
     const bool here = isIn(g, ch);
     if (t == QLatin1String("vjoin") || t == QLatin1String("vleave")) {
-        if (m_presence.apply(from, msg, now())) {
+        if (m_presence.apply(from, msg, now(), beats(from), fresh)) {
             ++m_serial;
             Q_EMIT presenceChanged();
         }
         if (t == QLatin1String("vjoin")) {
-            if (fresh && here && !m_peers.value(from).s) {
+            // A heartbeat from someone with no call here: offered again at most every 30 s (a pair that can't connect
+            // doesn't try every 10 s).
+            if (fresh && here && !m_peers.value(from).s && now() - m_offered.value(from) >= 30000) {
                 if (RoomWire::full(peerCount()))
                     sendRoom(QStringLiteral("full"), from, g, ch);
-                else
+                else {
+                    m_offered.insert(from, now());
                     offerTo(from);
+                }
             }
         } else {
+            m_offered.remove(from);
             if (here && m_peers.value(from).s) {
                 const Peer p = m_peers.take(from);
                 p.s->disconnect(this);
@@ -672,6 +748,11 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
             Q_EMIT logged(g, text, true);
             return;
         }
+        // A muted group: no ringing, just a line in the group (its voice room rows show who is in).
+        if (hushedFor && hushedFor(g)) {
+            Q_EMIT logged(g, QStringLiteral("Missed group call from %1").arg(nameOf(g, from)), true);
+            return;
+        }
         startRing(from, g, ch);
         return;
     }
@@ -694,7 +775,7 @@ void RoomManager::onRoomOffer(const QString &from, const QJsonObject &msg)
     if (why == QLatin1String("signature") || why == QLatin1String("malformed") || why == QLatin1String("stale"))
         return;
     const QJsonObject st = groupState ? groupState(g) : QJsonObject();
-    if (!isIn(g, ch) || !GroupWire::isMember(st, from) || why == QLatin1String("codec")) {
+    if (!isIn(g, ch) || !GroupWire::isMember(st, from) || why == QLatin1String("codec") || (barred && barred(g, from))) {
         m_signal->send(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), call}});
         return;
     }
@@ -766,6 +847,12 @@ void RoomManager::shareTo(CallSession *s, bool on)
         m_share->requestKey();
 }
 
+bool RoomManager::sharePicker() const
+{
+    // Wayland and the Flatpak go through the desktop portal, whose own dialog asks what to share.
+    return !QGuiApplication::platformName().startsWith(QLatin1String("wayland")) && qEnvironmentVariableIsEmpty("FLATPAK_ID");
+}
+
 void RoomManager::toggleShare()
 {
     if (m_share) {
@@ -775,7 +862,70 @@ void RoomManager::toggleShare()
     }
     if (!inRoom() || !vpxAvailable())
         return;
+    if (sharePicker()) {
+        Q_EMIT pickShare();
+        return;
+    }
+    const QString why = startShare([](VideoSender *) {}, QStringLiteral("Your screen"));
+    if (!why.isEmpty())
+        Q_EMIT finished(why);
+}
+
+QVariantList RoomManager::shareWindows()
+{
+    m_windows.clear();
+    QVariantList out;
+    for (const QCapturableWindow &w : QWindowCapture::capturableWindows()) {
+        if (!w.isValid() || w.description().trimmed().isEmpty())
+            continue;
+        out << QVariantMap{{QStringLiteral("i"), int(m_windows.size())}, {QStringLiteral("title"), w.description().trimmed()},
+                           {QStringLiteral("window"), QVariant::fromValue(w)}};
+        m_windows << w;
+        if (m_windows.size() >= 24)
+            break;
+    }
+    return out;
+}
+
+QVariantList RoomManager::shareScreens() const
+{
+    QVariantList out;
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    for (int i = 0; i < int(screens.size()); ++i) {
+        const QSize sz = screens.at(i)->size() * screens.at(i)->devicePixelRatio();
+        out << QVariantMap{{QStringLiteral("i"), i}, {QStringLiteral("name"), QStringLiteral("Screen %1").arg(i + 1)},
+                           {QStringLiteral("size"), QStringLiteral("%1 %2 %3").arg(sz.width()).arg(QChar(0x00D7)).arg(sz.height())},
+                           {QStringLiteral("primary"), screens.at(i) == QGuiApplication::primaryScreen()}};
+    }
+    return out;
+}
+
+QString RoomManager::shareWindow(int i)
+{
+    if (i < 0 || i >= int(m_windows.size()) || !m_windows.at(i).isValid())
+        return QStringLiteral("That window is closed. Pick another.");
+    const QCapturableWindow w = m_windows.at(i);
+    return startShare([w](VideoSender *v) { v->setWindow(w); }, w.description().trimmed());
+}
+
+QString RoomManager::shareScreen(int i)
+{
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    if (i < 0 || i >= int(screens.size()))
+        return QStringLiteral("That screen isn't there anymore.");
+    QScreen *screen = screens.at(i);
+    return startShare([screen](VideoSender *v) { v->setScreen(screen); }, QStringLiteral("Screen %1").arg(i + 1));
+}
+
+QString RoomManager::startShare(const std::function<void(VideoSender *)> &aim, const QString &title)
+{
+    if (m_share)
+        stopShare();
+    if (!inRoom() || !vpxAvailable())
+        return QStringLiteral("Join a voice room first.");
     m_share = new VideoSender(VideoSender::Screen, this);
+    aim(m_share);
+    m_shareTitle = title;
     connect(m_share, &VideoSender::encoded, this, [this](const QByteArray &vp8, bool key) {
         // Encoded once, sealed for each person with that pair's keys.
         for (const Peer &p : std::as_const(m_peers))
@@ -784,7 +934,7 @@ void RoomManager::toggleShare()
     });
     connect(m_share, &VideoSender::failed, this, [this](const QString &) {
         stopShare();
-        Q_EMIT finished(QStringLiteral("Screen sharing stopped: the screen can't be captured"));
+        Q_EMIT finished(QStringLiteral("Sharing stopped: it can't be captured anymore"));
         Q_EMIT changed();
     });
     // The size and bitrate everyone can take: the relay profile as soon as one of them is on the relay.
@@ -799,8 +949,8 @@ void RoomManager::toggleShare()
     if (!m_share->start()) {
         m_share->deleteLater();
         m_share = nullptr;
-        Q_EMIT finished(QStringLiteral("There is no screen to share"));
-        return;
+        Q_EMIT changed();
+        return QStringLiteral("That can't be shared. Pick another.");
     }
     for (const Peer &p : std::as_const(m_peers))
         shareTo(p.s, true);
@@ -821,6 +971,7 @@ void RoomManager::toggleShare()
     });
     m_shareRate.start();
     Q_EMIT changed();
+    return QString();
 }
 
 void RoomManager::stopShare()

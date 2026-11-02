@@ -1,5 +1,5 @@
 // Message limits (cap d1, shared/docs/protocol.md section 16), the Chat side: every chat deletes messages
-// older than its limit, with their photos and voice; a Family or Work group's limit rides in its signed
+// older than its limit, with their photos and voice; a Family group's limit rides in its signed
 // state, each side of a 1:1 chat says its own in "days" and the shorter one counts. Limits has the rules.
 #include "chat.h"
 #include "groupwire.h"
@@ -92,11 +92,79 @@ QVariantMap Chat::groupLimit(const QString &g) const
     for (const QString &k : GroupWire::keysOf(s))
         if (k != myKey() && capsKnown(k) && !hasD1(k))
             older << memberName(g, k);
+    const QString type = Limits::groupType(s);
+    // Family: each member's safety code is checked once ("Checked" in the member list).
+    QStringList unchecked;
+    if (type == QLatin1String(Limits::kFamily))
+        for (const QString &k : GroupWire::keysOf(s))
+            if (k != myKey() && !isVerified(k))
+                unchecked << k;
     return {{QStringLiteral("kind"), kind},
             {QStringLiteral("kindName"), Limits::kindName(kind)},
+            {QStringLiteral("type"), type},
+            {QStringLiteral("typeName"), Limits::typeName(type)},
+            {QStringLiteral("line"), Limits::typeLine(type)},
+            {QStringLiteral("links"), Limits::linksAllowed(s)},
+            {QStringLiteral("unchecked"), unchecked},
             {QStringLiteral("days"), Limits::groupDays(s)},
             {QStringLiteral("older"), older},
             {QStringLiteral("choices"), QVariantList{7, 14, 30}}};
+}
+
+QVariantList Chat::groupTypes() const
+{
+    QVariantList out;
+    for (const char *t : {Limits::kFolk, Limits::kFamily}) {
+        const QString type = QString::fromLatin1(t);
+        out << QVariantMap{{QStringLiteral("type"), type}, {QStringLiteral("name"), Limits::typeName(type)},
+                           {QStringLiteral("line"), Limits::typeLine(type)}, {QStringLiteral("rules"), Limits::typeRules(type)}};
+    }
+    return out;
+}
+
+bool Chat::inFamilyGroup(const QString &key) const
+{
+    for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it)
+        if (!it->state.isEmpty() && !it->removed && !it->left && Limits::groupType(it->state) == QLatin1String(Limits::kFamily)
+            && GroupWire::isMember(it->state, key))
+            return true;
+    return false;
+}
+
+void Chat::familySync()
+{
+    // Members of my Family groups who are contacts go in my Family folder, once each: moved out by hand, they stay out
+    // (the folder's "auto" list remembers who was put there).
+    if (!m_ready)
+        return;
+    int at = -1;
+    for (int i = 0; i < int(m_folders.size()); ++i)
+        if (m_folders.at(i).value(QStringLiteral("name")).toString() == QLatin1String("Family"))
+            at = i;
+    QStringList want;
+    for (auto it = m_groups.cbegin(); it != m_groups.cend(); ++it) {
+        if (it->state.isEmpty() || it->removed || it->left || Limits::groupType(it->state) != QLatin1String(Limits::kFamily))
+            continue;
+        for (const QString &k : GroupWire::keysOf(it->state))
+            if (k != myKey() && isContact(k) && !want.contains(k))
+                want << k;
+    }
+    if (want.isEmpty() || at < 0)
+        return;   // no Family folder (deleted by hand): nothing is made again
+    QStringList done = m_folders.at(at).value(QStringLiteral("auto")).toStringList();
+    const QString id = m_folders.at(at).value(QStringLiteral("id")).toString();
+    bool any = false;
+    for (const QString &k : std::as_const(want))
+        if (!done.contains(k)) {
+            done << k;
+            any = true;
+            if (!m_folders.at(at).value(QStringLiteral("keys")).toStringList().contains(k))
+                setInFolder(id, k, true);
+        }
+    if (!any)
+        return;
+    m_folders[at].insert(QStringLiteral("auto"), done);
+    saveFolders();
 }
 
 QString Chat::setGroupLimit(const QString &g, const QString &kind, int days)
@@ -208,6 +276,7 @@ void Chat::pruneToLimits()
     // A linked phone's chats on this computer (companion) go by the phone's limits too.
     if (m_linked)
         m_linked->prune(t);
+    familySync();
     if (changedAny || groupsChanged)
         Q_EMIT changed();
 }

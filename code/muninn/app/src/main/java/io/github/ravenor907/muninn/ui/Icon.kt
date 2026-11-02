@@ -48,6 +48,10 @@ object Icons {
         "wifi" to "M2 9a15 15 0 0 1 20 0 M5 12.5a10 10 0 0 1 14 0 M8.5 16a5 5 0 0 1 7 0 M12 19.5h0.01",
         "user" to "M12 4a4 4 0 1 0 0.01 0 M4 21a8 8 0 0 1 16 0",
         "mute" to "M4 9h4l5-4v14l-5-4H4z M16 9l5 6 M21 9l-5 6",
+        // A speaker with sound: a chat that isn't muted (its header's Mute button).
+        "sound" to "M4 9h4l5-4v14l-5-4H4z M16 9a4 4 0 0 1 0 6 M18.5 6.5a7.5 7.5 0 0 1 0 11",
+        // An eye struck through: Hide, for someone nearby.
+        "hide" to "M2 12c3-5 6.5-7 10-7s7 2 10 7c-3 5-6.5 7-10 7s-7-2-10-7z M12 9a3 3 0 1 0 0.01 0 M4 4l16 16",
         "close" to "M5 5l14 14 M19 5L5 19",
         "plus" to "M12 5v14 M5 12h14",
         "mic" to "M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5 11a7 7 0 0 0 14 0 M12 18v3",

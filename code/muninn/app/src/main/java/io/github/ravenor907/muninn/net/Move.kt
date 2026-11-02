@@ -107,7 +107,7 @@ object Move {
         if (cur != null && cur.optString("state") in setOf("hello", "receiving")) return cur.getString("code")
         val kp = ChatCrypto.newKeyPair()
         val secret = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-        val addrs = mine().map { it.first }.filter { MoveWire.lanIp(it) }.map { "$it:${LocalSend.PORT}" }
+        val addrs = mine().map { it.first }.filter { MoveWire.lanIp(it) }.map { "$it:${if (a.ready.value) a.net.serverPort else LocalSend.SERVER_FIRST}" }
         val code = MoveWire.code(MoveWire.Code(addrs, ChatCrypto.b64(kp.public.encoded), secret, a.identity.deviceName.take(40), "muninn"))
         put(a, "in", JSONObject().put("state", "shown").put("code", code).put("priv", ChatCrypto.b64(kp.private.encoded))
             .put("pub", ChatCrypto.b64(kp.public.encoded)).put("s", ChatCrypto.b64(secret)))

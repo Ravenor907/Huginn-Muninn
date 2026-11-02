@@ -10,6 +10,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
 #include <functional>
@@ -31,11 +32,16 @@ class StunProbe;
 class FileLink : public QObject
 {
     Q_OBJECT
-    // Every transfer this run: [{id, peer, name, size, mine, state, done, note, path, wifi}]. state: "connecting",
-    // "offered", "asking" (a big file waiting for Accept or Decline), "sending", "done", "failed". path: mine, the
-    // file sent; theirs, where it was saved once done. wifi: too big for the internet route (Send on Wi-Fi).
-    // A file of theirs coming over the internet route shows too (id: its message id), until its message is in.
+    // Every transfer this run: [{id, peer, where, chat, name, size, mine, state, done, note, path, route, pace, paused,
+    // held, kind, folder, group, relay}]. state: "connecting", "offered", "asking" (waiting for Accept or Decline),
+    // "sending", "done", "failed". where: the chat it belongs to (their key, or "g:<group>"); chat: its name. path:
+    // mine, the file sent; theirs, where it was saved once done. route: "Direct" (the same Wi-Fi) or "Over the internet"
+    // (empty until known). pace: "2.1 MB/s · 12 s left". folder: where theirs is saved, as words. relay: a file of mine
+    // going as a message over the internet route (its message shows it in the chat). A file of theirs coming over the
+    // internet route shows too (id: its message id), until its message is in.
     Q_PROPERTY(QVariantList transfers READ transfers NOTIFY changed)
+    // Running or waiting for an answer here: the Transfers button's count.
+    Q_PROPERTY(int activeCount READ activeCount NOTIFY changed)
 
 public:
     static const char kCap[];                   // "f1"
@@ -68,7 +74,8 @@ public:
     static QString leftText(qint64 seconds);
     static QString sizeText(qint64 bytes);
     static QString iconFor(const QString &name);
-    enum Type : quint8 { Probe = 1, Data = 2, Ack = 3, Done = 4 };
+    // Hold (cap f2, 27.5): 1 byte, 1 paused or 0 going again. Any side sends it every second while paused.
+    enum Type : quint8 { Probe = 1, Data = 2, Ack = 3, Done = 4, Hold = 5 };
 
     // What the sender keeps: which pieces went when, which are confirmed.
     class Sender
@@ -117,9 +124,30 @@ public:
     explicit FileLink(Chat *chat, QObject *parent = nullptr);
     ~FileLink() override;
 
-    // Sends a file to a contact: straight when both trust each other, through the relays when it's
-    // 2 MB or less and can't go straight. "" when it's on its way, else what to tell the person.
-    Q_INVOKABLE QString send(const QString &peer, const QString &path);
+    // Sends a file to someone, by the best route (Sharing::route): the same Wi-Fi, straight over the internet when both
+    // trust each other, through the relays when it's 2 MB or less. group: it's that group's file (27.2). "" when it's on
+    // its way (its card says how it goes), else what to tell the person.
+    Q_INVOKABLE QString send(const QString &peer, const QString &path, const QString &group = QString());
+    // The one way to send (Send file, drag and drop): files to a chat, their key or "g:<group>[:<channel>]". In a group,
+    // once to each member, after the group's own file rules said yes. "" when on their way, else why not.
+    Q_INVOKABLE QString sendTo(const QString &where, const QVariantList &urls);
+    // Pause and go on (cap f2): either side, while it moves.
+    Q_INVOKABLE void pause(const QString &id);
+    Q_INVOKABLE void resume(const QString &id);
+    Q_INVOKABLE bool canPause(const QString &id) const;
+    Q_INVOKABLE bool canResume(const QString &id) const;
+    // Accept, and from now on their files arrive without asking ("Always from this person").
+    Q_INVOKABLE void acceptAlways(const QString &id);
+    // A chat's Files: everything sent and received there, newest first: [{name, size, path, mine, time, there, folder}].
+    Q_INVOKABLE QVariantList filesIn(const QString &where);
+    // Delete: a received file goes from the disk; a sent one only from the list (the original stays where it was).
+    Q_INVOKABLE bool deleteFile(const QString &where, const QString &path);
+    // Where a chat's files are saved, as words ("Downloads/Huginn/Ana").
+    Q_INVOKABLE QString folderText(const QString &where) const;
+    Q_INVOKABLE QString kind(const QString &name) const;
+    // A transfer of mine or theirs is for this chat (their key, or "g:<group>").
+    bool expects(const QString &peer, const QString &id) const;
+    int activeCount() const;
     Q_INVOKABLE void cancel(const QString &id);
     // A big file waiting ("asking"): take it now, or say no (the sender hears so and it's gone here).
     Q_INVOKABLE void accept(const QString &id);
@@ -145,15 +173,16 @@ public:
     Q_INVOKABLE bool openFile(const QString &path) const;
     Q_INVOKABLE bool showInFolder(const QString &path) const;
 
-    // A file of mine that can't go at all: its card says why (wifi: Send on Wi-Fi helps).
+    // A file of mine that can't go at all: its card says why (wifi: only the same Wi-Fi can take it).
     void addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path = {}, bool wifi = false,
-                   const QString &id = {});
+                   const QString &id = {}, const QString &group = {});
     // A file of theirs coming over the internet route: have of n pieces. Done: its message is in (or half of it was
     // let go); a card for the same file that couldn't come straight goes too.
     void relayIn(const QString &msgId, const QString &peer, const QString &name, int have, int n);
     void relayInDone(const QString &msgId, const QString &peer = {}, const QString &name = {});
-    // A file that came as a message: saved in Downloads at once. Its full path, or empty when it couldn't be.
-    QString saveBytes(const QByteArray &bytes, const QString &name);
+    // A file that came as a message: saved in its chat's folder in Downloads at once. Its full path, or empty when it
+    // couldn't be.
+    QString saveBytes(const QByteArray &bytes, const QString &name, const QString &peer = QString());
 
     // An opened, checked (ok()) room "file" message from a contact.
     void onSignal(const QString &from, const QJsonObject &p);
@@ -165,8 +194,24 @@ public:
     // Their app waits kAskAnswerMs for a big file (its caps say e1): only then is a big file asked about first.
     // An older sender gives up after kAnswerMs, so its big files are taken as before. Unset: it waits.
     std::function<bool(const QString &peer)> waitsForAsk;
+    // In one of my Family groups (protocol.md 16.2): their files arrive by themselves, whatever the size.
+    std::function<bool(const QString &peer)> allArrive;
     std::function<QString(const QString &peer, const QByteArray &bytes, const QString &name)> relay;
     std::function<QString(const QString &peer)> nameOf;
+    // Cap f2 (section 27). lanHost: where they are on this Wi-Fi (a device whose chat key proved its certificate), never
+    // shown or sent; empty when they aren't here. Their app understands the "lan" candidate and group files with f2.
+    std::function<QString(const QString &peer)> lanHost;
+    std::function<bool(const QString &peer)> hasF2;
+    std::function<QString(const QString &g, const QString &from, qint64 size)> groupRefusal;
+    std::function<bool(const QString &g, qint64 size)> groupArrives;
+    std::function<QString(const QString &g)> groupName;
+    std::function<QStringList(const QString &g)> groupMembers;
+    std::function<QString()> myKey;
+    std::function<bool(const QString &peer)> alwaysFrom;
+    std::function<void(const QString &peer)> setAlways;
+    std::function<bool(const QString &peer)> isContact;
+    // Set by Chat::sendFileBlob: the message a file of mine went as (its card follows the message).
+    QString lastRelayId;
     QString saveDir;
     bool testLocal = false;                     // self-test: 127.0.0.1 only, no STUN
     int testDropEvery = 0;                      // self-test: lose every Nth data packet the first time
@@ -195,8 +240,24 @@ private:
     void end(Xfer *x);
     void put(Xfer *x, bool now = false);
     void sendPacket(Xfer *x, quint8 type, const QByteArray &payload, const Stun::Address &to);
-    QString freeName(const QString &name) const;
+    QString freeName(const QString &dir, const QString &name) const;
     QString who(const QString &peer) const { return nameOf ? nameOf(peer) : peer.left(8); }
+    // A chat's folder: Downloads/Huginn/<its name> (the save folder itself in the self-test).
+    QString folderOf(const QString &peer, const QString &group) const;
+    QString shownFolder(const QString &dir) const;
+    QString chatOf(const QString &peer, const QString &group) const;
+    QString lanOf(const QString &peer) const { return lanHost ? lanHost(peer) : QString(); }
+    // A card of theirs that was refused before it began (group rules, no space): it says why.
+    void addRefused(const QString &peer, const QString &group, const QString &id, const QString &name, qint64 size, const QString &why);
+    // A file of mine that went as a message: its card follows the message until it's sent.
+    void addRelay(const QString &peer, const QString &group, const QString &name, qint64 size, const QString &path);
+    void relayTick();
+    // The Files list of each chat, kept in the vault.
+    void logFile(const QString &where, const QString &name, qint64 size, const QString &path, bool mine);
+    void loadLog();
+    void saveLog();
+    QList<QVariantMap> m_log;
+    bool m_logLoaded = false;
 
     Chat *m_chat;
     QHash<QString, Xfer *> m_x;

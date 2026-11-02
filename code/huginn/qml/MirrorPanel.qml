@@ -6,7 +6,8 @@ import Huginn
 // A answers through the phone, X asks it for everything again (Refresh, at most once in 10 minutes), B goes back.
 // Opening never asks the phone for anything. History, photos, voice, video and files come over the home Wi-Fi; until then
 // media shows as words with "On home Wi-Fi". A message sent from here shows at once as Sending, and as "Didn't send ·
-// Retry" (or why) when the phone doesn't take it.
+// Retry" (or why) when the phone doesn't take it. Cap l1: group chats too (who wrote each message), with my role and the
+// folders each chat is in; the call button says calls ring on the phone. A copy kept after unlinking is read only.
 Rectangle {
     id: panel
     visible: false
@@ -29,8 +30,11 @@ Rectangle {
         if (peer) { const i = Linked.mirror.findIndex(c => c.peer === peer); if (i >= 0) row = i }
     }
     function close() { visible = false; zone = "chats"; msgSel = -1; if (Ui.main) Ui.main.restoreFocus() }
+    // Unlinked with its copy kept: read only.
+    readonly property bool kept: !!Linked.phone.gone
     function reply() {
         if (!current) return
+        if (kept) { Ui.say("Unlinked. Link your phone again to send.", true); return }
         const c = current
         Ui.ask("Message " + c.name, "Sent by " + (Linked.phone.name || "your phone") + " as its own message, while it's online", "", "Send", t => {
             const r = Linked.send(c.peer, t)
@@ -73,8 +77,36 @@ Rectangle {
     PageHeader {
         id: head
         width: parent.width
-        title: (Linked.phone.name || "Your phone") + "'s chats"
-        HButton { anchors.verticalCenter: parent.verticalCenter; height: Theme.px(34); fontSize: 14; text: "Refresh"; onClicked: panel.refresh() }
+        z: 2   // the call button's tip shows over the lists
+        title: (Linked.phone.name || "Your phone") + "'s chats" + (panel.kept ? " (kept copy)" : "")
+        // Calls stay on the phone: the button only says so.
+        Rectangle {
+            id: callBtn
+            visible: !!panel.current && !panel.kept
+            anchors.verticalCenter: parent.verticalCenter
+            width: Theme.px(34); height: width
+            radius: Theme.radius
+            color: callHover.hovered ? Theme.raised : "transparent"
+            Accessible.role: Accessible.Button
+            Accessible.name: "Call"
+            Accessible.description: "Calls ring on your phone"
+            Accessible.onPressAction: Ui.say("Calls ring on your phone")
+            Icon { anchors.centerIn: parent; name: "call"; size: Theme.px(18); color: callHover.hovered ? Theme.text : Theme.textMuted }
+            HoverHandler { id: callHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: Ui.say("Calls ring on your phone") }
+            Rectangle {
+                visible: callHover.hovered
+                z: 30
+                anchors.top: parent.bottom; anchors.topMargin: Theme.px(6)
+                anchors.right: parent.right
+                width: tip.implicitWidth + Theme.px(16); height: tip.implicitHeight + Theme.px(10)
+                radius: Theme.radius
+                color: Theme.panel
+                border.color: Theme.line
+                Text { id: tip; anchors.centerIn: parent; textFormat: Text.PlainText; text: "Calls ring on your phone"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+            }
+        }
+        HButton { visible: !panel.kept; anchors.verticalCenter: parent.verticalCenter; height: Theme.px(34); fontSize: 14; text: "Refresh"; onClicked: panel.refresh() }
         HButton { anchors.verticalCenter: parent.verticalCenter; height: Theme.px(34); fontSize: 14; text: "Close"; onClicked: panel.close() }
     }
     ListView {
@@ -91,7 +123,8 @@ Rectangle {
             Column {
                 anchors.fill: parent; anchors.margins: Theme.px(10)
                 Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.DemiBold }
-                Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.last; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                       text: [modelData.role || "", modelData.folders || "", modelData.last || ""].filter(x => x !== "").join(" · ") }
             }
             TapHandler { onTapped: { panel.row = index; panel.zone = "chats" } }
         }
@@ -128,7 +161,7 @@ Rectangle {
                     textFormat: Text.PlainText
                     width: parent.width
                     elide: Text.ElideRight
-                    text: (modelData.mine ? "You" : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
+                    text: (modelData.mine ? "You" : modelData.from ? modelData.from : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
                           + (modelData.pending ? " · " + panel.stateWord(modelData) : "")
                     color: modelData.failed ? Theme.danger : modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
                     // Didn't send: a click sends it again (the phone never sends one twice).
@@ -171,7 +204,7 @@ Rectangle {
     HButton {
         id: send
         anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: Theme.px(14)
-        visible: !!panel.current
+        visible: !!panel.current && !panel.kept
         kind: "accent"
         text: panel.current ? "Message " + panel.current.name : ""
         onClicked: panel.reply()

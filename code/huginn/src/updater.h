@@ -3,7 +3,9 @@
 #include <QHash>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
+#include <QElapsedTimer>
 #include <QObject>
+#include <QTimer>
 #include <QUrl>
 #include <functional>
 
@@ -43,8 +45,19 @@ public:
     QString readyPath() const { return m_readyPath; }
     bool installing() const { return m_installing; }
 
-    // At launch: if a newer release is out, download and check it; it installs only on Restart now.
+    // At launch: if a newer release is out, download and check it; it installs only on Restart now. While Huginn runs
+    // it checks again every 6 hours (12 with Battery saver on), give or take up to 30 minutes, and a minute after the
+    // computer wakes from sleep. Each check uses the same flow and never restarts Huginn by itself.
     void startAutoUpdate();
+    // Set by main.cpp: Battery saver is on now (System::batterySaving).
+    std::function<bool()> saving;
+    static constexpr qint64 kEveryMs = 6LL * 3600 * 1000;
+    static constexpr qint64 kEverySavingMs = 12LL * 3600 * 1000;
+    static constexpr qint64 kJitterMs = 30LL * 60 * 1000;
+    // The wait before the next check: kEveryMs (kEverySavingMs while saving), moved by jitter in [-1, 1] times kJitterMs.
+    static qint64 nextCheckMs(bool savingNow, double jitter);
+    // A clock tick that came this much later than asked means the computer slept in between.
+    static bool sleptBetween(qint64 expectedMs, qint64 wallMs) { return wallMs - expectedMs > 5 * 60000; }
     Q_INVOKABLE void restartToUpdate();
 
     Q_INVOKABLE void check();
@@ -98,6 +111,12 @@ Q_SIGNALS:
 
 private:
     void installNow(const QString &path);
+    void scheduleNext();
+    void periodicCheck();     // the timed (or after sleep) check: only when nothing else is going on
+    QTimer m_every;           // the next timed check
+    QTimer m_wake;            // a tick every minute, to notice the computer woke from sleep
+    qint64 m_wakeWall = 0;    // the wall clock (ms) at the last tick
+    bool m_periodic = false;  // startAutoUpdate ran: timed checks are on
     void fetch(bool installAfter, bool autoMode = false);
     // GitHub's API limits each address to 60 questions an hour: when it refuses, the "latest release" page (a redirect to the tag) says the same thing.
     void fetchLatestPage(bool installAfter, bool autoMode);

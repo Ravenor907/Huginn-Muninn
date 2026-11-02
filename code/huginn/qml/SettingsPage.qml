@@ -87,6 +87,7 @@ Rectangle {
         ]
         case "notify": return [
             { kind: "toggle", key: "showPreview", chat: true, title: "Show message text", note: "Off: only “New message”" },
+            { kind: "toggle", key: "reduceNotifications", chat: true, title: "Reduce notifications", note: "One per chat until you open it" },
             { kind: "toggle", key: "messageSound", title: "Message sound" },
             // The same as Do not disturb on your status card.
             { kind: "toggle", key: "dnd", own: true, on: Ui.myStatus === "dnd", title: "Do not disturb", note: "No sounds or notifications" },
@@ -96,16 +97,15 @@ Rectangle {
             { group: "Quiet hours", kind: "button", key: "quietTo", hide: !Settings.quietHours, title: "To: " + page.hourName(Settings.quietTo), label: "Change" }
         ].filter(r => !r.hide)
         case "look": return [
-            // Seasonal names its season; pressing it again steps to the next season.
             { group: "Theme", kind: "segmented", key: "theme", title: "Theme", value: Theme.choice,
-              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }, { value: "seasonal", label: "Seasonal: " + Theme.seasonName }] },
-            // Seasonal only: the season, its background, what falls and how much.
-            { group: "Theme", kind: "segmented", key: "season", hide: Theme.choice !== "seasonal", title: "Season", note: "Auto follows the date",
+              options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }] },
+            // Seasonal, over any theme: the season, its background (on Dark), what falls and how much.
+            { group: "Theme", kind: "segmented", key: "season", title: "Seasonal", note: "Over any theme",
               value: Theme.seasonPick, options: Theme.seasonChoices },
-            { group: "Theme", kind: "grounds", key: "seasonGround", hide: Theme.choice !== "seasonal", title: "Background" },
-            { group: "Theme", kind: "slider", key: "seasonGradient", hide: Theme.choice !== "seasonal",
+            { group: "Theme", kind: "grounds", key: "seasonGround", hide: !Theme.tinted, title: "Background" },
+            { group: "Theme", kind: "slider", key: "seasonGradient", hide: !Theme.seasonal || Theme.flatGround,
               title: "Gradient: " + (Settings.seasonGradient === 0 ? "Flat" : Settings.seasonGradient + "%"), low: "Flat", high: "Strong" },
-            { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: Theme.choice !== "seasonal", title: "Animation", note: "Less motion holds it still",
+            { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: !Theme.seasonal, title: "Animation", note: "Less motion holds it still",
               options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }] },
             { group: "Theme", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
               title: "Amount: " + page.fallShown + (Theme.snow ? (page.fallShown === 1 ? " flake" : " flakes") : (page.fallShown === 1 ? " leaf" : " leaves")),
@@ -120,7 +120,9 @@ Rectangle {
             { group: "Size", kind: "segmented", key: "textSize", title: "Text size",
               options: [{ value: "100", label: "Normal" }, { value: "115", label: "Large" }, { value: "130", label: "Larger" }, { value: "150", label: "Largest" }] },
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
-            { group: "Accessibility", kind: "toggle", key: "colorBlind", title: "Color-blind friendly" },
+            // Color vision: every color that means something, remapped for it; the preview shows them.
+            { group: "Accessibility", kind: "segmented", key: "colorVision", title: "Color vision", options: Theme.visionChoices },
+            { group: "Accessibility", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
             { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Less motion" },
             { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode || System.handheld },
             // Full screen, controller hints, the on-screen keyboard, bigger touch targets and lighter animation.
@@ -152,6 +154,8 @@ Rectangle {
             { group: "Lock", kind: "info", hide: Vault.exists && !Vault.hasLock, title: "When it locks", note: "Locks when you choose. Closing asks first." },
             { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
             { group: "Lock", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" },
+            // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
+            { group: "Privacy", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby", note: "Off: contacts only, nothing announced" },
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
             { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
             { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: Settings.dataSaver ? "Off while Data saver is on" : "" },
@@ -160,12 +164,11 @@ Rectangle {
             { group: "Privacy", kind: "toggle", key: "blockScreenshots", hide: Qt.platform.os !== "windows", title: "Block screenshots", note: "Hides Huginn from captures" },
             { group: "Privacy", kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages",
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "One day" }] },
-            { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Let people nearby find you" },
             { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
             { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" }
         ].filter(r => !r.hide)
         case "devices": return [
-            { kind: "button", key: "linked", title: "Linked devices", note: Linked.phone.key ? "Linked to " + Linked.phone.name : "", label: "Open" },
+            { kind: "button", key: "linked", title: "Linked devices", note: !Linked.phone.key ? "" : (Linked.phone.gone ? "Copy kept from " + Linked.phone.name : "Linked to " + Linked.phone.name), label: "Open" },
             { kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" },
             { kind: "button", key: "deviceName", title: "This computer's name", note: Settings.deviceName, label: "Change" }
         ]
@@ -175,8 +178,8 @@ Rectangle {
             { kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
         ]
         case "backup": return [
-            { kind: "button", key: "backup", title: "Back up chats", note: "Saved in Documents", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
-            { kind: "button", key: "restore", title: "Restore from backup", label: "Restore", enabled: Vault.exists && !Vault.busy }
+            { kind: "button", key: "backup", title: "Back up", note: "One encrypted file, saved where you choose", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
+            { kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy }
         ]
         case "about": return [
             { kind: "raven", key: "raven", title: "Huginn " + System.version, note: Settings.labs ? "Labs mode on" : "" },
@@ -193,7 +196,8 @@ Rectangle {
               label: "Go back", enabled: !Updater.busy },
             { group: "Labs", kind: "button", key: "report", hide: !Settings.labs, title: "Report a bug", note: "Screenshot optional", label: "Report" },
             { group: "Labs", kind: "button", key: "storage", hide: !Settings.labs, title: "App storage", note: "Files Huginn keeps", label: "Open" },
-            { group: "Labs", kind: "button", key: "perf", hide: !Settings.labs, title: "Performance check", note: "Lag and size", label: "Open" }
+            { group: "Labs", kind: "button", key: "perf", hide: !Settings.labs, title: "Performance check", note: "Lag and size", label: "Open" },
+            { group: "Labs", kind: "button", key: "practice", hide: !Settings.labs, title: "Replay first setup (practice)", note: "Nothing is saved", label: "Start" }
         ].filter(r => !r.hide)
         case "erase": return [
             { kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
@@ -396,8 +400,9 @@ Rectangle {
         property var r: ({})
         readonly property bool focused: page.active && page.inSection && page.row === at && !!Ui.main && Ui.main.padInUse
         readonly property bool danger: page.dangerKeys.indexOf(r.key) >= 0
-        // Wide choices go under the words when there isn't room beside them.
-        readonly property bool stacked: control.width > width * 0.5
+        // Wide choices go under the words when there isn't room beside them; a picker then takes the full width
+        // (and becomes a dropdown only if even that is too narrow, see Segmented).
+        readonly property bool stacked: r.kind === "segmented" ? segCtl.naturalWidth > width * 0.5 : control.width > width * 0.5
         onFocusedChanged: if (focused) Qt.callLater(page.showRow, rowItem)
         height: stacked ? texts.implicitHeight + control.height + Theme.px(30)
                         : Math.max(Theme.px(52), texts.implicitHeight + Theme.px(20), rowItem.r.kind === "raven" ? control.height + Theme.px(16) : 0)
@@ -423,9 +428,10 @@ Rectangle {
             y: rowItem.stacked ? texts.y + texts.implicitHeight + Theme.px(10) : (parent.height - height) / 2
             // Never wider than the row: on a narrow window the choices squeeze to fit.
             width: Math.min(rowItem.width - Theme.px(32),
-                   rowItem.r.kind === "segmented" ? segCtl.implicitWidth
+                   rowItem.r.kind === "segmented" ? (rowItem.stacked ? rowItem.width : segCtl.implicitWidth)
                  : rowItem.r.kind === "toggle" ? toggleCtl.implicitWidth
                  : rowItem.r.kind === "accent" ? accentCtl.naturalWidth
+                 : rowItem.r.kind === "preview" ? rowItem.width
                  : rowItem.r.kind === "swatches" ? swatchCtl.implicitWidth
                  : rowItem.r.kind === "grounds" ? groundCtl.naturalWidth
                  : rowItem.r.kind === "size" ? sizeCtl.naturalWidth
@@ -433,7 +439,8 @@ Rectangle {
                  : rowItem.r.kind === "raven" ? ravenCtl.width
                  : rowItem.r.kind === "button" ? buttonCtl.implicitWidth : 0)
             height: Math.max(Theme.px(36), segCtl.visible ? segCtl.implicitHeight : 0, buttonCtl.visible ? buttonCtl.implicitHeight : 0,
-                             ravenCtl.visible ? ravenCtl.height : 0, sliderCtl.visible ? sliderCtl.implicitHeight : 0)
+                             ravenCtl.visible ? ravenCtl.height : 0, sliderCtl.visible ? sliderCtl.implicitHeight : 0,
+                             previewCtl.visible ? previewCtl.implicitHeight : 0)
             // About: the raven. Ten presses turn Labs mode on or off.
             Image {
                 id: ravenCtl
@@ -503,26 +510,29 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: rowItem.r.kind === "accent"
                 spacing: Theme.px(8)
-                // Seven named colors and Any color; smaller swatches on a narrow window.
-                readonly property real naturalWidth: Theme.px(28) * 8 + spacing * 7
-                readonly property int swatch: Math.max(Theme.px(20), Math.min(Theme.px(28), Math.floor((control.width - spacing * 7) / 8)))
+                // The named colors (only those that suit the Color vision picked) and Any color; smaller swatches on
+                // a narrow window.
+                readonly property int slots: Theme.accentNames.length + (Theme.mono ? 0 : 1)
+                readonly property real naturalWidth: Theme.px(28) * slots + spacing * (slots - 1)
+                readonly property int swatch: Math.max(Theme.px(20), Math.min(Theme.px(28), Math.floor((control.width - spacing * (slots - 1)) / slots)))
                 Repeater {
                     model: rowItem.r.kind === "accent" ? Theme.accentNames : []
                     Rectangle {
                         width: accentCtl.swatch; height: width; radius: Theme.radius
-                        color: Theme.light ? Qt.darker(Theme.accents[modelData], 1.7) : Theme.accents[modelData]
-                        border.width: Settings.accent === modelData ? Theme.px(2) : 1
-                        border.color: Settings.accent === modelData ? Theme.text : Theme.lineMuted
+                        color: Theme.mono ? Theme.accent : Theme.light ? Qt.darker(Theme.accents[modelData], 1.7) : Theme.accents[modelData]
+                        border.width: Theme.accentKey === modelData ? Theme.px(2) : 1
+                        border.color: Theme.accentKey === modelData ? Theme.text : Theme.lineMuted
                         Accessible.role: Accessible.RadioButton
                         Accessible.name: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                        Accessible.checked: Settings.accent === modelData
+                        Accessible.checked: Theme.accentKey === modelData
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
                         TapHandler { onTapped: Settings.accent = modelData }
                     }
                 }
                 // Any color: a code like #6E9CC8.
                 Rectangle {
-                    readonly property bool custom: Theme.accentNames.indexOf(Settings.accent) < 0
+                    readonly property bool custom: Theme.accentNames.indexOf(Theme.accentKey) < 0
+                    visible: !Theme.mono
                     width: accentCtl.swatch; height: width; radius: Theme.radius
                     color: custom ? Theme.accent : Theme.raised
                     border.width: custom ? Theme.px(2) : 1
@@ -608,6 +618,44 @@ Rectangle {
                     }
                 }
             }
+            // Look › Color vision's preview: the status dots, a failed thing, the accent and the call buttons.
+            Flow {
+                id: previewCtl
+                visible: rowItem.r.kind === "preview"
+                width: parent.width
+                spacing: Theme.px(12)
+                Repeater {
+                    model: previewCtl.visible ? [{ id: "online", label: "Online" }, { id: "away", label: "Away" }, { id: "dnd", label: "Busy" }] : []
+                    Row {
+                        spacing: Theme.px(6)
+                        height: Theme.px(28)
+                        StatusDot { anchors.verticalCenter: parent.verticalCenter; width: Theme.px(16); status: modelData.id; backdrop: Theme.panel }
+                        Text { textFormat: Text.PlainText; anchors.verticalCenter: parent.verticalCenter; text: modelData.label; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                    }
+                }
+                Rectangle {
+                    width: failedText.implicitWidth + Theme.px(32); height: Theme.px(28); radius: Theme.radiusSmall
+                    color: Theme.dangerFill; border.color: Theme.dangerLine
+                    Icon { anchors.left: parent.left; anchors.leftMargin: Theme.px(6); anchors.verticalCenter: parent.verticalCenter; name: "close"; size: Theme.px(14); color: Theme.danger }
+                    Text { id: failedText; textFormat: Text.PlainText; anchors.left: parent.left; anchors.leftMargin: Theme.px(24); anchors.verticalCenter: parent.verticalCenter
+                           text: "Failed"; color: Theme.danger; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                }
+                Rectangle {
+                    width: accentText.implicitWidth + Theme.px(16); height: Theme.px(28); radius: Theme.radiusSmall
+                    color: Theme.accentFill; border.color: Theme.accent
+                    Text { id: accentText; textFormat: Text.PlainText; anchors.centerIn: parent; text: "Accent"; color: Theme.accent; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                }
+                Repeater {
+                    model: previewCtl.visible ? [{ icon: "call", name: "Answer" }, { icon: "hangup", name: "Hang up" }] : []
+                    Rectangle {
+                        width: Theme.px(28); height: width; radius: width / 2
+                        color: index === 0 ? Theme.success : Theme.danger
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: modelData.name
+                        Icon { anchors.centerIn: parent; name: modelData.icon; size: Theme.px(16); lineWidth: 2; color: Theme.light ? "#FFFFFF" : "#000000" }
+                    }
+                }
+            }
             HButton {
                 id: buttonCtl
                 anchors.right: parent.right
@@ -676,51 +724,21 @@ Rectangle {
         const items = Settings.audioDevices(input).map(d => ({ name: d.name, url: d.id === "" ? "default" : d.id, check: d.id === Settings[key] }))
         Ui.pickFrom(input ? "Microphone" : "Speaker", [{ header: "", items: items }], v => Settings[key] = v === "default" ? "" : v)
     }
-    // A choice in a row of choices. Seasonal picked again (a click, or A on it) steps to the next season.
+    // A choice in a row of choices.
     function pickSegment(r, v) {
         if (r.chat) Chat[r.key] = Number(v)
-        else if (r.key === "theme" && v === "seasonal" && Theme.choice === "seasonal") Settings.season = Theme.nextSeason()
         else Settings[r.key] = v
     }
 
-    // ------------------------------------------------------------- chat backup
+    // ------------------------------------------------------------- chat backup (BackupPanel.qml)
     function startBackup() {
         if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
-        Ui.ask("Backup password", "12 or more characters. Can't be recovered.", "", "Next", t => {
-            if (t.length < 12) { Ui.say("At least 12 characters.", true); return }
-            Ui.ask("Type it again", "To be sure", "", "Back up", t2 => {
-                if (t2 !== t) { Ui.say("They didn't match.", true); return }
-                Ui.say("Backing up your chats...")
-                Vault.backup(t)
-            }, true)
-        }, true)
+        Ui.main.openBackup("backup", false)
     }
     function startRestore() {
         if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
-        const list = Vault.backups()
-        if (!list.length) { Ui.say("No backups in Documents.", true); return }
-        const apps = {}
-        list.forEach(e => apps[e.url] = e.app)
-        Ui.pickFrom("Restore which backup?", [{ header: "", items: list }], url => {
-            if (apps[url] === "muninn") { Ui.say("That's a Muninn backup. Restore it in Muninn.", true); return }
-            Ui.ask("Backup password", "", "", "Open", pw => {
-                Ui.say("Opening the backup...")
-                Vault.openBackup(url, pw)
-            }, true)
-        })
+        Ui.main.openBackup("restore", false)
     }
-    Connections {
-        target: Vault
-        function onDone(what, ok, message) {
-            if (what === "open" && ok)
-                Ui.sure("Replace everything?",
-                        message + " Everything here is replaced. Can't be undone.",
-                        "Hold to restore", () => Vault.restoreOpened(), true, true, () => Vault.forgetOpened())
-            else
-                Ui.say(message, !ok)
-        }
-    }
-
 
     function press(key) {
         const job = running()
@@ -754,6 +772,7 @@ Rectangle {
         else if (key === "report") Ui.main.openReport()
         else if (key === "storage") Ui.main.openAppStorage()
         else if (key === "perf") Ui.main.openPerf()
+        else if (key === "practice") Ui.main.openSetup(true)
         else if (key === "goStable") {
             if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
             Ui.sure("Go back to stable?", "Installs the latest stable Huginn, then restarts. Labs mode turns off." + (job ? " " + job : ""),
@@ -774,8 +793,6 @@ Rectangle {
         else if (r.kind === "segmented") {
             const opts = r.options
             const now = r.value !== undefined ? r.value : r.chat ? String(Chat[r.key]) : Settings[r.key]
-            // A on Seasonal does what a click does: the next season.
-            if (dir === 0 && r.key === "theme" && now === "seasonal") { pickSegment(r, "seasonal"); return }
             let i = opts.findIndex(o => o.value === now)
             i = dir === 0 ? (i + 1) % opts.length : Math.max(0, Math.min(opts.length - 1, i + dir))
             pickSegment(r, opts[i].value)
@@ -787,8 +804,8 @@ Rectangle {
             Settings.seasonGround = order[i]
         } else if (r.kind === "accent") {
             // The named colors, then Any color (A on it asks for a code).
-            const order = Theme.accentNames.concat(["custom"])
-            const at = Theme.accentNames.indexOf(Settings.accent) < 0 ? order.length - 1 : Theme.accentNames.indexOf(Settings.accent)
+            const order = Theme.accentNames.concat(Theme.mono ? [] : ["custom"])
+            const at = Theme.accentNames.indexOf(Theme.accentKey) < 0 ? order.length - 1 : Theme.accentNames.indexOf(Theme.accentKey)
             // A on Any color (a code is in use) asks for another code instead of going round to gold.
             if (dir === 0 && order[at] === "custom") { pickColor(); return }
             const i = dir === 0 ? (at + 1) % order.length : Math.max(0, Math.min(order.length - 1, at + dir))
