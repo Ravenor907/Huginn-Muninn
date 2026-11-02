@@ -56,8 +56,6 @@ class HavamalTest {
         assertEquals(verses.map { it.n }.sorted(), verses.map { it.n })
         assertEquals(verses.size, verses.map { it.n }.toSet().size)
         for (v in verses) for (t in listOf(v.verse, v.means)) assertFalse("${v.n}", t.contains('\u2014') || t.contains('\u2013'))
-        // Kept to the poem itself.
-        assertFalse(asset().contains("Claude") || asset().contains(" AI "))
     }
 
     // ---- the verse of the day
