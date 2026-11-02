@@ -16,6 +16,10 @@ Item {
     property string gid: ""
     property string groupName: ""
     property bool amAdmin: false
+    // How full the group is: "10 spots left" shows under the link once fewer than 15 are left.
+    property int memberCount: 0
+    property int maxMembers: 50
+    readonly property int spotsLeft: Math.max(0, maxMembers - memberCount)
     property string mode: ""          // "", "create" or "list"
     property string link: ""
     property bool editing: false
@@ -100,7 +104,8 @@ Item {
                     textFormat: Text.PlainText
                     width: parent.width; wrapMode: Text.WordWrap
                     visible: text !== ""
-                    text: !panel.ready ? "" : panel.mode === "list" ? "Revoke stops a link at once." : "Anyone with this link can join."
+                    text: !panel.ready ? "" : panel.mode === "list" ? "Revoke stops a link at once."
+                        : "Anyone with this link can join." + (panel.spotsLeft < 15 ? (panel.spotsLeft === 0 ? " The group is full (" + panel.maxMembers + " people)." : " " + panel.spotsLeft + (panel.spotsLeft === 1 ? " spot left." : " spots left.")) : "")
                     color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
                 }
 

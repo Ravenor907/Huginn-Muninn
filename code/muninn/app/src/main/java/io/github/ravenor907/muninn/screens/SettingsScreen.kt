@@ -497,8 +497,9 @@ private fun BatteryPage(app: Muninn) {
         } })
         // A linked computer sends and reads through this phone: anything but Right away makes it wait.
         val linked by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
-        linked.firstOrNull { it.ok }?.takeIf { check != Check.LIVE || choice == BatteryChoice.EXTREME }?.let { c ->
-            Help("${c.name} sends and gets messages through this phone. Choose ${Check.LIVE.title} so it doesn't wait.")
+        linked.firstOrNull { it.ok }?.takeIf { check != Check.LIVE || choice == BatteryChoice.EXTREME || adaptive }?.let { c ->
+            Help("${c.name} sends and gets messages through this phone. Choose ${Check.LIVE.title}" +
+                (if (adaptive) " and turn off Check less when quiet" else "") + " so it doesn't wait.")
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -522,8 +523,9 @@ private fun BatteryPage(app: Muninn) {
 @Composable
 private fun FilesPage() {
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    var where by remember { mutableStateOf(io.github.ravenor907.muninn.net.Received.shownRoot()) }
+    // chosenTree first: a picked folder that went away resets the name shownRoot gives.
     var picked by remember { mutableStateOf(io.github.ravenor907.muninn.net.Received.chosenTree(ctx) != null) }
+    var where by remember { mutableStateOf(io.github.ravenor907.muninn.net.Received.shownRoot()) }
     val pick = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             io.github.ravenor907.muninn.net.Received.choose(ctx, uri)

@@ -11,6 +11,10 @@ QtObject {
     // Labs › Performance check › Animations: Off holds everything still too (from the start it was tried at), and so
     // does Settings › Look › Battery saver while it's on.
     readonly property bool motion: !Settings.reduceMotion && !Perf.animationsOff && !System.batterySaving
+    // The Seasonal leaves or snow only: Settings › Look › Animation "On, even on battery" keeps them moving under
+    // Battery saver (everything else still slows). Less motion and a tried Animations: Off still hold them still.
+    readonly property bool fallMotion: !Settings.reduceMotion && !Perf.animationsOff
+                                       && (!System.batterySaving || Settings.seasonAnimation === "battery")
 
     // Seasonal: each season's look and the days it runs, as month * 100 + day, both ends included (a
     // range that wraps past the new year, like 1201 to 229, works too). The first that holds the day

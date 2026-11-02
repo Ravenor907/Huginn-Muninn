@@ -18,6 +18,9 @@ Item {
     // A third answer between Cancel and the main one (X on a controller), set after open().
     property string otherText: ""
     property var otherCallback: null
+    // A fourth answer, next to the main one (Y on a controller, when there's no "Don't ask again"), set after open().
+    property string extraText: ""
+    property var extraCallback: null
     // Only the answer button (a note to read, like a copied code): B closes it too.
     property bool single: false
     // A "Don't ask again" switch under the message (Y on a controller), set after open(); remember is what it says.
@@ -33,6 +36,7 @@ Item {
         callback = cb || null; hold = !!needsHold; danger = !!isDanger
         cancelCallback = onCancel || null; tag = openTag || ""; cancelText = "Cancel"; single = false
         otherText = ""; otherCallback = null
+        extraText = ""; extraCallback = null
         rememberText = ""; remember = false
         held = 0; visible = true
     }
@@ -47,6 +51,12 @@ Item {
         cancelCallback = null; otherCallback = null
         visible = false; holdTimer.stop(); held = 0
         if (o) o()
+    }
+    function extra() {
+        const e = extraCallback
+        cancelCallback = null; extraCallback = null
+        visible = false; holdTimer.stop(); held = 0
+        if (e) e()
     }
     function cancel() {
         visible = false; holdTimer.stop(); held = 0
@@ -129,7 +139,7 @@ Item {
                     Text {
                         textFormat: Text.PlainText
                         anchors.verticalCenter: parent.verticalCenter
-                        text: (Ui.main && Ui.main.padInUse ? "Y: " : "") + dlg.rememberText
+                        text: (Ui.main && Ui.main.padInUse && dlg.extraText === "" ? "Y: " : "") + dlg.rememberText
                         color: Theme.text
                         font.family: Theme.body
                         font.pixelSize: Theme.fs(14)
@@ -150,19 +160,17 @@ Item {
             id: foot
             anchors.bottom: parent.bottom
             width: parent.width
-            height: Theme.px(64)
+            height: Math.max(Theme.px(64), buttons.implicitHeight + Theme.px(24))
             color: Theme.panelLow
             Rectangle { width: parent.width; height: 1; color: Theme.line }
-            Row {
-                anchors.right: parent.right; anchors.rightMargin: Theme.px(20)
+            // Right to left: the main answer at the right, then the others; a second line when four don't fit.
+            Flow {
+                id: buttons
+                x: Theme.px(20)
+                width: parent.width - Theme.px(40)
                 anchors.verticalCenter: parent.verticalCenter
+                layoutDirection: Qt.RightToLeft
                 spacing: Theme.px(8)
-                HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
-                HButton {
-                    visible: !dlg.single && dlg.otherText !== ""
-                    text: (Ui.main && Ui.main.padInUse ? "X: " : "") + dlg.otherText
-                    onClicked: dlg.other()
-                }
                 HButton {
                     id: go
                     text: dlg.hold ? (dlg.held > 0 ? "Keep holding…" : (Ui.main && Ui.main.padInUse ? "Hold A: " : "") + dlg.confirmText) : (Ui.main && Ui.main.padInUse ? "A: " : "") + dlg.confirmText
@@ -179,6 +187,17 @@ Item {
                         color: dlg.danger ? Theme.danger : Theme.ground
                     }
                 }
+                HButton {
+                    visible: !dlg.single && dlg.extraText !== ""
+                    text: (Ui.main && Ui.main.padInUse ? "Y: " : "") + dlg.extraText
+                    onClicked: dlg.extra()
+                }
+                HButton {
+                    visible: !dlg.single && dlg.otherText !== ""
+                    text: (Ui.main && Ui.main.padInUse ? "X: " : "") + dlg.otherText
+                    onClicked: dlg.other()
+                }
+                HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
             }
         }
     }
@@ -187,6 +206,7 @@ Item {
         if (b === "a") startHold()
         else if (b === "b") cancel()
         else if (b === "x" && !single && otherText !== "") other()
+        else if (b === "y" && !single && extraText !== "") extra()
         else if (b === "y" && rememberText !== "") remember = !remember
         else if ((b === "up" || b === "down") && scroller.interactive)
             scroller.contentY = Math.max(0, Math.min(scroller.contentHeight - scroller.height, scroller.contentY + (b === "up" ? -1 : 1) * Theme.px(60)))

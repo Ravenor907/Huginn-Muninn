@@ -13,7 +13,8 @@ import Huginn
 // fall, rock and tumble, flip edge-on and back, and lean into a gust now and then; the seeds spin and orbit as they
 // drop. It stops while the window is hidden or minimized, after a minute in the background, and after 30 seconds
 // without input on battery; Less motion and Battery saver lay everything still, scattered across the ground.
-// Settings › Look: Animation (Off draws nothing and stops it), Amount (1 to 400 on screen; until it's moved,
+// Settings › Look: Animation (Off draws nothing and stops it; "On, even on battery" keeps it moving under Battery saver
+// and idle on battery, at 15 frames a second while on battery), Amount (1 to 400 on screen; until it's moved,
 // Theme.fallCount scales it by the window's area) and Size (15% to 600%). Very big ones are fewer, so all
 // of them together hold at most twice the window's pixels.
 Item {
@@ -21,8 +22,9 @@ Item {
     visible: Theme.seasonal
     // What falls: "leaves" (Autumn) or "snow".
     readonly property string kind: Theme.snow ? "snow" : "leaves"
-    // Settings › Look › Animation: Off or On.
+    // Settings › Look › Animation: Off, On, or On even on battery ("battery").
     readonly property bool falling: Settings.seasonAnimation !== "off"
+    readonly property bool evenOnBattery: Settings.seasonAnimation === "battery"
 
     readonly property real sizeScale: (Number(Settings.fallSize) || 60) / 100 * Theme.s
     // At most as many as fit in twice the window's pixels at this size (only ever fewer for a few dozen huge ones).
@@ -37,8 +39,10 @@ Item {
     property bool resting: false
     Timer { interval: 60000; running: !leaves.winActive && leaves.onScreen && leaves.falling; onTriggered: leaves.resting = true }
     onWinActiveChanged: if (winActive) resting = false
-    // On battery, 30 seconds without input holds it still too, until the next key, touch, mouse or button.
-    readonly property bool moving: onScreen && Theme.motion && falling && !resting && !(System.onBattery && System.inputIdle)
+    // On battery, 30 seconds without input holds it still too, until the next key, touch, mouse or button (not with
+    // On, even on battery).
+    readonly property bool idleHeld: System.onBattery && System.inputIdle && !evenOnBattery
+    readonly property bool moving: onScreen && Theme.fallMotion && falling && !resting && !idleHeld
 
     // Where each leaf starts and how it moves. The same index always gets the same leaf, so the
     // sliders add or take away leaves without reshuffling the rest.
@@ -109,7 +113,8 @@ Item {
         id: driver
         anchors.fill: parent
         running: leaves.moving
-        fps: leaves.winActive ? 30 : 15
+        // On battery with On, even on battery: 15, to save power.
+        fps: leaves.winActive && !(leaves.evenOnBattery && (System.onBattery || System.batterySaving)) ? 30 : 15
         sizeScale: leaves.sizeScale
         snow: leaves.kind === "snow"
         plan: leaves.visible ? leaves.plan : []
@@ -119,7 +124,7 @@ Item {
     // still for another reason (in the background, idle on battery), everything stays where it was. A new plan,
     // size or season while still is placed by Fall itself.
     function settle() { driver.settle() }
-    onMovingChanged: if (!moving && (!Theme.motion || !falling)) settle()
+    onMovingChanged: if (!moving && (!Theme.fallMotion || !falling)) settle()
     onWidthChanged: sizeSoon.restart()
     onHeightChanged: sizeSoon.restart()
 

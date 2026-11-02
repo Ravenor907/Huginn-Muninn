@@ -32,6 +32,8 @@ class Settings : public QObject
     Q_PROPERTY(QString batterySaver READ batterySaver WRITE setBatterySaver NOTIFY changed)
     // The window's last place and size (empty: 80% of the screen, centered).
     Q_PROPERTY(QRect windowRect READ windowRect WRITE setWindowRect NOTIFY changed)
+    // The window was maximized when last left: it opens maximized again (windowRect keeps its normal size).
+    Q_PROPERTY(bool windowMaximized READ windowMaximized WRITE setWindowMaximized NOTIFY changed)
     Q_PROPERTY(bool autoUpdate READ autoUpdate WRITE setAutoUpdate NOTIFY changed)
     Q_PROPERTY(bool runInBackground READ runInBackground WRITE setRunInBackground NOTIFY changed)
     Q_PROPERTY(bool nearbySharing READ nearbySharing WRITE setNearbySharing NOTIFY changed)
@@ -70,7 +72,7 @@ class Settings : public QObject
     Q_PROPERTY(int fallSize READ fallSize WRITE setFallSize NOTIFY appearanceChanged)
     // Settings › Look › Seasonal, on top of any theme: "off", "auto" (follows the date) or a season's own name like
     // "snow"; the background ("" for the season's own, or one of the Look page's "#RRGGBB" swatches) and the
-    // animation ("off" or "full"; an older "light" reads as "full"). Theme.qml checks them. Seasonal used to be a
+    // animation ("off", "full", or "battery" for On even on battery; an older "light" reads as "full"). Theme.qml checks them. Seasonal used to be a
     // theme of its own: that saved theme opens as Dark with Seasonal on and the same season (see the constructor).
     Q_PROPERTY(QString season READ season WRITE setSeason NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonGround READ seasonGround WRITE setSeasonGround NOTIFY appearanceChanged)
@@ -137,6 +139,7 @@ public:
         return v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto");
     }
     QRect windowRect() const { return value("windowRect", QRect()).toRect(); }
+    bool windowMaximized() const { return value("windowMaximized", false).toBool(); }
     // Looks for a new release at start. Off: only Check now asks GitHub.
     bool autoUpdate() const { return value("autoUpdate", true).toBool(); }
     bool runInBackground() const { return value("runInBackground", true).toBool(); }
@@ -203,7 +206,8 @@ public:
     QString seasonAnimation() const
     {
         const QString v = value("seasonAnimation", "full").toString();
-        return v == QLatin1String("off") ? v : QStringLiteral("full");
+        // "battery": On, even on battery (Battery saver and idle on battery don't hold the leaves still).
+        return v == QLatin1String("off") || v == QLatin1String("battery") ? v : QStringLiteral("full");
     }
     bool quiet() const { return s_quiet; }
     bool labs() const { return value("labs/on", false).toBool(); }
@@ -229,6 +233,14 @@ public:
     Q_INVOKABLE QString audioDeviceName(bool input, const QString &id) const;
     QString deviceName() const;
     static QString defaultDeviceName();
+    // A group's about box folded to one line (GroupPage.qml), kept across restarts, per group.
+    Q_INVOKABLE bool aboutFolded(const QString &gid) const { return value(QStringLiteral("aboutFold/") + gid, false).toBool(); }
+    Q_INVOKABLE void setAboutFolded(const QString &gid, bool v)
+    {
+        if (gid.isEmpty()) return;
+        if (v) m_settings.setValue(QStringLiteral("aboutFold/") + gid, true);
+        else m_settings.remove(QStringLiteral("aboutFold/") + gid);
+    }
     bool blockScreenshots() const { return value("blockScreenshots", false).toBool(); }
     bool dataSaver() const { return value("dataSaver", false).toBool(); }
     static bool dataSaverOn() { return saved(QStringLiteral("dataSaver"), false).toBool(); }
@@ -263,6 +275,7 @@ public:
     void setHandheldMode(const QString &v) { set("handheldMode", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
     void setBatterySaver(const QString &v) { set("batterySaver", v == QLatin1String("on") || v == QLatin1String("off") ? v : QStringLiteral("auto")); }
     void setWindowRect(const QRect &r) { if (r.width() >= 320 && r.height() >= 240) set("windowRect", r); }
+    void setWindowMaximized(bool v) { if (v != windowMaximized()) set("windowMaximized", v); }
     void setAutoUpdate(bool v) { set("autoUpdate", v); }
     void setRunInBackground(bool v) { set("runInBackground", v); }
     void setNearbySharing(bool v) { set("nearbySharing", v); }

@@ -57,7 +57,7 @@ Item {
         case "name": return [{ id: "nameField", label: "Type" }, { id: "picture", label: "Add a picture" }, { id: "back", label: "Back" }, { id: "next", label: "Skip" }, { id: "saveName", label: "Next" }]
         case "link": return [{ id: "linkNow", label: "Show the code" }, { id: "back", label: "Back" }, { id: "next", label: Linked.phone.key && !practice ? "Next" : "Skip" }]
         case "people": return (codeShown ? [{ id: "copyLink", label: "Copy link" }] : [{ id: "showCode", label: "Show my code" }])
-                               .concat([{ id: "pasteField", label: "Type" }, { id: "addCode", label: "Add" }, { id: "back", label: "Back" }, { id: "next2", label: addedCount > 0 ? "Next" : "Skip" }])
+                               .concat([{ id: "pasteField", label: "Type" }, { id: "pasteCode", label: "Paste" }, { id: "addCode", label: "Add" }, { id: "back", label: "Back" }, { id: "next2", label: addedCount > 0 ? "Next" : "Skip" }])
         case "tour": return [{ id: "skipTour", label: "Skip tour" }, { id: "nextStop", label: stop < stops.length - 1 ? "Next" : "Got it" }]
         case "done": return [{ id: "back", label: "Back" }, { id: "finish", label: ribbon ? "Back to Labs" : "Start a chat" }]
         }
@@ -79,7 +79,8 @@ Item {
             return [{ key: "lb", label: lockPanel.usePattern ? "Password" : "Pattern" }, { key: "x", label: "Skip" }, { key: "b", label: "Back" }]
         const a = order.length ? order[focusAt].label : ""
         const b = index > 0 ? (touring && stop > 0 ? "Previous" : "Back") : ribbon ? "Leave" : ""
-        return [{ key: "dpad", label: "Choose" }, { key: "a", label: a }].concat(b !== "" ? [{ key: "b", label: b }] : [])
+        const x = step === "people" && pasteInput.canPaste && focusId !== "pasteCode" ? [{ key: "x", label: "Paste" }] : []
+        return [{ key: "dpad", label: "Choose" }, { key: "a", label: a }].concat(x, b !== "" ? [{ key: "b", label: b }] : [])
     }
 
     // isPractice: Labs practice. shotStep and shotStop: the screenshot tour's page and tour stop (practice, no ribbon).
@@ -172,6 +173,13 @@ Item {
         Chat.copyLink()
         Ui.say("Link copied.")
     }
+    // Paste: a copied code or invite link into the field, then the focus goes to Add.
+    function pasteCode() {
+        if (!pasteInput.canPaste) { Ui.say("Nothing copied yet. Copy their code or invite link first.", true); return }
+        pasteInput.pasteOver()
+        const i = order.findIndex(o => o.id === "addCode")
+        if (i >= 0) focusIndex = i
+    }
     function addCode() {
         const t = pasteInput.text.trim()
         if (t === "") { pasteInput.forceActiveFocus(); return }
@@ -206,6 +214,7 @@ Item {
         case "showCode": showCode(); break
         case "copyLink": copyLink(); break
         case "pasteField": pasteInput.forceActiveFocus(); System.showSteamKeyboard(); break
+        case "pasteCode": pasteCode(); break
         case "addCode": addCode(); break
         case "skipTour": next(); break
         case "nextStop": if (stop < stops.length - 1) stop++; else next(); break
@@ -222,6 +231,7 @@ Item {
         if (b === "left" || b === "up") focusIndex = Math.max(0, focusAt - 1)
         else if (b === "right" || b === "down") focusIndex = Math.min(order.length - 1, focusAt + 1)
         else if (b === "a") run(focusId)
+        else if (b === "x" && step === "people") pasteCode()
         else if (b === "b") back()
         return true
     }
@@ -390,7 +400,12 @@ Item {
                     onClicked: setup.run(setup.codeShown ? "copyLink" : "showCode")
                 }
                 Field { id: pasteInput; focusId: "pasteField"; placeholder: "Paste a code or invite link"; onEnter: setup.addCode() }
-                HButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Add"; focused: setup.lit("addCode"); onClicked: setup.run("addCode") }
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: Theme.px(8)
+                    HButton { text: "Paste"; focused: setup.lit("pasteCode"); onClicked: setup.run("pasteCode") }
+                    HButton { text: "Add"; focused: setup.lit("addCode"); onClicked: setup.run("addCode") }
+                }
             }
 
             // Done.
@@ -617,6 +632,9 @@ Item {
         property string focusId
         signal enter()
         function forceActiveFocus() { input.forceActiveFocus() }
+        // Setup's Paste (X on a controller): what's copied replaces what's typed. The on-screen keyboard has no paste.
+        readonly property bool canPaste: input.canPaste
+        function pasteOver() { input.selectAll(); input.paste() }
         width: parent ? Math.min(parent.width, Theme.px(360)) : 0
         anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
         height: Math.max(Theme.px(40), input.implicitHeight + Theme.px(16))

@@ -181,6 +181,8 @@ public:
     // A picture on the clipboard (pasted into the message box) or a dropped file, sent to a contact or
     // "g:<group>:<channel>". False when there's no picture.
     Q_INVOKABLE bool clipboardHasImage() const;
+    // A group invite (a MUNINNG1 code or an invite link) on the clipboard, for Join a group to fill in; "" when none.
+    Q_INVOKABLE QString clipboardInvite() const;
     Q_INVOKABLE bool pasteImage(const QString &where);
     Q_INVOKABLE QString localPath(const QUrl &url) const { return url.toLocalFile(); }
     Q_INVOKABLE bool isPicture(const QString &path) const;

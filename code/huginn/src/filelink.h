@@ -177,7 +177,11 @@ public:
     // A big file waiting ("asking"): take it now, or say no (the sender hears so and it's gone here).
     Q_INVOKABLE void accept(const QString &id);
     Q_INVOKABLE void decline(const QString &id);
+    // Close on a card: it goes from the list. A stopped file of theirs keeps what came (for kKeepDays), so it still
+    // goes on from there if they send it again; discard also deletes that part. keptSize: bytes kept for a card (0: none).
     Q_INVOKABLE void dismiss(const QString &id);
+    Q_INVOKABLE void discard(const QString &id);
+    Q_INVOKABLE double keptSize(const QString &id) const;
     Q_INVOKABLE bool hasF1(const QString &peer) const { return peerHasF1 && peerHasF1(peer); }
     // A file that came through the relays (a message with "file"): saved in Downloads. "" when saved.
     Q_INVOKABLE QString saveReceived(const QString &peer, const QString &msgId);

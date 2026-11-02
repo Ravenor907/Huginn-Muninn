@@ -2409,7 +2409,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             // Cap g3: Report to admins, through the group (an admin's older app gets a private message, when a contact).
             if (!gm.mine && gm.unsent.isEmpty() && gm.from.isNotEmpty() && !grp.readOnly && s.admins.any { it != me && it != gm.from })
                 add(SheetAction("Report to admins", "info", folder = "Message") {
-                    Ui.sure(Ask("Report this message?", "Only the group's admins see it.", "Report", onConfirm = {
+                    Ui.sure(Ask("Report this message?", "Only the group's admins see it, and that it came from you.", "Report", onConfirm = {
                         val n = app.chat.groups.report(g, gm.id) { k, line -> app.chat.sendPrivate(k, line) }
                         if (n == 0) Ui.say("No admin can get it yet. They may need an update.", true)
                         else Ui.say(if (n == 1) "Sent to 1 admin." else "Sent to $n admins.")
@@ -2690,9 +2690,9 @@ private fun ChannelDialog(app: Muninn, g: String, edit: Proto06.Channel?, startV
                     MButton("Text", Modifier.weight(1f), if (!voice) Kind.Accent else Kind.Normal) { voice = false }
                     MButton("Voice room", Modifier.weight(1f), if (voice) Kind.Accent else Kind.Normal) { voice = true }
                 }
-                // Cap g3: for #rules or #announcements.
+                // Cap g3: for #announcements. Posts still go after the group's message days: lasting rules go in About and rules.
                 if (edit != null && edit.t == "text" && edit.id != Proto06.MAIN)
-                    io.github.ravenor907.muninn.ui.ToggleRow("Only admins post", "For rules or announcements", adminsOnly) { adminsOnly = it }
+                    io.github.ravenor907.muninn.ui.ToggleRow("Only admins post", "For announcements. Posts here still go after the group's message days; lasting rules go in About and rules", adminsOnly) { adminsOnly = it }
             }
         },
         confirmButton = {

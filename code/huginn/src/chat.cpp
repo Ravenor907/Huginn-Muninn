@@ -3711,6 +3711,15 @@ bool Chat::clipboardHasImage() const
     return c && (!c->image().isNull() || !clipboardGif().isEmpty());
 }
 
+QString Chat::clipboardInvite() const
+{
+    const QClipboard *c = QGuiApplication::clipboard();
+    const QString t = c ? c->text().trimmed() : QString();
+    if (t.isEmpty() || t.size() > 4096)
+        return QString();
+    return parseGroupCode(t).isEmpty() ? QString() : t;
+}
+
 // A pasted picture goes through the same shrinking and scrubbing as a picked one.
 bool Chat::pasteImage(const QString &where)
 {

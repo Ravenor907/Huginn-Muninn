@@ -79,7 +79,7 @@ internal fun ColumnScope.ModRows(app: Muninn, g: String, key: String, name: Stri
     }
     MenuRow(if (p.muted) "sound" else "mute", if (p.muted) "Unmute for me" else "Mute for me") {
         done(); app.chat.sound.setMuted(key, !p.muted)
-        io.github.ravenor907.muninn.ui.Ui.say(if (p.muted) "$name isn't muted for you." else "$name is muted for you.")
+        io.github.ravenor907.muninn.ui.Ui.say(if (p.muted) "$name isn't muted for you." else "$name is muted for you, their voice in voice rooms and group calls too. Their face there says Muted by you.")
     }
     if (p.muted) MenuRow("hide", "Fold their messages", value = if (!p.show) "On" else "Off") { app.chat.sound.setHides(key, p.show) }
     MenuRow("audio", "Volume (just for you)", value = "${p.volume}%") { go("volume") }
@@ -202,7 +202,7 @@ internal fun PersonModDialog(app: Muninn, g: String, key: String, name: String, 
                 MenuRow(if (p.muted) "sound" else "mute", if (p.muted) "Unmute their voice" else "Mute their voice in rooms") {
                     app.chat.sound.setMuted(key, !p.muted)
                     if (!p.muted) app.chat.sound.setHides(key, false)
-                    say(if (p.muted) "You hear $name again." else "$name's voice is muted for you in voice rooms. Calls with them aren't. Their messages still show.", false)
+                    say(if (p.muted) "You hear $name again." else "$name's voice is muted for you in voice rooms and group calls. 1:1 calls with them aren't. Their messages still show.", false)
                 }
                 if (p.muted) MenuRow("hide", "Fold their messages", value = if (!p.show) "On" else "Off") { app.chat.sound.setHides(key, p.show) }
                 MenuRow("audio", "Volume (just for you)", value = "${p.volume}%") { page = "volume" }

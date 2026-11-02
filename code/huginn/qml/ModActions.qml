@@ -54,7 +54,11 @@ QtObject {
             Ui.sure("Ban " + name + "?", clear ? "Their messages from the last day show as Removed by an admin, and they can't rejoin until you unban them."
                                                : "They leave the group and can't rejoin by a link, code or invite until you unban them.", "Ban", () => {
                 const n = clear && typeof Mod.removeRecent === "function" ? Mod.removeRecent(g, k, 86400000) : 0
-                tell(Mod.ban(g, k), name + " is banned." + (n > 0 ? " " + n + (n === 1 ? " message removed." : " messages removed.") : ""))
+                // One removal list holds at most 50 (ModWire::kMaxList), and apps without g2 keep showing them.
+                const behind = n > 0 && typeof Mod.withoutRemove === "function" ? Mod.withoutRemove(g) : 0
+                tell(Mod.ban(g, k), name + " is banned." + (n > 0 ? " " + n + (n === 1 ? " message removed." : " messages removed.") : "")
+                     + (n >= 50 ? " Some older ones may still be up: remove them one at a time." : "")
+                     + (behind > 0 ? " " + behind + (behind === 1 ? " member still sees them until they update." : " members still see them until they update.") : ""))
             }, false, true)
         }, back)
     }

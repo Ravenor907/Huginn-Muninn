@@ -139,6 +139,14 @@ Item {
     function restoreNow(copyOk) {
         const where = panel.opened.device || (panel.opened.app === "muninn" ? "your phone" : "that device")
         const copy = panel.opened.app === "muninn" || (!!panel.opened.device && panel.opened.device !== Settings.deviceName)
+        // Already linked to a phone: restoring here doesn't stop the link, it breaks both (R12).
+        const linked = !!Linked.phone.key && !Linked.phone.gone
+        if (linked && !copyOk) {
+            Ui.sure("This PC is linked to " + (Linked.phone.name || "your phone"),
+                    "This PC is already linked to " + (Linked.phone.name || "your phone") + ". Restoring a backup here breaks both: unlink first (Settings › Linked devices), then restore.",
+                    "Restore anyway", () => panel.restoreNow(true), false, true)
+            return
+        }
         if (copy && !copyOk) {
             Ui.sure("This makes a copy of you",
                     "This computer becomes the same person as " + where + ". If both are used, messages stop working on one or both, and friends see errors. "
@@ -247,6 +255,12 @@ Item {
                     width: parent.width
                     spacing: Theme.px(10)
                     Line { text: "What's inside: your identity, contacts, chats, groups, folders and settings." }
+                    // Linked to a phone: this saves the PC's own account, not the phone's (R2).
+                    Line {
+                        visible: !!Linked.phone.key && !Linked.phone.gone
+                        color: Theme.danger
+                        text: "This PC's own account, not your phone's. To keep your account safe, back up on your phone: in Muninn, Settings › More › Backup."
+                    }
                     Rectangle {
                         width: parent.width
                         height: filesRow.implicitHeight + Theme.px(20)

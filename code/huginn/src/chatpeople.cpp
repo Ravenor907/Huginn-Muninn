@@ -276,8 +276,8 @@ QString Chat::notifyMode(const QString &key) const
 {
     const QString k = flagKey(key);
     const QString own = m_notifyMode.value(k);
-    if (own == kMentions && !k.startsWith(QLatin1String("g:")))
-        return kEvery;   // only groups have it
+    if (own == kMentions && !k.startsWith(QLatin1String("g:")) && !k.startsWith(QLatin1String("mirror:g:")))
+        return kEvery;   // only groups have it (this computer's own, and a linked phone's)
     if (!own.isEmpty())
         return own;
     return reduceNotifications() ? kOne : kEvery;

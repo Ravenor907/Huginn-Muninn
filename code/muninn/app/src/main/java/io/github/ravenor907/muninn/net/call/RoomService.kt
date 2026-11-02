@@ -192,6 +192,8 @@ object RoomRinger {
             .setTimeoutAfter(RoomLogic.ASK_MS)
             .build()
         try { NotificationManagerCompat.from(c).notify(STILL_HERE_ID, n) } catch (_: SecurityException) {}
+        // The calls channel makes no sound: a buzz and a soft tone in the earbuds, so a pocketed phone hears it.
+        Ringer.nudge(c)
     }
 
     /** Muninn left [room] after "Still here?" went unanswered: a note that says so, until it's tapped or cleared. */

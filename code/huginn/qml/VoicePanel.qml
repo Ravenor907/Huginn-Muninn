@@ -221,9 +221,10 @@ Rectangle {
                 width: parent.width - Theme.px(12)
                 horizontalAlignment: Text.AlignHCenter
                 elide: Text.ElideRight
-                // Windows: push to talk only hears the key while Huginn is in front, so with a game in front it says so.
+                // Windows, or Linux without a shortcut portal: push to talk only hears the key while Huginn is in front,
+                // so with another app in front it says so.
                 text: !panel.tour && Rooms.talking ? "Talking"
-                    : !panel.tour && Qt.platform.os === "windows" && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while a game is in front"
+                    : !panel.tour && (Qt.platform.os === "windows" || !GlobalKeys.everywhere) && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while another app is in front"
                     : "Push to talk: hold " + TalkKey.keyName
                 color: !panel.tour && Rooms.talking ? Theme.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold

@@ -1617,7 +1617,7 @@ QString PerfCheck::factsText(const QVariantMap &ui, bool full) const
     QString seasonal = m_settings->seasonAnimation();
     if (seasonal != QLatin1String("off")) {
         const QString still = m_settings->reduceMotion() ? QStringLiteral("Less motion")
-                              : m_system->batterySaving() ? QStringLiteral("Battery saver")
+                              : m_system->batterySaving() && seasonal != QLatin1String("battery") ? QStringLiteral("Battery saver")
                               : s_animationsOff           ? QStringLiteral("Animations off")
                                                           : QString();
         if (!still.isEmpty())

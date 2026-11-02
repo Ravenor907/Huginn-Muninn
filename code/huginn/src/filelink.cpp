@@ -686,15 +686,32 @@ void FileLink::dismiss(const QString &id)
 {
     if (m_x.contains(id))
         return;
-    dropPartial(id);   // closing a stopped file of theirs lets go of what came of it
-    if (m_resumable.remove(id))
-        saveKept();
+    // A stopped file of theirs keeps what came: only its card goes (saveKept below then keeps the part without it).
+    m_resumable.remove(id);
     for (int i = 0; i < m_list.size(); ++i)
         if (m_list.at(i).value(QStringLiteral("id")).toString() == id) {
             m_list.removeAt(i);
+            saveKept();
             Q_EMIT changed();
             return;
         }
+    saveKept();
+}
+
+void FileLink::discard(const QString &id)
+{
+    if (m_x.contains(id))
+        return;
+    dropPartial(id);
+    dismiss(id);
+}
+
+double FileLink::keptSize(const QString &id) const
+{
+    const auto it = m_partial.constFind(id);
+    if (it == m_partial.cend())
+        return 0;
+    return double(QFileInfo(it->path).size());
 }
 
 QString FileLink::send(const QString &peer, const QString &path, const QString &group)

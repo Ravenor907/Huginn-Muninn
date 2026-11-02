@@ -344,7 +344,9 @@ class Muninn : Application() {
         val putAway = ownChatsPutAway()
         // Panic-locked: never a name or text on the notification.
         val preview = identity.showPreview && name != null && !io.github.ravenor907.muninn.ui.Panic.locked.value && !putAway
-        val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).apply { if (!putAway) putExtra("chat", key) }
+        // A group's: the channel the newest message is in, so the tap opens there (not the last one looked at).
+        val ch = if (key.startsWith("g:")) try { chat.groups.messages.value[key.removePrefix("g:")]?.lastOrNull { !it.mine }?.ch.orEmpty() } catch (_: Exception) { "" } else ""
+        val open = PendingIntent.getActivity(this, key.hashCode(), Intent(this, MainActivity::class.java).apply { if (!putAway) { putExtra("chat", key); putExtra("ch", ch) } }
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         // Previews off: a group still says which group and channel ("Gaming · #memes"), never who or what.
         val where = if (!preview && !putAway && !io.github.ravenor907.muninn.ui.Panic.locked.value) groupWhere(key) else null

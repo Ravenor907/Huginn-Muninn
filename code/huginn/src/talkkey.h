@@ -7,8 +7,8 @@ class Settings;
 class RoomManager;
 
 // The push to talk key (Settings › Calls). Watches the keyboard while Huginn is in front: holding the
-// key in a voice room lets the microphone send (RoomManager::setTalking), and the key is kept from
-// typing into a message box while push to talk is on. Not a system-wide hook: other apps' keys are
+// key in a voice room lets the microphone send (RoomManager::setTalking). While a text box has the focus the key
+// types there instead (a message can still have a ` or a space in it). Not a system-wide hook: other apps' keys are
 // never seen, so it only works while Huginn has the focus. GlobalKeys (globalkeys.h) covers the rest of the time where
 // the system allows it.
 class TalkKey : public QObject

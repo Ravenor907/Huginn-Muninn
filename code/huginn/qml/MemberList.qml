@@ -20,7 +20,7 @@ Rectangle {
     readonly property var voiceIn: {
         const out = {}
         if (!host) return out
-        if (tour) { out["j"] = "Lounge"; out["s"] = "Lounge"; return out }
+        if (tour) { out["j"] = "Voice"; out["s"] = "Voice"; return out }
         if (host.locked || gid === "") return out
         Rooms.presence; Rooms.people
         host.channels.filter(c => c.type === "voice").forEach(c => Rooms.whoIn(gid, c.id).forEach(p => out[p.me ? "me" : p.key] = c.name))

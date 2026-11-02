@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
@@ -209,10 +210,75 @@ object Ringer {
     fun stop(c: Context) {
         NotificationManagerCompat.from(c).cancel(RING_ID)
         sound(c, false)
+        softSound(c, false)
     }
 
-    /** [key]: the chat it opens (the caller, or "g:" and a group for a group call). */
-    fun missed(c: Context, name: String, key: String) {
+    /**
+     * A 1:1 call while in a voice room: no full ring over the room. A soft call-waiting tone in the room's own sound
+     * (the earbuds), one short buzz, and a notification with Join call and leave room or Decline. Unanswered, it ends
+     * as a missed call with its notice.
+     */
+    fun ringInRoom(c: Context, name: String, room: String) {
+        channels(c)
+        val who = shown(c, name)
+        val n = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)
+            .setContentTitle((who ?: "Someone") + " is calling")
+            .setContentText(if (room.isEmpty()) "You're in a voice room" else "You're in $room")
+            .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_MAX)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setOngoing(true).setAutoCancel(false)
+            .setContentIntent(screen(c, CallActivity.SHOW))
+            .addAction(0, "Join call and leave room", screen(c, CallActivity.ANSWER))
+            .addAction(0, "Decline", action(c, CallActions.DECLINE))
+            .setTimeoutAfter(CallLogic.RING_MS + 2_000)
+            .build()
+        try { NotificationManagerCompat.from(c).notify(RING_ID, n) } catch (_: SecurityException) {}
+        softSound(c, true)
+    }
+
+    @Volatile private var soft: ToneGenerator? = null
+    private val softBeep = object : Runnable {
+        override fun run() {
+            val t = soft ?: return
+            try { t.startTone(ToneGenerator.TONE_SUP_CALL_WAITING, 700) } catch (_: Exception) {}
+            gap.postDelayed(this, 4_000)
+        }
+    }
+
+    /** The soft ring in a room: a short tone every 4 s on the call's own sound, and one buzz (none on silent or Do not disturb). */
+    @Synchronized
+    private fun softSound(c: Context, on: Boolean) {
+        gap.removeCallbacks(softBeep)
+        soft?.let { try { it.release() } catch (_: Exception) {} }
+        soft = null
+        if (!on) return
+        val dnd = try { (c.applicationContext as Muninn).doNotDisturb() } catch (_: Exception) { false }
+        val mode = if (dnd) AudioManager.RINGER_MODE_SILENT else c.getSystemService(AudioManager::class.java).ringerMode
+        if (mode == AudioManager.RINGER_MODE_SILENT) return
+        val vib = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(VibratorManager::class.java)?.defaultVibrator
+            else @Suppress("DEPRECATION") c.getSystemService(Vibrator::class.java)
+        try { vib?.vibrate(VibrationEffect.createOneShot(250, VibrationEffect.DEFAULT_AMPLITUDE)) } catch (_: Exception) {}
+        soft = try { ToneGenerator(AudioManager.STREAM_VOICE_CALL, 60) } catch (_: Exception) { null }
+        gap.post(softBeep)
+    }
+
+    /**
+     * One nudge in a voice room ("Still here?"): a short double buzz and a soft tone in the room's own sound, so a
+     * listener with the screen off notices. Nothing on silent or Do not disturb.
+     */
+    fun nudge(c: Context) {
+        val dnd = try { (c.applicationContext as Muninn).doNotDisturb() } catch (_: Exception) { false }
+        val mode = if (dnd) AudioManager.RINGER_MODE_SILENT else c.getSystemService(AudioManager::class.java).ringerMode
+        if (mode == AudioManager.RINGER_MODE_SILENT) return
+        val vib = if (Build.VERSION.SDK_INT >= 31) c.getSystemService(VibratorManager::class.java)?.defaultVibrator
+            else @Suppress("DEPRECATION") c.getSystemService(Vibrator::class.java)
+        try { vib?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 180, 160, 180), -1)) } catch (_: Exception) {}
+        val t = try { ToneGenerator(AudioManager.STREAM_VOICE_CALL, 60) } catch (_: Exception) { null } ?: return
+        try { t.startTone(ToneGenerator.TONE_PROP_BEEP2, 500) } catch (_: Exception) {}
+        gap.postDelayed({ try { t.release() } catch (_: Exception) {} }, 1_000)
+    }
+
+    /** [key]: the chat it opens (the caller, or "g:" and a group for a group call). [note]: why it was missed. */
+    fun missed(c: Context, name: String, key: String, note: String = "") {
         // Extreme battery saver: no notifications; the chat still shows it.
         if (try { (c.applicationContext as Muninn).power.manual() } catch (_: Exception) { false }) return
         channels(c)
@@ -220,7 +286,7 @@ object Ringer {
         val open = PendingIntent.getActivity(c, key.hashCode() + 1, Intent(c, io.github.ravenor907.muninn.MainActivity::class.java)
             .putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(c, MISSED).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("Missed call").setContentText(who ?: "Someone called you")
+            .setContentTitle("Missed call").setContentText(if (note.isEmpty()) who ?: "Someone called you" else "${who ?: "Someone"} called $note")
             .setCategory(NotificationCompat.CATEGORY_MISSED_CALL).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(c).notify(("missed" + key).hashCode(), n) } catch (_: SecurityException) {}

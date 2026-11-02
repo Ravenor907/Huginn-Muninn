@@ -334,7 +334,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun resumes(peer: String) = FileLink.RESUME_CAP in capsOf(peer) || envCaps[peer]?.contains(FileLink.RESUME_CAP) == true
             // A big file waiting for Accept or Decline: a notification as a message gets (it waits up to a day).
             override fun offered(where: String, from: String, text: String) { arrivals.tryEmit(Triple(this@Chat.nameOf(from), text, where)) }
+            // Cap f3: stopped files of theirs kept to go on from, across a restart (7 days), in the vault.
+            override fun readKept(): String? = vault.read(File(context.filesDir, "keptparts.json"))
+            override fun writeKept(text: String) { vault.write(File(context.filesDir, "keptparts.json"), text) }
         }
+        FileLink.loadKept()
         Link.host = object : Link.Host {
             override fun myKey() = id.publicKey
             override fun myMailbox() = nostr.publicKey
@@ -539,8 +543,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * only a hint that changes every day, which contacts (who have the key) can match (cap s1). So a stranger can't
      * follow this phone from place to place.
      */
-    /** A group message as a linked computer shows it (cap l1): "fn" is who wrote it. */
+    /** A group message as a linked computer shows it (cap l1): "fn" is who wrote it, "ch" its channel, "re" what it answers, "ed" when edited. */
     private fun linkGroupItem(m: Groups.GMsg): JSONObject = JSONObject().put("id", m.id).put("me", m.mine).put("t", m.time).put("fn", m.name.take(40))
+        .put("ch", m.ch.ifEmpty { Proto06.MAIN }.take(40))
+        .apply { if (m.re.isNotEmpty()) put("re", m.re.take(200)); if (m.edited > 0 && m.unsent.isEmpty()) put("ed", m.edited) }
         .put("x", when {
             m.unsent.isNotEmpty() -> "Message deleted"
             m.voice > 0 -> "Voice message"

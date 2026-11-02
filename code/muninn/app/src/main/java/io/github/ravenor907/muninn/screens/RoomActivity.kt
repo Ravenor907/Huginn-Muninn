@@ -1,11 +1,14 @@
 package io.github.ravenor907.muninn.screens
 
 import android.Manifest
+import android.app.PendingIntent
 import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
@@ -21,6 +24,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.call.AudioRoute
+import io.github.ravenor907.muninn.net.call.RoomActions
 import io.github.ravenor907.muninn.net.call.RoomManager
 import io.github.ravenor907.muninn.ui.MuninnTheme
 import io.github.ravenor907.muninn.ui.Panic
@@ -82,6 +86,12 @@ class RoomActivity : ComponentActivity() {
             RoomManager.room.combine(RoomManager.ring) { r, g -> r != null || g != null }.collect { if (it) seen = true else if (seen) finish() }
         }
         lifecycleScope.launch { RoomManager.notices.collect { Toast.makeText(this@RoomActivity, it, Toast.LENGTH_LONG).show() } }
+        // Picture-in-picture keeps Mute (or Unmute) and Leave up to date, and goes in by itself on Home (Android 12+).
+        lifecycleScope.launch {
+            RoomManager.room.combine(RoomManager.screen) { r, sc -> Triple(r?.muted, r?.listenOnly, sc != null) }.collect {
+                if (packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) try { setPictureInPictureParams(pipParams()) } catch (_: Exception) {}
+            }
+        }
         handle(intent)
     }
 
@@ -110,7 +120,12 @@ class RoomActivity : ComponentActivity() {
 
     // Watching: the shared screen comes only while the room screen shows (picture-in-picture counts) with the screen on.
     override fun onStart() { super.onStart(); RoomManager.setWatching(true) }
-    override fun onStop() { RoomManager.setWatching(false); super.onStop() }
+    override fun onStop() {
+        RoomManager.setWatching(false)
+        // Out of sight: no longer over the lock screen (a ring still is), so a pocketed phone doesn't light up the room.
+        if (RoomManager.ring.value == null) overLock(false)
+        super.onStop()
+    }
 
     /** Home or another app while a screen is shared: the picture goes on in a small window. */
     override fun onUserLeaveHint() {
@@ -129,7 +144,22 @@ class RoomActivity : ComponentActivity() {
         val h = if (turned) sc.width else sc.height
         // Android takes ratios between 1:2.39 and 2.39:1.
         val ratio = if (w > 0 && h > 0) Rational(w, h).let { r -> if (r.toFloat() > 2.39f) Rational(239, 100) else if (r.toFloat() < 1 / 2.39f) Rational(100, 239) else r } else Rational(16, 9)
-        return try { enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(ratio).build()) } catch (_: Exception) { false }
+        return try { enterPictureInPictureMode(pipParams(ratio)) } catch (_: Exception) { false }
+    }
+
+    /** The small window's ratio, its Mute (or Unmute) and Leave buttons, and auto-enter while a screen is shared. */
+    private fun pipParams(ratio: Rational? = null): PictureInPictureParams {
+        val r = RoomManager.room.value
+        val acts = mutableListOf<RemoteAction>()
+        fun act(icon: Int, title: String, action: String, code: Int) = RemoteAction(Icon.createWithResource(this, icon), title, title,
+            PendingIntent.getBroadcast(this, code, Intent(this, RoomActions::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        if (r != null && !r.listenOnly) acts += act(if (r.muted) android.R.drawable.ic_btn_speak_now else android.R.drawable.ic_lock_silent_mode,
+            if (r.muted) "Unmute" else "Mute", RoomActions.MUTE, 0x5201)
+        if (r != null) acts += act(android.R.drawable.ic_menu_close_clear_cancel, "Leave", RoomActions.LEAVE, 0x5202)
+        val b = PictureInPictureParams.Builder().setActions(acts)
+        if (ratio != null) b.setAspectRatio(ratio)
+        if (Build.VERSION.SDK_INT >= 31) b.setAutoEnterEnabled(r != null && RoomManager.screen.value != null && asking == null)
+        return b.build()
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {

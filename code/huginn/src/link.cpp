@@ -4,6 +4,7 @@
 #include "chatcrypto.h"
 #include "msglimits.h"
 #include "profile.h"
+#include "richwire.h"
 #include "trust.h"
 #include "vault.h"
 
@@ -145,6 +146,8 @@ void Link::ensureLoaded() const
     m_meCustom.clear();
     m_mePic.clear();
     m_own = m_phone.key.isEmpty() ? QJsonObject() : o.value(QStringLiteral("own")).toObject();
+    m_nameWanted = o.value(QStringLiteral("askName")).toBool();
+    m_drafts = QJsonDocument::fromJson(m_chat->m_vault->read(QStringLiteral("link-drafts.json"))).object();
     if (!m_phone.key.isEmpty()) {
         const QVariantMap me = readMe(o.value(QStringLiteral("me")).toObject());
         m_meName = vstr(me, "name");
@@ -196,6 +199,8 @@ void Link::save()
     for (const Device &d : std::as_const(m_companions))
         c.append(devJson(d));
     QJsonObject o{{QStringLiteral("companions"), c}};
+    if (m_nameWanted)
+        o.insert(QStringLiteral("askName"), true);
     if (!m_phone.key.isEmpty()) {
         o.insert(QStringLiteral("phone"), devJson(m_phone));
         if (!m_meName.isEmpty()) {
@@ -258,6 +263,12 @@ void Link::saveMirror()
                 j.insert(QStringLiteral("f"), fJson(x));
             if (!x.from.isEmpty())
                 j.insert(QStringLiteral("fn"), x.from);
+            if (!x.ch.isEmpty())
+                j.insert(QStringLiteral("ch"), x.ch);
+            if (!x.re.isEmpty())
+                j.insert(QStringLiteral("re"), x.re);
+            if (x.edited > 0)
+                j.insert(QStringLiteral("ed"), double(x.edited));
             a.append(j);
         }
         o.insert(m.peer, QJsonObject{{QStringLiteral("peer"), m.peer}, {QStringLiteral("n"), m.name}, {QStringLiteral("d"), m.days}, {QStringLiteral("msgs"), a},
@@ -301,7 +312,7 @@ QString Link::errText(const QString &err)
     if (err == QLatin1String("not in group"))
         return QStringLiteral("You're not in this group any more");
     if (err == QLatin1String("admins only"))
-        return QStringLiteral("Only admins post in that channel");
+        return QStringLiteral("Only admins post in that channel. Pick another channel above, or post from your phone.");
     return QStringLiteral("Didn't send");
 }
 
@@ -528,6 +539,52 @@ void Link::forgetPhone()
     saveAcct();
     saveMirror();
     dropMedia();
+    if (!m_drafts.isEmpty()) {
+        m_drafts = QJsonObject();
+        m_chat->m_vault->remove(QStringLiteral("link-drafts.json"));
+        Q_EMIT draftsChanged();
+    }
+}
+
+QVariantMap Link::drafts() const
+{
+    ensureLoaded();
+    return m_drafts.toVariantMap();
+}
+
+void Link::setDraft(const QString &peer, const QString &text, const QString &re)
+{
+    ensureLoaded();
+    if (peer.isEmpty() || !m_chat->ready())
+        return;
+    const QJsonObject before = m_drafts.value(peer).toObject();
+    if (text.isEmpty() && re.isEmpty()) {
+        if (!m_drafts.contains(peer))
+            return;
+        m_drafts.remove(peer);
+    } else {
+        const QJsonObject d{{QStringLiteral("text"), text.left(Chat::kMax)}, {QStringLiteral("re"), re.left(200)}};
+        if (d == before)
+            return;
+        m_drafts.insert(peer, d);
+    }
+    m_chat->m_vault->write(QStringLiteral("link-drafts.json"), compact(m_drafts));
+    Q_EMIT draftsChanged();
+}
+
+bool Link::nameWanted() const
+{
+    ensureLoaded();
+    return m_nameWanted;
+}
+
+void Link::nameGiven()
+{
+    ensureLoaded();
+    if (!m_nameWanted)
+        return;
+    m_nameWanted = false;
+    save();
 }
 
 bool Link::ownChats() const
@@ -600,11 +657,25 @@ QVariantList Link::mirror() const
         all << &m;
     auto last = [](const Mirror *m) { return m->msgs.isEmpty() ? qint64(0) : m->msgs.last().time; };
     std::sort(all.begin(), all.end(), [&](const Mirror *a, const Mirror *b) { return last(a) > last(b); });
+    // A group's text channels from its signed state, in its order: [{id, name, ao}] (ao: only admins post, 28.2).
+    auto chansOf = [](const Item &i) {
+        QVariantList chans;
+        for (const QJsonValue &v : i.v.value(QStringLiteral("st")).toObject().value(QStringLiteral("channels")).toArray()) {
+            const QJsonObject c = v.toObject();
+            if (jstr(c, "t") != QLatin1String("text") || jstr(c, "id").isEmpty())
+                continue;
+            const QString n = jstr(c, "n").simplified().left(32);
+            chans << QVariantMap{{QStringLiteral("id"), jstr(c, "id")}, {QStringLiteral("name"), n.isEmpty() ? QStringLiteral("general") : n},
+                                 {QStringLiteral("ao"), c.value(QStringLiteral("ao")).toBool()}};
+        }
+        return chans;
+    };
     QVariantList out;
     for (const Mirror *m : all) {
         // Cap l1: the name the account gives (a nickname first), the folders it's in, and my role in a group.
         QString name = m->name, role;
         QStringList folders;
+        QVariantList chans;
         if (m_phone.l1) {
             const bool group = m->peer.startsWith(QLatin1String("g:"));
             const Item i = m_acct.value(group ? QStringLiteral("group|") + m->peer.mid(2) : QStringLiteral("contact|") + m->peer);
@@ -614,6 +685,7 @@ QVariantList Link::mirror() const
                 if (group) {
                     const QString r = jstr(i.v, "role");
                     role = r == QLatin1String("owner") ? QStringLiteral("Owner") : r == QLatin1String("admin") ? QStringLiteral("Admin") : QStringLiteral("Member");
+                    chans = chansOf(i);
                 }
             }
             for (const Item &f : std::as_const(m_acct))
@@ -626,7 +698,7 @@ QVariantList Link::mirror() const
                            {QStringLiteral("last"), !l ? QString() : (l->mine ? QStringLiteral("You: ") : l->from.isEmpty() ? QString() : l->from + QStringLiteral(": ")) + l->text.left(80)},
                            {QStringLiteral("time"), double(last(m))}, {QStringLiteral("role"), role}, {QStringLiteral("folders"), folders.join(QStringLiteral(", "))},
                            {QStringLiteral("unread"), unreadIn(m->msgs, m->readAt)}, {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + m->peer)},
-                           {QStringLiteral("group"), m->peer.startsWith(QLatin1String("g:"))}};
+                           {QStringLiteral("group"), m->peer.startsWith(QLatin1String("g:"))}, {QStringLiteral("chans"), chans}};
     }
     // Cap l1: a group on the phone with nothing here yet (just joined, or no messages) still shows, at the end.
     if (m_phone.l1) {
@@ -639,7 +711,8 @@ QVariantList Link::mirror() const
                                  {QStringLiteral("last"), QString()}, {QStringLiteral("time"), 0.0},
                                  {QStringLiteral("role"), r == QLatin1String("owner") ? QStringLiteral("Owner") : r == QLatin1String("admin") ? QStringLiteral("Admin") : QStringLiteral("Member")},
                                  {QStringLiteral("folders"), QString()}, {QStringLiteral("unread"), 0},
-                                 {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + peer)}, {QStringLiteral("group"), true}};
+                                 {QStringLiteral("muted"), m_chat->isMuted(QStringLiteral("mirror:") + peer)}, {QStringLiteral("group"), true},
+                                 {QStringLiteral("chans"), chansOf(i)}};
         }
     }
     return out;
@@ -657,13 +730,16 @@ QVariantList Link::messages(const QString &peer) const
     for (const M &x : m_mirror.value(peer).msgs)
         out << QVariantMap{{QStringLiteral("id"), x.id}, {QStringLiteral("text"), x.text}, {QStringLiteral("mine"), x.mine}, {QStringLiteral("time"), double(x.time)},
                            {QStringLiteral("kind"), x.kind}, {QStringLiteral("media"), haveMedia(x.hash) ? mediaId(x.hash) : QString()},
-                           {QStringLiteral("name"), x.name}, {QStringLiteral("size"), double(x.size)}, {QStringLiteral("from"), x.from}};
+                           {QStringLiteral("name"), x.name}, {QStringLiteral("size"), double(x.size)}, {QStringLiteral("from"), x.from},
+                           {QStringLiteral("ch"), x.ch.isEmpty() ? QStringLiteral("main") : x.ch}, {QStringLiteral("re"), x.re},
+                           {QStringLiteral("edited"), double(x.edited)}};
     for (const Pending &p : m_pending)
         if (p.peer == peer)
             out << QVariantMap{{QStringLiteral("id"), p.id}, {QStringLiteral("text"), p.text}, {QStringLiteral("mine"), true}, {QStringLiteral("time"), double(p.time)},
                                {QStringLiteral("kind"), QString()}, {QStringLiteral("media"), QString()}, {QStringLiteral("name"), QString()},
                                {QStringLiteral("size"), 0.0}, {QStringLiteral("pending"), true}, {QStringLiteral("failed"), !p.err.isEmpty()},
-                               {QStringLiteral("err"), p.err}};
+                               {QStringLiteral("err"), p.err}, {QStringLiteral("ch"), p.ch.isEmpty() ? QStringLiteral("main") : p.ch},
+                               {QStringLiteral("re"), p.re}, {QStringLiteral("edited"), 0.0}};
     return out;
 }
 
@@ -1281,6 +1357,10 @@ Link::M Link::mOf(const QJsonObject &o)
         m.name = jstr(f, "nm").left(255);
     }
     m.from = jstr(o, "fn").simplified().left(40);
+    // Optional: a group message's channel, what it answers, and when it was edited.
+    m.ch = jstr(o, "ch").left(40);
+    m.re = jstr(o, "re").left(200);
+    m.edited = qMax<qint64>(0, qint64(o.value(QStringLiteral("ed")).toDouble()));
     return m;
 }
 
@@ -1338,6 +1418,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
             return true;
         }
         forgetPhone();   // another phone: nothing of the last one stays
+        m_nameWanted = false;
         m_phone = Device{from, mb.size() == 64 ? mb : QString(), n.isEmpty() ? QStringLiteral("Your phone") : n, false};
         m_acctFresh = true;   // cap l1: its first full account replaces whatever this device had
         save();
@@ -1350,6 +1431,9 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         if (ph) {
             Q_EMIT m_chat->notice(QStringLiteral("%1 unlinked this device.").arg(m_phone.name));
             forgetPhone();
+            // Its own name from before isn't known: the next screens ask for one (R7), so it doesn't keep the phone's.
+            if (!m_ownBack)
+                m_nameWanted = true;
         }
         save();
         return true;
@@ -1446,7 +1530,10 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
                         c.name = QStringLiteral("Someone");
                     }
                     if (std::none_of(c.msgs.cbegin(), c.msgs.cend(), [&](const M &x) { return x.id == mid; })) {
-                        merge(c.msgs, {M{mid, done.text, true, now(), {}, {}, {}, 0}});
+                        M x{mid, done.text, true, now(), {}, {}, {}, 0};
+                        x.ch = done.ch;
+                        x.re = done.re;
+                        merge(c.msgs, {x});
                         saveMirror();
                     }
                 }
@@ -1521,8 +1608,13 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         if (c.name.isEmpty())
             c.name = QStringLiteral("Someone");
         // Cap l3 (15.3): an id already here is that message edited or deleted: it replaces the old copy, quietly.
-        const bool again = std::any_of(c.msgs.cbegin(), c.msgs.cend(), [&](const M &y) { return y.id == x.id; });
+        const auto was = std::find_if(c.msgs.cbegin(), c.msgs.cend(), [&](const M &y) { return y.id == x.id; });
+        const bool again = was != c.msgs.cend();
+        // Its file went with it (deleted for everyone): the copy here goes too, not at some later prune.
+        const bool fileGone = again && !was->hash.isEmpty() && was->hash != x.hash;
         merge(c.msgs, {x});
+        if (fileGone)
+            dropMedia();
         // My own message from here came back: it isn't pending any more. Only when one pending row has its text (two
         // the same wait for their "result", which ends each by its own id).
         if (x.mine && !again) {
@@ -1539,8 +1631,16 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         want(x);
         fetchNext();
         // Who wrote it, in a group ("Sam in gaming server"). Muted here or on the phone: notifyFor stays quiet.
-        if (!x.mine && !again)
-            Q_EMIT m_chat->arrived(x.from.isEmpty() ? c.name : x.from + QStringLiteral(" in ") + c.name, x.text.left(60), QStringLiteral("mirror:") + peer);
+        // One deleted before it ever came here (sent on late) isn't news: no notification for it.
+        // A group set to Mentions only here (R10) hears of @me and of replies to my messages: the title says so, as for
+        // this computer's own groups (Chat::toMe).
+        if (!x.mine && !again && x.text != QLatin1String("Message deleted")) {
+            const bool toMe = !x.from.isEmpty()
+                && ((!m_meName.isEmpty() && RichWire::mentions(x.text, m_meName))
+                    || (!x.re.isEmpty() && std::any_of(c.msgs.cbegin(), c.msgs.cend(), [&](const M &y) { return y.id == x.re && y.mine; })));
+            const QString who = x.from.isEmpty() ? c.name : x.from + (toMe ? QStringLiteral(" mentioned you in ") : QStringLiteral(" in ")) + c.name;
+            Q_EMIT m_chat->arrived(who, x.text.left(60), QStringLiteral("mirror:") + peer);
+        }
         return true;
     }
     if (ph && t == QLatin1String("part")) {
@@ -2127,6 +2227,8 @@ bool Link::startChat(const QString &peer)
 void Link::markRead(const QString &peer)
 {
     ensureLoaded();
+    // Opened: with Reduce notifications, its next message notifies again (as this computer's own chats do).
+    m_chat->m_notified.remove(QStringLiteral("mirror:") + peer);
     auto it = m_mirror.find(peer);
     if (it == m_mirror.end() || it->msgs.isEmpty() || it->msgs.last().time <= it->readAt)
         return;

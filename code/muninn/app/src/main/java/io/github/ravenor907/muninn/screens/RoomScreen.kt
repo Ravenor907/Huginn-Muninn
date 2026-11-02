@@ -66,12 +66,18 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
     val roomCtx = androidx.compose.ui.platform.LocalContext.current
     val app = roomCtx.applicationContext as? io.github.ravenor907.muninn.Muninn
     var modFor by remember { mutableStateOf<RoomManager.Person?>(null) }
+    // Who I muted for me (the chat's Mute for me too): their face says so, so a silent face isn't taken for a broken mic.
+    val soundAll by remember(app) {
+        app?.chat?.sound?.all ?: kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, io.github.ravenor907.muninn.net.PeopleSound.Person>())
+    }.collectAsState()
     val room by RoomManager.room.collectAsState()
     val ring by RoomManager.ring.collectAsState()
     val screen by RoomManager.screen.collectAsState()
     // A shared screen or a camera picture showing: the phone's screen stays on.
     val pics by io.github.ravenor907.muninn.net.call.RoomVideo.state.collectAsState()
-    KeepScreenOn(room != null && (screen != null || pics.cameraOn || pics.pics.values.any { it.on }))
+    // Not while the lock screen is up: a room opened from the lock screen never keeps a pocketed phone lit.
+    val keyguard = roomCtx.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true
+    KeepScreenOn(!keyguard && room != null && (screen != null || pics.cameraOn || pics.pics.values.any { it.on }))
     // Tap the shared screen: full screen and landscape. Picture-in-picture: just the picture.
     var full by remember { mutableStateOf(false) }
     LaunchedEffect(screen == null) { if (screen == null) full = false }
@@ -122,7 +128,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
             Text(status(r), style = Type.normal.copy(color = Palette.textMuted))
             if (r.note.isNotEmpty()) Text(r.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             // A phone call has the sound: the room is paused, mic and sound, until it ends.
-            if (r.held.isNotEmpty()) Text("${r.held}. The room is paused and others see you muted.", style = Type.small.copy(color = Palette.danger),
+            if (r.held.isNotEmpty()) Text(if (r.held == io.github.ravenor907.muninn.net.call.SoundHold.OTHER_APP) "${r.held}. Others see you muted." else "${r.held}. The room is paused and others see you muted.", style = Type.small.copy(color = Palette.danger),
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
             if (r.deafened) Text("Deafened: you hear nobody and your mic is off", style = Type.small.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
             if (r.listenOnly) {
@@ -177,19 +183,22 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 r.people.forEach { p ->
                     val name = if (hideNames && !p.me) "?" else p.name
+                    val mutedByMe = !p.me && soundAll[p.key]?.muted == true
                     Column(Modifier.width(96.dp).clip(io.github.ravenor907.muninn.ui.Corner)
                         .combinedClickable(enabled = !p.me && !hideNames && app != null, onClickLabel = "Menu", onLongClickLabel = "Menu",
                             onLongClick = { modFor = p }) { modFor = p }
                         .semantics {
                         contentDescription = name + (if (p.speaking) ", speaking" else "") + (if (p.muted) ", muted" else "") +
+                            (if (mutedByMe) ", muted by you, tap to unmute" else "") +
                             (if (p.state == "connecting") ", connecting" else if (p.state == "reconnecting") ", reconnecting" else "")
                     }, horizontalAlignment = Alignment.CenterHorizontally) {
                         Box {
                             Face(if (hideNames && !p.me) "" else if (p.me) "me" else p.key, name, p.speaking, p.state != "live", size = 72)
-                            if (p.muted) Box(Modifier.align(Alignment.BottomEnd).size(24.dp).clip(CircleShape).background(Palette.dangerFill)
+                            if (p.muted || mutedByMe) Box(Modifier.align(Alignment.BottomEnd).size(24.dp).clip(CircleShape).background(Palette.dangerFill)
                                 .border(1.dp, Palette.dangerLine, CircleShape), contentAlignment = Alignment.Center) { MIcon("mute", Palette.text, 14.dp) }
                         }
                         Text(name, style = Type.small.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
+                        if (mutedByMe) Text("Muted by you", style = Type.small.copy(fontSize = 12.sp, color = Palette.danger), maxLines = 1)
                         if (p.state != "live") Text(if (p.state == "reconnecting") "Reconnecting" else "Connecting", style = Type.small.copy(fontSize = 12.sp))
                     }
                 }

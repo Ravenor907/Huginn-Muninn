@@ -45,6 +45,9 @@ Rectangle {
                                              : [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
     readonly property string status: ""
     // Look › Amount: how many fall in this window now (the Amount picked, or the window's own).
+    // The Seasonal leaves or snow are held still only because of the battery (Battery saver, or idle on battery).
+    readonly property bool fallBatteryHeld: Theme.seasonal && Settings.seasonAnimation === "full" && !Settings.reduceMotion
+                                            && !Perf.animationsOff && (System.batterySaving || System.onBattery)
     readonly property int fallShown: Theme.fallCount(Ui.main ? Ui.main.width : 1600, Ui.main ? Ui.main.height : 900)
     // Look › Amount and Size: where the slider sits (0 to 100) and what a position sets.
     // Gradient: 0 (flat) to 200%, the slider's 0 to 100.
@@ -112,8 +115,12 @@ Rectangle {
             { group: "Theme", kind: "slider", key: "seasonGradient", hide: !Theme.seasonal || Theme.flatGround,
               title: "Gradient: " + (Settings.seasonGradient === 0 ? "Flat" : Settings.seasonGradient + "%"), low: "Flat", high: "Strong" },
             { group: "Theme", kind: "segmented", key: "seasonAnimation", hide: !Theme.seasonal, title: "Animation",
-              note: Settings.reduceMotion ? "Held still by Less motion" : System.batterySaving ? "Paused by Battery saver" : Perf.animationsOff ? "Held still on this computer" : "Less motion and Battery saver hold it still",
-              options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }] },
+              note: Settings.seasonAnimation === "off" ? "" : Settings.reduceMotion ? "Held still by Less motion" : Perf.animationsOff ? "Held still on this computer"
+                    : page.fallBatteryHeld ? "" : Settings.seasonAnimation === "battery" ? "Moves on battery too, at a slower pace" : "Less motion and Battery saver hold it still",
+              options: [{ value: "off", label: "Off" }, { value: "full", label: "On" }, { value: "battery", label: "On, even on battery" }] },
+            // Held still on battery: why, in one line, and Move anyway switches Animation to On, even on battery.
+            { group: "Theme", kind: "button", key: "fallAnyway", hide: !page.fallBatteryHeld,
+              title: System.batterySaving ? "Held still by Battery saver" : "On battery, held still after 30 s without input", label: "Move anyway" },
             { group: "Theme", kind: "slider", key: "fallCount", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
               title: "Amount: " + page.fallShown + (Theme.snow ? (page.fallShown === 1 ? " flake" : " flakes") : (page.fallShown === 1 ? " leaf" : " leaves")),
               low: "1", high: "400" },
@@ -153,7 +160,7 @@ Rectangle {
             // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
             { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk", note: GlobalKeys.talkNote },
             { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: "Talk key: " + TalkKey.keyName,
-              note: TalkKey.capturing ? "Press the new key" : "", label: TalkKey.capturing ? "Press a key" : "Change" },
+              note: TalkKey.capturing ? "Press the new key" : "While you type in a text box, it types instead of talking", label: TalkKey.capturing ? "Press a key" : "Change" },
             { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Settings.pushToTalk,
               title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
@@ -815,6 +822,7 @@ Rectangle {
         }
         else if (key === "resetKeys") { GlobalKeys.resetKeys(); Ui.say("Mute and deafen keys are Ctrl+Shift+M and Ctrl+Shift+D again.") }
         else if (key === "resetPanels") { Ui.resetPanels(); Ui.say("Panels reset.") }
+        else if (key === "fallAnyway") { Settings.seasonAnimation = "battery"; Ui.say("Animation: On, even on battery. It moves slower on battery to save power.") }
         else if (key === "shortcuts") Ui.main.showShortcuts()
         else if (key === "backup") startBackup()
         else if (key === "restore") startRestore()

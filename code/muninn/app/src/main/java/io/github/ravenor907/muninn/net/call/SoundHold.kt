@@ -9,7 +9,7 @@ package io.github.ravenor907.muninn.net.call
 object SoundHold {
     const val ON_CALL = "On a phone call"
     const val OTHER_CALL = "In a call in another app"
-    const val OTHER_APP = "Paused while another app plays"
+    const val OTHER_APP = "Another app has the sound"
 
     // AudioManager's numbers.
     const val MODE_NORMAL = 0

@@ -85,8 +85,9 @@ public:
     Q_INVOKABLE void capture(int which);
     Q_INVOKABLE void stopCapture();
     Q_INVOKABLE void resetKeys();
-    // The short sound after a Mute or Deafen key: on (unmuted, undeafened) rises, off falls. Settings › Calls turns it off.
-    Q_INVOKABLE void cue(bool on);
+    // The short sound after a Mute or Deafen key: on (unmuted, undeafened) rises, off falls; Deafen's pair is lower, so
+    // the two keys sound different. Settings › Calls turns it off.
+    Q_INVOKABLE void cue(bool on, bool deafen = false);
 
 Q_SIGNALS:
     void changed();
@@ -108,7 +109,7 @@ private:
     bool m_heardBehind = false; // a key arrived while another window was in front
     int m_capturing = 0;
     QString m_captureNote;
-    Chime *m_cueOn = nullptr, *m_cueOff = nullptr;
+    Chime *m_cueOn = nullptr, *m_cueOff = nullptr, *m_deafOn = nullptr, *m_deafOff = nullptr;
 };
 
 // Made by the platform's file.

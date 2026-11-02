@@ -106,9 +106,17 @@ public:
     // The screenshot tour only: draw Handheld mode for a stop (the tour otherwise always draws the desktop layout).
     Q_INVOKABLE void setTourHandheld(bool on);
     Q_INVOKABLE void showSteamKeyboard();
+    // Steam's on-screen keyboard is what types here (game mode, or Handheld mode with Steam there): it covers the
+    // lower half of the window, so prompts sit at the top while it's up.
+    Q_INVOKABLE bool keyboardCovers() const;
     Q_INVOKABLE void hideSteamKeyboard();
     // The computer's own file picker, several at once. Empty when nothing was picked.
     Q_INVOKABLE QStringList pickFiles() const;
+    // Huginn's own file picker (game mode, driven by the controller; Ui.pickFiles): the usual folders that exist here
+    // [{name, path}], and one folder's contents, folders first, then up to 300 files newest first
+    // [{name, path, dir, size, time}]. Hidden files are left out.
+    Q_INVOKABLE QVariantList filePlaces() const;
+    Q_INVOKABLE QVariantList listFolder(const QString &path) const;
     /** A picture file from the computer's own file picker, as a file URL; empty when none was chosen. */
     Q_INVOKABLE QString pickPicture() const;
     // Ask the system not to dim or sleep while files are being sent or received.

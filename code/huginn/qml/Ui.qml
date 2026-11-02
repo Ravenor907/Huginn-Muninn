@@ -116,6 +116,32 @@ QtObject {
     property var person: null
     function showPerson(key, name, extra) { if (person && key) person.show(key, name || "", extra || {}) }
     function sure(title, message, confirmText, cb, hold, danger, onCancel, tag) { confirm.open(title, message, confirmText, cb, hold, danger, onCancel, tag) }
+    // Files to send, then cb(paths) (nothing when none were picked). In game mode (or Handheld mode with the controller)
+    // the system's file window can't be driven with the controller and may not even show, so Huginn's own list opens:
+    // the usual folders, then folders and files (newest first), D-pad and A to pick, B back up a folder.
+    function pickFiles(cb) {
+        if (!(System.gameMode || (System.handheld && main && main.padInUse))) {
+            const paths = System.pickFiles()
+            if (paths.length) cb(paths)
+            return
+        }
+        const places = System.filePlaces()
+        if (!places.length) { say("No folders to pick from here.", true); return }
+        pickFrom("Pick a file", [{ header: "", items: places.map(p => ({ name: p.name, icon: "folder", url: p.path })) }],
+                 path => browseFiles(path, places.find(p => p.path === path).name, cb, () => pickFiles(cb)))
+    }
+    function browseFiles(dir, title, cb, back) {
+        const list = System.listFolder(dir)
+        const folders = list.filter(e => e.dir).map(e => ({ name: e.name, icon: "folder", url: "d" + e.path }))
+        const files = list.filter(e => !e.dir).map(e => ({ name: e.name, icon: "attach", detail: FileLink.size(e.size), url: "f" + e.path }))
+        if (!folders.length && !files.length) { say("Nothing in " + title + ".", true); if (back) back(); return }
+        pickFrom(title, [{ header: folders.length && files.length ? "Folders" : "", items: folders },
+                         { header: folders.length && files.length ? "Files, newest first" : "", items: files }], u => {
+            const path = u.substring(1)
+            if (u.charAt(0) === "d") browseFiles(path, path.substring(path.lastIndexOf("/") + 1), cb, () => browseFiles(dir, title, cb, back))
+            else cb([path])
+        }, back)
+    }
     // A note with one Done button (a code that was just copied, and the like).
     function note(title, message) { confirm.open(title, message, "Done", null, false, false); confirm.single = true }
 }

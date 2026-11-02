@@ -348,6 +348,11 @@ object RoomManager {
     }
 
     fun leave() = exec.execute { if (g.isEmpty()) { _room.value = null; _screen.value = null } else doLeave("") }
+    /** Leaves the room, then runs [after] (on the room's thread): a 1:1 call answered from the room's soft ring. */
+    fun leaveThen(after: () -> Unit) = exec.execute {
+        if (g.isEmpty()) { _room.value = null; _screen.value = null } else doLeave("")
+        try { after() } catch (_: Exception) {}
+    }
 
     /** Test builds only (the CI screenshots): a made-up room with a shared screen. No sound, nothing sent. */
     fun demo(title: String, group: String) {

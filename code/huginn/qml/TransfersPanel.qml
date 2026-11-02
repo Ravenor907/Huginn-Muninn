@@ -82,6 +82,9 @@ Item {
             if (FileLink.needsDirect(t.id) && Chat.isContact(t.peer))
                 out.push({ label: PeopleActions.directLabel(t.peer), act: "direct", kind: PeopleActions.directLabel(t.peer) === "Asked" ? "normal" : "primary" })
             out.push({ label: "Retry", act: "retry", kind: "accent" }, { label: "Close", act: "close", kind: "normal" })
+        } else if (t.state === "failed" && !t.mine && FileLink.keptSize(t.id) > 0) {
+            // What came of their file is kept (it goes on from there): Close keeps it, Discard asks, then deletes it.
+            out.push({ label: "Close", act: "close", kind: "normal" }, { label: "Discard", act: "discard", kind: "danger" })
         } else if (t.state === "done" || t.state === "failed") {
             out.push({ label: "Close", act: "close", kind: "normal" })
         }
@@ -97,6 +100,11 @@ Item {
         else if (a === "cancel") FileLink.cancel(t.id)
         else if (a === "retry") FileLink.retry(t.id)
         else if (a === "close") FileLink.dismiss(t.id)
+        else if (a === "discard") {
+            const pct = t.size > 0 ? Math.floor(t.done * 100 / t.size) : 0
+            Ui.sure("Throw away what came?", "The " + pct + "% of " + t.name + " that came (" + FileLink.size(FileLink.keptSize(t.id))
+                    + ") is deleted. It starts over if they send it again. Close keeps it for 7 days instead.", "Discard", () => FileLink.discard(t.id), false, true)
+        }
         else if (a === "open") { if (!FileLink.openFile(t.path)) Ui.say("Nothing on this computer opens this kind of file, or it was moved.", true) }
         else if (a === "folder") { if (!FileLink.showInFolder(t.path)) Ui.say("It isn't there any more.", true) }
         else if (a === "direct") PeopleActions.allowDirect(t.peer)

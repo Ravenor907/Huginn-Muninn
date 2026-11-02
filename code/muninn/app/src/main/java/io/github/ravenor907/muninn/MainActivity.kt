@@ -248,6 +248,9 @@ class MainActivity : ComponentActivity() {
         // A Kids' TV: the notification's or banner's person (the TV's own screen ignores anyone not on its list).
         if (key != "inbox") io.github.ravenor907.muninn.tv.TvNav.show(key)
         tab = "chat"
+        // A group's notification names its channel: open that one.
+        val ch = i.getStringExtra("ch").orEmpty()
+        if (key.startsWith("g:") && ch.isNotEmpty()) ChatNav.channel[key.removePrefix("g:")] = ch
         ChatNav.open = if (key == "inbox") "" else key
         intentChose = true
     }

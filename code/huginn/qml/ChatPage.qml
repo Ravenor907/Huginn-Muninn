@@ -1339,7 +1339,11 @@ Rectangle {
         })
     }
     // Join a group: the same paste box, for a group's invite link or code (a person's code works here too).
-    function joinGroup() { Ui.ask("Join a group", ownNote("To join as you, open the invite on your phone.") || "Paste the invite link or code", "", "Join", t => takePaste(t)) }
+    // A copied invite fills the box in (no hunting for Paste on a controller).
+    function joinGroup() {
+        const copied = Chat.clipboardInvite()
+        Ui.ask("Join a group", ownNote("To join as you, open the invite on your phone.") || (copied !== "" ? "The copied invite is filled in" : "Paste the invite link or code"), copied, "Join", t => takePaste(t))
+    }
     function addSomeone() { Ui.ask("Add someone or join a group", ownNote("To add people as you, use your phone.") || "Paste a code or invite link", "", "Add", t => takePaste(t)) }
     // While a phone is linked, the paste box works for this PC's own account, which looks just like the phone's.
     function ownNote(tail) {
@@ -1812,9 +1816,18 @@ Rectangle {
     function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : listPane }
     // The controller in a message box: A sends (or brings Steam's keyboard back), Y brings the
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
+    // The on-screen keyboard would cover the message box at the foot: A writes the message in a prompt at the top
+    // instead, and its A sends.
+    function writeAbove(box) {
+        Ui.ask(box.placeholder !== "" ? box.placeholder : "Message", "", box.text, "Send", t => { box.setText(t); box.enter() })
+    }
     function boxButton(box, b) {
         switch (b) {
-        case "a": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "a":
+            if (box.text.trim() !== "") box.enter()
+            else if (System.keyboardCovers()) writeAbove(box)
+            else System.showSteamKeyboard()
+            return true
         case "y": System.showSteamKeyboard(); return true
         case "x": boxOptions(box); return true
         case "down": return true

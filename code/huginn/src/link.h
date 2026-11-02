@@ -42,7 +42,8 @@ class Link : public QObject
     Q_PROPERTY(int unread READ unread NOTIFY changed)
     // On the phone: the devices that mirror it, [{key, name, ok}] (ok: the 4 emoji were checked).
     Q_PROPERTY(QVariantList companions READ companions NOTIFY changed)
-    // On a companion: the phone's chats, newest first: [{peer, name, last, time, role, folders, unread, muted, group}].
+    // On a companion: the phone's chats, newest first: [{peer, name, last, time, role, folders, unread, muted, group, chans}]
+    // (chans: a group's text channels, [{id, name, ao}], from its signed state; empty without cap l1).
     // Cap l1: groups the account has with no messages here yet (just joined) are listed too.
     Q_PROPERTY(QVariantList mirror READ mirror NOTIFY changed)
     // The link code being shown here (empty until newCode), and when it stops working (ms).
@@ -57,6 +58,11 @@ class Link : public QObject
     // {on (the phone takes part), contacts: [{key, name, nick, shown, verified, blocked, picture}],
     //  groups: [{id, name, role, gone, members: [{key, name, role}]}], folders: [{id, name, keys}]}.
     Q_PROPERTY(QVariantMap account READ account NOTIFY changed)
+    // On a companion: half-written messages in the phone's chats, kept (in the vault) until sent or cleared:
+    // {peer: {text, re}}. Their own signal, so typing never redraws the chats.
+    Q_PROPERTY(QVariantMap drafts READ drafts NOTIFY draftsChanged)
+    // The phone unlinked this device and its own name from before wasn't known: ask for one (until nameGiven).
+    Q_PROPERTY(bool nameWanted READ nameWanted NOTIFY changed)
 
 public:
     static const char kPrefix[];                       // "MUNINNL1:"
@@ -114,6 +120,7 @@ public:
     // On a companion: one mirrored chat's messages, oldest first:
     // [{id, text, mine, time, kind ("" or photo, voice, video, file), media (an id for Chat.blob, "" until it's here), name, size}],
     // then what was sent from here and not answered yet: {id, text, mine, time, pending: true, failed, err}.
+    // Every message also has ch (a group's channel id, "main" when none was given), re (what it answers) and edited (ms, 0).
     Q_INVOKABLE QVariantList messages(const QString &peer) const;
     // On a companion: a photo, voice, video or file that came from the phone, saved in Downloads. "" when done,
     // else what to tell the person.
@@ -138,6 +145,12 @@ public:
     Q_INVOKABLE void ping();
     // On a companion: one that didn't send, again (the same id, so the phone never sends it twice).
     Q_INVOKABLE void retrySend(const QString &id);
+    // A chat's draft (text "" and re "" clear it).
+    Q_INVOKABLE void setDraft(const QString &peer, const QString &text, const QString &re);
+    QVariantMap drafts() const;
+    bool nameWanted() const;
+    // This device's own account has its name again (or the person chose not to give one now).
+    Q_INVOKABLE void nameGiven();
     // On a companion: ask the phone for every chat again (Refresh), at most once in 10 minutes. What to tell the person.
     Q_INVOKABLE QString refresh();
     // On a companion: this device's own chats while a phone is linked. openOwn checks the app lock (pattern or
@@ -183,6 +196,9 @@ public:
         QString hash, kind, name;           // a photo, voice, video or file: its SHA-256 (hex), kind and name
         qint64 size = 0;
         QString from;                       // cap l1, a group chat: who wrote it
+        QString ch;                         // a group chat: its channel's id ("" from an older phone: the main one)
+        QString re;                         // the id of the message it answers ("" for none)
+        qint64 edited = 0;                  // when it was last edited (0: never)
     };
     // Merges a page into a chat's messages by id (a later copy wins), oldest first; never drops one that's there.
     static void merge(QList<M> &into, const QList<M> &page);
@@ -233,6 +249,7 @@ public:
 
 Q_SIGNALS:
     void changed();
+    void draftsChanged();
     // Cap l1: the phone's contacts' pictures changed (contactPictures).
     void picturesChanged();
 
@@ -342,6 +359,8 @@ private:
     mutable QJsonObject m_own;
     mutable QString m_lastSaved;
     bool m_ownBack = true;
+    mutable bool m_nameWanted = false;      // in link.json ("askName")
+    mutable QJsonObject m_drafts;           // link-drafts.json
     bool restoreOwn();
     // Cap l1, the companion's side: the phone's account (link-account.json), and whether the next full set replaces it.
     mutable QHash<QString, Item> m_acct;

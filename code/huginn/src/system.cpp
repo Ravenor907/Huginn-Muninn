@@ -16,7 +16,9 @@
 #endif
 #include <QCoreApplication>
 #include <QDesktopServices>
+#include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -724,6 +726,11 @@ void System::showSteamKeyboard()
     }
 }
 
+bool System::keyboardCovers() const
+{
+    return gameLike() && steamAround(m_gameMode);
+}
+
 void System::hideSteamKeyboard()
 {
     if (gameLike() && steamAround(m_gameMode))
@@ -734,6 +741,44 @@ QStringList System::pickFiles() const
 {
     return QFileDialog::getOpenFileNames(nullptr, QStringLiteral("Pick files to send"),
                                          QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+}
+
+QVariantList System::filePlaces() const
+{
+    QVariantList out;
+    QStringList seen;
+    const std::pair<QStandardPaths::StandardLocation, const char *> places[] = {
+        {QStandardPaths::DownloadLocation, "Downloads"}, {QStandardPaths::MoviesLocation, "Videos"},
+        {QStandardPaths::PicturesLocation, "Pictures"}, {QStandardPaths::DocumentsLocation, "Documents"},
+        {QStandardPaths::MusicLocation, "Music"}};
+    for (const auto &place : places) {
+        const QString path = QStandardPaths::writableLocation(place.first);
+        if (path.isEmpty() || seen.contains(path) || !QFileInfo(path).isDir())
+            continue;
+        seen << path;
+        out << QVariantMap{{QStringLiteral("name"), QString::fromLatin1(place.second)}, {QStringLiteral("path"), path}};
+    }
+    return out;
+}
+
+QVariantList System::listFolder(const QString &path) const
+{
+    QVariantList out;
+    const QDir dir(path);
+    if (path.isEmpty() || !dir.exists())
+        return out;
+    const QFileInfoList dirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable, QDir::Name | QDir::IgnoreCase);
+    for (const QFileInfo &fi : dirs)
+        out << QVariantMap{{QStringLiteral("name"), fi.fileName()}, {QStringLiteral("path"), fi.absoluteFilePath()}, {QStringLiteral("dir"), true}};
+    const QFileInfoList files = dir.entryInfoList(QDir::Files | QDir::Readable, QDir::Time);
+    int shown = 0;
+    for (const QFileInfo &fi : files) {
+        if (++shown > 300)
+            break;
+        out << QVariantMap{{QStringLiteral("name"), fi.fileName()}, {QStringLiteral("path"), fi.absoluteFilePath()}, {QStringLiteral("dir"), false},
+                           {QStringLiteral("size"), double(fi.size())}, {QStringLiteral("time"), double(fi.lastModified().toMSecsSinceEpoch())}};
+    }
+    return out;
 }
 
 QString System::pickPicture() const

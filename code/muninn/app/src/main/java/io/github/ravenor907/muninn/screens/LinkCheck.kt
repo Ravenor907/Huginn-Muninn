@@ -141,7 +141,7 @@ private fun DoneStep(companion: Boolean, name: String, onDone: () -> Unit) {
         Box(Modifier.padding(top = 18.dp).size(72.dp).clip(CircleShape).background(Palette.accentFill).border(2.dp, Palette.accent, CircleShape),
             contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
         Text("Linked", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
-        Text(if (companion) "Your chats are coming over. Photos follow on home Wi-Fi." else "Your chats are going to $name. Photos follow on home Wi-Fi.",
+        Text(if (companion) "Your chats, contacts, groups and folders are coming over. Photos follow on home Wi-Fi." else "Your chats, contacts, groups and folders are going to $name. Photos follow on home Wi-Fi.",
             style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         MButton("Done", Modifier.fillMaxWidth().padding(top = 22.dp).focusRequester(first), Kind.Accent) { onDone() }
     }

@@ -36,7 +36,7 @@ Item {
         if (tour) return
         if (where === "") { Ui.say("Open a chat first.", true); return }
         Ui.pickFrom("Send to " + title, [{ header: "", items: [
-            { name: "Send file", detail: "Any file, any size", url: "file", icon: "attach" },
+            { name: "Send file", detail: "Any kind of file, up to 4 GB", url: "file", icon: "attach" },
             { name: "Pictures from this device", detail: "Up to 10 as an album", url: "files", icon: "image" },
             { name: "Recent pictures", url: "recent", icon: "image" },
             { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },

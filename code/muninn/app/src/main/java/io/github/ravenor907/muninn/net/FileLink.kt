@@ -46,6 +46,9 @@ object FileLink {
     const val RESUME_CAP = "f3"
     const val LONG_IDLE_MS = 120_000L
     const val QUIET_MS = 2_000L
+    /** Cap f3: a stopped file of theirs is kept to go on from for 7 days, across a restart too (as Huginn's kKeepDays). */
+    const val KEEP_DAYS = 7
+    const val KEEP_MS = KEEP_DAYS * 24 * 3_600_000L
     const val MAX_BYTES = 4L * 1024 * 1024 * 1024
     /** From someone trusted, a file smaller than this arrives by itself; a bigger one asks Accept or Decline first. */
     const val AUTO_BYTES = 50L * 1024 * 1024
@@ -270,6 +273,9 @@ object FileLink {
         fun resumes(peer: String): Boolean = false
         /** A file that asks Accept or Decline first: a notification, as a message gets ([where]: its chat). */
         fun offered(where: String, from: String, text: String) {}
+        /** Cap f3: the kept parts' list (keptparts.json in the vault), so they last across a restart. Null: none. */
+        fun readKept(): String? = null
+        fun writeKept(text: String) {}
     }
 
     @Volatile var host: Host? = null
@@ -285,12 +291,52 @@ object FileLink {
     /** Mine, while it can be sent again (Retry): who to, the file and its name, and its group. */
     private val again = ConcurrentHashMap<String, Triple<String, File, String>>()
     private val againGroup = ConcurrentHashMap<String, String>()
-    /** Cap f3: a file of theirs that stopped part way, kept to go on from (this run): by its card's id. */
-    private class Partial(val peer: String, val sha: String, val size: Long, val group: String, val file: File, val below: Int)
+    /** Cap f3: a file of theirs that stopped part way, kept to go on from for [KEEP_DAYS] (across a restart): by its card's id. */
+    private class Partial(val peer: String, val sha: String, val size: Long, val group: String, val file: File, val below: Int,
+                          val name: String = "", val time: Long = System.currentTimeMillis())
     private val partials = ConcurrentHashMap<String, Partial>()
     private fun partialFor(peer: String, sha: String, size: Long, group: String): String? =
         if (host?.resumes(peer) != true) null
         else partials.entries.firstOrNull { (_, p) -> p.peer == peer && p.sha == sha && p.size == size && p.group == group && p.file.isFile }?.key
+    private fun stoppedNote(p: Partial, who: String) =
+        "Stopped at ${FileText.percent(minOf(p.size, p.below.toLong() * CHUNK), p.size)}% (no answer from $who). It goes on from there if they send it again in the next $KEEP_DAYS days."
+
+    /**
+     * Cap f3: the kept parts from before a restart (and their cards), read once the vault is open. Older than
+     * [KEEP_DAYS], or with the part file gone: dropped.
+     */
+    fun loadKept() {
+        val h = host ?: return
+        val a = try { h.readKept()?.let { JSONObject(it).optJSONArray("parts") } } catch (_: Exception) { null } ?: return
+        val oldest = System.currentTimeMillis() - KEEP_MS
+        var dropped = false
+        for (i in 0 until a.length()) {
+            val o = a.optJSONObject(i) ?: continue
+            val id = o.optString("id")
+            val name = o.optString("file")
+            // Only a part file of ours, by its plain name in the cache: nothing in the list can point elsewhere.
+            val f = if (name.startsWith("incoming-") && !name.contains('/') && !name.contains("..")) File(h.cacheDir(), name) else null
+            if (id.isEmpty() || partials.containsKey(id)) continue
+            if (f == null || !f.isFile || o.optLong("time") < oldest) { f?.delete(); dropped = true; continue }
+            val p = Partial(o.optString("peer"), o.optString("sha"), o.optLong("size"), o.optString("group"), f, o.optInt("below"),
+                o.optString("name"), o.optLong("time"))
+            if (p.peer.isEmpty() || p.sha.isEmpty() || p.size <= 0) { f.delete(); dropped = true; continue }
+            partials[id] = p
+            if (_all.value[id] == null) _all.value = _all.value + (id to Progress(id, p.peer, p.name.ifEmpty { "A file" }, p.size, false, "failed",
+                minOf(p.size, p.below.toLong() * CHUNK), note = stoppedNote(p, h.nameOf(p.peer)), group = p.group, time = p.time))
+        }
+        if (dropped) saveKept()
+    }
+
+    /** Cap f3: writes the kept parts' list (when one comes or goes). */
+    private fun saveKept() {
+        val h = host ?: return
+        val a = JSONArray()
+        for ((id, p) in partials) a.put(JSONObject().put("id", id).put("peer", p.peer).put("sha", p.sha).put("size", p.size).put("group", p.group)
+            .put("file", p.file.name).put("below", p.below).put("name", p.name).put("time", p.time))
+        try { h.writeKept(JSONObject().put("parts", a).toString()) } catch (_: Exception) {}
+    }
+
     /** A file of mine already hashed (path, size, last change): Retry doesn't read it all again. */
     private val hashed = ConcurrentHashMap<String, Triple<Long, Long, String>>()
 
@@ -373,7 +419,7 @@ object FileLink {
     fun dismiss(id: String) {
         val p = _all.value[id] ?: return
         if (FileText.running(p.state)) return
-        partials.remove(id)?.file?.delete()   // closing a stopped file of theirs lets go of what came of it
+        partials.remove(id)?.let { it.file.delete(); saveKept() }   // closing a stopped file of theirs lets go of what came of it
         directIds.remove(id)
         again.remove(id)?.second?.delete()
         againGroup.remove(id)
@@ -767,14 +813,20 @@ object FileLink {
     private fun runReceiver(id: String, inc: In, key: ByteArray, sock: DatagramSocket) {
         val h = host ?: return
         // Cap f3: the same file from the same person stopped part way before. It goes on from there.
-        val kept = partialFor(inc.peer, inc.sha, inc.size, inc.group)?.let { k -> partials.remove(k)?.also { _all.value = _all.value - k } }
+        val kept = partialFor(inc.peer, inc.sha, inc.size, inc.group)?.let { k -> partials.remove(k)?.also { _all.value = _all.value - k; saveKept() } }
         val tmp = kept?.file ?: File(h.cacheDir(), "incoming-$id")
         val f3 = h.resumes(inc.peer)
         val who = h.nameOf(inc.peer)
         var keep = false
         try {
             val peer = punch(sock, key, id, 1, inc.theirCands) ?: run {
-                fail(id, if (inc.lanOnly) "Couldn't reach them on this Wi-Fi. Ask them to send it again." else "Couldn't connect straight to them. It may come another way.")
+                // The sender's fallback over the relays (fallBack) only takes a small file, and a group's only to a contact.
+                val another = inc.size <= FileText.RELAY_MAX && (inc.group.isEmpty() || h.isContact(inc.peer))
+                fail(id, when {
+                    inc.lanOnly -> "Couldn't reach them on this Wi-Fi. Ask them to send it again."
+                    another -> "Couldn't connect straight to them. It may come another way."
+                    else -> "Couldn't connect to $who. Ask them to send it again when you're on the same Wi-Fi."
+                })
                 return
             }
             val route = Sharing.routeLabel(if (inc.lan != null && peer == inc.lan) "direct" else "internet")
@@ -802,9 +854,11 @@ object FileLink {
                         if (f3) {
                             // Kept: when they send it again it goes on from here.
                             val below = r.ack().first
-                            partials[id] = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, below)
+                            val part = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, below, inc.name)
+                            partials[id] = part
+                            saveKept()
                             keep = true
-                            fail(id, "Stopped at ${FileText.percent(minOf(inc.size, below.toLong() * CHUNK), inc.size)}% (no answer from $who). It goes on from there if they send it again while Muninn stays open.")
+                            fail(id, stoppedNote(part, who))
                         } else fail(id, "Stopped (no answer from them). Ask them to send it again.")
                         return
                     }

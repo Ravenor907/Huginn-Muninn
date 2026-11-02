@@ -10,6 +10,9 @@ import Huginn
 // answer · Retry" (or why) when the phone doesn't take it. Cap l1: group chats too (who wrote each message), with my role,
 // and the phone's folders as sections; the call button says calls ring on the phone. Cap l2 (15.2): unread counts and
 // read state both ways, mute (on the phone too), and the phone's status. A copy kept after unlinking is read only.
+// A group with more than one text channel shows them as tabs over its messages (LB and RB on a controller); a message
+// goes in the channel on screen. Both lists change in place (LiveList), so a link change never moves the view or
+// drops a text selection. Drafts are kept (Linked.drafts) until sent.
 Rectangle {
     id: panel
     visible: false
@@ -17,7 +20,7 @@ Rectangle {
     // The chat picked, kept by its key: the list re-sorts as messages come and go, and the chat on screen stays.
     property string peer: ""
     property int at: -1               // where it was picked (a chat in two folders shows twice)
-    property var drafts: ({})         // per chat: the half-written message and what it answers
+    property var chanFor: ({})        // per group chat: the channel picked (its id)
     property string zone: "chats"     // "chats" or "talk"
     property int msgSel: -1
     property string replyId: ""
@@ -28,23 +31,36 @@ Rectangle {
         if (!visible) return []
         const all = Linked.mirror, folders = Linked.account.folders || [], out = []
         const placed = {}
-        folders.forEach(f => {
+        // sec: which section a row is in, so a chat in two folders is two rows to LiveList.
+        folders.forEach((f, fi) => {
             const keys = f.keys || []
             const inIt = all.filter(c => keys.indexOf(c.peer) >= 0)
-            inIt.forEach((c, i) => { placed[c.peer] = true; out.push(Object.assign({ head: i === 0 ? f.name : "" }, c)) })
+            inIt.forEach((c, i) => { placed[c.peer] = true; out.push(Object.assign({ head: i === 0 ? f.name : "", sec: "f:" + (f.id || fi) }, c)) })
         })
         const rest = all.filter(c => !placed[c.peer])
-        rest.forEach((c, i) => out.push(Object.assign({ head: i === 0 && out.length ? "Chats" : "" }, c)))
+        rest.forEach((c, i) => out.push(Object.assign({ head: i === 0 && out.length ? "Chats" : "", sec: "" }, c)))
         return out
     }
     readonly property int row: peer === "" ? -1 : chats[at] && chats[at].peer === peer ? at : chats.findIndex(c => c.peer === peer)
     readonly property var current: row >= 0 ? chats[row] : null
-    readonly property var msgs: current ? (Linked.mirror, Linked.messages(current.peer)) : []
+    // A group's text channels (shown as tabs when there's more than one), and the one on screen ("" for none).
+    readonly property var chans: current && current.group && current.chans ? current.chans : []
+    readonly property string chan: {
+        if (chans.length < 2) return ""
+        const want = chanFor[peer]
+        return chans.some(c => c.id === want) ? want : chans[0].id
+    }
+    readonly property var chanNow: chan === "" ? null : chans.find(c => c.id === chan) || null
+    // Only admins post there, and on the phone I'm a member: no message box, as in the group itself.
+    readonly property bool chanLocked: !!chanNow && !!chanNow.ao && !!current && current.role === "Member"
+    readonly property var allMsgs: current ? (Linked.mirror, Linked.messages(current.peer)) : []
+    readonly property var msgs: chan === "" ? allMsgs : allMsgs.filter(m => (m.ch || "main") === chan)
     readonly property var picked: zone === "talk" ? msgs[msgSel] || null : null
-    readonly property var replyMsg: replyId !== "" ? msgs.find(m => m.id === replyId) || null : null
-    readonly property var prompts: zone === "talk"
+    readonly property var replyMsg: replyId !== "" ? allMsgs.find(m => m.id === replyId) || null : null
+    readonly property var prompts: (zone === "talk"
         ? [{ key: "a", label: picked && picked.failed ? "Retry" : picked && picked.media ? actionWord(picked) : "Reply" }, { key: "x", label: "Refresh" }, { key: "b", label: "Back" }]
-        : [{ key: "a", label: "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Close" }]
+        : [{ key: "a", label: "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Close" }])
+        .concat(chans.length > 1 ? [{ key: "lb", label: "Channel" }] : [])
 
     // Picks the chat at [i] in the list: its draft comes back, the last one's is kept.
     function pick(i) {
@@ -54,17 +70,35 @@ Rectangle {
         if (c.peer === peer) return
         keepDraft()
         peer = c.peer
-        const d = drafts[peer]
-        compose.text = d ? d.text : ""
-        replyId = d ? d.re : ""
+        const d = Linked.drafts[peer]
+        compose.text = d ? d.text || "" : ""
+        replyId = d ? d.re || "" : ""
         msgSel = -1
         if (zone === "talk") zone = "chats"
+        talk.stick = true
+        talk.positionViewAtEnd()
         looked()
     }
+    // The half-written message, kept in the vault so closing Huginn doesn't lose it.
     function keepDraft() {
-        if (peer === "") return
-        if (compose.text !== "" || replyId !== "") drafts[peer] = { text: compose.text, re: replyId }
-        else delete drafts[peer]
+        draftSoon.stop()
+        if (peer !== "") Linked.setDraft(peer, compose.text, replyId)
+    }
+    Timer { id: draftSoon; interval: 1500; onTriggered: panel.keepDraft() }
+    onReplyIdChanged: if (visible) draftSoon.restart()
+    // Another channel of the group on screen.
+    function pickChan(id) {
+        if (!current || id === chan) return
+        const m = Object.assign({}, chanFor)
+        m[peer] = id
+        chanFor = m
+        msgSel = -1
+        talk.stick = true
+        talk.positionViewAtEnd()
+    }
+    function stepChan(d) {
+        const i = chans.findIndex(c => c.id === chan)
+        if (i >= 0 && chans.length > 1) pickChan(chans[(i + d + chans.length) % chans.length].id)
     }
     // Opens on chat [p], else the one picked before (or the first). Nothing is read until it's been on screen a moment.
     function open(p) {
@@ -77,6 +111,7 @@ Rectangle {
         looked()
     }
     function close() {
+        keepDraft()
         readSoon.stop()
         visible = false; zone = "chats"; msgSel = -1
         // The chat behind (if any) is the one on screen again.
@@ -109,11 +144,28 @@ Rectangle {
 
     function send(t) {
         if (!current) return
-        if (kept) { Ui.say("Unlinked. Link your phone again to send.", true); return }
-        const r = Linked.send(current.peer, t, replyId)
+        if (kept) { Ui.say("Unlinked. Link your phone again to send.", true); Qt.callLater(() => { compose.text = t }); return }
+        if (chanLocked) { Ui.say("Only admins post in #" + chanNow.name + ".", true); Qt.callLater(() => { compose.text = t }); return }
+        const re = replyId
+        const r = Linked.send(current.peer, t, re, chan)
+        if (r !== "") {
+            // Refused at once: the text and the reply stay in the box (Composer empties it after sending).
+            Ui.say(r, true)
+            Qt.callLater(() => { compose.text = t; replyId = re })
+            return
+        }
         replyId = ""
-        delete drafts[current.peer]
-        if (r !== "") Ui.say(r, true)
+        draftSoon.stop()
+        Linked.setDraft(current.peer, "", "")
+        talk.stick = true
+    }
+    // What a message answers, as one short line ("" when it answers nothing).
+    function quoteOf(m) {
+        if (!m || !m.re) return ""
+        const q = allMsgs.find(x => x.id === m.re)
+        if (!q) return "Replying to an earlier message"
+        const who = q.mine ? "you" : q.from || (current ? current.name : "")
+        return "Replying to " + who + ": " + String(q.text || "").replace(/\s+/g, " ").substring(0, 80)
     }
     function write() { if (current && !kept) { zone = "chats"; compose.focusField() } }
     function replyTo(m) { if (!m || kept) return; replyId = m.id; compose.focusField() }
@@ -166,7 +218,18 @@ Rectangle {
         }
         const items = [{ name: "For 15 minutes", url: "900000" }, { name: "For 1 hour", url: "3600000" },
                        { name: "For 8 hours", url: "28800000" }, { name: "Until I turn it back on", url: "on" }]
-        Ui.pickFrom("Mute " + c.name, [{ header: Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }], a => {
+        const sections = [{ header: Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }]
+        // A group: every message, or only @mentions and replies to me (on this computer).
+        const key = "mirror:" + c.peer, mode = Chat.notifyMode(key)
+        if (c.group) sections.push({ header: "Notifications on this computer", items: [
+            { name: "Every message", url: "n:every", check: mode !== "mentions" },
+            { name: "Only mentions and replies to me", url: "n:mentions", check: mode === "mentions" }] })
+        Ui.pickFrom("Mute " + c.name, sections, a => {
+            if (a.indexOf("n:") === 0) {
+                Chat.setNotifyMode(key, a === "n:mentions" ? "mentions" : "")
+                Ui.say(a === "n:mentions" ? c.name + ": only mentions and replies to you." : c.name + ": every message.")
+                return
+            }
             const r = Linked.setMute(c.peer, a === "on" ? 8640000000000000 : Date.now() + Number(a))   // the huge one: until unmuted
             Ui.say(r === "" ? c.name + " is muted." : r, r !== "")
         })
@@ -179,6 +242,8 @@ Rectangle {
             case "a": if (picked && picked.failed) Linked.retrySend(picked.id); else if (picked && picked.media) act(picked); else if (picked) replyTo(picked); else write(); return true
             case "x": refresh(); return true
             case "left": case "b": zone = "chats"; msgSel = -1; return true
+            case "lb": stepChan(-1); return true
+            case "rb": stepChan(1); return true
             }
             return true
         }
@@ -189,6 +254,8 @@ Rectangle {
         case "a": write(); return true
         case "x": refresh(); return true
         case "b": close(); return true
+        case "lb": stepChan(-1); return true
+        case "rb": stepChan(1); return true
         }
         return true
     }
@@ -200,7 +267,7 @@ Rectangle {
         if (kept) return "Unlinked. A copy, read only."
         if (!ph.ok) return "Check the 4 emoji on both screens first."
         if (phoneHere) return "Your phone is online" + (ph.lan ? " on this Wi-Fi" : "")
-        if (ph.asked > 0 && clock - ph.asked > 20000) return "Your phone isn't answering. It may be asleep or offline. Messages wait for it."
+        if (ph.asked > 0 && clock - ph.asked > 20000) return "Your phone isn't answering. It may be asleep or offline. Messages wait for it. In Muninn, Settings › Battery: choose Right away."
         if (ph.heard > 0) return "Phone last heard " + ago(ph.heard)
         return "Checking your phone"
     }
@@ -308,15 +375,20 @@ Rectangle {
         HoverHandler { cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: panel.whyWifi() }
     }
+    // Both lists change in place: a message elsewhere, a ping or a read never starts them over.
+    LiveList { id: chatModel; keys: ["sec", "peer"]; items: panel.chats }
+    LiveList { id: msgModel; keys: ["id"]; items: panel.msgs }
     ListView {
         id: side
         anchors.top: wifiBar.bottom; anchors.bottom: parent.bottom; anchors.left: parent.left
         width: Math.min(Theme.px(280), parent.width * 0.4)
         clip: true
-        model: panel.chats
+        model: chatModel
         delegate: Item {
             id: chatRow
             readonly property bool on: index === panel.row
+            // A half-written message (not for the chat on screen, whose box shows it).
+            readonly property var draft: modelData.peer !== panel.peer ? Linked.drafts[modelData.peer] || null : null
             width: side.width
             height: headH + Theme.px(56)
             readonly property real headH: modelData.head ? Theme.px(28) : 0
@@ -354,8 +426,10 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; text: modelData.name; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15)
                            font.weight: modelData.unread ? Font.Bold : Font.DemiBold }
-                    Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; color: modelData.unread ? Theme.textSoft : Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13)
-                           text: modelData.last || [modelData.role || "", modelData.folders || ""].filter(x => x !== "").join(" · ") || "No messages yet" }
+                    Text { textFormat: Text.PlainText; width: parent.width; elide: Text.ElideRight; color: chatRow.draft && chatRow.draft.text ? Theme.accent : modelData.unread ? Theme.textSoft : Theme.textMuted
+                           font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                           text: chatRow.draft && chatRow.draft.text ? "Draft: " + String(chatRow.draft.text).replace(/\s+/g, " ")
+                                 : modelData.last || [modelData.role || "", modelData.folders || ""].filter(x => x !== "").join(" · ") || "No messages yet" }
                 }
                 // When, then the unread count or a struck-through bell.
                 Column {
@@ -391,14 +465,51 @@ Rectangle {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
     }
+    // A group's text channels, as tabs: messages show, and go, in the one picked.
+    ListView {
+        id: chanBar
+        visible: panel.chans.length > 1
+        anchors.top: wifiBar.bottom; anchors.left: side.right; anchors.right: parent.right
+        anchors.leftMargin: Theme.px(14); anchors.rightMargin: Theme.px(14); anchors.topMargin: visible ? Theme.px(8) : 0
+        height: visible ? Theme.px(32) : 0
+        orientation: ListView.Horizontal
+        spacing: Theme.px(6)
+        clip: true
+        model: panel.chans
+        delegate: Rectangle {
+            id: tab
+            readonly property bool on: modelData.id === panel.chan
+            width: tabText.implicitWidth + Theme.px(20); height: chanBar.height
+            radius: Theme.radius
+            color: on ? Theme.tile : tabHover.hovered ? Theme.raised : "transparent"
+            border.width: on ? 1 : 0
+            border.color: Theme.accent
+            Accessible.role: Accessible.PageTab
+            Accessible.name: "#" + modelData.name + (modelData.ao ? ", only admins post" : "")
+            Accessible.onPressAction: panel.pickChan(modelData.id)
+            Text {
+                id: tabText
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                text: "#" + modelData.name + (modelData.ao ? " (admins)" : "")
+                color: tab.on ? Theme.text : Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: tab.on ? Font.DemiBold : Font.Normal
+            }
+            HoverHandler { id: tabHover; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: panel.pickChan(modelData.id) }
+        }
+    }
     ListView {
         id: talk
-        anchors.top: wifiBar.bottom; anchors.bottom: composeCol.top; anchors.left: side.right; anchors.right: parent.right
+        // Follows new messages only while it's at the end: scrolled up to read, it stays put.
+        property bool stick: true
+        anchors.top: chanBar.bottom; anchors.bottom: composeCol.top; anchors.left: side.right; anchors.right: parent.right
         anchors.margins: Theme.px(14)
         clip: true
         spacing: Theme.px(6)
-        model: panel.msgs
-        onCountChanged: if (panel.zone !== "talk") positionViewAtEnd()
+        model: msgModel
+        onMovementEnded: stick = atYEnd
+        onCountChanged: if (panel.zone !== "talk" && stick) positionViewAtEnd()
         delegate: Column {
             id: msgItem
             readonly property bool sel: panel.zone === "talk" && index === panel.msgSel
@@ -442,10 +553,20 @@ Rectangle {
                         width: parent.width
                         elide: Text.ElideRight
                         text: (modelData.mine ? "You" : modelData.from ? modelData.from : panel.current ? panel.current.name : "") + " · " + Qt.formatTime(new Date(modelData.time), "h:mm AP")
-                              + (modelData.pending ? " · " + panel.stateWord(modelData) : "")
+                              + (modelData.edited > 0 ? " · (edited)" : "") + (modelData.pending ? " · " + panel.stateWord(modelData) : "")
                         color: modelData.failed ? Theme.danger : modelData.mine ? Theme.accent : Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
                         // Not answered: a click sends it again (the phone never sends one twice).
                         TapHandler { enabled: !!modelData.failed; onTapped: Linked.retrySend(modelData.id) }
+                    }
+                    // What it answers.
+                    Text {
+                        readonly property string q: panel.quoteOf(modelData)
+                        visible: q !== ""
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        elide: Text.ElideRight
+                        text: q
+                        color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.italic: true
                     }
                     // A photo that's here.
                     Image {
@@ -462,7 +583,10 @@ Rectangle {
                         visible: !(modelData.kind === "photo" && modelData.media !== "")
                         readOnly: true; selectByMouse: true
                         selectionColor: Theme.accentFill; selectedTextColor: Theme.text
-                        text: modelData.text; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16)
+                        // Deleted for everyone: muted and slanted, as on the phone.
+                        readonly property bool gone: modelData.text === "Message deleted" && !modelData.pending && modelData.kind === ""
+                        text: modelData.text; color: gone ? Theme.textMuted : Theme.text; font.italic: gone
+                        font.family: Theme.body; font.pixelSize: Theme.fs(16)
                     }
                     // Its links, to open.
                     Repeater {
@@ -509,11 +633,12 @@ Rectangle {
         Composer {
             id: compose
             width: parent.width
-            visible: !panel.kept
-            placeholder: panel.current ? "Message " + panel.current.name : ""
+            visible: !panel.kept && !panel.chanLocked
+            placeholder: !panel.current ? "" : panel.chanNow ? "Message #" + panel.chanNow.name : "Message " + panel.current.name
             bannerTitle: panel.replyMsg ? "Replying to " + (panel.replyMsg.mine ? "yourself" : panel.replyMsg.from || (panel.current ? panel.current.name : "")) : ""
             bannerText: panel.replyMsg ? (panel.replyMsg.text || "") : ""
             onSend: t => panel.send(t)
+            onTextChanged: draftSoon.restart()
             showAttach: false
             pasteRefusal: "Send pictures from your phone."
             onAttach: Ui.say("Send files from your phone.")
@@ -524,7 +649,9 @@ Rectangle {
             textFormat: Text.PlainText
             width: parent.width
             wrapMode: Text.WordWrap
-            text: panel.kept ? "Unlinked. Link your phone again to send." : "Sent by your phone as its own message. Send files from your phone."
+            text: panel.kept ? "Unlinked. Link your phone again to send."
+                  : panel.chanLocked ? "Only admins post here. Rules for everyone are in Group settings on your phone."
+                  : "Sent by your phone as its own message. Send files from your phone."
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
     }

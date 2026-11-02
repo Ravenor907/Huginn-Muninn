@@ -110,7 +110,8 @@ object Received {
 
     /** Where received files end up, in words for the screen. */
     fun place(context: Context): String =
-        if (Build.VERSION.SDK_INT < 29 && !oldPhoneAllowed(context)) "Muninn's own Downloads folder" else "Downloads"
+        if (chosenTree(context) != null) shownRoot()
+        else if (Build.VERSION.SDK_INT < 29 && !oldPhoneAllowed(context)) "Muninn's own Downloads folder" else shownRoot()
 
     /** Free space where received files are saved. */
     fun freeBytes(context: Context): Long = try {

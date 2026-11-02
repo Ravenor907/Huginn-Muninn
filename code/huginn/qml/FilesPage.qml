@@ -354,17 +354,16 @@ Rectangle {
     // Send a file: pick it, then who gets it (PeopleActions.sendPicker: people, groups, LocalSend devices nearby).
     function pickFiles() {
         if (page.tour) return
-        const paths = System.pickFiles()
-        if (paths.length) PeopleActions.sendPicker(paths)
+        Ui.pickFiles(paths => PeopleActions.sendPicker(paths))
     }
     // A device nearby: pick a file for it. A PIN, when it asks for one, sends the same files again.
     function sendTo(d) {
         if (page.tour) return
-        const paths = System.pickFiles()
-        if (!paths.length) return
-        Transfer.clearShared()
-        Transfer.share(paths)
-        LocalSend.send(d.id, Transfer.shared)
+        Ui.pickFiles(paths => {
+            Transfer.clearShared()
+            Transfer.share(paths)
+            LocalSend.send(d.id, Transfer.shared)
+        })
     }
     function choose() {
         const r = rows[current]

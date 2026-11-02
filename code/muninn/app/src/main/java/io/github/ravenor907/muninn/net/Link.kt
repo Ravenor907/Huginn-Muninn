@@ -545,6 +545,9 @@ object Link {
     private fun mJson(m: Chat.Msg): JSONObject {
         val o = JSONObject().put("id", m.id).put("x", text(m).take(LinkWire.TEXT_MAX)).put("me", m.mine).put("t", m.time)
         mediaOf(m)?.let { o.put("f", LinkWire.mediaJson(it)) }
+        // Optional (section 15 items): what it answers, and when it was edited.
+        if (m.re.isNotEmpty()) o.put("re", m.re.take(200))
+        if (m.edited > 0 && m.unsent.isEmpty()) o.put("ed", m.edited)
         return o
     }
 

@@ -206,7 +206,7 @@ Item {
                 width: parent.width
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: "Your chats are coming over. Photos follow on home Wi-Fi."
+                text: "Your chats, contacts, groups and folders are coming over. Photos follow on home Wi-Fi."
                 color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(17)
             }
 

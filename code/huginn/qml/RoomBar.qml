@@ -18,9 +18,13 @@ Rectangle {
     border.color: Theme.line
 
     property bool screenShown: true
-    // Someone new starts sharing: show it again.
+    // Someone else's screen made big: it fills the window above the bar (the button, a double-click, Esc to return).
+    property bool screenBig: false
+    // Someone new starts sharing: show it again, at the usual size.
     readonly property string sharer: Rooms.sharerName
-    onSharerChanged: screenShown = true
+    onSharerChanged: { screenShown = true; screenBig = false }
+    onScreenShownChanged: if (!screenShown) screenBig = false
+    Shortcut { sequence: "Esc"; enabled: bar.screenBig && screenPanel.visible; onActivated: bar.screenBig = false }
 
     // Sharing this computer: always on show while it lasts, with Stop.
     Rectangle {
@@ -286,7 +290,7 @@ Rectangle {
                     wrapMode: Text.WordWrap
                     maximumLineCount: 3
                     // "No game sound" on a line of its own, so a narrow window cuts the rest first, never that.
-                    text: "No game sound.\n" + (picker.mode === "window" ? "Only that window is shared. " : "Everything on that screen is shared. ")
+                    text: "No game sound.\n" + (picker.mode === "window" ? "Only that window is shared (a game: Borderless or Windowed mode). " : "Everything on that screen is shared. ")
                           + (Rooms.shareSmooth ? "Smooth: up to 30 frames a second, smaller." : "Sharp: full size, up to 10 frames a second.")
                     color: Theme.textMuted
                     font.family: Theme.body; font.pixelSize: Theme.fs(12)
@@ -309,7 +313,8 @@ Rectangle {
         visible: Rooms.inRoom && Rooms.sharerName !== "" && bar.screenShown
         anchors.bottom: sharingStrip.visible ? sharingStrip.top : parent.top
         anchors.left: parent.left; anchors.right: parent.right
-        height: Math.min(Theme.px(560), (bar.parent ? bar.parent.height : 800) * 0.6)
+        height: bar.screenBig ? Math.max(Theme.px(120), bar.y - (sharingStrip.visible ? sharingStrip.height : 0))
+                              : Math.min(Theme.px(560), (bar.parent ? bar.parent.height : 800) * 0.6)
         color: "#000000"
         border.width: 1; border.color: Theme.line
         VideoOutput {
@@ -320,17 +325,26 @@ Rectangle {
             Component.onCompleted: Rooms.setScreenSink(screenOut.videoSink)
             Accessible.role: Accessible.Graphic
             Accessible.name: Rooms.sharerName + "'s screen"
+            TapHandler { onDoubleTapped: bar.screenBig = !bar.screenBig }
         }
         HButton {
+            id: hideScreen
             visible: bar.docked
             anchors.right: parent.right; anchors.top: parent.top; anchors.margins: Theme.px(10)
             text: "Hide screen"; fontSize: 13; implicitHeight: Theme.px(32)
             onClicked: bar.screenShown = false
         }
+        HButton {
+            id: bigScreen
+            anchors.right: hideScreen.visible ? hideScreen.left : parent.right; anchors.top: parent.top
+            anchors.rightMargin: Theme.px(hideScreen.visible ? 6 : 10); anchors.topMargin: Theme.px(10)
+            text: bar.screenBig ? "Smaller (Esc)" : "Full screen"; fontSize: 13; implicitHeight: Theme.px(32)
+            onClicked: bar.screenBig = !bar.screenBig
+        }
         Text {
             textFormat: Text.PlainText
             anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(10)
-            width: Math.min(implicitWidth, parent.width - Theme.px(20) - (bar.docked ? Theme.px(140) : 0))
+            width: Math.max(0, Math.min(implicitWidth, bigScreen.x - Theme.px(20)))
             elide: Text.ElideRight
             text: Rooms.sharerName + " is sharing their screen"
             color: Theme.text

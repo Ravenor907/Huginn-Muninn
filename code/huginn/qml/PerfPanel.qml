@@ -16,7 +16,7 @@ Item {
     property string reportText: ""
     readonly property bool padFocus: !!Ui.main && Ui.main.padInUse
     // The Seasonal animation is moving: the check's third part measures it instead of the test animation.
-    readonly property bool seasonalMoving: Theme.seasonal && Settings.seasonAnimation !== "off" && Theme.motion
+    readonly property bool seasonalMoving: Theme.seasonal && Settings.seasonAnimation !== "off" && Theme.fallMotion
 
     // The tour shows sample results: nothing is measured.
     readonly property var samplePhases: [

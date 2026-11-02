@@ -1670,7 +1670,9 @@ anywhere, it says "Mirrored to [name]".
 - `{"t": "part", ...}`: a file the companion asked for (below).
 - `{"t": "unlink"}`.
 
-An item is `{"id", "x", "me", "t"}` and, for a photo, voice message, video message or file, `"f": {"h": SHA-256 of the
+An item is `{"id", "x", "me", "t"}`, optionally `"re"` (the id of the message it answers), `"ed"` (ms: when it was
+last edited, left out if never) and, in a group chat (15.1), `"ch"` (its channel's id; left out: the main one), all
+ignored by companions that don't know them; and, for a photo, voice message, video message or file, `"f": {"h": SHA-256 of the
 file (lowercase hex), "s": bytes, "k": "photo" | "voice" | "video" | "file", "nm": file name}`. `x` is at most 2000
 characters; for media it stays the word ("Photo", "Voice message", "Video message", "File: name"). An `f` that isn't
 well-formed (or `s` over 100 MB) is ignored and the item shows as words. `d` is the chat's message limit in days
@@ -2669,8 +2671,8 @@ the wire: the ack (14.1) already says which pieces are in.
   its row says "Waiting for Ana to come back".
 - **Keeping what came.** When a file of theirs stops for silence, the receiver keeps the part file and how many pieces
   from the start are in (Close on its row deletes it). Huginn keeps the part, and the sender's row whose Retry goes
-  on, across a restart for up to 7 days (quitting keeps a file still on its way the same way); Muninn keeps them for
-  this run. The row says where it stopped without blaming either side ("Stopped at 61% (no answer from Ana)").
+  on, across a restart for up to 7 days (quitting keeps a file still on its way the same way); Muninn keeps the part
+  across a restart for up to 7 days too. The row says where it stopped without blaming either side ("Stopped at 61% (no answer from Ana)").
 - **Going on.** Retry sends a new `offer` (a new id and keys) for the same file. A receiver with a kept part from the
   same sender with the same `sha`, `size` and `g` takes it without asking again (Data saver still asks), writes into
   the kept part, and its acks say from the first one that everything below the kept count is in. The sender marks

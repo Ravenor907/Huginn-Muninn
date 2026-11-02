@@ -32,6 +32,8 @@ GlobalKeys::GlobalKeys(Settings *settings, RoomManager *rooms, TalkKey *talkKey,
 {
     m_cueOn = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/cue_on.wav"), this);
     m_cueOff = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/cue_off.wav"), this);
+    m_deafOn = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/cue_deaf_on.wav"), this);
+    m_deafOff = new Chime(QStringLiteral(":/qt/qml/Huginn/assets/cue_deaf_off.wav"), this);
     m_backend.reset(makeGlobalKeysBackend(this));
     connect(m_rooms, &RoomManager::changed, this, &GlobalKeys::update);
     connect(m_settings, &Settings::changed, this, &GlobalKeys::update);
@@ -177,11 +179,14 @@ bool GlobalKeys::eventFilter(QObject *watched, QEvent *event)
     return true;
 }
 
-void GlobalKeys::cue(bool on)
+void GlobalKeys::cue(bool on, bool deafen)
 {
     if (!m_settings->muteSounds())
         return;
-    (on ? m_cueOn : m_cueOff)->play();
+    if (deafen)
+        (on ? m_deafOn : m_deafOff)->play();
+    else
+        (on ? m_cueOn : m_cueOff)->play();
 }
 
 bool GlobalKeys::everywhere() const
@@ -196,7 +201,7 @@ QString GlobalKeys::talkNote() const
     return QStringLiteral("Voice rooms only, and only while Huginn is in front: it never watches keys in other apps. For games, turn this off to use voice activity, or mute with %1").arg(comboName(Mute));
 #endif
     if (!everywhere())
-        return QStringLiteral("Only while Huginn is open. While you play, use voice activity");
+        return QStringLiteral("Only while Huginn is in front. While you play, use voice activity");
     // The desktop offers the key, but only a press that arrived with Huginn behind proves it works while you play.
     return m_heardBehind ? QStringLiteral("Voice rooms: hold a key. Works while a game is in front")
                          : QStringLiteral("Voice rooms: hold a key. It may work while you play too; try it once");
@@ -205,11 +210,14 @@ QString GlobalKeys::talkNote() const
 QString GlobalKeys::keysNote() const
 {
     const QString keys = QStringLiteral("%1 and %2").arg(comboName(Mute), comboName(Deafen));
+    // Discord's own Toggle Mute and Toggle Deafen are the same two keys, and it may not show as "in use".
+    const bool clash = changeable() && (muteSequence() == QLatin1String("Ctrl+Shift+M") || deafenSequence() == QLatin1String("Ctrl+Shift+D"));
+    const QString discord = clash ? QStringLiteral(". Discord uses these too. If you run both, change them below") : QString();
     if (!everywhere())
-        return QStringLiteral("With Huginn open: %1, or hold LB with Up or Down").arg(keys);
+        return QStringLiteral("Only while Huginn is in front: %1, or hold LB with Up or Down%2").arg(keys, discord);
     const QString taken = m_backend->taken();
     if (!taken.isEmpty())
-        return QStringLiteral("%1 is in use by another app, so it works only with Huginn open.%2").arg(taken, changeable() ? QStringLiteral(" Change it below") : QString());
-    return m_heardBehind ? QStringLiteral("%1, even while a game is in front").arg(keys)
-                         : QStringLiteral("%1. They may work while you play too; try them once").arg(keys);
+        return QStringLiteral("%1 is in use by another app, so it works only while Huginn is in front.%2").arg(taken, changeable() ? QStringLiteral(" Change it below") : QString());
+    return m_heardBehind ? QStringLiteral("%1, even while a game is in front%2").arg(keys, discord)
+                         : QStringLiteral("%1. They may work while you play too; try them once%2").arg(keys, discord);
 }

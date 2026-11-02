@@ -6,6 +6,7 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QSettings>
+#include <QVariant>
 #include <QWindow>
 
 TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
@@ -59,6 +60,16 @@ void TalkKey::release()
     m_rooms->setTalking(false);
 }
 
+// A text box has the focus (a message, a name, a search): the talk key types there instead of talking, so a
+// Backtick or Space in a message still works. A read-only text (a message being selected) doesn't count.
+static bool typingNow()
+{
+    QObject *f = QGuiApplication::focusObject();
+    if (!f || !(f->inherits("QQuickTextInput") || f->inherits("QQuickTextEdit")))
+        return false;
+    return !f->property("readOnly").toBool();
+}
+
 bool TalkKey::eventFilter(QObject *watched, QEvent *event)
 {
     const QEvent::Type t = event->type();
@@ -86,6 +97,9 @@ bool TalkKey::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
     if (key != m_key || !m_settings->pushToTalk() || !m_rooms->inRoom())
+        return QObject::eventFilter(watched, event);
+    // Typing: the key goes to the text box. Held down from before the box took the focus, it still lets go here.
+    if (!m_down && typingNow())
         return QObject::eventFilter(watched, event);
     if (k->isAutoRepeat())
         return true;

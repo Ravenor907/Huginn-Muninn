@@ -91,6 +91,8 @@ Rectangle {
     readonly property bool readOnly: !!info.readOnly
     readonly property var channels: info.channels || []
     readonly property var members: info.members || []
+    // A group holds at most 50 people (GroupWire::kMaxMembers), shown before it fills up.
+    readonly property int maxMembers: 50
     readonly property var channel: channels.find(c => c.id === channelId) || { id: "main", name: "general", type: "text" }
     // The channel column: the TEXT category, then VOICE (voice rooms and group calls). A click (or A)
     // on a category folds it away, keeping only the open channel, the room you're in and rooms with
@@ -138,8 +140,13 @@ Rectangle {
     readonly property string modStatus: isTour || locked || !exists ? "" : (Mod.serial, modTick, Mod.myStatus(gid))
     // Cap g3 (28.2): an "Only admins post" channel, and I'm not an admin: no message box, a line saying so.
     readonly property bool postLocked: !isTour && !readOnly && !!channel.adminsOnly && !info.amAdmin
-    // The about box folds to one line (kept for this run, per group).
+    // The about box folds to one line, per group: this run's taps, else what Settings kept from before.
     property var aboutFolds: ({})
+    // Fold or show the about box (a tap on it, or Fold rules / Show rules in the group menu with a controller); kept.
+    function foldAbout(fold) {
+        const f = Object.assign({}, aboutFolds); f[gid] = fold; aboutFolds = f
+        Settings.setAboutFolded(gid, fold)
+    }
 
     readonly property var prompts: finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
@@ -279,17 +286,34 @@ Rectangle {
                         font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(0.5)
                     }
                     CountBadge {
-                        anchors.right: parent.right; anchors.rightMargin: Theme.px(10)
+                        anchors.right: catPlus.visible ? catPlus.left : parent.right; anchors.rightMargin: Theme.px(catPlus.visible ? 4 : 10)
                         anchors.verticalCenter: parent.verticalCenter
                         unread: modelData.unread || 0
                         mentions: modelData.mentions || 0
+                    }
+                    // Admins: a "+" adds a text channel or voice room here (the header's one tap handler sees where it lands).
+                    Icon {
+                        id: catPlus
+                        visible: page.canEditChannels
+                        anchors.right: parent.right; anchors.rightMargin: Theme.px(6)
+                        anchors.verticalCenter: parent.verticalCenter
+                        name: "plus"; size: Theme.px(14); lineWidth: 2
+                        color: catHover.hovered && catHover.point.position.x >= catPlus.x - Theme.px(6) ? Theme.text : Theme.textMuted
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData.cat === "voice" ? "Add a voice room" : "Add a text channel"
+                        Accessible.onPressAction: page.addChannelIn(modelData.cat)
                     }
                     HoverHandler { id: catHover; cursorShape: Qt.PointingHandCursor }
                     TapHandler {
                         id: catTap
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onTapped: (point, button) => { page.zone = "channels"; page.chRow = index; if (button === Qt.RightButton) Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.groupMenu()); else page.foldCat(modelData.cat) }
-                        onLongPressed: { page.zone = "channels"; page.chRow = index; Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.groupMenu()) }
+                        onTapped: (point, button) => {
+                            page.zone = "channels"; page.chRow = index
+                            if (button === Qt.RightButton) Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.headerMenu(modelData.cat, !!modelData.folded))
+                            else if (catPlus.visible && point.position.x >= catPlus.x - Theme.px(6)) page.addChannelIn(modelData.cat)
+                            else page.foldCat(modelData.cat)
+                        }
+                        onLongPressed: { page.zone = "channels"; page.chRow = index; Ui.menuAt(catTap.parent, point.position.x, point.position.y, () => page.headerMenu(modelData.cat, !!modelData.folded)) }
                     }
                 }
                 Rectangle {
@@ -477,7 +501,7 @@ Rectangle {
                 anchors.margins: Theme.px(12)
                 height: visible ? aboutText.implicitHeight + Theme.px(20) : 0
                 radius: Theme.radius; color: Theme.raised; border.color: Theme.line; border.width: 1
-                readonly property bool folded: !!page.aboutFolds[page.gid]
+                readonly property bool folded: page.aboutFolds[page.gid] !== undefined ? !!page.aboutFolds[page.gid] : Settings.aboutFolded(page.gid)
                 Accessible.role: Accessible.Button
                 Accessible.name: "About this group: " + about
                 Accessible.description: folded ? "Folded. Click to show it all." : "Click to fold it to one line."
@@ -501,7 +525,16 @@ Rectangle {
                 }
                 HoverHandler { id: aboutHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                    onTapped: { const f = Object.assign({}, page.aboutFolds); f[page.gid] = !aboutBox.folded; page.aboutFolds = f }
+                    onTapped: page.foldAbout(!aboutBox.folded)
+                }
+                // Read once (open on screen for a few seconds): it stays open now, and starts folded from the next start.
+                Timer {
+                    interval: 4000
+                    running: aboutBox.visible && !aboutBox.folded && page.aboutFolds[page.gid] === undefined && !page.isTour
+                    onTriggered: {
+                        const f = Object.assign({}, page.aboutFolds); f[page.gid] = false; page.aboutFolds = f
+                        Settings.setAboutFolded(page.gid, true)
+                    }
                 }
             }
             // Find in this channel: over the messages, which start under it.
@@ -554,6 +587,7 @@ Rectangle {
                 wrapMode: Text.WordWrap
                 visible: list.count === 0
                 text: page.readOnly ? "Nothing here." : "Nothing in #" + page.channel.name + " yet."
+                      + (page.channelId !== "main" && !!page.channel.adminsOnly ? "\nRules for everyone are at the top of #" + ((page.channels[0] || {}).name || "general") + "." : "")
                 color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(15)
             }
 
@@ -842,7 +876,7 @@ Rectangle {
     }
 
     // Invite links (Discord style): make one, see them all, revoke.
-    InvitePanel { id: invitePanel; anchors.fill: parent; z: 21; gid: page.gid; groupName: page.info.name || ""; amAdmin: !!page.info.amAdmin; onFromContacts: page.invite() }
+    InvitePanel { id: invitePanel; anchors.fill: parent; z: 21; gid: page.gid; groupName: page.info.name || ""; memberCount: page.members.length; maxMembers: page.maxMembers; amAdmin: !!page.info.amAdmin; onFromContacts: page.invite() }
     readonly property bool canInvite: !page.locked && page.exists && !page.readOnly && !page.isTour && (!!page.info.amAdmin || invitePanel.membersCanInvite)
 
     // ============================================================= actions
@@ -876,7 +910,7 @@ Rectangle {
         }
         const why = Rooms.join(gid, r.id)
         if (why !== "") Ui.say(why, true)
-        else Ui.say("You joined " + r.name + ".")
+        else Ui.say("You're in the " + r.name + (/\broom$/i.test(r.name) ? "." : " room."))
     }
     function write() {
         if (readOnly) { Ui.say("You're no longer in this group.", true); return }
@@ -923,12 +957,14 @@ Rectangle {
                  { name: "Media and files", icon: "image", url: "media" },
                  { name: !isTour && Chat.isMuted("g:" + gid) ? "Unmute notifications" : "Mute notifications", icon: "bell", url: "mute" },
                  { name: "Group settings", icon: "gear", url: "settings" })
+        // The about box at the top of the first channel: fold it to one line, or show it all.
+        if (aboutBox.visible) top.push({ name: aboutBox.folded ? "Show rules" : "Fold rules", icon: "info", detail: "About and rules at the top", url: "foldabout" })
         const items = [{ name: "Notifications", icon: "bell", url: "notify" }]
         // One Invite people: the link panel (with From contacts and Active links in it for admins); a Family group's admins
         // get From contacts or a code. Hidden for whoever can't invite.
         if (isTour || (!family && (canInvite || admin)) || (family && admin))
             items.push({ name: "Invite people", icon: "plus", detail: family ? "From contacts or a code" : admin ? "A link, a code or contacts" : "A link or code", url: "invite" })
-        items.push({ name: "People", icon: "people", url: "people" })
+        items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers, url: "people" })
         // Family: each member's safety code is checked once.
         const unchecked = family && !readOnly && !isTour ? members.filter(m => !m.me && !m.checked).length : 0
         if (unchecked) items.push({ name: "Check safety codes", icon: "check", detail: unchecked + " to check", url: "check" })
@@ -957,6 +993,7 @@ Rectangle {
     function groupAction(a) {
         const g = gid
         if (a === "people") { peopleMenu(); return }
+        if (a === "foldabout") { foldAbout(!aboutBox.folded); return }
         if (a === "check") { checkMenu(); return }
         if (a === "find") { openFind(); return }
         if (a === "more") { groupMore(); return }
@@ -993,7 +1030,7 @@ Rectangle {
     }
     // People: everyone in the group; each opens their member menu.
     function peopleMenu() {
-        Ui.pickFrom("People", [{ header: "", items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.me ? "me" : m.key,
+        Ui.pickFrom("People", [{ header: members.length + " of " + maxMembers + " people" + (maxMembers - members.length < 15 ? " · " + Math.max(0, maxMembers - members.length) + " spots left" : ""), items: members.map(m => ({ name: m.name + (m.me ? " (you)" : ""), url: m.me ? "me" : m.key,
             detail: [m.owner ? "Owner" : m.admin ? "Admin" : "", family && !m.me ? (m.checked ? "Checked" : "Not checked") : "",
                      !isTour && m.needsUpdate ? "Needs an update" : ""].filter(x => x).join(" · ") })) }],
             k => { const m = members.find(x => (x.me ? "me" : x.key) === k); if (m) memberMenu(m, () => page.peopleMenu()) },
@@ -1045,6 +1082,26 @@ Rectangle {
             k => tell(Chat.inviteToGroup(g, k), "Invite sent."), () => page.addMenu())
     }
     // Channels: pins and what was shared in this one; admins add, rename and remove.
+    // Admins add channels and voice rooms (the TEXT and VOICE headers' "+", and their right-click menu).
+    readonly property bool canEditChannels: exists && !readOnly && (isTour || !!info.amAdmin)
+    function addChannelIn(cat) {
+        if (isTour || !canEditChannels) return
+        if (cat === "voice") addVoiceRoom(gid)
+        else newTextChannel(gid, "", false)
+    }
+    function addVoiceRoom(g) {
+        Ui.ask("New voice room", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, true), "Added."), false, true)
+    }
+    // A TEXT or VOICE header's right-click menu: add one there (admins), and fold or unfold it.
+    function headerMenu(cat, shut) {
+        const items = []
+        if (canEditChannels) items.push(cat === "voice" ? { name: "Add a voice room", icon: "speaker", url: "add" } : { name: "Add a text channel", icon: "hash", url: "add" })
+        items.push({ name: shut ? "Unfold" : "Fold", icon: "down", url: "fold" })
+        Ui.pickFrom(cat === "voice" ? "Voice rooms" : "Text channels", [{ header: "", items: items }], a => {
+            if (a === "fold") foldCat(cat)
+            else if (a === "add") addChannelIn(cat)
+        })
+    }
     function channelsMenu() {
         const items = [{ name: "Pinned in #" + channel.name, icon: "pin", url: "pins" },
                        { name: "Shared in #" + channel.name, icon: "image", url: "shared" },
@@ -1061,8 +1118,7 @@ Rectangle {
             else if (a === "shared") more.openShared()
             else if (a === "files") { if (!isTour) PeopleActions.openFiles("g:" + gid, info.name) }
             else if (a === "addtext") newTextChannel(g, "", false)
-            else if (a === "addvoice")
-                Ui.ask("New voice room", "Up to 32 characters", "", "Add", t => tell(Chat.addChannel(g, t, true), "Added."), false, true)
+            else if (a === "addvoice") addVoiceRoom(g)
             else if (a === "rename") {
                 pickChannel("Rename which?", channels, id => {
                     const c = channels.find(x => x.id === id)
@@ -1095,9 +1151,12 @@ Rectangle {
         const own = []
         if (admin && !c.call) {
             own.push({ name: "Rename", icon: "edit", url: "rename" })
-            if (!voice && c.id !== "main") own.push({ name: "Only admins post", detail: "For rules or announcements", url: "ao", check: !!c.adminsOnly })
-            // The first channel stays open to everyone: say where "Only admins post" goes instead.
-            if (!voice && c.id === "main") own.push({ name: "Only admins post", detail: "Not here: add a #rules channel", url: "aomain" })
+            // Posts in a channel go after the group's message days; lasting rules belong in About and rules (cap g3).
+            const days = isTour ? 7 : Chat.groupLimit(g).days
+            if (!voice && c.id !== "main") own.push({ name: "Only admins post", detail: "For announcements. Posts here go after " + days + " days; lasting rules go in Group settings › About and rules", url: "ao", check: !!c.adminsOnly })
+            // The first channel stays open to everyone: offer the rules that last first, then an admins-only channel.
+            if (!voice && c.id === "main") own.push({ name: "Write the group's rules", detail: "About and rules: at the top of #" + c.name + ", kept until changed", url: "about" },
+                                                    { name: "Add #announcements", detail: "Only admins post there. Posts go after " + days + " days", url: "aomain" })
             if (c.id !== "main") own.push({ name: voice ? "Delete voice room" : "Delete channel", url: "delete", danger: true })
         }
         Ui.pickFrom((voice ? "" : "#") + c.name, [{ header: "", items: items }, { header: "", items: own }], a => {
@@ -1112,7 +1171,8 @@ Rectangle {
                 Ui.ask("Rename " + c.name, "Up to 32 characters", c.name, "Save", t => tell(Chat.renameChannel(g, c.id, t), "Renamed."), false, true)
             else if (a === "ao")
                 tell(Chat.setChannelAdminsOnly(g, c.id, !c.adminsOnly), c.adminsOnly ? "Everyone can post in #" + c.name + "." : "Only admins post in #" + c.name + " now.")
-            else if (a === "aomain") newTextChannel(g, "rules", true)
+            else if (a === "aomain") newTextChannel(g, "announcements", true)
+            else if (a === "about") editAbout(null)
             else if (a === "delete")
                 Ui.sure("Delete " + c.name + "?", "Gone for everyone.", "Delete",
                         () => { if (channelId === c.id) channelId = "main"; tell(Chat.removeChannel(g, c.id), "Deleted.") }, false, true)
@@ -1142,6 +1202,7 @@ Rectangle {
         // Cap g3: the about text (description and rules), shown at the top of the first channel. It never expires.
         const about = isTour ? "" : (info.about || "")
         items.push({ name: "About and rules", icon: "info", detail: about !== "" ? about.replace(/\n+/g, " · ") : admin ? "Add a description or rules" : "None", url: "about" })
+        items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers + " people", url: "people" })
         items.push({ name: "Type", icon: "people", detail: l.typeName, url: "type" })
         items.push({ name: "Message days", icon: "moon", detail: l.days + " days", url: "days" })
         if (admin && l.links && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
@@ -1158,20 +1219,13 @@ Rectangle {
         }
         const g = gid, back = () => page.settingsMenu()
         Ui.pickFrom("Group settings", [{ header: "", items: items }], a => {
+            if (a === "people") { peopleMenu(); return }
             if (a === "reports") { if (!isTour) reportsMenu(back); return }
             if (a === "banned") { if (!isTour) bannedMenu(back); return }
             if (a === "timeouts") { if (!isTour) timeoutsMenu(back); return }
             if (a === "files") { if (!isTour) PeopleActions.groupFilesMenu(g, back); return }
             if (a === "name") Ui.ask("Group name", "Everyone sees it", info.name, "Save", t => tell(Chat.renameGroup(g, t), "Renamed."), false, true)
-            else if (a === "about") {
-                if (isTour) return
-                if (!admin) { Ui.note("About " + (info.name || "this group"), about !== "" ? about : "No description or rules yet."); return }
-                // Paragraphs are kept (a numbered rule on each line); turning it on may need everyone's update first.
-                const behind = Chat.needG3Update(g)
-                Ui.askLong("About and rules", "Everyone sees it at the top of #" + ((channels[0] || {}).name || "general") + ". Up to 500 characters and 10 lines, kept until changed."
-                           + (behind.length && about === "" ? " " + behind.join(", ") + (behind.length === 1 ? " needs" : " need") + " the newest Huginn or Muninn first." : ""),
-                           about, "Save", t => tell(Chat.setGroupAbout(g, t), t.trim() !== "" ? "Saved. Everyone sees it." : "Removed."))
-            }
+            else if (a === "about") editAbout(back)
             else if (a === "days") pickGroupLimit(back)
             else if (a === "type") pickGroupType(back)
             else if (a === "invite") {
@@ -1181,6 +1235,17 @@ Rectangle {
                 Qt.callLater(back)
             }
         }, () => page.groupMenu())
+    }
+    // Cap g3: the about text (description and rules): admins edit it, members read it. It never expires.
+    function editAbout(back) {
+        if (isTour || !exists) return
+        const g = gid, admin = !readOnly && !!info.amAdmin, about = info.about || ""
+        if (!admin) { Ui.note("About " + (info.name || "this group"), about !== "" ? about : "No description or rules yet."); return }
+        // Paragraphs are kept (a numbered rule on each line); turning it on may need everyone's update first.
+        const behind = Chat.needG3Update(g)
+        Ui.askLong("About and rules", "Everyone sees it at the top of #" + ((channels[0] || {}).name || "general") + ", new members too. Up to 500 characters and 10 lines, kept until changed."
+                   + (behind.length && about === "" ? " " + behind.join(", ") + (behind.length === 1 ? " needs" : " need") + " the newest Huginn or Muninn first." : ""),
+                   about, "Save", t => tell(Chat.setGroupAbout(g, t), t.trim() !== "" ? "Saved. Everyone sees it." : "Removed."))
     }
     // Cap g3: reports from members, newest first. Each: go to the message, Delete for everyone, Timeout or Ban its
     // author, or Dismiss. Opening the list marks them read.
@@ -1335,7 +1400,7 @@ Rectangle {
     // Report to admins: through the group, to every admin (an admin's older app gets it in a private message when they're a contact).
     function reportToAdmins(m) {
         if (!members.some(x => !x.me && (x.admin || x.owner) && x.key !== m.from)) { Ui.say("There's no other admin to tell.", true); return }
-        Ui.sure("Report this message?", "Only the group's admins see it.", "Report", () => {
+        Ui.sure("Report this message?", "Only the group's admins see it, and that it came from you.", "Report", () => {
             const n = Chat.reportToAdmins(gid, m.id)
             if (n === 0) Ui.say("No admin can get it yet. They may need an update.", true)
             else Ui.say(n === 1 ? "Sent to 1 admin." : "Sent to " + n + " admins.")
@@ -1492,9 +1557,18 @@ Rectangle {
     function scrollView() { return zone === "messages" ? list : zone === "side" ? sideList : zone === "members" ? memberCol.flick : chanList }
     // The controller in a message box: A sends (or brings Steam's keyboard back), Y brings the
     // keyboard back, LT the box's options, B leaves it. Up and the rest leave it and act as usual.
+    // The on-screen keyboard would cover the message box at the foot: A writes the message in a prompt at the top
+    // instead, and its A sends.
+    function writeAbove(box) {
+        Ui.ask(box.placeholder !== "" ? box.placeholder : "Message", "", box.text, "Send", t => { box.setText(t); box.enter() })
+    }
     function boxButton(box, b) {
         switch (b) {
-        case "a": if (box.text.trim() !== "") box.enter(); else System.showSteamKeyboard(); return true
+        case "a":
+            if (box.text.trim() !== "") box.enter()
+            else if (System.keyboardCovers()) writeAbove(box)
+            else System.showSteamKeyboard()
+            return true
         case "y": System.showSteamKeyboard(); return true
         case "x": boxOptions(box); return true
         case "down": return true

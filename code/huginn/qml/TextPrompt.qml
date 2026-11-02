@@ -102,12 +102,19 @@ Item {
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
     MouseArea { anchors.fill: parent; onClicked: prompt.cancel() }
 
+    // Steam's on-screen keyboard covers the lower half of the window: the box sits at the top, above it.
+    readonly property bool atTop: visible && System.keyboardCovers()
     Rectangle {
         id: box
-        anchors.centerIn: parent
+        anchors.centerIn: prompt.atTop ? undefined : parent
+        anchors.top: prompt.atTop ? parent.top : undefined
+        anchors.topMargin: prompt.atTop ? Theme.px(8) : 0
+        anchors.horizontalCenter: prompt.atTop ? parent.horizontalCenter : undefined
         width: Math.min(parent.width - Theme.px(32), Theme.px(440))
-        // Never taller than the window: long help text scrolls above the field.
-        height: Math.min(parent.height - Theme.px(32), Theme.px(36) + head.implicitHeight + body.implicitHeight + foot.height)
+        // Never taller than the window (at the top, than the half above the keyboard): long help text scrolls above
+        // the field.
+        height: Math.min(prompt.atTop ? Math.max(Theme.px(160), parent.height * 0.5) : parent.height - Theme.px(32),
+                         Theme.px(36) + head.implicitHeight + body.implicitHeight + foot.height)
         radius: Theme.radius
         color: Theme.panel
         border.color: Theme.line
@@ -195,7 +202,8 @@ Item {
                 id: areaView
                 visible: prompt.multiLine
                 width: parent.width
-                height: visible ? Theme.px(180) : 0
+                // Shorter above the on-screen keyboard, so all of it stays in sight.
+                height: visible ? Theme.px(prompt.atTop ? 100 : 180) : 0
                 background: Rectangle {
                     radius: Theme.radius
                     color: Theme.groundDeep
@@ -222,7 +230,7 @@ Item {
                 visible: prompt.multiLine
                 width: parent.width
                 wrapMode: Text.WordWrap
-                text: "Enter starts a new line. Ctrl+Enter saves."
+                text: Ui.main && Ui.main.padInUse ? "Enter starts a new line. A saves." : "Enter starts a new line. Ctrl+Enter saves."
                 color: Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
             }

@@ -295,6 +295,8 @@ qt_add_qml_module(huginn
         qml/assets/raven_message.wav
         qml/assets/cue_on.wav
         qml/assets/cue_off.wav
+        qml/assets/cue_deaf_on.wav
+        qml/assets/cue_deaf_off.wav
         ${HUGINN_FONTS}
 )
 
@@ -316,6 +318,8 @@ set_source_files_properties(qml/assets/valknut.png PROPERTIES QT_RESOURCE_ALIAS 
 set_source_files_properties(qml/assets/raven_message.wav PROPERTIES QT_RESOURCE_ALIAS assets/raven_message.wav)
 set_source_files_properties(qml/assets/cue_on.wav PROPERTIES QT_RESOURCE_ALIAS assets/cue_on.wav)
 set_source_files_properties(qml/assets/cue_off.wav PROPERTIES QT_RESOURCE_ALIAS assets/cue_off.wav)
+set_source_files_properties(qml/assets/cue_deaf_on.wav PROPERTIES QT_RESOURCE_ALIAS assets/cue_deaf_on.wav)
+set_source_files_properties(qml/assets/cue_deaf_off.wav PROPERTIES QT_RESOURCE_ALIAS assets/cue_deaf_off.wav)
 foreach(font IN LISTS HUGINN_FONTS)
     get_filename_component(name ${font} NAME)
     set_source_files_properties(${font} PROPERTIES QT_RESOURCE_ALIAS fonts/${name})

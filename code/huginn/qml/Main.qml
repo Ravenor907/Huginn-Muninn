@@ -34,7 +34,10 @@ Window {
     // After that only F11, Settings › Look › Open full screen and Handheld mode switch it (applyWindowMode below):
     // a change to any other setting never touches it.
     visibility: System.startsFullScreen() ? Window.FullScreen : Window.Windowed
-    title: "Huginn"
+    // Unread chats and @mentions in the title, as "(3) Huginn" (the taskbar shows it). Never while locked.
+    readonly property int unreadTotal: touring || Vault.screenLocked ? 0
+                                       : railItems.reduce((n, e) => n + (e.id === "dms" || e.kind === "group" ? (e.badge || 0) : 0), 0)
+    title: unreadTotal > 0 ? "(" + unreadTotal + ") Huginn" : "Huginn"
     color: Theme.ground
 
     readonly property bool touring: System.tourDir.length > 0
@@ -57,7 +60,7 @@ Window {
         const want = wantFullScreen()
         if (want === fullNow) return
         fullNow = want
-        app.visibility = want ? Window.FullScreen : Window.Windowed
+        app.visibility = want ? Window.FullScreen : app.normalVisibility()
     }
     Connections { target: Settings; function onChanged() { app.applyWindowMode() } }
     // Taller than wide: one column at a time.
@@ -195,18 +198,13 @@ Window {
         return parts.join(" ")
     }
     // A file still moving: Wait for it. Only paused ones: Resume and wait (paused, it would never finish).
-    function offerWait(what) {
-        if (FileLink.runningCount > 0) {
-            confirm.otherText = "Wait for it"
-            confirm.otherCallback = () => app.waitThen(what)
-            return true
-        }
-        if (FileLink.pausedCount > 0) {
-            confirm.otherText = "Resume and wait"
-            confirm.otherCallback = () => { FileLink.resumeAll(); app.waitThen(what) }
-            return true
-        }
-        return false
+    // { text, cb } for the dialog, or null when no file can be waited for.
+    function waitChoice(what) {
+        if (FileLink.runningCount > 0)
+            return { text: "Wait for it", cb: () => app.waitThen(what) }
+        if (FileLink.pausedCount > 0)
+            return { text: "Resume and wait", cb: () => { FileLink.resumeAll(); app.waitThen(what) } }
+        return null
     }
     function requestExit(fromX) {
         // A chat file on its way, paused or waiting for them to accept counts too.
@@ -215,50 +213,83 @@ Window {
         const busy = LocalSend.busy || files || voice
         const locks = Vault.hasLock && !Vault.screenLocked
         const lockAndQuit = () => { if (locks) Vault.lockScreen(); app.quitNow() }
-        if (fromX && !files && !LocalSend.busy && Settings.closeAction === "minimize") { System.minimize(app); return }
+        // A remembered Minimize minimizes even during a call or a transfer: minimizing ends nothing.
+        if (fromX && Settings.closeAction === "minimize") { System.minimize(app); return }
         if (fromX && !busy && Settings.closeAction === "quit") { lockAndQuit(); return }
-        if (voice && !files && !LocalSend.busy) {
-            // In a call or a voice room: Minimize is the main choice, as it keeps the call going.
+        if (busy) {
+            // A call, a voice room or a file on its way: Minimize is the main choice, as it keeps them going.
             Ui.sure("Leave Huginn?", app.stakeText("Closing") + " Minimize keeps it going.", "Minimize", () => {
                 if (fromX && confirm.remember) Settings.closeAction = "minimize"
                 System.minimize(app)
             }, false, false)
             confirm.otherText = "Close anyway"
             confirm.otherCallback = lockAndQuit
+            const wait = files ? app.waitChoice(locks ? "lock" : "quit") : null
+            if (wait) {
+                confirm.extraText = wait.text
+                confirm.extraCallback = wait.cb
+            }
             confirm.cancelText = "Stay"
-            if (fromX) confirm.rememberText = "Don't ask again"
+            if (fromX && !files && !LocalSend.busy) confirm.rememberText = "Don't ask again"
             return
         }
-        const why = busy ? app.stakeText("Closing") : "Minimize keeps messages and calls coming."
-        Ui.sure("Leave Huginn?", why, busy ? "Close anyway" : locks ? "Lock and close" : "Close", () => {
+        Ui.sure("Leave Huginn?", "Minimize keeps messages and calls coming.", locks ? "Lock and close" : "Close", () => {
             if (fromX && confirm.remember) Settings.closeAction = "quit"
             lockAndQuit()
-        }, busy, busy)
-        if (!(files && app.offerWait(locks ? "lock" : "quit"))) {
-            confirm.otherText = "Minimize"
-            confirm.otherCallback = () => {
-                if (fromX && confirm.remember) Settings.closeAction = "minimize"
-                System.minimize(app)
-            }
+        }, false, false)
+        confirm.otherText = "Minimize"
+        confirm.otherCallback = () => {
+            if (fromX && confirm.remember) Settings.closeAction = "minimize"
+            System.minimize(app)
         }
         confirm.cancelText = "Stay"
-        if (fromX && !busy) confirm.rememberText = "Don't ask again"
+        if (fromX) confirm.rememberText = "Don't ask again"
     }
     // Wait for it: what to do once no chat file is moving any more ("quit", "lock" or "restart" to update).
     property string afterFiles: ""
+    // The files being waited for (their ids), so one that fails keeps Huginn open.
+    property var waitIds: []
     function waitThen(what) {
         afterFiles = what
+        waitIds = FileLink.transfers.filter(t => !t.relay && (t.state === "connecting" || t.state === "sending")).map(t => t.id)
         Ui.say(what === "restart" ? "Huginn restarts to update when the file is done." : "Huginn closes when the file is done.")
+    }
+    // Don't close (the pending-close bar), a call or voice room starting, or a file failing: Huginn stays open.
+    function cancelWait(why) {
+        if (afterFiles === "") return
+        afterFiles = ""
+        waitIds = []
+        if (why !== "") Ui.say(why)
+    }
+    // What the pending-close bar waits for, in words: the file's name, or "2 files".
+    readonly property var waitFiles: afterFiles === "" ? [] : FileLink.transfers.filter(t => waitIds.indexOf(t.id) >= 0)
+    onInVoiceChanged: {
+        if (inVoice && afterFiles !== "")
+            cancelWait((Rooms.inRoom ? "You're in a voice room now" : "You're in a call now")
+                       + (afterFiles === "restart" ? ", so the update waits. Restart now is in Settings › About." : ", so Huginn stays open."))
     }
     Connections {
         target: FileLink
         function onChanged() {
             if (app.afterFiles === "" || FileLink.runningCount > 0) return
             const what = app.afterFiles
+            const failed = FileLink.transfers.filter(t => app.waitIds.indexOf(t.id) >= 0 && t.state === "failed")
             app.afterFiles = ""
+            app.waitIds = []
+            // A file that stopped before it was done: Huginn stays, so it can be retried.
+            if (failed.length > 0) {
+                Ui.say(failed[0].name + " stopped before it was done, so Huginn stays open.", true)
+                return
+            }
             // Paused while waiting: it would never finish, so Huginn stays (and says so) rather than cut it off.
             if (FileLink.pausedCount > 0) {
                 Ui.say(what === "restart" ? "A file is paused, so the update waits. Restart now is in Settings › About." : "A file is paused, so Huginn stays open.")
+                return
+            }
+            // Something else started meanwhile (a call, a voice room, another file): ask again rather than cut it off.
+            if (app.inVoice || LocalSend.busy || FileLink.closeWarning !== "") {
+                if (what === "restart") app.restartForUpdate()
+                else app.requestExit(false)
                 return
             }
             if (what === "restart") Updater.restartToUpdate()
@@ -271,7 +302,11 @@ Window {
         const files = FileLink.closeWarning !== ""
         if (!files && !app.inVoice && !LocalSend.busy) { Updater.restartToUpdate(); return }
         Ui.sure("Restart to update?", app.stakeText("Restarting"), "Restart anyway", () => Updater.restartToUpdate(), false, true)
-        if (files) app.offerWait("restart")
+        const wait = files ? app.waitChoice("restart") : null
+        if (wait) {
+            confirm.otherText = wait.text
+            confirm.otherCallback = wait.cb
+        }
         confirm.cancelText = "Later"
     }
     // Answered: Huginn closes (the window's close question isn't asked again).
@@ -498,6 +533,13 @@ Window {
     Shortcut { sequence: "F11"; context: Qt.ApplicationShortcut; enabled: !System.windowed && !System.gameMode && !System.handheld; onActivated: Settings.fullScreen = !Settings.fullScreen }
     // The window's place and size, kept a moment after it stops moving (only while it's a normal window).
     Timer { id: keepRect; interval: 800; onTriggered: if (app.placed && app.visibility === Window.Windowed && !app.touring) Settings.windowRect = Qt.rect(app.x, app.y, app.width, app.height) }
+    // Maximized or not is kept too, so Huginn opens the way it was left (a minimized or full screen window keeps the last).
+    function normalVisibility() { return Settings.windowMaximized && !app.touring ? Window.Maximized : Window.Windowed }
+    onVisibilityChanged: {
+        if (!app.placed || app.touring || app.quitting) return
+        if (app.visibility === Window.Maximized) Settings.windowMaximized = true
+        else if (app.visibility === Window.Windowed) Settings.windowMaximized = false
+    }
     property bool placed: false
     onXChanged: keepRect.restart()
     onYChanged: keepRect.restart()
@@ -530,7 +572,7 @@ Window {
     Connections {
         target: GlobalKeys
         function onMutePressed() { Ui.toggleMic(); GlobalKeys.cue(!Ui.micMuted) }
-        function onDeafenPressed() { Ui.toggleDeaf(); GlobalKeys.cue(!Ui.deafened) }
+        function onDeafenPressed() { Ui.toggleDeaf(); GlobalKeys.cue(!Ui.deafened, true) }
     }
     Shortcut { sequence: "Ctrl+Shift+H"; context: Qt.ApplicationShortcut; enabled: app.keysOn && Rooms.inRoom; onActivated: Rooms.leave() }
     Shortcut { sequences: ["Ctrl+=", "Ctrl++"]; context: Qt.ApplicationShortcut; enabled: app.keysOn; onActivated: app.stepSize(1) }
@@ -843,6 +885,40 @@ Window {
         }
     }
 
+    // Wait for it was picked: a slim bar says Huginn closes (or restarts) when the file is done, and Don't close
+    // takes it back.
+    Rectangle {
+        id: waitBar
+        anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter
+        anchors.topMargin: Theme.px(8) + (updateBar.visible ? updateBar.height + Theme.px(12) : 0)
+                           + (unreadableBar.visible ? unreadableBar.height + Theme.px(12) : 0)
+        z: 55
+        visible: app.afterFiles !== "" && !app.touring
+        width: Math.min(app.width - Theme.px(24), waitRow.implicitWidth + Theme.px(24))
+        height: waitRow.implicitHeight + Theme.px(12)
+        color: Theme.panel
+        border.color: Theme.accent; border.width: Math.max(1, Theme.px(1))
+        Row {
+            id: waitRow
+            anchors.centerIn: parent
+            spacing: Theme.px(12)
+            Text {
+                textFormat: Text.PlainText
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(implicitWidth, app.width - Theme.px(200))
+                elide: Text.ElideMiddle
+                text: (app.afterFiles === "restart" ? "Restarts to update when " : "Closes when ")
+                      + (app.waitFiles.length > 1 ? app.waitFiles.length + " files are done" : (app.waitFiles.length === 1 ? app.waitFiles[0].name : "the file") + " is done")
+                color: Theme.text
+                font.family: Theme.body; font.pixelSize: Theme.fs(15)
+            }
+            HButton {
+                text: app.afterFiles === "restart" ? "Don't restart" : "Don't close"
+                onClicked: app.cancelWait(app.afterFiles === "restart" ? "The update waits. Restart now is in Settings › About." : "Huginn stays open.")
+            }
+        }
+    }
+
     // A message or missed call the system couldn't show as a notification (no notification service, or a game in front
     // in game mode): the newest one waits here, under the top bar. It goes when its chat opens by any route, on A or B
     // (the controller), or 10 seconds after Huginn is in front again.
@@ -986,7 +1062,9 @@ Window {
     }
 
     Component.onCompleted: {
-        placeWindow(); placed = true
+        placeWindow()
+        if (!fullNow && Settings.windowMaximized && !touring) app.visibility = Window.Maximized
+        placed = true
         controllerFirst()
         Ui.main = app
         Ui.prompt = prompt
@@ -1020,6 +1098,19 @@ Window {
                      "Accept", () => LocalSend.accept(), false, false, () => LocalSend.decline(), "localsend")
         confirm.cancelText = "Decline"
     }
+    // The phone unlinked this PC and its own name from before wasn't known: ask for one, once a run, so its own
+    // account doesn't keep the phone's name (Linked.nameWanted).
+    property bool askedOwnName: false
+    function askOwnNameSoon() {
+        if (askedOwnName || touring || !Linked.nameWanted || !Chat.ready || Vault.screenLocked) return
+        askedOwnName = true
+        Qt.callLater(() => PeopleActions.askOwnName("Saved."))
+    }
+    Connections {
+        target: Linked
+        function onChanged() { app.askOwnNameSoon() }
+        function onPicturesChanged() { app.askOwnNameSoon() }
+    }
     // Chat: notices, and a toast for a message unless that chat is on screen (main.cpp plays the sound).
     Connections {
         target: Chat
@@ -1044,6 +1135,12 @@ Window {
         function onBanner(title, body, where) { newsBanner.show(title, body, where) }
         // The tray icon's menu (Windows).
         function onTrayAction(what) {
+            // A click on an older notification Windows can't tell apart: the chat list, not the wrong chat.
+            if (what === "chats") {
+                if (newsBanner.visible) newsBanner.hide()
+                app.openPage("dms", {})
+                return
+            }
             if (what === "mute") {
                 // A local mute: Do not disturb (seen by others) is only ever set from your card.
                 if (Ui.myStatus === "dnd") { Ui.say("Do not disturb is on. Your card changes it."); return }
@@ -1053,7 +1150,7 @@ Window {
             }
             // A call, a voice room or a transfer: Huginn comes up and asks first, as the X does.
             if (LocalSend.busy || FileLink.closeWarning !== "" || app.inVoice) {
-                if (app.visibility === Window.Minimized || app.visibility === Window.Hidden) app.visibility = app.fullNow ? Window.FullScreen : Window.Windowed
+                if (app.visibility === Window.Minimized || app.visibility === Window.Hidden) app.visibility = app.fullNow ? Window.FullScreen : app.normalVisibility()
                 app.raise(); app.requestActivate()
                 app.requestExit(false)
                 return
@@ -1083,13 +1180,14 @@ Window {
         function onFinished(t) { Ui.say(t) }
     }
     // Push to talk on Windows only hears the key while Huginn is in front (Huginn never watches keys in other apps, on
-    // purpose). It can't tell when the key was held behind a game, so the first time Huginn is back in front after being
+    // purpose), and on Linux too when the desktop offers no shortcut portal (GlobalKeys.everywhere false). It can't tell when the key was held behind a game, so the first time Huginn is back in front after being
     // behind in a voice room with push to talk on, a toast says so (once per room).
     readonly property bool inFront: Qt.application.state === Qt.ApplicationActive
+    readonly property bool talkInFrontOnly: Qt.platform.os === "windows" || !GlobalKeys.everywhere
     property bool talkWentBehind: false
     property bool talkToldOnce: false
     onInFrontChanged: {
-        if (Qt.platform.os !== "windows" || app.touring || !Rooms.inRoom || !Settings.pushToTalk) return
+        if (!app.talkInFrontOnly || app.touring || !Rooms.inRoom || !Settings.pushToTalk) return
         if (!app.inFront) { app.talkWentBehind = true; return }
         if (!app.talkWentBehind || app.talkToldOnce) return
         app.talkWentBehind = false
@@ -1501,7 +1599,7 @@ Window {
             // A contact's one menu, as the three dots, a right click or LT open it.
             if (s.picker) PeopleActions.contactMenu("tour", "Mira", { tour: true })
             if (s.prompt) prompt.open("Message everyone nearby", "You're " + Ui.myName, "", "Send", null, false, true)
-            if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Lounge", note: "Hosts raid night on Fridays. Bring snacks." })
+            if (s.profile) Ui.showProfile("j", "Jake", { tour: true, group: "Gaming Crew", admin: true, room: "Voice", note: "Hosts raid night on Fridays. Bring snacks." })
             if (s.shortcuts) shortcutsPanel.open()
             if (s.transfers) transfersPanel.open(true)
             if (s.chatFiles) chatFiles.open("g:tour-crew", "Gaming Crew", true)

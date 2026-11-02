@@ -481,8 +481,7 @@ QtObject {
     // "g:<group>[:<channel>]". The route is picked by itself; its card shows in the chat and in Transfers.
     function sendFile(where) {
         if (Ui.main && Ui.main.touring) return
-        const paths = System.pickFiles()
-        if (paths.length) sendFiles(where, paths)
+        Ui.pickFiles(paths => sendFiles(where, paths))
     }
     function sendFiles(where, urls) {
         const r = FileLink.sendTo(where, urls)
@@ -569,10 +568,16 @@ QtObject {
 
     // Unlinks the phone and takes its copy off. This PC's own name and picture come back; when they aren't known
     // (it was linked before they were kept, or it never had a name), it asks for one instead of keeping the phone's.
-    function unlinkRemove() {
-        if (Linked.unlinkPhone(false)) { Ui.say("Unlinked. This computer has its own name again."); return }
-        Qt.callLater(() => Ui.ask("Name this computer's account", "Your phone's name was used here. Pick the name this computer shows in its own chats.", "", "Save",
-                                  t => { Chat.username = t; Ui.say("Unlinked.") }))
+    // wasKept: only a copy kept earlier is removed (it was unlinked already).
+    function unlinkRemove(wasKept) {
+        const done = wasKept ? "Copy removed." : "Unlinked."
+        if (Linked.unlinkPhone(false)) { Ui.say(wasKept ? "Copy removed. This computer has its own name again." : "Unlinked. This computer has its own name again."); return }
+        Qt.callLater(() => askOwnName(done))
+    }
+    // This computer's own account needs a name of its own again (the phone's was used here).
+    function askOwnName(done) {
+        Ui.ask("Name this computer's account", "Your phone's name was used here. Pick the name this computer shows in its own chats.", "", "Save",
+               t => { Chat.username = t; Linked.nameGiven(); Ui.say(done || "Saved.") })
     }
 
     function linkedDevices() {
@@ -583,7 +588,7 @@ QtObject {
         else if (ph.gone) {
             // Unlinked with a copy kept: link again, or take the copy off.
             phone.push({ name: "Link this PC to my phone", detail: "Shows a code to scan in Muninn", url: "code" },
-                       { name: "Remove " + ph.name + "'s copy", detail: "Its chats and contacts leave this device", url: "wipe", danger: true })
+                       { name: "Remove " + ph.name + "'s copy", detail: "Its chats, contacts, groups and folders leave this device", url: "wipe", danger: true })
         } else {
             if (!ph.ok) phone.push({ name: "Check the 4 emoji", detail: "Nothing comes over until they match", url: "check" })
             phone.push({ name: "Unlink " + ph.name, detail: "Keep a read-only copy here, or remove it", url: "ph", danger: true })
@@ -615,15 +620,15 @@ QtObject {
             } else if (a === "ph") {
                 // Keep a read-only copy here, or take everything that came from the phone off this device.
                 Ui.pickFrom("Unlink " + ph.name + "?", [{ header: "", items: [
-                    { name: "Unlink, keep a copy", detail: "Chats and contacts stay here, read only", url: "keep" },
-                    { name: "Unlink and remove", detail: "Its chats and contacts leave this device", url: "wipe", danger: true }] }],
+                    { name: "Unlink, keep a copy", detail: "Chats, contacts, groups and folders stay here, read only", url: "keep" },
+                    { name: "Unlink and remove", detail: "Its chats, contacts, groups and folders leave this device", url: "wipe", danger: true }] }],
                     b => {
-                        if (b === "keep") { Linked.unlinkPhone(true); Ui.say("Unlinked. A read-only copy stays here."); return }
+                        if (b === "keep") { Linked.unlinkPhone(true); Ui.say("Unlinked. A read-only copy stays here. This PC's own account keeps your name until you remove the copy."); return }
                         Ui.sure("Unlink and remove?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.",
-                                "Unlink and remove", () => unlinkRemove(), false, true)
+                                "Unlink and remove", () => unlinkRemove(false), false, true)
                     })
             } else if (a === "wipe") {
-                Ui.sure("Remove " + ph.name + "'s copy?", "Its chats and contacts leave this device.", "Remove", () => unlinkRemove(), false, true)
+                Ui.sure("Remove " + ph.name + "'s copy?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.", "Remove", () => unlinkRemove(true), false, true)
             } else if (a.indexOf("u:") === 0) {
                 const key = a.substring(2), c = Linked.companions.find(x => x.key === key)
                 const name = c ? c.name : "this device"

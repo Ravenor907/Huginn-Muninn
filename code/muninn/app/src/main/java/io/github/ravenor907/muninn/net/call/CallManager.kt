@@ -237,10 +237,15 @@ object CallManager {
     fun answer(video: Boolean = false) { exec.execute { lockedRing?.takeIf { session == null }?.let { answerLocked(it); return@execute }
         session?.let { s ->
         app?.let { Ringer.stop(it) }
+        // Rang during a voice room: "Join call and leave room" leaves it first, then answers.
+        if (RoomManager.busy) { RoomManager.leaveThen { exec.execute { if (session === s) answerNow(s, video) } }; return@execute }
+        answerNow(s, video)
+    } } }
+    private fun answerNow(s: CallSession, video: Boolean) {
         s.wantVideo = video && videoHere()
         CallVideo.want(s, s.wantVideo)
         s.answer(); app?.let { CallService.start(it) }
-    } } }
+    }
     fun setCamera(on: Boolean) = CallVideo.setCamera(on)
     fun switchCamera() = CallVideo.switchCamera()
     fun decline() { exec.execute { lockedRing?.takeIf { session == null }?.let { declineLocked(it); return@execute }
@@ -295,13 +300,19 @@ object CallManager {
                 if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, s.ts, 0, "missed")).also { Ringer.missed(a, nameOf(fromKey), fromKey) }
                 return@execute
             }
-            if (cur != null || RoomManager.busy) {
-                // Already in a call (or a voice room): busy, 3 times over 2 s.
+            if (cur != null) {
+                // Already in a call: busy, 3 times over 2 s, and a missed-call notice so it's never silent.
                 val busy = CallLogic.simple("busy", s.call)
                 send(fromKey, busy); exec.schedule(Runnable { send(fromKey, busy) }, 1, TimeUnit.SECONDS); exec.schedule(Runnable { send(fromKey, busy) }, 2, TimeUnit.SECONDS)
-                if (remember(s.call)) addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed"))
+                if (remember(s.call) && !a.chat.blocked.value.contains(fromKey)) {
+                    addLog(Log(s.call, fromKey, nameOf(fromKey), false, System.currentTimeMillis(), 0, "missed"))
+                    Ringer.missed(a, nameOf(fromKey), fromKey, "while you were on a call")
+                }
                 return@execute
             }
+            // In a voice room (or a group call): it rings softly there instead of "busy" (see below).
+            val inRoom = RoomManager.busy
+            val roomTitle = if (inRoom) RoomManager.room.value?.title.orEmpty() else ""
             if (!remember(s.call)) return@execute   // an old call's late retry
             if (a.chat.blocked.value.contains(fromKey)) return@execute
             // Extreme battery saver: calls ring only while Muninn is open. Otherwise it's in the call history as missed.
@@ -328,9 +339,15 @@ object CallManager {
                 } catch (_: Exception) {}
                 return@execute
             }
+            // In a voice room: a soft tone in the room's sound, one buzz, and Join call and leave room or Decline.
+            // Unanswered, it ends as a missed call with its notice ("while you were in Hangout").
+            if (inRoom) { roomRing = ns.callId to roomTitle; Ringer.ringInRoom(a, nameOf(fromKey), roomTitle); return@execute }
             Ringer.ring(a, ns.callId, nameOf(fromKey), fromKey)
         }
     }
+
+    /** The call that rang softly in a voice room, and that room's name (for its missed-call notice). */
+    @Volatile private var roomRing: Pair<String, String>? = null
 
     /** True the first time a call id is seen. */
     private fun remember(id: String): Boolean = synchronized(seen) {
@@ -400,7 +417,10 @@ object CallManager {
                 }
                 val secs = if (s.connectedAt > 0) (System.currentTimeMillis() - s.connectedAt) / 1000 else 0
                 addLog(Log(s.callId, s.peerKey, nameOf(s.peerKey), s.outgoing, s.startedAt, secs, result))
-                if (result == "missed") Ringer.missed(a, nameOf(s.peerKey), s.peerKey)
+                val inRoom = roomRing?.takeIf { it.first == s.callId }
+                if (inRoom != null) roomRing = null
+                if (result == "missed") Ringer.missed(a, nameOf(s.peerKey), s.peerKey,
+                    if (inRoom == null) "" else if (inRoom.second.isEmpty()) "while you were in a voice room" else "while you were in ${inRoom.second}")
             }
             // The ended state stays on screen for a moment, then goes.
             exec.schedule(Runnable { if (_call.value?.callId == s.callId && session == null) _call.value = null }, 2500, TimeUnit.MILLISECONDS)
