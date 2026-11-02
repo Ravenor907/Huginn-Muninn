@@ -20,7 +20,7 @@ Rectangle {
     readonly property bool vaultLocked: Vault.exists && Vault.screenLocked
     readonly property string statusText: {
         if (vaultLocked) return "Locked"
-        if (Settings.pushToTalk && inVoice) return "Push to talk: " + TalkKey.keyName
+        if (Settings.pushToTalk && inVoice) return TalkKey.hasKey ? "Push to talk: " + TalkKey.keyName : "Push to talk: pick a key"
         if (Ui.myCustomStatus !== "") return Ui.myCustomStatus
         return statusName(Ui.myStatus)
     }
@@ -34,6 +34,12 @@ Rectangle {
     readonly property bool muted: !tour && Ui.micMuted
     readonly property bool deafened: !tour && Ui.deafened
     readonly property bool talking: tour || Rooms.inRoom || Calls.inCall
+    // The talk key, short: "`" for Backtick.
+    readonly property string keyShort: TalkKey.key === Qt.Key_QuoteLeft ? "`" : TalkKey.keyName
+    // What push to talk does right now: no key yet, the key goes into the focused text box, or hold it.
+    readonly property string holdWords: !TalkKey.hasKey ? "Pick a talk key (Settings › Calls)"
+                                      : TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + keyShort + " goes to the box"
+                                      : "Hold " + keyShort
     height: (voice.visible ? voice.implicitHeight : 0) + me.height
     radius: Theme.radius
     color: Theme.raised
@@ -51,8 +57,9 @@ Rectangle {
         topPadding: panel.compact ? Theme.px(4) : Theme.px(8)
         bottomPadding: panel.compact ? Theme.px(4) : Theme.px(8)
 
-        // Compact: the room, the faces of whoever is talking (or, with push to talk, the key to hold), More (Share,
-        // Watch) and Leave, all on one line. A problem (Rooms.note) gets the line to itself, beside Leave.
+        // Compact: the room, the faces of whoever is talking (with push to talk and nobody talking, the key to hold),
+        // More (Share, Watch) and Leave, all on one line. A problem (Rooms.note) takes the room's place, beside More and
+        // Leave.
         Row {
             id: oneLine
             visible: panel.compact
@@ -60,10 +67,12 @@ Rectangle {
             spacing: Theme.px(6)
             readonly property var talkers: panel.others.filter(p => p.speaking).slice(0, 3)
             readonly property bool noted: Rooms.note !== "" && !panel.tour
-            readonly property bool holdShown: !noted && !panel.tour && Settings.pushToTalk
-            readonly property bool facesShown: !noted && !holdShown && talkers.length > 0
-            readonly property bool hasMore: !noted && (Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar))
+            readonly property bool facesShown: !noted && talkers.length > 0
+            // Who is talking comes first: the key shows while nobody is (its words are in the room name's tooltip too).
+            readonly property bool holdShown: !noted && !facesShown && !panel.tour && Settings.pushToTalk
+            readonly property bool hasMore: Rooms.canShare || panel.tour || (Rooms.sharerName !== "" && !!panel.roomBar)
             Text {
+                id: roomWords
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 width: Math.max(0, parent.width - compactLeave.width - parent.spacing
@@ -76,8 +85,10 @@ Rectangle {
                     : panel.tour ? "Voice / Gaming Crew" : Rooms.title + (Rooms.groupName ? " / " + Rooms.groupName : "")
                 color: oneLine.noted ? Theme.danger : !panel.tour && Settings.pushToTalk && Rooms.talking ? Theme.accent : Theme.online
                 font.family: Theme.body; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
-                Accessible.name: "Voice connected: " + text
+                Accessible.name: "Voice connected: " + text + (!panel.tour && Settings.pushToTalk ? ". " + panel.holdWords : "")
+                HoverHandler { id: roomHover }
                 TapHandler { onTapped: if (!panel.tour) Ui.openPage("g:" + Rooms.group, { voice: true }) }
+                Tip { shown: roomHover.hovered && !panel.tour && Settings.pushToTalk && !oneLine.holdShown; text: panel.holdWords }
             }
             // Push to talk: the key to hold, where the faces would be.
             Text {
@@ -85,7 +96,7 @@ Rectangle {
                 visible: oneLine.holdShown
                 textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Hold " + (TalkKey.key === Qt.Key_QuoteLeft ? "`" : TalkKey.keyName)
+                text: panel.holdWords
                 color: Rooms.talking ? Theme.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
             }
@@ -258,6 +269,8 @@ Rectangle {
                 // so with another app in front it says so.
                 text: !panel.tour && Rooms.talking ? "Talking"
                     : !panel.tour && (Qt.platform.os === "windows" || !GlobalKeys.everywhere) && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while another app is in front"
+                    : !panel.tour && !TalkKey.hasKey ? "Push to talk: pick a key in Settings › Calls"
+                    : !panel.tour && TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + TalkKey.keyName + " goes to the box"
                     : "Push to talk: hold " + TalkKey.keyName
                 color: !panel.tour && Rooms.talking ? Theme.accent : Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold

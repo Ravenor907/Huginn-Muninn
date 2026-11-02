@@ -20,6 +20,10 @@ class TalkKey : public QObject
     Q_PROPERTY(bool capturing READ capturing NOTIFY changed)
     // The key puts a character in a text box, so it types there instead of talking while one has the focus.
     Q_PROPERTY(bool keyTypes READ keyTypes NOTIFY changed)
+    // No key picked yet (a new install): push to talk waits for one (Settings › Calls).
+    Q_PROPERTY(bool hasKey READ hasKey NOTIFY changed)
+    // A text box has the focus right now, so a key that types goes there instead of talking.
+    Q_PROPERTY(bool inBox READ inBox NOTIFY changed)
 
 public:
     TalkKey(Settings *settings, RoomManager *rooms, QObject *parent = nullptr);
@@ -28,6 +32,8 @@ public:
     QString keyName() const;
     bool capturing() const { return m_capturing; }
     bool keyTypes() const;
+    bool hasKey() const { return m_key != 0; }
+    bool inBox() const { return m_inBox; }
 
     // The next key pressed becomes the push to talk key (Escape keeps the old one).
     Q_INVOKABLE void capture();
@@ -43,10 +49,13 @@ protected:
 
 private:
     void release();
+    static int firstKey();
+    static bool boxFocused();
     Settings *m_settings;
     RoomManager *m_rooms;
     int m_key;
     bool m_capturing = false;
     bool m_down = false;
     bool m_toldTyped = false;
+    bool m_inBox = false;
 };

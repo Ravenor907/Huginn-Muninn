@@ -1231,6 +1231,7 @@ Window {
         if (!app.talkWentBehind || app.talkToldOnce) return
         app.talkWentBehind = false
         app.talkToldOnce = true
+        if (!TalkKey.hasKey) return
         Ui.say("Push to talk only hears " + TalkKey.keyName + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
     }
     Connections {
@@ -1241,7 +1242,7 @@ Window {
     Connections {
         target: TalkKey
         function onTypedInstead() {
-            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like Caps Lock or F13 (Settings › Calls).")
+            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like F13 or Scroll Lock (Settings › Calls).")
         }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen. Report a bug stays, behind its own lock

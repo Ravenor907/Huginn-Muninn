@@ -23,6 +23,9 @@ const QString kMentions = QStringLiteral("mentions");
 // A key as flags keep it: a contact's, or "g:<group>" for any of a group's channels ("g:<group>:<channel>").
 QString flagKey(const QString &key)
 {
+    // A phone's group on a linked PC arrives per channel ("mirror:g:<id>#<channel>"); its flags are the group's.
+    if (key.startsWith(QLatin1String("mirror:")) && key.contains(QLatin1Char('#')))
+        return key.section(QLatin1Char('#'), 0, 0);
     return key.startsWith(QLatin1String("g:")) ? QStringLiteral("g:") + key.mid(2).section(QLatin1Char(':'), 0, 0) : key;
 }
 }

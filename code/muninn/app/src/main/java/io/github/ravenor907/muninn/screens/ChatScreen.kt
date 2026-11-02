@@ -254,13 +254,16 @@ private fun PhotoSendRow(enabled: Boolean, onCancel: () -> Unit, onSend: (Boolea
 
 /** "Messages delete after 7 days · Keep longer": a quiet line under a chat's top bar; the tap explains the choices. */
 @Composable
-private fun KeepLine(days: Int, onTap: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Keep longer") { onTap() }
+private fun KeepLine(days: Int, link: String? = null, onTap: () -> Unit) {
+    // [link]: the words after the days. By default "Keep longer" (or "Change" at the most); "Why?" where a tap can't
+    // change it, only explain.
+    val words = link ?: if (days >= io.github.ravenor907.muninn.net.Limits.LONGEST) "Change" else "Keep longer"
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = words) { onTap() }
         .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         MIcon("clock", Palette.textMuted, 14.dp)
         Spacer(Modifier.width(6.dp))
         Text("Messages delete after $days days", style = tinyStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Text(if (days >= io.github.ravenor907.muninn.net.Limits.LONGEST) " · Change" else " · Keep longer",
+        Text(" · $words",
             style = tinyStyle.copy(color = Palette.accent, fontWeight = FontWeight.SemiBold), maxLines = 1)
     }
 }
@@ -906,7 +909,7 @@ private fun ThreadBar(name: String, status: String, statusIcon: String, statusTi
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(name, style = nameStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (status.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
                         MIcon(statusIcon, statusTint, 13.dp, weight = 2f)
                         Spacer(Modifier.width(5.dp))
                         Text(status, style = metaStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1126,13 +1129,19 @@ private fun Conversation(app: Muninn, key: String) {
     val matches = if (!searching || query.isBlank()) emptyList()
         else msgs.indices.filter { msgs[it].unsent.isEmpty() && msgs[it].text.contains(query.trim(), ignoreCase = true) }.reversed()
     LaunchedEffect(matchAt, matches.size, query) { matches.getOrNull(matchAt)?.let { list.animateScrollToItem(it) } }
-    // Like any messenger: typing, Active now, or how long messages stay. How messages travel is in Person details.
+    // Like any messenger: typing, Active now, or nothing. A contact's chat says how long messages stay in the line
+    // under the bar (KeepLine), so the bar doesn't say it again; someone just met has no such line, so it says it here.
+    // Muted shows first, as Huginn's header does. How messages travel is in Person details.
     val keepDays = app.chat.chatDays(key)
-    val status = when {
+    val chatFlags by app.chat.flags.all.collectAsState()
+    val mutedNow = (chatFlags.muted[key] ?: 0L) > System.currentTimeMillis()
+    val said = when {
         typingNow -> "typing…"
-        activeNow -> "Active now · $keepDays days"
-        else -> "Messages stay $keepDays days"
+        activeNow -> if (c != null) "Active now" else "Active now · $keepDays days"
+        c == null -> "Messages stay $keepDays days"
+        else -> ""
     }
+    val status = if (mutedNow && !typingNow) (if (said.isEmpty()) "Muted" else "Muted · $said") else said
     var keeping by remember { mutableStateOf(false) }
     if (keeping) KeepLongerDialog(app, key, name) { keeping = false }
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
@@ -1341,8 +1350,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     // GIFs come in from the keyboard (Gboard's GIF key) or the photo picker: the emoji window's GIF button says how.
     if (emoji) EmojiPicker("Emoji", { e -> onText((text + e).take(Chat.MAX)) }, onGif = if (onImageSet && onPhoto != null) ({
         emoji = false
-        Ui.sure(io.github.ravenor907.muninn.ui.Ask("Send a GIF", "Tap your keyboard's GIF key (on Gboard: the smiley key, then GIF), " +
-            "or pick a GIF from your photos with + › Photos.", "Open +", onConfirm = { onPhoto() }))
+        gifHelp(onPhoto)
     }) else null) { emoji = false }
     banner?.invoke()
     val recording by Voice.recording.collectAsState()
@@ -1869,7 +1877,7 @@ private class CallChoice(val icon: String, val text: String, val go: () -> Unit)
 
 /**
  * A chat header's one Call button. A tap shows [choices] in a small popup under it (Voice call and Video call,
- * or a group's Call everyone and Join voice). No choices: [unavailable] is said instead, and the button is dimmed.
+ * or a group's Call everyone and Drop-in call). No choices: [unavailable] is said instead, and the button is dimmed.
  */
 @Composable
 private fun CallButton(label: String, choices: List<CallChoice>, unavailable: String = "") {
@@ -2167,30 +2175,58 @@ private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> 
 }
 
 /**
- * "Keep longer" in a group: how long its messages stay, and why. A Folk group always keeps 7 days; a Family group's
- * admins pick 7 to 30 (in Group settings). The rules stay as they are; this only says them plainly.
+ * "Keep longer" (or "Why?") in a group: how long its messages stay, and why. A Folk group always keeps 7 days; a Family
+ * group's admins pick 7 to 30 (in Group settings). The rules stay as they are; this says them plainly and, to an admin
+ * of a Folk group, offers the choice: make it Family, or keep 7 days.
  */
 @Composable
-private fun GroupKeepDialog(s: Proto06.State, admin: Boolean, onSettings: () -> Unit, onDismiss: () -> Unit) {
+private fun GroupKeepDialog(s: Proto06.State, admin: Boolean, onSettings: () -> Unit, onFamily: () -> Unit, onDismiss: () -> Unit) {
     val days = io.github.ravenor907.muninn.net.Limits.groupDays(s)
     val family = io.github.ravenor907.muninn.net.Limits.groupType(s) == io.github.ravenor907.muninn.net.Limits.FAMILY
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Palette.panel,
         shape = io.github.ravenor907.muninn.ui.Corner,
-        title = { Text("How long messages stay", style = Type.big) },
+        title = { Text(if (!family && admin) "Keep messages longer?" else "How long messages stay", style = Type.big) },
         text = {
-            Text(if (family) "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. In a Family group the admins " +
+            Text(when {
+                family -> "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. In a Family group the admins " +
                     "choose 7, 14 or 30 days in Group settings." + (if (admin) "" else " Ask an admin if you'd like longer.")
-                else "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. This is a Folk group, and Folk groups " +
-                    "always keep 7 days. To keep up to 30 days, make a Family group instead: people join it in person or by a code, not a link.",
-                style = Type.normal)
+                admin -> "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. ${s.name} is a Folk group, " +
+                    "and Folk groups keep 7 days.\n\nTo keep up to 30 days, make it a Family group. Then invite links stop, and only " +
+                    "admins add people, face to face or by a code. Or keep it Folk, at 7 days."
+                else -> "Messages in ${s.name} delete after $days days for everyone, so old chats can't leak. ${s.name} is a Folk group, " +
+                    "and Folk groups keep 7 days.\n\nAn admin can make it a Family group to keep up to 30 days. Then invite links stop, " +
+                    "and only admins add people."
+            }, style = Type.normal)
         },
         confirmButton = {
-            if (family && admin) MButton("Group settings", kind = Kind.Accent) { onSettings() } else MButton("OK") { onDismiss() }
+            when {
+                family && admin -> MButton("Group settings", kind = Kind.Accent) { onSettings() }
+                admin -> MButton("Make it Family", kind = Kind.Accent) { onFamily() }
+                else -> MButton("OK") { onDismiss() }
+            }
         },
-        dismissButton = if (family && admin) ({ MButton("Close") { onDismiss() } }) else null,
+        dismissButton = when {
+            family && admin -> ({ MButton("Close") { onDismiss() } })
+            admin -> ({ MButton("Keep 7 days") { onDismiss() } })
+            else -> null
+        },
     )
+}
+
+/** A small group's "In voice: Sam, Jo · Join" line, in place of the channel chips. */
+@Composable
+private fun InVoiceLine(names: List<String>, onJoin: () -> Unit) {
+    val shown = if (names.size <= 3) names.joinToString(", ") else names.take(2).joinToString(", ") + " and ${names.size - 2} more"
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Join the drop-in call") { onJoin() }
+        .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        MIcon("audio", Palette.online, 14.dp)
+        Spacer(Modifier.width(6.dp))
+        Text("In voice: $shown", style = tinyStyle.copy(color = Palette.online), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false))
+        Text(" · Join", style = tinyStyle.copy(color = Palette.accent, fontWeight = FontWeight.SemiBold), maxLines = 1)
+    }
 }
 
 /** [ChannelDialog] for a new voice room (an admin's tap on "Voice rooms: talk here"). */
@@ -2385,10 +2421,13 @@ private fun GroupConversation(app: Muninn, g: String) {
     val otherMembers = s.members.filter { it.k != app.identity.publicKey }
     val others = otherMembers.map { memberName(app, it) }
     val inRoom by RoomManager.room.collectAsState()
+    // Muted shows first in the bar, as in a 1:1 chat.
+    val groupFlags by app.chat.flags.all.collectAsState()
+    val groupMuted = (groupFlags.muted[key] ?: 0L) > System.currentTimeMillis()
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
-            "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
+            (if (groupMuted) "Muted · " else "") + "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
             { GroupAvatar(s.name, otherMembers, 40.dp) }, actions = {
                 // One Call button, like a person's; Mute is in the menu.
                 if (!grp.readOnly) {
@@ -2403,7 +2442,13 @@ private fun GroupConversation(app: Muninn, g: String) {
                                 extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
                                 onConfirm = { RoomActivity.call(context, g, emptyList()) }))
                         })
-                        rooms.forEach { (id, n) -> add(CallChoice("audio", if (rooms.size == 1) "Drop-in call (no ringing)" else "Drop-in call · $n") { RoomActivity.join(context, g, id) }) }
+                        rooms.forEach { (id, n) ->
+                            // How many are in it already, so a hangout shows it's going.
+                            val inIt = RoomManager.whoIn(g, id).size
+                            val base = if (rooms.size == 1) "Drop-in call" else "Drop-in call · $n"
+                            val label = if (inIt > 0) "$base · $inIt in it" else if (rooms.size == 1) "$base (no ringing)" else base
+                            add(CallChoice("audio", label) { RoomActivity.join(context, g, id) })
+                        }
                     }
                     if (choices.isNotEmpty()) CallButton("Call ${s.name}", choices)
                 }
@@ -2419,10 +2464,20 @@ private fun GroupConversation(app: Muninn, g: String) {
         // second channel is added (Group settings › Channels); the voice room stays in the Call button as Drop-in call.
         val manyChannels = s.channels.count { it.t == "text" } > 1 || s.channels.count { it.t == "voice" } > 1 || calls.isNotEmpty()
         if (!ChatNav.wide && manyChannels) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
+        // No chips (a small group): who is in the drop-in call still shows, on one line with Join.
+        if (!ChatNav.wide && !manyChannels && inRoom?.g != g) s.channels.firstOrNull { it.t == "voice" }?.let { v ->
+            val who = RoomManager.whoIn(g, v.id).filter { !it.me }
+            if (who.isNotEmpty()) InVoiceLine(who.map { it.name }) { RoomActivity.join(context, g, v.id) }
+        }
         // How long messages stay, with one tap to see how to keep them longer.
         var keepInfo by remember { mutableStateOf(false) }
-        if (!grp.readOnly && !searching) KeepLine(io.github.ravenor907.muninn.net.Limits.groupDays(s)) { keepInfo = true }
-        if (keepInfo) GroupKeepDialog(s, admin, onSettings = { keepInfo = false; ChatNav.open = "$key/settings" }) { keepInfo = false }
+        // Only an admin can change it (a Folk group by making it Family), so for everyone else the link only explains.
+        if (!grp.readOnly && !searching) KeepLine(io.github.ravenor907.muninn.net.Limits.groupDays(s), if (admin) null else "Why?") { keepInfo = true }
+        if (keepInfo) GroupKeepDialog(s, admin, onSettings = { keepInfo = false; ChatNav.open = "$key/settings" }, onFamily = {
+            keepInfo = false
+            app.chat.groups.setLimit(g, io.github.ravenor907.muninn.net.Limits.FAMILY, io.github.ravenor907.muninn.net.Limits.groupDays(s))?.let { Ui.say(it, true) }
+                ?: run { Ui.say("${s.name} is a Family group now. Pick how many days in Group settings."); ChatNav.open = "$key/settings" }
+        }) { keepInfo = false }
         // Cap g3: the group's about text (description and rules), at the top of its first channel. It never expires.
         // Paragraphs show one a line; a tap folds it to one line (kept for this run), for small screens.
         if (s.about.isNotEmpty() && ch == Proto06.MAIN) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp), onClick = {
@@ -2581,8 +2636,9 @@ private fun GroupConversation(app: Muninn, g: String) {
                 }
             }
             // Cap g3: Report to admins, through the group (an admin's older app gets a private message, when a contact).
+            // A main row, where people look for it (not among the facts in Info).
             if (!gm.mine && gm.unsent.isEmpty() && gm.from.isNotEmpty() && !grp.readOnly && s.admins.any { it != me && it != gm.from })
-                add(SheetAction("Report to admins", "info", folder = "Info") {
+                add(SheetAction("Report to admins", "info") {
                     Ui.sure(Ask("Report this message?", "Only the group's admins see it, and that it came from you.", "Report", onConfirm = {
                         val n = app.chat.groups.report(g, gm.id) { k, line -> app.chat.sendPrivate(k, line) }
                         if (n == 0) Ui.say("No admin can get it yet. They may need an update.", true)

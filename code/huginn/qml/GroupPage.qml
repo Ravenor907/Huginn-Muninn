@@ -180,7 +180,8 @@ Rectangle {
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
         : zone === "side" ? (side === "thread" && !readOnly ? [{ key: "a", label: "Reply in the thread" }] : side === "pins" ? [{ key: "a", label: "Go to it" }] : [])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
-        : zone === "channels" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Group menu" }, { key: "b", label: "Back" }]
+        : zone === "channels" ? [{ key: "a", label: "Open" }].concat(callChoices.length ? [{ key: "y", label: "Call" }] : [],
+                                                                       [{ key: "lt", label: "Group menu" }, { key: "b", label: "Back" }])
         : zone === "members" ? [{ key: "a", label: "Menu" }, { key: "lt", label: "Menu" }, { key: "b", label: "Back" }]
         : (readOnly ? [] : [{ key: "a", label: sel >= 0 && messages[sel] && messages[sel].call ? "Call back" : "Write" }, { key: "y", label: "Hold to record" }]).concat([{ key: "lt", label: sel >= 0 ? "Options" : "Group menu" }], membersFit ? [] : [{ key: "right", label: "People" }], [{ key: "b", label: "Back" }])
     readonly property string status: Chat.netStatus
@@ -1735,6 +1736,8 @@ Rectangle {
             else groupMenu()
             return true
         case "y":
+            // The channel list: the header's Call button (Call everyone, Drop-in call), which the D-pad never lands on.
+            if (zone === "channels") { if (callChoices.length) callMenu(); return true }
             if (zone === "messages" && !readOnly && !isTour && !Voice.recording) {
                 if (!Voice.start(chatKey)) Ui.say("The microphone isn't available right now.", true)
             }

@@ -78,7 +78,16 @@ import kotlinx.coroutines.withContext
  * "+" menu in the message box that makes them.
  */
 
-/** The "+" in the message box: photos, the camera, a video message, a poll. */
+/**
+ * How to send a GIF: from the keyboard's GIF key, or a GIF saved in Photos ([onPhotos] opens the photo picker).
+ * From + › GIF and the emoji window's GIF button.
+ */
+internal fun gifHelp(onPhotos: () -> Unit) {
+    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Send a GIF", "Tap your keyboard's GIF key (on Gboard: the smiley key, then GIF), " +
+        "or pick a GIF saved in your photos.", "Pick from photos", onConfirm = { onPhotos() }))
+}
+
+/** The "+" in the message box: photos, a GIF, the camera, a video message, a poll. */
 @Composable
 internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: () -> Unit, onPoll: () -> Unit, onFile: (() -> Unit)? = null, done: () -> Unit) {
     androidx.compose.material3.AlertDialog(
@@ -88,6 +97,7 @@ internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: (
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Line("Photos", "Up to 10 at once", icon = "image") { done(); onPhotos() }
+                Line("GIF", "From your keyboard or photos", icon = "image") { done(); gifHelp(onPhotos) }
                 Line("Camera", "Take a photo now", icon = "image") { done(); onCamera() }
                 Line("Video message", "Up to a minute", icon = "video") { done(); onVideo() }
                 Line("Poll", "Ask a question", icon = "check") { done(); onPoll() }

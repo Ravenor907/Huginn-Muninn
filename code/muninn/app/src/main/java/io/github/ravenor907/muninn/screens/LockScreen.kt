@@ -1,6 +1,10 @@
 package io.github.ravenor907.muninn.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Arrangement
@@ -53,6 +57,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }
     var shakes by remember { mutableStateOf(0) }   // a wrong pattern shakes the pad
+    var forgot by remember { mutableStateOf(false) }   // "Forgot it?": the way back is a backup
     val ask by Ui.ask.collectAsState()
     val scope = rememberCoroutineScope()
     val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
@@ -73,6 +78,11 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     var now by remember { mutableStateOf(elapsed()) }
     LaunchedEffect(waitUntil) { while (elapsed() < waitUntil) { now = elapsed(); kotlinx.coroutines.delay(500) }; now = elapsed() }
     val waiting = now < waitUntil
+    if (forgot) {
+        ForgotLock(app) { forgot = false }
+        ask?.let { AskDialog(it) }
+        return
+    }
     fun tryIt(secret: String = pw) {
         if (waiting || busy) return
         busy = true; wrong = false
@@ -107,6 +117,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                 wrong -> "That's not it. Try again."
                 else -> "Your messages, contacts and keys stay encrypted until you do."
             }, style = Type.small.copy(color = if (waiting || wrong) Palette.danger else Palette.textMuted), modifier = Modifier.padding(top = 4.dp))
+            ForgotLink { forgot = true }
             val (top, bottom) = padWeights(app.identity.patternPos)
             Spacer(Modifier.weight(top))
             PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
@@ -132,10 +143,64 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                     wrong -> Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                 }
                 if (!pattern) MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt() }
+                ForgotLink { forgot = true }
             }
         }
     }
     ask?.let { AskDialog(it) }
+}
+
+/** "Forgot it?" under the lock. */
+@Composable
+private fun ForgotLink(onClick: () -> Unit) {
+    Text("Forgot it?", style = Type.small.copy(color = Palette.accent, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline),
+        modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).wrapContentHeight()
+            .clickable(role = androidx.compose.ui.semantics.Role.Button, onClickLabel = "Restore from a backup") { onClick() })
+}
+
+/**
+ * The lock forgotten. Nobody can reset it (the owner's choice), so the way back is a backup: what's here is erased
+ * and the usual Restore from a backup runs (its last step asks first, holding the button). No backup: clear
+ * Muninn's storage in Android settings and start again.
+ */
+@Composable
+private fun ForgotLock(app: Muninn, onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    var restoring by remember { mutableStateOf(false) }
+    androidx.activity.compose.BackHandler { if (restoring) restoring = false else onBack() }
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+        Brand()
+        Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (!restoring) Panel {
+                Text("Forgot your lock?", style = Type.big)
+                Text("Your chats are encrypted with it, so nobody can open or reset it.", style = Type.normal, modifier = Modifier.padding(top = 4.dp))
+                Text("If you made a backup, you can erase what's on this phone and put the backup back. Messages that came after the backup are lost.",
+                    style = Type.normal, modifier = Modifier.padding(top = 6.dp))
+                MButton("Restore from a backup", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) { restoring = true }
+                Text("No backup? Clear Muninn's storage in Android settings (Storage › Clear storage) to start again with a new account. " +
+                    "Your contacts will need to add you again.", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                MButton("Open Android settings", Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    try {
+                        ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.fromParts("package", ctx.packageName, null)))
+                    } catch (_: Exception) { Ui.say("Open Android Settings › Apps › Muninn.", true) }
+                }
+                MButton("Back to the lock", Modifier.fillMaxWidth().padding(top = 8.dp)) { onBack() }
+            }
+            if (restoring) Panel {
+                RestoreFlow(app, erases = true, onCancel = { restoring = false }) { o ->
+                    val files = io.github.ravenor907.muninn.net.Backup.prepare(app, o)
+                    val old = app.vault.startOverKeeping()
+                    io.github.ravenor907.muninn.net.Backup.restore(ctx, app.vault, files)
+                    // What was here can't be opened without the lock: erased, not kept. The wrong tries go too.
+                    old.deleteRecursively()
+                    app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit()
+                        .remove("lockFails").remove("lockAt").remove("lockWait").remove("lockBoot").commit()
+                    "Restored. Muninn is restarting."
+                }
+            }
+        }
+    }
 }
 
 /** Space above and below the pattern for Top, Middle and Lower. */

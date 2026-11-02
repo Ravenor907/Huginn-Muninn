@@ -172,7 +172,8 @@ fun BackupFlow(app: Muninn, onClose: () -> Unit) {
  * happened; Muninn then restarts. In [practice] nothing is opened or changed.
  */
 @Composable
-fun RestoreFlow(app: Muninn, practice: Boolean = false, onCancel: () -> Unit, restore: (BackupFormat.Opened) -> String) {
+fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false, onCancel: () -> Unit, restore: (BackupFormat.Opened) -> String) {
+    // [erases]: the lock screen's "Forgot it?". What's here can't be opened, so it's erased, not kept.
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var file by remember { mutableStateOf<Uri?>(null) }
@@ -221,8 +222,10 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, onCancel: () -> Unit, re
                 "Restore anyway", danger = true) { replace(o, copyOk = true) })
             return
         }
-        Ui.sure(Ask("Replace what's here?", "Everything on this phone is replaced by the backup. A copy of what's here now is kept first.",
-            "Restore", danger = true, hold = true) {
+        Ui.sure(Ask(if (erases) "Erase what's here and restore?" else "Replace what's here?",
+            if (erases) "Muninn's chats, contacts and keys on this phone are erased for good, and the backup goes in. Messages since the backup are lost."
+            else "Everything on this phone is replaced by the backup. A copy of what's here now is kept first.",
+            if (erases) "Erase and restore" else "Restore", danger = true, hold = true) {
             busy = true; error = ""
             scope.launch {
                 val r = withContext(Dispatchers.IO) { try { Result.success(restore(o)) } catch (e: Exception) { Result.failure<String>(e) } }
@@ -270,8 +273,9 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, onCancel: () -> Unit, re
                     s.files == false -> "Files and pictures: not in it."
                     else -> "Files and pictures: in it."
                 }, style = Type.small, modifier = Modifier.padding(top = 4.dp))
-                Text("A copy of what's here now is kept on this phone first.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-                MButton(if (busy) "Restoring…" else "Restore (replaces what's here)", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Danger,
+                Text(if (erases) "What's on this phone now is erased first." else "A copy of what's here now is kept on this phone first.",
+                    style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                MButton(if (busy) "Restoring…" else if (erases) "Erase and restore" else "Restore (replaces what's here)", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Danger,
                     enabled = !busy) { replace(o) }
             }
         }

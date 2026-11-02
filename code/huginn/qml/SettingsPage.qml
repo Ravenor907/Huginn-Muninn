@@ -160,10 +160,11 @@ Rectangle {
             { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
             // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
             { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk", note: GlobalKeys.talkNote },
-            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: "Talk key: " + TalkKey.keyName,
-              note: TalkKey.capturing ? "Press the new key. One that doesn't type, like Caps Lock or F13, talks while you type too"
-                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Caps Lock or F13, always talk"
-                    : "Talks even while you type", label: TalkKey.capturing ? "Press a key" : "Change" },
+            { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.hasKey ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
+              note: TalkKey.capturing ? "Press the new key. One that doesn't type, like F13 or Scroll Lock, talks while you type too"
+                    : !TalkKey.hasKey ? "Pick the key you'll hold to talk. One that doesn't type, like F13 or Scroll Lock, talks while you type too"
+                    : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like F13 or Scroll Lock, always talk"
+                    : "Talks even while you type", label: TalkKey.capturing ? "Press a key" : TalkKey.hasKey ? "Change" : "Pick a key" },
             { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Settings.pushToTalk,
               title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },

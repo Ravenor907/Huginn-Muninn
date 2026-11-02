@@ -13,9 +13,17 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
     : QObject(parent)
     , m_settings(settings)
     , m_rooms(rooms)
-    , m_key(Settings::saved(QStringLiteral("talkKey"), int(Qt::Key_QuoteLeft)).toInt())
+    , m_key(firstKey())
 {
     qApp->installEventFilter(this);
+    // A text box taking or losing the focus changes what a key that types does (the voice line says so).
+    connect(qApp, &QGuiApplication::focusObjectChanged, this, [this] {
+        const bool now = boxFocused();
+        if (now != m_inBox) {
+            m_inBox = now;
+            Q_EMIT changed();
+        }
+    });
     // Huginn in the background: the key can't be seen going up, so let go now.
     connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState s) {
         if (s != Qt::ApplicationActive)
@@ -27,11 +35,23 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
     });
 }
 
+// The saved key. A new install has none, so the first talk key never types into a message: Settings › Calls asks
+// for one when push to talk goes on. Someone who had push to talk before keeps the old default, Backtick.
+int TalkKey::firstKey()
+{
+    QSettings s = Settings::store();
+    if (!s.contains(QStringLiteral("talkKey")))
+        s.setValue(QStringLiteral("talkKey"), s.contains(QStringLiteral("pushToTalk")) ? int(Qt::Key_QuoteLeft) : 0);
+    return s.value(QStringLiteral("talkKey"), 0).toInt();
+}
+
 QString TalkKey::keyName() const
 {
+    if (m_key == 0)
+        return QStringLiteral("no key yet");
     if (m_key == Qt::Key_Space)
         return QStringLiteral("Space");
-    // The default: "`" alone is easy to miss in "hold `".
+    // The old default: "`" alone is easy to miss in "hold `".
     if (m_key == Qt::Key_QuoteLeft)
         return QStringLiteral("Backtick (`)");
     const QString n = QKeySequence(m_key).toString(QKeySequence::NativeText);
@@ -70,13 +90,15 @@ static bool typesText(const QKeyEvent *k)
 
 bool TalkKey::keyTypes() const
 {
+    if (m_key == 0)
+        return false;
     // Qt's keys below 0x01000000 are characters; the ones above (F keys, Caps Lock, Insert) aren't.
     return m_key < 0x01000000;
 }
 
 // A text box has the focus (a message, a name, a search): a talk key that types goes there instead of talking, so a
 // Backtick or Space in a message still works. A read-only text (a message being selected) doesn't count.
-static bool typingNow()
+bool TalkKey::boxFocused()
 {
     QObject *f = QGuiApplication::focusObject();
     if (!f || !(f->inherits("QQuickTextInput") || f->inherits("QQuickTextEdit")))
@@ -110,11 +132,11 @@ bool TalkKey::eventFilter(QObject *watched, QEvent *event)
         stopCapture();
         return true;
     }
-    if (key != m_key || !m_settings->pushToTalk() || !m_rooms->inRoom())
+    if (m_key == 0 || key != m_key || !m_settings->pushToTalk() || !m_rooms->inRoom())
         return QObject::eventFilter(watched, event);
     // Typing: a key that types goes to the text box. Held down from before the box took the focus, it still lets go
     // here. A key that types nothing talks even while a box has the focus.
-    if (!m_down && typesText(k) && typingNow()) {
+    if (!m_down && typesText(k) && boxFocused()) {
         if (t == QEvent::KeyPress && !k->isAutoRepeat() && !m_toldTyped) {
             m_toldTyped = true;
             Q_EMIT typedInstead();

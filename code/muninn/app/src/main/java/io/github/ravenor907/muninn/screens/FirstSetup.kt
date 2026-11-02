@@ -566,7 +566,7 @@ private fun DonePage() {
                 contentAlignment = Alignment.Center) { MIcon("check", Palette.accent, 36.dp, weight = 2.2f) }
             Text("You're set.", style = Type.title, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
             Text("Messages, photos and calls delete after 7 days, so old chats can't leak. To keep a chat longer, tap “Keep longer” at the top of it.", style = Type.normal, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
-            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › More › Backup. If you ever forget your lock, a backup brings your chats back.",
+            if (!practice && Setup.hasLock) Text("One more good step: make a backup in Settings › More › Backup. If you ever forget your lock, tap “Forgot it?” on the lock screen to put the backup back.",
                 style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
             if (practice) Text("Practice ends here and goes back to Labs.", style = Type.small, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp))
         }
