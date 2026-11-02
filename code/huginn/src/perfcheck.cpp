@@ -73,7 +73,7 @@ const int kIdleMs = 5000;       // then 5 seconds with nothing asked to draw: wh
 const int kTotalMs = 3 * kPhaseMs + kWarmMs + kIdleMs;
 const char *const kKeys[] = {"display", "drawing", "loop", "animations"};
 
-QSettings store() { return QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")); }
+QSettings store() { return QSettings(Settings::org(), QStringLiteral("Huginn")); }
 QString key(const char *k) { return QStringLiteral("labs/perf/") + QLatin1String(k); }
 QString defaultOf(const QString &k) { return k == QLatin1String("animations") ? QStringLiteral("on") : QStringLiteral("auto"); }
 

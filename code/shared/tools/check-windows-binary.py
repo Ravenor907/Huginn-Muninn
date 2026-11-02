@@ -4,11 +4,13 @@
 Usage: check-windows-binary.py FOLDER
 
 Fails (exit 1, with GitHub annotations) when Huginn.exe:
-  - holds text that runs scripts or hides windows (PowerShell, ExecutionPolicy, -WindowStyle Hidden...),
-    in plain ASCII or in UTF-16 (how Qt string literals are stored);
+  - holds text that runs scripts or hides windows (PowerShell, ExecutionPolicy, -WindowStyle Hidden...), or names the
+    registry key sandbox checks read (HARDWARE\\DESCRIPTION\\System), in plain ASCII or in UTF-16 (how Qt string
+    literals are stored);
   - imports Windows functions for starting programs suspended or writing into other programs
-    (ResumeThread, CreateProcess, WinExec, ShellExecute, WriteProcessMemory...). Huginn starts its
-    new copy after an update with Qt's QProcess, which lives in Qt6Core.dll, not in Huginn.exe.
+    (ResumeThread, CreateProcess, WinExec, ShellExecute, WriteProcessMemory...), for opening or ending other
+    programs (OpenProcess), or for redirecting the registry (RegOverridePredefKey). Huginn starts its new copy after
+    an update with Qt's QProcess, which lives in Qt6Core.dll, not in Huginn.exe.
   - lacks version details (VERSIONINFO) or an application manifest.
   - lacks the hardening Windows looks for: Control Flow Guard, CET shadow stack support, a random
     load address (high entropy, 64-bit) and no running code from data (DEP).
@@ -19,11 +21,13 @@ import struct
 import sys
 
 FORBIDDEN_TEXT = ["powershell", "executionpolicy", "-windowstyle", "windowstyle hidden", "expand-archive",
-                  "robocopy", "cmd.exe /c", "wscript", "cscript", "mshta", "-encodedcommand", "bypass -file"]
+                  "robocopy", "cmd.exe /c", "wscript", "cscript", "mshta", "-encodedcommand", "bypass -file",
+                  "hardware\\description\\system"]
 FORBIDDEN_IMPORTS = {"resumethread", "createprocessa", "createprocessw", "createprocessasusera", "createprocessasuserw",
                      "winexec", "shellexecutea", "shellexecutew", "shellexecuteexa", "shellexecuteexw",
                      "writeprocessmemory", "virtualallocex", "createremotethread", "createremotethreadex",
-                     "setthreadcontext", "ntunmapviewofsection", "queueuserapc", "setwindowshookexa", "setwindowshookexw"}
+                     "setthreadcontext", "ntunmapviewofsection", "queueuserapc", "setwindowshookexa", "setwindowshookexw",
+                     "openprocess", "regoverridepredefkey", "queryfullprocessimagenamew"}
 
 
 def find_text(data):

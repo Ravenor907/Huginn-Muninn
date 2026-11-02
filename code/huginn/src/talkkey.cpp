@@ -78,7 +78,7 @@ bool TalkKey::eventFilter(QObject *watched, QEvent *event)
         if (bad)
             return true;
         m_key = key;
-        QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).setValue(QStringLiteral("talkKey"), key);
+        QSettings(Settings::org(), QStringLiteral("Huginn")).setValue(QStringLiteral("talkKey"), key);
         stopCapture();
         return true;
     }

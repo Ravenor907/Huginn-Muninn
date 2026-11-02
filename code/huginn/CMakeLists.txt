@@ -309,7 +309,6 @@ if(WIN32)
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
         ${QRENCODE_LIBRARY}
         winmm      # PlaySound, for the raven call (src/platform/chime_windows.cpp)
-        advapi32   # the Wi-Fi self-test's separate registry key
         psapi      # Labs › Performance check's memory figure (src/perfcheck.cpp)
     )
 else()

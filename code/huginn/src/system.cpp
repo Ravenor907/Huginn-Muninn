@@ -27,13 +27,13 @@
 #include <QImage>
 #include <QLocale>
 #include <QQuickWindow>
-#include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QVariantMap>
 
 #ifdef Q_OS_WIN
 #include <rhi/qrhi.h>
+#include <windows.h>
 #else
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
@@ -48,8 +48,8 @@ namespace
 {
 // Known handhelds for Settings › Look › Handheld mode (Automatic). Checked in order and the first match wins, so
 // the more specific names come first. part: a case-insensitive piece of the product name, product family or board
-// name (Linux: /sys/class/dmi/id; Windows: the BIOS key in the registry). maker: a piece of the system vendor that
-// must match too (empty: any maker). An entry without a part matches on the maker alone.
+// name (Linux: /sys/class/dmi/id; Windows: the firmware's SMBIOS table, read only on a 6 to 9 inch screen). maker: a
+// piece of the system vendor that must match too (empty: any maker). An entry without a part matches on the maker alone.
 struct KnownHandheld
 {
     const char *name;
@@ -80,14 +80,66 @@ const KnownHandheld kHandhelds[] = {
     {"OneXPlayer", "", "ONE-NETBOOK"},
 };
 
-// The firmware's product name, family, board name and maker. Read from /sys even in the Flatpak (these four are
-// readable by anyone; the serial numbers next to them are not read). Empty when they can't be read.
+#ifdef Q_OS_WIN
+// String number n (1-based) of the SMBIOS structure at s, whose formatted part is len bytes; empty when absent.
+QString smbiosString(const BYTE *s, BYTE len, BYTE n, const BYTE *end)
+{
+    if (n == 0)
+        return {};
+    const char *p = reinterpret_cast<const char *>(s + len);
+    const char *stop = reinterpret_cast<const char *>(end);
+    for (BYTE i = 1; p < stop && *p; ++i) {
+        const char *e = p;
+        while (e < stop && *e)
+            ++e;
+        if (i == n)
+            return QString::fromLatin1(p, int(qMin<qsizetype>(e - p, 256))).trimmed();
+        p = e + 1;
+    }
+    return {};
+}
+#endif
+
+// The firmware's product name, family, board name and maker. Linux: read from /sys even in the Flatpak (these four
+// are readable by anyone; the serial numbers next to them are not read). Windows: the same four from the SMBIOS
+// table Windows documents for this (GetSystemFirmwareTable), nothing else from it. Empty when they can't be read.
 QStringList firmwareNames()
 {
 #ifdef Q_OS_WIN
-    QSettings bios(QStringLiteral("HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\BIOS"), QSettings::NativeFormat);
-    return {bios.value(QStringLiteral("SystemProductName")).toString().trimmed(), bios.value(QStringLiteral("SystemFamily")).toString().trimmed(),
-            bios.value(QStringLiteral("BaseBoardProduct")).toString().trimmed(), bios.value(QStringLiteral("SystemManufacturer")).toString().trimmed()};
+    QStringList out{QString(), QString(), QString(), QString()};
+    const DWORD sig = 'R' << 24 | 'S' << 16 | 'M' << 8 | 'B';
+    const UINT size = GetSystemFirmwareTable(sig, 0, nullptr, 0);
+    if (size < 8 || size > 1024 * 1024)
+        return out;
+    QByteArray buf(int(size), Qt::Uninitialized);
+    if (GetSystemFirmwareTable(sig, 0, buf.data(), size) != size)
+        return out;
+    // RawSMBIOSData: 4 bytes of version, a 32-bit length, then the structures.
+    const BYTE *raw = reinterpret_cast<const BYTE *>(buf.constData());
+    const DWORD length = *reinterpret_cast<const DWORD *>(raw + 4);
+    const BYTE *p = raw + 8;
+    const BYTE *end = raw + qMin<qsizetype>(qsizetype(size), 8 + qsizetype(length));
+    while (p + 4 <= end) {
+        const BYTE type = p[0], len = p[1];
+        if (len < 4 || p + len > end)
+            break;
+        if (type == 1 && len >= 8) {   // System: maker, product name, and (SMBIOS 2.4 and newer) family
+            out[3] = smbiosString(p, len, p[4], end);
+            out[0] = smbiosString(p, len, p[5], end);
+            if (len > 0x1A)
+                out[1] = smbiosString(p, len, p[0x1A], end);
+        } else if (type == 2 && len >= 6 && out[2].isEmpty()) {   // Baseboard: product
+            out[2] = smbiosString(p, len, p[5], end);
+        } else if (type == 127) {
+            break;
+        }
+        // The strings after the formatted part end with two zero bytes.
+        const BYTE *q = p + len;
+        while (q + 1 < end && (q[0] || q[1]))
+            ++q;
+        p = q + 2;
+    }
+    return out;
 #else
     QStringList out;
     for (const char *f : {"product_name", "product_family", "board_name", "sys_vendor"}) {
@@ -292,12 +344,19 @@ void System::detectHandheld()
     // The screenshot tour never looks: its pictures stay the same on every machine.
     if (!m_tourDir.isEmpty())
         return;
-    const QStringList fw = firmwareNames();
-    m_model = handheldModelFor(fw.value(0), fw.value(1), fw.value(2), fw.value(3));
     // The built-in screen is the one Huginn starts on.
     const QScreen *s = QGuiApplication::primaryScreen();
     const double inches = s ? trustedInches(s->size(), s->physicalSize(), m_gameMode) : 0;
     m_smallScreen = inches >= 6.0 && inches <= 9.0;
+#ifdef Q_OS_WIN
+    // Windows: the firmware is only asked on a handheld-sized screen (a PC on a monitor never needs the model).
+    if (!m_smallScreen) {
+        updateHandheld();
+        return;
+    }
+#endif
+    const QStringList fw = firmwareNames();
+    m_model = handheldModelFor(fw.value(0), fw.value(1), fw.value(2), fw.value(3));
     updateHandheld();
 }
 
@@ -419,9 +478,9 @@ bool System::handheldSelfTest()
     // A laptop with a plugged-in pad and a 14 inch screen: not a handheld.
     {
         const double inches = trustedInches(QSize(1920, 1200), QSizeF(302, 189), false);
-        const bool small = inches >= 6.0 && inches <= 9.0;
+        const bool smallScreen = inches >= 6.0 && inches <= 9.0;
         const QString model = handheldModelFor(QStringLiteral("82XV"), QStringLiteral("IdeaPad Slim 5 14IRL8"), QStringLiteral("LNVNB161216"), QStringLiteral("LENOVO"));
-        if (small || !model.isEmpty() || handheldRule(!model.isEmpty(), small, true, false)) {
+        if (smallScreen || !model.isEmpty() || handheldRule(!model.isEmpty(), smallScreen, true, false)) {
             std::printf("a 14 inch laptop with a controller counted as a handheld\n");
             ok = false;
         }

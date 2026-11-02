@@ -1,5 +1,6 @@
 #include "chat.h"
 #include "busy.h"
+#include "settings.h"
 #include "profile.h"
 #include "proof.h"
 #include "richwire.h"
@@ -89,7 +90,7 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
     , m_vault(vault)
     , m_nostr(nostr)
     , m_ble(ble)
-    , m_settings(QStringLiteral("Huginn"), QStringLiteral("Huginn"))
+    , m_settings(Settings::org(), QStringLiteral("Huginn"))
 {
     // First of all: chats() is made again after any change (everything else reads it after this).
     connect(this, &Chat::changed, this, [this] {

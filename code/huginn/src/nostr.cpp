@@ -1,5 +1,6 @@
 #include "nostr.h"
 #include "busy.h"
+#include "settings.h"
 #include "schnorr.h"
 
 #include <QCoreApplication>
@@ -209,7 +210,7 @@ Nostr::Nostr(std::function<QByteArray()> secret, QObject *parent)
     if (QCoreApplication *app = QCoreApplication::instance())
         connect(app, &QCoreApplication::aboutToQuit, this, &Nostr::flushSeen);
     m_pageSubId = QStringLiteral("huginn-p") + QString::number(QRandomGenerator::global()->generate(), 16).rightJustified(8, QLatin1Char('0'));
-    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    const QSettings s(Settings::org(), QStringLiteral("Huginn"));
     const QVariantMap eose = s.value(QStringLiteral("nostr/eose")).toMap();
     for (auto it = eose.cbegin(); it != eose.cend(); ++it)
         m_eoseAt.insert(it.key(), it.value().toLongLong());
@@ -248,7 +249,7 @@ void Nostr::flushSeen()
             ids.append(QString::fromLatin1(id.toHex()));
         keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), ids}}).toJson(QJsonDocument::Compact));
     }
-    QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    QSettings s(Settings::org(), QStringLiteral("Huginn"));
     if (m_takenAt > 0)
         s.setValue(QStringLiteral("nostr/since"), m_takenAt);
     QVariantMap eose;
@@ -330,7 +331,7 @@ QString Nostr::publicKey() const
 {
     if (!m_pub.isEmpty())
         return m_pub;
-    QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    QSettings s(Settings::org(), QStringLiteral("Huginn"));
     m_pub = s.value(QStringLiteral("nostr/pub")).toString();
     if (m_pub.isEmpty()) {
         const QByteArray sk = secret();
@@ -568,7 +569,7 @@ qint64 Nostr::sinceFor(const QString &url) const
     const qint64 cursor = m_eoseAt.value(url, 0);
     if (cursor > 0)
         return qMax(floor, cursor - 20 * 60);
-    const QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    const QSettings s(Settings::org(), QStringLiteral("Huginn"));
     return qMax(floor, s.value(QStringLiteral("nostr/since"), 0).toLongLong() - 2 * 86400);
 }
 

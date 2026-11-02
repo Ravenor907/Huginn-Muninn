@@ -7,6 +7,7 @@
 #include "localsend.h"
 #include "platform/chime.h"
 #include "platform/notify.h"
+#include "settings.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -16,6 +17,7 @@
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QSettings>
 #include <QSslConfiguration>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -24,10 +26,6 @@
 #include <QUuid>
 #include <cstdio>
 #include <memory>
-
-#ifdef Q_OS_WIN
-#include <windows.h>
-#endif
 
 namespace
 {
@@ -246,20 +244,14 @@ namespace WifiSelfTest
 {
 void isolate()
 {
+    // Settings::org(): the settings (the registry on Windows) under their own name, emptied first. Set before the
+    // folders below, whose names follow it.
+    QCoreApplication::setOrganizationName(QStringLiteral("HuginnSelfTest"));
     QStandardPaths::setTestModeEnabled(true);
+    QSettings(Settings::org(), QStringLiteral("Huginn")).clear();
     for (const auto where : {QStandardPaths::AppDataLocation, QStandardPaths::AppLocalDataLocation})
         QDir(QStandardPaths::writableLocation(where)).removeRecursively();
-    QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/Huginn")).removeRecursively();
-#ifdef Q_OS_WIN
-    // QSettings keeps Huginn's settings in the registry (HKEY_CURRENT_USER\Software\Huginn): point
-    // this process's HKEY_CURRENT_USER at an empty key so a test never touches the real ones.
-    RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\HuginnSelfTest");
-    HKEY key = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\HuginnSelfTest", 0, nullptr, 0, KEY_ALL_ACCESS, nullptr, &key, nullptr) == ERROR_SUCCESS) {
-        RegOverridePredefKey(HKEY_CURRENT_USER, key);
-        RegCloseKey(key);
-    }
-#endif
+    QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QLatin1Char('/') + Settings::org()).removeRecursively();
 }
 
 void start(Chat *chat, LocalSend *net, Chime *chime)

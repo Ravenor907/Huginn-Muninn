@@ -17,7 +17,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Ravenor907"
-            VALUE "FileDescription",  "Huginn: messages, calls and file sharing with Muninn"
+            VALUE "FileDescription",  "Huginn messenger"
             VALUE "FileVersion",      "@HUGINN_VERSION@"
             VALUE "InternalName",     "Huginn"
             VALUE "LegalCopyright",   "Ravenor907. Free software under the GNU GPL version 3."

@@ -316,6 +316,13 @@ int main(int argc, char *argv[])
         PerfCheck::notStarting();   // this copy draws nothing: no failed start to count
         return 0;
     }
+    // Windows: an update staged beside Huginn.exe is finished by the staged Huginn.exe itself, now that the copy before
+    // it has closed; it then starts Huginn from its own folder and this copy ends (WinUpdate::finishAtStart).
+    if (!quiet && WinUpdate::finishAtStart()) {
+        Platform::noStartLog();
+        PerfCheck::notStarting();
+        return 0;
+    }
     if (!quiet) {
         CrashLog::claimed();
         PerfCheck::noteStart();
@@ -694,9 +701,10 @@ int main(int argc, char *argv[])
                 CrashLog::note(QStringLiteral("graphics failed: ") + msg);
             });
 #endif
-        // Settings › Privacy › Block screenshots (Windows), set again whenever it's switched.
+        // Settings › Privacy › Block screenshots (Windows, off unless switched on), set again whenever it's switched.
+        // The window starts without it, so nothing is asked of Windows until it is turned on.
         if (window) {
-            auto shield = std::make_shared<int>(-1);
+            auto shield = std::make_shared<int>(0);
             auto applyShield = [window, settings, shield] {
                 const int on = settings->blockScreenshots() ? 1 : 0;
                 if (on == *shield)
@@ -712,7 +720,7 @@ int main(int argc, char *argv[])
         WifiSelfTest::start(chat, localSend, sound);
     QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::flushSaves);
-    // Saved: from here on, a copy that finds this one stuck while closing may end it (SingleInstance::takeOverStaleLock).
+    // Saved: from here on, a copy that finds this one stuck while closing may ask it to end itself (SingleInstance::markClosing).
     if (!quiet)
         QObject::connect(&app, &QCoreApplication::aboutToQuit, one, &SingleInstance::markClosing);
     if (!quiet)

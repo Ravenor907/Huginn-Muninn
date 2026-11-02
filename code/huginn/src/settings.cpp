@@ -11,7 +11,7 @@ bool Settings::s_quiet = false;
 
 Settings::Settings(QObject *parent)
     : QObject(parent)
-    , m_settings(QStringLiteral("Huginn"), QStringLiteral("Huginn"))
+    , m_settings(Settings::org(), QStringLiteral("Huginn"))
 {
 }
 

@@ -205,7 +205,7 @@ QString Labs::send(const QString &text, bool withShot, bool withLog, const QStri
     if (!m_chat->sendInternet(key, bodies, QString::fromLatin1(kMailbox), nullptr, 7))
         return QStringLiteral("The report couldn't be sent. Try again.");
     m_lastSent = now();
-    QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).setValue(QStringLiteral("labs/reportedAt"), m_lastSent);
+    QSettings(Settings::org(), QStringLiteral("Huginn")).setValue(QStringLiteral("labs/reportedAt"), m_lastSent);
     clearShot();
     return QString();
 }
@@ -214,7 +214,7 @@ bool Labs::replyAllowed(const QString &fromKey) const
 {
     if (fromKey != QLatin1String(kKey))
         return false;
-    const qint64 at = QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).value(QStringLiteral("labs/reportedAt"), 0).toLongLong();
+    const qint64 at = QSettings(Settings::org(), QStringLiteral("Huginn")).value(QStringLiteral("labs/reportedAt"), 0).toLongLong();
     return at > 0 && now() - at < 30 * kDay;
 }
 

@@ -8,11 +8,12 @@ class QObject;
 
 // Updates for the Windows portable build (Huginn-Windows.zip from the GitHub release).
 // Updater downloads the zip, checks its SHA-256 against the one published with the release, then
-// calls install(), which does everything inside Huginn itself: it unpacks the zip into a staging
-// folder beside Huginn.exe, moves each file in use aside (Windows lets a running program's files be
-// renamed), puts the new files in their place and starts the new Huginn.exe as a normal window (it waits for this
-// one to close).
-// The moved-aside files are deleted the next time Huginn starts (cleanUp()).
+// calls install(), which does everything inside Huginn itself: it unpacks the zip into update-staging beside
+// Huginn.exe, marks it ready (with the staged Huginn.exe's SHA-256) and starts the staged Huginn.exe as a normal window.
+// Nothing the running copy uses is renamed or replaced.
+// The staged Huginn.exe waits until the old copy has closed, copies its files over Huginn's folder (finishAtStart()),
+// starts Huginn.exe from there and ends; that copy removes update-staging. When the restart doesn't happen, the next
+// start of Huginn.exe finds the ready update and hands it to the staged copy the same way.
 // On other platforms (and in a Windows development build) supported() is false.
 namespace WinUpdate
 {
@@ -23,10 +24,13 @@ QString digestName();     // "Huginn-Windows.zip.sha256", published beside it by
 QByteArray parseDigest(const QByteArray &text);
 // Empty when Huginn's folder can be written to, else a sentence for the person.
 QString folderProblem();
-// At every start, before Qt loads anything: deletes what an update moved aside, and files from other
-// folder layouts (everything at the top, or a launcher at the top with the app in lib\).
+// At start, once this copy is the only one: true when this copy only finishes a staged update (it is the staged
+// Huginn.exe, or Huginn's own one handing a ready update to it) and must end now; Huginn was started again.
+bool finishAtStart();
+// At every start, after finishAtStart(): deletes update-staging (unless an update there is ready), what an update
+// moved aside, and files from other folder layouts (everything at the top, or a launcher at the top with the app in lib\).
 void cleanUp();
 void tidyOldLayout();   // the folder-layout part of cleanUp(), kept for callers that run it later
-// done: ok (the files were replaced), restarting (the new copy was started; this one must close now) and what to say.
+// done: ok (the update is staged and ready), restarting (the staged copy was started; this one must close now) and what to say.
 void install(const QString &zipPath, QObject *context, std::function<void(bool ok, bool restarting, const QString &message)> done);
 }

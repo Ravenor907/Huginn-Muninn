@@ -29,6 +29,7 @@ QProcessEnvironment childEnvironment() { return QProcessEnvironment::systemEnvir
 #include <QGuiApplication>
 #include <QMutex>
 #include <QOffscreenSurface>
+#include <QOperatingSystemVersion>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QQuickWindow>
@@ -233,12 +234,9 @@ void beginStart()
     SetUnhandledExceptionFilter(crashed);
     logLine(QStringLiteral("Huginn %1 starting in %2").arg(QStringLiteral(HUGINN_VERSION), QDir::toNativeSeparators(dir)));
 
-    OSVERSIONINFOW os{};
-    os.dwOSVersionInfoSize = sizeof os;
-    using RtlGetVersionFn = LONG(WINAPI *)(OSVERSIONINFOW *);
-    if (const auto rtl = reinterpret_cast<RtlGetVersionFn>(reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"))))
-        rtl(&os);
-    logLine(QStringLiteral("Windows %1.%2 build %3").arg(os.dwMajorVersion).arg(os.dwMinorVersion).arg(os.dwBuildNumber));
+    // Qt's own reading of the Windows version (the real one, whatever the manifest says).
+    const QOperatingSystemVersion os = QOperatingSystemVersion::current();
+    logLine(QStringLiteral("Windows %1.%2 build %3").arg(os.majorVersion()).arg(os.minorVersion()).arg(os.microVersion()));
 
     // The DLLs are in lib\ (a private assembly, see packaging/windows/huginn.manifest.in). Qt looks for
     // OpenSSL's libssl by full path in Huginn's folder, the system folder and then PATH, so lib\ goes on PATH.
@@ -303,6 +301,7 @@ void blockCapture(QQuickWindow *window, bool on)
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
 #endif
+    // Only ever called once Block screenshots was switched on (main.cpp): a window that never had it is left alone.
     const HWND hwnd = reinterpret_cast<HWND>(window->winId());
     if (!on) {
         SetWindowDisplayAffinity(hwnd, WDA_NONE);

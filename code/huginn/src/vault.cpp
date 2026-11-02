@@ -1,5 +1,6 @@
 #include "vault.h"
 #include "busy.h"
+#include "settings.h"
 #include "platform/crashlog.h"
 #include "platform/singleinstance.h"
 #include "gamepad.h"
@@ -148,7 +149,7 @@ QByteArray random(int n)
 
 QSettings &settings()
 {
-    static QSettings s(QStringLiteral("Huginn"), QStringLiteral("Huginn"));
+    static QSettings s(Settings::org(), QStringLiteral("Huginn"));
     return s;
 }
 

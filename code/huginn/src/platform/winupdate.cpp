@@ -6,7 +6,10 @@
 #ifdef Q_OS_WIN
 #include "singleinstance.h"
 
+#include "crashlog.h"
+
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -14,6 +17,7 @@
 #include <QProcess>
 #include <QSet>
 #include <QStringList>
+#include <QThread>
 #include <QTimer>
 // Qt's zip reader: in QtCore from Qt 6.8 on, in QtGui before.
 #if __has_include(<QtCore/private/qzipreader_p.h>)
@@ -47,6 +51,7 @@ QByteArray parseDigest(const QByteArray &text)
 #ifndef Q_OS_WIN
 
 bool supported() { return false; }
+bool finishAtStart() { return false; }
 void cleanUp() {}
 void tidyOldLayout() {}
 QString folderProblem() { return {}; }
@@ -60,8 +65,12 @@ void install(const QString &, QObject *, std::function<void(bool, bool, const QS
 
 namespace
 {
-// What an update moves aside; deleted at the next start.
+// What the swap moves aside (never a running program's files: the copy doing it runs from update-staging), deleted
+// right after or at the next start.
 const QString kAside = QStringLiteral(".huginn-old");
+// In update-staging once the update is unpacked and checked: the SHA-256 of the staged Huginn.exe.
+const QString kReady = QStringLiteral("update.ready");
+const QString kStaging = QStringLiteral("update-staging");
 
 // The portable folder people unzipped: the one with Huginn.exe. Works before Qt has started.
 QString appDir()
@@ -73,7 +82,41 @@ QString appDir()
     self.resize(n);
     return QFileInfo(QDir::fromNativeSeparators(QString::fromStdWString(self))).absolutePath();
 }
-QString stagingDir() { return appDir() + QStringLiteral("/update-staging"); }
+QString stagingDir() { return appDir() + QLatin1Char('/') + kStaging; }
+
+QByteArray fileSha256(const QString &path)
+{
+    QFile f(path);
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    if (!f.open(QIODevice::ReadOnly) || !h.addData(&f))
+        return {};
+    return h.result().toHex();
+}
+
+// The files under dir (relative to it), the ready mark and the start log left out.
+QStringList filesUnder(const QString &dir)
+{
+    QStringList out;
+    QDirIterator it(dir, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString rel = QDir(dir).relativeFilePath(it.next());
+        if (rel == kReady || rel.compare(QLatin1String("Huginn-start.log"), Qt::CaseInsensitive) == 0)
+            continue;
+        out << rel;
+    }
+    return out;
+}
+
+// A file that was in use a moment ago (the copy that just closed) can take a moment to let go.
+bool retry(const std::function<bool()> &step)
+{
+    for (int i = 0; i < 20; ++i) {
+        if (step())
+            return true;
+        QThread::msleep(250);
+    }
+    return false;
+}
 
 // A file name from the zip, made safe: relative, no "..", no drive letters or streams.
 QString safeRelative(QString p)
@@ -101,7 +144,8 @@ void rollBack(const QList<Moved> &moved)
     }
 }
 
-// Moves a file aside so a new one can take its name; true if the name is free afterwards.
+// Moves a file aside so a new one can take its name; true if the name is free afterwards. Only for files no running
+// program uses (the swap runs from the staged copy, after the old one closed).
 bool moveAside(const QString &target, QString *aside)
 {
     aside->clear();
@@ -218,7 +262,9 @@ void cleanUp()
     const QString root = appDir();
     if (root.isEmpty())
         return;
-    QDir(stagingDir()).removeRecursively();
+    // A staged update that is ready is finished by finishAtStart(), not removed.
+    if (!QFileInfo::exists(stagingDir() + QLatin1Char('/') + kReady))
+        QDir(stagingDir()).removeRecursively();
     deleteAsides(root);
     tidyOldLayout();
 #endif
@@ -231,11 +277,89 @@ void tidyOldLayout()
     if (root.isEmpty() || !QFileInfo(lib).isDir())
         return;
     // Huginn.exe at the top is the app; a copy in lib\ (a launcher layout) goes.
-    if (QFileInfo::exists(lib + QStringLiteral("/Huginn.exe"))) {
-        QString aside;
-        moveAside(lib + QStringLiteral("/Huginn.exe"), &aside);
-        QFile::remove(aside);
+    if (QFileInfo::exists(lib + QStringLiteral("/Huginn.exe")))
+        QFile::remove(lib + QStringLiteral("/Huginn.exe"));
+#endif
+}
+
+bool finishAtStart()
+{
+#ifdef HUGINN_WINDOWS_PORTABLE
+    const QString here = appDir();
+    if (here.isEmpty())
+        return false;
+    // This copy is the staged update (Huginn.exe in update-staging, started by the copy that unpacked it, or by the
+    // next start): the old copy has closed, so its files are free. They are replaced here, Huginn is started from its
+    // own folder and this copy ends. Nothing in use is renamed: this copy runs from update-staging.
+    const QString ready = here + QLatin1Char('/') + kReady;
+    if (QFileInfo(here).fileName().compare(kStaging, Qt::CaseInsensitive) == 0 && QFileInfo::exists(ready)) {
+        const QString staging = here, root = QFileInfo(here).absolutePath();
+        QFile::remove(ready);   // once only, whatever happens below
+        const QStringList files = filesUnder(staging);
+        QList<Moved> moved;
+        QSet<QString> fresh;
+        QString failed;
+        for (const QString &rel : files) {
+            const QString target = root + QLatin1Char('/') + rel;
+            fresh.insert(QDir::cleanPath(target).toLower());
+            QDir().mkpath(QFileInfo(target).absolutePath());
+            Moved m{target, {}};
+            if (!retry([&] { return moveAside(target, &m.aside); }) || !QFile::copy(staging + QLatin1Char('/') + rel, target)) {
+                if (!m.aside.isEmpty())
+                    QFile::rename(m.aside, target);
+                failed = rel;
+                break;
+            }
+            moved << m;
+        }
+        if (!failed.isEmpty()) {
+            rollBack(moved);
+            CrashLog::note(QStringLiteral("update: couldn't replace ") + failed + QStringLiteral("; kept the version that was there"));
+        } else {
+            // Whatever lib\ held that the new version doesn't (old plugins Qt would still find) goes.
+            QDirIterator old(root + QStringLiteral("/lib"), QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            while (old.hasNext()) {
+                const QString f = old.next();
+                if (!f.endsWith(kAside, Qt::CaseInsensitive) && !fresh.contains(QDir::cleanPath(f).toLower()))
+                    QFile::remove(f);
+            }
+            deleteAsides(root);
+        }
+        // Huginn from its own folder (updated, or as it was): it waits until this copy has ended, then removes
+        // update-staging.
+        if (!SingleInstance::startAgain(root + QStringLiteral("/Huginn.exe"), root))
+            CrashLog::note(QStringLiteral("update: couldn't start Huginn after the update"));
+        return true;
     }
+    // Huginn's own folder with an update staged and ready (the restart after it didn't happen): the staged copy is
+    // started to finish it, if it is exactly the file that was checked.
+    QFile mark(stagingDir() + QLatin1Char('/') + kReady);
+    if (!mark.exists())
+        return false;
+    const QString staged = stagingDir() + QStringLiteral("/Huginn.exe");
+    QByteArray want;
+    if (mark.open(QIODevice::ReadOnly)) {
+        want = mark.read(256).trimmed();
+        mark.close();
+    }
+    // Tried from here once already (the staged copy didn't get as far as finishing): given up, Huginn starts as it is.
+    const bool tried = want.endsWith(" tried");
+    want = want.left(64);
+    if (tried || want.size() != 64 || fileSha256(staged) != want) {
+        CrashLog::note(tried ? QStringLiteral("update: the staged update didn't finish; removed") : QStringLiteral("update: the staged update didn't match; removed"));
+        QDir(stagingDir()).removeRecursively();
+        return false;
+    }
+    if (mark.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        mark.write(want + " tried");
+        mark.close();
+    }
+    if (SingleInstance::startAgain(staged, stagingDir()))
+        return true;
+    QDir(stagingDir()).removeRecursively();
+    return false;
+#else
+    return false;
 #endif
 }
 
@@ -248,7 +372,7 @@ void install(const QString &zipPath, QObject *context, std::function<void(bool, 
             done(false, false, problem);
             return;
         }
-        const QString root = appDir(), staging = stagingDir();
+        const QString staging = stagingDir();
         QDir(staging).removeRecursively();
         if (!QDir().mkpath(staging)) {
             done(false, false, QStringLiteral("Couldn't make a folder for the update."));
@@ -262,41 +386,22 @@ void install(const QString &zipPath, QObject *context, std::function<void(bool, 
             done(false, false, why);
             return;
         }
-
-        // Swap: each old file is moved aside (fine even while it runs) and the new one moved in.
-        QList<Moved> moved;
-        QSet<QString> fresh;
-        for (const QString &rel : files) {
-            const QString target = root + QLatin1Char('/') + rel;
-            fresh.insert(QDir::cleanPath(target).toLower());
-            QDir().mkpath(QFileInfo(target).absolutePath());
-            Moved m{target, {}};
-            if (!moveAside(target, &m.aside) || !QFile::rename(staging + QLatin1Char('/') + rel, target)) {
-                if (!m.aside.isEmpty())
-                    QFile::rename(m.aside, target);
-                rollBack(moved);
-                QDir(staging).removeRecursively();
-                qWarning("update: couldn't replace %s", qPrintable(rel));
-                done(false, false, QStringLiteral("Couldn't replace %1. Close anything using the Huginn folder and try again.").arg(QDir::toNativeSeparators(rel)));
-                return;
-            }
-            moved << m;
+        // Ready: the staged Huginn.exe's SHA-256, so only that exact file finishes the update.
+        const QString staged = staging + QStringLiteral("/Huginn.exe");
+        const QByteArray sum = fileSha256(staged);
+        QFile mark(staging + QLatin1Char('/') + kReady);
+        if (sum.isEmpty() || !mark.open(QIODevice::WriteOnly | QIODevice::Truncate) || mark.write(sum) != sum.size() || !mark.flush()) {
+            QDir(staging).removeRecursively();
+            done(false, false, QStringLiteral("Couldn't write the update. Is the disk full?"));
+            return;
         }
-        // Whatever lib\ held that the new version doesn't (old plugins Qt would still find) goes aside too.
-        QDirIterator old(root + QStringLiteral("/lib"), QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
-        while (old.hasNext()) {
-            const QString f = old.next();
-            if (f.endsWith(kAside, Qt::CaseInsensitive) || fresh.contains(QDir::cleanPath(f).toLower()))
-                continue;
-            QString aside;
-            moveAside(f, &aside);
-        }
-        QDir(staging).removeRecursively();
+        mark.close();
         QFile::remove(zipPath);
 
-        // The new Huginn.exe in its own folder. It waits until this one has saved and closed.
-        if (!SingleInstance::startAgain(root + QStringLiteral("/Huginn.exe"), root)) {
-            done(true, false, QStringLiteral("Updated. Open Huginn again."));
+        // Nothing of the running copy is touched. The staged Huginn.exe waits until this one has saved and closed,
+        // puts its files in place and starts Huginn from its own folder (finishAtStart()).
+        if (!SingleInstance::startAgain(staged, staging)) {
+            done(true, false, QStringLiteral("The update is ready. Open Huginn again to finish it."));
             return;
         }
         done(true, true, QStringLiteral("Updated. Restarting…"));

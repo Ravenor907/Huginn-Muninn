@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QCoreApplication>
 #include <QObject>
 #include <QRect>
 #include <QSettings>
@@ -203,7 +204,14 @@ public:
     bool dataSaver() const { return value("dataSaver", false).toBool(); }
     static bool dataSaverOn() { return saved(QStringLiteral("dataSaver"), false).toBool(); }
     // The same, read where no Settings object is at hand (the call's audio, src/call/audioio.cpp).
-    static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(QStringLiteral("Huginn"), QStringLiteral("Huginn")).value(key, fallback); }
+    static QVariant saved(const QString &key, const QVariant &fallback) { return QSettings(org(), QStringLiteral("Huginn")).value(key, fallback); }
+    // The organization Huginn's settings are kept under (QSettings(Settings::org(), "Huginn")): "Huginn", or the
+    // self-tests' own name on their throwaway profile (WifiSelfTest::isolate), so they never touch the real ones.
+    static QString org()
+    {
+        const QString o = QCoreApplication::organizationName();
+        return o.isEmpty() ? QStringLiteral("Huginn") : o;
+    }
 
     void setUiSize(const QString &v) { set("size", qBound(50, v.toInt(), 200)); }
     void setAccent(const QString &v) { set("accent", v); }

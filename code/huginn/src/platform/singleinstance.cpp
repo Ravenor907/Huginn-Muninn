@@ -21,7 +21,11 @@
 #include <QTimer>
 #include <QPointer>
 #include <QWindow>
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <thread>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -88,6 +92,8 @@ SingleInstance::SingleInstance(QObject *parent, const QString &where)
     // Beside the lock while its copy is closing (written on aboutToQuit, gone when the process lets the lock go).
     // A copy that is closing and doesn't answer is stuck; one that doesn't answer otherwise may only be busy.
     m_closing = dir + QStringLiteral("/instance.closing");
+    // Written by a newer copy that finds this one stuck closing: this copy then ends itself (markClosing()).
+    m_endAsk = dir + QStringLiteral("/instance.end");
     m_lock->setStaleLockTime(0);   // only a live process holds it; a crashed one's lock is taken over
 }
 
@@ -124,6 +130,7 @@ void SingleInstance::listen()
 {
     s_current = this;
     QFile::remove(m_closing);   // left by a copy that ended while closing
+    QFile::remove(m_endAsk);
     QLocalServer::removeServer(m_name);   // left behind by a crash (Unix sockets only)
     m_server = new QLocalServer(this);
     Busy::nameSocket(m_server, "single instance");
@@ -152,6 +159,25 @@ void SingleInstance::markClosing()
     QFile f(m_closing);
     if (f.open(QIODevice::WriteOnly))
         f.write(QByteArray::number(QCoreApplication::applicationPid()));
+    f.close();
+    // Everything is saved by now. If this copy is still closing kStuckMs from here and a newer copy asks it to make
+    // way (m_endAsk), it ends itself: no copy ever ends another.
+    static bool watching = false;
+    if (watching)
+        return;
+    watching = true;
+    // Plain file checks on this thread (no Qt): it may still be looking while Qt itself is being taken down.
+    std::thread([ask = std::filesystem::path(m_endAsk.toStdU16String())] {
+        const auto from = std::chrono::steady_clock::now();
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            std::error_code err;
+            if (std::chrono::steady_clock::now() - from >= std::chrono::milliseconds(kStuckMs) && std::filesystem::exists(ask, err)) {
+                std::fprintf(stderr, "single instance: a newer copy is waiting; this one ends now\n");
+                std::_Exit(3);
+            }
+        }
+    }).detach();
 }
 
 bool SingleInstance::knock()
@@ -207,43 +233,47 @@ bool SingleInstance::takeOverStaleLock()
         return true;   // it finished after all
     if (!QFile::exists(m_closing))
         return m_lock->tryLock(1000);   // its mark went as it let go (or it isn't closing any more: left alone)
-    qWarning("single instance: the running copy is stuck closing; ending it");
-    endHolder();
+    // Stuck closing: it is asked to end itself (markClosing() watches for this), and the lock is waited for.
+    qWarning("single instance: the running copy is stuck closing; asking it to end");
+    {
+        QFile ask(m_endAsk);
+        if (ask.open(QIODevice::WriteOnly))
+            ask.write("end");
+    }
     QElapsedTimer t;
     t.start();
     while (t.elapsed() < 4000) {
         m_lock->removeStaleLockFile();
-        if (m_lock->tryLock(200))
+        if (m_lock->tryLock(200)) {
+            QFile::remove(m_endAsk);
             return true;
+        }
         QThread::msleep(200);
     }
+#ifndef Q_OS_WIN
+    // Linux: a copy from before this way of asking doesn't watch for it.
+    endHolder();
+    t.restart();
+    while (t.elapsed() < 4000) {
+        m_lock->removeStaleLockFile();
+        if (m_lock->tryLock(200)) {
+            QFile::remove(m_endAsk);
+            return true;
+        }
+        QThread::msleep(200);
+    }
+#endif
+    QFile::remove(m_endAsk);
+    qWarning("single instance: the running copy didn't end; leaving it");
     return false;
 }
 
+#ifndef Q_OS_WIN
 void SingleInstance::endHolder()
 {
     qint64 pid = 0;
     QString host, app;
     const bool known = m_lock->getLockInfo(&pid, &host, &app) && pid > 0 && pid != QCoreApplication::applicationPid();
-#ifdef Q_OS_WIN
-    if (!known)
-        return;
-    HANDLE h = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, DWORD(pid));
-    if (!h)
-        return;
-    wchar_t buf[4096];
-    DWORD n = DWORD(sizeof buf / sizeof buf[0]);
-    if (QueryFullProcessImageNameW(h, 0, buf, &n)) {
-        const QString theirs = QFileInfo(QString::fromWCharArray(buf, int(n))).fileName();
-        const QString ours = QFileInfo(QCoreApplication::applicationFilePath()).fileName();
-        // Only Huginn itself, never another program that happens to have the same process id now.
-        if (theirs.compare(ours, Qt::CaseInsensitive) == 0) {
-            TerminateProcess(h, 3);
-            WaitForSingleObject(h, 3000);
-        }
-    }
-    CloseHandle(h);
-#else
     if (known) {
         QString exe = QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(pid));
         if (exe.endsWith(QLatin1String(" (deleted)")))
@@ -257,8 +287,8 @@ void SingleInstance::endHolder()
     // A copy in another Flatpak sandbox: its process id means nothing here.
     if (inFlatpak())
         endOtherFlatpakCopies();
-#endif
 }
+#endif
 
 void SingleInstance::release()
 {
@@ -269,6 +299,7 @@ void SingleInstance::release()
     }
     if (m_lock && m_lock->isLocked()) {
         QFile::remove(m_closing);
+        QFile::remove(m_endAsk);
         m_lock->unlock();
     }
 }
@@ -349,11 +380,8 @@ int SingleInstance::selfTestHolder(const QString &dir, int ms, bool hang)
     std::printf("holding\n");
     std::fflush(stdout);
     if (hang) {
-        // Stuck while closing: says so, then never answers a knock (no event loop) until it is ended.
-        QFile f(one.m_closing);
-        if (f.open(QIODevice::WriteOnly))
-            f.write("1");
-        f.close();
+        // Stuck while closing: says so, then never answers a knock (no event loop) until it is asked to end.
+        one.markClosing();
         QThread::msleep(ms);
         return 0;
     }
@@ -408,7 +436,7 @@ bool SingleInstance::selfTest()
         check(p->state() == QProcess::NotRunning || p->waitForFinished(3000), "the old copy ended");
         delete p;
     }
-    // 3. A copy stuck closing (no answer) is ended and its lock taken.
+    // 3. A copy stuck closing (no answer) is asked to end, ends itself, and its lock is taken.
     {
         QProcess *p = holder(60000, true);
         QElapsedTimer t;
@@ -416,7 +444,7 @@ bool SingleInstance::selfTest()
         SingleInstance next(nullptr, dir);
         check(next.claim(false), "a copy stuck closing is taken over");
         check(t.elapsed() < 12000, "taking over a stuck copy is quick");
-        check(p->waitForFinished(5000), "the stuck copy was ended");
+        check(p->waitForFinished(5000), "the stuck copy ended itself");
         p->kill();
         p->waitForFinished(2000);
         delete p;
