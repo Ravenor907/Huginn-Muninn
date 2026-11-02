@@ -89,6 +89,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `k11` | Kids' Device on any Android device (7.18): config fields `chat`, `quiet` and `pin`, `dev` in `applied`, and `unlockask`, `unlock`, `left`. Muninn only. |
 | `k12` | Daily Hávamál on a Kids' Device (7.18): config fields `hav`, `havw` and `havh`, `havh` in `applied`, and `havtext`. Muninn only. |
 | `k13` | a Kids' Device's colors and the kid's name (7.18): config fields `look`, `season`, `accent`, `lookpick` and `kname`. Muninn only. |
+| `k14` | a Kids' Device's accessibility, the child's name, group members a parent approves and other families' Kids' Devices (7.18): config fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait`, `e` on a quick message, and `ghold`, `kidadd`, `kidok`. Muninn only. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -980,8 +981,8 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 ```
 
 Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd`, the k8 field `keep`
-and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
-it; `quick` at most 24, unique ids, each text 1 to 80 characters, array order is the order on screen;
+and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` and the k14 fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
+it; `quick` at most 24, unique ids, each exactly `id` and `text` (and, k14, `e`), each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
 The TV accepts `new` if: well-formed, `new.tv` is its own key, `new.by` is one of its current parent keys,
@@ -1451,7 +1452,47 @@ makes the config malformed. Like `hav` and `havw`, each field is kept on its own
 the signed config), so a parent's app without `k13` changes none of them. The device puts the parent's colors on when
 `look`, `season` or `accent` differ from the last ones it put on (a config sent again with the same colors leaves the kid's
 own pick alone); while `lookpick` is false it puts them on whenever something else shows. A TV takes the colors too; only a
-tablet or phone has "My colors". A parent's phone sends the name it shows for the device (its "Device name") as `kname`.
+tablet or phone has "My colors". A parent's phone with `k14` sends the child's name set on the device's page as `kname` (and
+never the device's name, which earlier apps sent); a device with `k14` greets with `child` instead.
+
+**Accessibility, the child's name, groups and other families (`k14`).** A device whose app says `k14` takes eight more
+optional config fields, and an `e` on each quick message. A parent's app puts them in only for such a device (`gok` and
+`wait` always, the others when set); a device without `k14` would refuse the config as malformed. Like the k13 fields, each
+is kept on its own when absent (the device keeps them beside the signed config), so a parent's app without `k14` changes none.
+
+| field | value | absent means | what the device does |
+|---|---|---|---|
+| `tsz` | integer 100, 115, 130 or 150 | the device keeps its own | Muninn's text size (Settings › Look), in percent |
+| `dsz` | integer 85, 100, 115 or 130 | as for `tsz` | the size of everything, in percent |
+| `hc` | true or false | as for `tsz` | high contrast |
+| `cv` | `"typical"`, `"protan"`, `"deutan"`, `"tritan"` or `"mono"` | as for `tsz` | color vision |
+| `still` | true or false | as for `tsz` | less motion (no sliding, fading or moving GIFs) |
+| `child` | a string, 1 to 40 characters, not only spaces, no control characters | the device keeps its current name | the child's name in the greeting ("Hi, Ava"); without one the greeting is "Hi!". Never the device's name. Set on the device's page, the same for every parent: the latest config wins, and a parent's phone takes it from the device's config |
+| `gok` | array of at most 200 objects, exactly `g` (a group id: 1 to 64 of `A-Z a-z 0-9 _ -`) and `k` (a chat key), sorted by `g` then `k`, each once | as for `child` | group members a parent approved, each for that one group |
+| `wait` | array of chat keys, sorted, each once, at most 50 | as for `child` | other families' Kids' Devices on its list whose parents haven't put this one on theirs yet: their conversation says "Waiting for a parent to say yes" and its messages show "Waiting" |
+| `e` (in a quick message) | 1 to 8 code points, no letters, digits, spaces or control characters | none | the picture a parent picked, shown big on the chip. A chip without one shows the emoji its text starts with, if any |
+
+A chat key in `gok` or `wait`: 1 to 200 characters, no spaces or control characters. Anything else makes the config
+malformed. The accessibility goes on like the colors: when it differs from the last one put on, or whenever something else
+shows while `lookpick` is false; with `lookpick` true the kid can still change the text size in "My colors".
+
+**Groups.** On a device with `k14`, messages in a group from anyone who isn't the device itself, one of its parents, on
+its `contacts` or in `gok` for that group are held: kept, but not shown, counted or notified ("Some messages are waiting for
+a parent" in that group). The device asks each parent whose app says `k14`, once per member and group, in room `tvconfig`:
+
+| t | from | fields |
+|---|---|---|
+| `ghold` | the device, to its parents | `g`: the group id. `k`: the member's chat key. `n`: their name (1 to 40). `gn`: the group's name (1 to 40). A parent's phone shows "Approve Sam in Soccer for Ava?" (a notification, a card on the device's page, a dialog when none is open). Approve puts (`g`, `k`) in `gok`; Decline keeps them hidden and isn't asked again |
+| `kidadd` | a parent, to the parent who handed them another family's Kids' Device | `tv`: that device. `k`: their own Kids' Device, now on its list. `n`: their child's name. `code`: `k`'s contact code (at most 2000 characters). The other parent's phone asks "Let Leo talk with Ava?"; Add puts `k` on `tv`'s list and answers `kidok`. One already on the list is answered `kidok` at once |
+| `kidok` | a parent, to the other family's parent | `tv`: their Kids' Device. `k`: the asker's, now on `tv`'s list. The asker's phone takes `k` off `wait` |
+
+Exactly these fields; anything else is malformed and ignored. A parent's page shows "Waiting for Leo's parent to add Ava"
+for each device in `wait`. A message a kid sends shows "Sending" until a relay or a direct route took it, then "Sent";
+after a minute without, or while `wait` lists the other device, "Waiting".
+
+**Quiet times and drafts.** A quiet time never discards what a kid made: a draft stays in its box, and a finished voice
+message or photo for someone a quiet time holds back (including one being recorded when it starts) is kept on the device
+and sent when it ends ("Will send at 7:00 AM", with Don't send). Something for someone no longer on the list is dropped.
 
 ## 8. Message types
 

@@ -5,6 +5,8 @@ import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,30 +48,63 @@ internal object KidChats {
             .map { TvPerson(G + it.g, it.state.name.ifBlank { "Group" }, "") }
     }
 
-    /** A group's messages as the kids' screens show them: someone else's text says who wrote it. */
-    fun groupMsgs(list: List<Groups.GMsg>): List<Chat.Msg> = list.filter { it.unsent.isEmpty() }.map { m ->
-        Chat.Msg(m.id, m.from, m.name, if (m.mine || m.text.isEmpty()) m.text else "${m.name}: ${m.text}", m.mine, m.time,
-            photo = m.photo, voice = m.voice, video = m.video, poll = m.poll, votes = m.votes, gif = m.gif)
-    }
+    /**
+     * A group's messages as the kids' screens show them: someone else's text says who wrote it. k14: messages from members
+     * no parent approved ([KidTv.heldNow]) are left out. Mine say how they're doing; one still sending after a minute waits.
+     */
+    fun groupMsgs(g: String, list: List<Groups.GMsg>, now: Long = System.currentTimeMillis()): List<Chat.Msg> =
+        list.filter { it.unsent.isEmpty() && (it.mine || !KidTv.heldNow(g, it.from)) }.map { m ->
+            Chat.Msg(m.id, m.from, m.name, if (m.mine || m.text.isEmpty()) m.text else "${m.name}: ${m.text}", m.mine, m.time,
+                failed = m.mine && m.state == "sending" && now - m.time > 60_000L, state = m.state,
+                photo = m.photo, voice = m.voice, video = m.video, poll = m.poll, votes = m.votes, gif = m.gif)
+        }
+
+    /** How many messages in group conversation [k] are held for a parent (k14); 0 for a person. */
+    fun heldCount(k: String, gmsgs: Map<String, List<Groups.GMsg>>): Int =
+        if (!isGroup(k)) 0 else gmsgs[gid(k)].orEmpty().count { !it.mine && it.unsent.isEmpty() && KidTv.heldNow(gid(k), it.from) }
 
     /** The messages of conversation [k], from the private ones [convs] or the groups' [gmsgs]. */
     fun msgs(k: String, convs: Map<String, List<Chat.Msg>>, gmsgs: Map<String, List<Groups.GMsg>>): List<Chat.Msg> =
-        if (isGroup(k)) groupMsgs(gmsgs[gid(k)].orEmpty()) else convs[k].orEmpty().filter { it.unsent.isEmpty() }
+        if (isGroup(k)) groupMsgs(gid(k), gmsgs[gid(k)].orEmpty()) else convs[k].orEmpty().filter { it.unsent.isEmpty() }
 
     /** New messages in [k]: a group's are counted from the newest message of this device's. */
     fun unread(k: String, msgs: List<Chat.Msg>, unreadPeople: Set<String>, unreadGroups: Set<String>): Int =
         unreadCount(msgs, if (isGroup(k)) gid(k) in unreadGroups else k in unreadPeople)
 
-    fun sendText(app: Muninn, k: String, text: String) {
+    /** The chatting level now, from the device's config (checked when something is sent, not only when a button shows). */
+    private fun level(): Int = KidTv.state.value.cfg?.chat ?: KidRules.QUICK_ONLY
+
+    /** A quick message, or text a kid typed ([typed]: only at a level that allows typing). */
+    fun sendText(app: Muninn, k: String, text: String, typed: Boolean = false) {
+        if (typed && !KidRules.canSend(level(), "text")) return
         if (isGroup(k)) app.chat.sendGroupText(gid(k), "", text) else app.chat.sendPrivate(k, text)
     }
 
     fun sendVoice(app: Muninn, k: String, aac: ByteArray, ms: Int) {
+        if (!KidRules.canSend(level(), "voice")) return
         if (isGroup(k)) app.chat.sendGroupVoice(gid(k), "", aac, ms) else app.chat.sendVoice(k, aac, ms)
     }
 
     fun sendPhoto(app: Muninn, k: String, jpeg: ByteArray) {
+        if (!KidRules.canSend(level(), "photo")) return
         if (isGroup(k)) app.chat.sendGroupPhoto(gid(k), "", jpeg) else app.chat.sendPhoto(k, jpeg)
+    }
+
+    /**
+     * A finished voice message ([kind] "voice", [ms] long) or photo for [k]: sent now, or, during a quiet time that [k]
+     * doesn't get through, held and sent when it ends. Returns what to tell the kid: "Sending", "Will send at 7:00 AM", or
+     * "Ask a parent" when the chatting level doesn't allow it any more.
+     */
+    fun sendOrHold(app: Muninn, k: String, kind: String, bytes: ByteArray, ms: Int): String {
+        if (!KidRules.canSend(level(), kind)) return TvWords.ASK_PARENT
+        val parents = KidTv.state.value.parents
+        val quiet = KidTv.quietNow()
+        if (quiet != null && KidK14.holds(k, parents, quiet)) {
+            KidHoldStore.hold(app, k, kind, bytes, ms)
+            return KidK14.willSend(quiet, android.text.format.DateFormat.is24HourFormat(app))
+        }
+        if (kind == "voice") sendVoice(app, k, bytes, ms) else sendPhoto(app, k, bytes)
+        return "Sending"
     }
 
     fun markRead(app: Muninn, k: String) {
@@ -91,14 +126,20 @@ internal object KidSpeak {
     @Volatile private var ready = false
     @Volatile private var waiting: String? = null
 
+    /** The device has no text to speech (it said so when asked): a tap says that instead of doing nothing. */
+    @Volatile private var none = false
+    const val NONE = "This device can't read out loud"
+
     fun say(context: Context, text: String) {
         if (text.isBlank()) return
+        if (none) { io.github.ravenor907.muninn.ui.Ui.say(NONE, true); return }
         val t = tts
         if (t == null) {
             waiting = text
             tts = TextToSpeech(context.applicationContext) { st ->
                 ready = st == TextToSpeech.SUCCESS
                 if (ready) waiting?.let { w -> waiting = null; try { tts?.speak(w, TextToSpeech.QUEUE_FLUSH, null, "kid") } catch (_: Exception) {} }
+                else { none = true; waiting = null; io.github.ravenor907.muninn.ui.Ui.say(NONE, true) }
             }
             return
         }
@@ -107,6 +148,74 @@ internal object KidSpeak {
     }
 
     fun stop() { try { tts?.stop() } catch (_: Exception) {} }
+}
+
+/**
+ * k14: voice messages and photos a quiet time holds ([KidK14.release]), kept in the vault until the quiet time ends, then
+ * sent; the kid can cancel each one. A draft is never held here: it stays in the box ([KidPhoneNav.drafts]).
+ */
+internal object KidHoldStore {
+    private const val FILE = "kid-held.json"
+    private const val DIR = "kid-held"
+    val list = kotlinx.coroutines.flow.MutableStateFlow<List<Held>>(emptyList())
+    @Volatile private var loaded = false
+    private val random = java.security.SecureRandom()
+
+    private fun file(app: Muninn) = java.io.File(app.filesDir, FILE)
+    private fun blob(app: Muninn, id: String) = java.io.File(java.io.File(app.filesDir, DIR), id)
+
+    @Synchronized fun load(app: Muninn) {
+        if (loaded) return
+        loaded = true
+        list.value = try { app.vault.read(file(app))?.let { KidK14.heldIn(org.json.JSONArray(it)) } } catch (_: Exception) { null } ?: emptyList()
+    }
+
+    private fun save(app: Muninn) { try { app.vault.write(file(app), KidK14.heldJson(list.value).toString()) } catch (_: Exception) {} }
+
+    /** Holds [bytes] for [k] until the quiet time ends. */
+    @Synchronized fun hold(app: Muninn, k: String, kind: String, bytes: ByteArray, ms: Int) {
+        load(app)
+        val id = ByteArray(16).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
+        try { app.vault.writeBytes(blob(app, id), bytes) } catch (_: Exception) { return }
+        val before = list.value
+        val after = KidK14.addHeld(before, Held(id, k, kind, ms, System.currentTimeMillis()))
+        before.filter { b -> after.none { it.id == b.id } }.forEach { blob(app, it.id).delete() }
+        list.value = after
+        save(app)
+    }
+
+    /** The kid said not to send [id]. */
+    @Synchronized fun cancel(app: Muninn, id: String) {
+        load(app)
+        blob(app, id).delete()
+        list.value = KidK14.cancelHeld(list.value, id)
+        save(app)
+    }
+
+    /** Sends what no quiet time holds any more; drops what's for someone no longer on the list. */
+    @Synchronized fun release(app: Muninn) {
+        load(app)
+        if (list.value.isEmpty()) return
+        val s = KidTv.state.value
+        val cfg = s.cfg ?: return
+        val (send, keep) = KidK14.release(list.value, s.parents, KidTv.quietNow()) { k -> KidChats.isGroup(k) || KidTv.approved(k) }
+        for (h in send) {
+            val bytes = try { app.vault.readBytes(blob(app, h.id)) } catch (_: Exception) { null }
+            if (bytes != null && KidRules.canSend(cfg.chat, h.kind)) {
+                if (h.kind == "voice") KidChats.sendVoice(app, h.k, bytes, h.ms) else KidChats.sendPhoto(app, h.k, bytes)
+            }
+        }
+        list.value.filter { h -> keep.none { it.id == h.id } }.forEach { blob(app, it.id).delete() }
+        list.value = keep
+        save(app)
+    }
+
+    /** A disconnect or leaving kids' mode: everything held goes. */
+    @Synchronized fun clear(app: Muninn) {
+        loaded = true
+        list.value = emptyList()
+        try { java.io.File(app.filesDir, DIR).deleteRecursively(); file(app).delete() } catch (_: Exception) {}
+    }
 }
 
 /** A video message, full screen, with Play and Pause. Back closes it. */
@@ -118,7 +227,10 @@ internal fun KidVideo(app: Muninn, m: Chat.Msg, onClose: () -> Unit) {
         val b = bytes
         if (b == null) Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             MIcon("video", Palette.textMuted, 72.dp)
-        } else io.github.ravenor907.muninn.screens.VideoPlayer(b, onClose)
+        } else Box(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
+            // Clear of the status bar and a camera cutout, so Back can be reached.
+            io.github.ravenor907.muninn.screens.VideoPlayer(b, onClose)
+        }
     }
     // A video that can't be read at all doesn't leave a black screen up.
     LaunchedEffect(m.photo) { kotlinx.coroutines.delay(8_000); if (bytes == null) onClose() }

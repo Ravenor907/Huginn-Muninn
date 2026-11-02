@@ -185,9 +185,12 @@ private fun PadKey(label: String, tv: Boolean, requester: FocusRequester?, modif
         .onFocusChanged { focused = it.isFocused }
         .clip(shape).background(Palette.field)
         .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
-        .clickable(role = Role.Button, onClick = onClick),
+        .clickable(role = Role.Button, onClick = onClick)
+        .then(if (label == "Delete" && !tv) Modifier.semantics { contentDescription = "Delete" } else Modifier),
         contentAlignment = Alignment.Center) {
-        Text(label, style = tvText(if (label.length > 1) (if (tv) 22.sp else 18.sp) else (if (tv) 30.sp else 26.sp), weight = FontWeight.SemiBold))
+        // On a touch screen Delete is its icon: the word doesn't fit a key at a large text size.
+        if (label == "Delete" && !tv) MIcon("back", Palette.text, 26.dp)
+        else Text(label, style = tvText(if (label.length > 1) (if (tv) 22.sp else 18.sp) else (if (tv) 30.sp else 26.sp), weight = FontWeight.SemiBold))
     }
 }
 

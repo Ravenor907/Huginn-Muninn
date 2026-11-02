@@ -313,25 +313,26 @@ object KidRules {
      * The config a device runs: [new] as it came, or, when it has no k11 field (an older parent app sent it), [new] with
      * the device's current chatting level, quiet times, time zone and PIN from [cur] kept, and nobody taken off ([addOnly]).
      * k12 the same way, field by field: no "hav" keeps Daily Hávamál on or off as it was; no "havw" keeps the wording and
-     * the translation's hash. k13 too, field by field: no "look", "season", "accent", "lookpick" or "kname" keeps that one.
+     * the translation's hash. k13 too, field by field: no "look", "season", "accent", "lookpick" or "kname" keeps that one;
+     * and k14 ([KidK14.FIELDS]) the same way.
      */
     fun keepK11(new: TvConfig, cur: TvConfig?): TvConfig {
         if (cur == null) return new
         var c = if (hasK11(new.raw)) new else addOnly(new, cur).copy(chat = cur.chat, quiet = cur.quiet, pin = cur.pin, tz = cur.tz)
         if (!Havamal.hasOn(new.raw)) c = c.copy(hav = cur.hav)
         if (!Havamal.hasWording(new.raw)) c = c.copy(havw = cur.havw, havh = cur.havh)
-        return KidLook.keep(c, cur)
+        return KidK14.keep(KidLook.keep(c, cur), cur)
     }
 
-    /** True when the device must keep values beside config [c] (it lacks a k11, k12 or k13 field), so a restart keeps them. */
-    fun needsKept(c: JSONObject): Boolean = !hasK11(c) || !Havamal.hasOn(c) || !Havamal.hasWording(c) || KidLook.needsKept(c)
+    /** True when the device must keep values beside config [c] (it lacks a k11, k12, k13 or k14 field), so a restart keeps them. */
+    fun needsKept(c: JSONObject): Boolean = !hasK11(c) || !Havamal.hasOn(c) || !Havamal.hasWording(c) || KidLook.needsKept(c) || KidK14.needsKept(c)
 
-    /** The k11, k12 and k13 values a device keeps beside its signed config, so a restart keeps what [keepK11] kept. */
-    fun keptJson(c: TvConfig): JSONObject = KidLook.keptInto(
+    /** The k11, k12, k13 and k14 values a device keeps beside its signed config, so a restart keeps what [keepK11] kept. */
+    fun keptJson(c: TvConfig): JSONObject = KidK14.keptInto(KidLook.keptInto(
         Havamal.keptInto(JSONObject().put("chat", c.chat).put("quiet", quietJson(c.quiet)).apply { c.pin?.let { put("pin", pinJson(it)) } }
             // The people and parents an older parent app's config didn't take off ([addOnly]), and the time zone.
             .put("tz", c.tz).put("parents", JSONArray(c.parents))
-            .put("contacts", JSONArray().apply { c.contacts.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } }), c), c)
+            .put("contacts", JSONArray().apply { c.contacts.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } }), c), c), c)
 
     /** [cfg] read back at start, with the values [keptJson] saved for the fields its own config lacks. */
     fun keptIn(cfg: TvConfig, saved: JSONObject?): TvConfig {
@@ -353,7 +354,8 @@ object KidRules {
             addOnly(cfg, cfg.copy(contacts = people, parents = parents)).copy(chat = chat, quiet = quiet, pin = pin, tz = tz)
         } catch (e: Exception) { cfg }
         val h = try { Havamal.keptFrom(c, saved) } catch (e: Exception) { c }
-        return try { KidLook.keptFrom(h, saved) } catch (e: Exception) { h }
+        val l = try { KidLook.keptFrom(h, saved) } catch (e: Exception) { h }
+        return try { KidK14.keptFrom(l, saved) } catch (e: Exception) { l }
     }
 
     /** PBKDF2 (RFC 8018) with HMAC-SHA256, one 32-byte block. */

@@ -322,7 +322,10 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     // k12: Daily Hávamál turned off: Earlier verses starts over the next time it comes on.
     LaunchedEffect(cfg.hav) { if (!cfg.hav) HavDevice.forgetStart(context) }
     // k13 (7.18): the colors a parent picked go on when they change, or always while the kid may not pick their own.
-    LaunchedEffect(cfg) { applyKidLook(app, cfg) }
+    // k14: the accessibility a parent picked, the same way.
+    LaunchedEffect(cfg) { applyKidLook(app, cfg); applyKidAccess(app, cfg) }
+    // k14: a voice message or photo a quiet time held goes once it's over (the quiet time is checked every half minute).
+    LaunchedEffect(quiet) { kotlinx.coroutines.withContext(Dispatchers.IO) { KidHoldStore.release(app) } }
     // Someone a parent just took off the list: back to the people who are still on it.
     if (!tv) KidPhone(app, cfg, shown, quiet) { parent = true }
     else if (shown == null) TvHome(app, cfg, TvNav.last, quiet, onParent = { parent = true }) { TvNav.show(it) }
@@ -568,7 +571,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
         overlay = Overlay.Sending
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             val r = TvRecorder.finish()
-            if (r != null) { KidChats.sendVoice(app, p.k, r.first, r.second); overlay = null; Ui.say("Sent") }
+            if (r != null) { overlay = null; Ui.say(KidChats.sendOrHold(app, p.k, "voice", r.first, r.second)) }
             else overlay = Overlay.Problem(TvWords.TOO_SHORT)
         }
     }
@@ -648,7 +651,8 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             // The last messages sit at the bottom; when they're taller than the room left, they scroll and the newest shows.
             Box(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.BottomStart) {
                 Column(Modifier.verticalScroll(rememberScrollState(), reverseScrolling = true), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    msgs.takeLast(3).forEach { TalkBubble(app, it, playing, onText = { reading = it.id }, onVideo = { video = it.id }, onPoll = { poll = it.id }) { viewing = it.id } }
+                    msgs.takeLast(3).forEach { TalkBubble(app, it, playing, onText = { reading = it.id }, onVideo = { video = it.id }, onPoll = { poll = it.id },
+                        who = if (KidChats.isGroup(p.k)) "" else p.n) { viewing = it.id } }
                 }
             }
         }
@@ -705,7 +709,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                     Text("“${o.text}”", style = tvText(32.sp, weight = FontWeight.SemiBold), textAlign = TextAlign.Center)
                     // The remote starts on Again, so a stray OK never sends words that came out wrong.
                     DialogButtons(listOf(
-                        "Send" to { KidChats.sendText(app, p.k, o.text); overlay = null; Ui.say("Sent") },
+                        "Send" to { KidChats.sendText(app, p.k, o.text); overlay = null; Ui.say("Sending") },
                         "Again" to { listen() },
                     ), focus = 1)
                 }
@@ -785,13 +789,22 @@ private fun QuickTile(text: String, done: Boolean, requester: FocusRequester?, m
     }
 }
 
+/**
+ * One message in a kids' conversation. [who]: their name as the device shows it (a group's message has its sender's own
+ * [Chat.Msg.name]); [status]: how my message is doing ("Sending", "Sent", "Waiting"), shown under it. TalkBack reads every
+ * bubble as "Mom: I'm on my way, 4:12 PM" (k14), with the TV's "Press OK" only on a TV ([speak] null).
+ */
 @Composable
 internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onVideo: () -> Unit = {}, onPoll: () -> Unit = {},
-                        speak: (() -> Unit)? = null, corner: Dp = 14.dp, onPhoto: () -> Unit) {
+                        speak: (() -> Unit)? = null, corner: Dp = 14.dp, who: String = "", status: String = "", onPhoto: () -> Unit) {
     // [corner]: 14dp on a TV; rounder on a tablet or phone (the kids' style).
     val shape = if (m.mine) RoundedCornerShape(corner, corner, 4.dp, corner) else RoundedCornerShape(corner, corner, corner, 4.dp)
     val bg = if (m.mine) Palette.bubbleMine else TheirBubble
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
+    val touch = speak != null
+    val time = remember(m.time) { if (m.time > 0L) java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(m.time)) else "" }
+    val label = KidK14.bubbleLabel(who.ifBlank { m.name }, m.mine, m.text, m.voice, if (m.photo.isNotEmpty()) m.video else 0,
+        m.photo.isNotEmpty(), m.gif, m.file.isNotEmpty(), m.poll?.q, time)
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
         when {
             m.voice > 0 -> {
                 var focused by remember { mutableStateOf(false) }
@@ -799,6 +812,7 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                 Row(Modifier.onFocusChanged { focused = it.isFocused }.clip(shape).background(bg)
                     .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
                     .clickable(role = Role.Button) { if (on) Voice.stopPlaying() else app.chat.photo(m.photo)?.let { Voice.play(m.id, it) } }
+                    .semantics(mergeDescendants = true) { contentDescription = if (on) "$label, playing" else label }
                     .padding(start = 7.dp, end = 13.dp, top = 7.dp, bottom = 7.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(40.dp).clip(CircleShape).background(Palette.gold), contentAlignment = Alignment.Center) {
@@ -810,15 +824,15 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
             }
             // A video message: a play tile; OK or a tap plays it full screen.
             m.video > 0 && m.photo.isNotEmpty() -> KidTile(if (m.mine) "Video" else "Video, ${Voice.length(m.video)}", "video", shape, bg, onVideo,
-                "Video, ${Voice.length(m.video)}. Press to play it.")
+                if (touch) label else "$label. Press OK to play it.")
             // A file: the kids can't open files here.
-            m.file.isNotEmpty() -> KidTile("Ask a parent to open this", "file", shape, bg, null, "A file. Ask a parent to open this.")
+            m.file.isNotEmpty() -> KidTile("Ask a parent to open this", "file", shape, bg, null, "$label. Ask a parent to open this.")
             // A poll: its question; OK or a tap shows the choices.
-            m.poll != null -> KidTile(m.poll.q.ifBlank { "Poll" }, "chat", shape, bg, onPoll, "Poll: ${m.poll.q}. Press to see the choices.")
-            // Cap a1: a GIF moves right in the conversation (still with Less motion); OK shows it big.
+            m.poll != null -> KidTile(m.poll.q.ifBlank { "Poll" }, "chat", shape, bg, onPoll, if (touch) label else "$label. Press OK to see the choices.")
+            // Cap a1: a GIF moves right in the conversation (still with Less motion or Android's Remove animations); OK shows it big.
             m.photo.isNotEmpty() && m.gif -> {
                 var focused by remember { mutableStateOf(false) }
-                io.github.ravenor907.muninn.ui.GifImage(m.id, { app.chat.photo(m.photo) }, "GIF. Press OK to see it big.",
+                io.github.ravenor907.muninn.ui.GifImage(m.id, { app.chat.photo(m.photo) }, if (touch) label else "$label. Press OK to see it big.",
                     Modifier.size(150.dp, 110.dp).onFocusChanged { focused = it.isFocused }.clip(shape).background(bg)
                         .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
                         .clickable(role = Role.Image, onClick = onPhoto), maxSide = 400)
@@ -827,11 +841,11 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                 val bmp = remember(m.photo) { try { app.chat.photo(m.photo)?.let { thumb(it) } } catch (e: Throwable) { null } }
                 var focused by remember { mutableStateOf(false) }
                 // OK on a photo shows it full screen.
-                if (bmp != null) Image(bmp, contentDescription = "Photo. Press OK to see it big.", contentScale = ContentScale.Crop,
+                if (bmp != null) Image(bmp, contentDescription = if (touch) label else "$label. Press OK to see it big.", contentScale = ContentScale.Crop,
                     modifier = Modifier.size(150.dp, 110.dp).onFocusChanged { focused = it.isFocused }.clip(shape)
                         .then(if (focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
                         .clickable(role = Role.Image, onClick = onPhoto))
-                else MIcon("image", Palette.textMuted, 40.dp, Modifier.clip(shape).background(bg).padding(10.dp))
+                else MIcon("image", Palette.textMuted, 40.dp, Modifier.clip(shape).background(bg).semantics { contentDescription = label }.padding(10.dp))
             }
             else -> {
                 // A message longer than the bubble shows: the remote can land on it, and OK shows it whole. On a touch
@@ -841,14 +855,16 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                 val tap = cut || (speak != null && !m.mine)
                 Text(m.text, style = tvText(20.sp), maxLines = 3, overflow = TextOverflow.Ellipsis,
                     onTextLayout = { if (it.hasVisualOverflow) cut = true },
-                    modifier = Modifier.then(if (tap) Modifier.onFocusChanged { focused = it.isFocused }
-                        .semantics { contentDescription = if (cut) "${m.text}. Press OK to read it all." else m.text } else Modifier)
+                    modifier = Modifier.semantics { contentDescription = if (cut && !touch) "$label. Press OK to read it all." else label }
+                        .then(if (tap) Modifier.onFocusChanged { focused = it.isFocused } else Modifier)
                         .clip(shape).background(bg)
                         .then(if (tap && focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
                         .then(if (tap) Modifier.clickable(role = Role.Button) { if (!m.mine) speak?.invoke(); if (cut) onText() } else Modifier)
                         .padding(horizontal = 13.dp, vertical = 9.dp))
             }
         }
+        if (status.isNotEmpty()) Text(status, style = tvText(14.sp, if (status == "Waiting") Palette.textSoft else Palette.textMuted),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
     }
 }
 

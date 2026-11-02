@@ -79,9 +79,22 @@ data class ManagedTv(
     /** k13 (7.18): the colors picked for the device (the same choices as Settings › Look), and Let the kid choose. */
     val look: String = KidLook.DEFAULT.look, val season: String = KidLook.DEFAULT.season, val accent: String = KidLook.DEFAULT.accent,
     val lookPick: Boolean = true,
+    /**
+     * k14 (7.18): the child's name for the greeting (the same for every parent; "" for none), the accessibility picked
+     * for the device (null fields: the device keeps its own), group members a parent approved and declined (group id to
+     * chat key), group members the device asks about, other families' Kids' Devices on its list still waiting for their
+     * parents (key to since), and other families' parents asking to put their Kids' Device on this one's list.
+     */
+    val child: String = "", val access: KidAccess = KidAccess(),
+    val gok: List<Pair<String, String>> = emptyList(), val gno: List<Pair<String, String>> = emptyList(),
+    val holdAsks: List<HoldAsk> = emptyList(), val waitKid: Map<String, Long> = emptyMap(),
+    val kidAsks: List<KidAddAsk> = emptyList(),
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
+
+/** Another family's parent ([from]) asks to put their Kids' Device on this one's list ([add]). */
+data class KidAddAsk(val add: KidAdd, val from: String)
 
 /**
  * The parent side of the kids' TV: adds a TV from its code, sends signed configs when the parent changes
@@ -181,6 +194,19 @@ object TvParent {
         kidKeys.value = try {
             app.vault.read(File(app.filesDir, KIDS_FILE))?.let { JSONArray(it) }?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
         } catch (_: Exception) { null } ?: emptySet()
+        try {
+            app.vault.read(File(app.filesDir, KID_FROM_FILE))?.let { JSONObject(it) }?.let { o -> o.keys().forEach { k -> kidFrom[k] = o.getString(k) } }
+        } catch (_: Exception) {}
+    }
+
+    /** k14: who handed this phone each other family's Kids' Device (a card, or their ask): the parent to ask to add one back. */
+    private const val KID_FROM_FILE = "tv-kidfrom.json"
+    private val kidFrom = ConcurrentHashMap<String, String>()
+
+    private fun noteKidFrom(app: Muninn, kid: String, parent: String) {
+        if (kidFrom[kid] == parent) return
+        kidFrom[kid] = parent
+        try { app.vault.write(File(app.filesDir, KID_FROM_FILE), JSONObject(kidFrom.toMap()).toString()) } catch (_: Exception) {}
     }
 
     private fun markKid(app: Muninn, key: String) {
@@ -252,6 +278,7 @@ object TvParent {
             val k11 = k11(app, key)
             val k12 = k12(app, key)
             val k13 = k13(app, key)
+            val k14 = k14(app, key)
             val (havw, havh) = havWording(t)
             val extras = if (k2(app, key)) TvExtras(t.calls, t.mic, if (k5(app, key)) t.nr else null,
                 if (k7(app, key)) t.upd else null, if (k8(app, key)) t.keep else null,
@@ -259,9 +286,13 @@ object TvParent {
                 if (k12) t.hav else null, if (k12) havw else null, if (k12) havh else null,
                 // k11: the time zone quiet times follow (this phone's until a parent picks another).
                 tz = if (k11) t.tz.ifEmpty { java.util.TimeZone.getDefault().id } else null,
-                // k13: the colors, Let the kid choose, and the device's name on this phone for the kids' greeting.
+                // k13: the colors and Let the kid choose; the child's name a parent set (never the device's name).
                 look = if (k13) t.look else null, season = if (k13) t.season else null, accent = if (k13) t.accent else null,
-                lookPick = if (k13) t.lookPick else null, kname = if (k13) app.contacts.get(key)?.shown else null) else null
+                lookPick = if (k13) t.lookPick else null, kname = if (k13) t.child.ifEmpty { null } else null,
+                // k14: the child's name, accessibility, approved group members, other families' devices still waiting, and
+                // each quick message's emoji.
+                access = if (k14) t.access else null, child = if (k14) t.child.ifEmpty { null } else null,
+                gok = if (k14) t.gok else null, wait = if (k14) t.waitKid.keys.toList() else null, pics = if (k14) true else null) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -346,6 +377,10 @@ object TvParent {
         // k11 (7.18): someone at the device asks to open its parent settings, or it left kids' mode.
         if (o.optString("t") == "unlockask") return takeUnlockAsk(app, fromKey, o)
         if (o.optString("t") == "left") return takeLeft(app, fromKey, o)
+        // k14 (7.18): a group member the device holds, and another family's Kids' Device.
+        if (o.optString("t") == "ghold") return takeHold(app, fromKey, o)
+        if (o.optString("t") == "kidadd") return takeKidAdd(app, fromKey, o)
+        if (o.optString("t") == "kidok") return takeKidOk(app, fromKey, o)
         if (o.optString("t") != "applied") return false
         val v = o.optLong("v", -1)
         if (v < 0) return false
@@ -417,6 +452,8 @@ object TvParent {
                     if (done && runs != null && !Havamal.hasOn(runs.raw) && k12(app, fromKey) && (t.hav || t.havw == Havamal.MINE)) resend = true
                     // The device just showed it speaks k13: the colors as the parent set them go out.
                     if (done && runs != null && !runs.raw.has("look") && k13(app, fromKey)) resend = true
+                    // The device just showed it speaks k14: its accessibility, child's name and the rest go out.
+                    if (done && runs != null && !runs.raw.has("gok") && k14(app, fromKey)) resend = true
                 }
             }
             _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
@@ -454,6 +491,15 @@ object TvParent {
             // k13: another parent's colors; a config without them leaves this phone's as they were.
             look = cfg.look ?: t.look, season = cfg.season ?: t.season, accent = cfg.accent ?: t.accent,
             lookPick = if (cfg.raw.has("lookpick")) cfg.lookPick else t.lookPick,
+            // k14: another parent's child's name (the latest change wins), accessibility, approved members and waiting devices;
+            // a config without one leaves this phone's as it was.
+            child = if (cfg.raw.has("child")) cfg.child else t.child,
+            access = KidAccess(
+                if (cfg.raw.has("tsz")) cfg.access.text else t.access.text, if (cfg.raw.has("dsz")) cfg.access.size else t.access.size,
+                if (cfg.raw.has("hc")) cfg.access.hc else t.access.hc, if (cfg.raw.has("cv")) cfg.access.cv else t.access.cv,
+                if (cfg.raw.has("still")) cfg.access.still else t.access.still),
+            gok = if (cfg.raw.has("gok")) cfg.gok else t.gok,
+            waitKid = if (cfg.raw.has("wait")) cfg.wait.associateWith { t.waitKid[it] ?: System.currentTimeMillis() } else t.waitKid,
         )
     }
 
@@ -572,7 +618,7 @@ object TvParent {
         if (_tvs.value[key]?.parents?.contains(person) == true) return
         dropWaiting(key, listOf(person))
         if (_tvs.value[key]?.reach?.contains(person) == true)
-            change(key) { t -> t.copy(reach = t.reach - person, others = t.others.filter { it.k != person }) }
+            change(key) { t -> t.copy(reach = t.reach - person, others = t.others.filter { it.k != person }, waitKid = t.waitKid - person) }
     }
 
     /** The TV's app said "k3": it reports its level and storage and takes Clear history. */
@@ -646,6 +692,8 @@ object TvParent {
         val tv = Contacts.parse(code) ?: return false
         // A card only ever carries a Kids' Device: group pickers here leave it out unless this phone looks after it.
         markKid(app, tv.chatKey)
+        // k14: the parent to ask when this phone puts that device on one of its own.
+        if (tv.chatKey != app.identity.publicKey) noteKidFrom(app, tv.chatKey, fromKey)
         if (tv.chatKey == app.identity.publicKey) return true
         // A parent made this phone a parent too: the config they signed lists it (and them) as parents.
         val shared = TvRules.shared(tv.chatKey, app.identity.publicKey, cfg)?.takeIf { it.by == fromKey }
@@ -670,8 +718,12 @@ object TvParent {
     fun invite(app: Muninn, tvKey: String, people: Collection<String>) {
         val add = people.filter { it != tvKey && it != app.identity.publicKey && app.contacts.get(it) != null }
         if (add.isEmpty()) return
-        change(tvKey) { t -> t.copy(reach = (t.reach + add).distinct().take(TvRules.MAX_CONTACTS - 1)) }
         val now = System.currentTimeMillis()
+        // k14: another family's Kids' Device waits until its own parents put this one on its list.
+        val others = add.filter { isKidDevice(it) && !isManaged(it) }
+        change(tvKey) { t -> t.copy(reach = (t.reach + add).distinct().take(TvRules.MAX_CONTACTS - 1),
+            waitKid = t.waitKid + others.filter { it !in t.waitKid }.associateWith { now }) }
+        askOtherParents(app, tvKey, others)
         // A Kids' Device gets no card: it takes people only from its own parents' configs (this phone's, or theirs).
         add.filter { !isKidDevice(it) }.forEach { k -> app.chat.probeCaps(k); cards[k] = tvKey to now; sendCard(app, k, false) }
         if (add.isNotEmpty()) ticking()
@@ -849,6 +901,129 @@ object TvParent {
     /** Let the kid choose: whether "My colors" shows on the device. */
     fun setLookPick(key: String, on: Boolean) = change(key) { it.copy(lookPick = on) }
 
+    // ---- k14 (7.18): the child's name, accessibility, group members a parent approves, and other families' Kids' Devices
+
+    /** The device's app said "k14". */
+    fun k14(app: Muninn, key: String): Boolean = KidK14.CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The child's name, for the greeting on the device ("Hi, Ava"). The same on every parent's page once the config goes out. */
+    fun setChild(key: String, name: String) {
+        val n = TvRules.clean(name, TvRules.MAX_NAME)
+        if (n.isNotEmpty()) change(key) { it.copy(child = n) }
+    }
+
+    /** The child's name, or the device's name on this phone while none is set (for this phone's own words, never the device's). */
+    fun childName(app: Muninn, t: ManagedTv): String = t.child.ifEmpty { app.contacts.get(t.key)?.shown ?: "the Kids' Device" }
+
+    /** The parent picked part of the device's accessibility. */
+    fun setAccess(key: String, f: (KidAccess) -> KidAccess) = change(key) { it.copy(access = f(it.access)) }
+
+    /**
+     * The device holds a group member who isn't on its list: a card on its page, a notification, and a dialog when no
+     * other dialog is open. Once approved it's let in; once declined it isn't asked about again.
+     */
+    private fun takeHold(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        val a = KidK14.holdIn(o) ?: return false
+        val pair = a.g to a.k
+        var title = ""
+        synchronized(lock) {
+            val t = _tvs.value[fromKey] ?: return false
+            if (t.disconnecting || pair in t.gno) return true
+            // Approved before (its config may not have reached the device yet): the config goes again.
+            if (pair in t.gok) { change(fromKey) { it }; return true }
+            if (t.holdAsks.any { it.g == a.g && it.k == a.k }) return true
+            put(t.copy(holdAsks = t.holdAsks + a))
+            title = KidK14.approveText(a.n, a.gn, childName(app, t))
+        }
+        val text = "${a.n} is in the group ${a.gn} but isn't on its list. Approve shows their messages in that group only. Decline keeps them hidden."
+        if (Ui.ask.value == null) Ui.sure(Ask(title, text, "Approve", cancel = "Decline", onCancel = { answerHold(fromKey, a, false) }) {
+            answerHold(fromKey, a, true)
+        })
+        try { app.notice(title, text, pageOf(fromKey), "ghold$fromKey${a.g}${a.k}".take(120)) } catch (_: Exception) {}
+        return true
+    }
+
+    /** Approve ([yes]): [a] goes on the device's list for that group only. Decline: kept hidden, not asked again. */
+    fun answerHold(key: String, a: HoldAsk, yes: Boolean) {
+        val pair = a.g to a.k
+        change(key) { t ->
+            t.copy(holdAsks = t.holdAsks.filter { it.g != a.g || it.k != a.k },
+                gok = if (yes) (t.gok + pair).distinct().take(KidK14.MAX_GOK) else t.gok - pair,
+                gno = if (yes) t.gno - pair else (t.gno + pair).distinct())
+        }
+        Ui.say(if (yes) "Approved. Their messages show there once the device is online." else "Kept hidden")
+    }
+
+    /** Asks the parents of other families' Kids' Devices ([others]) to put [tvKey] on their device's list. */
+    private fun askOtherParents(app: Muninn, tvKey: String, others: List<String>) {
+        if (others.isEmpty()) return
+        val t = _tvs.value[tvKey] ?: return
+        val me = app.contacts.get(tvKey) ?: return
+        val code = Contacts.code(me.name, tvKey, me.mailbox ?: "")
+        for (k in others) {
+            val parent = kidFrom[k] ?: continue
+            send(app, parent, listOf(KidK14.kidAddMessage(KidAdd(k, tvKey, childName(app, t), code))))
+        }
+    }
+
+    /**
+     * Another family's parent asks to put their Kids' Device ([KidAdd.k]) on this phone's Kids' Device ([KidAdd.tv]). One
+     * already on its list: the answer says so at once. Otherwise a card on the device's page and a notification.
+     */
+    private fun takeKidAdd(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        val a = KidK14.kidAddIn(o) ?: return false
+        if (app.contacts.get(fromKey) == null) return false
+        var title = ""
+        var text = ""
+        synchronized(lock) {
+            val t = _tvs.value[a.tv] ?: return false
+            if (t.disconnecting) return true
+            noteKidFrom(app, a.k, fromKey)
+            if (a.k in t.reach) {
+                // Both lists have each other now.
+                if (a.k in t.waitKid) change(a.tv) { it.copy(waitKid = it.waitKid - a.k) }
+                send(app, fromKey, listOf(KidK14.kidOkMessage(a.tv, a.k)))
+                return true
+            }
+            if (t.kidAsks.any { it.add.k == a.k }) return true
+            put(t.copy(kidAsks = t.kidAsks + KidAddAsk(a, fromKey)))
+            val child = childName(app, t)
+            title = "Let ${a.n} talk with $child?"
+            text = "${app.chat.nameOf(fromKey)} put their Kids' Device for ${a.n} on its list. Add it to who $child can talk to?"
+        }
+        if (Ui.ask.value == null) Ui.sure(Ask(title, text, "Add", cancel = "Not now", onCancel = { answerKidAdd(app, a.tv, a.k, false) }) {
+            answerKidAdd(app, a.tv, a.k, true)
+        })
+        try { app.notice(title, text, pageOf(a.tv), "kidadd${a.tv}${a.k}".take(120)) } catch (_: Exception) {}
+        return true
+    }
+
+    /** Add ([yes]): the other family's device goes on [key]'s list, and its parent hears so. Not now: the ask goes. */
+    fun answerKidAdd(app: Muninn, key: String, k: String, yes: Boolean) {
+        val ask = _tvs.value[key]?.kidAsks?.firstOrNull { it.add.k == k } ?: return
+        synchronized(lock) { _tvs.value[key]?.let { t -> put(t.copy(kidAsks = t.kidAsks.filter { it.add.k != k })) } }
+        if (!yes) return
+        val c = Contacts.parse(ask.add.code)
+        if (c == null || c.chatKey != k) { Ui.say("That device's code can't be read.", true); return }
+        if (app.contacts.get(k) == null) {
+            if (app.chat.keyChangeFor(c) != null) { Ui.say("That device's code can't be added here.", true); return }
+            app.chat.addContact(c.copy(invite = null))
+        }
+        markKid(app, k)
+        invite(app, key, listOf(k))
+        send(app, ask.from, listOf(KidK14.kidOkMessage(key, k)))
+        Ui.say("Added. The two devices can talk once it's online.")
+    }
+
+    /** Another family's parent put this phone's Kids' Device (the "k" in [o]) on theirs (its "tv"): it no longer waits. */
+    private fun takeKidOk(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        val (tv, k) = KidK14.kidOkIn(o) ?: return false
+        if (app.contacts.get(fromKey) == null) return false
+        val t = _tvs.value[k] ?: return false
+        if (tv in t.waitKid) change(k) { it.copy(waitKid = it.waitKid - tv) }
+        return true
+    }
+
     /** The parent switched Daily Hávamál on or off. */
     fun setHav(key: String, on: Boolean) = change(key) { it.copy(hav = on) }
 
@@ -965,7 +1140,7 @@ object TvParent {
 
     private fun toJson(m: Map<String, ManagedTv>): JSONObject = JSONObject().apply {
         for (t in m.values) put(t.key, JSONObject().put("v", t.v).put("applied", t.applied)
-            .put("quick", JSONArray().apply { t.quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
+            .put("quick", JSONArray().apply { t.quick.forEach { q -> put(JSONObject().put("id", q.id).put("text", q.text).apply { if (q.e.isNotEmpty()) put("e", q.e) }) } })
             .put("reach", JSONArray(t.reach)).put("dictation", t.dictation).put("parents", JSONArray(t.parents))
             .put("myName", t.myName).put("pending", JSONArray(t.pending)).put("pendingV", t.pendingV).put("since", t.since)
             .put("disconnecting", t.disconnecting).put("calls", t.calls).put("mic", t.mic).put("extrasSent", t.extrasSent).put("app", t.app)
@@ -980,6 +1155,11 @@ object TvParent {
             .put("names", JSONObject().apply { t.names.forEach { (k, n) -> put(k, n) } }).put("tz", t.tz)
             .put("seenAt", t.seenAt).put("silentTold", t.silentTold)
             .put("look", t.look).put("season", t.season).put("accent", t.accent).put("lookPick", t.lookPick)
+            .put("child", t.child).put("gok", KidK14.gokJson(t.gok)).put("gno", KidK14.gokJson(t.gno))
+            .put("access", JSONObject().apply { KidK14.putInto(this, TvExtras(access = t.access)) })
+            .put("holdAsks", JSONArray().apply { t.holdAsks.forEach { put(JSONObject(KidK14.holdMessage(it))) } })
+            .put("waitKid", JSONObject().apply { t.waitKid.forEach { (k, v) -> put(k, v) } })
+            .put("kidAsks", JSONArray().apply { t.kidAsks.forEach { put(JSONObject().put("a", JSONObject(KidK14.kidAddMessage(it.add))).put("from", it.from)) } })
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -990,7 +1170,7 @@ object TvParent {
             val q = x.optJSONArray("quick") ?: JSONArray()
             fun strs(a: JSONArray?) = if (a == null) emptyList() else (0 until a.length()).map { a.getString(it) }
             k to ManagedTv(k, x.optLong("v"), x.optLong("applied"),
-                (0 until q.length()).map { q.getJSONObject(it).let { e -> Quick(e.getString("id"), e.getString("text")) } },
+                (0 until q.length()).map { q.getJSONObject(it).let { e -> Quick(e.getString("id"), e.getString("text"), e.optString("e").takeIf { x -> KidK14.emojiOk(x) } ?: "") } },
                 strs(x.optJSONArray("reach")), x.optBoolean("dictation"), strs(x.optJSONArray("parents")), x.optString("myName"),
                 strs(x.optJSONArray("pending")), x.optLong("pendingV"), x.optLong("since"), x.optBoolean("disconnecting"),
                 x.optBoolean("calls", true), x.optInt("mic", TvRules.DEFAULT_MIC), x.optBoolean("extrasSent"), x.optString("app"),
@@ -1013,7 +1193,18 @@ object TvParent {
                 look = io.github.ravenor907.muninn.ui.Looks.of(x.optString("look")),
                 season = io.github.ravenor907.muninn.ui.Seasons.choice(x.optString("season")),
                 accent = io.github.ravenor907.muninn.ui.Accents.choice(x.optString("accent")),
-                lookPick = x.optBoolean("lookPick", true))
+                lookPick = x.optBoolean("lookPick", true),
+                child = x.optString("child").takeIf { KidK14.nameOk(it) } ?: "",
+                access = x.optJSONObject("access")?.let { a -> try { KidK14.check(a); KidK14.accessIn(a) } catch (_: Exception) { null } } ?: KidAccess(),
+                gok = x.optJSONArray("gok")?.let { a -> try { KidK14.gokIn(a) } catch (_: Exception) { null } } ?: emptyList(),
+                gno = x.optJSONArray("gno")?.let { a -> try { KidK14.gokIn(a) } catch (_: Exception) { null } } ?: emptyList(),
+                holdAsks = x.optJSONArray("holdAsks")?.let { a -> (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { KidK14.holdIn(it) } } } ?: emptyList(),
+                waitKid = x.optJSONObject("waitKid")?.let { w -> w.keys().asSequence().associateWith { w.optLong(it) } } ?: emptyMap(),
+                kidAsks = x.optJSONArray("kidAsks")?.let { a -> (0 until a.length()).mapNotNull { i ->
+                    val e = a.optJSONObject(i) ?: return@mapNotNull null
+                    val add = e.optJSONObject("a")?.let { KidK14.kidAddIn(it) } ?: return@mapNotNull null
+                    e.optString("from").takeIf { it.isNotEmpty() }?.let { KidAddAsk(add, it) }
+                } } ?: emptyList())
         } catch (e: Exception) { null }
     }.toMap()
 }

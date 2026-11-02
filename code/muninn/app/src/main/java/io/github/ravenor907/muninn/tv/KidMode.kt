@@ -135,6 +135,7 @@ object KidTv {
         val local = if (o.has("micLocal")) o.optInt("micLocal").coerceIn(0, TvRules.MAX_MIC) else null
         val nr = if (o.has("nrLocal")) o.optInt("nrLocal").coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH) else null
         _state.value = KidState(parents, cfg, local, o.optLong("micAt"), nr)
+        me = try { app.identity.publicKey } catch (_: Exception) { "" }
         // k12: the parent's translation for Daily Hávamál, if one came.
         HavDevice.load(app)
         // k11: the trusted time kept from before Muninn restarted (while the device hasn't).
@@ -247,6 +248,42 @@ object KidTv {
 
     /** A group invite, or being put straight into a group: only from one of this device's parents. */
     fun groupInviteOk(fromKey: String): Boolean = KidRules.groupInviteOk(fromKey, _state.value.parents)
+
+    // ---- k14 (7.18): group members no parent approved are held
+
+    /** This device's own chat key (set when it loads). */
+    @Volatile private var me = ""
+
+    /** Whether [from]'s messages in group [g] are held: not this device, a parent, on its list, or approved for [g]. */
+    fun heldNow(g: String, from: String): Boolean {
+        val s = _state.value
+        val c = s.cfg ?: return false
+        return KidK14.held(from, g, me, s.parents, c.contacts.map { it.k }, c.gok)
+    }
+
+    private const val HELD_ASKED = "gheldAsked"
+
+    /**
+     * A message from [from] ([name]) in group [g] ([gn]) was held: the parents whose app takes it (k14) are asked once
+     * whether to approve them for that group. Asked again only if no parent could be asked yet.
+     */
+    fun onHeld(app: Muninn, g: String, from: String, name: String, gn: String) {
+        statusTimer.execute {
+            try {
+                val s = _state.value
+                if (s.cfg == null) return@execute
+                val id = "$g $from"
+                val p = prefs(app)
+                val asked = p.getStringSet(HELD_ASKED, emptySet()).orEmpty()
+                if (id in asked) return@execute
+                val to = s.parents.filter { KidK14.CAP in (app.contacts.get(it)?.caps ?: emptySet()) }
+                if (to.isEmpty()) { s.parents.forEach { app.chat.probeCaps(it) }; return@execute }
+                val msg = KidK14.holdMessage(HoldAsk(g, from, name, gn))
+                to.forEach { send(app, it, msg) }
+                p.edit().putStringSet(HELD_ASKED, (asked + id).toList().takeLast(200).toSet()).apply()
+            } catch (_: Exception) {}
+        }
+    }
 
     // ---- trusted time (7.18): quiet times follow a parent's config time or a relay's clock, never the device's alone
 
@@ -619,6 +656,9 @@ object KidTv {
         file(app).delete()
         TvApps.clear()
         HavDevice.clear(app)
+        // k14: anything a quiet time held, and the group members already asked about.
+        KidHoldStore.clear(app)
+        prefs(app).edit().remove(HELD_ASKED).apply()
         unlockedUntil.value = 0L
         asked = null
         lastAsk = 0L
@@ -690,6 +730,17 @@ object Tv : TvHandler {
         // Never let anything through before the TV side knows its parents: only configs, which it checks itself.
         val a = app ?: return room == "tvconfig"
         return if (KidMode.on(a)) KidTv.allow(fromKey, room) { k -> try { a.chat.groups.sharesGroup(k) } catch (_: Exception) { false } } else true
+    }
+
+    /** k14: on a Kids' Device, a group member no parent approved is held (their messages don't show or notify). */
+    override fun groupHeld(g: String, fromKey: String): Boolean {
+        val a = app ?: return false
+        return KidMode.on(a) && KidTv.heldNow(g, fromKey)
+    }
+
+    override fun onGroupHeld(g: String, fromKey: String, name: String, groupName: String) {
+        val a = app ?: return
+        if (KidMode.on(a)) KidTv.onHeld(a, g, fromKey, name, groupName)
     }
 
     /** On a Kids' Device a group invite (or being put straight in a group) comes only from one of its parents. */

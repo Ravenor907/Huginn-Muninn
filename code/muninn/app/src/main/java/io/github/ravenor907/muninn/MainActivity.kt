@@ -378,6 +378,8 @@ class MainActivity : ComponentActivity() {
     /** "Share" › Muninn from another app: pick who gets it (a person, a group or a LocalSend device nearby: ShareToDialog). */
     private fun handleShare(i: Intent?) {
         if (i == null || (i.action != Intent.ACTION_SEND && i.action != Intent.ACTION_SEND_MULTIPLE)) return
+        // A Kids' Device takes nothing from other apps' Share: there's no chat list to pick from, and nothing waits for later.
+        if (io.github.ravenor907.muninn.tv.KidMode.saved(this)) return
         val uris = if (i.action == Intent.ACTION_SEND) listOfNotNull(if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM))
             else (if (Build.VERSION.SDK_INT >= 33) i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableArrayListExtra(Intent.EXTRA_STREAM)).orEmpty()
         if (uris.isEmpty()) return

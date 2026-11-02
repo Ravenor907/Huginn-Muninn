@@ -193,7 +193,8 @@ class KidPhoneTest {
         assertEquals(listOf("g:x", "mom", "dad", "amy", "ben"), KidUi.order(listOf("dad", "mom", "amy", "ben", "g:x"), setOf("g:x")) { last[it] ?: 0L })
         assertEquals(listOf("mom", "g:x", "dad", "amy", "ben"), KidUi.order(listOf("dad", "mom", "amy", "ben", "g:x"), emptySet()) { last[it] ?: 0L })
         assertEquals(listOf("all", "family", "groups"), KidUi.FILTERS.map { it.first })
-        assertEquals(listOf("All", "Family", "Groups"), KidUi.FILTERS.map { it.second })
+        // "People", as the tab says: friends and another family's device are on it too, not only family.
+        assertEquals(listOf("All", "People", "Groups"), KidUi.FILTERS.map { it.second })
         assertTrue(KidUi.keeps("all", "g:x") && KidUi.keeps("all", "dad"))
         assertTrue(KidUi.keeps("family", "dad"))
         assertFalse(KidUi.keeps("family", "g:x"))
@@ -204,7 +205,8 @@ class KidPhoneTest {
     @Test fun theGreetingUsesTheKidsName() {
         assertEquals("Hi, Ava", KidUi.greeting("Ava"))
         assertEquals("Hi, Ava", KidUi.greeting("  Ava "))
-        for (n in listOf("", "Kids' Tablet", "Kids' Phone", "Kids' TV", "Raven 1234")) assertEquals(n, "Hi there", KidUi.greeting(n))
+        // No child's name yet (or a device's starting name, which earlier parent apps sent): just "Hi!".
+        for (n in listOf("", "Kids' Tablet", "Kids' Phone", "Kids' TV", "Raven 1234")) assertEquals(n, "Hi!", KidUi.greeting(n))
     }
 
     // ---- nothing to add or scan

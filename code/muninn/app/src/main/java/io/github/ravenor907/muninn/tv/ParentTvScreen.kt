@@ -53,6 +53,7 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -223,7 +224,10 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
         Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
             when (open) {
-                null -> { UnlockCard(app, t, tvName); UpdateHeader(app, t); Menu(app, t) { stack = stack + it }; if (t.dev == KidRules.TABLET || t.dev == KidRules.PHONE) Note(FULL_LOCK) }
+                null -> {
+                    UnlockCard(app, t, tvName); HoldCards(app, t); KidAddCards(app, t); UpdateHeader(app, t); ChildNameRow(app, t)
+                    Menu(app, t) { stack = stack + it }; if (t.dev == KidRules.TABLET || t.dev == KidRules.PHONE) Note(FULL_LOCK)
+                }
                 "people" -> People(app, t)
                 "parents" -> Parents(app, t)
                 "chatting" -> Chatting(app, t)
@@ -231,7 +235,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
                 "lock" -> Lock(app, t)
                 "havamal" -> DailyHavamal(app, t)
                 "look" -> KidLookPart(app, t)
-                "quick" -> QuickMessages(t)
+                "quick" -> QuickMessages(app, t)
                 "sound" -> Sound(app, t)
                 "names" -> Names(app, t, tvName)
                 "apps" -> Apps(app, t)
@@ -265,12 +269,67 @@ private fun Menu(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
             // k12: an older device can't show it yet.
             "havamal" -> if (!TvParent.k12(app, t.key)) UPDATE_FIRST else if (t.hav) "On" else "Off"
             // k13: an older device can't take its colors yet.
-            "look" -> if (!TvParent.k13(app, t.key)) UPDATE_FIRST else io.github.ravenor907.muninn.ui.Looks.name(t.look)
+            "look" -> if (!TvParent.k13(app, t.key)) UPDATE_FIRST else lookSummary(t)
             "apps" -> asks.let { TvAppAsks.of(app, t.key).count { !it.answered } }.let { n -> if (n > 0) "$n waiting for you" else "" }
             "updates" -> if (t.upd) "Auto-update on" else "Auto-update off"
             else -> ""
         }
         MenuRow(label, value) { onOpen(id) }
+    }
+}
+
+/** "Dark, Gold, the kid may pick": what the Look row says (the theme alone hid the accent and Let the kid choose). */
+private fun lookSummary(t: ManagedTv): String {
+    val accent = io.github.ravenor907.muninn.ui.Accents.TITLES.getOrNull(io.github.ravenor907.muninn.ui.Accents.NAMES.indexOf(t.accent)) ?: "Own color"
+    return io.github.ravenor907.muninn.ui.Looks.name(t.look) + ", " + accent + if (t.lookPick) ", the kid may pick" else ", locked"
+}
+
+/** k14: the child's name, greeting the kids on the device ("Hi, Ava"); the same on every parent's page. Never the device's name. */
+@Composable
+private fun ChildNameRow(app: Muninn, t: ManagedTv) {
+    var naming by remember { mutableStateOf(false) }
+    val k14 = TvParent.k14(app, t.key)
+    MenuRow("Child's name", if (t.child.isEmpty()) "Not set" else t.child) { naming = true }
+    if (naming) TextDialog("Child's name", t.child, TvRules.MAX_NAME, onCancel = { naming = false }) { name ->
+        naming = false
+        TvParent.setChild(t.key, name)
+        Ui.say(if (k14) "Saved. The device says \"Hi, $name\" once it's online." else "Saved. $UPDATE_FIRST to greet them by name.")
+    }
+}
+
+/** k14: group members the device holds (no parent put them on its list): Approve for that group, or Decline. */
+@Composable
+private fun HoldCards(app: Muninn, t: ManagedTv) {
+    if (t.holdAsks.isEmpty()) return
+    val child = TvParent.childName(app, t)
+    t.holdAsks.forEach { a ->
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(Corner).border(1.dp, Palette.gold, Corner).padding(14.dp)) {
+            Text(KidK14.approveText(a.n, a.gn, child), style = Type.big.copy(fontSize = 17.sp))
+            Text("${a.n} is in ${a.gn} but isn't on its list, so their messages there are hidden. Approve shows them in that group only.",
+                style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Approve", kind = Kind.Accent) { TvParent.answerHold(t.key, a, true) }
+                MButton("Decline") { TvParent.answerHold(t.key, a, false) }
+            }
+        }
+    }
+}
+
+/** k14: another family's parent asks to let their Kids' Device talk with this one: Add or Not now. */
+@Composable
+private fun KidAddCards(app: Muninn, t: ManagedTv) {
+    if (t.kidAsks.isEmpty()) return
+    val child = TvParent.childName(app, t)
+    t.kidAsks.forEach { a ->
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(Corner).border(1.dp, Palette.gold, Corner).padding(14.dp)) {
+            Text("Let ${a.add.n} talk with $child?", style = Type.big.copy(fontSize = 17.sp))
+            Text("${app.chat.nameOf(a.from)} put their Kids' Device for ${a.add.n} on its list. It can talk with $child once you add it here too.",
+                style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MButton("Add", kind = Kind.Accent) { TvParent.answerKidAdd(app, t.key, a.add.k, true) }
+                MButton("Not now") { TvParent.answerKidAdd(app, t.key, a.add.k, false) }
+            }
+        }
     }
 }
 
@@ -395,7 +454,14 @@ private fun People(app: Muninn, t: ManagedTv) {
     // A parent stays on the list (the kids could not answer them otherwise): no minus for them.
     people.drop(1).forEach { p ->
         val parent = p.k in t.parents
-        ItemRow(p.n, if (parent) "Parent" else if (TvParent.isKidDevice(p.k)) "Kids' Device" else null, onClick = { naming = p.k },
+        // k14: another family's Kids' Device waits until its own parent adds this one.
+        val note = when {
+            parent -> "Parent"
+            p.k in t.waitKid -> KidK14.waitingText(p.n, TvParent.childName(app, t))
+            TvParent.isKidDevice(p.k) -> "Kids' Device"
+            else -> null
+        }
+        ItemRow(p.n, note, onClick = { naming = p.k },
             onRemove = if (parent) null else ({ remove(p.n, p.k, false) }))
     }
     if (naming.isNotEmpty()) TextDialog("Name on the device", people.firstOrNull { it.k == naming }?.n ?: "", TvRules.MAX_NAME,
@@ -407,8 +473,9 @@ private fun People(app: Muninn, t: ManagedTv) {
             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), "Send its code"))
         }
     }
-    Note("Another family's Kids' Device can go on the list too. It can talk with this one once its own parents add this device on their side (send them its code).")
+    Note("Another family's Kids' Device can go on the list too. Its parent is asked to add this one on their side; until then it shows as waiting here and on the device.")
     MenuRow("Group chat", "") { grouping = true }
+    Note("In a group, only the people on this list (and you) show on the device. Anyone else in the group is hidden until a parent approves them for that group.")
 
     if (adding) {
         // People this phone asked who haven't accepted yet: invited by themselves once they accept.
@@ -471,9 +538,10 @@ private fun Parents(app: Muninn, t: ManagedTv) {
     }
 }
 
-/** The device's quick messages: tap to edit, a minus to delete, drag the handle to reorder, Add. */
+/** The device's quick messages: tap to edit (and, k14, pick its picture), a minus to delete, drag the handle to reorder, Add. */
 @Composable
-private fun QuickMessages(t: ManagedTv) {
+private fun QuickMessages(app: Muninn, t: ManagedTv) {
+    val k14 = TvParent.k14(app, t.key)
     val tvKey = t.key
     var editing by remember { mutableStateOf<Quick?>(null) }
     var order by remember(t.quick) { mutableStateOf(t.quick) }
@@ -489,7 +557,8 @@ private fun QuickMessages(t: ManagedTv) {
     }
     Text("A TV shows the first ${TvRules.QUICK_SHOWN}; a tablet or phone shows them all.", style = Type.small.copy(fontSize = 13.sp), modifier = Modifier.padding(vertical = 8.dp))
     // A child who can't read yet tells the tiles apart by a picture.
-    Note("Start each with an emoji, like \uD83C\uDF4E or \u2764\uFE0F, so a child who can't read yet can tell them apart.")
+    Note(if (k14) "Pick a picture for each, so a child who can't read yet can tell them apart. A tap sends it and reads it out loud."
+        else "Start each with an emoji, like \uD83C\uDF4E or \u2764\uFE0F, so a child who can't read yet can tell them apart.")
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         order.forEach { q ->
             key(q.id) {
@@ -524,7 +593,7 @@ private fun QuickMessages(t: ManagedTv) {
                             }
                         }
                     }, contentAlignment = Alignment.Center) { Grip() }
-                    Text(q.text, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    Text(if (q.e.isNotEmpty()) "${q.e}  ${q.text}" else q.text, style = Type.normal.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f).clickable(role = Role.Button) { editing = q }.padding(vertical = 14.dp))
                     Minus("Delete ${q.text}") { commit(order.filterNot { it.id == q.id }) }
                 }
@@ -533,8 +602,8 @@ private fun QuickMessages(t: ManagedTv) {
     }
     if (order.size < TvRules.MAX_QUICK) AddRow("Add") { editing = Quick("", "") }
     editing?.let { q ->
-        TextDialog(if (q.id.isEmpty()) "Add a message" else "Edit message", q.text, TvRules.QUICK_TILE, onCancel = { editing = null }) { text ->
-            commit(if (q.id.isEmpty()) order + Quick(TvRules.quickId(), text) else order.map { if (it.id == q.id) it.copy(text = text) else it })
+        QuickDialog(if (q.id.isEmpty()) "Add a message" else "Edit message", q, pics = k14, onCancel = { editing = null }) { text, e ->
+            commit(if (q.id.isEmpty()) order + Quick(TvRules.quickId(), text, e) else order.map { if (it.id == q.id) it.copy(text = text, e = e) else it })
             editing = null
         }
     }
@@ -577,9 +646,9 @@ private fun Names(app: Muninn, t: ManagedTv, tvName: String) {
     MenuRow("Device name", tvName) { naming = "tv" }
     MenuRow("Your name on it", t.myName.ifBlank { "Parent" }) { naming = "me" }
     when (naming) {
-        // The name also greets the kids on the device (k13): the config goes out again.
+        // Only on this phone: the kids' greeting uses the child's name on the device page, never this.
         "tv" -> TextDialog("Device name", tvName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name ->
-            app.chat.rename(t.key, name); naming = ""; TvParent.change(t.key) { it }
+            app.chat.rename(t.key, name); naming = ""
         }
         "me" -> TextDialog("Your name on it", t.myName, TvRules.MAX_NAME, onCancel = { naming = "" }) { name ->
             TvParent.setName(t.key, app.identity.publicKey, name); naming = ""
@@ -932,8 +1001,43 @@ private fun KidLookPart(app: Muninn, t: ManagedTv) {
             }
         }
     }
-    TvToggle("Let the kid choose", "Shows My colors on the device, with the same choices. Your pick here goes on again whenever you change it.",
+    TvToggle("Let the kid choose", "Shows My colors on the device, with the same choices and text size. Your pick here goes on again whenever you change it.",
         t.lookPick, enabled = k13) { on -> TvParent.setLookPick(t.key, on); saved() }
+    KidAccessPart(app, t)
+}
+
+/**
+ * k14: the device's accessibility, the same choices as Settings › Look on a phone: text size, size of everything, high
+ * contrast, color vision and less motion. One not picked here leaves the device's own as it is.
+ */
+@Composable
+private fun KidAccessPart(app: Muninn, t: ManagedTv) {
+    val k14 = TvParent.k14(app, t.key)
+    fun saved() = Ui.say("Saved. It changes on the device once it's online.")
+    val head = Type.big.copy(fontSize = 16.sp, color = if (k14) Palette.text else Palette.textFaint)
+    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Palette.hairline))
+    Text("Accessibility", style = Type.big.copy(fontSize = 17.sp, color = if (k14) Palette.text else Palette.textFaint))
+    if (!k14) Note(UPDATE_FIRST)
+    val a = t.access
+    Text("Text size", style = head, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+    ChoiceRow(KidK14.TEXT_SIZES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
+        val v = KidK14.TEXT_SIZES[i]
+        MButton("$v%", m, if (a.text == v) Kind.Accent else Kind.Normal, enabled = k14) { if (a.text != v) { TvParent.setAccess(t.key) { it.copy(text = v) }; saved() } }
+    }
+    Text("Size of everything", style = head, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+    ChoiceRow(KidK14.DISPLAY_SIZES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
+        val v = KidK14.DISPLAY_SIZES[i]
+        MButton("$v%", m, if (a.size == v) Kind.Accent else Kind.Normal, enabled = k14) { if (a.size != v) { TvParent.setAccess(t.key) { it.copy(size = v) }; saved() } }
+    }
+    TvToggle("High contrast", "Stronger outlines", a.hc == true, enabled = k14) { on -> TvParent.setAccess(t.key) { it.copy(hc = on) }; saved() }
+    TvToggle("Less motion", "No sliding, fading or moving GIFs", a.still == true, enabled = k14) { on -> TvParent.setAccess(t.key) { it.copy(still = on) }; saved() }
+    Text("Color vision", style = head, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+    val kinds = io.github.ravenor907.muninn.ui.ColorVision.ALL
+    ChoiceRow(kinds.size, Modifier.padding(vertical = 6.dp), minWidth = 200.dp, max = 2) { i, m ->
+        val (k, n) = kinds[i]
+        MButton(n, m, if (a.cv == k) Kind.Accent else Kind.Normal, enabled = k14) { if (a.cv != k) { TvParent.setAccess(t.key) { it.copy(cv = k) }; saved() } }
+    }
+    Note("Not picked here: the device keeps its own. With Let the kid choose on, the kid can still change the text size in My colors.")
 }
 
 /** A new PIN, typed twice. */
@@ -1177,6 +1281,51 @@ private fun TextDialog(title: String, start: String, max: Int, onCancel: () -> U
             }
         },
         confirmButton = { MButton("Save", kind = Kind.Accent, enabled = fits) { if (fits) onSave(clean) } },
+        dismissButton = { MButton("Cancel", onClick = onCancel) },
+    )
+}
+
+/** The pictures a parent can pick for a quick message (k14). */
+private val QUICK_PICS = listOf("\uD83D\uDE4B", "\uD83D\uDC4B", "\uD83C\uDF4E", "\u2764\uFE0F", "\uD83D\uDE0A", "\uD83D\uDE22", "\uD83D\uDE34",
+    "\uD83D\uDEBD", "\uD83D\uDCA7", "\uD83C\uDFE0", "\uD83D\uDE97", "\uD83C\uDFAE", "\uD83D\uDCDA", "\uD83D\uDC4D", "\uD83D\uDC4E", "\u2753")
+
+/** A quick message: its words, and with [pics] (a device with k14) a picture to show big on its chip. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun QuickDialog(title: String, start: Quick, pics: Boolean, onCancel: () -> Unit, onSave: (String, String) -> Unit) {
+    var text by remember { mutableStateOf(start.text) }
+    var pic by remember { mutableStateOf(start.e) }
+    val clean = TvRules.clean(text, Int.MAX_VALUE)
+    val count = clean.codePointCount(0, clean.length)
+    val max = TvRules.QUICK_TILE
+    val fits = count in 1..max
+    AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = Palette.panel,
+        title = { Text(title, style = Type.big) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Field(text, { v -> text = TvRules.quickEdit(text, v, max) }, "Up to $max letters")
+                Text("$count of $max", style = Type.small.copy(color = if (count > max) Palette.danger else Palette.textMuted), modifier = Modifier.padding(top = 6.dp))
+                if (pics) {
+                    Text("Picture", style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                    androidx.compose.foundation.layout.FlowRow(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        (listOf("") + QUICK_PICS).forEach { e ->
+                            val on = pic == e
+                            Box(Modifier.size(48.dp).clip(Corner).background(if (on) Palette.accentFill else Palette.field)
+                                .border(if (on) 2.dp else 1.dp, if (on) Palette.accent else Palette.lineMuted, Corner)
+                                .clickable(role = Role.RadioButton) { pic = e }
+                                .semantics { contentDescription = if (e.isEmpty()) "No picture" else "Picture $e"; selected = on },
+                                contentAlignment = Alignment.Center) {
+                                if (e.isEmpty()) Text("None", style = Type.small.copy(fontSize = 11.sp)) else Text(e, style = Type.big.copy(fontSize = 22.sp))
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { MButton("Save", kind = Kind.Accent, enabled = fits) { if (fits) onSave(clean, if (KidK14.emojiOk(pic)) pic else "") } },
         dismissButton = { MButton("Cancel", onClick = onCancel) },
     )
 }

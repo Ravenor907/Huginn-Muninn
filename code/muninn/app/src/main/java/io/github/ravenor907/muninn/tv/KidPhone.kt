@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -41,6 +43,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -55,27 +59,33 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -121,6 +131,10 @@ internal object KidPhoneNav {
     var tab by mutableStateOf("chats")
     var filter by mutableStateOf("all")
     var colors by mutableStateOf(false)
+    /** What's typed in each chat's box (chat key to text): it stays while the chat closes (a quiet time, Back, the screen turning). */
+    val drafts = java.util.concurrent.ConcurrentHashMap<String, String>()
+    /** When the last quick message went, from any chip (a burst of taps sends one a moment). */
+    @Volatile var chipAt = 0L
 }
 
 /** The kids' style: rounder cards and rows, rounder bubbles, bigger avatars and touch targets. */
@@ -154,6 +168,24 @@ internal fun applyKidLook(app: Muninn, cfg: TvConfig) {
     prefs.edit().putString(TAKEN, parent.key).apply()
 }
 
+private const val ACCESS_TAKEN = "accessTaken"
+
+/**
+ * k14 (7.18): puts the accessibility a parent picked on (text size, size of everything, high contrast, color vision, less
+ * motion) when it is new here, or always while the kid may not pick their own. Saved the same way Settings › Look saves them.
+ */
+internal fun applyKidAccess(app: Muninn, cfg: TvConfig) {
+    val prefs = app.getSharedPreferences(LOOK_PREFS, Context.MODE_PRIVATE)
+    val a = KidK14.accessToApply(cfg.access, prefs.getString(ACCESS_TAKEN, "") ?: "", cfg.lookPick) ?: return
+    val id = app.identity
+    a.text?.let { v -> val f = v / 100f; Access.text = f; id.textSize = f }
+    a.size?.let { v -> val f = v / 100f; Access.size = f; id.uiSize = f }
+    a.hc?.let { Access.contrast = it; id.highContrast = it }
+    a.cv?.let { Access.colorVision = it; id.colorVision = it }
+    a.still?.let { Access.reduceMotion = it; id.reduceMotion = it }
+    prefs.edit().putString(ACCESS_TAKEN, a.key).apply()
+}
+
 /** Shows and saves [t], the same way Settings › Look does. */
 private fun putKidTheme(app: Muninn, t: KidTheme) {
     Access.look = Looks.of(t.look); Access.season = Seasons.choice(t.season); Access.accent = Accents.choice(t.accent)
@@ -178,7 +210,7 @@ internal fun KidPhone(app: Muninn, cfg: TvConfig, person: TvPerson?, quiet: Quie
                 Box(Modifier.width(1.dp).fillMaxHeight().background(Palette.hairline))
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     if (person != null) key(person.k) { KidTalk(app, cfg, person, wide = true) { TvNav.home() } }
-                    else PickNote()
+                    else PickNote(cfg, quiet)
                 }
             } else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                 Box(Modifier.widthIn(max = COLUMN_MAX).fillMaxSize()) {
@@ -191,12 +223,17 @@ internal fun KidPhone(app: Muninn, cfg: TvConfig, person: TvPerson?, quiet: Quie
     }
 }
 
-/** A tablet with no conversation open. */
+/** A tablet with no conversation open; during a quiet time it says why the chat closed and who the kid can talk to. */
 @Composable
-private fun PickNote() {
+private fun PickNote(cfg: TvConfig, quiet: QuietTime?) {
+    val words = if (quiet == null) "Pick a chat" else {
+        val ns = kidPeople(cfg, quiet).map { it.n }
+        val who = if (ns.size <= 1) ns.firstOrNull() ?: "a parent" else ns.dropLast(1).joinToString(", ") + " and " + ns.last()
+        "${KidRules.quietName(quiet.n)} now. You can talk to $who."
+    }
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        MIcon("chat", Palette.textFaint, 48.dp)
-        Text("Pick a chat", style = Type.normal.copy(color = Palette.textMuted, fontSize = 18.sp), modifier = Modifier.padding(top = 12.dp))
+        MIcon(if (quiet == null) "chat" else "clock", Palette.textFaint, 48.dp)
+        Text(words, style = Type.normal.copy(color = Palette.textMuted, fontSize = 18.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
     }
 }
 
@@ -208,6 +245,7 @@ private fun KidHome(app: Muninn, cfg: TvConfig, quiet: QuietTime?, openKey: Stri
     Column(Modifier.fillMaxSize()) {
         GreetingCard(app, cfg, onParent)
         if (quiet != null) QuietLine(quiet, tv = false, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).fillMaxWidth())
+        HeldList(app, cfg, quiet)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (KidPhoneNav.tab) {
                 "call" -> KidCalls(app, cfg, quiet)
@@ -220,13 +258,43 @@ private fun KidHome(app: Muninn, cfg: TvConfig, quiet: QuietTime?, openKey: Stri
 }
 
 /**
+ * k14: what a quiet time is holding (a voice message or photo the kid finished), each with when it goes and Don't send.
+ */
+@Composable
+private fun HeldList(app: Muninn, cfg: TvConfig, quiet: QuietTime?) {
+    val held by KidHoldStore.list.collectAsState()
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { KidHoldStore.load(app) } }
+    if (held.isEmpty()) return
+    val context = LocalContext.current
+    val h24 = android.text.format.DateFormat.is24HourFormat(context)
+    val groupsAll by app.chat.groups.all.collectAsState()
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+        held.forEach { h ->
+            val who = cfg.contacts.firstOrNull { it.k == h.k }?.n ?: groupsAll[h.k.removePrefix("g:")]?.state?.name ?: "someone"
+            val what = if (h.kind == "voice") "Voice message" else "Photo"
+            val line = "$what to $who. " + (quiet?.let { KidK14.willSend(it, h24) } ?: "Sending soon")
+            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(CARD)).background(Palette.panel).padding(start = 14.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                MIcon(if (h.kind == "voice") "mic" else "image", Palette.accent, 22.dp)
+                Text(line, style = Type.normal.copy(fontSize = 16.sp), maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 10.dp))
+                Box(Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button) { KidHoldStore.cancel(app, h.id) }
+                    .semantics { contentDescription = "Don't send the ${what.lowercase()} to $who" }, contentAlignment = Alignment.Center) {
+                    MIcon("close", Palette.textMuted, 22.dp)
+                }
+            }
+        }
+    }
+}
+
+/**
  * The top card, where Muninn has the raven, its name and Settings: the raven, "Hi, Ava" with a little sparkle, My colors
- * (unless a parent locked it) and "For a parent".
+ * (unless a parent locked it) and "For a parent". The name is the child's name a parent set (k14), never the device's.
  */
 @Composable
 private fun GreetingCard(app: Muninn, cfg: TvConfig, onParent: () -> Unit) {
     val shape = RoundedCornerShape(CARD)
-    val name = cfg.kname.ifEmpty { app.identity.username }
+    val name = cfg.child
     Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp).clip(shape).background(Palette.panel)
         .heightIn(min = 72.dp).padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Image(painterResource(R.drawable.raven_silver), contentDescription = null, modifier = Modifier.size(32.dp))
@@ -318,7 +386,10 @@ private fun KidChatList(app: Muninn, cfg: TvConfig, quiet: QuietTime?, openKey: 
     val byKey = rows.associateBy { it.p.k }
     val unreadKeys = rows.filter { it.unread > 0 }.map { it.p.k }.toSet()
     val ordered = KidUi.order(rows.map { it.p.k }, unreadKeys) { byKey[it]?.last ?: 0L }.mapNotNull { byKey[it] }
-    val chip = KidPhoneNav.filter
+    // The Groups chip only while the device is in a group.
+    val hasGroups = rows.any { KidChats.isGroup(it.p.k) }
+    val chips = KidUi.FILTERS.filter { it.first != "groups" || hasGroups }
+    val chip = KidPhoneNav.filter.takeIf { f -> chips.any { it.first == f } } ?: "all"
     val shown = ordered.filter { KidUi.keeps(chip, it.p.k) }
     // "New from Mom, Dad" over the list: a tap opens the newest; X hides it until the next new message.
     val unreadNewest = ordered.filter { it.unread > 0 }.sortedByDescending { it.last }
@@ -331,7 +402,7 @@ private fun KidChatList(app: Muninn, cfg: TvConfig, quiet: QuietTime?, openKey: 
         item(key = "chips") {
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                KidUi.FILTERS.forEach { (id, label) ->
+                chips.forEach { (id, label) ->
                     io.github.ravenor907.muninn.screens.Chip(label, chip == id, shape = RoundedCornerShape(CARD), minHeight = TOUCH) { KidPhoneNav.filter = id }
                 }
             }
@@ -438,17 +509,21 @@ private fun kidCall(app: Muninn, context: Context, k: String) {
 /**
  * One conversation, Muninn's own: the top bar (back, avatar, name, and Call when a parent allows calls), the messages,
  * and the composer for the chatting level. Quick messages sit behind the smile left of the box; at "Quick messages only"
- * there's no box: the quick messages are the composer, open, with big chips.
+ * there's no box: the quick messages are the composer, open, with big chips. k14: the tray takes a share of the height
+ * (one scrolling row on a phone held sideways), closes while the kid types, and the smile and photo fold into More when
+ * the box would get too narrow. A draft stays when the chat closes; a quiet time holds a finished clip or photo.
  */
 @Composable
 private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val convs by app.chat.conversations.collectAsState()
     val gmsgs by app.chat.groups.messages.collectAsState()
-    // A person's messages, or a group's (someone else's text says who wrote it).
+    // A person's messages, or a group's (someone else's text says who wrote it; members no parent approved are held).
     val msgs = KidChats.msgs(p.k, convs, gmsgs)
     val group = KidChats.isGroup(p.k)
+    val held = KidChats.heldCount(p.k, gmsgs)
+    // k14: another family's Kids' Device whose parents haven't added this one yet.
+    val waiting = p.k in cfg.wait
     val playing by Voice.playing.collectAsState()
     var viewing by remember { mutableStateOf<String?>(null) }
     /** A video playing full screen, or a poll open (their message ids). */
@@ -456,25 +531,36 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
     var poll by remember { mutableStateOf<String?>(null) }
     val openedAt = remember { System.currentTimeMillis() }
     var reading by remember { mutableStateOf<String?>(null) }
-    var text by remember(p.k) { mutableStateOf("") }
+    // The draft lives outside this screen, so a quiet time (or Back, or the screen turning) never loses it.
+    var text by remember(p.k) { mutableStateOf(KidPhoneNav.drafts[p.k] ?: "") }
     var recording by remember { mutableStateOf(false) }
     var sending by remember { mutableStateOf(false) }
+    /** The quick message just sent (its id) and when, so its chip says how it's doing. */
     var sent by remember { mutableStateOf("") }
+    var sentAt by remember { mutableLongStateOf(0L) }
     val mic = remember { TvAudio.hasMic(context) }
     // k11: typing, photos and voice messages only when a parent chose that chatting level.
     val compose = KidUi.compose(cfg.chat, mic)
     var tray by remember(p.k) { mutableStateOf(compose.trayOpen) }
+    /** The box has focus, or the keyboard is up: the tray stays closed meanwhile. */
+    var focused by remember { mutableStateOf(false) }
+    val ime = WindowInsets.isImeVisible
+    /** The folded smile and photo are open (k14: a narrow composer). */
+    var more by remember(p.k) { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
 
+    fun setText(v: String) { text = v; if (v.isEmpty()) KidPhoneNav.drafts.remove(p.k) else KidPhoneNav.drafts[p.k] = v }
     fun micOn() = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     fun finishRecording() {
         if (!recording || sending) return
         sending = true
-        // Not tied to this screen: a clip on its way is still sent if the screen goes.
+        // Not tied to this screen: a clip on its way is still sent (or held by a quiet time) if the screen goes.
         CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             val r = TvRecorder.finish()
             sending = false
             recording = false
-            if (r != null) { KidChats.sendVoice(app, p.k, r.first, r.second); Ui.say("Sent") } else Ui.say(TvWords.TOO_SHORT, true)
+            if (r != null) Ui.say(KidChats.sendOrHold(app, p.k, "voice", r.first, r.second)) else Ui.say(TvWords.TOO_SHORT, true)
         }
     }
     fun cancelRecording() { if (sending) return; if (TvRecorder.recording.value) TvRecorder.cancel(); recording = false }
@@ -485,14 +571,23 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
     }
     fun sendTyped() {
         val t = TvRules.clean(text, 2000)
-        if (t.isNotEmpty()) { KidChats.sendText(app, p.k, t); text = "" }
+        if (t.isNotEmpty()) { KidChats.sendText(app, p.k, t, typed = true); setText("") }
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) scope.launch {
+        // Not tied to this screen either: a photo picked as a quiet time starts is held, not lost.
+        if (uri != null) CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
             val jpeg = withContext(Dispatchers.IO) { Photos.prepare(context, uri, false) }
             if (jpeg == null) Ui.say("That photo can't be sent", true)
-            else { withContext(Dispatchers.IO) { KidChats.sendPhoto(app, p.k, jpeg) }; Ui.say("Sent") }
+            else Ui.say(withContext(Dispatchers.IO) { KidChats.sendOrHold(app, p.k, "photo", jpeg, 0) })
         }
+    }
+    fun pickPhoto() {
+        try { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say(TvWords.ASK_PARENT, true) }
+    }
+    /** The smile: opening the tray puts the keyboard away. */
+    fun toggleTray() {
+        if (!tray) { focusManager.clearFocus(); keyboard?.hide() }
+        tray = !tray
     }
 
     DisposableEffect(p.k) {
@@ -501,7 +596,13 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
         onDispose {
             if (app.openChat == p.k) app.openChat = ""
             TvRecorder.onLimit = null
-            if (TvRecorder.recording.value) TvRecorder.cancel()
+            if (TvRecorder.recording.value && !sending) {
+                // A quiet time closed the chat mid-recording: the clip is finished and held, never lost. Back cancels it.
+                val q = KidTv.quietNow()
+                if (q != null && KidK14.holds(p.k, KidTv.state.value.parents, q)) CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+                    TvRecorder.finish()?.let { r -> Ui.say(KidChats.sendOrHold(app, p.k, "voice", r.first, r.second)) }
+                } else TvRecorder.cancel()
+            }
             Voice.stopPlaying()
             KidSpeak.stop()
         }
@@ -516,60 +617,108 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
             app.chat.photo(newest.photo)?.let { Voice.play(newest.id, it) }
     }
     LaunchedEffect(playing) { while (playing.isNotEmpty()) { Voice.tick(); delay(200) } }
-    LaunchedEffect(sent) { if (sent.isNotEmpty()) { delay(2000); sent = "" } }
+    LaunchedEffect(sent) { if (sent.isNotEmpty()) { delay(2500); sent = "" } }
+    // Typing (the box focused, or the keyboard up) closes the tray; a parent opening typing up closes the big one too.
+    LaunchedEffect(ime, focused) { if (compose.text && (ime || focused)) tray = false }
+    LaunchedEffect(compose.text) { if (compose.text) tray = false }
     BackHandler { onBack() }
 
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 10.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            // A tablet keeps the list beside the conversation, so there's nothing to go back to.
-            if (!wide) IconAction("back", "Back to chats", Palette.text, Modifier.size(TOUCH), size = 26.dp) { onBack() }
-            else Spacer(Modifier.width(12.dp))
-            io.github.ravenor907.muninn.ui.Avatar(p.k, p.n, AVATAR)
-            Text(p.n, style = Type.big.copy(fontSize = 20.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { heading() })
-            if (cfg.calls && !group) Row(Modifier.heightIn(min = TOUCH).clip(RoundedCornerShape(TOUCH / 2)).background(Palette.gold)
-                .clickable(role = Role.Button) { kidCall(app, context, p.k) }.semantics(mergeDescendants = true) { contentDescription = "Call ${p.n}" }
-                .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                MIcon("call", Palette.onGold, 22.dp)
-                Text("Call", style = Type.big.copy(color = Palette.onGold, fontWeight = FontWeight.Bold), modifier = Modifier.padding(start = 8.dp))
-            }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        // The pane's size, taken here once: the rows below use these, never maxWidth or maxHeight in their own scopes.
+        val paneW = maxWidth.value
+        val paneH = maxHeight.value
+        val conf = LocalConfiguration.current
+        val oneRow = KidK14.trayOneRow(conf.screenWidthDp.toFloat(), conf.screenHeightDp.toFloat(),
+            conf.smallestScreenWidthDp >= io.github.ravenor907.muninn.screens.ChatNav.TABLET_SW_DP)
+        val trayMax = KidK14.trayMax(paneH).dp
+        val fontScale = LocalDensity.current.fontScale
+        val callIcon = KidK14.callIconOnly(paneW, fontScale, back = !wide)
+        // The smile and the photo, beside the box; folded into More when the box would get too narrow to type in.
+        val icons = (if (cfg.quick.isNotEmpty()) 1 else 0) + (if (compose.photo) 1 else 0)
+        val fold = compose.text && KidK14.collapse(paneW, icons)
+        val chipState = if (sent.isEmpty()) "" else {
+            val q = cfg.quick.firstOrNull { it.id == sent }
+            val m = q?.let { x -> msgs.lastOrNull { it.mine && it.text == x.text && it.time >= sentAt - 2_000L } }
+            if (m == null) "Sending" else KidK14.sendState(true, m.state, m.failed, waiting).ifEmpty { "Sending" }
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
-        // The newest at the bottom.
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            // A tap on their message reads it out loud, for a child who can't read yet.
-            items(msgs.takeLast(60).asReversed()) { m ->
-                TalkBubble(app, m, playing, onText = { reading = m.id }, onVideo = { video = m.id }, onPoll = { poll = m.id },
-                    speak = { KidSpeak.say(context, m.text) }, corner = BUBBLE) { viewing = m.id }
-            }
-        }
-        // Quick messages: one tap sends, and the chip says Sent for a moment. The composer at "Quick messages only".
-        if (tray || !compose.text) QuickTray(cfg.quick, compose.bigChips, sent) { q ->
-            if (sent != q.id) { KidChats.sendText(app, p.k, q.text); sent = q.id }
-        }
-        if (!compose.text && cfg.quick.isEmpty()) Text("Ask a parent to add quick messages", style = Type.normal.copy(fontSize = 17.sp),
-            textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
-        if (compose.text || compose.photo || compose.voice) Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 10.dp, top = 6.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.Bottom) {
-            if (cfg.quick.isNotEmpty()) RoundIcon("smile", if (tray) "Hide quick messages" else "Quick messages", on = tray) { tray = !tray }
-            if (compose.photo) RoundIcon("image", "Send a photo") {
-                try { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say(TvWords.ASK_PARENT, true) }
-            }
-            if (compose.text) {
-                val shape = RoundedCornerShape(TOUCH / 2)
-                val body = TextStyle(fontFamily = Type.body, fontSize = 17.sp, color = Palette.text)
-                Box(Modifier.weight(1f).padding(horizontal = 6.dp).heightIn(min = TOUCH).clip(shape).background(Palette.field).hcBorder(shape)
-                    .padding(horizontal = 18.dp, vertical = 14.dp), contentAlignment = Alignment.CenterStart) {
-                    if (text.isEmpty()) Text("Type a message", style = body.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    BasicTextField(text, { text = it.take(2000) }, textStyle = body, cursorBrush = SolidColor(Palette.accent), maxLines = 6,
-                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Type a message" })
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 10.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                // A tablet keeps the list beside the conversation, so there's nothing to go back to.
+                if (!wide) IconAction("back", "Back to chats", Palette.text, Modifier.size(TOUCH), size = 26.dp) { onBack() }
+                else Spacer(Modifier.width(12.dp))
+                io.github.ravenor907.muninn.ui.Avatar(p.k, p.n, AVATAR)
+                Text(p.n, style = Type.big.copy(fontSize = 20.sp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp).semantics { heading() })
+                // At a large text size (or a narrow screen) Call is only its icon, so the name keeps its room.
+                if (cfg.calls && !group) {
+                    if (callIcon) Box(Modifier.size(TOUCH).clip(CircleShape).background(Palette.gold).clickable(role = Role.Button) { kidCall(app, context, p.k) }
+                        .semantics { contentDescription = "Call ${p.n}" }, contentAlignment = Alignment.Center) {
+                        MIcon("call", Palette.onGold, 24.dp)
+                    } else Row(Modifier.heightIn(min = TOUCH).clip(RoundedCornerShape(TOUCH / 2)).background(Palette.gold)
+                        .clickable(role = Role.Button) { kidCall(app, context, p.k) }.semantics(mergeDescendants = true) { contentDescription = "Call ${p.n}" }
+                        .padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+                        MIcon("call", Palette.onGold, 22.dp)
+                        Text("Call", style = Type.big.copy(color = Palette.onGold, fontWeight = FontWeight.Bold), maxLines = 1, modifier = Modifier.padding(start = 8.dp))
+                    }
                 }
-            } else Spacer(Modifier.weight(1f))
-            when {
-                compose.text && text.isNotBlank() -> RoundIcon("send", "Send", filled = true) { sendTyped() }
-                compose.voice -> RoundIcon("mic", "Voice message", filled = true) { record() }
-                compose.text -> RoundIcon("send", "Send", filled = true, enabled = false) {}
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.hairline))
+            // The newest at the bottom. The list is measured after the rows below, so it always keeps what they leave.
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), reverseLayout = true, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // A tap on their message reads it out loud, for a child who can't read yet.
+                items(msgs.takeLast(60).asReversed()) { m ->
+                    TalkBubble(app, m, playing, onText = { reading = m.id }, onVideo = { video = m.id }, onPoll = { poll = m.id },
+                        speak = { KidSpeak.say(context, m.text) }, corner = BUBBLE, who = if (group) "" else p.n,
+                        status = KidK14.sendState(m.mine, m.state, m.failed, waiting)) { viewing = m.id }
+                }
+            }
+            if (waiting) TalkNote(KidK14.WAIT_LINE)
+            if (held > 0) TalkNote(KidK14.HELD_LINE)
+            // Quick messages: one tap sends, reads it out loud, and the chip says how it's doing. The composer at "Quick messages only".
+            if (KidK14.trayShown(!compose.text, tray, ime || focused)) QuickTray(cfg.quick, compose.bigChips, sent, chipState, trayMax, oneRow) { q ->
+                val now = System.currentTimeMillis()
+                if (KidK14.chipOk(KidPhoneNav.chipAt, now)) {
+                    KidPhoneNav.chipAt = now
+                    KidChats.sendText(app, p.k, q.text)
+                    sent = q.id
+                    sentAt = now
+                    KidSpeak.say(context, KidK14.spoken(q))
+                }
+            }
+            if (!compose.text && cfg.quick.isEmpty()) Text("Ask a parent to add quick messages", style = Type.normal.copy(fontSize = 17.sp),
+                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
+            // The folded buttons, open: big and labelled, above the box.
+            if (fold && more) Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (cfg.quick.isNotEmpty()) MoreChoice("smile", "Quick messages", Modifier.weight(1f)) { more = false; toggleTray() }
+                if (compose.photo) MoreChoice("image", "Photo", Modifier.weight(1f)) { more = false; pickPhoto() }
+            }
+            if (compose.text || compose.photo || compose.voice) Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 10.dp, top = 6.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.Bottom) {
+                if (fold) RoundIcon("more", "More", on = more, toggle = true) { more = !more }
+                else {
+                    if (cfg.quick.isNotEmpty()) RoundIcon("smile", "Quick messages", on = tray, toggle = true) { toggleTray() }
+                    if (compose.photo) RoundIcon("image", "Send a photo") { pickPhoto() }
+                }
+                if (compose.text) {
+                    val shape = RoundedCornerShape(TOUCH / 2)
+                    val body = TextStyle(fontFamily = Type.body, fontSize = 17.sp, color = Palette.text)
+                    Box(Modifier.weight(1f).padding(horizontal = 6.dp).heightIn(min = TOUCH).clip(shape).background(Palette.field).hcBorder(shape)
+                        .padding(horizontal = 18.dp, vertical = 14.dp), contentAlignment = Alignment.CenterStart) {
+                        if (text.isEmpty()) Text("Type a message", style = body.copy(color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        BasicTextField(text, { setText(it.take(2000)) }, textStyle = body, cursorBrush = SolidColor(Palette.accent),
+                            // At a large text size the box grows to 3 lines at most, so the messages keep room.
+                            maxLines = if (fontScale >= 1.5f) 3 else 6,
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { sendTyped() }),
+                            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }.semantics { contentDescription = "Type a message" })
+                    }
+                } else Spacer(Modifier.weight(1f))
+                when {
+                    compose.text && text.isNotBlank() -> RoundIcon("send", "Send", filled = true) { sendTyped() }
+                    compose.voice -> RoundIcon("mic", "Voice message", filled = true) { record() }
+                    compose.text -> RoundIcon("send", "Send", filled = true, enabled = false) {}
+                }
             }
         }
     }
@@ -598,41 +747,80 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
     }
 }
 
-/** The quick messages as round chips that wrap; [big] at "Quick messages only". Scrolls when there are many. */
+/** A line under the messages: why some don't show, or that a parent still has to say yes. */
 @Composable
-private fun QuickTray(quick: List<Quick>, big: Boolean, sent: String, onSend: (Quick) -> Unit) {
+private fun TalkNote(text: String) {
+    Text(text, style = Type.normal.copy(color = Palette.textMuted, fontSize = 15.sp), textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
+}
+
+/** One of the folded buttons, open: its icon and its name. */
+@Composable
+private fun MoreChoice(icon: String, label: String, modifier: Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(BUBBLE)
+    Row(modifier.heightIn(min = TOUCH).clip(shape).background(Palette.field).hcBorder(shape).clickable(role = Role.Button, onClick = onClick)
+        .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        MIcon(icon, Palette.accent, 24.dp)
+        Text(label, style = Type.big.copy(fontSize = 16.sp), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp))
+    }
+}
+
+/**
+ * The quick messages as round chips; [big] at "Quick messages only". At most [maxH] tall, scrolling inside it; one
+ * scrolling row ([oneRow]) on a phone held sideways. The chip just sent ([sent]) says how it's doing ([state]).
+ */
+@Composable
+private fun QuickTray(quick: List<Quick>, big: Boolean, sent: String, state: String, maxH: Dp, oneRow: Boolean, onSend: (Quick) -> Unit) {
     if (quick.isEmpty()) return
-    FlowRow(Modifier.fillMaxWidth().heightIn(max = if (big) 360.dp else 220.dp).verticalScroll(rememberScrollState())
+    if (oneRow) Row(Modifier.fillMaxWidth().heightIn(max = maxH).horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        quick.forEach { q -> QuickChip(q, big, if (sent == q.id) state else "", oneRow = true) { onSend(q) } }
+    } else FlowRow(Modifier.fillMaxWidth().heightIn(max = maxH).verticalScroll(rememberScrollState())
         .padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        quick.forEach { q ->
-            val done = sent == q.id
-            val shape = RoundedCornerShape(BUBBLE)
-            Row(Modifier.heightIn(min = if (big) 64.dp else 48.dp).then(if (big) Modifier.widthIn(min = 140.dp) else Modifier).clip(shape)
-                .background(if (done) Palette.accentFill else Palette.field).hcBorder(shape)
-                .clickable(role = Role.Button) { onSend(q) }.semantics(mergeDescendants = true) { contentDescription = if (done) "Sent" else q.text }
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                if (done) { MIcon("check", Palette.online, 22.dp); Spacer(Modifier.width(6.dp)) }
-                Text(if (done) "Sent" else q.text, style = Type.big.copy(fontSize = if (big) 19.sp else 16.sp), maxLines = 3, overflow = TextOverflow.Ellipsis)
+        quick.forEach { q -> QuickChip(q, big, if (sent == q.id) state else "", oneRow = false) { onSend(q) } }
+    }
+}
+
+/** One quick message: its picture big (the parent's emoji, or the one it starts with), then its words. */
+@Composable
+private fun QuickChip(q: Quick, big: Boolean, state: String, oneRow: Boolean, onClick: () -> Unit) {
+    val (pic, words) = KidK14.picture(q)
+    val shape = RoundedCornerShape(BUBBLE)
+    val done = state.isNotEmpty()
+    Row(Modifier.heightIn(min = if (big) 64.dp else 48.dp).then(if (big && !oneRow) Modifier.widthIn(min = 140.dp) else Modifier)
+        .then(if (oneRow) Modifier.widthIn(max = 260.dp) else Modifier).clip(shape)
+        .background(if (done) Palette.accentFill else Palette.field).hcBorder(shape)
+        .clickable(role = Role.Button, onClick = onClick).semantics(mergeDescendants = true) { contentDescription = if (done) "$words, $state" else words }
+        .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        if (pic.isNotEmpty()) Text(pic, style = Type.big.copy(fontSize = if (big) 30.sp else 24.sp), maxLines = 1, modifier = Modifier.padding(end = 8.dp))
+        Column {
+            Text(words, style = Type.big.copy(fontSize = if (big) 19.sp else 16.sp), maxLines = if (oneRow) 1 else 3, overflow = TextOverflow.Ellipsis)
+            if (done) Row(verticalAlignment = Alignment.CenterVertically) {
+                if (state == "Sent") { MIcon("check", Palette.online, 16.dp); Spacer(Modifier.width(4.dp)) }
+                Text(state, style = Type.small.copy(color = Palette.textMuted))
             }
         }
     }
 }
 
-/** A 56dp round button: [filled] gold (Send, the mic), [on] lit (the quick messages open), else plain. */
+/**
+ * A 56dp round button: [filled] gold (Send, the mic), [on] lit (the quick messages or More open), else plain. Only a
+ * [toggle] says whether it's open; the others are plain buttons to TalkBack.
+ */
 @Composable
-private fun RoundIcon(icon: String, label: String, filled: Boolean = false, on: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
+private fun RoundIcon(icon: String, label: String, filled: Boolean = false, on: Boolean = false, toggle: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     val bg = when { !enabled -> Palette.panelLow; filled -> Palette.gold; on -> Palette.accentFill; else -> Color.Transparent }
     val tint = when { !enabled -> Palette.textFaint; filled -> Palette.onGold; on -> Palette.accent; else -> Palette.textMuted }
     Box(Modifier.size(TOUCH).clip(CircleShape).background(bg).clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-        .semantics { contentDescription = label; selected = on }, contentAlignment = Alignment.Center) {
+        .semantics { contentDescription = label; if (toggle) stateDescription = if (on) "Open" else "Closed" }, contentAlignment = Alignment.Center) {
         MIcon(icon, tint, 26.dp)
     }
 }
 
 /**
- * My colors: the same Theme, Seasonal and accent choices as Settings › Look, for the kid. Hidden while a parent turned
- * Let the kid choose off (it then closes by itself).
+ * My colors: the same Theme, Seasonal and accent choices as Settings › Look, and its text sizes, for the kid. Hidden while
+ * a parent turned Let the kid choose off (it then closes by itself).
  */
 @Composable
 private fun MyColors(app: Muninn, cfg: TvConfig, onClose: () -> Unit) {
@@ -655,19 +843,31 @@ private fun MyColors(app: Muninn, cfg: TvConfig, onClose: () -> Unit) {
             MButton(n, m, if (now.season == k) Kind.Accent else Kind.Normal) { putKidTheme(app, now.copy(season = k)) }
         }
         Text("Color", style = label, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
-        // Only the colors that suit the Color vision in use, as Settings › Look shows them.
+        // Only the colors that suit the Color vision in use, as Settings › Look shows them; each with its name, so they
+        // can be told apart in high contrast or No color too.
         val names = ColorVision.accents(Access.colorVision)
         FlowRow(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             names.forEach { n ->
                 val on = Palette.accentKey == n
                 val c = Palette.accentOf(n)
                 val title = Accents.TITLES.getOrElse(Accents.NAMES.indexOf(n)) { n }
-                Box(Modifier.size(TOUCH).clip(CircleShape).background(c).border(if (on) 4.dp else 1.dp, if (on) Palette.text else Palette.line, CircleShape)
-                    .clickable(role = Role.RadioButton) { putKidTheme(app, now.copy(accent = n)) }
-                    .semantics { contentDescription = title; selected = on }, contentAlignment = Alignment.Center) {
-                    if (on) MIcon("check", Palette.onAccentOf(c), 26.dp, weight = 2.2f)
+                Column(Modifier.clip(RoundedCornerShape(CARD)).clickable(role = Role.RadioButton) { putKidTheme(app, now.copy(accent = n)) }
+                    .semantics(mergeDescendants = true) { contentDescription = title; selected = on }.padding(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(TOUCH).clip(CircleShape).background(c).border(if (on) 4.dp else 1.dp, if (on) Palette.text else Palette.line, CircleShape),
+                        contentAlignment = Alignment.Center) {
+                        if (on) MIcon("check", Palette.onAccentOf(c), 26.dp, weight = 2.2f)
+                    }
+                    Text(title, style = Type.small.copy(color = if (on) Palette.text else Palette.textMuted), maxLines = 1, modifier = Modifier.padding(top = 4.dp))
                 }
             }
+        }
+        // k14: Muninn's text size, as Settings › Look has it (a parent's pick goes on again when they change it).
+        Text("Text size", style = label, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
+        val sizes = KidK14.TEXT_SIZES
+        ChoiceRow(sizes.size, Modifier.padding(vertical = 6.dp), minWidth = 80.dp) { i, m ->
+            val f = sizes[i] / 100f
+            MButton("${sizes[i]}%", m, if (Access.text == f) Kind.Accent else Kind.Normal) { Access.text = f; app.identity.textSize = f }
         }
         MButton("Done", Modifier.fillMaxWidth().padding(top = 14.dp), Kind.Accent) { onClose() }
     }

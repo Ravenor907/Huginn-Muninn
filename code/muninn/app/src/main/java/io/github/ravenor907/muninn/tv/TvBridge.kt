@@ -37,4 +37,10 @@ interface TvHandler {
 
     /** A group invite, or being put straight into a group (cap m1): a Kids' Device takes it only from one of its parents. */
     fun groupInviteOk(fromKey: String): Boolean = true
+
+    /** k14: a Kids' Device holds messages in group [g] from [fromKey] when no parent put them on its list or approved them there. */
+    fun groupHeld(g: String, fromKey: String): Boolean = false
+
+    /** k14: a message from [fromKey] ([name]) in group [g] ([groupName]) was held: the device's parents are asked. */
+    fun onGroupHeld(g: String, fromKey: String, name: String, groupName: String) {}
 }

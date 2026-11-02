@@ -107,8 +107,8 @@ object KidUi {
     /** The bottom tabs: (id, label). Nothing to add, scan or share: a parent sets everything from their phone. */
     val TABS = listOf("chats" to "Chats", "call" to "Call", "people" to "People")
 
-    /** The filter chips over the chat list: (id, label). Family: the people; Groups: the groups a parent put it in. */
-    val FILTERS = listOf("all" to "All", "family" to "Family", "groups" to "Groups")
+    /** The filter chips over the chat list: (id, label). People: everyone on the list; Groups: the groups a parent put it in. */
+    val FILTERS = listOf("all" to "All", "family" to "People", "groups" to "Groups")
 
     /** The buttons on the greeting card: My colors (unless a parent locked it) and For a parent. */
     val CARD_ACTIONS = listOf("colors" to "My colors", "parent" to "For a parent")
@@ -148,9 +148,12 @@ object KidUi {
     private val MADE_UP = Regex("""Raven \d{4}""")
     private val DEVICE_NAMES = setOf("Kids' Tablet", "Kids' Phone", "Kids' TV", "Kids' Device")
 
-    /** "Hi, Ava"; "Hi there" while the device has no real name yet. */
-    fun greeting(name: String): String {
-        val n = name.trim()
-        return if (n.isEmpty() || n in DEVICE_NAMES || MADE_UP.matches(n)) "Hi there" else "Hi, $n"
+    /**
+     * "Hi, Ava" with the child's name a parent set (k14 "child"); "Hi!" without one. Never the device's name: a name that is
+     * one of the names a device starts with, or a made-up "Raven 1234", greets as "Hi!" too.
+     */
+    fun greeting(child: String): String {
+        val n = child.trim()
+        return if (n.isEmpty() || n in DEVICE_NAMES || MADE_UP.matches(n)) "Hi!" else "Hi, $n"
     }
 }

@@ -154,10 +154,13 @@ class HavamalTest {
         assertNull(set.havh)
         // Kept beside the signed config, so a restart keeps them too.
         assertTrue(KidRules.needsKept(older.raw))
-        // Nothing to keep only once every k11, k12 and k13 field came.
+        // Nothing to keep only once every k11, k12, k13 and k14 field came.
         assertTrue(KidRules.needsKept(cfg(45, TvExtras(chat = 2, hav = true, havw = "b"))))
-        assertFalse(KidRules.needsKept(cfg(45, TvExtras(chat = 2, hav = true, havw = "b", look = "dark", season = "off", accent = "gold",
+        assertTrue(KidRules.needsKept(cfg(45, TvExtras(chat = 2, hav = true, havw = "b", look = "dark", season = "off", accent = "gold",
             lookPick = true, kname = "Ava"))))
+        assertFalse(KidRules.needsKept(cfg(45, TvExtras(chat = 2, hav = true, havw = "b", look = "dark", season = "off", accent = "gold",
+            lookPick = true, kname = "Ava", access = io.github.ravenor907.muninn.tv.KidAccess(100, 100, false, "typical", false), child = "Ava",
+            gok = emptyList(), wait = emptyList()))))
         val saved = JSONObject(KidRules.keptJson(kept).toString())
         val restarted = KidRules.keptIn(TvRules.parse(older.raw), saved)
         assertTrue(restarted.hav)

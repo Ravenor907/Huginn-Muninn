@@ -43,6 +43,10 @@ class Groups(
         fun notice(text: String)
         /** Something arrived in group [g] (for a notification). */
         fun arrived(g: String, title: String, text: String)
+        /** A Kids' Device holds [from]'s messages in [g] (no parent approved them): kept, but not shown, counted or notified. */
+        fun held(g: String, from: String): Boolean = false
+        /** One of those came: the device's parents are asked about [from] ([name]) in [g] ([groupName]). */
+        fun heldBy(g: String, from: String, name: String, groupName: String) {}
         fun deleteBlob(id: String)
         /** Their app said "m1": reactions and edits go to them (shared/docs/protocol.md, section 11). */
         fun hasM1(k: String): Boolean = false
@@ -1235,10 +1239,13 @@ class Groups(
         val m2 = More.ok("gmsg", p)
         addMsg(GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re"),
             poll = if (m2) More.pollOf(p) else null, preview = if (m2) More.previewOf(p) else null))
-        unread.add(g)
-        // My name, a nickname of mine, or @everyone from an admin; the title names the channel too.
-        val where = s.name + (s.channel(chId)?.n?.let { " #$it" } ?: "")
-        host.arrived(g, if (Rich.mentionsMe(text, host.myName, host.mentionNames, s.isAdmin(from))) "$name mentioned you in $where" else "$name in $where", text)
+        if (host.held(g, from)) host.heldBy(g, from, name, s.name)
+        else {
+            unread.add(g)
+            // My name, a nickname of mine, or @everyone from an admin; the title names the channel too.
+            val where = s.name + (s.channel(chId)?.n?.let { " #$it" } ?: "")
+            host.arrived(g, if (Rich.mentionsMe(text, host.myName, host.mentionNames, s.isAdmin(from))) "$name mentioned you in $where" else "$name in $where", text)
+        }
         receipt(from, g, listOf(id), "delivered")
         return 200
     }
@@ -1257,9 +1264,12 @@ class Groups(
         val chId = s.channel(ch)?.takeIf { it.t == "text" }?.id ?: MAIN
         addMsg(GMsg(gid, g, chId, from, name, "", false, now(), photo = blob, voice = voiceMs,
             video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, gif = gif))
-        unread.add(g)
-        // The title names the channel, as for text.
-        host.arrived(g, "$name in ${s.name}" + (s.channel(chId)?.n?.let { " #$it" } ?: ""), when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; gif -> "GIF"; album != null -> "Photos"; else -> "Photo" })
+        if (host.held(g, from)) host.heldBy(g, from, name, s.name)
+        else {
+            unread.add(g)
+            // The title names the channel, as for text.
+            host.arrived(g, "$name in ${s.name}" + (s.channel(chId)?.n?.let { " #$it" } ?: ""), when { voiceMs > 0 -> "Voice message"; videoMs > 0 -> "Video message"; gif -> "GIF"; album != null -> "Photos"; else -> "Photo" })
+        }
         receipt(from, g, listOf(gid), "delivered")
         true
     }
@@ -1274,7 +1284,7 @@ class Groups(
             val e = p.getString("e")
             val all = Rich.react(m.reactions, from, e, ts) ?: return
             edit(g, msg) { it.copy(reactions = all) }
-            if (m.mine && e.isNotEmpty()) host.arrived(g, "${nameIn(grp.state, from, fromName)} in ${grp.state.name}" +
+            if (m.mine && e.isNotEmpty() && !host.held(g, from)) host.arrived(g, "${nameIn(grp.state, from, fromName)} in ${grp.state.name}" +
                 (grp.state.channel(m.ch)?.n?.let { " #$it" } ?: ""), "Reacted $e to your message")
         } else {
             if (m.mine || m.photo.isNotEmpty() || !Rich.editWins(m.from, from, ts, m.edited)) return

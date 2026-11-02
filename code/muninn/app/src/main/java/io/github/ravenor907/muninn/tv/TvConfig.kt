@@ -117,8 +117,11 @@ object TvWords {
     }
 }
 
-/** A parent-defined button on the TV. [id]: 8 random bytes, base64url (11 characters). */
-data class Quick(val id: String, val text: String)
+/**
+ * A parent-defined button on the TV. [id]: 8 random bytes, base64url (11 characters). [e]: k14, the emoji a parent
+ * picked for it ("" for none), shown big on a tablet's or phone's chip.
+ */
+data class Quick(val id: String, val text: String, val e: String = "")
 
 /** Someone the TV may talk to: chat key, name shown on the TV, Nostr mailbox (hex, or empty). */
 data class TvPerson(val k: String, val n: String, val p: String)
@@ -146,6 +149,13 @@ data class TvConfig(
      * the kid may pick their own (absent: yes) and the kid's name for the greeting (absent: none).
      */
     val look: String? = null, val season: String? = null, val accent: String? = null, val lookPick: Boolean = true, val kname: String = "",
+    /**
+     * k14 (7.18): the accessibility a parent set (each null: the device keeps its own), the child's name for the greeting
+     * (absent: none, "Hi!"), the group members a parent approved (group id to chat key), and the other families' Kids'
+     * Devices on the list still waiting for their parents.
+     */
+    val access: KidAccess = KidAccess(), val child: String = "", val gok: List<Pair<String, String>> = emptyList(),
+    val wait: List<String> = emptyList(),
 )
 
 /** The k2 fields (7.5), only put in a config for a TV whose app said "k2". */
@@ -160,7 +170,10 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      val tz: String? = null,
                      /** k13: only for a device whose app said "k13" (null: left out). */
                      val look: String? = null, val season: String? = null, val accent: String? = null,
-                     val lookPick: Boolean? = null, val kname: String? = null)
+                     val lookPick: Boolean? = null, val kname: String? = null,
+                     /** k14: only for a device whose app said "k14" (null: left out). [pics]: quick messages carry their emoji. */
+                     val access: KidAccess? = null, val child: String? = null, val gok: List<Pair<String, String>>? = null,
+                     val wait: List<String>? = null, val pics: Boolean? = null)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -198,7 +211,7 @@ object TvRules {
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz") + KidLook.FIELDS
+    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz") + KidLook.FIELDS + KidK14.FIELDS
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -221,6 +234,8 @@ object TvRules {
         if (c.has("tz")) KidRules.tzIn(c.get("tz"))
         // k13 (7.18): the colors, Let the kid choose and the kid's name.
         KidLook.check(c)
+        // k14 (7.18): accessibility, the child's name, approved group members and other families' devices still waiting.
+        KidK14.check(c)
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -233,7 +248,9 @@ object TvRules {
         val ids = qs.map { it.opt("id") }
         require(ids.distinct().size == ids.size) { "quick ids" }
         for (q in qs) {
-            require(Canon.keys(q) == setOf("id", "text") && quickIdOk(q.get("id"))) { "quick fields" }
+            // k14: "e", an emoji a parent picked for it.
+            val qk = Canon.keys(q)
+            require((qk == setOf("id", "text") || (qk == setOf("id", "text", "e") && KidK14.emojiOk(q.get("e")))) && quickIdOk(q.get("id"))) { "quick fields" }
             Canon.text(q.get("text"), MAX_QUICK_TEXT)
             require(q.getString("text").isNotBlank()) { "empty quick message" }
         }
@@ -286,9 +303,9 @@ object TvRules {
         val q = c.getJSONArray("quick")
         val p = c.getJSONArray("contacts")
         val ps = c.getJSONArray("parents")
-        return TvConfig(
+        return KidK14.parse(c, TvConfig(
             c.getString("tv"), c.getLong("v"), c.getString("by"), (0 until ps.length()).map { ps.getString(it) },
-            (0 until q.length()).map { q.getJSONObject(it).let { o -> Quick(o.getString("id"), o.getString("text")) } },
+            (0 until q.length()).map { q.getJSONObject(it).let { o -> Quick(o.getString("id"), o.getString("text"), if (o.has("e")) o.getString("e") else "") } },
             (0 until p.length()).map { p.getJSONObject(it).let { o -> TvPerson(o.getString("k"), o.getString("n"), o.getString("p")) } },
             c.getBoolean("dictation"), c.getLong("ts"), c,
             c.optBoolean("calls", true), if (c.has("mic")) c.getInt("mic") else DEFAULT_MIC,
@@ -307,7 +324,7 @@ object TvRules {
             accent = if (c.has("accent")) c.getString("accent") else null,
             lookPick = c.optBoolean("lookpick", true),
             kname = if (c.has("kname")) c.getString("kname") else "",
-        )
+        ))
     }
 
     /** A signed config from a parent's app. Sorts [parents] and [contacts] the way [check] wants them. */
@@ -315,7 +332,9 @@ object TvRules {
                contacts: List<TvPerson>, dictation: Boolean, ts: Long, extras: TvExtras? = null): JSONObject {
         val o = JSONObject().put("tv", tv).put("v", v).put("by", by)
             .put("parents", JSONArray().apply { (parents + by).distinct().sorted().forEach { put(it) } })
-            .put("quick", JSONArray().apply { quick.forEach { put(JSONObject().put("id", it.id).put("text", it.text)) } })
+            // k14: each quick message's emoji, only for a device whose app takes it.
+            .put("quick", JSONArray().apply { quick.forEach { q -> put(JSONObject().put("id", q.id).put("text", q.text)
+                .apply { if (extras?.pics == true && KidK14.emojiOk(q.e)) put("e", q.e) }) } })
             .put("contacts", JSONArray().apply { contacts.distinctBy { it.k }.sortedBy { it.k }.forEach { put(JSONObject().put("k", it.k).put("n", it.n).put("p", it.p)) } })
             .put("dictation", dictation).put("ts", ts)
         extras?.let { o.put("calls", it.calls).put("mic", it.mic.coerceIn(0, MAX_MIC)); it.nr?.let { n -> o.put("nr", n.coerceIn(NR_NONE, NR_BOTH)) }; it.upd?.let { u -> o.put("upd", u) }; it.keep?.let { d -> o.put("keep", d.coerceIn(MIN_KEEP, MAX_KEEP)) }
@@ -332,7 +351,9 @@ object TvRules {
             it.season?.takeIf { l -> Regex("[a-z]{1,16}").matches(l) }?.let { l -> o.put("season", l) }
             it.accent?.let { a -> o.put("accent", KidLook.accentOut(a)) }
             it.lookPick?.let { k -> o.put("lookpick", k) }
-            it.kname?.let { n -> clean(n, MAX_NAME).takeIf { x -> x.isNotEmpty() }?.let { x -> o.put("kname", x) } } }
+            it.kname?.let { n -> clean(n, MAX_NAME).takeIf { x -> x.isNotEmpty() }?.let { x -> o.put("kname", x) } }
+            // k14: accessibility, the child's name, approved group members and other families' devices still waiting.
+            KidK14.putInto(o, it) }
         return Canon.sign(priv, CONFIG, o)
     }
 

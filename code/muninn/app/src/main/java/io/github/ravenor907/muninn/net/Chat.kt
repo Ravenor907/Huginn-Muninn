@@ -2625,6 +2625,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         override fun notice(text: String) { notices.tryEmit(text) }
         // Same flow as private messages, keyed "g:<group id>": the notification opens the group.
         override fun arrived(g: String, title: String, text: String) { arrivals.tryEmit(Triple(title, text, Folders.groupKey(g))) }
+        // k14: a Kids' Device holds group members no parent approved, and asks its parents about them.
+        override fun held(g: String, from: String) = tvHandler?.groupHeld(g, from) == true
+        override fun heldBy(g: String, from: String, name: String, groupName: String) { tvHandler?.onGroupHeld(g, from, name, groupName) }
         override fun deleteBlob(id: String) { File(photosDir, id).delete() }
         override fun hasM1(k: String) = this@Chat.hasM1(k)
         override fun hasM2(k: String) = this@Chat.hasM2(k)
