@@ -663,6 +663,8 @@ Window {
             if (ctxMenu.isField(f)) { f.selectAll(); ctxMenu.forField(f, -1, -1, true) }
         } else if (what === "space" && p && typeof p.spaceMenu === "function")
             at(left, app.height - Theme.px(220), () => p.spaceMenu(false))
+        else if (what === "call" && p && typeof p.callMenu === "function")
+            Qt.callLater(() => p.callMenu())   // after the header has laid out its buttons
     }
     // Size of everything, like a web browser's zoom; saved at once.
     readonly property var sizes: [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200]
@@ -1529,7 +1531,7 @@ Window {
             { page: "dms", zone: "messages", transfers: true, file: "49-transfers" },
             { page: "g:tour-crew", zone: "messages", chatFiles: true, file: "50-files-section" },
             // Right-click menus, each where a right click opens it: a person (with Mute open beside it), a group on the rail,
-            // a folder, a message, a member, Settings on the rail, a text box, and the empty list.
+            // a folder, a message, a member, Settings on the rail, a text box, the empty list, and a group's Call popup.
             { page: "dms", folders: true, ctx: "person", file: "70-menu-person" },
             { page: "dms", ctx: "group", file: "71-menu-group" },
             { page: "dms", folders: true, ctx: "folder", file: "72-menu-folder" },
@@ -1538,6 +1540,8 @@ Window {
             { page: "dms", ctx: "settings", file: "75-menu-settings" },
             { page: "dms", ctx: "field", file: "76-menu-text" },
             { page: "dms", ctx: "space", small: true, file: "77-menu-empty-list" },
+            // A group's one Call button, its popup open: Call everyone, Call some people and Join voice for each room.
+            { page: "g:tour-crew", zone: "messages", ctx: "call", file: "78-menu-call" },
             // Settings › Backup: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
             { page: "settings", section: "backup", backup: "what", file: "80-backup" },
             { page: "settings", section: "backup", backup: "password", file: "81-backup-password" },

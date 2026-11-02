@@ -71,8 +71,9 @@ Rectangle {
     readonly property bool tinted: Theme.validColor(chatColor)
     // The conversation header's buttons for a controller (Up from the first message): Call, Video and the menu.
     property int headSel: 0
-    readonly property var headButtons: openKey === "" || locked ? [] : ["call"].concat(Calls.canVideo(openKey) ? ["video"] : []).concat(tour ? [] : ["mute"]).concat(["find"]).concat(["menu"])
-    // The open chat is muted (its header's bell, struck through).
+    // The header's buttons: Call (Voice call and Video call in its popup), Find and the menu. Mute is in the menu.
+    readonly property var headButtons: openKey === "" || locked ? [] : ["call", "find", "menu"]
+    // The open chat is muted (said in the header's subtitle; Mute is in the menu).
     readonly property bool openMuted: openKey !== "" && !tour && !locked && (Chat.chats, Chat.isMuted(openKey))
     // Find in this chat (the search icon or Ctrl+F).
     function openFind() { if (picked && !locked) { zone = "messages"; sel = -1; finder.open() } }
@@ -166,8 +167,7 @@ Rectangle {
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
         : typingIn ? [{ key: "a", label: "Send" }, { key: "y", label: "Keyboard" }, { key: "lt", label: "Options" }, { key: "b", label: "Done" }]
-        : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "video" ? "Video" : headButtons[headSel] === "menu" ? "Menu"
-                                                                                  : headButtons[headSel] === "mute" ? (openMuted ? "Unmute notifications" : "Mute notifications")
+        : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "menu" ? "Menu"
                                                                                   : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
@@ -641,38 +641,16 @@ Rectangle {
                       .concat([page.keyWarning ? "Security key changed" : (Chat.chats, Chat.isVerified(page.openKey)) ? "Verified" : "Not verified"]).join(" · ")
             warn: !page.locked && page.picked && page.keyWarning
             accent: page.tinted && page.picked ? page.tint : "transparent"
-            // Name, Call, Video (when they can) and the person's one menu.
+            // Name, one Call button (Voice call and Video call in its popup), Find and the person's one menu.
+            // Mute is in the menu, so the name keeps its room.
             HButton {
+                id: callBtn
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !page.locked && page.openKey !== ""
                 text: "Call"
                 implicitHeight: Theme.px(30); fontSize: 13; kind: page.tinted ? "accent" : "plain"; accent: page.tint
                 focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "call"
-                onClicked: page.startCall()
-            }
-            HButton {
-                anchors.verticalCenter: parent.verticalCenter
-                visible: !page.locked && page.openKey !== "" && Calls.canVideo(page.openKey)
-                text: "Video"
-                implicitHeight: Theme.px(30); fontSize: 13; kind: page.tinted ? "accent" : "plain"; accent: page.tint
-                focused: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "video"
-                onClicked: page.startVideo()
-            }
-            // Mute this chat (15 minutes to until turned back on), or unmute it: a bell, struck through while muted.
-            Rectangle {
-                visible: !page.locked && page.openKey !== "" && !page.tour
-                anchors.verticalCenter: parent.verticalCenter
-                width: Theme.px(28); height: width
-                radius: Theme.radius
-                color: muteHover.hovered ? Theme.raised : "transparent"
-                border.width: page.zone === "head" && page.pad && page.headButtons[page.headSel] === "mute" ? Theme.focusWidth : 0
-                border.color: Theme.text
-                Accessible.role: Accessible.Button
-                Accessible.name: page.openMuted ? "Unmute notifications for " + page.openName : "Mute notifications for " + page.openName
-                Accessible.onPressAction: page.muteOpen()
-                Icon { anchors.centerIn: parent; name: page.openMuted ? "belloff" : "bell"; size: Theme.px(18); color: page.openMuted ? Theme.accent : muteHover.hovered ? Theme.text : Theme.textMuted }
-                HoverHandler { id: muteHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: page.muteOpen() }
+                onClicked: page.callMenu()
             }
             // Find in this chat (Ctrl+F too).
             Rectangle {
@@ -1438,8 +1416,6 @@ Rectangle {
         PeopleActions.contactMenu(k, openName, { tour: tour, inChat: true, section: e ? e.section : "", keys: e ? sectionKeys(e.section) : [], removed: () => page.closeChatWith(k) })
     }
     function closeChatWith(k) { if (openKey === k) { openKey = ""; picked = false; zone = "list" } }
-    // The header's bell: mute the open chat (asks how long), or unmute it.
-    function muteOpen() { if (openKey !== "" && !tour) PeopleActions.muteMenu(openKey, openName) }
     function checkCode(k) { PeopleActions.checkCode(k) }
     function startCall() {
         const w = Calls.call(openKey)
@@ -1448,6 +1424,16 @@ Rectangle {
     function startVideo() {
         const w = Calls.callVideo(openKey)
         if (w !== "") Ui.say(w, true)
+    }
+    // The header's Call button: a small popup under it with Voice call and, when they can take one, Video call
+    // (a Kids' TV has no video, so only Voice call).
+    function callMenu() {
+        if (openKey === "" || locked) return
+        const items = [{ name: "Voice call", icon: "call", url: "voice" }]
+        if (Calls.canVideo(openKey)) items.push({ name: "Video call", icon: "video", url: "video" })
+        Ui.menuAt(callBtn, 0, callBtn.height, () => Ui.pickFrom("", [{ header: "", items: items }], a => {
+            if (a === "video") page.startVideo(); else page.startCall()
+        }))
     }
     // The header's buttons with a controller: Left and Right pick, A presses, Down or B goes back to the messages.
     function headButton(b) {
@@ -1459,7 +1445,7 @@ Rectangle {
         case "a": {
             const w = headButtons[Math.min(headSel, n - 1)]
             zone = "messages"
-            if (w === "call") startCall(); else if (w === "video") startVideo(); else if (w === "find") openFind(); else if (w === "mute") muteOpen(); else chatMenu()
+            if (w === "call") callMenu(); else if (w === "find") openFind(); else chatMenu()
             return true
         }
         case "down": case "b": zone = "messages"; return true

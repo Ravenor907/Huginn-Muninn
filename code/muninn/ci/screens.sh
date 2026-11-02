@@ -43,6 +43,8 @@ shot add-someone --es chat add
 # Groups: a group conversation (channel chips, sender names) and its settings (members, channels, folders).
 shot group --ez group true
 shot group-settings --ez group true --ez gsettings true
+# The group's one Call button, its popup open (Join voice for the CI group's voice room).
+shot group-call --ez group true --ez callpick true
 # Voice: the join sheet (mic and sound choice), and a room with a shared screen (made up: no sound, nothing sent).
 shot room-join --ez roomjoin true
 shot room --ez room true

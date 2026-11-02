@@ -180,6 +180,8 @@ object ChatNav {
     var back by mutableStateOf("")
     /** A group whose "Pick people" call list is open, "" for none. */
     var callSome by mutableStateOf("")
+    /** Test builds only: open the conversation's Call popup once it shows. */
+    var callPick by mutableStateOf(false)
     /** Who New group starts with picked (Start a group, from a person's menu). */
     var groupWith by mutableStateOf(setOf<String>())
     /**
@@ -813,8 +815,9 @@ private fun ArchivedScreen(app: Muninn) {
 }
 
 /**
- * A conversation's slim top bar: back, avatar, name and one short status line, then [actions] and the three dots.
- * Tapping the name or the dots opens the chat's menu ([onMenu]); null: no menu.
+ * A conversation's slim top bar: back, avatar, name and one short status line, then [actions] (at most the Call
+ * button, so the name keeps its room) and the three dots. Tapping the name or the dots opens the chat's menu
+ * ([onMenu]); null: no menu.
  */
 @Composable
 private fun ThreadBar(name: String, status: String, statusIcon: String, statusTint: Color, avatar: @Composable () -> Unit,
@@ -1059,18 +1062,16 @@ private fun Conversation(app: Muninn, key: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(name, status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(key, name, 40.dp, active = activeNow) }, actions = {
-            // Someone met close by can be called too while on the same Wi-Fi.
+            // One Call button; Mute is in the menu. Someone met close by can be called too while on the same Wi-Fi.
             if (c != null || io.github.ravenor907.muninn.net.call.CallManager.canCall(key)) {
                 val callable = io.github.ravenor907.muninn.net.call.CallManager.canCall(key)
-                IconAction("call", if (callable) "Call $name" else "Calling needs an update", if (callable) Palette.text else Palette.textSoft) {
-                    if (callable) io.github.ravenor907.muninn.screens.CallActivity.call(context, key)
-                    else Ui.say("$name needs an update for calls.")
-                }
-                // Video calls: both apps must speak c2 (shared/docs/protocol.md 5.8.5).
-                if (callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key))
-                    IconAction("video", "Video call $name", Palette.text) { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) }
+                // Video calls: both apps must speak c2 (shared/docs/protocol.md 5.8.5). A Kids' TV has no video, so only Voice call.
+                val video = callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key)
+                val choices = if (!callable) emptyList() else listOfNotNull(
+                    CallChoice("call", "Voice call") { io.github.ravenor907.muninn.screens.CallActivity.call(context, key) },
+                    if (video) CallChoice("video", "Video call") { io.github.ravenor907.muninn.screens.CallActivity.call(context, key, video = true) } else null)
+                CallButton(if (callable) "Call $name" else "Calling needs an update", choices, "$name needs an update for calls.")
             }
-            MuteAction(app, key, name)
         }, onMenu = { ChatNav.menuGroup = ""; ChatNav.hold = key })
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
@@ -1755,19 +1756,32 @@ private fun RequestsScreen(app: Muninn, back: () -> Unit) {
     }
 }
 
-/** Mute notifications from a chat: for a while, or until turned back on. Only on this phone. */
-/** The chat header's Mute button: a speaker, struck through while muted (a tap then unmutes). */
+/** One choice under a chat header's Call button. */
+private class CallChoice(val icon: String, val text: String, val go: () -> Unit)
+
+/**
+ * A chat header's one Call button. A tap shows [choices] in a small popup under it (Voice call and Video call,
+ * or a group's Call everyone and Join voice). No choices: [unavailable] is said instead, and the button is dimmed.
+ */
 @Composable
-private fun MuteAction(app: Muninn, key: String, name: String) {
-    val flags by app.chat.flags.all.collectAsState()
-    var asking by remember(key) { mutableStateOf(false) }
-    val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
-    IconAction(if (muted) "mute" else "sound", if (muted) "Unmute notifications for $name" else "Mute notifications for $name", if (muted) Palette.accent else Palette.text) {
-        if (muted) { app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else asking = true
+private fun CallButton(label: String, choices: List<CallChoice>, unavailable: String = "") {
+    var open by remember { mutableStateOf(false) }
+    // CI: the screenshot of the open popup.
+    LaunchedEffect(ChatNav.callPick, choices.size) { if (ChatNav.callPick && choices.isNotEmpty()) { ChatNav.callPick = false; open = true } }
+    Box {
+        IconAction("call", label, if (choices.isEmpty()) Palette.textSoft else Palette.text) {
+            if (choices.isEmpty()) { if (unavailable.isNotEmpty()) Ui.say(unavailable) } else open = true
+        }
+        DropdownMenu(expanded = open && choices.isNotEmpty(), onDismissRequest = { open = false }) {
+            choices.forEach { c ->
+                DropdownMenuItem(text = { Text(c.text, style = Type.normal.copy(color = Palette.text), maxLines = 1) },
+                    onClick = { open = false; c.go() }, leadingIcon = { MIcon(c.icon, Palette.accent, 20.dp) })
+            }
+        }
     }
-    if (asking) MuteDialog(app, key, name) { asking = false }
 }
 
+/** Mute notifications from a chat: for a while, or until turned back on. Only on this phone. */
 @Composable
 internal fun MuteDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
     val flags = io.github.ravenor907.muninn.net.ChatFlags
@@ -2234,7 +2248,25 @@ private fun GroupConversation(app: Muninn, g: String) {
     Column(Modifier.fillMaxSize().imePadding()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
             "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted · ${io.github.ravenor907.muninn.net.Limits.groupDays(s)} days", "shield", Palette.online,
-            { GroupAvatar(s.name, otherMembers, 40.dp) }, actions = { MuteAction(app, key, s.name) }, onMenu = { ChatNav.menuGroup = ""; ChatNav.hold = key })
+            { GroupAvatar(s.name, otherMembers, 40.dp) }, actions = {
+                // One Call button, like a person's; Mute is in the menu.
+                if (!grp.readOnly) {
+                    RoomManager.presence.collectAsState().value   // re-reads the group's calls when they change
+                    val rooms = s.channels.filter { it.t == "voice" }.map { it.id to it.n } +
+                        RoomManager.groupCalls(g).map { (id, _) -> id to "Group call" }
+                    val choices = buildList {
+                        // Rings every member, so it asks first. To just talk, there are voice rooms.
+                        if (s.members.size > 1) add(CallChoice("call", "Call everyone") {
+                            val n = s.members.size - 1
+                            Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To just talk, join a voice room.", "Ring everyone",
+                                extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
+                                onConfirm = { RoomActivity.call(context, g, emptyList()) }))
+                        })
+                        rooms.forEach { (id, n) -> add(CallChoice("audio", if (rooms.size == 1) "Join voice" else "Join voice · $n") { RoomActivity.join(context, g, id) }) }
+                    }
+                    if (choices.isNotEmpty()) CallButton("Call ${s.name}", choices)
+                }
+            }, onMenu = { ChatNav.menuGroup = ""; ChatNav.hold = key })
         if (searching) ChatSearchBar(query, { query = it; matchAt = 0 }, matches.size, matchAt,
             onPrev = { if (matches.isNotEmpty()) matchAt = (matchAt + 1) % matches.size },
             onNext = { if (matches.isNotEmpty()) matchAt = (matchAt - 1 + matches.size) % matches.size }) { searching = false; query = "" }

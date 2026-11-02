@@ -55,8 +55,8 @@ the power button (lock or close). LB steps through them. Calls show in their cha
 | Settings | Open, or change the highlighted row | | |
 
 While Y is held in a chat the voice message records, and the legend says "Let go: send" and "B: cancel": letting go
-of Y sends it, B throws it away. Up from the first message in a chat reaches its header: Left and Right pick Call,
-Video (when they can take video) or the menu, A presses it, Down or B goes back to the messages.
+of Y sends it, B throws it away. Up from the first message in a chat reaches its header: Left and Right pick Call
+(Voice call, and Video call when they can take video), Find or the menu, A presses it, Down or B goes back to the messages.
 
 A phone's chats on this device (Settings › Linked devices): Up and Down pick a chat, A writes through the phone, Right
 goes into its messages (Up and Down pick one, A plays a voice message or saves a photo, video or file, or retries one

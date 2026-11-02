@@ -190,6 +190,7 @@ class MainActivity : ComponentActivity() {
         if (ciSkip) intent?.getStringExtra("folder")?.let { SettingsNav.folder = it }   // CI: a Settings page
         if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: a person's three-dot menu
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
+        if (ciSkip && intent?.getBooleanExtra("callpick", false) == true) io.github.ravenor907.muninn.screens.ChatNav.callPick = true   // CI: the Call popup
         if (ciSkip && intent?.getBooleanExtra("room", false) == true && app.ready.value) ciRoom(false)   // CI: the voice room screen
         if (ciSkip && intent?.getBooleanExtra("roomjoin", false) == true && app.ready.value) ciRoom(true)   // CI: the join sheet
         if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs

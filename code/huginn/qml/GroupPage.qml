@@ -118,6 +118,29 @@ Rectangle {
         add("voice", voice.length ? "VOICE" : "Voice rooms: talk here", voice)
         return out
     }
+    // The header's Call button: Call everyone (and Call some people) when there's anyone to ring, then Join voice for each
+    // voice room and group call going on. Nothing applies: no button.
+    readonly property var callChoices: {
+        if (locked || !exists || readOnly) return []
+        const out = []
+        if (isTour || info.count > 1) {
+            out.push({ name: "Call everyone", icon: "call", detail: "Rings every member", url: "callall" })
+            if (isTour || info.count > 2) out.push({ name: "Call some people", icon: "call", url: "callsome" })
+        }
+        const rooms = channels.filter(c => c.type === "voice").map(c => ({ id: c.id, name: c.name }))
+        const calls = isTour ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
+        calls.forEach(c => rooms.push({ id: c.ch, name: "Group call" }))
+        rooms.forEach(r => out.push({ name: rooms.length === 1 ? "Join voice" : "Join voice · " + r.name, icon: "speaker", url: "join:" + r.id, room: r }))
+        return out
+    }
+    function callMenu() {
+        const list = callChoices
+        if (!list.length) return
+        Ui.menuAt(groupCallBtn, 0, groupCallBtn.height, () => Ui.pickFrom("", [{ header: "", items: list }], a => {
+            const c = list.find(x => x.url === a)
+            if (c && c.room) page.roomAction(c.room); else page.groupAction(a)
+        }))
+    }
     // Who's in a voice room or group call right now: [{name, speaking}] (the tour shows how it looks).
     function roomPeople(id) {
         if (isTour) return id === "l" ? [{ name: "Bjorn" }, { name: "Jake", speaking: true }, { name: "Sam" }] : []
@@ -441,6 +464,15 @@ Rectangle {
             glyph: page.locked || !page.exists ? "" : "#"
             title: page.locked || !page.exists ? "" : page.channel.name
             subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only" : (page.info.name || "")
+            // One Call button, like a person's: Call everyone and Join voice (whichever apply) in its popup.
+            HButton {
+                id: groupCallBtn
+                anchors.verticalCenter: parent.verticalCenter
+                visible: page.callChoices.length > 0
+                text: "Call"
+                implicitHeight: Theme.px(30); fontSize: 13; kind: "plain"
+                onClicked: page.callMenu()
+            }
             // Find in this channel (Ctrl+F too).
             Rectangle {
                 visible: !page.locked && page.exists
