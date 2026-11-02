@@ -97,6 +97,20 @@ void TalkKey::clearPad()
     Q_EMIT changed();
 }
 
+void TalkKey::setPadConnected(bool connected)
+{
+    if (connected == m_padConnected)
+        return;
+    m_padConnected = connected;
+    // The controller went away: its talk button can't be seen going up, so let go.
+    if (!connected && m_padDown) {
+        m_padDown = false;
+        m_padTook = false;
+        m_rooms->setTalking(m_down);
+    }
+    Q_EMIT changed();
+}
+
 void TalkKey::clearKey()
 {
     if (m_key == 0)
@@ -120,13 +134,19 @@ bool TalkKey::pad(const QString &button, bool down)
             stopCapture();
             return true;
         }
-        // A back paddle and LT have no other job of their own (X opens the options too). Y and LB can be picked, but in a
-        // voice room they talk instead (Settings says so, and LB with Up or Down still mutes and deafens there). A, B, X,
-        // the D-pad, Start and View, the sticks, and RB and RT (the stick pointer's clicks) can't be used: wait for another.
+        // A back paddle has no other job. LT opens the options, which X opens too, so it can talk in a voice room (the
+        // legend then shows X for them). Y and LB can be picked, but in a voice room they talk instead (Settings says so,
+        // and LB with Up or Down still mutes and deafens there). A, B, X, the D-pad, Start and View, the sticks, and RB
+        // and RT (the stick pointer's clicks) can't be used: wait for another. Settings says why (not for the D-pad,
+        // which repeats).
         static const QStringList usable{QStringLiteral("lt"), QStringLiteral("p1"), QStringLiteral("p2"), QStringLiteral("p3"),
                                         QStringLiteral("p4"), QStringLiteral("y"), QStringLiteral("lb")};
-        if (!usable.contains(button))
+        static const QStringList dpad{QStringLiteral("up"), QStringLiteral("down"), QStringLiteral("left"), QStringLiteral("right")};
+        if (!usable.contains(button)) {
+            if (!dpad.contains(button))
+                Q_EMIT padRefused(button);
             return true;
+        }
         m_pad = button;
         Settings::store().setValue(QStringLiteral("talkPad"), button);
         stopCapture();

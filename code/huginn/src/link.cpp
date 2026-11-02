@@ -49,12 +49,17 @@ bool kindOk(const QString &k)
 {
     return k == QLatin1String("photo") || k == QLatin1String("voice") || k == QLatin1String("video") || k == QLatin1String("file");
 }
-// The plain "linked to a phone" note beside the vault (Link::linkedWhileLocked).
+// The plain "linked to a phone" note beside the vault (Link::linkedWhileLocked). Only there while linked: Unlink
+// removes it, so it never says a PC was linked once.
 void notePhone(bool linked)
 {
     QSettings s = Settings::store();
-    if (s.value(QStringLiteral("link/phone"), false).toBool() != linked)
-        s.setValue(QStringLiteral("link/phone"), linked);
+    if (linked) {
+        if (!s.value(QStringLiteral("link/phone"), false).toBool())
+            s.setValue(QStringLiteral("link/phone"), true);
+    } else if (s.contains(QStringLiteral("link/phone"))) {
+        s.remove(QStringLiteral("link/phone"));
+    }
 }
 }
 

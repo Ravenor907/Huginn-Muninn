@@ -986,6 +986,23 @@ const int kMaxName = 4096;
 // Huginn's own chat settings (name, public key, inbox) ride along under this name; Muninn skips it.
 const QString kSettingsEntry = QStringLiteral("huginn-settings.dat");
 const QStringList kSettingsGroups{QStringLiteral("chat"), QStringLiteral("nostr")};
+// The plain "linked to a phone" note (Link::linkedWhileLocked) for what was just put back: set from the restored
+// link.json (a phone there that isn't gone), so the next "Forgot it?" shows the right way back.
+void noteLinkedFrom(const std::vector<std::pair<QString, QByteArray>> &files)
+{
+    bool linked = false;
+    for (const auto &e : files) {
+        if (e.first != QLatin1String("link.json"))
+            continue;
+        const QJsonObject phone = QJsonDocument::fromJson(e.second).object().value(QStringLiteral("phone")).toObject();
+        linked = !phone.value(QStringLiteral("k")).toString().isEmpty() && !phone.value(QStringLiteral("gone")).toBool();
+    }
+    if (linked)
+        settings().setValue(QStringLiteral("link/phone"), true);
+    else
+        settings().remove(QStringLiteral("link/phone"));
+    settings().sync();
+}
 // v3 backups, what both apps write: scrypt with 64 MiB and two lanes (Muninn has no Argon2id), and the tag covers the
 // header too. "@about.json" says which app and device made it; "@move.json" is the shared form (Move).
 const quint64 kBackupN = 65536, kBackupR = 8, kBackupP = 2;
@@ -1158,6 +1175,7 @@ bool Vault::takeEverything(const Files &files, QString *error)
     for (const auto &e : files)
         if (e.first == kSettingsEntry)
             applySettingsBlob(e.second);
+    noteLinkedFrom(files);
     m_key.fill(0);
     m_key.clear();
     m_restarting = true;
@@ -1659,6 +1677,7 @@ void Vault::restoreOpened()
     for (const auto &e : files)
         if (e.first == kSettingsEntry)
             applySettingsBlob(e.second);
+    noteLinkedFrom(files);
     for (auto &e : files)
         e.second.fill(0);
     forgetOpened();
@@ -1742,6 +1761,7 @@ void Vault::restoreErasing()
     for (const auto &e : files)
         if (e.first == kSettingsEntry)
             applySettingsBlob(e.second);
+    noteLinkedFrom(files);
     for (auto &e : files)
         e.second.fill(0);
     forgetOpened();

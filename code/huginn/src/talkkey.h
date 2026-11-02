@@ -24,6 +24,10 @@ class TalkKey : public QObject
     Q_PROPERTY(bool keyTypes READ keyTypes NOTIFY changed)
     // A key or a controller button is picked. None yet (a new install): voice activity until one is.
     Q_PROPERTY(bool hasKey READ hasKey NOTIFY changed)
+    // Only a controller button is picked and no controller is connected: voice activity until one is (main.cpp).
+    Q_PROPERTY(bool padAway READ padAway NOTIFY changed)
+    // Something can talk right now: a keyboard key, or the controller button with a controller connected.
+    Q_PROPERTY(bool canTalk READ canTalk NOTIFY changed)
     // The controller's talk button ("rb", "" for none), and its name to show ("RB").
     Q_PROPERTY(QString padButton READ padButton NOTIFY changed)
     Q_PROPERTY(QString padName READ padName NOTIFY changed)
@@ -38,6 +42,10 @@ public:
     bool capturing() const { return m_capturing; }
     bool keyTypes() const;
     bool hasKey() const { return m_key != 0 || !m_pad.isEmpty(); }
+    bool padAway() const { return m_key == 0 && !m_pad.isEmpty() && !m_padConnected; }
+    bool canTalk() const { return m_key != 0 || (!m_pad.isEmpty() && m_padConnected); }
+    // A controller connected or not (main.cpp follows Gamepad).
+    void setPadConnected(bool connected);
     QString padButton() const { return m_pad; }
     QString padName() const { return m_pad.toUpper(); }
     bool inBox() const { return m_inBox; }
@@ -60,6 +68,8 @@ Q_SIGNALS:
     void typedInstead();
     // A controller button was just picked as the talk button ("y", "lb"...): Settings warns when it has another job.
     void padPicked(const QString &button);
+    // A controller button that can't talk was pressed while picking ("x", "a"...): Settings says why.
+    void padRefused(const QString &button);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -75,7 +85,8 @@ private:
     bool m_down = false;
     QString m_pad;            // the controller's talk button, "" for none
     bool m_padDown = false;   // it's held, talking
-    bool m_padTook = false;   // its press talked, so its release is taken here too (even after the room ended)
+    bool m_padTook = false;
+    bool m_padConnected = false;   // its press talked, so its release is taken here too (even after the room ended)
     bool m_toldTyped = false;
     bool m_inBox = false;
 };

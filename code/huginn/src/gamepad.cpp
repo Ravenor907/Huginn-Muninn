@@ -281,6 +281,11 @@ QString Gamepad::glyph(const QString &button) const
     if (button == QLatin1String("dpad")) return QStringLiteral("✚");
     if (button == QLatin1String("ls")) return ps ? QStringLiteral("L3") : QStringLiteral("LS");
     if (button == QLatin1String("rs")) return ps ? QStringLiteral("R3") : QStringLiteral("RS");
+    // The back paddles: each controller names them its own way (M1, L4...), so plain words.
+    if (button == QLatin1String("p1")) return QStringLiteral("Back paddle 1");
+    if (button == QLatin1String("p2")) return QStringLiteral("Back paddle 2");
+    if (button == QLatin1String("p3")) return QStringLiteral("Back paddle 3");
+    if (button == QLatin1String("p4")) return QStringLiteral("Back paddle 4");
     return button.toUpper();
 }
 

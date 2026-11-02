@@ -546,12 +546,19 @@ Window {
         }
     }
     // In a voice room with push to talk on, the controller's talk button talks on every screen, so the legend shows
-    // that instead of the button's usual job (Y's Keyboard, LT's Options), first in the row.
+    // that instead of the button's usual job (Y's Keyboard, LT's Options), first in the row. X opens what LT did
+    // (Options, Menu), so with LT talking its chip moves to X, unless X already has a job on that screen.
     readonly property bool padTalks: TalkKey.padButton !== "" && Settings.pushToTalk && Rooms.inRoom
     function withTalk(list) {
         if (!padTalks || !list) return list
         const k = TalkKey.padButton
-        return [{ key: k, label: "Talk" }].concat(list.filter(x => x.key !== k))
+        const hasX = list.some(c => c.key === "x")
+        const rest = []
+        for (const c of list) {
+            if (c.key !== k) rest.push(c)
+            else if (k === "lt" && !hasX) rest.push({ key: "x", label: c.label })
+        }
+        return [{ key: k, label: "Talk" }].concat(rest)
     }
 
     // ------------------------------------------------------------- overlays
@@ -1249,18 +1256,21 @@ Window {
         if (!TalkKey.hasKey) return
         Ui.say("Push to talk only hears " + (TalkKey.key !== 0 ? TalkKey.keyName : Gamepad.glyph(TalkKey.padButton)) + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
     }
-    // Push to talk on with no key or controller button picked: the mic uses voice activity, so joining a room says so
-    // (once per room a run).
+    // Push to talk on with no key or controller button picked, or only a controller button and no controller connected:
+    // the mic uses voice activity, so joining a room says so (once per room a run).
     property var talkNoKeyTold: ({})
     Connections {
         target: Rooms
         function onChanged() {
             if (!Rooms.inRoom) { app.talkWentBehind = false; app.talkToldOnce = false; return }
-            if (app.touring || !Settings.pushToTalk || TalkKey.hasKey || Rooms.room === "") return
+            if (app.touring || !Settings.pushToTalk || TalkKey.canTalk || Rooms.room === "") return
             const id = Rooms.group + "/" + Rooms.room
             if (app.talkNoKeyTold[id]) return
             app.talkNoKeyTold[id] = true
-            Ui.say("No talk key yet: using voice activity. Pick a key in Settings › Calls.")
+            if (TalkKey.padAway)
+                Ui.say("Your talk button is " + Gamepad.glyph(TalkKey.padButton) + ", but no controller is connected: using voice activity.")
+            else
+                Ui.say("No talk key yet: using voice activity. Pick a key in Settings › Calls.")
         }
     }
     // The talk key typed into a text box during a voice room (once a run): say how to talk while typing.

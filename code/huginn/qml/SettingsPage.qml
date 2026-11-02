@@ -161,7 +161,8 @@ Rectangle {
             // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
             // With push to talk on and no key or controller button yet, the mic uses voice activity (never dead), and says so.
             { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk",
-              note: Settings.pushToTalk && !TalkKey.hasKey ? "No talk key yet, so your mic uses voice activity until you pick one" : GlobalKeys.talkNote },
+              note: Settings.pushToTalk && !TalkKey.hasKey ? "No talk key yet, so your mic uses voice activity until you pick one"
+                    : Settings.pushToTalk && TalkKey.padAway ? "No controller connected, so your mic uses voice activity until one is" : GlobalKeys.talkNote },
             { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.key !== 0 ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
               note: TalkKey.capturing ? page.pickNote
                     : !TalkKey.hasKey ? "Pick the key you'll hold to talk, or a controller button. A key that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
@@ -747,27 +748,42 @@ Rectangle {
         if (top < rowsView.contentY) rowsView.contentY = Math.max(0, top)
         else if (bottom > rowsView.contentY + rowsView.height) rowsView.contentY = Math.min(bottom - rowsView.height, Math.max(0, rowsView.contentHeight - rowsView.height))
     }
-    // "Pick a key": LT or a back paddle have no other job; Y and LB do, so they say what they give up in a voice room.
+    // "Pick a key": a back paddle has no other job, and with LT talking X opens the options instead. Y and LB have other
+    // jobs, so they say what they give up in a voice room. Back paddles may need mapping in Steam Input to reach Huginn.
     // A handheld's controller button only works with Huginn in front, and a Linux desktop may ask to confirm a key.
-    readonly property string pickNote: "Press the new key, or on a controller " + Gamepad.glyph("lt") + " or a back paddle, which have no other job. "
+    readonly property string pickNote: "Press the new key, or on a controller " + Gamepad.glyph("lt") + " or a back paddle ("
+        + Gamepad.glyph("x") + " then opens the options instead of " + Gamepad.glyph("lt") + "). If a back paddle does nothing, set it up in Steam Input first. "
         + Gamepad.glyph("y") + " or " + Gamepad.glyph("lb") + " work too, but in a voice room they only talk. Esc or " + Gamepad.glyph("b") + " keeps the old one"
         + (System.handheld || System.gameMode ? ". The controller button works while Huginn is in front; in a game, voice activity is better" : "")
         + (Qt.platform.os === "linux" && GlobalKeys.everywhere && !System.gameMode ? ". Your desktop may ask to confirm a key" : "")
     // The controller talk button's note: what it gives up in a voice room, when it has another job.
     function padNote(b) {
-        const g = Gamepad.glyph(b), lt = Gamepad.glyph("lt")
-        if (b === "y") return g + " also opens the keyboard, records and calls. In a voice room it only talks. " + lt + " has no other job"
-        if (b === "lb") return g + " also changes section. In a voice room it only talks, and " + g + " with Up or Down still mutes and deafens"
-        if (b === "x") return g + " also opens options. In a voice room it only talks. " + lt + " has no other job"
-        return "Hold it in a voice room while Huginn is in front"
+        const g = Gamepad.glyph(b), lt = Gamepad.glyph("lt"), x = Gamepad.glyph("x")
+        const away = TalkKey.padAway ? ". No controller connected, so voice activity until one is" : ""
+        if (b === "y") return g + " also opens the keyboard, records and calls. In a voice room it only talks. A back paddle has no other job" + away
+        if (b === "lb") return g + " also changes section. In a voice room it only talks, and " + g + " with Up or Down still mutes and deafens" + away
+        if (b === "x") return g + " opens the options, so it shouldn't talk. Remove it and pick " + lt + " or a back paddle" + away
+        if (b === "lt") return "In a voice room it only talks, and " + x + " opens the options instead" + away
+        return "Hold it in a voice room while Huginn is in front" + away
     }
     // Y or LB just picked: a clear warning, since each has another job.
     Connections {
         target: TalkKey
         function onPadPicked(button) {
             const g = Gamepad.glyph(button)
-            if (button === "y") Ui.say(g + " also opens the keyboard: in a voice room it only talks. " + Gamepad.glyph("lt") + " has no other job.")
+            if (button === "y") Ui.say(g + " also opens the keyboard: in a voice room it only talks. A back paddle has no other job.")
             else if (button === "lb") Ui.say(g + " also changes section: in a voice room it only talks. " + g + " with Up or Down still mutes and deafens.")
+        }
+        // A button that can't talk, pressed while picking: why not.
+        function onPadRefused(button) {
+            const g = Gamepad.glyph(button)
+            const why = button === "x" ? " opens the options"
+                      : button === "a" ? " selects"
+                      : button === "rb" || button === "rt" ? " clicks for the stick pointer"
+                      : button === "start" ? " opens Settings"
+                      : button === "back" ? " shows the buttons"
+                      : " already has a job"
+            Ui.say(g + why + ", so it can't talk. Try " + Gamepad.glyph("lt") + " or a back paddle.")
         }
     }
     // Leaving Settings (or this part of it) stops "Pick a key", so the next key pressed elsewhere never becomes the talk key.

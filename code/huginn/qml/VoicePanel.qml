@@ -20,7 +20,8 @@ Rectangle {
     readonly property bool vaultLocked: Vault.exists && Vault.screenLocked
     readonly property string statusText: {
         if (vaultLocked) return "Locked"
-        if (Settings.pushToTalk && inVoice) return TalkKey.hasKey ? "Push to talk: " + keyFull : "Voice activity: no talk key yet"
+        if (Settings.pushToTalk && inVoice) return TalkKey.canTalk ? "Push to talk: " + keyFull
+                                            : TalkKey.padAway ? "Voice activity: no controller" : "Voice activity: no talk key yet"
         if (Ui.myCustomStatus !== "") return Ui.myCustomStatus
         return statusName(Ui.myStatus)
     }
@@ -40,9 +41,11 @@ Rectangle {
     // What push to talk does right now: no key yet (voice activity until one is picked), the key goes into the focused
     // text box, or hold it. Short for the compact line; holdTip has the whole of it.
     readonly property string holdWords: !TalkKey.hasKey ? "Pick a key"
+                                      : TalkKey.padAway ? "No controller"
                                       : TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + keyShort + " goes to the box"
                                       : "Hold " + keyShort
-    readonly property string holdTip: !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls" : holdWords
+    readonly property string holdTip: !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls"
+                                    : TalkKey.padAway ? "No controller connected: voice activity until one is" : holdWords
     height: (voice.visible ? voice.implicitHeight : 0) + me.height
     radius: Theme.radius
     color: Theme.raised
@@ -279,6 +282,7 @@ Rectangle {
                 text: !panel.tour && Rooms.talking ? "Talking"
                     : !panel.tour && (Qt.platform.os === "windows" || !GlobalKeys.everywhere) && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while another app is in front"
                     : !panel.tour && !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls"
+                    : !panel.tour && TalkKey.padAway ? "No controller connected: voice activity until one is"
                     : !panel.tour && TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + TalkKey.keyName + " goes to the box"
                     : "Push to talk: hold " + panel.keyFull
                 color: !panel.tour && Rooms.talking ? Theme.accent : Theme.textMuted

@@ -119,7 +119,7 @@ Rectangle {
         return out
     }
     // The header's Call button: Call everyone (and Pick people) when there's anyone to ring, then Drop-in call for each
-    // voice room and group call going on. Nothing applies: no button.
+    // voice room and Join group call for each group call going on. Nothing applies: no button.
     readonly property var callChoices: {
         if (locked || !exists || readOnly) return []
         const out = []
@@ -129,12 +129,16 @@ Rectangle {
         }
         const rooms = channels.filter(c => c.type === "voice").map(c => ({ id: c.id, name: c.name }))
         const calls = isTour ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
-        calls.forEach(c => rooms.push({ id: c.ch, name: "Group call" }))
         // How many are in each, as Muninn's popup says it ("Drop-in call · 2 in it").
         rooms.forEach(r => {
             const n = isTour ? 0 : (Rooms.presence, Rooms.whoIn(gid, r.id)).length
             const base = rooms.length === 1 ? "Drop-in call" : "Drop-in call · " + r.name
             out.push({ name: n > 0 ? base + " · " + n + " in it" : rooms.length === 1 ? base + " (no ringing)" : base, icon: "speaker", url: "join:" + r.id, room: r })
+        })
+        // Someone rang everyone: that's a group call, not a drop-in call.
+        calls.forEach(c => {
+            const n = (Rooms.presence, Rooms.whoIn(gid, c.ch)).length
+            out.push({ name: n > 0 ? "Join group call · " + n + " in it" : "Join group call", icon: "speaker", url: "join:" + c.ch, room: { id: c.ch, name: "Group call" } })
         })
         return out
     }

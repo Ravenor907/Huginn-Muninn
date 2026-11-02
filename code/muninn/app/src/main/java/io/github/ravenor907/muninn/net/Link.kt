@@ -378,6 +378,7 @@ object Link {
         if (k == h.myKey()) return "That's this device's own code."
         val d = Device(k, o.optString("p"), o.optString("n").take(40).ifBlank { "Linked device" }, ok = confirmed)
         _companions.value = _companions.value.filterNot { it.key == k } + d
+        if (confirmed) dropReplaced(d)
         save()
         h.send(d, JSONObject().put("t", "hello").put("i", o.optString("i")).put("n", h.myName()).put("p", h.myMailbox()).toString())
         if (confirmed) { syncAll(d); sendMe(true) }
@@ -390,6 +391,7 @@ object Link {
         _companions.value.firstOrNull { it.key == key && !it.ok }?.let { d ->
             val now = d.copy(ok = true)
             _companions.value = _companions.value.map { if (it.key == key) now else it }
+            dropReplaced(now)
             save(); syncAll(now); sendMe(true)
         }
         _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
@@ -397,6 +399,18 @@ object Link {
             // "f": the first one after the emoji, which the phone takes even inside the 10 minutes.
             h.send(p, JSONObject().put("t", "sync").put("f", true).toString())
         }
+    }
+
+    /**
+     * The same computer linked again (erased after a forgotten lock, so it has a new key): the old entry with its name
+     * that was linked goes, so Linked devices doesn't list it twice and nothing is mirrored to it any more. It was
+     * erased, so no "unlink" goes to it.
+     */
+    private fun dropReplaced(d: Device) {
+        val old = _companions.value.filter { it.key != d.key && it.ok && it.name == d.name }
+        if (old.isEmpty()) return
+        _companions.value = _companions.value.filterNot { o -> old.any { it.key == o.key } }
+        old.forEach { owed.remove(it.key); meOwed.remove(it.key); acctOwed.remove(it.key) }
     }
 
     fun unlink(key: String) {

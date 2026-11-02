@@ -1137,7 +1137,7 @@ private fun Conversation(app: Muninn, key: String) {
     val mutedNow = (chatFlags.muted[key] ?: 0L) > System.currentTimeMillis()
     val said = when {
         typingNow -> "typing…"
-        activeNow -> if (c != null) "Active now" else "Active now · $keepDays days"
+        activeNow -> if (c != null) "Active now" else "Active now · deletes after $keepDays days"
         c == null -> "Messages delete after $keepDays days"
         else -> ""
     }
@@ -2453,8 +2453,8 @@ private fun GroupConversation(app: Muninn, g: String) {
                 // One Call button, like a person's; Mute is in the menu.
                 if (!grp.readOnly) {
                     RoomManager.presence.collectAsState().value   // re-reads the group's calls when they change
-                    val rooms = s.channels.filter { it.t == "voice" }.map { it.id to it.n } +
-                        RoomManager.groupCalls(g).map { (id, _) -> id to "Group call" }
+                    val rooms = s.channels.filter { it.t == "voice" }.map { it.id to it.n }
+                    val calls = RoomManager.groupCalls(g).map { (id, _) -> id }
                     val choices = buildList {
                         // Rings every member, so it asks first. To just talk, there are voice rooms.
                         if (s.members.size > 1) add(CallChoice("call", "Call everyone") {
@@ -2469,6 +2469,11 @@ private fun GroupConversation(app: Muninn, g: String) {
                             val base = if (rooms.size == 1) "Drop-in call" else "Drop-in call · $n"
                             val label = if (inIt > 0) "$base · $inIt in it" else if (rooms.size == 1) "$base (no ringing)" else base
                             add(CallChoice("audio", label) { RoomActivity.join(context, g, id) })
+                        }
+                        // Someone rang everyone: that's a group call, not a drop-in call.
+                        calls.forEach { id ->
+                            val inIt = RoomManager.whoIn(g, id).size
+                            add(CallChoice("audio", if (inIt > 0) "Join group call · $inIt in it" else "Join group call") { RoomActivity.join(context, g, id) })
                         }
                     }
                     if (choices.isNotEmpty()) CallButton("Call ${s.name}", choices)
