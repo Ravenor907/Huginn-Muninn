@@ -85,7 +85,11 @@ Everything there works with a controller too:
 - A on a TEXT or VOICE heading folds that category away, and A again opens it.
 - In a voice room, A on the room has Mute, Deafen and Leave. The voice panel at the foot of the list has them too
   (click it with the right stick's pointer).
-- Push to talk (Settings › Calls) is a keyboard key: it works while Huginn is in front.
+- Push to talk (Settings › Calls) is a keyboard key, a controller button (LT, a back paddle, Y or LB), or both. The
+  controller button works only while Huginn is in front (a key may work behind a game on a Linux desktop that allows
+  it). In a voice room the controller button only talks; LB opens the mic a moment after
+  the press, so LB with Up or Down still mutes and deafens without opening it. If the controller goes away mid-room,
+  the mic mutes until it's back.
 - Huginn opens in a normal window that keeps its size and place. F11, or Settings › Look › Open full screen,
   switches to full screen. A handheld's game mode is always full screen.
 - Settings › Look › Handheld mode (Automatic, On or Off). On: full screen, the controller's wording and button

@@ -1282,6 +1282,11 @@ Window {
     // The controller with the talk button went away (or slept) mid-room: push to talk stays on and the mic is muted,
     // never an open mic. It comes back unmuted only if this muted it.
     property bool padMutedMic: false
+    // Quitting (Quit, Restart to update) while muted only by that: the next run's rooms and calls don't start muted.
+    Connections {
+        target: Qt.application
+        function onAboutToQuit() { if (app.padMutedMic) { app.padMutedMic = false; Settings.micMuted = false } }
+    }
     // The talk key typed into a text box during a voice room (once a run): say how to talk while typing.
     Connections {
         target: TalkKey

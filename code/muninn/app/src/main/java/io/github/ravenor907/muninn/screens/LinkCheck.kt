@@ -218,12 +218,16 @@ fun LinkCheck() {
     if (d == null && done == null) {
         replace?.let { r ->
             AlertDialog(onDismissRequest = { Link.answerReplace(false) }, containerColor = Palette.panel,
-                title = { Text("Replace ${r.oldName}?", style = Type.big) },
+                title = { Text(if (r.sameName) "Replace its old entry?" else "Replace ${r.oldName}?", style = Type.big) },
                 text = {
-                    Text("${r.newName} was erased and linked again. If it's the same computer as ${r.oldName}, replace the old entry. "
-                        + "If they're two computers, keep both.", style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState()))
+                    // Same name: the machine tag survived the erase, so it's almost surely the same computer. A different
+                    // name: an entry not heard from in 14 days, so Keep both stays the safe choice (Replace isn't the accent).
+                    Text(if (r.sameName) "This is ${r.newName} again after an erase. Replace its old entry? If they're two computers with the same name, keep both."
+                        else "Just linked: ${r.newName}, after an erase. Not heard from in 14 days: ${r.oldName}. "
+                            + "If they're the same computer, replace the old entry. If not, keep both.",
+                        style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState()))
                 },
-                confirmButton = { MButton("Replace", kind = Kind.Accent) { Link.answerReplace(true) } },
+                confirmButton = { MButton("Replace", kind = if (r.sameName) Kind.Accent else Kind.Normal) { Link.answerReplace(true) } },
                 dismissButton = { MButton("Keep both") { Link.answerReplace(false) } })
         }
         return

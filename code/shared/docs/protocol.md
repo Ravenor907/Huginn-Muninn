@@ -1650,9 +1650,11 @@ anywhere, it says "Mirrored to [name]".
 **Linking again after an erase.** A companion erased by "Erase and link my phone again" (Huginn: Unlock › Forgot
 it?) comes back with a new key, so the phone sees a new device. The companion keeps a yes/no note through the erase
 and puts `"relink": true` beside `caps` in its first `sync` after "They match" (the one with `"f": true`), once; a phone
-that doesn't know the field ignores it. Only then does the phone look for the old entry (a checked companion with the
-same name, else the only other checked one) and ask "Replace [old name]?" with Replace (unlinks the old entry) or
-Keep both. A matching name alone never drops a companion: two computers may share one. Huginn's default name ends
+that doesn't know the field ignores it. If that `sync` comes before "They match" on the phone (the computer was
+tapped first), the phone drops the `sync` but keeps the `relink` and acts on it at its own "They match". Only then does
+the phone look for the old entry (a checked companion with the same name, else the one other checked companion not
+heard from in 14 days, and only if exactly one is) and ask "Replace [old name]?" with Replace (unlinks the old entry) or
+Keep both (Keep both is the default when the names differ). A matching name alone never drops a companion: two computers may share one. Huginn's default name ends
 with a short tag from the machine ("Huginn on Windows 3F2A"), the same after an erase, so names rarely match by
 chance.
 

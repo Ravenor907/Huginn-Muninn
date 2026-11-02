@@ -97,7 +97,7 @@ private:
     bool m_padTook = false;        // its press talked, so its release is taken here too (even after the room ended)
     bool m_padConnected = false;
     bool m_padGone = false;        // padGone()
-    // LB as the talk button: the mic opens about 150 ms after the press, and not at all while that hold is LB with Up
+    // LB as the talk button: the mic opens about 80 ms after the press, and not at all while that hold is LB with Up
     // or Down (mute and deafen), so muting never sends a blip of sound first.
     QTimer *m_padWait = nullptr;
     bool m_padHushed = false;

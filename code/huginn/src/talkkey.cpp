@@ -21,7 +21,8 @@ TalkKey::TalkKey(Settings *settings, RoomManager *rooms, QObject *parent)
     qApp->installEventFilter(this);
     m_padWait = new QTimer(this);
     m_padWait->setSingleShot(true);
-    m_padWait->setInterval(150);
+    // Short enough not to clip the first syllable, long enough for LB with Up or Down pressed together (A11-1).
+    m_padWait->setInterval(80);
     connect(m_padWait, &QTimer::timeout, this, [this] {
         if (m_padDown && !m_padHushed)
             m_rooms->setTalking(true);

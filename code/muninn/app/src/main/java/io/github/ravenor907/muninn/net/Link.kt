@@ -187,6 +187,10 @@ object Link {
     private const val HASHES = "link-hashes.json"
     private const val STORED = "mirror-media.json"
     private const val MEDIA_DIR = "mirror-media/"
+    /** An entry not heard from in this long may be offered as the one a relinked computer replaces. */
+    private const val STALE_MS = 14L * 24 * 60 * 60_000L
+    /** "heard" times go to link.json at most this often per companion. */
+    private const val HEARD_SAVE_MS = 60 * 60_000L
 
     /** A device linked to this one: on the phone, a companion; on the companion, the phone. */
     /** [ok]: both screens showed the same 4 emoji and the person said so (nothing is mirrored before). */
@@ -284,6 +288,10 @@ object Link {
     private val owed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val meOwed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val synced = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** The phone's side: when each companion was last heard from (kept in link.json), so a stale entry can be told apart. */
+    private val heard = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** The phone's side: companions whose first "sync" said "relink" before They match was pressed here (J11-1). */
+    private val relinkSeen = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     /** The companion's side: when Refresh last asked. */
     @Volatile private var askedAt = 0L
     private val clock = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "muninn-link-clock").apply { isDaemon = true } }
@@ -306,6 +314,10 @@ object Link {
                 _companions.value = o.optJSONArray("companions")?.let { a -> (0 until a.length()).map { dev(a.getJSONObject(it)) } }.orEmpty()
                 _phone.value = o.optJSONObject("phone")?.let { dev(it) }
                 _me.value = if (_phone.value != null) o.optJSONObject("me")?.let { LinkWire.readMe(it) } else null
+                val hd = o.optJSONObject("heard")
+                // An entry with no time yet (an older install) counts as heard now, so it never looks stale too soon.
+                val now = System.currentTimeMillis()
+                _companions.value.forEach { d -> heard[d.key] = hd?.optLong(d.key, 0L)?.takeIf { it > 0L } ?: now }
             }
             h.read("mirror.json")?.let { t ->
                 val o = JSONObject(t)
@@ -319,7 +331,9 @@ object Link {
         val h = host ?: return
         h.write("link.json", JSONObject().put("companions", JSONArray().apply { _companions.value.forEach { put(devJson(it)) } })
             .apply { _phone.value?.let { put("phone", devJson(it)) } }
-            .apply { if (_phone.value != null) _me.value?.let { put("me", meJson(it)) } }.toString())
+            .apply { if (_phone.value != null) _me.value?.let { put("me", meJson(it)) } }
+            .apply { val keys = _companions.value.map { it.key }.toSet(); put("heard", JSONObject().apply { heard.forEach { (k, v) -> if (k in keys) put(k, v) } }) }
+            .toString())
     }
 
     private fun meJson(m: LinkWire.Me): JSONObject = JSONObject().put("t", "me").put("n", m.name).put("st", m.status).apply {
@@ -378,6 +392,7 @@ object Link {
         if (k == h.myKey()) return "That's this device's own code."
         val d = Device(k, o.optString("p"), o.optString("n").take(40).ifBlank { "Linked device" }, ok = confirmed)
         _companions.value = _companions.value.filterNot { it.key == k } + d
+        heard[k] = System.currentTimeMillis(); relinkSeen.remove(k)
         save()
         h.send(d, JSONObject().put("t", "hello").put("i", o.optString("i")).put("n", h.myName()).put("p", h.myMailbox()).toString())
         if (confirmed) { syncAll(d); sendMe(true) }
@@ -391,6 +406,8 @@ object Link {
             val now = d.copy(ok = true)
             _companions.value = _companions.value.map { if (it.key == key) now else it }
             save(); syncAll(now); sendMe(true)
+            // The computer pressed They match first: its "relink" came before this phone checked it, so it's asked now.
+            if (relinkSeen.remove(key)) askReplace(now)
         }
         _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
             _phone.value = p.copy(ok = true); _ownShown.value = false; save()
@@ -400,18 +417,24 @@ object Link {
     }
 
     /** "Replace [oldName]?" on the phone: [newName] was just linked again after an erase (its first "sync" said "relink"). */
-    data class Replace(val newKey: String, val newName: String, val oldKey: String, val oldName: String)
+    data class Replace(val newKey: String, val newName: String, val oldKey: String, val oldName: String) {
+        /** The same name (the machine tag survives an erase): almost surely the same computer. */
+        val sameName: Boolean get() = newName == oldName
+    }
     private val _replace = MutableStateFlow<Replace?>(null)
     val replace: StateFlow<Replace?> = _replace.asStateFlow()
 
     /**
      * A computer erased by "Erase and link my phone again" links with a new key, and its first "sync" says "relink"
      * (protocol.md 15). Only then the phone asks whether it replaces an old entry: the one with the same name, else the
-     * only other checked one. A name alone never drops anything: two family PCs may share one.
+     * one other entry that hasn't been heard from in [STALE_MS] (exactly one, so a PC still in use is never offered).
+     * A name alone never drops anything: two family PCs may share one, and the answer is always the user's.
      */
     private fun askReplace(d: Device) {
         val others = _companions.value.filter { it.key != d.key && it.ok }
-        val old = others.firstOrNull { it.name == d.name } ?: others.singleOrNull() ?: return
+        val now = System.currentTimeMillis()
+        val old = others.firstOrNull { it.name == d.name }
+            ?: others.filter { now - (heard[it.key] ?: now) >= STALE_MS }.singleOrNull() ?: return
         _replace.value = Replace(d.key, d.name, old.key, old.name)
     }
 
@@ -427,7 +450,7 @@ object Link {
         _companions.value.firstOrNull { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()) }
         _phone.value?.takeIf { it.key == key }?.let { h.send(it, JSONObject().put("t", "unlink").toString()); dropPhone() }
         _companions.value = _companions.value.filterNot { it.key == key }
-        owed.remove(key); meOwed.remove(key); acctOwed.remove(key)
+        owed.remove(key); meOwed.remove(key); acctOwed.remove(key); heard.remove(key); relinkSeen.remove(key)
         save()
     }
 
@@ -651,6 +674,12 @@ object Link {
         val t = p.optString("t")
         val comp = _companions.value.firstOrNull { it.key == from }
         val ph = _phone.value?.takeIf { it.key == from }
+        if (comp != null) {
+            // Heard from now; written down at most once an hour, enough for the 14 days in [askReplace].
+            val now = System.currentTimeMillis()
+            val before = heard.put(comp.key, now)
+            if (before == null || now - before > HEARD_SAVE_MS) save()
+        }
         when {
             // Pairing: the phone answers my link code with its token.
             t == "hello" && comp == null -> {
@@ -733,6 +762,8 @@ object Link {
             ph != null && t == "part" -> if (lan) takePart(p)
             // Not checked here yet: a "send" is answered, so the companion doesn't wait for nothing.
             comp != null && !comp.ok && t == "send" -> answerSend(h, comp, p.optString("id"), false, "confirm")
+            // Not checked here yet, but a first "sync" that says "relink" is kept for this phone's own They match (J11-1).
+            comp != null && !comp.ok && t == "sync" && p.optBoolean("f") && p.optBoolean("relink") -> relinkSeen.add(comp.key)
             comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct" || t == "ping" || t == "read") -> {}
             // Cap l2 (15.2): the companion asks whether this phone is there, says it takes "read" and gives its device name.
             comp != null && t == "ping" -> {
