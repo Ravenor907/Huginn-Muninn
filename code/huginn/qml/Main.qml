@@ -515,7 +515,8 @@ Window {
         showKeys: (app.legend && Gamepad.connected) || app.tourLegend
         status: incomingCall.visible ? incomingCall.status : callPage.visible ? callPage.status
               : app.focusZone === "rail" ? "" : pageLoader.item && pageLoader.item.status !== undefined ? pageLoader.item.status : ""
-        prompts: {
+        prompts: app.withTalk(basePrompts)
+        readonly property var basePrompts: {
             if (incomingCall.visible) return incomingCall.prompts
             if (callPage.visible) return callPage.prompts
             if (moveCover.visible && !prompt.visible && !confirm.visible) return moveCover.prompts.concat([{ key: "back", label: "Hide buttons" }])
@@ -536,8 +537,21 @@ Window {
             const p = pageLoader.item && pageLoader.item.prompts ? pageLoader.item.prompts.filter(x => x.key !== "back" && x.key !== "start") : []
             return lb.concat(p, voice, hide)
         }
-        // A tap on a chip is a whole press: LB here can't be held, so it just goes to the next section.
-        onPrompt: k => k === "lb" && !app.overlay() ? app.stepSection(1) : app.press(k)
+        // A tap on a chip is a whole press: LB here can't be held, so it just goes to the next section. The talk
+        // button's chip can't be held either, so a tap does nothing.
+        onPrompt: k => {
+            if (app.padTalks && k === TalkKey.padButton) return
+            if (k === "lb" && !app.overlay()) app.stepSection(1)
+            else app.press(k)
+        }
+    }
+    // In a voice room with push to talk on, the controller's talk button talks on every screen, so the legend shows
+    // that instead of the button's usual job (Y's Keyboard, LT's Options), first in the row.
+    readonly property bool padTalks: TalkKey.padButton !== "" && Settings.pushToTalk && Rooms.inRoom
+    function withTalk(list) {
+        if (!padTalks || !list) return list
+        const k = TalkKey.padButton
+        return [{ key: k, label: "Talk" }].concat(list.filter(x => x.key !== k))
     }
 
     // ------------------------------------------------------------- overlays
@@ -1235,9 +1249,19 @@ Window {
         if (!TalkKey.hasKey) return
         Ui.say("Push to talk only hears " + (TalkKey.key !== 0 ? TalkKey.keyName : Gamepad.glyph(TalkKey.padButton)) + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
     }
+    // Push to talk on with no key or controller button picked: the mic uses voice activity, so joining a room says so
+    // (once per room a run).
+    property var talkNoKeyTold: ({})
     Connections {
         target: Rooms
-        function onChanged() { if (!Rooms.inRoom) { app.talkWentBehind = false; app.talkToldOnce = false } }
+        function onChanged() {
+            if (!Rooms.inRoom) { app.talkWentBehind = false; app.talkToldOnce = false; return }
+            if (app.touring || !Settings.pushToTalk || TalkKey.hasKey || Rooms.room === "") return
+            const id = Rooms.group + "/" + Rooms.room
+            if (app.talkNoKeyTold[id]) return
+            app.talkNoKeyTold[id] = true
+            Ui.say("No talk key yet: using voice activity. Pick a key in Settings › Calls.")
+        }
     }
     // The talk key typed into a text box during a voice room (once a run): say how to talk while typing.
     Connections {
@@ -1402,15 +1426,23 @@ Window {
             app.padDown[button] = true
             app.noteInput()
             app.padInUse = true
-            // Picking the talk button (B stops), or the talk button held in a voice room: nothing else happens.
-            if (TalkKey.pad(button, true)) return
+            // Picking the talk button (B stops), or the talk button held in a voice room: nothing else happens. LB as
+            // the talk button still mutes and deafens with Up or Down while it's held (and doesn't change section).
+            const picking = TalkKey.capturing
+            if (TalkKey.pad(button, true)) {
+                if (button === "lb" && !picking) { app.lbHeld = true; app.lbUsed = true }
+                return
+            }
             if (app.isPointerButton(button)) { app.legend = false; stick.press(button) }
             else app.press(button)
         }
         function onReleased(button) {
             if (!app.padDown[button]) return
             delete app.padDown[button]
-            if (TalkKey.pad(button, false)) return
+            if (TalkKey.pad(button, false)) {
+                if (button === "lb") app.lbHeld = false
+                return
+            }
             if (app.isPointerButton(button)) stick.release(button)
             else app.release(button)
         }

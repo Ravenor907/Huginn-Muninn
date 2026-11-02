@@ -720,6 +720,8 @@ void Vault::eraseAll()
     settings().remove(QStringLiteral("nostr"));
     settings().remove(QStringLiteral("chat"));
     settings().remove(QStringLiteral("restore"));
+    // The plain "linked to a phone" note (Link::linkedWhileLocked): the link went with the vault.
+    settings().remove(QStringLiteral("link"));
     // An erased computer starts over: first setup runs again at the next start.
     settings().remove(QStringLiteral("setup"));
     // Written now, so what Move saves right after (its "Moved to" note, through its own QSettings) isn't removed later.

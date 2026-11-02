@@ -5,6 +5,7 @@
 #include "msglimits.h"
 #include "profile.h"
 #include "richwire.h"
+#include "settings.h"
 #include "trust.h"
 #include "vault.h"
 
@@ -48,6 +49,22 @@ bool kindOk(const QString &k)
 {
     return k == QLatin1String("photo") || k == QLatin1String("voice") || k == QLatin1String("video") || k == QLatin1String("file");
 }
+// The plain "linked to a phone" note beside the vault (Link::linkedWhileLocked).
+void notePhone(bool linked)
+{
+    QSettings s = Settings::store();
+    if (s.value(QStringLiteral("link/phone"), false).toBool() != linked)
+        s.setValue(QStringLiteral("link/phone"), linked);
+}
+}
+
+bool Link::linkedWhileLocked() const
+{
+    if (m_chat->ready()) {
+        ensureLoaded();
+        return !m_phone.key.isEmpty() && !m_phone.gone;
+    }
+    return Settings::store().value(QStringLiteral("link/phone"), false).toBool();
 }
 
 const char Link::kPrefix[] = "MUNINNL1:";
@@ -141,6 +158,7 @@ void Link::ensureLoaded() const
         m_companions << dev(v.toObject());
     if (o.contains(QStringLiteral("phone")))
         m_phone = dev(o.value(QStringLiteral("phone")).toObject());
+    notePhone(!m_phone.key.isEmpty() && !m_phone.gone);
     m_meName.clear();
     m_meStatus.clear();
     m_meCustom.clear();
@@ -219,6 +237,7 @@ void Link::save()
             o.insert(QStringLiteral("own"), m_own);
     }
     m_chat->m_vault->write(QStringLiteral("link.json"), compact(o));
+    notePhone(!m_phone.key.isEmpty() && !m_phone.gone);
     Q_EMIT changed();
 }
 

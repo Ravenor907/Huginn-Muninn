@@ -145,8 +145,8 @@ private val ROLES = Folders.DEFAULTS
 internal fun roleWords(role: String?): String = when (role) {
     "Family" -> "Family: you can keep messages up to 30 days"
     "Work" -> "Work: you can keep messages up to 30 days"
-    "Folk" -> "Folk: messages stay 7 days"
-    else -> "None: messages stay 7 days"
+    "Folk" -> "Folk: messages delete after 7 days"
+    else -> "None: messages delete after 7 days"
 }
 
 /**

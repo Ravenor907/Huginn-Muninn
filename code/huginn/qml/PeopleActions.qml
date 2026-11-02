@@ -60,6 +60,8 @@ QtObject {
             else Ui.openPage("dms", { open: k, show: "shared" })
         }, back)
     }
+    // How messages reach someone right now, in a word (Chat.route).
+    function routeWord(r) { return r === "bluetooth" ? "Bluetooth" : r === "wifi" ? "Wi-Fi" : r === "internet" ? "Internet" : "Not reachable" }
     // The rest of a contact's menu: where the chat sits and how it behaves, then safety, then the red ones last.
     function contactMore(k, n, ctx, back) {
         const c = ctx || {}
@@ -74,7 +76,10 @@ QtObject {
         if (at > 0) items.push({ name: "Move up", url: "up" })
         if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", url: "down" })
         items.push({ name: "Pinned messages", icon: "pin", url: "pins" })
-        if (contact) items.push({ name: "Check safety code", icon: "check", url: "check" }, { name: "Introduce", icon: "people", url: "introduce" })
+        if (contact) items.push({ name: "Check safety code", icon: "check", detail: c.tour ? "" : Chat.isVerified(k) ? "Verified" : "Not verified", url: "check" },
+                                { name: "Introduce", icon: "people", url: "introduce" })
+        // How messages reach them right now (never an address): out of the chat's header, as on Muninn.
+        if (!c.tour) items.push({ name: "How messages travel", detail: routeWord(Chat.route(k)), url: "route" })
         // Someone nearby who isn't a contact: Hide takes them off the Nearby list for good.
         if (!contact && !c.tour) items.push({ name: "Hide", icon: "close", url: "hide" })
         const end = [{ name: blocked ? "Unblock" : "Block", url: "block", danger: !blocked }]
@@ -97,6 +102,10 @@ QtObject {
             }
             else if (a === "pins") Ui.openPage("dms", { open: k, show: "pins" })
             else if (a === "check") checkCode(k)
+            else if (a === "route") {
+                const w = routeWord(Chat.route(k))
+                Ui.say(w === "Not reachable" ? name + " can't be reached right now." : "Messages to " + name + " go by " + w + " right now, end-to-end encrypted.")
+            }
             else if (a === "introduce") introduce(k)
             else if (a === "hide") { if (c.removed) c.removed(); Chat.hideNearby(k); Ui.say(name + " is hidden.") }
             else if (a === "deletechat") deleteChat(k, name, c.removed)

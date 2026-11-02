@@ -11,7 +11,7 @@ class RoomManager;
 // types (` or Space) types there instead, so a message can still have one in it; a key that types nothing (Caps Lock,
 // F13) always talks. Not a system-wide hook: other apps' keys are
 // never seen, so it only works while Huginn has the focus. GlobalKeys (globalkeys.h) covers the rest of the time where
-// the system allows it. A controller button (LB, LT, X or Y) can be the talk button too: Main.qml passes each
+// the system allows it. A controller button (LT, a back paddle, Y or LB) can be the talk button too: Main.qml passes each
 // press and release to pad(), which holds the mic open while it's down (only while Huginn is in front).
 // With push to talk on and neither a key nor a button picked, the mic uses voice activity (main.cpp), so it's never dead.
 class TalkKey : public QObject
@@ -48,6 +48,8 @@ public:
     Q_INVOKABLE void stopCapture();
     // Takes the controller's talk button away (the keyboard key stays).
     Q_INVOKABLE void clearPad();
+    // Takes the keyboard talk key away (the controller's button stays). With neither, voice activity again.
+    Q_INVOKABLE void clearKey();
     // Every controller press and release (Main.qml): true when it was taken here (picking the button, B to stop
     // picking, or the talk button held in a voice room), so Main.qml does nothing else with it.
     Q_INVOKABLE bool pad(const QString &button, bool down);
@@ -56,6 +58,8 @@ Q_SIGNALS:
     void changed();
     // The talk key went into a text box during a voice room instead of talking (once a run).
     void typedInstead();
+    // A controller button was just picked as the talk button ("y", "lb"...): Settings warns when it has another job.
+    void padPicked(const QString &button);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -71,6 +75,7 @@ private:
     bool m_down = false;
     QString m_pad;            // the controller's talk button, "" for none
     bool m_padDown = false;   // it's held, talking
+    bool m_padTook = false;   // its press talked, so its release is taken here too (even after the room ended)
     bool m_toldTyped = false;
     bool m_inBox = false;
 };

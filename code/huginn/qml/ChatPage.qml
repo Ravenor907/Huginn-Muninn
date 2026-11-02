@@ -154,9 +154,7 @@ Rectangle {
         return openKey === "" ? (picked && Chat.visibleNearby ? Chat.nearby : []) : (Chat.chats, Chat.messagesWith(openKey))
     }
     readonly property string openName: openKey === "" ? "" : (Chat.chats, Chat.nameOf(openKey))   // Chat.chats: follows renames
-    readonly property string openRoute: openKey === "" ? "" : (Chat.chats, Chat.route(openKey))
     readonly property bool keyWarning: openKey !== "" && !tour && (Chat.chats, Chat.keyChanged(openKey))
-    function routeWord(r) { return r === "bluetooth" ? "Bluetooth" : r === "wifi" ? "Wi-Fi" : r === "internet" ? "Internet" : "Not reachable" }
 
     // What the hint bar shows (Main.qml adds LB). LT opens the menu (the page gets it as X).
     readonly property var prompts: mirror.visible ? mirror.prompts
@@ -636,10 +634,11 @@ Rectangle {
             backShown: Theme.portrait && !page.locked
             onBack: { page.zone = "list"; page.sel = -1 }
             title: page.locked ? "Locked" : !page.picked ? "Chats" : page.openKey === "" ? "Nearby room" : page.openName
-            // How they're reached (never an address), Active, and Verified or a changed security key.
+            // Like Muninn's: Muted first, then Active now, or a changed security key. How messages travel and Verified are
+            // in the person's menu (More).
             subtitle: page.locked || !page.picked ? "" : page.openKey === "" ? "People close by"
-                    : [page.routeWord(page.openRoute)].concat(page.theyActive ? ["Active now"] : []).concat(page.openMuted ? ["Muted"] : [])
-                      .concat([page.keyWarning ? "Security key changed" : (Chat.chats, Chat.isVerified(page.openKey)) ? "Verified" : "Not verified"]).join(" · ")
+                    : (page.openMuted ? ["Muted"] : []).concat(page.theyActive ? ["Active now"] : [])
+                      .concat(page.keyWarning ? ["Security key changed"] : []).join(" · ")
             warn: !page.locked && page.picked && page.keyWarning
             accent: page.tinted && page.picked ? page.tint : "transparent"
             // Name, one Call button (Voice call and Video call in its popup), Find and the person's one menu.

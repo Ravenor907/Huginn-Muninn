@@ -80,7 +80,7 @@ QStringList Limits::typeRules(const QString &type)
 {
     if (type == QLatin1String(kFamily))
         return {QStringLiteral("Only admins add people, face to face or by a code they hand over"), QStringLiteral("No invite links"),
-                QStringLiteral("Each new member's safety code is checked once"), QStringLiteral("Messages stay up to 30 days (admins pick 7 to 30)"),
+                QStringLiteral("Each new member's safety code is checked once"), QStringLiteral("Messages delete after 7 to 30 days (admins pick)"),
                 QStringLiteral("Files and photos from members arrive by themselves"), QStringLiteral("Members are in your Family folder")};
     return {QStringLiteral("Anyone in the group can invite, by a link or a code"), QStringLiteral("Messages delete after 7 days"),
             QStringLiteral("Small files arrive by themselves, big ones ask first"), QStringLiteral("Members aren't added to your contacts")};

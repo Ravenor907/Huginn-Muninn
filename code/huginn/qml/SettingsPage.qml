@@ -163,13 +163,16 @@ Rectangle {
             { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk",
               note: Settings.pushToTalk && !TalkKey.hasKey ? "No talk key yet, so your mic uses voice activity until you pick one" : GlobalKeys.talkNote },
             { group: "Talking", kind: "button", key: "talkKey", hide: !Settings.pushToTalk, title: TalkKey.key !== 0 ? "Talk key: " + TalkKey.keyName : "Talk key: none yet",
-              note: TalkKey.capturing ? "Press the new key, or LB, LT, X or Y on a controller. Esc or B keeps the old one"
+              note: TalkKey.capturing ? page.pickNote
                     : !TalkKey.hasKey ? "Pick the key you'll hold to talk, or a controller button. A key that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
                     : TalkKey.key === 0 ? "A keyboard key too, if you like. One that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
                     : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Insert, Pause or Scroll Lock, always talk"
                     : "Talks even while you type", label: TalkKey.capturing ? "Cancel" : TalkKey.hasKey ? "Change" : "Pick a key" },
+            // A keyboard key can go too: the controller button alone, or voice activity with push to talk still on.
+            { group: "Talking", kind: "button", key: "clearTalkKey", hide: !Settings.pushToTalk || TalkKey.key === 0 || TalkKey.capturing,
+              title: "No keyboard key", note: TalkKey.padButton !== "" ? "Only the controller button talks" : "Voice activity until you pick one", label: "Remove key" },
             { group: "Talking", kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
-              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: "Hold it in a voice room while Huginn is in front", label: "Remove" },
+              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: page.padNote(TalkKey.padButton), label: "Remove" },
             { group: "Talking", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
               title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
@@ -744,6 +747,29 @@ Rectangle {
         if (top < rowsView.contentY) rowsView.contentY = Math.max(0, top)
         else if (bottom > rowsView.contentY + rowsView.height) rowsView.contentY = Math.min(bottom - rowsView.height, Math.max(0, rowsView.contentHeight - rowsView.height))
     }
+    // "Pick a key": LT or a back paddle have no other job; Y and LB do, so they say what they give up in a voice room.
+    // A handheld's controller button only works with Huginn in front, and a Linux desktop may ask to confirm a key.
+    readonly property string pickNote: "Press the new key, or on a controller " + Gamepad.glyph("lt") + " or a back paddle, which have no other job. "
+        + Gamepad.glyph("y") + " or " + Gamepad.glyph("lb") + " work too, but in a voice room they only talk. Esc or " + Gamepad.glyph("b") + " keeps the old one"
+        + (System.handheld || System.gameMode ? ". The controller button works while Huginn is in front; in a game, voice activity is better" : "")
+        + (Qt.platform.os === "linux" && GlobalKeys.everywhere && !System.gameMode ? ". Your desktop may ask to confirm a key" : "")
+    // The controller talk button's note: what it gives up in a voice room, when it has another job.
+    function padNote(b) {
+        const g = Gamepad.glyph(b), lt = Gamepad.glyph("lt")
+        if (b === "y") return g + " also opens the keyboard, records and calls. In a voice room it only talks. " + lt + " has no other job"
+        if (b === "lb") return g + " also changes section. In a voice room it only talks, and " + g + " with Up or Down still mutes and deafens"
+        if (b === "x") return g + " also opens options. In a voice room it only talks. " + lt + " has no other job"
+        return "Hold it in a voice room while Huginn is in front"
+    }
+    // Y or LB just picked: a clear warning, since each has another job.
+    Connections {
+        target: TalkKey
+        function onPadPicked(button) {
+            const g = Gamepad.glyph(button)
+            if (button === "y") Ui.say(g + " also opens the keyboard: in a voice room it only talks. " + Gamepad.glyph("lt") + " has no other job.")
+            else if (button === "lb") Ui.say(g + " also changes section: in a voice room it only talks. " + g + " with Up or Down still mutes and deafens.")
+        }
+    }
     // Leaving Settings (or this part of it) stops "Pick a key", so the next key pressed elsewhere never becomes the talk key.
     onSectionChanged: { rowsView.contentY = 0; Rooms.micTest = false; TalkKey.stopCapture() }
     onVisibleChanged: if (!visible) TalkKey.stopCapture()
@@ -830,6 +856,7 @@ Rectangle {
         else if (key === "micTest") Rooms.micTest = !Rooms.micTest
         else if (key === "talkKey") { if (TalkKey.capturing) TalkKey.stopCapture(); else TalkKey.capture() }
         else if (key === "talkPad") TalkKey.clearPad()
+        else if (key === "clearTalkKey") TalkKey.clearKey()
         else if (key === "muteKey" || key === "deafenKey") {
             const which = key === "muteKey" ? 1 : 2
             if (GlobalKeys.capturing === which) GlobalKeys.stopCapture(); else GlobalKeys.capture(which)

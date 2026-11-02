@@ -1138,7 +1138,7 @@ private fun Conversation(app: Muninn, key: String) {
     val said = when {
         typingNow -> "typing…"
         activeNow -> if (c != null) "Active now" else "Active now · $keepDays days"
-        c == null -> "Messages stay $keepDays days"
+        c == null -> "Messages delete after $keepDays days"
         else -> ""
     }
     val status = if (mutedNow && !typingNow) (if (said.isEmpty()) "Muted" else "Muted · $said") else said
@@ -2169,7 +2169,7 @@ private fun ChannelChips(s: Proto06.State, current: String, onText: (String) -> 
             if (onEdit != null) onEdit(null) else Ui.say("An admin adds voice rooms.")
         }
         RoomManager.groupCalls(s.g).forEach { (id, who) ->
-            Chip("Voice room · ${who.size}", room?.let { it.g == s.g && it.ch == id } == true, icon = "call") { onVoice(id) }
+            Chip("Group call · ${who.size}", room?.let { it.g == s.g && it.ch == id } == true, icon = "call") { onVoice(id) }
         }
     }
 }
@@ -2721,7 +2721,7 @@ fun ChannelColumn(app: Muninn, g: String) {
                 RoomFaces(who)
             }
             calls.forEach { (id, who) ->
-                ChannelRow("Voice room", voice = true, on = room?.let { it.g == g && it.ch == id } == true) { RoomActivity.join(context, g, id) }
+                ChannelRow("Group call", voice = true, on = room?.let { it.g == g && it.ch == id } == true) { RoomActivity.join(context, g, id) }
                 RoomFaces(who)
             }
             if (grp.readOnly) Text(if (grp.gone == "removed") "You were removed from this group." else "You left this group.",

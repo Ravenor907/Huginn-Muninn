@@ -37,7 +37,7 @@ object Limits {
     /** "What's the difference?" */
     fun typeRules(type: String): List<String> = if (type == FAMILY) listOf(
         "Only admins add people, face to face or by a code they hand over", "No invite links",
-        "Each new member's safety code is checked once", "Messages stay up to 30 days (admins pick 7 to 30)",
+        "Each new member's safety code is checked once", "Messages delete after 7 to 30 days (admins pick)",
         "Files and photos from members arrive by themselves", "Members are in your Family folder")
         else listOf("Anyone in the group can invite, by a link or a code", "Messages delete after 7 days",
         "Small files arrive by themselves, big ones ask first", "Members aren't added to your contacts")

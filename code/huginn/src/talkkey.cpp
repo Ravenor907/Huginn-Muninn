@@ -91,8 +91,22 @@ void TalkKey::clearPad()
     if (m_pad.isEmpty())
         return;
     release();
+    m_padTook = false;
     m_pad.clear();
     Settings::store().remove(QStringLiteral("talkPad"));
+    Q_EMIT changed();
+}
+
+void TalkKey::clearKey()
+{
+    if (m_key == 0)
+        return;
+    if (m_down) {
+        m_down = false;
+        m_rooms->setTalking(m_padDown);
+    }
+    m_key = 0;
+    Settings::store().setValue(QStringLiteral("talkKey"), 0);
     Q_EMIT changed();
 }
 
@@ -106,27 +120,43 @@ bool TalkKey::pad(const QString &button, bool down)
             stopCapture();
             return true;
         }
-        // A, the D-pad, Start and View, the sticks, and RB and RT (the stick pointer's clicks) can't be used: wait for another.
-        static const QStringList usable{QStringLiteral("lb"), QStringLiteral("lt"), QStringLiteral("x"), QStringLiteral("y")};
+        // A back paddle and LT have no other job of their own (X opens the options too). Y and LB can be picked, but in a
+        // voice room they talk instead (Settings says so, and LB with Up or Down still mutes and deafens there). A, B, X,
+        // the D-pad, Start and View, the sticks, and RB and RT (the stick pointer's clicks) can't be used: wait for another.
+        static const QStringList usable{QStringLiteral("lt"), QStringLiteral("p1"), QStringLiteral("p2"), QStringLiteral("p3"),
+                                        QStringLiteral("p4"), QStringLiteral("y"), QStringLiteral("lb")};
         if (!usable.contains(button))
             return true;
         m_pad = button;
         Settings::store().setValue(QStringLiteral("talkPad"), button);
         stopCapture();
+        Q_EMIT padPicked(button);
         return true;
     }
-    if (m_pad.isEmpty() || button != m_pad || !m_settings->pushToTalk() || !m_rooms->inRoom()) {
-        // Let go of in a room that has just ended: nothing to do, but it's still the talk button's release.
-        if (!down && button == m_pad && m_padDown) {
-            release();
-            return true;
+    // A release: the talk button's only when its press talked (a press that did the button's usual job, outside a
+    // voice room, gets its usual release too).
+    if (!down) {
+        if (m_pad.isEmpty() || button != m_pad || !m_padTook)
+            return false;
+        m_padTook = false;
+        if (m_padDown) {
+            m_padDown = false;
+            m_rooms->setTalking(m_down);
         }
+        return true;
+    }
+    // A press: the talk button talks only in a voice room with push to talk on; anywhere else it does its usual job.
+    if (m_pad.isEmpty() || button != m_pad)
+        return false;
+    if (!m_settings->pushToTalk() || !m_rooms->inRoom()) {
+        m_padTook = false;
         return false;
     }
-    if (down == m_padDown)
-        return true;
-    m_padDown = down;
-    m_rooms->setTalking(down || m_down);
+    m_padTook = true;
+    if (!m_padDown) {
+        m_padDown = true;
+        m_rooms->setTalking(true);
+    }
     return true;
 }
 

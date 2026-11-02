@@ -32,6 +32,13 @@ QString buttonName(Uint8 b)
     case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return QStringLiteral("right");
     case SDL_CONTROLLER_BUTTON_LEFTSTICK: return QStringLiteral("ls");
     case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return QStringLiteral("rs");
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    // The back paddles (Xbox Elite, some handhelds): no job in Huginn, so one can be the talk button (TalkKey).
+    case SDL_CONTROLLER_BUTTON_PADDLE1: return QStringLiteral("p1");
+    case SDL_CONTROLLER_BUTTON_PADDLE2: return QStringLiteral("p2");
+    case SDL_CONTROLLER_BUTTON_PADDLE3: return QStringLiteral("p3");
+    case SDL_CONTROLLER_BUTTON_PADDLE4: return QStringLiteral("p4");
+#endif
     }
     return {};
 }

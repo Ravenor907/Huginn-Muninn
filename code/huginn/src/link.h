@@ -106,6 +106,9 @@ public:
     Q_INVOKABLE QVariantList unchecked() const;
     Q_INVOKABLE void confirm(const QString &key);
     Q_INVOKABLE void unlink(const QString &key);
+    // This PC is linked to a phone, known even while Huginn is locked (link.json is in the vault, so a plain note is kept
+    // beside it: no name, no key). The lock's "Forgot it?" uses it to offer linking again instead of a restore.
+    Q_INVOKABLE bool linkedWhileLocked() const;
     // On a companion: unlink the phone. keep: its chats, contacts, groups and folders stay here, read only (Unlink
     // again, or linking another phone, takes them away); else everything that came from it goes now. False when this
     // device's own name from before linking isn't known (linked before it was kept): ask for one.
