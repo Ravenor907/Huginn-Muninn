@@ -208,10 +208,15 @@ object Seasons {
     /** The season on screen: the one picked, or today's for Auto. */
     val current: String get() = choice(Access.season).let { if (it == AUTO || it == OFF) now else it }
 
-    /** Background (Seasonal on Dark): the season's own (""), or one of these dark grounds; panels and lines are shaded from it. */
+    /**
+     * Background (Seasonal on Dark): Default (""), the season's own from [defaultGround], or one of these dark grounds;
+     * panels and lines are shaded from it.
+     */
     val GROUNDS = listOf("#0C1724", "#13201A", "#0E1C1E", "#1E1522", "#22140F", "#221B10", "#17191E", "#111111")
     val GROUND_NAMES = listOf("Night", "Pine", "Teal", "Plum", "Bark", "Umber", "Slate", "Charcoal")
     fun ground(key: String?): String = if (key != null && key in GROUNDS) key else ""
+    /** The Background [season] shows until one is picked (the same in Huginn). */
+    fun defaultGround(season: String): String = when (season) { AUTUMN -> "#111111"; SNOW -> "#0E1C1E"; else -> "" }
 
     /** Animation: whether anything falls behind the Seasonal look. How much and how big is [LeafPrefs]. Also Seasonal's Off. */
     const val OFF = "off"
@@ -251,8 +256,9 @@ object Palette {
     /** Color vision, and which of its sets: 0 on a dark ground, 1 on Light, 2 in high contrast. */
     val vision: String get() = Access.colorVision
     private val tone: Int get() = ColorVision.tone(light, hc)
-    /** The Seasonal background picked in Settings, or null for the season's own. */
-    private val customGround: Color? get() = if (tinted) parse(Seasons.ground(Access.seasonGround).ifEmpty { null }) else null
+    /** The Seasonal background on screen: the one picked in Settings, or the season's own ([Seasons.defaultGround]). */
+    private val customGround: Color? get() =
+        if (tinted) parse(Seasons.ground(Access.seasonGround).ifEmpty { Seasons.defaultGround(Seasons.current) }.ifEmpty { null }) else null
 
     /**
      * Picks the shade for the look in use: dark, true black, parchment, autumn, high contrast, snow. A shade with a

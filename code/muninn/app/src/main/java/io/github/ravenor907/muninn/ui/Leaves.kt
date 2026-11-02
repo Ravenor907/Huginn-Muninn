@@ -38,15 +38,18 @@ import kotlin.math.sin
  * The Amount and Size sliders under Settings › Look › Seasonal, worked out the same way in Huginn. Both are
  * logarithmic, so the low end is fine-grained: a slider position from 0 to 100 gives 1 to 400 on screen
  * (`round(400^(v/100))`) and 15% to 600% of the usual size (`round(15 * 40^(v/100))`). Until Amount is moved it
- * follows the screen: [DEFAULT_BASE] on a phone-sized screen, more on a bigger one.
+ * is [DEFAULT_COUNT]; an older Amount carried over follows the screen: its base on a phone-sized screen, more on a
+ * bigger one.
  */
 object FallScale {
     const val MIN_COUNT = 1
     const val MAX_COUNT = 400
     const val MIN_SIZE = 15
     const val MAX_SIZE = 600
-    const val DEFAULT_SIZE = 60
-    /** How many fall on a phone-sized screen until Amount is moved. */
+    const val DEFAULT_SIZE = 57
+    /** How many fall until Amount is moved (the same in Huginn). */
+    const val DEFAULT_COUNT = 121
+    /** The base no older Amount came over with: [DEFAULT_COUNT] falls. */
     const val DEFAULT_BASE = 12f
     /** How many fell on a phone-sized screen at 100% in older versions (11 leaves and 3 seeds). */
     const val OLD_BASE = 14f
@@ -74,12 +77,12 @@ object FallScale {
 }
 
 /**
- * Settings › Look › Seasonal: Amount (how many fall; 0 follows the screen) and Size (percent of the usual). Kept here
+ * Settings › Look › Seasonal: Amount (how many fall; 0 for the default) and Size (percent of the usual). Kept here
  * so the sliders and what falls follow the same value at once; saved in the app's settings under "fallCount",
  * "fallBase" and "fallSize". Older "leafCount" and "leafSize" percents and the Light animation carry over.
  */
 object LeafPrefs {
-    /** Amount picked on the slider, or 0: [FallScale.autoCount] of [base] for the screen. */
+    /** Amount picked on the slider, or 0: [FallScale.DEFAULT_COUNT], or [FallScale.autoCount] of an older [base]. */
     var count by mutableIntStateOf(0)
     var base by mutableFloatStateOf(FallScale.DEFAULT_BASE)
     var size by mutableIntStateOf(FallScale.DEFAULT_SIZE)
@@ -98,7 +101,8 @@ object LeafPrefs {
     }
     /** How many fall on a screen [widthDp] by [heightDp]. */
     fun countFor(widthDp: Int, heightDp: Int): Int =
-        if (count > 0) count else FallScale.autoCount(base, FallScale.area(widthDp, heightDp))
+        if (count > 0) count else if (base == FallScale.DEFAULT_BASE) FallScale.DEFAULT_COUNT
+        else FallScale.autoCount(base, FallScale.area(widthDp, heightDp))
     fun setSize(context: Context, v: Int) {
         size = v.coerceIn(FallScale.MIN_SIZE, FallScale.MAX_SIZE)
         context.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putInt("fallSize", size).apply()

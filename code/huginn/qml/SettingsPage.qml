@@ -60,14 +60,14 @@ Rectangle {
         else Settings.fallSize = Theme.fallSizeAt(v)
     }
     // One notch left or right: on to the next number the slider gives (near 1 several positions give
-    // the same one). A puts it back: Amount follows the window again, Size goes to 60%.
+    // the same one). A puts it back: Amount and Size go back to their defaults (121, 57%), Gradient to 80%.
     function stepFall(key, dir) {
         // A on Input sensitivity never turns Automatic off: from Manual it goes back to Automatic, else it does nothing.
         if (key === "gateThreshold") { if (dir !== 0) Rooms.gateThreshold = Rooms.gateThreshold + dir; else if (Rooms.gateMode === "manual") Rooms.gateMode = "auto"; return }
-        if (key === "seasonGradient") { Settings.seasonGradient = dir === 0 ? 100 : Math.max(0, Math.min(200, Settings.seasonGradient + dir * 10)); return }
+        if (key === "seasonGradient") { Settings.seasonGradient = dir === 0 ? 80 : Math.max(0, Math.min(200, Settings.seasonGradient + dir * 10)); return }
         if (dir === 0) {
             if (key === "fallCount") Settings.fallCount = 0
-            else Settings.fallSize = 60
+            else Settings.fallSize = 57
             return
         }
         const now = key === "fallCount" ? fallShown : Settings.fallSize
@@ -650,7 +650,7 @@ Rectangle {
                     Math.floor((control.width - defaultGround.width - spacing * Theme.groundSwatches.length) / Math.max(1, Theme.groundSwatches.length))))
                 Rectangle {
                     id: defaultGround
-                    readonly property bool on: Theme.groundPick === ""
+                    readonly property bool on: Theme.groundSaved === ""
                     readonly property real naturalWidth: defaultText.implicitWidth + Theme.px(16)
                     width: naturalWidth; height: groundCtl.swatch
                     radius: Theme.radiusSmall
@@ -674,7 +674,7 @@ Rectangle {
                 Repeater {
                     model: rowItem.r.kind === "grounds" ? Theme.groundSwatches : []
                     Rectangle {
-                        readonly property bool on: Theme.groundPick === modelData
+                        readonly property bool on: Theme.groundSaved === modelData
                         width: groundCtl.swatch; height: width; radius: width / 2
                         color: modelData
                         border.width: on ? Theme.px(2) : 1
@@ -929,7 +929,7 @@ Rectangle {
         } else if (r.kind === "grounds") {
             // Default, then each background.
             const order = [""].concat(Theme.groundSwatches)
-            const at = Math.max(0, order.indexOf(Theme.groundPick))
+            const at = Math.max(0, order.indexOf(Theme.groundSaved))
             const i = dir === 0 ? (at + 1) % order.length : Math.max(0, Math.min(order.length - 1, at + dir))
             Settings.seasonGround = order[i]
         } else if (r.kind === "accent") {

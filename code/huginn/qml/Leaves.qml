@@ -14,8 +14,8 @@ import Huginn
 // drop. It stops while the window is hidden or minimized, after a minute in the background, and after 30 seconds
 // without input on battery; Less motion and Battery saver lay everything still, scattered across the ground.
 // Settings › Look: Animation (Off draws nothing and stops it; "On, even on battery" keeps it moving under Battery saver
-// and idle on battery, at 15 frames a second while on battery), Amount (1 to 400 on screen; until it's moved,
-// Theme.fallCount scales it by the window's area) and Size (15% to 600%). Very big ones are fewer, so all
+// and idle on battery, at 15 frames a second while on battery), Amount (1 to 400 on screen; 121 until it's moved,
+// see Theme.fallCount) and Size (15% to 600%, 57% until moved). Very big ones are fewer, so all
 // of them together hold at most twice the window's pixels.
 Item {
     id: leaves
@@ -26,7 +26,7 @@ Item {
     readonly property bool falling: Settings.seasonAnimation !== "off"
     readonly property bool evenOnBattery: Settings.seasonAnimation === "battery"
 
-    readonly property real sizeScale: (Number(Settings.fallSize) || 60) / 100 * Theme.s
+    readonly property real sizeScale: (Number(Settings.fallSize) || 57) / 100 * Theme.s
     // At most as many as fit in twice the window's pixels at this size (only ever fewer for a few dozen huge ones).
     readonly property int fits: Math.max(1, Math.floor(Math.max(width * height, 1440000) * 2 / Math.pow(30 * sizeScale, 2)))
     readonly property int count: falling ? Math.min(Theme.fallCount(width, height), fits) : 0

@@ -65,8 +65,8 @@ class Settings : public QObject
     Q_PROPERTY(bool patternTrail READ patternTrail WRITE setPatternTrail NOTIFY changed)
     // The Seasonal look's falling leaves or snowflakes. fallCount: how many on screen, 1 to 400, or
     // 0 until the Amount slider is moved: then fallBase on a 1600x900 window, scaled by the window's
-    // area. fallSize: percent of the usual, 15 to 600. Older "leafCount" and "leafSize" percents and
-    // the Light animation carry over; their old defaults get today's (12 and 60%).
+    // area (Theme.qml: 121 while fallBase is today's default). fallSize: percent of the usual, 15 to 600, 57 until
+    // moved. Older "leafCount" and "leafSize" percents and the Light animation carry over; their old defaults get today's.
     Q_PROPERTY(int fallCount READ fallCount WRITE setFallCount NOTIFY appearanceChanged)
     Q_PROPERTY(double fallBase READ fallBase NOTIFY appearanceChanged)
     Q_PROPERTY(int fallSize READ fallSize WRITE setFallSize NOTIFY appearanceChanged)
@@ -77,7 +77,7 @@ class Settings : public QObject
     Q_PROPERTY(QString season READ season WRITE setSeason NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonGround READ seasonGround WRITE setSeasonGround NOTIFY appearanceChanged)
     Q_PROPERTY(QString seasonAnimation READ seasonAnimation WRITE setSeasonAnimation NOTIFY appearanceChanged)
-    // Seasonal: how strong the ground's gradient is, 0 (flat) to 200 percent of the usual (100).
+    // Seasonal: how strong the ground's gradient is, 0 (flat) to 200 percent of the usual (80 until moved).
     Q_PROPERTY(int seasonGradient READ seasonGradient WRITE setSeasonGradient NOTIFY appearanceChanged)
     // Do not disturb: no message sound, no desktop notification and no ring while it's on. Set by
     // the status card for this run only; it isn't saved here (the status is).
@@ -196,13 +196,13 @@ public:
     }
     int fallSize() const
     {
-        if (m_settings.contains(QStringLiteral("fallSize"))) return qBound(15, value("fallSize", 60).toInt(), 600);
+        if (m_settings.contains(QStringLiteral("fallSize"))) return qBound(15, value("fallSize", 57).toInt(), 600);
         const int old = value("leafSize", 100).toInt();
-        return old == 100 ? 60 : qBound(15, old, 600);
+        return old == 100 ? 57 : qBound(15, old, 600);
     }
     QString season() const { return value("seasonal", "off").toString(); }
     QString seasonGround() const { return value("seasonGround", "").toString(); }
-    int seasonGradient() const { return qBound(0, value("seasonGradient", 100).toInt(), 200); }
+    int seasonGradient() const { return qBound(0, value("seasonGradient", 80).toInt(), 200); }
     QString seasonAnimation() const
     {
         const QString v = value("seasonAnimation", "full").toString();

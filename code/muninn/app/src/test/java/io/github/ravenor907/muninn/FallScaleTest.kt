@@ -45,7 +45,9 @@ class FallScaleTest {
     }
 
     @Test
-    fun defaultsAreTwelveOnAPhoneAtSixtyPercent() {
+    fun defaultsAre121AtFiftySevenPercent() {
+        assertEquals(121, FallScale.DEFAULT_COUNT)
+        // An older Amount carried over still follows the screen.
         assertEquals(12, FallScale.autoCount(FallScale.DEFAULT_BASE, FallScale.area(412, 915)))
         // More on a bigger screen, held between half and four times a phone's.
         assertEquals(24, FallScale.autoCount(FallScale.DEFAULT_BASE, FallScale.area(824, 915)))
@@ -53,7 +55,7 @@ class FallScaleTest {
         assertEquals(48, FallScale.autoCount(FallScale.DEFAULT_BASE, FallScale.area(4000, 4000)))
         assertEquals(1, FallScale.autoCount(0.1f, 1f))
         assertEquals(400, FallScale.autoCount(1000f, 1f))
-        assertEquals(60, FallScale.DEFAULT_SIZE)
+        assertEquals(57, FallScale.DEFAULT_SIZE)
     }
 
     @Test

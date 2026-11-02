@@ -20,11 +20,12 @@ QtObject {
     // range that wraps past the new year, like 1201 to 229, works too). The first that holds the day
     // wins; with none, the last one. Snow runs from December 1 to the end of February (229 covers a
     // leap year), Autumn the rest of the year. The order here is the order of the Seasonal choices, so a
-    // new season joins them by being added here.
+    // new season joins them by being added here. ground: the season's Background until one is picked (one of
+    // groundSwatches, on Dark), its Default.
     function seasons() {
         return [
-            { look: "autumn", name: "Autumn", from: 301, to: 1130 },
-            { look: "snow", name: "Snow", from: 1201, to: 229 }
+            { look: "autumn", name: "Autumn", from: 301, to: 1130, ground: "#111111" },
+            { look: "snow", name: "Snow", from: 1201, to: 229, ground: "#0E1C1E" }
         ]
     }
     function seasonOn(d) {
@@ -54,11 +55,13 @@ QtObject {
     function fallCountPos(n) { return 100 * Math.log(Math.max(1, Math.min(400, n))) / Math.log(400) }
     function fallSizeAt(v) { return Math.max(15, Math.min(600, Math.round(15 * Math.pow(40, Math.max(0, Math.min(100, v)) / 100)))) }
     function fallSizePos(p) { return 100 * Math.log(Math.max(15, Math.min(600, p)) / 15) / Math.log(40) }
-    // How many fall in a w by h window: the Amount picked, or until it's moved, Settings.fallBase on
-    // a 1600x900 window scaled by the window's area.
-    // Handheld mode: half as many until the Amount slider is moved.
+    // How many fall in a w by h window: the Amount picked, or until it's moved, fallDefault. An older
+    // Amount carried over (Settings.fallBase other than 12) is on a 1600x900 window scaled by the window's area,
+    // and in Handheld mode half as many.
+    readonly property int fallDefault: 121
     function fallCount(w, h) {
         if (Settings.fallCount > 0) return Settings.fallCount
+        if (Settings.fallBase === 12) return fallDefault
         const area = Math.max(0.2, (w * h) / (1600 * 900))
         return Math.max(1, Math.min(400, Math.round(Settings.fallBase * area * (System.handheld ? 0.5 : 1))))
     }
@@ -81,11 +84,17 @@ QtObject {
     readonly property bool tinted: seasonal && choice === "dark" && !hc
     readonly property bool snowTint: tinted && snow
     readonly property bool autumnTint: tinted && !snow
-    // Settings › Look › Background (Seasonal on Dark): the season's own ground, or one of these dark grounds; the
-    // panels and lines are shaded from it, so text stays readable.
+    // Settings › Look › Background (Seasonal on Dark): Default (the season's own ground, see seasons()), or one of
+    // these dark grounds; the panels and lines are shaded from it, so text stays readable. groundSaved: the one
+    // picked ("" for Default); groundPick: the one on screen.
     readonly property var groundSwatches: ["#0C1724", "#13201A", "#0E1C1E", "#1E1522", "#22140F", "#221B10", "#17191E", "#111111"]
     readonly property var groundNames: ["Night", "Pine", "Teal", "Plum", "Bark", "Umber", "Slate", "Charcoal"]
-    readonly property string groundPick: tinted && groundSwatches.indexOf(Settings.seasonGround) >= 0 ? Settings.seasonGround : ""
+    readonly property string groundSaved: groundSwatches.indexOf(Settings.seasonGround) >= 0 ? Settings.seasonGround : ""
+    readonly property string groundDefault: {
+        const s = seasons().find(x => x.look === seasonLook)
+        return s && groundSwatches.indexOf(s.ground) >= 0 ? s.ground : ""
+    }
+    readonly property string groundPick: !tinted ? "" : groundSaved !== "" ? groundSaved : groundDefault
     // A "#RRGGBB" lifted toward white by f (0 to 1), or darkened toward black by a negative f.
     function shade(hex, f) {
         const c = [1, 3, 5].map(i => parseInt(hex.substr(i, 2), 16) / 255)
