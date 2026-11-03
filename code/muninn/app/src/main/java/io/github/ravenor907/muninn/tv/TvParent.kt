@@ -338,7 +338,7 @@ object TvParent {
             // change (from any parent, wherever they are) sends the same zone instead of its own phone's.
             put(t.copy(v = v, pending = listOf(plain), pendingV = v, since = System.currentTimeMillis(), extrasSent = extras != null, k11Sent = extras?.chat != null,
                 sharedWith = (t.sharedWith + newParents).distinct(), tz = KidRules.zoneToKeep(t.tz, extras?.tz)))
-            _tvs.value[key]?.let { signed[key] = Signed(v, Canon.hash(cfg), it) }
+            _tvs.value[key]?.let { TvParent.signed[key] = Signed(v, Canon.hash(cfg), it) }
             tries[key] = 1 to System.currentTimeMillis() + RETRY[0]
             signed = cfg
         }
