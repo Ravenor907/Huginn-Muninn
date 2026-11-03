@@ -3777,7 +3777,7 @@ int Chat::receiveProfile(const QString &fromKey, const QString &sentId, const QJ
         if (!sentId.isEmpty())
             m_seen.add(fromKey, sentId, now());
         if (p.value(QStringLiteral("t")).toString() == QLatin1String("profile?"))
-            m_profile->askedBy(fromKey);
+            m_profile->askedBy(fromKey, Profile::askedPv(p));
         else
             m_profile->acked(fromKey, Profile::versionOf(p.value(QStringLiteral("v"))));
         return 200;

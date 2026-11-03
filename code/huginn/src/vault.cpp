@@ -655,6 +655,7 @@ void Vault::wrongTry()
 
 bool Vault::setSecret(const QString &secret, bool pattern)
 {
+    m_secretError.clear();
     if (!strongSecret(secret))
         return false;
     if (exists() && m_key.isEmpty())
@@ -685,6 +686,7 @@ bool Vault::setSecret(const QString &secret, bool pattern)
             e.second.fill(0);
         if (!swapped) {
             CrashLog::note(QStringLiteral("vault: setting a lock didn't swap: %1").arg(error));
+            m_secretError = error;   // round 16: LockPanel says why
             return false;   // what was there is as it was (or is finished at the next start)
         }
         m_key.fill(0);
@@ -771,6 +773,7 @@ void Vault::eraseAll()
     // A restore's folders left beside it (finishSwap) go too.
     QDir(System::dataDir() + QStringLiteral("/chat.restore")).removeRecursively();
     QDir(System::dataDir() + QStringLiteral("/chat.old")).removeRecursively();
+    QFile::remove(System::dataDir() + QStringLiteral("/chat.old.replaced"));
     // Copies kept before a restore (keepCopy) go too.
     for (const QFileInfo &fi : QDir(System::dataDir()).entryInfoList({QStringLiteral("chat-kept-*")}, QDir::Dirs | QDir::NoDotAndDotDot))
         QDir(fi.absoluteFilePath()).removeRecursively();
@@ -1505,6 +1508,43 @@ namespace
 {
 // In a restore's new folder once every file is written; gone once the swap is done.
 const QString kComplete = QStringLiteral(".restore-complete");
+// Round 16: a file beside the folder a swap put aside ("chat.old.replaced"), written once the new folder is in place:
+// that folder is done with, and goes (now, or at the next start or swap if a file in it was held). Beside it, not in
+// it, so it stays while the folder is half deleted. Only a folder with it is ever deleted without being asked.
+QString replacedMark(const QString &old) { return old + QStringLiteral(".replaced"); }
+
+// Round 16: a folder a swap put aside (old, "chat.old") goes. One marked done with is deleted; one without the mark (it
+// may hold someone's chats) is never deleted: it is moved aside as "chat-kept-<date and time>" beside it. *kept: where
+// it went then. False when it is still there (a file in it is held), with *why for the person.
+bool clearOld(const QString &old, QString *kept, QString *why)
+{
+    if (!QFileInfo(old).isDir()) {
+        QFile::remove(replacedMark(old));
+        return true;
+    }
+    if (QFileInfo::exists(replacedMark(old))) {
+        if (QDir(old).removeRecursively()) {
+            QFile::remove(replacedMark(old));
+            return true;
+        }
+        CrashLog::note(QStringLiteral("vault: a folder a swap put aside couldn't be deleted yet"));
+    } else {
+        const QString aside = QFileInfo(old).absolutePath() + QStringLiteral("/chat-kept-")
+                              + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd-HHmmss"));
+        if (!QFileInfo::exists(aside) && QDir().rename(old, aside)) {
+            if (kept)
+                *kept = aside;
+            CrashLog::note(QStringLiteral("vault: chats a swap put aside were kept as %1").arg(QFileInfo(aside).fileName()));
+            return true;
+        }
+    }
+    if (why)
+        *why = QStringLiteral("Huginn couldn't clear %1, a folder left from an earlier restore or lock change. Another program, like "
+                              "antivirus or the search indexer, may be using a file in it. Close Huginn, delete or move that folder, "
+                              "then open Huginn and try again.")
+                   .arg(QDir::toNativeSeparators(old));
+    return false;
+}
 
 // A folder that was in use a moment ago (a file another program, like antivirus, looks at) can take a moment to let go.
 bool renameDir(const QString &from, const QString &to)
@@ -1523,12 +1563,15 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
     // Everything is written and checked in a new folder first, so a failure leaves Chat as it was.
     const QString clean = QDir::cleanPath(dir);
     const QString stage = clean + QStringLiteral(".restore"), old = clean + QStringLiteral(".old");
-    // Chats left aside by a swap that couldn't finish (finishSwap said where) are never deleted here: moved first.
-    if (QFileInfo(old).isDir()) {
-        *error = QStringLiteral("Your previous chats are still in %1. Move that folder somewhere else first (it opens with the lock it had), "
-                                "then try again.")
-                     .arg(QDir::toNativeSeparators(old));
-        return false;
+    // Round 16: a folder left aside by an earlier swap never blocks this one. One marked done with goes; chats left
+    // aside by a swap that couldn't finish are never deleted: moved aside as chat-kept-<date> (they open with the lock
+    // they had). Only when neither works is the reason given.
+    {
+        QString why;
+        if (!clearOld(old, nullptr, &why)) {
+            *error = why;
+            return false;
+        }
     }
     QDir(stage).removeRecursively();
     auto failed = [&](const QString &why) {
@@ -1590,9 +1633,19 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
         }
         return failed(QStringLiteral("Another program is using Huginn's chat folder, so nothing changed. Close it and try again."));
     }
-    // The old folder goes first: a start that finds the mark still here only tidies up.
-    QDir(old).removeRecursively();
-    QFile::remove(clean + QLatin1Char('/') + kComplete);
+    // The old folder goes first: a start that finds the mark still here only tidies up. Round 16: it is marked done
+    // with first, so if a file in it is held (antivirus, the indexer) it goes at the next start or swap, and the mark in
+    // the new folder stays until it has.
+    {
+        QFile replaced(replacedMark(old));
+        if (replaced.open(QIODevice::WriteOnly))
+            replaced.write("1");
+    }
+    if (QDir(old).removeRecursively()) {
+        QFile::remove(replacedMark(old));
+        QFile::remove(clean + QLatin1Char('/') + kComplete);
+    } else
+        CrashLog::note(QStringLiteral("vault: the folder a swap put aside couldn't be deleted yet; it goes at the next start"));
     return true;
 }
 
@@ -1611,16 +1664,26 @@ QString Vault::finishSwap(const QString &dir)
     const bool hasDir = QFileInfo(clean).isDir();
     QString said;
     if (hasDir && QFileInfo::exists(clean + QLatin1Char('/') + kComplete)) {
-        // Swapped in; only the tidying was left.
-        if (hasOld)
-            QDir(old).removeRecursively();
-        QFile::remove(clean + QLatin1Char('/') + kComplete);
-        CrashLog::note(QStringLiteral("vault: finished tidying up after a restore"));
+        // Swapped in; only the tidying was left (round 16: the mark stays until the old folder is really gone).
+        if (!hasOld || QDir(old).removeRecursively()) {
+            QFile::remove(replacedMark(old));
+            QFile::remove(clean + QLatin1Char('/') + kComplete);
+            CrashLog::note(QStringLiteral("vault: finished tidying up after a restore"));
+        } else {
+            CrashLog::note(QStringLiteral("vault: the folder a restore put aside couldn't be deleted yet; tried again next time"));
+        }
     } else if (!hasDir && hasOld) {
         if (stageComplete && QDir().rename(stage, clean)) {
-            // Cut off between the two renames, with every new file written: finished.
-            QDir(old).removeRecursively();
-            QFile::remove(clean + QLatin1Char('/') + kComplete);
+            // Cut off between the two renames, with every new file written: finished (round 16: marked done with
+            // first, so a held file only delays its going).
+            QFile mark(replacedMark(old));
+            if (mark.open(QIODevice::WriteOnly))
+                mark.write("1");
+            mark.close();
+            if (QDir(old).removeRecursively()) {
+                QFile::remove(replacedMark(old));
+                QFile::remove(clean + QLatin1Char('/') + kComplete);
+            }
             CrashLog::note(QStringLiteral("vault: finished a restore that was cut off"));
             said = QStringLiteral("A restore was cut off, and is finished now.");
         } else if (QDir().rename(old, clean)) {
@@ -1631,8 +1694,16 @@ QString Vault::finishSwap(const QString &dir)
             said = QStringLiteral("A restore didn't finish. Your previous chats are in %1.").arg(QDir::toNativeSeparators(old));
         }
     } else if (hasDir && hasOld) {
-        // The old folder aside but not yet deleted, with no sign the new one is complete: kept, never deleted unseen.
-        said = QStringLiteral("A restore didn't finish. Your previous chats are in %1.").arg(QDir::toNativeSeparators(old));
+        // The old folder aside but not yet deleted, with no sign the new one is complete. Round 16: marked done with
+        // (the swap finished, a held file kept it): it goes now. Otherwise kept, never deleted unseen, but moved out of
+        // the way (chat-kept-<date>), so it never blocks a restore or Set a lock.
+        QString kept, why;
+        if (!clearOld(old, &kept, &why))
+            said = why;
+        else if (!kept.isEmpty())
+            said = QStringLiteral("Chats from before an earlier restore or lock change were kept in %1. They open with the lock they had. "
+                                  "If you don't need them, delete that folder.")
+                       .arg(QDir::toNativeSeparators(kept));
     }
     if (QFileInfo(stage).isDir() && QFileInfo(clean).isDir()) {
         // A stage that never went in: what's in place is untouched; the backup can be restored again.
@@ -2144,16 +2215,42 @@ bool Vault::backupSelfTest()
                          QFile k(cut + QStringLiteral("/vault.key"));
                          return k.open(QIODevice::ReadOnly) && k.readAll() == "new lock";
                      }());
-        // Chats left aside are never deleted by the next swap: it refuses and says where they are.
+        // Round 16: chats left aside are never deleted by the next swap, and never block it: they are moved aside as
+        // chat-kept-<date> (they still open), and the swap goes ahead.
+        const QString parent = QFileInfo(cut).absolutePath();
+        const auto keptDirs = [&parent] { return QDir(parent).entryList({QStringLiteral("chat-kept-*")}, QDir::Dirs | QDir::NoDotAndDotDot); };
         QDir().mkpath(cut + QStringLiteral(".old"));
         QFile left(cut + QStringLiteral(".old/chats.json"));
         if (left.open(QIODevice::WriteOnly))
             left.write("previous");
         left.close();
         QString refused;
-        check("a swap never deletes chats left aside", !replaceAll(keyA, cut, stale, &refused) && refused.contains(QStringLiteral(".old"))
-                                                           && QFileInfo::exists(cut + QStringLiteral(".old/chats.json")) && collect(keyB, cut) == want);
-        QDir(cut + QStringLiteral(".old")).removeRecursively();
+        const bool went = replaceAll(keyB, cut, back, &refused);
+        const QStringList keptNow = keptDirs();
+        check("a swap never deletes chats left aside, and isn't blocked by them",
+              went && keptNow.size() == 1 && QFileInfo::exists(parent + QLatin1Char('/') + keptNow.first() + QStringLiteral("/chats.json"))
+                  && !QFileInfo::exists(cut + QStringLiteral(".old")) && collect(keyB, cut) == want);
+        for (const QString &k : keptNow)
+            QDir(parent + QLatin1Char('/') + k).removeRecursively();
+        // A folder a finished swap put aside but couldn't delete (marked done with) goes at the next start, with
+        // nothing said; one without the mark is kept as chat-kept-<date>, and the start says where.
+        QDir().mkpath(cut + QStringLiteral(".old/photos"));
+        QFile done(cut + QStringLiteral(".old.replaced"));
+        if (done.open(QIODevice::WriteOnly))
+            done.write("1");
+        done.close();
+        const QString tidied = finishSwap(cut);
+        check("a leftover a finished swap marked goes at the next start", tidied.isEmpty() && !QFileInfo::exists(cut + QStringLiteral(".old"))
+                                                                               && !QFileInfo::exists(cut + QStringLiteral(".old.replaced")) && keptDirs().isEmpty());
+        QDir().mkpath(cut + QStringLiteral(".old"));
+        const QString keptSaid = finishSwap(cut);
+        const QStringList keptStart = keptDirs();
+        check("an unmarked leftover is kept aside at the start and said", keptSaid.contains(QStringLiteral("chat-kept-")) && keptStart.size() == 1
+                                                                            && !QFileInfo::exists(cut + QStringLiteral(".old")) && collect(keyB, cut) == want);
+        for (const QString &k : keptStart)
+            QDir(parent + QLatin1Char('/') + k).removeRecursively();
+        // Then Set a lock (a swap) works again.
+        check("a swap works once the leftover is cleared", replaceAll(keyB, cut, back, &refused) && collect(keyB, cut) == want);
     }
     check("unsafe names refused", !safeName(QStringLiteral("../x")) && !safeName(QStringLiteral("/etc/x")) && !safeName(QStringLiteral("a//b"))
                                       && safeName(QStringLiteral("photos/abc")));

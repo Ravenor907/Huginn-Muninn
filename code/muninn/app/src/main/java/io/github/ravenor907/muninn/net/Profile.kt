@@ -139,8 +139,14 @@ object ProfileWire {
     const val ASK_MS = 5 * 60_000L
     /** Refresh by hand: no sooner than this after the last ask. */
     const val REFRESH_MS = 10_000L
-    /** At most one picture sent because a person asked, per person, in this long. */
-    const val ANSWER_MS = 60_000L
+    /**
+     * Round 16: a person's "profile?" is answered at most once per version of mine in this long, and only when the
+     * version they say they keep ("pv" in the ask) is older than mine. Pictures sent after a restart wait this long
+     * after the last one to that person too.
+     */
+    const val DAY_MS = 24 * 3_600_000L
+    /** At most this many pictures go out in one day (UTC), to everyone together: first sends, retries and answers. */
+    const val DAY_MAX = 200
     /** "profile?" and "profile-ok" from one sender: at most this many in 10 s (apart from the picture's 1 in 10 s). */
     const val CTL_PER_10S = 5
     /** No "profile-ok": sent again after 2, 4, 8 ... minutes, at most 6 hours apart, at most this many times. */
@@ -158,7 +164,26 @@ object ProfileWire {
     /** The sender's profile version an envelope carries ("pv"), or null. */
     fun pvOf(o: JSONObject): Long? = versionOf(o.opt("pv"))
 
-    fun askMsg(): String = JSONObject().put("t", ASK).toString()
+    /** "profile?" saying the version of theirs I keep ([have], 0: none). */
+    fun askMsg(have: Long): String = JSONObject().put("t", ASK).put("pv", have.coerceIn(0L, (1L shl 53) - 1)).toString()
+
+    /**
+     * The version of mine the asker says it keeps ("pv" in a "profile?": a whole number, 0 <= pv < 2^53). An app from
+     * before round 16 doesn't say, and anything unusable counts the same: 0, so it is still answered (within the
+     * once-a-day limit).
+     */
+    fun askedPv(p: JSONObject): Long = when (val x = p.opt("pv")) {
+        is Int -> x.toLong().takeIf { it >= 0 } ?: 0L
+        is Long -> x.takeIf { it >= 0 && it < (1L shl 53) } ?: 0L
+        else -> 0L
+    }
+
+    /**
+     * Answer a "profile?": I have a version [mine], the asker keeps an older one ([theirs]), and the last answer to
+     * them ([lastV] at [lastAt], 0 0: none) was another version or at least a day ago.
+     */
+    fun mayAnswer(mine: Long, theirs: Long, lastV: Long, lastAt: Long, now: Long): Boolean =
+        mine >= 1 && theirs < mine && (lastV != mine || lastAt == 0L || now - lastAt >= DAY_MS || now < lastAt)
     fun ackMsg(v: Long): String = JSONObject().put("t", ACK).put("v", v).toString()
 
     /** "profile?" or "profile-ok" (the small ones in room "profile"), from the plaintext; false for anything else. */
@@ -184,8 +209,25 @@ object ProfileWire {
         return minOf(FIRST_RETRY_MS shl shift, MAX_RETRY_MS)
     }
 
-    /** Send now: never sent ([tries] 0), or not yet [MAX_TRIES] and the wait after the last send ([at]) is over. */
-    fun due(tries: Int, at: Long, now: Long) = tries == 0 || (tries < MAX_TRIES && now - at >= retryMs(tries))
+    /**
+     * Send now: never sent ([tries] 0), or not yet [MAX_TRIES] and the wait after the last send ([at]) is over. [old]:
+     * that last send was before this start, so it goes again only a day after it (a restart never sends to everyone).
+     */
+    fun due(tries: Int, at: Long, now: Long, old: Boolean = false): Boolean = when {
+        tries == 0 -> true
+        tries >= MAX_TRIES -> false
+        old -> now - at >= DAY_MS || now < at
+        else -> now - at >= retryMs(tries)
+    }
+
+    /** Pictures sent on [day] (days since 1970, UTC): [n] of at most [DAY_MAX]. */
+    class DayBudget(var day: Long = 0L, var n: Int = 0) {
+        private fun roll(now: Long) { val d = Math.floorDiv(now, DAY_MS); if (d != day) { day = d; n = 0 } }
+        /** One more may go now. */
+        fun has(now: Long): Boolean { roll(now); return n < DAY_MAX }
+        /** One went. */
+        fun spend(now: Long) { roll(now); n++ }
+    }
 
     /** A "profile-ok" for [v] marks my version [mine] as theirs only when it is that version. */
     fun acks(mine: Long, v: Long) = mine >= 1 && v == mine
@@ -211,12 +253,22 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     private val lock = Any()
     private val peers = ConcurrentHashMap<String, Entry>()
     private val sent = ConcurrentHashMap<String, Long>()
-    /** Cap p2: my version [v] sent [n] times to someone with no "profile-ok" yet, the last at [at] (memory only). */
-    private class Try(val v: Long, val n: Int, val at: Long)
+    /**
+     * Cap p2: my version [v] sent [n] times to someone with no "profile-ok" yet, the last at [at]; [old] when that was
+     * before this start. Kept in p2.json with [answered] and [budget], so a restart doesn't send everything again.
+     */
+    private class Try(val v: Long, val n: Int, val at: Long, val old: Boolean = false)
+    private val p2File = File(dir, "p2.json")
     private val tries = ConcurrentHashMap<String, Try>()
-    /** Cap p2: when I last asked each person for theirs, and last sent mine because they asked (memory only). */
+    /** Cap p2: when I last asked each person for theirs (memory only). */
     private val asked = ConcurrentHashMap<String, Long>()
-    private val answered = ConcurrentHashMap<String, Long>()
+    /** Cap p2: the version of mine last sent because they asked, and when. */
+    private class Answer(val v: Long, val at: Long)
+    private val answered = ConcurrentHashMap<String, Answer>()
+    /** People who asked and are answered on the next pass, whatever the retry wait. */
+    private val answerNow: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /** Pictures sent today, everyone together. */
+    private val budget = ProfileWire.DayBudget()
     @Volatile private var me = Entry(0, "", ByteArray(0))
     /** Decoded pictures, up to a sixteenth of the memory Android gives Muninn (by bytes, not by count). */
     private val bitmaps = object : LruCache<String, Bitmap>(MemoryBudget.bytes(
@@ -391,9 +443,11 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
             tries.remove(key)
             asked.remove(key)
             answered.remove(key)
+            answerNow.remove(key)
             bitmaps.remove(key)
             file(key).delete()
             saveSent()
+            saveP2()
         }
         heard.remove(key)
         _statuses.update { it - key }
@@ -424,7 +478,8 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     }
 
     private fun ask(key: String) {
-        sender.execute { try { chat.sendProfile(key, ProfileWire.askMsg()) } catch (_: Exception) {} }
+        val have = peers[key]?.v ?: 0L
+        sender.execute { try { chat.sendProfile(key, ProfileWire.askMsg(have)) } catch (_: Exception) {} }
     }
 
     /** An envelope from [key] opened and says their version is [pv]: newer than the one here, so ask (once in 5 minutes). */
@@ -443,11 +498,21 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         return true
     }
 
-    /** [key] asked for mine ("profile?"): it goes again now, and until its "profile-ok" (once a minute at most). */
-    fun askedBy(key: String) {
-        if (me.v == 0L || !saysP2(key) || !inTouch(key) || !claim(answered, key, ProfileWire.ANSWER_MS)) return
-        tries.remove(key)
-        if (sent.remove(key) != null) synchronized(lock) { saveSent() }
+    /**
+     * [key] asked for mine ("profile?") and says it keeps version [theirs]: when that is older than mine, it goes once
+     * now, at most once per version of mine a day. The retry count isn't reset, so asking never starts a new round.
+     */
+    fun askedBy(key: String, theirs: Long) {
+        val mine = me.v
+        if (mine == 0L || !saysP2(key) || !inTouch(key)) return
+        val now = System.currentTimeMillis()
+        var ok = false
+        answered.compute(key) { _, a ->
+            if (ProfileWire.mayAnswer(mine, theirs, a?.v ?: 0L, a?.at ?: 0L, now)) { ok = true; Answer(mine, now) } else a
+        }
+        if (!ok) return
+        answerNow.add(key)
+        synchronized(lock) { if (sent.remove(key) != null) saveSent(); saveP2() }
         sender.execute { try { reconcile() } catch (_: Exception) {} }
     }
 
@@ -460,10 +525,11 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     /** [key] says my version [v] came: only now is it marked sent to them. */
     fun acked(key: String, v: Long) {
         if (!ProfileWire.acks(me.v, v)) return
-        tries.remove(key)
-        if (sent[key] == v) return
+        val had = tries.remove(key) != null
+        answerNow.remove(key)
+        if (sent[key] == v) { if (had) synchronized(lock) { saveP2() }; return }
         sent[key] = v
-        synchronized(lock) { saveSent() }
+        synchronized(lock) { saveSent(); saveP2() }
     }
 
     // ------------------------------------------------------------------ sending
@@ -478,7 +544,8 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
      * My picture and colour to everyone who should have this version and doesn't yet: contacts, and members of my
      * groups (who are group peers in Contacts), only those whose app said p1, never anyone blocked or in the trash.
      * One is marked sent only once a route took it, so someone out of reach gets it on a later pass. Cap p2: an app
-     * that says p2 has it only once its "profile-ok" came; until then it goes again after 2, 4, 8 ... minutes.
+     * that says p2 has it only once its "profile-ok" came; until then it goes again after 2, 4, 8 ... minutes (after a
+     * restart, only a day after the last send to them). Round 16: at most [ProfileWire.DAY_MAX] pictures a day in all.
      */
     private fun reconcile() {
         if (Move.locked) return
@@ -488,21 +555,27 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         val blocked = chat.blocked.value
         val now = System.currentTimeMillis()
         var changed = false
+        var counted = false
         for (c in contacts.all.value) {
             val k = c.chatKey
             if (k in blocked || chat.trash.has(k) || ProfileWire.CAP !in c.caps) continue
             // A group peer gets it only while we're in a group together; once that's over, their picture goes.
             if (c.groupOnly && !chat.groups.sharesGroup(k)) { if (peers.containsKey(k)) forget(k); continue }
             if (sent[k] == mine.v) continue
+            if (!budget.has(now)) break
             if (ProfileWire.CAP2 in c.caps) {
                 val t = tries[k]?.takeIf { it.v == mine.v }
-                if (!ProfileWire.due(t?.n ?: 0, t?.at ?: 0L, now)) continue
-                if (chat.sendProfile(k, plain)) tries[k] = Try(mine.v, (t?.n ?: 0) + 1, now)
+                val wanted = k in answerNow
+                if (!wanted && !ProfileWire.due(t?.n ?: 0, t?.at ?: 0L, now, t?.old == true)) continue
+                if (chat.sendProfile(k, plain)) {
+                    answerNow.remove(k)
+                    tries[k] = Try(mine.v, (t?.n ?: 0) + 1, now); budget.spend(now); counted = true
+                }
                 continue
             }
-            if (chat.sendProfile(k, plain)) { sent[k] = mine.v; changed = true }
+            if (chat.sendProfile(k, plain)) { sent[k] = mine.v; changed = true; budget.spend(now); counted = true }
         }
-        if (changed) synchronized(lock) { saveSent() }
+        if (changed || counted) synchronized(lock) { if (changed) saveSent(); if (counted) saveP2() }
     }
 
     // ------------------------------------------------------------------ files
@@ -525,6 +598,16 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         } catch (_: Exception) {}
     }
 
+    /** Cap p2's retry state, answers and today's count: {"day","n","try":{key:[v,n,at]},"ans":{key:[v,at]}}. */
+    private fun saveP2() {
+        try {
+            dir.mkdirs()
+            val t = JSONObject().apply { tries.forEach { (k, x) -> put(k, org.json.JSONArray().put(x.v).put(x.n).put(x.at)) } }
+            val a = JSONObject().apply { answered.forEach { (k, x) -> put(k, org.json.JSONArray().put(x.v).put(x.at)) } }
+            vault.write(p2File, JSONObject().put("day", budget.day).put("n", budget.n).put("try", t).put("ans", a).toString())
+        } catch (_: Exception) {}
+    }
+
     private fun saveSent() {
         try { dir.mkdirs(); vault.write(sentFile, JSONObject().apply { sent.forEach { (k, v) -> put(k, v) } }.toString()) } catch (_: Exception) {}
     }
@@ -543,8 +626,17 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
             vault.read(sentFile)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { sent[it] = o.optLong(it) } }
         } catch (e: Exception) { vault.loadFailed(sentFile, e) }
         try {
+            vault.read(p2File)?.let { JSONObject(it) }?.let { o ->
+                budget.day = o.optLong("day"); budget.n = o.optInt("n")
+                o.optJSONObject("try")?.let { t -> t.keys().forEach { k ->
+                    t.optJSONArray(k)?.let { x -> tries[k] = Try(x.optLong(0), x.optInt(1), x.optLong(2), old = true) } } }
+                o.optJSONObject("ans")?.let { a -> a.keys().forEach { k ->
+                    a.optJSONArray(k)?.let { x -> answered[k] = Answer(x.optLong(0), x.optLong(1)) } } }
+            }
+        } catch (_: Exception) {}   // only limits: one that can't be read starts them anew
+        try {
             dir.listFiles()?.forEach { f ->
-                if (f == meFile || f == sentFile || !f.name.endsWith(".json")) return@forEach
+                if (f == meFile || f == sentFile || f == p2File || !f.name.endsWith(".json")) return@forEach
                 val o = try { vault.read(f)?.let { JSONObject(it) } } catch (e: Exception) { null } ?: return@forEach
                 val k = o.optString("k")
                 if (k.isNotEmpty()) fromJson(o)?.let { peers[k] = it }

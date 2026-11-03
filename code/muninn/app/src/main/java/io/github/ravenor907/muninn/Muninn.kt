@@ -329,10 +329,11 @@ class Muninn : Application() {
         // Round 14: one that names nobody may be anyone in a group: folded and held to one alert per 2 minutes.
         val took = lockedLimit.take(show, came, System.currentTimeMillis())
         val n = took.n
-        val quiet = alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET || doNotDisturb() || !took.alert
         val key = took.key
         val count = (lockedCounts[key] ?: 0) + 1
         lockedCounts[key] = count
+        val quiet = alert == io.github.ravenor907.muninn.net.PowerLogic.Alert.QUIET || doNotDisturb()
+            || !io.github.ravenor907.muninn.net.NudgeWire.LockedLimit.sounds(took, count)
         val id = key.hashCode()
         val intent = Intent(this, MainActivity::class.java).putExtra("chat", "inbox").addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         // Only a contact's nudge (ring key) may open a chat by name; one naming nobody opens the chat list.
@@ -342,7 +343,9 @@ class Muninn : Application() {
             .setContentTitle(io.github.ravenor907.muninn.net.NudgeWire.title(show, n))
             .setContentText(io.github.ravenor907.muninn.net.NudgeWire.text(show, n.kind, count))
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
-            .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(true)
+            // A contact's nudge alerts the first time; the shared "Group message" one (nudge key) whenever the limit
+            // allows, at most once per 2 minutes, however long the phone stays locked (round 16).
+            .apply { if (quiet) setSilent(true) else setVibrate(BUZZ) }.setOnlyAlertOnce(n.known)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
         if (count > 1) b.setNumber(count)
         try { NotificationManagerCompat.from(this).notify(NUDGE_TAG, id, b.build()) } catch (_: SecurityException) {}

@@ -378,6 +378,12 @@ object NudgeWire {
         fun clear() { lastAlert = Long.MIN_VALUE / 2 }
         companion object {
             const val ALERT_EVERY_MS = 2 * 60_000L
+            /**
+             * Round 16: whether a taken nudge alerts, the [count]-th on its notification: a contact's ([Nudge.known]) the
+             * first time; the shared "Group message" one whenever [take] allows (at most once per [ALERT_EVERY_MS],
+             * however long the phone stays locked). The same as Huginn's LockedNudgeLimit::sounds.
+             */
+            fun sounds(t: Take, count: Int) = t.alert && (count == 1 || !t.n.known)
         }
     }
 

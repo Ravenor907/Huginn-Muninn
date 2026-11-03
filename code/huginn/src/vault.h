@@ -65,6 +65,8 @@ public:
     // off: a new data key, and every file is sealed again with it (the old key sat unprotected on disk).
     // At least 6 pattern dots or 6 characters.
     Q_INVOKABLE bool setSecret(const QString &secret, bool pattern);
+    // Why the last setSecret() didn't save, when there is something to tell (round 16: a folder in the way), else "".
+    Q_INVOKABLE QString secretError() const { return m_secretError; }
     // True once, after unlocking with a lock shorter than new ones may be: suggest a stronger one.
     Q_INVOKABLE bool askStronger();
     // Shows the lock screen again; the data key stays in memory while Huginn runs, so incoming
@@ -249,6 +251,7 @@ private:
     bool writeKeyFile(const QByteArray &bytes) const;
     void wrongTry();   // counts a wrong pattern or password (the wait doubles every 5)
     QByteArray m_key;
+    QString m_secretError;
     SaveQueue *m_saves = nullptr;       // the saving thread
     bool m_unlocking = false;
     QPointer<QThread> m_unlockThread;

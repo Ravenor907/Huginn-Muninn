@@ -721,7 +721,9 @@ int main(int argc, char *argv[])
         const QString key = took.key;
         const int count = lockedCounts->value(key) + 1;
         lockedCounts->insert(key, count);
-        if (count == 1 && took.alert && !Settings::hushed() && Settings::messageSoundOn())
+        // A contact's nudge sounds the first time; the shared "Group message" one (nudge key) whenever its limit
+        // allows, at most once per 2 minutes, however long Huginn stays locked (round 16, as Muninn).
+        if (LockedNudgeLimit::sounds(took, count) && !Settings::hushed() && Settings::messageSoundOn())
             sound->play();
         const QString title = RingWire::nudgeTitle(mode, n);
         const QString body = RingWire::nudgeText(mode, n.kind, count);

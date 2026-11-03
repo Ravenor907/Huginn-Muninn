@@ -52,7 +52,7 @@ Item {
             Ui.say(pattern ? "Pattern set." : "Password set.")
             first = null; note = ""; bad = false
             finished(mode === "setup" ? "setup" : mode === "renew" ? "renew" : "change")
-        } else { note = "That didn't save. Try again."; bad = true }
+        } else { note = Vault.secretError() || "That didn't save. Try again."; bad = true }
     }
     // Unlocking works out the key (and reads the chats) off the window's thread: a ring turns until it's done.
     property bool unlockAsked: false

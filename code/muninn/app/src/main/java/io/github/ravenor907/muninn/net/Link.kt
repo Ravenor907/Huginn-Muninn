@@ -112,10 +112,15 @@ object LinkWire {
     fun saysL3(caps: String) = caps.split(' ').any { it == L3 }
     /**
      * Cap l4 (15, "Replay"): this app stamps every link frame ("lts" and "ln"). Said in "caps" on "sync", "ping" and
-     * "pong"; one of those that comes unstamped and without it says the device went back to an app that doesn't stamp.
+     * "pong". Round 16: an unstamped frame from a device that stamped is never taken, whatever its caps say.
      */
     const val L4 = "l4"
     fun saysL4(caps: String) = caps.split(' ').any { it == L4 }
+    /**
+     * Round 16: what this device says about a linked device found on an older version ([LinkReplay.olderOnes]).
+     * [phone]: it is this device's phone (this device is the companion); else a computer or tablet linked to this phone.
+     */
+    fun olderText(phone: Boolean) = "Your linked ${if (phone) "phone" else "computer"} is on an older version. Link again to keep using it."
     /** A device name from a "ping" ("dn"): one line, at most 40 characters. */
     fun deviceName(s: String) = s.trim().replace(Regex("\\s+"), " ").take(40)
 
@@ -178,16 +183,21 @@ object LinkWire {
  * without a stamp are dropped too (an app before 1.36 never stamps, so its frames are still taken). Frames that change
  * nothing when they come twice ([UNREMEMBERED]) are checked for time only, so history pages don't fill the list.
  *
- * Going back to stable (cap l4): an unstamped "sync", "ping" or "pong" whose "caps" lack "l4" says the device runs an
- * app that doesn't stamp any more. It is taken and the device no longer counts as one that stamps ([left] says so once,
- * so the receiver catches up). Its next stamped frame makes it one again. Other unstamped frames from a device that
- * stamps stay dropped, and the receiver asks for its caps again ([probeDue]). A "hello" needs its one-time link token,
- * so it is taken unstamped too, and a device linked again starts over ([forget]).
+ * Round 16 (cap l4, "Going back to an older version"): once a device has sent a stamped frame, its unstamped frames
+ * are always dropped, whatever they say (a relay could keep an old unstamped frame from before 1.36 and replay it, so
+ * no unstamped frame may ever switch the guard off). The receiver asks for its caps again ([probeDue]). A device that
+ * really went back to an older app keeps sending only unstamped frames: [OLDER_FRAMES] of them over at least
+ * [OLDER_MS] with no stamped frame between, and it is found to be on an older version ([found] says so once,
+ * [olderOnes] lists them until it stamps again or is linked again). Nothing of it is taken meanwhile; the person is
+ * asked to link it again, through the usual emoji check. A "hello" needs its one-time link token, so it is taken
+ * unstamped (that is how linking again works), and a device linked again starts over ([forget]).
  */
 class LinkReplay {
     private val seen = LinkedHashMap<String, Long>()   // from + "\n" + ln -> drop from the list after this (ms)
     private val stamps = HashSet<String>()              // devices known to stamp
-    private val gone = HashSet<String>()               // devices that just stopped stamping, for [left]
+    private val quiet = HashMap<String, LongArray>()   // device -> [first, count]: unstamped frames since its last stamped one
+    private val older = HashSet<String>()              // devices found on an older version (kept)
+    private val news = HashSet<String>()               // just found, for [found]
     private val probed = HashMap<String, Long>()       // device -> when its caps were last asked for
     @Volatile var dirty = false; private set
 
@@ -197,12 +207,10 @@ class LinkReplay {
         val ln = p.opt("ln")
         if (ln == null) {
             if (from !in stamps) return true
-            val t = p.optString("t")
-            if (t == "hello") return true
-            if (t in CAPS_FRAMES && !LinkWire.saysL4(p.optString("caps"))) {
-                stamps.remove(from); gone.add(from); dirty = true
-                return true
-            }
+            if (p.optString("t") == "hello") return true
+            val q = quiet.getOrPut(from) { longArrayOf(nowMs, 0L) }
+            q[1]++
+            if (from !in older && olderBy(q[0], q[1], nowMs)) { older.add(from); news.add(from); dirty = true }
             return false
         }
         val lts = p.opt("lts")
@@ -210,19 +218,31 @@ class LinkReplay {
         val t = lts.toLong()
         if (t < nowMs - MAX_AGE_MS || t > nowMs + MAX_AGE_MS) return false
         seen.entries.removeIf { it.value < nowMs }
-        if (stamps.add(from)) dirty = true
-        if (p.optString("t") in UNREMEMBERED) return true
+        if (p.optString("t") in UNREMEMBERED) { stamped(from); return true }
         val key = from + "\n" + ln
         if (seen.containsKey(key)) return false
+        stamped(from)
         seen[key] = maxOf(nowMs, t) + MAX_AGE_MS
         while (seen.size > MAX_SEEN) seen.remove(seen.keys.first())
         dirty = true
         return true
     }
 
-    /** Whether [from] just stopped stamping (once): the receiver asks it for what was dropped meanwhile. */
+    /** A stamped frame from [from] was taken: it stamps, and isn't on an older version. */
+    private fun stamped(from: String) {
+        if (stamps.add(from)) dirty = true
+        quiet.remove(from)
+        if (older.remove(from)) dirty = true
+        news.remove(from)
+    }
+
+    /** Whether [from] was just found on an older version (once): the person is asked to link it again. */
     @Synchronized
-    fun left(from: String): Boolean = gone.remove(from)
+    fun found(from: String): Boolean = news.remove(from)
+
+    /** The devices found on an older version, until they stamp again or are linked again. */
+    @Synchronized
+    fun olderOnes(): Set<String> = older.toSet()
 
     /** Whether to ask [from] for its caps again after one of its unstamped frames was dropped (at most every [PROBE_MS]). */
     @Synchronized
@@ -238,14 +258,16 @@ class LinkReplay {
     @Synchronized
     fun forget(from: String) {
         if (stamps.remove(from)) dirty = true
-        gone.remove(from); probed.remove(from)
+        if (older.remove(from)) dirty = true
+        quiet.remove(from); news.remove(from); probed.remove(from)
     }
 
-    /** Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}}. */
+    /** Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "old": [devices on an older version]}. */
     @Synchronized
     fun save(): String {
         dirty = false
-        return JSONObject().put("s", org.json.JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } }).toString()
+        return JSONObject().put("s", org.json.JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } })
+            .put("old", org.json.JSONArray(older.toList())).toString()
     }
 
     @Synchronized
@@ -255,6 +277,7 @@ class LinkReplay {
             val o = JSONObject(text)
             o.optJSONArray("s")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { stamps.add(it) } }
             o.optJSONObject("n")?.let { n -> n.keys().forEach { k -> seen[k] = n.optLong(k) } }
+            o.optJSONArray("old")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { older.add(it) } }
         } catch (_: Exception) {}
     }
 
@@ -265,6 +288,11 @@ class LinkReplay {
         val UNREMEMBERED = setOf("chat", "part", "ping", "pong")
         /** The frames that carry "caps" (cap l4 in them says the sender stamps). */
         val CAPS_FRAMES = setOf("sync", "ping", "pong")
+        /** On an older version: at least this many unstamped frames, over at least [OLDER_MS], none stamped between. */
+        const val OLDER_FRAMES = 3L
+        const val OLDER_MS = 10 * 60_000L
+        /** [count] unstamped frames since [first], none stamped: found on an older version by [nowMs]. */
+        fun olderBy(first: Long, count: Long, nowMs: Long) = count >= OLDER_FRAMES && nowMs - first >= OLDER_MS
         /** Asking a device for its caps again: at most this often. */
         const val PROBE_MS = 2 * 60_000L
         private val NONCE = Regex("^[0-9a-f]{32}$")
@@ -441,6 +469,9 @@ object Link {
             }
             h.read(STORED)?.let { t -> val a = JSONArray(t); _stored.value = (0 until a.length()).map { a.getString(it) }.toSet() }
         } catch (_: Exception) {}
+        // Round 16: a device found on an older version is still asked about after a restart.
+        ensureReplay(h)
+        _older.value = replay.olderOnes()
     }
 
     private fun save() {
@@ -569,6 +600,7 @@ object Link {
         _companions.value = _companions.value.filterNot { it.key == key }
         owed.remove(key); meOwed.remove(key); acctOwed.remove(key); heard.remove(key); relinkSeen.remove(key)
         save()
+        forgetStamps(key)
     }
 
     /** On a companion: the phone is gone, with its chats and media; this device's own chats are the main list again. */
@@ -793,13 +825,12 @@ object Link {
         val ph = _phone.value?.takeIf { it.key == from }
         // Round 14: a frame from a linked device that's too old, came before, or lacks the stamp it always has: dropped quietly.
         // Unstamped from one that stamped: it may have gone back to stable, so its caps are asked for again (cap l4).
+        // Round 16: never taken, whatever it says; one that keeps sending only those is on an older version, and the
+        // person is asked to link it again (Link again, with the usual emoji).
         if ((comp != null || ph != null) && !replayOk(h, from, p)) {
             if (!p.has("ln") && ph != null && replay.probeDue(from, System.currentTimeMillis())) probeCaps(h, ph)
+            if (replay.found(from)) _older.value = replay.olderOnes()
             return true
-        }
-        // It just went back to an app that doesn't stamp: what it sent meanwhile was dropped, so this side catches up.
-        if ((comp != null || ph != null) && replay.left(from)) {
-            if (ph != null && ph.ok) h.send(ph, JSONObject().put("t", "sync").put("caps", LinkWire.L4).toString())
         }
         if (comp != null) {
             // Heard from now; written down at most once an hour, enough for the 14 days in [askReplace].
@@ -1150,6 +1181,9 @@ object Link {
 
     /** Round 14: link frames' stamps ([LinkReplay]), kept in the vault ([REPLAY]). */
     private val replay = LinkReplay()
+    private val _older = MutableStateFlow<Set<String>>(emptySet())
+    /** Round 16: linked devices found on an older version (they send only unstamped frames): link them again. */
+    val older: StateFlow<Set<String>> = _older.asStateFlow()
     @Volatile private var replayLoaded = false
     private const val REPLAY = "link-replay.json"
 
@@ -1161,22 +1195,28 @@ object Link {
         h.send(ph, JSONObject().put("t", "ping").put("caps", LinkWire.L4).toString())
     }
 
+    private fun ensureReplay(h: Host) {
+        if (!replayLoaded) synchronized(replay) {
+            if (!replayLoaded) { try { replay.load(h.read(REPLAY)) } catch (_: Exception) {}; replayLoaded = true }
+        }
+    }
+
     /** A device linked again: whether it stamps is learned anew. */
     private fun forgetStamps(k: String) {
         val h = host ?: return
-        if (!replayLoaded) synchronized(replay) {
-            if (!replayLoaded) { try { replay.load(h.read(REPLAY)) } catch (_: Exception) {}; replayLoaded = true }
-        }
+        ensureReplay(h)
         replay.forget(k)
         if (replay.dirty) try { h.write(REPLAY, replay.save()) } catch (_: Exception) {}
+        _older.value = replay.olderOnes()
     }
 
     private fun replayOk(h: Host, from: String, p: JSONObject): Boolean {
-        if (!replayLoaded) synchronized(replay) {
-            if (!replayLoaded) { try { replay.load(h.read(REPLAY)) } catch (_: Exception) {}; replayLoaded = true }
-        }
+        ensureReplay(h)
         val ok = replay.take(from, p, System.currentTimeMillis())
-        if (replay.dirty) try { h.write(REPLAY, replay.save()) } catch (_: Exception) {}
+        if (replay.dirty) {
+            try { h.write(REPLAY, replay.save()) } catch (_: Exception) {}
+            _older.value = replay.olderOnes()
+        }
         return ok
     }
 

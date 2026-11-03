@@ -1267,9 +1267,33 @@ Window {
         askedOwnName = true
         Qt.callLater(() => PeopleActions.askOwnName("Saved."))
     }
+    // Round 16 (cap l4): a linked device found on an older version (it sends only unstamped frames, and none is taken).
+    // Asked once a run per device, with Link again through the usual 4 emoji (Linked.older).
+    property var olderAsked: ({})
+    function askOlderSoon() {
+        if (touring || !Chat.ready || Vault.screenLocked || confirm.visible) return
+        const d = Linked.older.find(o => !app.olderAsked[o.key])
+        if (!d) return
+        const asked = Object.assign({}, app.olderAsked)
+        asked[d.key] = true
+        app.olderAsked = asked
+        Qt.callLater(() => {
+            confirm.open(d.name, d.text, "Link again", () => app.relinkOlder(d), false, false, null, "older")
+            confirm.cancelText = "Not now"
+            app.guardOverlay(confirm)
+        })
+    }
+    // The phone: Link your phone shows a code again. Another device: paste the code it shows.
+    function relinkOlder(d) {
+        if (d.phone) { showLinkPhone(false); return }
+        Ui.ask("Link " + d.name + " again", "Paste the code " + d.name + " shows.", "", "Link", t => {
+            const r = Linked.link(t)
+            Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
+        })
+    }
     Connections {
         target: Linked
-        function onChanged() { app.askOwnNameSoon() }
+        function onChanged() { app.askOwnNameSoon(); app.askOlderSoon() }
         function onPicturesChanged() { app.askOwnNameSoon() }
     }
     // Chat: notices, and a toast for a message unless that chat is on screen (main.cpp plays the sound).

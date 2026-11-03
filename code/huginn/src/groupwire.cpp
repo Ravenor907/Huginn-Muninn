@@ -620,6 +620,31 @@ bool GroupWire::linkOk(qint64 x, int max, int uses, bool off, bool makerIn, bool
     return !off && (x == 0 || x > nowMs) && (max == 0 || uses < max) && makerIn && makerMay;
 }
 
+bool GroupWire::partOk(const QJsonValue &ps, const QJsonValue &pi, const QJsonValue &pn)
+{
+    if (!ps.isString() || !isLogicalId(ps.toString()) || !pi.isDouble() || !pn.isDouble())
+        return false;
+    const double i = pi.toDouble(), n = pn.toDouble();
+    if (i != double(int(i)) || n != double(int(n)))
+        return false;
+    return n >= 2 && n <= kMaxParts && i >= 1 && i <= n;
+}
+
+int GroupWire::partPlace(const QVariantList &messages, const QVariantMap &m)
+{
+    const QString set = m.value(QStringLiteral("ps")).toString();
+    if (set.isEmpty())
+        return -1;
+    const QString from = m.value(QStringLiteral("from")).toString();
+    const int at = m.value(QStringLiteral("pi")).toInt();
+    for (int i = 0; i < messages.size(); ++i) {
+        const QVariantMap x = messages.at(i).toMap();
+        if (x.value(QStringLiteral("ps")).toString() == set && x.value(QStringLiteral("from")).toString() == from && x.value(QStringLiteral("pi")).toInt() > at)
+            return i;
+    }
+    return -1;
+}
+
 QVariantMap GroupWire::parseCode(const QString &raw, qint64 nowMs)
 {
     // A pasted invite link too (some apps write its ":" as "%3A").
@@ -857,6 +882,34 @@ bool GroupWire::selfTest(const QString &vectorsPath)
               "a 0.6 group code with an onion address still reads (the address is ignored)");
         check(parseCode(text, t0 + kTokenLife + 1000).value(QStringLiteral("expired")).toBool(), "a group code expires after an hour");
         check(parseCode(QStringLiteral("MUNINN1:abc"), t0).isEmpty() && parseCode(QStringLiteral("MUNINNG1:e30"), t0).isEmpty(), "anything else isn't a group code");
+    }
+
+    // Round 16 (3.8): a long message's parts are placed by their index, whichever comes first (as Muninn's GroupsTest).
+    {
+        const QString set = newLogicalId();
+        const auto part = [&set](const char *id, int i, const char *from) {
+            return QVariantMap{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("from"), QString::fromLatin1(from)}, {QStringLiteral("ps"), set}, {QStringLiteral("pi"), i}};
+        };
+        QVariantList l;
+        const auto put = [&l](const QVariantMap &m) {
+            const int at = partPlace(l, m);
+            if (at < 0)
+                l << m;
+            else
+                l.insert(at, m);
+        };
+        put(part("p2", 2, "amy"));
+        put(part("p3", 3, "amy"));
+        put(QVariantMap{{QStringLiteral("id"), QStringLiteral("bo1")}, {QStringLiteral("from"), QStringLiteral("bo")}});
+        put(part("p1", 1, "amy"));
+        QStringList ids;
+        for (const QVariant &x : std::as_const(l))
+            ids << x.toMap().value(QStringLiteral("id")).toString();
+        check(ids == QStringList{QStringLiteral("p1"), QStringLiteral("p2"), QStringLiteral("p3"), QStringLiteral("bo1")}, QStringLiteral("long message parts are placed by index"));
+        check(partPlace(QVariantList{part("x2", 2, "cy")}, part("a1", 1, "amy")) == -1, QStringLiteral("another sender's parts don't move them"));
+        check(partOk(set, 2, 3) && !partOk(QStringLiteral("nope"), 1, 2) && !partOk(set, 0, 2) && !partOk(set, 3, 2) && !partOk(set, 1, 1)
+                  && !partOk(set, 1, kMaxParts + 1) && !partOk(set, QStringLiteral("1"), 2) && !partOk(set, 1.5, 2) && !partOk(QJsonValue(), 1, 2),
+              QStringLiteral("a part says ps, pi and pn; anything unusable is no part"));
     }
 
     std::printf("proto 0.6 self-test: %d passed, %d failed\n", pass, fail);

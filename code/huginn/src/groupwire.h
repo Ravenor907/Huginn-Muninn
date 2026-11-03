@@ -98,6 +98,13 @@ QString linkId(const QString &token); // first 16 hex of SHA-256("link|" + token
 // Whether a link still lets someone in, decided only on the admin that counts it (17.3).
 bool linkOk(qint64 x, int max, int uses, bool off, bool makerIn, bool makerMay, qint64 nowMs);
 
+// Round 16 (3.8): one part of a long message, "ps" (the parts' set id, a logical id), "pi" (its place, 1 = the
+// first) and "pn" (how many, 2 to kMaxParts). partPlace: where a stored message (a map with from, ps, pi) goes in a
+// group's messages: before the same sender's first part of that set with a higher place, or -1 (last).
+const int kMaxParts = 10;
+bool partOk(const QJsonValue &ps, const QJsonValue &pi, const QJsonValue &pn);
+int partPlace(const QVariantList &messages, const QVariantMap &m);
+
 // Checks shared/vectors/proto06-vectors.json (group section and canonical JSON, with chat-vectors.json next
 // to it for the keys), plus state limits, signing and group codes. Prints what it found.
 bool selfTest(const QString &vectorsPath);

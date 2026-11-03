@@ -1280,7 +1280,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 // Cap p2: someone asks for my picture, or says mine came.
                 if (p.opt("t") == ProfileWire.ASK || p.opt("t") == ProfileWire.ACK) {
                     if (ProfileWire.CAP2 !in c.caps || !ProfileWire.ctlOk(p)) return 400 to "{}"
-                    if (p.opt("t") == ProfileWire.ASK) profile?.askedBy(fromKey) else profile?.acked(fromKey, ProfileWire.versionOf(p.opt("v"))!!)
+                    if (p.opt("t") == ProfileWire.ASK) profile?.askedBy(fromKey, ProfileWire.askedPv(p)) else profile?.acked(fromKey, ProfileWire.versionOf(p.opt("v"))!!)
                     return 200 to "{}"
                 }
                 if (profile?.receive(fromKey, p) != true) return 400 to "{}"
@@ -2714,15 +2714,16 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** A link gets its preview first (cap m2), made on this phone only when Settings › Privacy allows it. */
-    fun sendGroupText(g: String, ch: String, text: String, re: String = ""): Boolean {
+    fun sendGroupText(g: String, ch: String, text: String, re: String = "", part: TextPart? = null): Boolean {
         val t = ChatWire.clip(text.trim(), MAX)
         sends.tryEmit(Folders.groupKey(g))
         val link = if (id.linkPreviews) More.firstLink(t) else null
-        if (link == null) return groups.sendText(g, ch, t, re)
+        if (link == null) return groups.sendText(g, ch, t, re, part = part)
         if (t.isEmpty()) return false
         // The time is taken now, before the preview is fetched: the parts after this one (sent a moment later) stay after it.
+        // Round 16: a part says its index too, so every member places it among the others (Groups.placePart).
         val at = System.currentTimeMillis()
-        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link), at = at) }
+        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link), at = at, part = part) }
         return true
     }
 

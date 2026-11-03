@@ -141,6 +141,9 @@ public:
     };
     Take take(int mode, const RingWire::Nudge &n, qint64 nowMs);
     void clear();
+    // Round 16: whether a taken nudge sounds, the count-th on its notification: a contact's (known) the first time; the
+    // shared "Group message" one whenever take() allows (at most once per kAlertEveryMs, however long it stays locked).
+    static bool sounds(const Take &t, int count) { return t.alert && (count == 1 || !t.n.known); }
 
 private:
     qint64 m_lastAlert = -kAlertEveryMs;

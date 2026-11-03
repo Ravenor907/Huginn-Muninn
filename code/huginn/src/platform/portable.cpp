@@ -48,7 +48,7 @@ const QString kMoving = QStringLiteral(".moving");
 bool huginnsOwn(const QString &name)
 {
     static const QStringList kNames = {
-        QStringLiteral("Huginn"), QStringLiteral("chat"), QStringLiteral("chat.restore"), QStringLiteral("chat.old"), QStringLiteral("cache"),
+        QStringLiteral("Huginn"), QStringLiteral("chat"), QStringLiteral("chat.restore"), QStringLiteral("chat.old"), QStringLiteral("chat.old.replaced"), QStringLiteral("cache"),
         QStringLiteral("scratch"), QStringLiteral("tls"), QStringLiteral("crash.log"), QStringLiteral("running.mark"),
         QStringLiteral("Huginn-start.log"), QStringLiteral("ring-key.json"), QStringLiteral("nudge-key.json"), QStringLiteral("QtProject.ini"),
         QStringLiteral(".huginn-write-test"), kMark, kMoving, QStringLiteral("instance.lock"), QStringLiteral("instance.closing"),
@@ -250,6 +250,25 @@ bool ownerOf(const QString &dir, std::wstring *sidText, QString *name)
     return !sidText->empty();
 }
 
+// An account's own SID (a local or domain account, S-1-5-21-..., or a Microsoft Entra one, S-1-12-1-...), not
+// Administrators (S-1-5-32-544), the system (S-1-5-18) or TrustedInstaller (S-1-5-80-...).
+bool personSid(const std::wstring &sid)
+{
+    return sid.rfind(L"S-1-5-21-", 0) == 0 || sid.rfind(L"S-1-12-1-", 0) == 0;
+}
+
+// Inside Program Files (either one), where Windows lets only administrators save.
+bool inProgramFiles(const QString &dir)
+{
+    const QString d = QDir::cleanPath(QDir::fromNativeSeparators(dir)) + QLatin1Char('/');
+    for (const char *var : {"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"}) {
+        const QString pf = QDir::cleanPath(QDir::fromNativeSeparators(qEnvironmentVariable(var)));
+        if (!pf.isEmpty() && d.startsWith(pf + QLatin1Char('/'), Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
 // Writes a little more than one byte into dir and flushes it (a full disk shows here too). On failure *err is
 // Windows' own error, which tells a full disk from a folder this account may not open.
 bool probeWrite(const QString &dir, DWORD *err)
@@ -302,14 +321,45 @@ QString cantWriteText(const QString &root, unsigned long err, bool full)
                               "open it again.")
             .arg(folder);
     if (err == ERROR_ACCESS_DENIED) {
+        const QString ownFolder = QStringLiteral("Move the whole Huginn folder to a folder of your own, like C:\\Users\\<you>\\Huginn, and "
+                                                 "open Huginn.exe from there (not with Run as administrator).");
+        // Round 16: Program Files, where only administrators may save (whoever owns a "data" made there by an
+        // administrator's run).
+        if (inProgramFiles(root))
+            return QStringLiteral("Huginn is in Program Files (%1), where Windows lets only administrators save, so Huginn can't keep "
+                                  "your chats there. %2")
+                .arg(folder, ownFolder);
+        // No data folder, and none can be made: the folder Huginn is in doesn't let this account save.
+        if (!QFileInfo(root).isDir())
+            return QStringLiteral("Windows won't let Huginn make its data folder in %1: this account can't save in that folder, or a "
+                                  "security program (like Controlled folder access in Windows Security) is blocking it. %2")
+                .arg(folder, ownFolder);
         // The data folder is private to the account that set it up (makePrivate): whose is it?
         std::wstring sid;
         QString name;
         const bool known = ownerOf(root, &sid, &name);
         const std::wstring me = mySid();
-        const QString recover = QStringLiteral("If these chats are yours from another computer or from before Windows was installed again, "
-                                               "open the \"data\" folder in File Explorer and choose Continue when it asks for permission "
-                                               "(it needs an administrator's OK), then open Huginn again.");
+        // Made by an administrator's run (Run as administrator) or by Windows itself, not by an account.
+        if (known && !personSid(sid))
+            return QStringLiteral("Huginn's data folder (%1) was made when Huginn ran as an administrator, so this account can't save in "
+                                  "it. %2 Or open the \"data\" folder in File Explorer, choose Continue when it asks for permission, then "
+                                  "open Huginn again.")
+                .arg(where, ownFolder);
+        // This account's own folder (Huginn already put its permissions right, folderProblem): something else blocks it.
+        if (known && !me.empty() && sid == me)
+            return QStringLiteral("Windows won't let this account save in Huginn's data folder (%1), though the folder is this "
+                                  "account's own. Controlled folder access in Windows Security, or another security program, is "
+                                  "probably blocking Huginn. Allow Huginn.exe there (Windows Security › Virus & threat protection › "
+                                  "Manage ransomware protection › Allow an app through Controlled folder access), or move the whole "
+                                  "Huginn folder out of Documents, Pictures and Desktop to a folder like C:\\Users\\<you>\\Huginn.")
+                .arg(where);
+        // Round 16: a folder made private by 1.36's first beta has no administrators in its list, so File Explorer's
+        // Continue can't open it. Taking ownership always works; then Huginn puts its permissions right by itself.
+        const QString recover = QStringLiteral("If these chats are yours from another computer or from before Windows was installed again: "
+                                               "right-click the \"data\" folder › Properties › Security › Advanced. Next to Owner choose "
+                                               "Change, type your Windows account name, choose Check Names, then OK. Tick \"Replace owner on "
+                                               "subcontainers and objects\", choose OK (it needs an administrator's OK), then OK again, and "
+                                               "open Huginn: it gives the folder the right permissions itself.");
         if (known && !me.empty() && sid != me && !name.isEmpty())
             return QStringLiteral("Huginn's data folder (%1) belongs to the Windows account \"%2\" on this computer, and only that account "
                                   "can open it. Sign in as %2 to use these chats, or give this account its own copy of Huginn: unzip "
@@ -341,6 +391,35 @@ QString cantWriteText(const QString &root, unsigned long err, bool full)
         .arg(where);
 }
 
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+namespace
+{
+bool onlyThisAccount(const QString &dir, DWORD *err);
+bool inheritAgain(const QString &dir, DWORD *err);
+bool movableDrive(const QString &dir);
+
+// Round 16: a data folder this account owns but can't save in (made private by 1.36's first beta under an account
+// that is gone, then taken over with Change owner, or a list that lost this account): an owner may always set the
+// folder's permissions, so Huginn puts them right (as makePrivate would, or the drive's own on a removable drive) and
+// tries again. False, with Windows' error, when it still can't save (Controlled folder access, say).
+bool repairOwn(const QString &root, DWORD *err)
+{
+    std::wstring sid;
+    QString name;
+    const std::wstring me = mySid();
+    if (!QFileInfo(root).isDir() || !ownerOf(root, &sid, &name) || me.empty() || sid != me)
+        return false;
+    DWORD fix = 0;
+    const bool movable = movableDrive(root);
+    const bool fixed = movable ? inheritAgain(root, &fix) : onlyThisAccount(root, &fix);
+    CrashLog::note(fixed ? QStringLiteral("data: this account owns the data folder but couldn't save in it: its permissions were put right")
+                         : QStringLiteral("data: this account owns the data folder but couldn't save in it, and its permissions couldn't be "
+                                          "put right (error %1)").arg(fix));
+    return fixed && probeWrite(root, err);
+}
+}
+#endif
+
 QString folderProblem()
 {
     if (!s_problem.isEmpty())
@@ -366,7 +445,9 @@ QString folderProblem()
     // private to another account each get their own words.
 #if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
     DWORD err = 0;
-    const bool wrote = probeWrite(root, &err);
+    bool wrote = probeWrite(root, &err);
+    if (!wrote && err == ERROR_ACCESS_DENIED)
+        wrote = repairOwn(root, &err);
 #else
     const unsigned long err = 0;
     QFile probe(root + QStringLiteral("/.huginn-write-test"));
@@ -964,6 +1045,30 @@ bool selfTest()
         std::wstring sid;
         QString name;
         return ownerOf(tmp.path(), &sid, &name) && sid == mySid();
+    }());
+    // Round 16: Program Files, a folder that can't be made and this account's own blocked folder each get their own
+    // words; none says the folder is private to another account.
+    check("Windows: Program Files says Program Files", [&] {
+        const QString pf = qEnvironmentVariable("ProgramFiles");
+        if (pf.isEmpty())
+            return true;
+        const QString t = cantWriteText(QDir::fromNativeSeparators(pf) + QStringLiteral("/Huginn/data"), ERROR_ACCESS_DENIED, false);
+        return t.contains(QStringLiteral("Program Files")) && t.contains(QStringLiteral("folder of your own")) && !t.contains(QStringLiteral("private"));
+    }());
+    check("Windows: a data folder that can't be made says where to move Huginn", [&] {
+        const QString t = cantWriteText(tmp.path() + QStringLiteral("/none/data"), ERROR_ACCESS_DENIED, false);
+        return t.contains(QStringLiteral("folder of your own")) && t.contains(QStringLiteral("Controlled folder access")) && !t.contains(QStringLiteral("private"));
+    }());
+    check("Windows: this account's own folder, blocked, speaks of Controlled folder access", [&] {
+        const QString t = cantWriteText(tmp.path(), ERROR_ACCESS_DENIED, false);
+        return t.contains(QStringLiteral("Controlled folder access")) && !t.contains(QStringLiteral("private"));
+    }());
+    check("Windows: account SIDs are told from Administrators and the system", personSid(L"S-1-5-21-1-2-3-1001") && personSid(L"S-1-12-1-5-6-7-8")
+                                                                                    && !personSid(L"S-1-5-32-544") && !personSid(L"S-1-5-18")
+                                                                                    && !personSid(L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"));
+    check("Windows: a folder this account owns and can save in needs no repair", [&] {
+        DWORD e = 0;
+        return repairOwn(tmp.path(), &e) && e == 0;
     }());
 #endif
     return all;

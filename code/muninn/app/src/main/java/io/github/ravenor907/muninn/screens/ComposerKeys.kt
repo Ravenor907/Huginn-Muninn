@@ -25,6 +25,46 @@ object ComposerKeys {
     }
 }
 
+/**
+ * What the message box does with a value it reports after a hardware Enter sent [sent]. Pure, so it can be tested;
+ * the Composer applies it. The box's report can run before the screen has caught up with the send, so a report of the
+ * text just sent is never typing (it would put the sent text back and make it go twice). An IME that had letters
+ * open (Korean, Japanese) may put them back into the emptied box a moment later: a piece of the end of the sent text,
+ * right after the box was seen empty, is cleared again.
+ */
+class BoxEcho {
+    private var sent: String? = null
+    private var at = 0L
+    private var sawEmpty = false
+
+    /** Enter sent [text] at [now] (ms). */
+    fun send(text: String, now: Long) { sent = text; at = now; sawEmpty = false }
+
+    /** The box now holds [box]; [text] is the last text the screen has. One of [PASS], [SKIP] or [CLEAR]. */
+    fun seen(box: String, text: String, now: Long): Int {
+        val s = sent
+        if (s != null) {
+            val fresh = now - at in 0..ECHO_MS
+            when {
+                box == s -> return SKIP
+                box.isEmpty() -> sawEmpty = true
+                fresh && sawEmpty && s.endsWith(box) -> { sent = null; return CLEAR }
+                else -> sent = null
+            }
+            if (!fresh) sent = null
+        }
+        return if (box != text) PASS else SKIP
+    }
+
+    companion object {
+        const val PASS = 0
+        const val SKIP = 1
+        const val CLEAR = 2
+        /** How long after Enter an IME's letters coming back count as an echo. */
+        const val ECHO_MS = 400L
+    }
+}
+
 /** The message box's keys ([ComposerKeys]): true when the key was used here. Acts on key down; its key up is used too. */
 internal fun composerKey(ev: androidx.compose.ui.input.key.KeyEvent, focus: FocusManager, send: () -> Unit): Boolean {
     val n = ev.nativeKeyEvent

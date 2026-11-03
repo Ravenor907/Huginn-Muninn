@@ -83,6 +83,12 @@ object LinkUi {
     /** Just linked: the "Linked" step, for [name]; [companion]: this device shows the phone's chats. */
     class Linked(val name: String, val companion: Boolean)
     var linked by mutableStateOf<Linked?>(null)
+    /** Round 16: "Link your phone" shows its code again for a phone found on an older version (Link again). */
+    var relinking by mutableStateOf(false)
+    /** Round 16: on the phone, the scanner for a companion found on an older version: its name (null: none). */
+    var rescan by mutableStateOf<String?>(null)
+    /** Round 16: devices found on an older version that were answered Not now (asked again on the next start). */
+    var olderLater by mutableStateOf(setOf<String>())
     private const val OFFERED = "linkOffered"
 
     /** A tablet (sw600dp or more), not a TV. */
@@ -157,7 +163,7 @@ fun LinkYourPhone(app: Muninn, onClose: () -> Unit) {
     val phone by Link.phone.collectAsState()
     val ctx = LocalContext.current
     val done = LinkUi.linked
-    fun close() { LinkUi.linked = null; onClose() }
+    fun close() { LinkUi.linked = null; LinkUi.relinking = false; onClose() }
     BackHandler {
         phone?.takeIf { !it.ok }?.let { Link.unlink(it.key) }
         close()
@@ -167,8 +173,8 @@ fun LinkYourPhone(app: Muninn, onClose: () -> Unit) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             val p = phone
             when {
-                done != null || p?.ok == true -> DoneStep(true, p?.name ?: "") { close() }
-                p != null -> MatchStep(p.name, Link.emojiWith(p.key), true,
+                done != null || (p?.ok == true && !LinkUi.relinking) -> DoneStep(true, p?.name ?: "") { close() }
+                p != null && !p.ok -> MatchStep(p.name, Link.emojiWith(p.key), true,
                     onYes = { Link.confirm(p.key); LinkUi.linked = LinkUi.Linked(p.name, true) },
                     onNo = { Link.unlink(p.key) })
                 else -> {
@@ -186,7 +192,7 @@ fun LinkYourPhone(app: Muninn, onClose: () -> Unit) {
                     LaunchedEffect(Unit) { try { skip.requestFocus() } catch (_: Exception) {} }
                     Step {
                         RavenMark()
-                        Text("Link your phone", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
+                        Text(if (LinkUi.relinking) "Link your phone again" else "Link your phone", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
                         if (code.isNotEmpty()) Box(Modifier.padding(top = 18.dp)) { Qr(code, 340.dp) }
                         Text("In Muninn: Settings › Devices and backup › Scan to link", style = Type.normal, textAlign = TextAlign.Center,
                             modifier = Modifier.padding(top = 16.dp))
@@ -208,9 +214,10 @@ fun LinkYourPhone(app: Muninn, onClose: () -> Unit) {
  * whole screen, before anything is mirrored. Until They match nothing goes either way.
  */
 @Composable
-fun LinkCheck() {
+fun LinkCheck(app: Muninn) {
     val companions by Link.companions.collectAsState()
     val phone by Link.phone.collectAsState()
+    val older by Link.older.collectAsState()
     if (LinkUi.companionOpen) return
     val d = companions.firstOrNull { !it.ok } ?: phone?.takeIf { !it.ok }
     val done = LinkUi.linked
@@ -231,6 +238,7 @@ fun LinkCheck() {
                 confirmButton = { MButton("Replace", kind = if (r.sameName) Kind.Accent else Kind.Normal) { Link.answerReplace(true) } },
                 dismissButton = { MButton("Keep both") { Link.answerReplace(false) } })
         }
+        if (replace == null) OlderNotice(app, older, phone, companions)
         return
     }
     val companion = d != null && phone?.key == d.key
@@ -243,6 +251,59 @@ fun LinkCheck() {
                     onYes = { Link.confirm(d.key); LinkUi.linked = LinkUi.Linked(d.name, companion) },
                     onNo = { Link.unlink(d.key) })
                 else if (done != null) DoneStep(done.companion, done.name) { LinkUi.linked = null }
+            }
+        }
+    }
+}
+
+/**
+ * Round 16: a linked device found on an older version (it sends only unstamped frames, and none is taken, so nothing
+ * from it works). Said once a start, with Link again: on a companion "Link your phone" shows its code again; on the
+ * phone the scanner opens, after the lock. Either way the 4 emoji are checked as on any linking.
+ */
+@Composable
+private fun OlderNotice(app: Muninn, older: Set<String>, phone: Link.Device?, companions: List<Link.Device>) {
+    val scan = LinkUi.rescan
+    if (scan != null) { RelinkScan(scan); return }
+    val ph = phone?.takeIf { it.ok && it.key in older }
+    val dev = ph ?: companions.firstOrNull { it.ok && it.key in older } ?: return
+    if (dev.key in LinkUi.olderLater) return
+    val isPhone = ph != null
+    AlertDialog(onDismissRequest = { LinkUi.olderLater = LinkUi.olderLater + dev.key }, containerColor = Palette.panel,
+        title = { Text(dev.name, style = Type.big) },
+        text = { Text(LinkWire.olderText(isPhone), style = Type.normal) },
+        confirmButton = { MButton("Link again", kind = Kind.Accent, icon = "qr") { LinkUi.olderLater = LinkUi.olderLater + dev.key; relink(app, dev, isPhone) } },
+        dismissButton = { MButton("Not now") { LinkUi.olderLater = LinkUi.olderLater + dev.key } })
+}
+
+/** Link again a device found on an older version: [isPhone] it is this companion's phone; else a companion of this phone. */
+internal fun relink(app: Muninn, dev: Link.Device, isPhone: Boolean) {
+    if (isPhone) { LinkUi.relinking = true; LinkUi.companionOpen = true }
+    else LockGate.ask(app, "Link ${dev.name} again") { LinkUi.rescan = dev.name }
+}
+
+/** The scanner for linking [name] again: its code goes through [Link.link], then the 4 emoji as always. */
+@Composable
+private fun RelinkScan(name: String) {
+    var attempt by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    Dialog(onDismissRequest = { LinkUi.rescan = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Palette.ground)) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                Step {
+                    RavenMark()
+                    Text("Link $name again", style = Type.title, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp).semantics { heading() })
+                    Text("On $name, show its link code (Link this PC to my phone on a computer, Link my phone on a tablet) and scan it here.", style = Type.normal, textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 8.dp))
+                    key(attempt) {
+                        QrScanner(Modifier.padding(top = 16.dp).fillMaxWidth().height(280.dp)) { c ->
+                            val err = LinkUi.take(c)
+                            if (err == null) LinkUi.rescan = null
+                            else { Ui.say(err, true); scope.launch { delay(1500); attempt++ } }
+                        }
+                    }
+                    MButton("Cancel", Modifier.fillMaxWidth().padding(top = 16.dp)) { LinkUi.rescan = null }
+                }
             }
         }
     }
@@ -301,6 +362,7 @@ internal fun LinkedDevicesPanel(app: Muninn) {
     val ctx = LocalContext.current
     val companions by Link.companions.collectAsState()
     val phone by Link.phone.collectAsState()
+    val older by Link.older.collectAsState()
     val tablet = remember { LinkUi.tablet(ctx) }
     var scanning by remember { mutableStateOf(false) }
     var pasting by remember { mutableStateOf(false) }
@@ -326,6 +388,7 @@ internal fun LinkedDevicesPanel(app: Muninn) {
                         spoken = "Hold for 5 seconds to unlink ${p.name}") { Link.unlink(p.key) })
                 }
             }
+            if (p.ok && p.key in older) OlderLine(true) { relink(app, p, true) }
 
         }
     }
@@ -339,6 +402,7 @@ internal fun LinkedDevicesPanel(app: Muninn) {
                         spoken = "Hold for 5 seconds to unlink ${d.name}") { Link.unlink(d.key) })
                 }
             }
+            if (d.ok && d.key in older) OlderLine(false) { relink(app, d, false) }
         }
     }
     io.github.ravenor907.muninn.ui.Framed(if (tablet) "Link" else "Link a tablet or computer") {
@@ -360,6 +424,15 @@ internal fun LinkedDevicesPanel(app: Muninn) {
         }
     }
     Spacer(Modifier.height(4.dp))
+}
+
+/** Round 16: under a linked device found on an older version, what to do, with Link again. */
+@Composable
+private fun OlderLine(phone: Boolean, onRelink: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Text(LinkWire.olderText(phone), style = Type.small.copy(color = Palette.danger))
+        MButton("Link again", Modifier.padding(top = 6.dp), Kind.Accent, icon = "qr") { onRelink() }
+    }
 }
 
 /** A message's photo or file on a companion: the picture once it's here, else its word and "On home Wi-Fi". */

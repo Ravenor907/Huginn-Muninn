@@ -26,6 +26,8 @@ class Vault;
 //  - Cap p2 (22.4): "pv" (my version) on every envelope to an app that says p2, so one that missed my picture asks
 //    ({"t":"profile?"}); a picture is answered {"t":"profile-ok","v"}, and to a p2 app it counts as sent only then
 //    (until then it goes again after 2, 4, 8 ... minutes). Refresh on a person's page asks them (askPicture).
+//    Round 16: "profile?" says the version the asker keeps ("pv"); it is answered once per version a day, only when
+//    older; a restart sends again only a day after the last send; at most kDayMax pictures a day in all.
 // Everything kept is in the vault (profile/me.json, profile/<hash>.json, profile/sent.json), so a backup and a move
 // carry it and Erase everything wipes it. shared/vectors/p1-vectors.json checks the wire parts (selfTest).
 class Profile : public QObject
@@ -48,7 +50,10 @@ public:
     static const char kCap2[];             // "p2"
     static const qint64 kAskMs = 5 * 60000;   // at most one "profile?" to a person in this long (from a "pv")
     static const qint64 kRefreshMs = 10000;   // Refresh by hand: no sooner than this after the last ask
-    static const qint64 kAnswerMs = 60000;    // at most one picture sent because a person asked, per person
+    // Round 16: a "profile?" is answered at most once per version of mine a day, and only when the asker says it keeps
+    // an older one; pictures after a restart wait a day after the last one to that person; at most kDayMax a day in all.
+    static const qint64 kDayMs = 24LL * 3600 * 1000;
+    static const int kDayMax = 200;
     static const int kCtlPer10s = 5;          // "profile?" and "profile-ok" per sender in 10 s (apart from pictures)
     static const qint64 kFirstRetryMs = 2 * 60000;          // no "profile-ok": again after 2, 4, 8 ... minutes,
     static const qint64 kMaxRetryMs = 6LL * 3600 * 1000;    // at most 6 hours apart,
@@ -104,7 +109,7 @@ public:
     qint64 myVersion() const { return m_me.v; }
     bool saysP2(const QString &key) const;
     void sawVersion(const QString &key, qint64 pv);
-    void askedBy(const QString &key);
+    void askedBy(const QString &key, qint64 theirs);
     void ack(const QString &key, qint64 v);
     void acked(const QString &key, qint64 v);
     // Refresh on a person's page: asks them for their current picture (through a linked phone while it is the account
@@ -124,13 +129,23 @@ public:
     static QString cleanCustom(const QString &s);
     // Cap p2: a usable version ("v" or "pv": a whole number, 1 <= v < 2^53), else 0; the small messages; the rules.
     static qint64 versionOf(const QJsonValue &v);
-    static QByteArray askMsg();
+    static QByteArray askMsg(qint64 have);            // "profile?" saying the version of theirs kept here (0: none)
+    static qint64 askedPv(const QJsonObject &p);       // the version an asker says it keeps; 0 when none or unsaid
+    static bool mayAnswer(qint64 mine, qint64 theirs, qint64 lastV, qint64 lastAt, qint64 now);
     static QByteArray ackMsg(qint64 v);
     static bool isCtl(const QJsonObject &p);           // "profile?" or "profile-ok"
     static bool ctlOk(const QJsonObject &p);           // well-formed "profile?" or "profile-ok"
     static bool mayAsk(qint64 last, qint64 now, qint64 gap);
     static qint64 retryMs(int tries);
-    static bool due(int tries, qint64 at, qint64 now);
+    static bool due(int tries, qint64 at, qint64 now, bool old = false);   // old: the last send was before this start
+    // Pictures sent on one day (days since 1970, UTC), at most kDayMax.
+    struct DayBudget {
+        qint64 day = 0;
+        int n = 0;
+        void roll(qint64 now);
+        bool has(qint64 now);
+        void spend(qint64 now);
+    };
     static bool p2SelfTest();
     // The JPEG to send: the centre square at 256x256, the first quality of the ladder that fits, or empty.
     static QByteArray encode(const QImage &image);
@@ -150,6 +165,7 @@ private:
     void load();
     void saveMe();
     void saveSent();
+    void saveP2();
     void change(const Entry &e);
     void reconcileSoon();
     void reconcile();
@@ -170,10 +186,19 @@ private:
         qint64 v = 0;
         int n = 0;
         qint64 at = 0;
+        bool old = false;   // counted before this start
     };
-    QHash<QString, Try> m_tries;          // cap p2: my version v sent n times with no "profile-ok", the last at at
-    QHash<QString, qint64> m_asked;       // cap p2: when I last asked each person for theirs
-    QHash<QString, qint64> m_answered;    // cap p2: when I last sent mine because they asked
+    // Cap p2: my version v sent n times with no "profile-ok", the last at at. m_tries, m_answered and m_budget are kept
+    // in profile/p2.json, so a restart doesn't send everything again.
+    QHash<QString, Try> m_tries;
+    QHash<QString, qint64> m_asked;       // cap p2: when I last asked each person for theirs (memory only)
+    struct Answer {
+        qint64 v = 0;
+        qint64 at = 0;
+    };
+    QHash<QString, Answer> m_answered;    // cap p2: the version of mine last sent because they asked, and when
+    QSet<QString> m_answerNow;            // asked, and answered on the next pass whatever the retry wait
+    DayBudget m_budget;                   // pictures sent today, everyone together
     bool inTouch(const QString &key) const;
     bool claim(QHash<QString, qint64> &map, const QString &key, qint64 gap);
     void sendSmall(const QString &key, const QByteArray &plain);

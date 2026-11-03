@@ -358,6 +358,13 @@ the new key has to be invited again.
   otherwise drop it.
 - Unknown `ch` while `sv` is higher: hold and sync, as above. A channel that was removed: show it in `main`.
 - The receiver answers `greceipt` `delivered` to the sender only.
+- **A long message in parts (round 16).** A text longer than one message, sent as up to 10 messages, carries in each
+  part `"ps": "<logical id>"` (the same for all its parts), `"pi": i` (its place, 1 for the first) and `"pn": n` (how
+  many, 2 to 10). A receiver places a part before the same sender's first part of that set with a higher `pi` already
+  in the chat, else last, so every member reads the parts in order even when one came later (part 1 waits for its link
+  preview). The fields are kept with the message. Apps that don't know them ignore them and show the parts as they
+  come; a part with an unusable `ps`, `pi` or `pn` is shown as a plain message. Muninn `Groups.placePart` (test
+  `GroupsTest`), Huginn `GroupWire::partPlace` (self-test).
 
 ### 3.9 Room `gphoto`: photos and voice messages
 
@@ -1906,21 +1913,30 @@ stamped frame, its frames without `lts` and `ln` are dropped. Frames from an app
 as before, and such an app ignores the two fields. A dropped frame is answered as if taken (nothing tells a relay which
 it was). Muninn `LinkReplay`, Huginn `LinkReplay`.
 
-**Going back to stable (cap `l4`).** An app that stamps says `l4` in `caps` on every `sync`, `ping` and `pong` it sends
-(a phone's `pong` is `{"t": "pong", "caps": "l4"}`; a companion adds `l4` to its usual caps). A device that stamped and
-then went back to an app that doesn't (Labs, Go back to stable) is noticed this way:
-- An unstamped `sync`, `ping` or `pong` whose `caps` lack `l4`, from a device that stamped: taken, and that device no
-  longer counts as one that stamps, so its unstamped frames are taken again. The receiver catches up on what it dropped
-  meanwhile (a companion sends the phone `sync`; a phone's own `sync` handling sends the chats again).
-- Any other unstamped frame from a device that stamps stays dropped. A companion then asks the phone for its caps again
-  with `{"t": "ping", "caps": "l4"}` (at most every 2 minutes); the phone's `pong` answers it. A phone waits for the
-  companion's next `ping` or `sync` (on opening, and every minute while it's in front).
-- A stamped frame from the device again (updated back to the beta) makes it one that stamps once more: replays and old
-  frames are dropped as above.
-- `hello` needs the one-time link token (section 15), so it is taken unstamped; a device linked again (a `hello` taken,
-  or a link code scanned) is learned anew.
-- Limit: nothing proves an unstamped frame is new. A relay holding an unstamped `sync`, `ping` or `pong` from before the
-  device ever stamped could send it to turn the guard off, until the device's next stamped frame turns it back on.
+**Going back to an older version (cap `l4`, round 16).** An app that stamps says `l4` in `caps` on every `sync`, `ping`
+and `pong` it sends (a phone's `pong` is `{"t": "pong", "caps": "l4"}`; a companion adds `l4` to its usual caps). Nothing
+proves an unstamped frame is new, and relays have seen unstamped frames from every pair linked before 1.36, so an
+unstamped frame never switches the guard off:
+- Once a device has sent one stamped frame that was taken, its unstamped frames are **always** dropped, whatever their
+  `t` or `caps` say (an unstamped `sync`, `ping` or `pong` without `l4` too). Nothing is ever downgraded silently.
+- A companion that drops one asks the phone for its caps again with `{"t": "ping", "caps": "l4"}` (at most every 2
+  minutes). A phone waits for the companion's next `ping` or `sync` (on opening, and every minute while it's in front).
+- A device that really went back to an older app keeps sending only unstamped frames. When a receiver has dropped at
+  least **3** unstamped frames from it over at least **10 minutes**, with no stamped frame taken from it in between, the
+  device is **on an older version**: kept in `link-replay.json` (`"old": [keys]`) until it is linked again or sends a
+  stamped frame that is taken (a stamped frame dropped as a replay doesn't count, and starts nothing). The receiver
+  says "Your linked phone is on an older version. Link again to keep using it." (on a companion) or "Your linked
+  computer is on an older version. Link again to keep using it." (on the phone), once a run, with **Link again**: on a
+  companion it shows its link code again, on the phone it opens the scanner (Huginn: paste the code). Linking again is
+  the usual linking (section 15): `hello` with a fresh one-time token and the 4 emoji checked on both screens. Until
+  then nothing from that device is taken. A relay replaying old unstamped frames can at most make this question appear;
+  it can never make a frame be taken.
+- A stamped frame from the device again (updated back to the beta) is taken as usual: replays and old frames are
+  dropped as above, and it is no longer on an older version.
+- `hello` needs the one-time link token (section 15), so it is taken unstamped (that is how linking again works); a
+  device linked again (a `hello` taken, or a link code scanned) is learned anew. Unlinking forgets it too.
+- Round 15's rule (an unstamped `sync`, `ping` or `pong` without `l4` taken, and the device no longer one that stamps)
+  is withdrawn: one replayed frame could turn the guard off. A round 15 app still stamps, so it is unaffected.
 
 **Clocks more than 36 hours apart (round 15, receiver only; Huginn does this, and nothing on the wire changes).** A
 frame that came straight over the Wi-Fi or Bluetooth is live (a relay can't have kept it), so it's taken whatever its
@@ -2656,16 +2672,24 @@ for everyone else):
   `profile?`, which only ever brings the sender's real picture, sealed.
 - **Asking.** A receiver that opens an envelope from a contact or a group peer it shares a group with, whose caps say
   `p2`, and whose `pv` is higher than the version it keeps for them (0: none), sends room `profile`
-  `{"t": "profile?"}` (other fields ignored), at most once per person in 5 minutes.
-- **Answering.** An app with a profile that takes `profile?` from a contact or group peer that says `p2` (never anyone
-  blocked or in the trash) forgets that person's sent version and sends its picture (22.2) at once, at most once per
-  person a minute.
+  `{"t": "profile?", "pv": n}`, at most once per person in 5 minutes. `pv` (round 16) is the version of theirs the asker
+  keeps (0: none), a whole number 0 <= pv < 2^53; other fields are ignored. An app from before round 16 sends no `pv`;
+  that, or a `pv` that isn't usable, counts as 0, so it is still answered (within the limits below).
+- **Answering (round 16).** An app with a profile that takes `profile?` from a contact or group peer that says `p2`
+  (never anyone blocked or in the trash) answers only when the asker's `pv` is lower than its own version, and at most
+  once per person per version of its own in 24 hours (kept with the retry state, so a restart doesn't reset it). An
+  answer forgets that person's sent version and sends the picture (22.2) once, at once, whatever the retry wait; it
+  does not reset the retry count, so asking never starts a new round of retries.
+- **At most 200 pictures a day (round 16).** Every picture an app sends (first sends, retries and answers, to everyone
+  together, `p1` peers included) counts toward one UTC day; at 200 the rest wait until the next day.
 - **Acknowledging.** A receiver that takes (200) a `profile` message from an app that says `p2`, even one with a version
   it already has, answers `{"t": "profile-ok", "v": n}` with that message's `v`. The sender marks its version sent to
   that person only on a `profile-ok` whose `v` is its current version; a route taking it no longer counts. Until then it
-  sends the picture again 2, 4, 8 ... minutes after the last send, at most 6 hours apart, at most 10 times (in memory
-  only; a new version, a `profile?` or starting again begins anew). After that only a `profile?` sends it again.
-  `profile-ok` is never answered.
+  sends the picture again 2, 4, 8 ... minutes after the last send, at most 6 hours apart, at most 10 times. Round 16:
+  the count and the last send are kept (Muninn `profile/p2.json`, Huginn the vault's `profile/p2.json`, with the
+  answers and the day's count), so after a restart a person who never acked gets it again only 24 hours after the last
+  send to them (and never after the 10th); a new version begins anew. After the 10th only an answered `profile?` sends
+  it again. `profile-ok` is never answered.
 - **Limits.** `profile?` and `profile-ok` are sealed through the ratchet in room `profile` like a picture, deduped the
   same way, and counted apart from pictures: at most 5 in 10 seconds per sender (429). From an app whose caps don't say
   `p2`, or a `profile-ok` without a usable `v`: 400. Someone not a contact or group peer: 403. An app with only `p1`
@@ -2841,7 +2865,8 @@ below, for senders known to be unable to nudge.
   - Nothing: "Muninn" (Huginn: "Huginn"), "New message".
 
   One notification per sender and chat (with Nothing, one for all; from the nudge key, one for all as above), updated
-  as more come ("3 new messages") and alerting only the first time. Quiet hours, Do not disturb and Extreme battery saver apply as for any message. On
+  as more come ("3 new messages") and alerting only the first time (the shared "Group message" one: whenever its limit
+  allows, at most once per 2 minutes, however long the device stays locked). Quiet hours, Do not disturb and Extreme battery saver apply as for any message. On
   Muninn, a tap opens the lock screen, then that chat once unlocked when exactly one contact (1:1) or group (by
   `chat`) has that name, else the chat list; unlocking takes these notifications down (the messages themselves then
   notify). Huginn shows the same words and counts; a click brings it to its lock screen, then the chat list.

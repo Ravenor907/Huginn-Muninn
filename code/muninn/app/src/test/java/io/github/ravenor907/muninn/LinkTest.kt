@@ -258,46 +258,75 @@ class LinkTest {
         assertTrue(send.getString("ln") != unlink.getString("ln"))
     }
 
-    /** Round 15: a device that went back to stable (no cap l4) is taken again; one that still stamps keeps its guard. */
+    /**
+     * Round 16 (cap l4): an unstamped frame never switches the guard off, whatever it says. A device that keeps sending
+     * only unstamped frames is found on an older version, to be linked again; it stamps again or is linked again to clear.
+     */
     @Test
-    fun goingBackToStableKeepsTheLink() {
+    fun anOldUnstampedFrameNeverTurnsTheGuardOff() {
         val t0 = 1_800_000_000_000L
         val r = LinkReplay()
         val send = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"hi"}""", t0))
         assertTrue(r.take("PC", send, t0))
-        assertFalse(r.left("PC"))
-        // Unstamped and not a caps frame: dropped, and its caps are asked for (not again within PROBE_MS).
-        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        // A relay replays a 1.35-era ping, sync or pong (no l4), then a 1.35-era send and unlink: all dropped.
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping"}"""), t0 + 1))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"sync","caps":"l1 l2 l3"}"""), t0 + 2))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"pong"}"""), t0 + 3))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"send","text":"old"}"""), t0 + 4))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"unlink"}"""), t0 + 5))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping","caps":"l1 l2 l3 l4"}"""), t0 + 6))
+        // Its caps are asked for (not again within PROBE_MS).
         assertTrue(r.probeDue("PC", t0))
         assertFalse(r.probeDue("PC", t0 + LinkReplay.PROBE_MS - 1))
         assertTrue(r.probeDue("PC", t0 + LinkReplay.PROBE_MS))
-        // An unstamped ping that still says l4: dropped (a stamping app never sends one).
-        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping","caps":"l1 l2 l3 l4"}"""), t0))
-        // Its unstamped "sync" without l4: taken, and from then on its frames are taken again.
-        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"sync","caps":"l1 l2 l3"}"""), t0))
-        assertTrue(r.left("PC"))
-        assertFalse(r.left("PC"))
-        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
-        assertFalse(r.probeDue("PC", t0 + 10 * LinkReplay.PROBE_MS))
-        // A plain pong from a phone back on stable works the same way.
+        // Not found on an older version yet: all of that came within OLDER_MS.
+        assertFalse(r.found("PC"))
+        assertTrue(r.olderOnes().isEmpty())
+        // A stamped frame starts the count again.
+        assertTrue(r.take("PC", org.json.JSONObject(LinkReplay.stamp("""{"t":"ping","caps":"l4"}""", t0 + 1000)), t0 + 1000))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping"}"""), t0 + LinkReplay.OLDER_MS))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping"}"""), t0 + LinkReplay.OLDER_MS + 1))
+        assertFalse(r.found("PC"))
+        // A replayed stamped frame (seen before) doesn't count as a stamped one.
+        assertFalse(r.take("PC", send, t0 + LinkReplay.OLDER_MS + 2))
+        assertFalse(r.found("PC"))
+    }
+
+    @Test
+    fun aDeviceBackOnAnOlderVersionIsFoundAndLinkedAgain() {
+        val t0 = 1_800_000_000_000L
         val ph = LinkReplay()
         assertTrue(ph.take("phone", org.json.JSONObject(LinkReplay.stamp("""{"t":"pong","caps":"l4"}""", t0)), t0))
-        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
-        assertTrue(ph.take("phone", org.json.JSONObject("""{"t":"pong"}"""), t0))
-        assertTrue(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
-        // Updated again: its first stamped frame guards it once more, replays included.
-        val again = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"x"}""", t0))
-        assertTrue(r.take("PC", again, t0))
-        assertFalse(r.take("PC", again, t0 + 1))
-        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
-        // A "hello" (one-time token) is taken unstamped; linking again starts over.
-        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"hello","i":"x"}"""), t0))
-        r.forget("PC")
-        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
-        // Kept between runs.
+        // It keeps sending only unstamped frames (pongs to the probe, messages): never taken.
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0 + 1_000))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"pong"}"""), t0 + 2 * 60_000L))
+        assertFalse(ph.found("phone"))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"pong"}"""), t0 + 1_000 + LinkReplay.OLDER_MS))
+        // Found, once; and listed until it is linked again.
+        assertTrue(ph.found("phone"))
+        assertFalse(ph.found("phone"))
+        assertEquals(setOf("phone"), ph.olderOnes())
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0 + 2 * LinkReplay.OLDER_MS))
+        // Kept between runs, and still dropping.
         val kept = LinkReplay()
         kept.load(ph.save())
+        assertEquals(setOf("phone"), kept.olderOnes())
+        assertFalse(kept.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        // Linking again (its hello carries the one-time token) is taken, and forget starts over.
+        assertTrue(kept.take("phone", org.json.JSONObject("""{"t":"hello","i":"x"}"""), t0))
+        kept.forget("phone")
+        assertTrue(kept.olderOnes().isEmpty())
         assertTrue(kept.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        // Updated again instead: its first stamped frame clears it, and guards it once more.
+        val again = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"x"}""", t0))
+        assertTrue(ph.take("phone", again, t0))
+        assertTrue(ph.olderOnes().isEmpty())
+        assertFalse(ph.take("phone", again, t0 + 1))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"send"}"""), t0))
+        assertEquals(3L, LinkReplay.OLDER_FRAMES)
+        assertEquals(10 * 60_000L, LinkReplay.OLDER_MS)
+        assertEquals("Your linked phone is on an older version. Link again to keep using it.", LinkWire.olderText(true))
+        assertEquals("Your linked computer is on an older version. Link again to keep using it.", LinkWire.olderText(false))
         assertTrue(LinkWire.saysL4("l1 l4"))
         assertFalse(LinkWire.saysL4("l1 l40"))
     }

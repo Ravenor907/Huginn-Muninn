@@ -1438,7 +1438,12 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
     if (!m_groups.contains(g) || (!m.value(QStringLiteral("system")).toBool() && gmsgKnown(id)))
         return;
     Group &gr = m_groups[g];
-    gr.messages << m;
+    // Round 16: a part of a long message goes before the same sender's later parts of that set (part 1 may come last).
+    const int at = GroupWire::partPlace(gr.messages, m);
+    if (at < 0)
+        gr.messages << m;
+    else
+        gr.messages.insert(at, m);
     while (gr.messages.size() > kMaxGroupMessages) {
         const QVariantMap old = gr.messages.takeFirst().toMap();
         m_gidx.remove(str(old, "id"));
@@ -1828,6 +1833,12 @@ int Chat::gmsgIn(const QString &g, const QString &from, const QString &name, con
     if (p.contains(QStringLiteral("re")))
         m.insert(QStringLiteral("re"), p.value(QStringLiteral("re")).toString());
     MoreWire::keep(m, QStringLiteral("gmsg"), p);   // cap m2: a poll or a link preview
+    // Round 16: one part of a long message ("ps", "pi", "pn"): placed by its index among the parts already here.
+    const QJsonValue ps = p.value(QStringLiteral("ps")), pi = p.value(QStringLiteral("pi")), pn = p.value(QStringLiteral("pn"));
+    if (GroupWire::partOk(ps, pi, pn)) {
+        m.insert(QStringLiteral("ps"), ps.toString());
+        m.insert(QStringLiteral("pi"), pi.toInt());
+    }
     storeGroupMessage(g, m, true);
     groupReceipt(g, from, {id}, QStringLiteral("delivered"));
     return 200;

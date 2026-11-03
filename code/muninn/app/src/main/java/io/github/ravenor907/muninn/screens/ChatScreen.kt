@@ -1495,18 +1495,29 @@ private fun micAnswer(context: android.content.Context, ok: Boolean) {
  * messages, split at line breaks or spaces; longer still, it says so and the text stays. [send] gets each part and
  * whether it's the first (only the first answers a message). [done] clears the box once it's sent.
  */
-internal fun sendLong(text: String, done: () -> Unit, send: (String, Boolean) -> Unit) {
+internal fun sendLong(text: String, done: () -> Unit, send: (String, Boolean) -> Unit) =
+    sendLongParts(text, done) { p, part -> send(p, part == null || part.i == 1) }
+
+/**
+ * [sendLong], saying which part each one is (null: the text went whole): a group message carries it, so every member
+ * places the parts by their index (Groups.placePart), whichever comes first.
+ */
+internal fun sendLongParts(text: String, done: () -> Unit, send: (String, io.github.ravenor907.muninn.net.TextPart?) -> Unit) {
     val parts = Drafts.split(text, Chat.MAX)
     when {
         parts.isEmpty() -> done()
-        parts.size == 1 -> { send(parts[0], true); done() }
+        parts.size == 1 -> { send(parts[0], null); done() }
         parts.size > Drafts.MAX_PARTS -> Ui.say("That's too long to send as messages. Send it as a file instead.", true)
         else -> Ui.sure(Ask("Send as ${parts.size} messages?",
             "One message holds up to ${Chat.MAX} characters, so this goes in ${parts.size} parts, split at line breaks or spaces. Nothing is cut.",
             "Send ${parts.size}", onConfirm = {
                 // A moment apart, so they keep their order everywhere.
                 val main = android.os.Handler(android.os.Looper.getMainLooper())
-                parts.forEachIndexed { i, p -> if (i == 0) send(p, true) else main.postDelayed({ send(p, false) }, i * 50L) }
+                val set = Proto06.newLogicalId()
+                parts.forEachIndexed { i, p ->
+                    val part = io.github.ravenor907.muninn.net.TextPart(set, i + 1, parts.size)
+                    if (i == 0) send(p, part) else main.postDelayed({ send(p, part) }, i * 50L)
+                }
                 done()
             }))
     }
@@ -1544,14 +1555,26 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
         val want = text
         if (field.text.toString() != want) field.edit { replace(0, length, want) }
     }
+    // After an Enter send, the box's report of the sent text is not typing, and an IME's letters put back into the
+    // emptied box are cleared (BoxEcho): the sent text never comes back, so it can't go twice.
+    val echo = remember { BoxEcho() }
     // Never cut here: a long message is split or refused when sent (sendLong), with a line saying so before that.
-    LaunchedEffect(field) { snapshotFlow { field.text.toString() }.collect { if (it != textNow) onTextNow(it.take(Drafts.KEEP_MAX)) } }
+    LaunchedEffect(field) {
+        snapshotFlow { field.text.toString() }.collect {
+            when (echo.seen(it, textNow, android.os.SystemClock.uptimeMillis())) {
+                BoxEcho.PASS -> onTextNow(it.take(Drafts.KEEP_MAX))
+                BoxEcho.CLEAR -> field.edit { replace(0, length, "") }
+                else -> {}
+            }
+        }
+    }
     // Enter on a hardware keyboard sends what the box holds right now: its last letters reach [text] only a frame or
     // two later. An open composition (a Korean or Japanese IME) is committed first: setting the text from here ends it
-    // and keeps its letters, so nothing comes back into the emptied box.
+    // and keeps its letters.
     val sendFromBox: () -> Unit = {
         val now = field.text.toString().take(Drafts.KEEP_MAX)
         if (now.isNotBlank()) {
+            echo.send(now, android.os.SystemClock.uptimeMillis())
             field.edit { replace(0, length, now) }
             if (now != textNow) onTextNow(now)
             onSendNow()
@@ -2901,8 +2924,9 @@ private fun GroupConversation(app: Muninn, g: String) {
                 app.chat.groups.editText(g, e.id, text)?.let { Ui.say(it, true) }; editing = null; text = ""
             } else {
                 val re = replyTo?.id ?: ""
-                sendLong(text, { replyTo = null; text = "" }) { p, first ->
-                    if (!app.chat.sendGroupText(g, ch, p, if (first) re else "") && first && app.chat.groups.myStatus(g).isEmpty() && !adminsOnlyHere)
+                sendLongParts(text, { replyTo = null; text = "" }) { p, part ->
+                    val first = part == null || part.i == 1
+                    if (!app.chat.sendGroupText(g, ch, p, if (first) re else "", part) && first && app.chat.groups.myStatus(g).isEmpty() && !adminsOnlyHere)
                         Ui.say("That couldn't be sent.", true)
                 }
             }

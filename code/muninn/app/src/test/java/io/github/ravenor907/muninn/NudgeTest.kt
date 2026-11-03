@@ -306,12 +306,20 @@ class NudgeTest {
         assertEquals("", raw.n.from + raw.n.chat)
         assertEquals("Group message", NudgeWire.title(Show.NAME, raw.n))
         assertEquals("3 new messages", NudgeWire.text(Show.NAME, raw.n.kind, 3))
-        // Two minutes on, one may buzz again.
-        assertTrue(lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G6", "msg")), t0 + NudgeWire.LockedLimit.ALERT_EVERY_MS).alert)
+        // Two minutes on, one may buzz again, whatever the count (round 16: not once per lock).
+        val later = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G6", "msg")), t0 + NudgeWire.LockedLimit.ALERT_EVERY_MS)
+        assertTrue(later.alert)
+        assertTrue(NudgeWire.LockedLimit.sounds(a, 1))
+        assertFalse(NudgeWire.LockedLimit.sounds(b, 2))
+        assertFalse(NudgeWire.LockedLimit.sounds(raw, 3))
+        assertTrue(NudgeWire.LockedLimit.sounds(later, 4))
         // A contact's nudge (ring key) still names them and alerts.
         val c = lim.take(Show.NAME, Nudge(4L, "Ann", "", "msg"), t0 + 6_000)
         assertTrue(c.alert)
         assertEquals("Ann", NudgeWire.title(Show.NAME, c.n))
+        // A contact's alerts its first time only.
+        assertTrue(NudgeWire.LockedLimit.sounds(c, 1))
+        assertFalse(NudgeWire.LockedLimit.sounds(c, 2))
         assertEquals("Ann · Gaming", NudgeWire.title(Show.NAME, Nudge(4L, "Ann", "Gaming", "msg")))
         lim.clear()
         assertTrue(lim.take(Show.NAME, g, t0 + 7_000).alert)

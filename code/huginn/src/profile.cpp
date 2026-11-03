@@ -166,7 +166,29 @@ qint64 Profile::versionOf(const QJsonValue &v)
     return qint64(d);
 }
 
-QByteArray Profile::askMsg() { return compact({{QStringLiteral("t"), QStringLiteral("profile?")}}); }
+QByteArray Profile::askMsg(qint64 have)
+{
+    const qint64 pv = have < 0 ? 0 : have > 9007199254740991LL ? 9007199254740991LL : have;
+    return compact({{QStringLiteral("t"), QStringLiteral("profile?")}, {QStringLiteral("pv"), QJsonValue(pv)}});
+}
+
+// An app from before round 16 doesn't say "pv" in its ask; that, and anything unusable, counts as 0 (none), so it is
+// still answered within the once-a-day limit.
+qint64 Profile::askedPv(const QJsonObject &p)
+{
+    const QJsonValue v = p.value(QStringLiteral("pv"));
+    if (!v.isDouble())
+        return 0;
+    const double d = v.toDouble();
+    if (!(d >= 0) || d >= 9007199254740992.0 || d != double(qint64(d)))
+        return 0;
+    return qint64(d);
+}
+
+bool Profile::mayAnswer(qint64 mine, qint64 theirs, qint64 lastV, qint64 lastAt, qint64 now)
+{
+    return mine >= 1 && theirs < mine && (lastV != mine || lastAt == 0 || now - lastAt >= kDayMs || now < lastAt);
+}
 
 QByteArray Profile::ackMsg(qint64 v) { return compact({{QStringLiteral("t"), QStringLiteral("profile-ok")}, {QStringLiteral("v"), QJsonValue(v)}}); }
 
@@ -195,7 +217,37 @@ qint64 Profile::retryMs(int tries)
     return wait < kMaxRetryMs ? wait : qint64(kMaxRetryMs);
 }
 
-bool Profile::due(int tries, qint64 at, qint64 now) { return tries == 0 || (tries < kMaxTries && now - at >= retryMs(tries)); }
+bool Profile::due(int tries, qint64 at, qint64 now, bool old)
+{
+    if (tries == 0)
+        return true;
+    if (tries >= kMaxTries)
+        return false;
+    if (old)
+        return now - at >= kDayMs || now < at;
+    return now - at >= retryMs(tries);
+}
+
+void Profile::DayBudget::roll(qint64 now)
+{
+    const qint64 d = now >= 0 ? now / kDayMs : -((-now + kDayMs - 1) / kDayMs);
+    if (d != day) {
+        day = d;
+        n = 0;
+    }
+}
+
+bool Profile::DayBudget::has(qint64 now)
+{
+    roll(now);
+    return n < kDayMax;
+}
+
+void Profile::DayBudget::spend(qint64 now)
+{
+    roll(now);
+    ++n;
+}
 
 QByteArray Profile::encode(const QImage &image)
 {
@@ -522,6 +574,8 @@ void Profile::forget(const QString &key)
     m_tries.remove(key);
     m_asked.remove(key);
     m_answered.remove(key);
+    m_answerNow.remove(key);
+    saveP2();
     m_cache.remove(key);
     m_heard.remove(key);
     m_statuses.remove(key);
@@ -566,7 +620,7 @@ void Profile::sawVersion(const QString &key, qint64 pv)
     if (!m_loaded || pv <= m_peers.value(key).v || !saysP2(key) || !inTouch(key))
         return;
     if (claim(m_asked, key, kAskMs))
-        sendSmall(key, askMsg());
+        sendSmall(key, askMsg(m_peers.value(key).v));
 }
 
 QString Profile::askPicture(const QString &key)
@@ -575,7 +629,7 @@ QString Profile::askPicture(const QString &key)
     // Someone in touch with this computer: asked from here.
     if (m_chat->ready() && inTouch(key) && saysP2(key)) {
         if (claim(m_asked, key, kRefreshMs))
-            sendSmall(key, askMsg());
+            sendSmall(key, askMsg(m_peers.value(key).v));
         return asked;
     }
     // Otherwise a linked phone that is the account here asks its contact (cap l1).
@@ -584,14 +638,20 @@ QString Profile::askPicture(const QString &key)
     return QStringLiteral("Their app can't be asked for it yet.");
 }
 
-void Profile::askedBy(const QString &key)
+void Profile::askedBy(const QString &key, qint64 theirs)
 {
-    if (!m_loaded || m_me.v == 0 || !saysP2(key) || !inTouch(key) || !claim(m_answered, key, kAnswerMs))
+    if (!m_loaded || m_me.v == 0 || !saysP2(key) || !inTouch(key))
         return;
-    // They say they don't have it: it goes now, and again until its "profile-ok".
-    m_tries.remove(key);
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    const Answer last = m_answered.value(key);
+    if (!mayAnswer(m_me.v, theirs, last.v, last.at, t))
+        return;
+    // They keep an older one: it goes once now. The retry count isn't reset, so asking never starts a new round.
+    m_answered.insert(key, Answer{m_me.v, t});
+    m_answerNow.insert(key);
     if (m_sent.remove(key))
         saveSent();
+    saveP2();
     reconcileSoon();
 }
 
@@ -605,11 +665,16 @@ void Profile::acked(const QString &key, qint64 v)
 {
     if (m_me.v < 1 || v != m_me.v)
         return;
-    m_tries.remove(key);
-    if (m_sent.value(key, 0) == v)
+    const bool had = m_tries.remove(key);
+    m_answerNow.remove(key);
+    if (m_sent.value(key, 0) == v) {
+        if (had)
+            saveP2();
         return;
+    }
     m_sent.insert(key, v);
     saveSent();
+    saveP2();
 }
 
 // ------------------------------------------------------------------ sending
@@ -623,7 +688,8 @@ void Profile::reconcileSoon()
 // My picture and colour to everyone who should have this version and doesn't yet: contacts, and members of my groups,
 // only those whose app said p1, never anyone blocked or in the trash. One is marked sent only once a route took it, so
 // someone out of reach gets it on a later pass. Cap p2: an app that says p2 has it only once its "profile-ok" came;
-// until then it goes again after 2, 4, 8 ... minutes (at most 6 hours apart, 10 times).
+// until then it goes again after 2, 4, 8 ... minutes (at most 6 hours apart, 10 times; after a restart only a day after
+// the last send to them). Round 16: at most kDayMax pictures a day in all.
 void Profile::reconcile()
 {
     Busy::Scope busy("profile sharing");
@@ -645,17 +711,19 @@ void Profile::reconcile()
     }
     const QByteArray plain = msg(m_me.v, m_me.pic, m_me.col);
     const qint64 t = QDateTime::currentMSecsSinceEpoch();
-    bool changed = false;
+    bool changed = false, counted = false;
     for (const QString &k : std::as_const(keys)) {
         if (c->isBlocked(k) || c->isTrashed(k) || (!c->isContact(k) && !c->isGroupPeer(k)) || !c->hasCap(k, QLatin1String(kCap)))
             continue;
         if (m_sent.value(k, 0) == m_me.v)
             continue;
+        if (!m_budget.has(t))
+            break;
         const bool p2 = c->hasCap(k, QLatin1String(kCap2));
         Try was = m_tries.value(k);
         if (was.v != m_me.v)
-            was = Try{m_me.v, 0, 0};
-        if (p2 && !due(was.n, was.at, t))
+            was = Try{m_me.v, 0, 0, false};
+        if (p2 && !m_answerNow.contains(k) && !due(was.n, was.at, t, was.old))
             continue;
         // No way to reach them right now: nothing is sealed (that would use up a ratchet step and a save each pass).
         if (c->route(k).isEmpty() && c->mailboxOf(k).isEmpty())
@@ -663,8 +731,11 @@ void Profile::reconcile()
         const QJsonObject env = c->envelope(QStringLiteral("profile"), k, plain, QUuid::createUuid().toString(QUuid::WithoutBraces));
         if (c->deliver(k, env, c->mailboxOf(k)).isEmpty())
             continue;
+        m_budget.spend(t);
+        counted = true;
         if (p2) {
-            m_tries.insert(k, Try{m_me.v, was.n + 1, t});
+            m_answerNow.remove(k);
+            m_tries.insert(k, Try{m_me.v, was.n + 1, t, false});
             continue;
         }
         m_sent.insert(k, m_me.v);
@@ -672,6 +743,8 @@ void Profile::reconcile()
     }
     if (changed)
         saveSent();
+    if (counted)
+        saveP2();
 }
 
 // ------------------------------------------------------------------ files
@@ -711,6 +784,21 @@ void Profile::saveSent()
     m_vault->write(QStringLiteral("profile/sent.json"), compact(o));
 }
 
+// {"day","n","try":{key:[v,n,at]},"ans":{key:[v,at]}}: cap p2's retry state, answers and today's count.
+void Profile::saveP2()
+{
+    if (!m_loaded)
+        return;
+    QJsonObject tries, ans;
+    for (auto it = m_tries.cbegin(); it != m_tries.cend(); ++it)
+        tries.insert(it.key(), QJsonArray{QJsonValue(it->v), it->n, QJsonValue(it->at)});
+    for (auto it = m_answered.cbegin(); it != m_answered.cend(); ++it)
+        ans.insert(it.key(), QJsonArray{QJsonValue(it->v), QJsonValue(it->at)});
+    m_vault->write(QStringLiteral("profile/p2.json"),
+                   compact({{QStringLiteral("day"), QJsonValue(m_budget.day)}, {QStringLiteral("n"), m_budget.n},
+                            {QStringLiteral("try"), tries}, {QStringLiteral("ans"), ans}}));
+}
+
 void Profile::load()
 {
     m_loaded = true;
@@ -724,9 +812,26 @@ void Profile::load()
     const QJsonObject sent = QJsonDocument::fromJson(m_vault->read(QStringLiteral("profile/sent.json"))).object();
     for (auto it = sent.constBegin(); it != sent.constEnd(); ++it)
         m_sent.insert(it.key(), qint64(it.value().toDouble()));
+    // Cap p2's limits; one that can't be read starts them anew. Sends counted before this start wait a day (Try::old).
+    m_tries.clear();
+    m_answered.clear();
+    m_answerNow.clear();
+    const QJsonObject p2 = QJsonDocument::fromJson(m_vault->read(QStringLiteral("profile/p2.json"))).object();
+    m_budget.day = qint64(p2.value(QStringLiteral("day")).toDouble());
+    m_budget.n = p2.value(QStringLiteral("n")).toInt();
+    const QJsonObject tries = p2.value(QStringLiteral("try")).toObject();
+    for (auto it = tries.constBegin(); it != tries.constEnd(); ++it) {
+        const QJsonArray a = it.value().toArray();
+        m_tries.insert(it.key(), Try{qint64(a.at(0).toDouble()), a.at(1).toInt(), qint64(a.at(2).toDouble()), true});
+    }
+    const QJsonObject ans = p2.value(QStringLiteral("ans")).toObject();
+    for (auto it = ans.constBegin(); it != ans.constEnd(); ++it) {
+        const QJsonArray a = it.value().toArray();
+        m_answered.insert(it.key(), Answer{qint64(a.at(0).toDouble()), qint64(a.at(1).toDouble())});
+    }
     const QDir dir(m_vault->path(QStringLiteral("profile")));
     for (const QString &name : dir.entryList({QStringLiteral("*.json")}, QDir::Files)) {
-        if (name == QLatin1String("me.json") || name == QLatin1String("sent.json"))
+        if (name == QLatin1String("me.json") || name == QLatin1String("sent.json") || name == QLatin1String("p2.json"))
             continue;
         const QJsonObject o = QJsonDocument::fromJson(m_vault->read(QStringLiteral("profile/") + name)).object();
         const QString k = jstr(o, "k");
@@ -894,16 +999,18 @@ bool Profile::p2SelfTest()
     const QStringList caps = QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' '));
     check(caps.last() == QLatin1String(kCap2) && caps.contains(QLatin1String(kCap)), "caps say p2, last, and still p1");
     const auto obj = [](const QByteArray &b) { return QJsonDocument::fromJson(b).object(); };
-    check(askMsg() == QByteArrayLiteral("{\"t\":\"profile?\"}"), "ask shape");
+    check(askMsg(0) == QByteArrayLiteral("{\"pv\":0,\"t\":\"profile?\"}") && obj(askMsg(7)).value(QStringLiteral("pv")).toInteger() == 7
+              && obj(askMsg(7)).size() == 2,
+          "ask shape (round 16: says the version kept)");
     check(obj(ackMsg(5)).value(QStringLiteral("t")).toString() == QLatin1String("profile-ok") && obj(ackMsg(5)).value(QStringLiteral("v")).toInteger() == 5
               && obj(ackMsg(5)).size() == 2,
           "profile-ok shape");
-    check(ctlOk(obj(askMsg())) && ctlOk(obj(ackMsg(5))) && isCtl(obj(askMsg())) && isCtl(obj(ackMsg(5))), "small ones are well-formed");
+    check(ctlOk(obj(askMsg(3))) && ctlOk(obj(ackMsg(5))) && isCtl(obj(askMsg(3))) && isCtl(obj(ackMsg(5))), "small ones are well-formed");
     check(ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"x\":1}"))), "ask: other fields ignored");
     check(!ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile-ok\"}"))) && !ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile-ok\",\"v\":0}")))
               && !ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile-ok\",\"v\":\"5\"}"))) && !ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile\",\"v\":5}"))),
           "profile-ok needs a usable v");
-    check(!isCtl(obj(msg(2, QByteArray(), QStringLiteral("#3a7bd5")))) && !ok(obj(askMsg())) && !ok(obj(ackMsg(5))), "never taken for a picture");
+    check(!isCtl(obj(msg(2, QByteArray(), QStringLiteral("#3a7bd5")))) && !ok(obj(askMsg(3))) && !ok(obj(ackMsg(5))), "never taken for a picture");
     check(versionOf(QJsonValue(1)) == 1 && versionOf(QJsonValue(qint64(9007199254740991LL))) == 9007199254740991LL && versionOf(QJsonValue(0)) == 0
               && versionOf(QJsonValue(-3)) == 0 && versionOf(QJsonValue(2.5)) == 0 && versionOf(QJsonValue(QStringLiteral("4"))) == 0
               && versionOf(QJsonValue()) == 0 && versionOf(QJsonValue(9007199254740992.0)) == 0,
@@ -911,7 +1018,7 @@ bool Profile::p2SelfTest()
     check(versionOf(obj(QByteArrayLiteral("{\"room\":\"private\",\"pv\":4}")).value(QStringLiteral("pv"))) == 4, "pv on an envelope");
     const qint64 t = 1000000000;
     check(mayAsk(0, t, kAskMs) && !mayAsk(t, t + kAskMs - 1, kAskMs) && mayAsk(t, t + kAskMs, kAskMs) && kAskMs == 300000
-              && kRefreshMs == 10000 && kAnswerMs == 60000 && kCtlPer10s == 5,
+              && kRefreshMs == 10000 && kCtlPer10s == 5,
           "asking is rate limited");
     check(retryMs(1) == 120000 && retryMs(2) == 240000 && retryMs(3) == 480000 && retryMs(8) == 256LL * 60000 && retryMs(9) == 6LL * 3600000
               && retryMs(1000) == 6LL * 3600000,
@@ -920,6 +1027,44 @@ bool Profile::p2SelfTest()
     check(due(0, 0, a) && !due(1, a, a + 120000 - 1) && due(1, a, a + 120000) && !due(3, a, a + 7 * 60000) && due(3, a, a + 8 * 60000)
               && due(kMaxTries - 1, a, a + 6LL * 3600000) && !due(kMaxTries, a, a + 100LL * 6 * 3600000) && kMaxTries == 10,
           "retries stop after 10");
+    // Round 16 (N2): the same cases as Muninn's P2Test.
+    check(askedPv(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"pv\":4}"))) == 4 && askedPv(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"pv\":0}"))) == 0
+              && askedPv(obj(QByteArrayLiteral("{\"t\":\"profile?\"}"))) == 0 && ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile?\"}")))
+              && askedPv(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"pv\":-1}"))) == 0
+              && askedPv(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"pv\":\"4\"}"))) == 0
+              && askedPv(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"pv\":2.5}"))) == 0,
+          "an ask says the version kept; an older app's counts as none");
+    const qint64 d = 10 * kDayMs;
+    check(mayAnswer(5, 4, 0, 0, d) && mayAnswer(5, 0, 0, 0, d) && !mayAnswer(5, 5, 0, 0, d) && !mayAnswer(5, 6, 0, 0, d) && !mayAnswer(0, 0, 0, 0, d),
+          "answered only when the asker keeps an older version");
+    check(!mayAnswer(5, 4, 5, d, d + 60000) && !mayAnswer(5, 4, 5, d, d + kDayMs - 1) && mayAnswer(5, 4, 5, d, d + kDayMs) && mayAnswer(6, 4, 5, d, d + 1),
+          "answered once per version a day");
+    {
+        qint64 last = 0, lastV = 0;
+        int answers = 0;
+        for (qint64 now = d; now < d + kDayMs; now += 60000)
+            if (mayAnswer(5, 0, lastV, last, now)) {
+                ++answers;
+                last = now;
+                lastV = 5;
+            }
+        check(answers == 1, "a peer asking every minute for a day gets one answer");
+    }
+    check(!due(1, a, a + 2 * 60000, true) && !due(1, a, a + kDayMs - 1, true) && due(1, a, a + kDayMs, true) && !due(kMaxTries, a, a + 10 * kDayMs, true)
+              && due(0, 0, a, true),
+          "a restart waits a day per person");
+    {
+        DayBudget b;
+        const qint64 day = 20000LL * kDayMs;
+        int sent = 0;
+        for (int i = 0; i < kDayMax * 3; ++i)
+            if (b.has(day + i)) {
+                b.spend(day + i);
+                ++sent;
+            }
+        const bool full = !b.has(day + kDayMs - 1);
+        check(sent == kDayMax && full && b.has(day + kDayMs) && b.n == 0 && kDayMax == 200 && kDayMs == 86400000LL, "at most kDayMax pictures a day");
+    }
     std::printf("p2 self-test: %d passed, %d failed\n", pass, fail);
     return fail == 0;
 }

@@ -11,6 +11,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyPair
 
+/** Round 16: one part of a long group message: the parts' set id (a logical id), its place [i] (1 = the first) of [n]. */
+data class TextPart(val set: String, val i: Int, val n: Int)
+
 /**
  * Group chats (shared/docs/protocol.md, section 3). No group key: every group message is sealed to each
  * member over that member's own pairwise session, by [Host.send]. The group itself is a signed
@@ -114,6 +117,8 @@ class Groups(
         val readAt: Map<String, Long> = emptyMap(), val noRead: Set<String> = emptySet(),
         /** Cap a1: an animated GIF, stored like a photo under [photo]. */
         val gif: Boolean = false,
+        /** Round 16: one part of a long message sent in parts: the parts' set id and this one's place (1 = the first). */
+        val part: String = "", val partAt: Int = 0,
     )
 
     /** [Companion.readBy]: readers with when they read it (0: not known), then the rest by where the message stands with them. */
@@ -537,7 +542,8 @@ class Groups(
      * [re]: the message this answers (cap m1: "re" in the gmsg; apps without m1 just show the text). [at]: the time it
      * was sent, taken before a link preview was fetched, so the parts of a long message keep their order (0: now).
      */
-    fun sendText(g: String, ch: String, text: String, re: String = "", poll: More.Poll? = null, preview: More.Preview? = null, at: Long = 0L): Boolean = act {
+    fun sendText(g: String, ch: String, text: String, re: String = "", poll: More.Poll? = null, preview: More.Preview? = null, at: Long = 0L,
+                 part: TextPart? = null): Boolean = act {
         val t = text.trim()
         if (t.isEmpty() || Proto06.chars(t) > Proto06.MAX_TEXT) return@act false
         val (s, chId) = target(g, ch) ?: return@act false
@@ -546,12 +552,15 @@ class Groups(
         val to = s.members.map { it.k }.filter { it != me }.toSet()
         val quote = re.takeIf { r -> Proto06.isLogicalId(r) && chats[g].orEmpty().any { it.id == r } } ?: ""
         val made = GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to, re = quote,
-            poll = poll, preview = preview)
+            poll = poll, preview = preview, part = part?.set ?: "", partAt = part?.i ?: 0)
+        // Round 16: a part of a long message goes before its later parts already here (part 1 waits for its link preview).
         // Sent with an earlier time (after a link preview): placed by its time, before the parts that went meanwhile.
-        if (at > 0L) chats[g] = inOrder(chats[g].orEmpty(), made) else addMsg(made)
-        // A poll's text says the same for apps without m2; they ignore "poll" and "lp".
+        if (part != null) chats[g] = placePart(chats[g].orEmpty(), made)
+        else if (at > 0L) chats[g] = inOrder(chats[g].orEmpty(), made) else addMsg(made)
+        // A poll's text says the same for apps without m2; they ignore "poll" and "lp". Apps before round 16 ignore the part.
         val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time)
-            .apply { if (quote.isNotEmpty()) put("re", quote); poll?.let { put("poll", More.pollJson(it)) }; preview?.let { put("lp", More.previewJson(it)) } }.toString()
+            .apply { if (quote.isNotEmpty()) put("re", quote); poll?.let { put("poll", More.pollJson(it)) }; preview?.let { put("lp", More.previewJson(it)) }
+                part?.let { put("ps", it.set).put("pi", it.i).put("pn", it.n) } }.toString()
         to.forEach { out(it, "gmsg", plain, id, g) }
         true
     }
@@ -1242,8 +1251,12 @@ class Groups(
         val name = nameIn(s, from, fromName)
         // Cap m2: a poll or link preview; a malformed one is left out and the text shows.
         val m2 = More.ok("gmsg", p)
-        addMsg(GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re"),
-            poll = if (m2) More.pollOf(p) else null, preview = if (m2) More.previewOf(p) else null))
+        // Round 16: a part of a long message is placed by its index among the parts already here, so every member reads
+        // them in order even when part 1 came last (it waited for its link preview). A malformed part is shown as is.
+        val pt = partOf(p)
+        val msg = GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re"),
+            poll = if (m2) More.pollOf(p) else null, preview = if (m2) More.previewOf(p) else null, part = pt?.set ?: "", partAt = pt?.i ?: 0)
+        if (pt != null) chats[g] = placePart(chats[g].orEmpty(), msg) else addMsg(msg)
         if (host.held(g, from)) host.heldBy(g, from, name, s.name)
         else {
             unread.add(g)
@@ -1529,6 +1542,7 @@ class Groups(
         .apply {
             if (m.video > 0) put("vd", m.video)
             if (m.album.isNotEmpty()) put("al", m.album).put("ai", m.albumAt).put("an", m.albumOf)
+            if (m.part.isNotEmpty()) put("ps", m.part).put("pi", m.partAt)
             m.poll?.let { put("poll", More.pollJson(it)) }
             if (m.votes.isNotEmpty()) put("vt", More.votesToJson(m.votes))
             m.preview?.let { put("lp", More.previewJson(it)) }
@@ -1590,7 +1604,7 @@ class Groups(
                         it.optInt("vd"), it.optString("al"), it.optInt("ai"), it.optInt("an"),
                         More.pollOf(it), More.votesFromJson(it.optJSONObject("vt")), More.previewOf(it),
                         it.optJSONObject("ra")?.let { ra -> ra.keys().asSequence().associateWith { k -> ra.optLong(k) } }.orEmpty(),
-                        strings(it.optJSONArray("nrd")), gif = it.optBoolean("gif"))
+                        strings(it.optJSONArray("nrd")), gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"))
                 } }
             }
             read(OUTS)?.let { text ->
@@ -1606,6 +1620,24 @@ class Groups(
 
     companion object {
         /** [list] with [m] after the last message not newer than it (a part sent late with its earlier time). */
+        /** The part a gmsg says it is ("ps", "pi", "pn"), or null when it says none or something unusable. */
+        fun partOf(p: JSONObject): TextPart? {
+            val set = p.opt("ps") as? String ?: return null
+            val i = (p.opt("pi") as? Int) ?: return null
+            val n = (p.opt("pn") as? Int) ?: return null
+            if (!Proto06.isLogicalId(set) || n !in 2..Drafts.MAX_PARTS || i !in 1..n) return null
+            return TextPart(set, i, n)
+        }
+
+        /**
+         * [m], a part of a long message, goes before the first of the same sender's parts of that set with a higher
+         * place (they came first); else last. Everything else keeps its place.
+         */
+        fun placePart(list: List<GMsg>, m: GMsg): List<GMsg> {
+            val at = list.indexOfFirst { it.from == m.from && it.part == m.part && it.partAt > m.partAt }
+            return (if (at < 0) list + m else list.subList(0, at) + m + list.subList(at, list.size)).takeLast(1000)
+        }
+
         fun inOrder(list: List<GMsg>, m: GMsg): List<GMsg> {
             val at = list.indexOfLast { it.time <= m.time } + 1
             return (list.subList(0, at) + m + list.subList(at, list.size)).takeLast(1000)

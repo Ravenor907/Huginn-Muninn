@@ -501,4 +501,37 @@ class GroupsTest {
         // A new Family group: no "mi" from the start.
         assertFalse(a.state(a.groups.create("Kin", Limits.FAMILY)!!).mi)
     }
+
+    // ---- Round 16 m4: a long message's parts are placed by their index for every member
+
+    @Test
+    fun longMessagePartsArePlacedByIndex() {
+        val set = Proto06.newLogicalId()
+        fun part(id: String, i: Int, from: String = "amy") =
+            Groups.GMsg(id, "g", Proto06.MAIN, from, "Amy", id, false, 1000L + i, part = set, partAt = i)
+        fun other(id: String) = Groups.GMsg(id, "g", Proto06.MAIN, "bo", "Bo", id, false, 2000)
+        // Parts 2 and 3 came first (part 1 waited for its link preview); Bo wrote in between.
+        var l = Groups.placePart(emptyList(), part("p2", 2))
+        l = Groups.placePart(l, part("p3", 3))
+        l = l + other("bo1")
+        l = Groups.placePart(l, part("p1", 1))
+        assertEquals(listOf("p1", "p2", "p3", "bo1"), l.map { it.id })
+        // In order already: each goes last.
+        var k = Groups.placePart(emptyList(), part("a", 1))
+        k = Groups.placePart(k, part("b", 2))
+        assertEquals(listOf("a", "b"), k.map { it.id })
+        // Someone else's parts with the same index don't move them.
+        val mixed = Groups.placePart(listOf(part("x2", 2, from = "cy")), part("a1", 1))
+        assertEquals(listOf("x2", "a1"), mixed.map { it.id })
+        // The wire: "ps", "pi", "pn"; anything unusable is no part (the message still shows).
+        val ok = Groups.partOf(JSONObject().put("ps", set).put("pi", 2).put("pn", 3))
+        assertEquals(io.github.ravenor907.muninn.net.TextPart(set, 2, 3), ok)
+        assertNull(Groups.partOf(JSONObject().put("text", "hi")))
+        assertNull(Groups.partOf(JSONObject().put("ps", "nope").put("pi", 1).put("pn", 2)))
+        assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", 0).put("pn", 2)))
+        assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", 3).put("pn", 2)))
+        assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", 1).put("pn", 1)))
+        assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", 1).put("pn", io.github.ravenor907.muninn.net.Drafts.MAX_PARTS + 1)))
+        assertNull(Groups.partOf(JSONObject().put("ps", set).put("pi", "1").put("pn", 2)))
+    }
 }

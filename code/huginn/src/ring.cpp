@@ -901,6 +901,11 @@ bool RingWire::selfTest(const QString &vectorsPath)
                       && a.alert && !b.alert && a.key == b.key && raw.key == a.key && raw.n.chat.isEmpty()
                       && nudgeTitle(1, raw.n) == QLatin1String("Group message") && !raw.alert
                       && later.alert && c.alert && nudgeTitle(1, c.n) == QLatin1String("Ann") && c.key != a.key);
+            // Round 16 (F5): the shared one sounds again 2 minutes on, whatever its count (locked overnight, each 2
+            // minutes at most); a contact's sounds only its first time; nothing sounds that take() held back.
+            check("a Group message nudge sounds once per 2 minutes, not once per lock",
+                  LockedNudgeLimit::sounds(a, 1) && !LockedNudgeLimit::sounds(b, 2) && !LockedNudgeLimit::sounds(raw, 3) && LockedNudgeLimit::sounds(later, 4)
+                      && LockedNudgeLimit::sounds(c, 1) && !LockedNudgeLimit::sounds(c, 2));
             check("old nudges are dropped", nudgeFresh(Nudge{1000}, 1000 + kNudgeMaxAgeMs) && !nudgeFresh(Nudge{1000}, 1001 + kNudgeMaxAgeMs));
             check("senders known to be unable to nudge",
                   cantNudge({QStringLiteral("r1"), QStringLiteral("b1")}, false) && !cantNudge({QStringLiteral("r1"), QStringLiteral("n1")}, false)

@@ -621,11 +621,15 @@ QtObject {
                        { name: "Remove " + ph.name + "'s copy", detail: "Its chats, contacts, groups and folders leave this device", url: "wipe", danger: true })
         } else {
             if (!ph.ok) phone.push({ name: "Compare emoji", detail: "Nothing comes over until they match", url: "check" })
+            // Round 16: found on an older version: nothing from it is taken until it's linked again.
+            const old = Linked.older.find(o => o.key === ph.key)
+            if (old) phone.push({ name: "Link " + ph.name + " again", detail: old.text, url: "code" })
             phone.push({ name: "Unlink " + ph.name, detail: "Keep a read-only copy here, or remove it", url: "ph", danger: true })
         }
         // Huginn as the phone: another device mirrors this one.
         // The other way round, rarely wanted: another device shows this PC's chats.
         const others = [{ name: "Show this PC's chats on another device", detail: "Paste the code that device shows", url: "link" }]
+        Linked.older.filter(o => !o.phone).forEach(o => others.push({ name: "Link " + o.name + " again", detail: o.text, url: "r:" + o.key }))
         Linked.companions.forEach(c => others.push({ name: "Unlink " + c.name, url: "u:" + c.key, danger: true }))
         // Cap x1: everything moves here instead, and the old device is locked out.
         const move = [{ name: "Move here", detail: "The old device is locked out", url: "movehere" },
@@ -659,6 +663,9 @@ QtObject {
                     })
             } else if (a === "wipe") {
                 Ui.sure("Remove " + ph.name + "'s copy?", "Its chats, contacts, groups and folders leave this device. Your phone keeps them all.", "Remove", () => unlinkRemove(true), true, true)
+            } else if (a.indexOf("r:") === 0) {
+                const o = Linked.older.find(x => x.key === a.substring(2))
+                if (o && Ui.main) Ui.main.relinkOlder(o)
             } else if (a.indexOf("u:") === 0) {
                 const key = a.substring(2), c = Linked.companions.find(x => x.key === key)
                 const name = c ? c.name : "this device"

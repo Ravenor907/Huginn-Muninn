@@ -14,7 +14,9 @@ class QQuickWindow;
 
 // Round 15 (R9): one controller seen as two devices (Steam's virtual pad and the raw one) whose copies don't overlap in
 // time (down and up on one, then down and up on the other, in one poll): the second copy's press within kTwinMs of the
-// first's release, on another pad, is the same tap, never a second one. Its release goes with it.
+// first's release, on another pad, is the same tap, never a second one. Its release goes with it. Round 16: when the
+// copies of the last tap overlapped (another pad held the button at its press or release: overlapped()), the next
+// press is a real tap whatever pad it comes on, so fast taps are never lost.
 class TapTwins
 {
 public:
@@ -23,15 +25,19 @@ public:
     bool press(qint32 pad, const QString &button, qint64 nowMs);
     // A release that would count: false when its press didn't (and it's let go quietly).
     bool release(qint32 pad, const QString &button, qint64 nowMs);
+    // A press or release of the button was not counted because another pad held it: this tap's copies overlap.
+    void overlapped(const QString &button) { m_overlap.insert(button); }
     static bool selfTest();
 
 private:
     struct Up {
         qint32 pad = -1;
         qint64 at = 0;
+        bool overlapped = false;   // that tap's copies overlapped
     };
     QHash<QString, Up> m_lastUp;   // per button: the pad that last let it go, and when
     QSet<QString> m_twin;          // pad + "|" + button: a press taken as the other copy
+    QSet<QString> m_overlap;       // buttons whose tap now going on has overlapping copies
 };
 
 // Reads controllers through SDL. In Game Mode Steam hands non-Steam apps a virtual Xbox pad,

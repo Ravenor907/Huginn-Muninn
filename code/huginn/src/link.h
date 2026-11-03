@@ -22,10 +22,10 @@ class Chat;
 // came straight over Wi-Fi or Bluetooth is live, so it's taken, the difference kept for its relay frames, and the
 // clocks are said to be off), and one whose "ln"
 // it took before (remembered kMaxAgeMs past the later of its time and now). A device that stamps is kept in a set: its
-// frames without a stamp are dropped (an app before 1.36 never stamps, so its frames are still taken). Round 15, cap l4
-// (protocol.md 15, "Going back to stable"): an unstamped "sync", "ping" or "pong" without "l4" in its caps is taken and
-// takes the device out of the set (it went back to an older app); a stamped frame puts it back; a "hello" is taken
-// unstamped (it needs its one-time token). "chat", "part", "ping" and "pong" change nothing when they come twice:
+// frames without a stamp are dropped (an app before 1.36 never stamps, so its frames are still taken). Round 16, cap l4
+// (protocol.md 15, "Going back to an older version"): those are ALWAYS dropped, whatever their caps say; a device that
+// keeps sending only unstamped frames is found on an older version (olderOnes) and is linked again by the person; a
+// "hello" is taken unstamped (it needs its one-time token). "chat", "part", "ping" and "pong" change nothing when they come twice:
 // checked for time only, so history pages don't fill the list. The same as Muninn's LinkReplay.
 class LinkReplay
 {
@@ -46,19 +46,33 @@ public:
     void forget(const QString &from);
     // How far the frame's own time is from nowMs (ms, 0 when it has none).
     static qint64 skewOf(const QJsonObject &p, qint64 nowMs);
-    // Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "o": {device: clock offset}}.
+    // Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "o": {device: clock offset},
+    // "old": [devices on an older version]}.
     QByteArray save();
     void load(const QByteArray &json);
     bool dirty() const { return m_dirty; }
-    // The last judge() took the device out of the set (it went back to an app that doesn't stamp).
-    bool left() const { return m_left; }
+    // Round 16: a device that keeps sending only unstamped frames (kOlderFrames over at least kOlderMs, none stamped
+    // between) is on an older version. found() says so once; olderOnes() lists them until one stamps again or is
+    // linked again (forget). Nothing unstamped from a device that stamped is ever taken meanwhile.
+    static constexpr int kOlderFrames = 3;
+    static constexpr qint64 kOlderMs = 10 * 60000;
+    static bool olderBy(qint64 first, int count, qint64 nowMs) { return count >= kOlderFrames && nowMs - first >= kOlderMs; }
+    bool found(const QString &from) { return m_news.remove(from); }
+    QSet<QString> olderOnes() const { return m_older; }
 
 private:
+    void stamped(const QString &from);
     QHash<QString, qint64> m_seen;   // from + "\n" + ln -> dropped from the list after this (ms)
     QSet<QString> m_stamps;          // devices known to stamp
     QHash<QString, qint64> m_offset; // round 15: a device's clock minus this one's (ms), as its last Wi-Fi or Bluetooth frame said
+    struct Quiet {
+        qint64 first = 0;
+        int count = 0;
+    };
+    QHash<QString, Quiet> m_quiet;   // round 16: unstamped frames from a device since its last stamped one
+    QSet<QString> m_older;           // round 16: devices found on an older version (kept)
+    QSet<QString> m_news;            // just found, for found()
     bool m_dirty = false;
-    bool m_left = false;
 };
 
 // Linked devices, companion style (shared/docs/protocol.md section 15), the same as Muninn's Link.kt.
@@ -110,6 +124,9 @@ class Link : public QObject
     Q_PROPERTY(QVariantMap drafts READ drafts NOTIFY draftsChanged)
     // The phone unlinked this device and its own name from before wasn't known: ask for one (until nameGiven).
     Q_PROPERTY(bool nameWanted READ nameWanted NOTIFY changed)
+    // Round 16 (cap l4): linked devices found on an older version (they send only unstamped frames, none of them taken):
+    // [{key, name, phone (it is this computer's phone), text}]. Link again: showLinkPhone for the phone, link() for another.
+    Q_PROPERTY(QVariantList older READ older NOTIFY changed)
 
 public:
     static const char kPrefix[];                       // "MUNINNL1:"
@@ -128,6 +145,9 @@ public:
     QVariantMap phone() const;
     int unread() const;
     QVariantList companions() const;
+    QVariantList older() const;
+    // Round 16: what is said about a linked device found on an older version (phone: this computer's phone).
+    static QString olderText(bool phone);
     QVariantList mirror() const;
     QString code() const { return m_code; }
     qint64 codeUntil() const { return m_tokenUntil; }
@@ -223,7 +243,7 @@ public:
     // Round 14: stamped before it goes (every route of one send carries the same stamp); checked as it comes.
     // via: the route it came on (only a relay's frame is held to the 36 hours).
     LinkReplay::Verdict replayVerdict(const QString &from, const QJsonObject &p, const QString &via);
-    void loadReplay();
+    void loadReplay() const;
     void forgetStamps(const QString &key);   // round 15: linked again or unlinked, so whether it stamps is learned anew
     // On the phone: a message in or out of a 1:1 chat (Chat::addPrivate), for the companions.
     void onMessage(const QString &peer, const QVariantMap &m);
@@ -420,8 +440,8 @@ private:
     QString m_token, m_code;
     qint64 m_tokenUntil = 0;
     QHash<QString, qint64> m_tokens;        // every code shown that hasn't run out: a refreshed one leaves the last one working
-    LinkReplay m_replay;                    // round 14: link frames' stamps, kept in the vault (link-replay.json)
-    bool m_replayLoaded = false;
+    mutable LinkReplay m_replay;            // round 14: link frames' stamps, kept in the vault (link-replay.json)
+    mutable bool m_replayLoaded = false;
     bool m_ownOpen = false;
     // The companion's side of "me" (in link.json).
     mutable QString m_meName, m_meStatus, m_meCustom;

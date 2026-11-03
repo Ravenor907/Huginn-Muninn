@@ -2,6 +2,7 @@ package io.github.ravenor907.muninn
 
 import io.github.ravenor907.muninn.net.Drafts
 import io.github.ravenor907.muninn.net.ExifTurn
+import io.github.ravenor907.muninn.screens.BoxEcho
 import io.github.ravenor907.muninn.screens.ComposerKeys
 import io.github.ravenor907.muninn.screens.RoomTiles
 import io.github.ravenor907.muninn.ui.Picking
@@ -188,5 +189,53 @@ class EverydayTest {
         assertEquals(ComposerKeys.NEXT, ComposerKeys.action(ComposerKeys.TAB, shift = false, physical = true))
         assertEquals(ComposerKeys.PREV, ComposerKeys.action(ComposerKeys.TAB, shift = true, physical = true))
         assertEquals(ComposerKeys.NONE, ComposerKeys.action(29, shift = false, physical = true))
+    }
+
+    // ---- Round 16 N1: a hardware Enter sends once and leaves the box empty
+
+    @Test
+    fun enterSendsOnceAndEmpties() {
+        // The box reports "ok" before the screen caught up (the screen still has "o"): not typing, so "ok" isn't put back.
+        val e = BoxEcho()
+        assertEquals(BoxEcho.PASS, e.seen("o", "", 0))
+        e.send("ok", 1000)
+        assertEquals(BoxEcho.SKIP, e.seen("ok", "o", 1001))
+        assertEquals(BoxEcho.SKIP, e.seen("ok", "o", 1002))
+        // The box is emptied: passed out (harmless), then new typing goes out as usual.
+        assertEquals(BoxEcho.PASS, e.seen("", "o", 1010))
+        assertEquals(BoxEcho.PASS, e.seen("h", "", 2000))
+        assertEquals(BoxEcho.PASS, e.seen("hi", "h", 2050))
+    }
+
+    @Test
+    fun imeLettersComingBackAreCleared() {
+        // A Korean IME had its last syllable open; after the box was emptied it puts it back: cleared, never kept.
+        val e = BoxEcho()
+        e.send("안녕하세요", 500)
+        assertEquals(BoxEcho.SKIP, e.seen("안녕하세요", "안녕하세", 501))
+        assertEquals(BoxEcho.SKIP, e.seen("", "", 510))
+        assertEquals(BoxEcho.CLEAR, e.seen("요", "", 520))
+        // Only once: what comes after is typing.
+        assertEquals(BoxEcho.PASS, e.seen("요", "", 530))
+        // Late (past the window) the same letters are typing.
+        val late = BoxEcho()
+        late.send("ok", 0)
+        assertEquals(BoxEcho.PASS, late.seen("", "ok", 5))
+        assertEquals(BoxEcho.PASS, late.seen("k", "", BoxEcho.ECHO_MS + 1))
+    }
+
+    @Test
+    fun refusedSendKeepsTyping() {
+        // A send that didn't clear (too long, or a question still open): the box keeps the text; any edit goes out.
+        val e = BoxEcho()
+        e.send("ok", 0)
+        assertEquals(BoxEcho.SKIP, e.seen("ok", "ok", 1))
+        assertEquals(BoxEcho.PASS, e.seen("o", "ok", 2))
+        assertEquals(BoxEcho.PASS, e.seen("ok", "o", 3))
+        // Something other than the end of the sent text right after the clear is typing too.
+        val f = BoxEcho()
+        f.send("ok", 0)
+        assertEquals(BoxEcho.SKIP, f.seen("", "", 1))
+        assertEquals(BoxEcho.PASS, f.seen("x", "", 2))
     }
 }

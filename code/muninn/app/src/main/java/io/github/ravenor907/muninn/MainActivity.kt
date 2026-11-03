@@ -620,7 +620,7 @@ class MainActivity : ComponentActivity() {
         // Shared into Muninn from another app: who gets it.
         if (ready) io.github.ravenor907.muninn.screens.ShareToDialog(app) { where -> show("chat"); ChatNav.open = where }
         // Linked devices: the 4 emoji are checked on both screens before anything is mirrored.
-        io.github.ravenor907.muninn.screens.LinkCheck()
+        io.github.ravenor907.muninn.screens.LinkCheck(app)
         ask?.let { AskDialog(it) }
         // Something asked for the current lock first (Turn off the lock, linking, moving): over everything else.
         io.github.ravenor907.muninn.screens.LockGateDialog(app)

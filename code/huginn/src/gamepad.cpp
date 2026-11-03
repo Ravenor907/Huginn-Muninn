@@ -219,8 +219,13 @@ void Gamepad::down(qint32 pad, const QString &button, bool repeats)
         return;
     it.value().held.insert(button);
     useStyleOf(pad);
-    // Already down on another pad: one press, not two. Just let go on another pad: its other copy, not a new tap.
-    if (heldElsewhere(pad, button) || !m_twins.press(pad, button, m_clock.elapsed()))
+    // Already down on another pad: one press, not two (round 16: and its copies overlap, so the next press is a real
+    // tap). Just let go on another pad: its other copy, not a new tap.
+    if (heldElsewhere(pad, button)) {
+        m_twins.overlapped(button);
+        return;
+    }
+    if (!m_twins.press(pad, button, m_clock.elapsed()))
         return;
     Q_EMIT pressed(button);
     if (repeats) {
@@ -234,7 +239,11 @@ void Gamepad::up(qint32 pad, const QString &button)
     auto it = m_pads.find(pad);
     if (it == m_pads.end() || !it.value().held.remove(button))
         return;
-    if (heldElsewhere(pad, button) || !m_twins.release(pad, button, m_clock.elapsed()))
+    if (heldElsewhere(pad, button)) {
+        m_twins.overlapped(button);
+        return;
+    }
+    if (!m_twins.release(pad, button, m_clock.elapsed()))
         return;
     if (m_repeatButton == button) {
         m_repeatButton.clear();
@@ -246,8 +255,10 @@ void Gamepad::up(qint32 pad, const QString &button)
 bool TapTwins::press(qint32 pad, const QString &button, qint64 nowMs)
 {
     const auto it = m_lastUp.constFind(button);
-    if (it == m_lastUp.cend() || it->pad == pad || nowMs - it->at > kTwinMs)
+    if (it == m_lastUp.cend() || it->pad == pad || it->overlapped || nowMs - it->at > kTwinMs) {
+        m_overlap.remove(button);   // a new tap: whether its copies overlap is learned anew
         return true;
+    }
     m_twin.insert(QString::number(pad) + QLatin1Char('|') + button);
     return false;
 }
@@ -256,7 +267,7 @@ bool TapTwins::release(qint32 pad, const QString &button, qint64 nowMs)
 {
     if (m_twin.remove(QString::number(pad) + QLatin1Char('|') + button))
         return false;
-    m_lastUp.insert(button, Up{pad, nowMs});
+    m_lastUp.insert(button, Up{pad, nowMs, m_overlap.remove(button)});
     return true;
 }
 
@@ -270,7 +281,21 @@ bool TapTwins::selfTest()
     const bool again = t.press(2, QStringLiteral("a"), 1200) && t.release(2, QStringLiteral("a"), 1250)
         && t.press(2, QStringLiteral("a"), 1260) && t.release(2, QStringLiteral("a"), 1300);
     const bool other = t.press(1, QStringLiteral("b"), 1301);
-    const bool ok = first && twin && again && other;
+    // Round 16 (F4): overlapping copies (pad 2 lags): pad 1 down counts, pad 2 down and pad 1 up are held elsewhere,
+    // pad 2 up counts. The next real tap comes first on pad 1, within 40 ms: a tap, never lost; and so on, fast.
+    TapTwins f;
+    const QString d = QStringLiteral("down");
+    bool fast = true;
+    for (int i = 0; i < 8; ++i) {
+        const qint64 at = 2000 + i * 100;
+        fast = fast && f.press(1, d, at);
+        f.overlapped(d);   // pad 2's press
+        f.overlapped(d);   // pad 1's release
+        fast = fast && f.release(2, d, at + 70);
+    }
+    // After overlapping taps, copies that stop overlapping are still told apart: a twin that doesn't overlap is one tap.
+    const bool split = f.press(1, d, 3000) && f.release(1, d, 3005) && !f.press(2, d, 3010) && !f.release(2, d, 3012);
+    const bool ok = first && twin && again && other && fast && split;
     std::printf("gamepad: one pad seen twice taps once: %s\n", ok ? "ok" : "FAILED");
     return ok;
 }
