@@ -248,7 +248,13 @@ void CallManager::setCamera(bool on)
                     m_session->media()->sendVideo(VideoWire::Camera, key, 0, vp8);
             });
             connect(m_camera, &VideoSender::failed, this, [this](const QString &) {
+#ifdef Q_OS_WIN
+                // Round 17 (m7): Windows can switch desktop apps off the camera, and says nothing when it does.
+                Q_EMIT finished(QStringLiteral("The camera isn't available. Check Windows Settings › Privacy & security › Camera › Let desktop "
+                                               "apps access your camera."));
+#else
                 Q_EMIT finished(QStringLiteral("The camera isn't available"));
+#endif
                 setCamera(false);
             });
         }

@@ -130,7 +130,10 @@ object TvUpdate {
     private fun abandonOld(c: Context) {
         try {
             val pi = c.packageManager.packageInstaller
-            pi.mySessions.forEach { s -> try { pi.abandonSession(s.sessionId) } catch (_: Exception) {} }
+            // Round 17: only Muninn's own update sessions that aren't going in now; an app a parent approved (k9) that is
+            // still installing after Muninn restarted is left to finish.
+            pi.mySessions.filter { s -> (s.appPackageName == null || s.appPackageName == c.packageName) && !s.isActive }
+                .forEach { s -> try { pi.abandonSession(s.sessionId) } catch (_: Exception) {} }
         } catch (_: Exception) {}
     }
 
@@ -185,7 +188,9 @@ object TvUpdate {
     }
 
     /** A call is on: an update never goes in then (installing closes Muninn). */
-    private fun inCall(): Boolean = io.github.ravenor907.muninn.net.call.CallManager.call.value != null
+    private fun inCall(): Boolean = io.github.ravenor907.muninn.net.call.CallManager.call.value != null ||
+        // Round 17: a group call (voice room) too, or one ringing.
+        io.github.ravenor907.muninn.net.call.RoomManager.busy || io.github.ravenor907.muninn.net.call.RoomManager.ring.value != null
 
     fun canInstall(c: Context) = Build.VERSION.SDK_INT < 26 || c.packageManager.canRequestPackageInstalls()
 

@@ -92,7 +92,7 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
             busy = false
             if (ok) {
                 pw = ""; prefs.edit().putInt("lockFails", 0).remove("lockAt").remove("lockWait").remove("lockBoot").apply()
-                io.github.ravenor907.muninn.ui.Panic.unlocked(); done(true)
+                io.github.ravenor907.muninn.ui.Panic.unlocked(app); done(true)
             } else {
                 wrong = true
                 shakes++
@@ -135,9 +135,15 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                         PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
                     }
                 } else {
+                    // Round 17: with a hardware keyboard (a keyboard cover), typing goes straight into the password.
+                    val pwFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+                    val hardKeys = androidx.compose.ui.platform.LocalConfiguration.current.let {
+                        it.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY && it.hardKeyboardHidden != android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
+                    }
+                    LaunchedEffect(hardKeys) { if (hardKeys) try { pwFocus.requestFocus() } catch (_: Exception) {} }
                     Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
                         keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt() })
+                        onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt() }, focus = pwFocus)
                 }
                 when {
                     waiting -> Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))

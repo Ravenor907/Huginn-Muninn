@@ -39,7 +39,12 @@ public:
     enum class Verdict { Taken, Dropped, Skewed, Unstamped };
     // msg with "lts" and "ln" added.
     static QJsonObject stamp(QJsonObject msg, qint64 nowMs);
-    // direct: it came over Wi-Fi or Bluetooth (live, never a relay's copy), so its time isn't held against it.
+    // direct: it came over Wi-Fi or Bluetooth. Round 17 (security M2): that says where a frame came from, not when it
+    // was made (anyone on the network can hand over bytes captured from a relay), so every route is held to the
+    // 36 hours. A device's clock offset is learned only from a pong over Wi-Fi or Bluetooth that answers this app's own
+    // ping (pinged) within kChallengeMs, echoing its "pn" when the device says it back; never from a frame on its own.
+    static constexpr qint64 kChallengeMs = 30000;
+    void pinged(const QString &to, const QString &pn, qint64 nowMs);
     Verdict judge(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false);
     bool take(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false) { return judge(from, p, nowMs, direct) == Verdict::Taken; }
     // A device linked again or unlinked: whether it stamps is learned anew.
@@ -64,7 +69,13 @@ private:
     void stamped(const QString &from);
     QHash<QString, qint64> m_seen;   // from + "\n" + ln -> dropped from the list after this (ms)
     QSet<QString> m_stamps;          // devices known to stamp
-    QHash<QString, qint64> m_offset; // round 15: a device's clock minus this one's (ms), as its last Wi-Fi or Bluetooth frame said
+    QHash<QString, qint64> m_offset; // round 15: a device's clock minus this one's (ms); round 17: only from an answered ping
+    struct Ping {
+        QString pn;
+        qint64 at = 0;
+    };
+    QHash<QString, Ping> m_pings;    // round 17: the last ping sent to each device (not kept between runs)
+    QHash<QString, qint64> m_lastStamped;   // round 17: when a stamped frame from each device last came (this run)
     struct Quiet {
         qint64 first = 0;
         int count = 0;
@@ -166,7 +177,10 @@ public:
     // On the phone: link the device whose code this is. "" when done, else what to tell the person.
     // Nothing is mirrored until both screens showed the same 4 emoji and the person said so (confirm); confirmed only
     // for a device already proven (moving, section 18).
-    Q_INVOKABLE QString link(const QString &code, bool confirmed = false);
+    // Round 17 (B1): only after the current lock was given again (Vault::confirmLock "link"; no lock set: nothing to ask).
+    Q_INVOKABLE QString link(const QString &code);
+    // After a move (section 18): the device that just moved here, already proven, with no lock asked.
+    QString linkMoved(const QString &code) { return linkWith(code, true, false); }
     // The linked devices whose emoji haven't been checked yet: [{key, name, emoji}] (a companion, or the phone).
     Q_INVOKABLE QVariantList unchecked() const;
     Q_INVOKABLE void confirm(const QString &key);
@@ -245,6 +259,10 @@ public:
     LinkReplay::Verdict replayVerdict(const QString &from, const QJsonObject &p, const QString &via);
     void loadReplay() const;
     void forgetStamps(const QString &key);   // round 15: linked again or unlinked, so whether it stamps is learned anew
+    // link() and linkMoved(): ask says the lock's grant is needed (and used up once it links).
+    QString linkWith(const QString &code, bool confirmed, bool ask);
+    // Round 17: a fresh "pn" for a ping to the phone, noted so its pong can teach the clock offset (LinkReplay::pinged).
+    QString pingNonce();
     // On the phone: a message in or out of a 1:1 chat (Chat::addPrivate), for the companions.
     void onMessage(const QString &peer, const QVariantMap &m);
     // On a companion: messages past each chat's limit (cap d1, the phone's "d") go, as on the phone.

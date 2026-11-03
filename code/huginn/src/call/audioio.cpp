@@ -84,7 +84,13 @@ bool AudioIO::start()
 #endif
     const bool in = startInput(), out = startOutput();
     if (!in)
+#ifdef Q_OS_WIN
+        // Round 17 (m7): Windows can switch desktop apps off the microphone, and says nothing when it does.
+        Q_EMIT error(QStringLiteral("The microphone isn't available right now. Check Windows Settings › Privacy & security › Microphone › "
+                                    "Let desktop apps access your microphone."));
+#else
         Q_EMIT error(QStringLiteral("The microphone isn't available right now."));
+#endif
     if (!out)
         Q_EMIT error(QStringLiteral("No speaker or headphones to play the call on."));
     m_pump.start();

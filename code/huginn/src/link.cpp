@@ -1,6 +1,8 @@
 #include "link.h"
 #include "busy.h"
 #include "chat.h"
+#include "sharing.h"
+#include "groupwire.h"
 #include "chatcrypto.h"
 #include "msglimits.h"
 #include "profile.h"
@@ -349,8 +351,15 @@ qint64 LinkReplay::skewOf(const QJsonObject &p, qint64 nowMs)
     return ltv.isDouble() ? qint64(ltv.toDouble()) - nowMs : 0;
 }
 
+void LinkReplay::pinged(const QString &to, const QString &pn, qint64 nowMs)
+{
+    m_pings.insert(to, Ping{pn, nowMs});
+}
+
 void LinkReplay::forget(const QString &from)
 {
+    m_pings.remove(from);
+    m_lastStamped.remove(from);
     const bool stamped = m_stamps.remove(from);
     const bool offset = m_offset.remove(from);
     const bool older = m_older.remove(from);
@@ -383,6 +392,14 @@ LinkReplay::Verdict LinkReplay::judge(const QString &from, const QJsonObject &p,
         // frames is found on an older version, and the person is asked to link it again.
         if (!m_stamps.contains(from) || type == QLatin1String("hello"))
             return Verdict::Taken;
+        // Round 17 (m11): only an unstamped frame straight over Wi-Fi or Bluetooth, or one within 2 minutes after a ping
+        // to it that no stamped frame answered, counts toward "on an older version": a relay replaying old frames can't
+        // raise the question.
+        const auto pinged = m_pings.constFind(from);
+        const bool unanswered = pinged != m_pings.constEnd() && nowMs >= pinged->at && nowMs - pinged->at <= 120000
+                                && m_lastStamped.value(from, 0) < pinged->at;
+        if (!direct && !unanswered)
+            return Verdict::Unstamped;
         Quiet &q = m_quiet[from];
         if (q.count == 0)
             q.first = nowMs;
@@ -395,6 +412,7 @@ LinkReplay::Verdict LinkReplay::judge(const QString &from, const QJsonObject &p,
         return Verdict::Unstamped;
     }
     const QJsonValue lnv = p.value(QStringLiteral("ln")), ltv = p.value(QStringLiteral("lts"));
+    // (round 17: the time check below applies whatever route the frame came on)
     const QString ln = lnv.toString();
     if (!lnv.isString() || ln.size() != 32 || !std::all_of(ln.cbegin(), ln.cend(), [](QChar c) { const char16_t u = c.unicode(); return (u >= u'0' && u <= u'9') || (u >= u'a' && u <= u'f'); }))
         return Verdict::Dropped;
@@ -402,12 +420,18 @@ LinkReplay::Verdict LinkReplay::judge(const QString &from, const QJsonObject &p,
     if (!ltv.isDouble() || d != std::floor(d))
         return Verdict::Dropped;
     const qint64 t = qint64(d);
-    // Only a relay could bring an old frame back; one straight over Wi-Fi or Bluetooth is live, whatever its clock says,
-    // and how far that device's clock is from this one is kept. A relay's frame is then held to the 36 hours from
-    // either this clock or this clock moved by that much, so a device with a wrong date keeps working over the internet
-    // once the two have met on Wi-Fi or Bluetooth (a replay is still more than 36 hours behind both).
+    // Round 17 (security M2): every frame, whatever route it came on, is held to the 36 hours from either this clock or
+    // this clock moved by how far that device's clock is off. The offset is learned only from a pong straight over
+    // Wi-Fi or Bluetooth answering this app's own ping within 30 seconds (and echoing its "pn" when it says one), so a
+    // device with a wrong date keeps working once the two have met, and an old frame handed over on the LAN is still
+    // more than 36 hours behind both.
     const auto within = [&](qint64 at) { return t >= at - kMaxAgeMs && t <= at + kMaxAgeMs; };
-    if (direct) {
+    const auto asked = m_pings.constFind(from);
+    const bool challenged = direct && type == QLatin1String("pong") && asked != m_pings.constEnd() && nowMs >= asked->at
+                            && nowMs - asked->at <= kChallengeMs
+                            && (!p.contains(QStringLiteral("pn")) || p.value(QStringLiteral("pn")).toString() == asked->pn);
+    if (challenged) {
+        m_pings.remove(from);
         const qint64 off = t - nowMs;
         if (qAbs(off) > kOffsetMinMs) {
             // Kept again only when it moved by more than 10 minutes, so frames don't each write the file.
@@ -418,9 +442,10 @@ LinkReplay::Verdict LinkReplay::judge(const QString &from, const QJsonObject &p,
         } else if (m_offset.remove(from)) {
             m_dirty = true;
         }
-    } else if (!within(nowMs) && !(m_offset.contains(from) && within(nowMs + m_offset.value(from)))) {
-        return Verdict::Skewed;
     }
+    if (!within(nowMs) && !(m_offset.contains(from) && within(nowMs + m_offset.value(from))))
+        return Verdict::Skewed;
+    m_lastStamped.insert(from, nowMs);
     for (auto it = m_seen.begin(); it != m_seen.end();) {
         if (it.value() < nowMs)
             it = m_seen.erase(it);
@@ -463,7 +488,7 @@ QByteArray LinkReplay::save()
     QJsonArray old;
     for (const QString &k : std::as_const(m_older))
         old.append(k);
-    return QJsonDocument(QJsonObject{{QStringLiteral("s"), st}, {QStringLiteral("n"), n}, {QStringLiteral("o"), off}, {QStringLiteral("old"), old}})
+    return QJsonDocument(QJsonObject{{QStringLiteral("s"), st}, {QStringLiteral("n"), n}, {QStringLiteral("o2"), off}, {QStringLiteral("old"), old}})
         .toJson(QJsonDocument::Compact);
 }
 
@@ -476,7 +501,8 @@ void LinkReplay::load(const QByteArray &json)
     const QJsonObject n = o.value(QStringLiteral("n")).toObject();
     for (auto it = n.constBegin(); it != n.constEnd(); ++it)
         m_seen.insert(it.key(), qint64(it.value().toDouble()));
-    const QJsonObject off = o.value(QStringLiteral("o")).toObject();
+    // Round 17: "o2", offsets learned only from answered pings; the older "o" (learned from any Wi-Fi frame) is dropped.
+    const QJsonObject off = o.value(QStringLiteral("o2")).toObject();
     for (auto it = off.constBegin(); it != off.constEnd(); ++it)
         if (it.value().isDouble())
             m_offset.insert(it.key(), qint64(it.value().toDouble()));
@@ -525,7 +551,16 @@ void Link::reprobe()
     if (m_reprobeAt > 0 && t - m_reprobeAt < 120000)
         return;
     m_reprobeAt = t;
-    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()}, {QStringLiteral("dn"), myDeviceName()}});
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()}, {QStringLiteral("dn"), myDeviceName()},
+                                {QStringLiteral("pn"), pingNonce()}});
+}
+
+QString Link::pingNonce()
+{
+    // Round 17 (security M2): only the pong that answers this ping within 30 seconds teaches the phone's clock offset.
+    const QString pn = QString::number(QRandomGenerator::system()->generate64(), 16).rightJustified(16, QLatin1Char('0'));
+    m_replay.pinged(m_phone.key, pn, now());
+    return pn;
 }
 
 void Link::sayClockOff(const QString &from, qint64 skewMs)
@@ -881,7 +916,7 @@ void Link::setDraft(const QString &peer, const QString &text, const QString &re)
             return;
         m_drafts.remove(peer);
     } else {
-        const QJsonObject d{{QStringLiteral("text"), text.left(Chat::kMax)}, {QStringLiteral("re"), re.left(200)}};
+        const QJsonObject d{{QStringLiteral("text"), GroupWire::clip(text, Chat::kMax)}, {QStringLiteral("re"), re.left(200)}};
         if (d == before)
             return;
         m_drafts.insert(peer, d);
@@ -1127,8 +1162,11 @@ QString Link::saveMedia(const QString &peer, const QString &id) const
 QString Link::safeName(const QString &raw, const QString &fallback)
 {
     QString name;
-    for (const QChar c : raw)
+    for (const QChar c : raw) {
+        if (Sharing::hiddenChar(c.unicode()))
+            continue;   // round 17 (m8): hidden direction and zero-width marks only ever hide what a file is
         name += (c.unicode() < 0x20 || c.unicode() == 0x7f || QStringLiteral("<>:\"/\\|?*").contains(c)) ? QChar(QLatin1Char('_')) : c;
+    }
     // At most kNameMax characters, keeping a short extension.
     constexpr int kNameMax = 120;
     if (name.size() > kNameMax) {
@@ -1149,9 +1187,12 @@ QString Link::safeName(const QString &raw, const QString &fallback)
         name = fallback;
     // CON, PRN, AUX, NUL, COM1 to COM9 and LPT1 to LPT9, with or without an extension, in any case.
     const QString stem = name.section(QLatin1Char('.'), 0, 0).trimmed().toUpper();
+    // Round 17 (m8): COM and LPT with a superscript 1, 2 or 3, and CONIN$ and CONOUT$, are Windows' too.
+    const QChar n = stem.size() == 4 ? stem.at(3) : QChar();
     const bool numbered = stem.size() == 4 && (stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT")))
-                          && stem.at(3) >= QLatin1Char('1') && stem.at(3) <= QLatin1Char('9');
-    if (stem == QLatin1String("CON") || stem == QLatin1String("PRN") || stem == QLatin1String("AUX") || stem == QLatin1String("NUL") || numbered)
+                          && ((n >= QLatin1Char('1') && n <= QLatin1Char('9')) || n == QChar(0x00B9) || n == QChar(0x00B2) || n == QChar(0x00B3));
+    if (stem == QLatin1String("CON") || stem == QLatin1String("PRN") || stem == QLatin1String("AUX") || stem == QLatin1String("NUL")
+        || stem == QLatin1String("CONIN$") || stem == QLatin1String("CONOUT$") || numbered)
         name.prepend(QLatin1Char('_'));
     return name;
 }
@@ -1218,7 +1259,12 @@ QJsonObject Link::readCode(const QString &text)
     return {{QStringLiteral("k"), k}, {QStringLiteral("p"), jstr(o, "p")}, {QStringLiteral("n"), jstr(o, "n").left(40)}, {QStringLiteral("i"), jstr(o, "i")}};
 }
 
-QString Link::link(const QString &text, bool confirmed)
+QString Link::link(const QString &text)
+{
+    return linkWith(text, false, true);
+}
+
+QString Link::linkWith(const QString &text, bool confirmed, bool ask)
 {
     ensureLoaded();
     if (!m_chat->ready())
@@ -1233,6 +1279,9 @@ QString Link::link(const QString &text, bool confirmed)
         return QStringLiteral("That's this device's own code.");
     if (k == m_phone.key)
         return QStringLiteral("That device is the phone this one mirrors.");
+    // Round 17 (B1): showing this PC's chats on another device needs the current lock given again (used up here).
+    if (ask && !m_chat->vault()->takeGrant(QStringLiteral("link")))
+        return QStringLiteral("Confirm your lock first, then paste the code again.");
     QString name = jstr(o, "n").trimmed();
     const Device d{k, jstr(o, "p"), name.isEmpty() ? QStringLiteral("Linked device") : name, confirmed};
     m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == k; }), m_companions.end());
@@ -1857,8 +1906,14 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
                 save();
             }
         for (const Device &d : std::as_const(m_companions))
-            if (d.key == from)
-                sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("pong")}, {QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap)}});
+            if (d.key == from) {
+                QJsonObject pong{{QStringLiteral("t"), QStringLiteral("pong")}, {QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap)}};
+                // Round 17: the ping's own "pn" said back, so the other end learns this clock only from a real answer.
+                const QString pn = jstr(p, "pn");
+                if (!pn.isEmpty() && pn.size() <= 32)
+                    pong.insert(QStringLiteral("pn"), pn);
+                sendTo(d, pong);
+            }
         return true;
     }
     if (ph && t == QLatin1String("acct")) {
@@ -2090,7 +2145,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         } else if (!firstSend(id)) {
             answerSend(dev, id, true, QString());   // sent already: its copy went then
         } else {
-            const QString mid = m_chat->sendPrivateWith(peer, text.left(Chat::kMax), QString(), QJsonObject());
+            const QString mid = m_chat->sendPrivateWith(peer, GroupWire::clip(text, Chat::kMax), QString(), QJsonObject());
             answerSend(dev, id, !mid.isEmpty(), mid.isEmpty() ? QStringLiteral("not sent") : QString(), mid);
         }
         return true;
@@ -2125,7 +2180,7 @@ QString Link::send(const QString &peer, const QString &text, const QString &re, 
         return QStringLiteral("Write something first.");
     // Shown at once as pending, until the phone answers or its copy comes back.
     const bool group = peer.startsWith(QLatin1String("g:"));
-    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, t.left(Chat::kMax), QString(), re.left(200), now(),
+    const Pending p{QUuid::createUuid().toString(QUuid::WithoutBraces), peer, GroupWire::clip(t, Chat::kMax), QString(), re.left(200), now(),
                     group && ch.size() <= 40 ? ch : QString()};
     m_pending << p;
     while (m_pending.size() > 50)
@@ -2682,7 +2737,7 @@ void Link::ping()
         return;
     m_pingAt = t;
     sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()},
-                                {QStringLiteral("dn"), myDeviceName()}});
+                                {QStringLiteral("dn"), myDeviceName()}, {QStringLiteral("pn"), pingNonce()}});
     Q_EMIT changed();
     // No answer in 20 seconds: the status says so.
     QTimer::singleShot(20500, this, [this] { Q_EMIT changed(); });
@@ -2765,7 +2820,9 @@ bool Link::selfTest(const QJsonObject &v)
         const qint64 t0 = 1800000000000;
         const auto st = [](const char *type, qint64 at) { return LinkReplay::stamp(QJsonObject{{QStringLiteral("t"), QLatin1String(type)}}, at); };
         const auto plain = [](const char *type) { return QJsonObject{{QStringLiteral("t"), QLatin1String(type)}}; };
-        const auto un = [](LinkReplay &r, const QString &k, const QJsonObject &o, qint64 at) { return r.judge(k, o, at) == LinkReplay::Verdict::Unstamped; };
+        // Round 17 (m11): the old phone's unstamped frames come straight over Wi-Fi here (only those, or ones after an
+        // unanswered ping, count toward finding it on an older version).
+        const auto un = [](LinkReplay &r, const QString &k, const QJsonObject &o, qint64 at) { return r.judge(k, o, at, true) == LinkReplay::Verdict::Unstamped; };
         LinkReplay r16;
         const QString pc16 = QStringLiteral("PC");
         const QJsonObject send = st("send", t0);
@@ -2811,22 +2868,62 @@ bool Link::selfTest(const QJsonObject &v)
         check(caps.contains(QStringLiteral("l4")) && caps.contains(QStringLiteral("l1")) && caps.contains(QStringLiteral("l3"))
                   && QString::fromLatin1(LinkReplay::kStampCap) == QLatin1String("l4"),
               "link caps: l4 is said");
-        // A clock 5 days off: a relay's frame is dropped as off, one over Wi-Fi or Bluetooth is taken, and after that its
-        // relay frames are too; a replay of that frame is still refused, and an old copy from before still is.
+        // A clock 5 days off. Round 17 (security M2): a frame is dropped as off on every route, Wi-Fi and Bluetooth
+        // too, until a pong over Wi-Fi or Bluetooth answers this app's own ping within 30 seconds; after that its frames
+        // are taken on any route; a replay of a frame is still refused, and an old copy from before still is.
         const qint64 off = 5LL * 86400000;
         LinkReplay c;
         const QString pc = QStringLiteral("PC");
         const QJsonObject a = st("send", t0 - off), b = st("send", t0 - off + 60000), old = st("send", t0 - off - 3 * LinkReplay::kMaxAgeMs);
         const bool relayFirst = c.judge(pc, a, t0) == LinkReplay::Verdict::Skewed;
-        const bool direct = c.take(pc, a, t0, true);
+        const bool directFirst = c.judge(pc, a, t0, true) == LinkReplay::Verdict::Skewed;
+        // An unsolicited pong straight over Wi-Fi teaches nothing; one that answers a ping (saying its pn back) does.
+        const bool unasked = c.judge(pc, st("pong", t0 - off + 1000), t0 + 1000, true) == LinkReplay::Verdict::Skewed;
+        c.pinged(pc, QStringLiteral("00aa11bb22cc33dd"), t0 + 2000);
+        QJsonObject wrongPn = st("pong", t0 - off + 3000);
+        wrongPn.insert(QStringLiteral("pn"), QStringLiteral("ffffffffffffffff"));
+        const bool wrongAnswer = c.judge(pc, wrongPn, t0 + 3000, true) == LinkReplay::Verdict::Skewed;
+        QJsonObject answer = st("pong", t0 - off + 4000);
+        answer.insert(QStringLiteral("pn"), QStringLiteral("00aa11bb22cc33dd"));
+        const bool answered = c.take(pc, answer, t0 + 4000, true);
+        const bool direct = c.take(pc, a, t0 + 5000, true);
         const bool relayAfter = c.take(pc, b, t0 + 60000);
         const bool replay = !c.take(pc, a, t0 + 120000) && !c.take(pc, a, t0 + 120000, true);
-        const bool oldCopy = c.judge(pc, old, t0 + 180000) == LinkReplay::Verdict::Skewed;
+        const bool oldCopy = c.judge(pc, old, t0 + 180000) == LinkReplay::Verdict::Skewed && c.judge(pc, old, t0 + 180000, true) == LinkReplay::Verdict::Skewed;
         LinkReplay kept;
         kept.load(c.save());
         const bool remembered = kept.take(pc, st("send", t0 - off + 240000), t0 + 240000);
-        check(relayFirst && direct && relayAfter && replay && oldCopy && remembered && LinkReplay::skewOf(a, t0) == -off,
-              "link frames: a clock days off keeps working once seen on Wi-Fi or Bluetooth");
+        // A ping answered too late (over 30 s) teaches nothing either.
+        LinkReplay late;
+        late.pinged(pc, QStringLiteral("0123456789abcdef"), t0);
+        QJsonObject slow = st("pong", t0 - off);
+        slow.insert(QStringLiteral("pn"), QStringLiteral("0123456789abcdef"));
+        const bool tooLate = late.judge(pc, slow, t0 + LinkReplay::kChallengeMs + 1, true) == LinkReplay::Verdict::Skewed;
+        check(relayFirst && directFirst && unasked && wrongAnswer && answered && direct && relayAfter && replay && oldCopy && remembered && tooLate
+                  && LinkReplay::skewOf(a, t0) == -off,
+              "link frames: a clock days off keeps working once a ping is answered on Wi-Fi or Bluetooth");
+        // Round 17 (security M2): a relay's frame copied and handed over the LAN 3 days later is refused like any other.
+        LinkReplay lan;
+        const QJsonObject captured = st("unlink", t0);
+        const bool lanReplay = lan.judge(pc, captured, t0 + 3 * 86400000LL, true) == LinkReplay::Verdict::Skewed
+                               && lan.judge(pc, captured, t0 + 3 * 86400000LL) == LinkReplay::Verdict::Skewed;
+        check(lanReplay, "link frames: an old frame over Wi-Fi or Bluetooth is held to the 36 hours too");
+        // Round 17 (m11): a relay replaying unstamped frames never raises "on an older version"; after a ping nobody
+        // answered with a stamped frame, they count.
+        LinkReplay relayOnly;
+        const QString ph = QStringLiteral("PHONE");
+        const bool stampsFirst = relayOnly.take(ph, st("send", t0), t0);
+        const QJsonObject bare{{QStringLiteral("t"), QStringLiteral("msg")}};
+        for (int i = 0; i < 6; ++i)
+            relayOnly.judge(ph, bare, t0 + 1000 + i * LinkReplay::kOlderMs);
+        const bool notRaised = !relayOnly.found(ph) && relayOnly.olderOnes().isEmpty();
+        const qint64 tp = t0 + 10 * LinkReplay::kOlderMs;
+        relayOnly.pinged(ph, QStringLiteral("1111222233334444"), tp);
+        relayOnly.judge(ph, bare, tp + 1000);
+        relayOnly.judge(ph, bare, tp + 2000);
+        relayOnly.pinged(ph, QStringLiteral("5555666677778888"), tp + LinkReplay::kOlderMs);
+        relayOnly.judge(ph, bare, tp + LinkReplay::kOlderMs + 1000);
+        check(stampsFirst && notRaised && relayOnly.found(ph), "link frames: only unstamped frames on Wi-Fi or after an unanswered ping count as an older version");
     }
 
     // Paging and merging: pages of at most 100 messages and 20 KB of UTF-8 JSON, merged by id without losing any.
@@ -2899,6 +2996,12 @@ bool Link::selfTest(const QJsonObject &v)
               && safeName(QStringLiteral("com1.jpg"), fb) == QLatin1String("_com1.jpg") && safeName(QStringLiteral("LPT9"), fb) == QLatin1String("_LPT9")
               && safeName(QStringLiteral("COM10.txt"), fb) == QLatin1String("COM10.txt") && safeName(QStringLiteral("console.txt"), fb) == QLatin1String("console.txt"),
           "names Windows keeps for itself get a _");
+    // Round 17 (m8): the superscript COM and LPT names, CONIN$ and CONOUT$, and hidden direction marks.
+    check(safeName(QStringLiteral("COM") + QChar(0x00B9) + QStringLiteral(".txt"), fb).startsWith(QLatin1Char('_'))
+              && safeName(QStringLiteral("lpt") + QChar(0x00B3), fb).startsWith(QLatin1Char('_')) && safeName(QStringLiteral("CONIN$"), fb) == QLatin1String("_CONIN$")
+              && safeName(QStringLiteral("conout$.log"), fb) == QLatin1String("_conout$.log")
+              && safeName(QStringLiteral("Photos") + QChar(0x202e) + QStringLiteral("gpj.exe"), fb) == QLatin1String("Photosgpj.exe"),
+          "more names Windows keeps, and hidden marks, are made safe");
     const QString longName = safeName(QString(300, QLatin1Char('a')) + QStringLiteral(".pdf"), fb);
     check(longName.size() == 120 && longName.endsWith(QLatin1String(".pdf")), "long names are cut, keeping the extension");
 

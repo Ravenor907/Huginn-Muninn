@@ -82,6 +82,20 @@ QByteArray ChatCrypto::publicFromPrivate(const QByteArray &privateDer)
     return out;
 }
 
+bool ChatCrypto::samePublic(const QByteArray &a, const QByteArray &b)
+{
+    if (a.isEmpty() || b.isEmpty())
+        return false;
+    if (a == b)
+        return true;
+    EVP_PKEY *x = readPublic(a);
+    EVP_PKEY *y = readPublic(b);
+    const bool same = x && y && EVP_PKEY_eq(x, y) == 1;
+    EVP_PKEY_free(x);
+    EVP_PKEY_free(y);
+    return same;
+}
+
 QByteArray ChatCrypto::sharedKey(const QByteArray &myPrivateDer, const QByteArray &myPublicDer, const QByteArray &theirPublicDer)
 {
     EVP_PKEY *mine = readPrivate(myPrivateDer);

@@ -6,6 +6,7 @@
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QStringList>
 #include <QVariantMap>
@@ -23,6 +24,8 @@ public:
     // The desktop's activation token for a click (sent just before ActionInvoked): with it, Wayland lets the window
     // come forward instead of only flashing on the taskbar.
     QHash<uint, QByteArray> tokens;
+    // Round 17: every notification still on show (clearShown takes them all away on a lock).
+    QList<uint> shown;
 
 public Q_SLOTS:
     void token(uint id, const QString &t)
@@ -54,6 +57,7 @@ public Q_SLOTS:
     void closed(uint id, uint reason)
     {
         Q_UNUSED(reason);
+        shown.removeAll(id);
         pending.remove(id);
         calls.remove(id);
         tokens.remove(id);
@@ -114,15 +118,13 @@ void notify(const QString &title, const QString &body, int timeoutMs, std::funct
             onFailed();
         return;
     }
-    NotifyClicks *c = onClick || onFailed ? clicks() : nullptr;
+    NotifyClicks *c = clicks();   // round 17: every id is kept, so a lock can take them all away
     const QStringList actions = onClick ? QStringList{QStringLiteral("default"), QStringLiteral("Open")} : QStringList();
     // Never waits for the desktop: its answer (the notification's id, for a click) comes back later.
     const QDBusPendingCall call = QDBusConnection::sessionBus().asyncCall(
         message(QStringLiteral("Notify"), {QStringLiteral("Huginn"), 0u, QStringLiteral("io.github.ravenor907.Huginn"), title, plainBody(body), actions,
                                            QVariantMap(), timeoutMs}),
         5000);
-    if (!c)
-        return;
     auto *w = new QDBusPendingCallWatcher(call, c);
     QObject::connect(w, &QDBusPendingCallWatcher::finished, c, [c, onClick = std::move(onClick), onFailed = std::move(onFailed)](QDBusPendingCallWatcher *w) mutable {
         w->deleteLater();
@@ -132,6 +134,9 @@ void notify(const QString &title, const QString &body, int timeoutMs, std::funct
                 onFailed();
             return;
         }
+        if (c->shown.size() > 100)
+            c->shown.removeFirst();
+        c->shown.append(r.arguments().constFirst().toUInt());
         if (!onClick)
             return;
         if (c->pending.size() > 50)
@@ -165,6 +170,19 @@ void setUpTray(std::function<bool()>, std::function<bool()>, std::function<void(
 void setTrayState(int, bool) {}
 // The desktop says which notification was clicked, so there's nothing to guess.
 void forgetChat(const QString &) {}
+
+void clearShown()
+{
+    if (!QDBusConnection::sessionBus().isConnected())
+        return;
+    NotifyClicks *c = clicks();
+    const QList<uint> ids = c->shown;
+    c->shown.clear();
+    for (const uint id : ids) {
+        c->pending.remove(id);
+        QDBusConnection::sessionBus().asyncCall(message(QStringLiteral("CloseNotification"), {id}));
+    }
+}
 
 void closeNotification(uint id)
 {

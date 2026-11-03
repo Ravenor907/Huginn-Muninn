@@ -504,7 +504,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             val now = android.os.SystemClock.elapsedRealtime()
             // A Kids' Device's quiet times follow a trusted time: here the relay's own clock (its answer's Date).
             try { response.headers.getDate("Date")?.let { d ->
-                io.github.ravenor907.muninn.tv.KidTv.heardTime(d.time)
+                // Round 17: one reading per relay; the device's time follows what several agree on.
+                io.github.ravenor907.muninn.tv.KidTv.heardTime(d.time, "relay:$url")
                 // Round 14: this relay's clock against ours, so its EOSE cursor is kept in its own time.
                 relayOffsetS[url] = d.time / 1000 - System.currentTimeMillis() / 1000
             } } catch (_: Exception) {}

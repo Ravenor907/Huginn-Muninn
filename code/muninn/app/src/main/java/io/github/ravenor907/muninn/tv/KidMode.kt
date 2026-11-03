@@ -123,7 +123,13 @@ object KidMode {
  * changes it; [micAt]: when (this TV's clock). [nrLocal]: noise removal kept on the TV (7.10), the same way.
  */
 data class KidState(val parents: List<String> = emptyList(), val cfg: TvConfig? = null, val micLocal: Int? = null, val micAt: Long = 0,
-                    val nrLocal: Int? = null)
+                    val nrLocal: Int? = null,
+                    /**
+                     * Round 17 (7.18): other families' Kids' Devices on the list that left kids' mode (key to the trusted
+                     * time it was heard): no longer talked to, and [cfg] leaves them out. [goneC] and [goneP]: people and
+                     * parents a parent app with k11 took off, which an older parent app's config can't bring back.
+                     */
+                    val left: Map<String, Long> = emptyMap(), val goneC: Set<String> = emptySet(), val goneP: Set<String> = emptySet())
 
 /**
  * The TV side of shared/docs/protocol.md section 7: pairing, taking configs, the people it may talk to, and
@@ -148,10 +154,19 @@ object KidTv {
         val ps = o.optJSONArray("parents")
         val parents = if (ps == null) emptyList() else (0 until ps.length()).map { ps.getString(it) }
         // k11: the chatting level, quiet times and PIN kept from before an older parent app's config (7.18).
-        val cfg = o.optJSONObject("cfg")?.let { c -> try { TvRules.check(c); KidRules.keptIn(TvRules.parse(c), o.optJSONObject("k11")) } catch (e: Exception) { null } }
+        // Round 17: devices that left kids' mode, and the people and parents taken off (an older parent app's config can't
+        // bring them back, after a restart too).
+        val left = o.optJSONObject("left")?.let { l -> l.keys().asSequence().filter { KidK14.keyOk(it) }.associateWith { l.optLong(it) } } ?: emptyMap()
+        fun keys(n: String) = o.optJSONArray(n)?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).takeIf { k -> KidK14.keyOk(k) } }.toSet() } ?: emptySet()
+        val goneC = keys("goneC"); val goneP = keys("goneP")
+        val cfg = o.optJSONObject("cfg")?.let { c -> try {
+            TvRules.check(c)
+            val kept = KidRules.keptIn(TvRules.parse(c), o.optJSONObject("k11"))
+            KidRules.withoutLeft(if (KidRules.hasK11(c)) kept else KidRules.stripGone(kept, goneC, goneP).first, left.keys)
+        } catch (e: Exception) { null } }
         val local = if (o.has("micLocal")) o.optInt("micLocal").coerceIn(0, TvRules.MAX_MIC) else null
         val nr = if (o.has("nrLocal")) o.optInt("nrLocal").coerceIn(TvRules.NR_NONE, TvRules.NR_BOTH) else null
-        _state.value = KidState(parents, cfg, local, o.optLong("micAt"), nr)
+        _state.value = KidState(parents, cfg, local, o.optLong("micAt"), nr, left, goneC, goneP)
         me = try { app.identity.publicKey } catch (_: Exception) { "" }
         // k12: the parent's translation for Daily Hávamál, if one came.
         HavDevice.load(app)
@@ -194,6 +209,9 @@ object KidTv {
         s.cfg?.let { o.put("cfg", it.raw); if (KidRules.needsKept(it.raw)) o.put("k11", KidRules.keptJson(it)) }
         s.micLocal?.let { o.put("micLocal", it).put("micAt", s.micAt) }
         s.nrLocal?.let { o.put("nrLocal", it) }
+        if (s.left.isNotEmpty()) o.put("left", JSONObject().apply { s.left.forEach { (k, at) -> put(k, at) } })
+        if (s.goneC.isNotEmpty()) o.put("goneC", JSONArray(s.goneC.toList()))
+        if (s.goneP.isNotEmpty()) o.put("goneP", JSONArray(s.goneP.toList()))
         app.vault.write(file(app), o.toString())
     }
 
@@ -225,7 +243,8 @@ object KidTv {
         val b = Tv.bridge(app) ?: return
         val ts = if (s.micLocal != null) s.micAt else cfg.ts
         val off = TvUpdate.needs(app).map { it.id }.filter { it in TvRules.PERMS }
-        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null, off = off, update = TvUpdate.state.value.code)
+        val msg = TvRules.statusMessage(TvMic.level, TvStorage.used(app), ts, own = s.micLocal != null, off = off, update = TvUpdate.state.value.code,
+            pinfail = pinFails(app).takeIf { it >= KidRules.PIN_WARN } ?: 0)
         for (k in to ?: s.parents) if ("k3" in (app.contacts.get(k)?.caps ?: emptySet())) try { b.sendTvRoom(k, msg) } catch (_: Exception) {}
     }
 
@@ -329,15 +348,31 @@ object KidTv {
      * A trusted time [wall] (a parent's signed config, or a relay's clock from its connection's Date): the device's quiet
      * times follow it, plus the time since by the device's own uptime. Changing the device's clock or zone moves nothing.
      */
-    fun heardTime(wall: Long) {
+    fun heardTime(wall: Long, source: String = "relay") {
         val ctx = clockApp ?: return
         if (!KidMode.saved(ctx)) return
         val el = elapsed()
-        val next = KidRules.anchor(anchor, wall, el) ?: return
-        if (next == anchor) return
-        anchor = next
+        val next = synchronized(timeLock) {
+            // Round 17: each source's newest reading; the time follows what several agree on ([KidRules.clockFrom]).
+            readings = KidRules.addReading(readings, source, TimeAnchor(wall, el))
+            val n = KidRules.clockFrom(anchor, readings, el) ?: return
+            if (n == anchor) return
+            anchor = n
+            n
+        }
         try { prefs(ctx).edit().putLong(ANCHOR_WALL, next.wall).putLong(ANCHOR_AT, next.at).putInt(ANCHOR_BOOT, bootCount(ctx)).apply() } catch (_: Exception) {}
     }
+    private val timeLock = Any()
+    @Volatile private var readings: Map<String, TimeAnchor> = emptyMap()
+
+    /** Whether a trusted time has come since the device started (quiet times then never follow the device's own clock). */
+    fun timeKnown(): Boolean = anchor != null
+
+    /** Quiet times are set and no trusted time has come since the device started: what's sent to friends waits. */
+    fun timeUnsure(): Boolean = _state.value.cfg?.quiet?.isNotEmpty() == true && anchor == null
+
+    /** The time now by the trusted time, or the device's own clock while none has come: for what the kids see (Daily Hávamál). */
+    fun nowMs(): Long = KidRules.trustedNow(anchor, elapsed()) ?: System.currentTimeMillis()
 
     /**
      * The quiet time on now, or null: by the trusted time in the parent's time zone. Only right after the device started,
@@ -384,16 +419,45 @@ object KidTv {
      * The parent PIN typed on the device ([KidRules.tryPin]): right, the parent settings open for 10 minutes. During a
      * wait it isn't checked. Slow on purpose (the hash): call it off the main thread.
      */
-    fun tryPin(context: Context, pin: String): PinTry {
+    fun tryPin(context: Context, pin: String): PinTry = synchronized(pinLock) {
+        // Round 17: one check at a time (a second dialog's try waits for the first), and the try is counted (committed)
+        // before the slow hash, so neither parallel tries nor stopping the app mid-check gets a free guess.
         val now = elapsed()
-        val (r, t) = KidRules.tryPin(pin, _state.value.cfg?.pin, tries(context), now)
-        prefs(context).edit().putInt(PIN_FAILS, t.fails).putLong(PIN_AT, t.at).putInt(PIN_BOOT, bootCount(context)).apply()
-        if (r.ok) unlockedUntil.value = elapsed() + KidRules.UNLOCK_MS
-        return r
+        val t = tries(context)
+        val cfgPin = _state.value.cfg?.pin
+        if (KidRules.waitLeft(t, now) > 0 || pin.length < KidRules.PIN_MIN) return@synchronized KidRules.tryPin(pin, cfgPin, t, now).first
+        val boot = bootCount(context)
+        val pre = KidRules.counted(t, now)
+        prefs(context).edit().putInt(PIN_FAILS, pre.fails).putLong(PIN_AT, pre.at).putInt(PIN_BOOT, boot).commit()
+        val (r, after) = KidRules.tryPin(pin, cfgPin, t, now)
+        prefs(context).edit().putInt(PIN_FAILS, after.fails).putLong(PIN_AT, after.at).putInt(PIN_BOOT, boot).commit()
+        // Many wrong tries in a row: the parents hear it (the count rides in the status).
+        if (!r.ok && after.fails >= KidRules.PIN_WARN) (context.applicationContext as? Muninn)?.let { statusSoon(it) }
+        r
     }
+    private val pinLock = Any()
+
+    /**
+     * The right PIN was typed and its dialog is still up: the parent settings open for 10 minutes. Only the dialog that
+     * asked opens them, never a check that finished after it closed.
+     */
+    fun openWithPin() { unlockedUntil.value = elapsed() + KidRules.UNLOCK_MS }
+
+    /** Wrong PINs in a row now (for the parents' status), 0 when none count. */
+    private fun pinFails(context: Context): Int = KidRules.failsNow(tries(context), elapsed())
     private const val PIN_FAILS = "pinFails"
     private const val PIN_AT = "pinAt"
     private const val PIN_BOOT = "pinBoot"
+    private const val ASK_N = "askUnanswered"
+    private const val ASK_AT = "askAt"
+    private const val ASK_BOOT = "askBoot"
+
+    /** The last ask kept from before Muninn restarted (uptime); after the device restarted, the wait starts over from [now]. */
+    private fun savedAsk(context: Context, now: Long): Long {
+        val p = prefs(context)
+        val at = p.getLong(ASK_AT, -1L)
+        return if (p.getInt(ASK_BOOT, -2) == bootCount(context) && at in 1..now) at else now
+    }
 
     /** What [askUnlock] did. */
     enum class Asked { SENT, TOO_SOON, CHECKING, NEEDS_UPDATE }
@@ -406,7 +470,10 @@ object KidTv {
         val s = _state.value
         if (s.cfg == null) return Asked.CHECKING
         val now = elapsed()
-        if (!KidRules.askAgainOk(lastAsk, now)) return Asked.TOO_SOON
+        // Round 17: asks nobody answered wait longer each time (1, 2, 5, 15 minutes, then an hour), kept over a restart.
+        val unanswered = prefs(app).getInt(ASK_N, 0)
+        if (lastAsk <= 0L && unanswered > 0) lastAsk = savedAsk(app, now)
+        if (!KidRules.askAgainOk(lastAsk, now, unanswered)) return Asked.TOO_SOON
         val caps = s.parents.map { app.contacts.get(it)?.caps ?: emptySet() }
         val to = s.parents.filterIndexed { i, _ -> KidRules.CAP in caps[i] }
         if (to.isEmpty()) {
@@ -418,9 +485,18 @@ object KidTv {
         askedAt = now
         lastAsk = now
         lastAskWall = System.currentTimeMillis()
+        prefs(app).edit().putInt(ASK_N, unanswered + 1).putLong(ASK_AT, now).putInt(ASK_BOOT, bootCount(app)).apply()
         val msg = KidRules.unlockAskMessage(id)
         to.forEach { send(app, it, msg) }
         return Asked.SENT
+    }
+
+    /** How long before someone at the device may ask a parent's phone again (ms, 0: now). */
+    fun askWait(context: Context): Long {
+        if (lastAsk <= 0L && prefs(context).getInt(ASK_N, 0) > 0) lastAsk = savedAsk(context, elapsed())
+        if (lastAsk <= 0L) return 0L
+        val gap = KidRules.askGap(prefs(context).getInt(ASK_N, 0))
+        return (gap - (elapsed() - lastAsk)).coerceIn(0L, gap)
     }
 
     /**
@@ -429,15 +505,40 @@ object KidTv {
      */
     fun leave(app: Muninn) {
         if (!unlocked() || wiping.value) return
+        // Round 17: saved first (committed), so a Leave cut short (Muninn stopped, the battery out) is finished at the next
+        // start instead of leaving a Kids' Device no parent looks after any more.
+        prefs(app).edit().putBoolean(LEAVING, true).commit()
+        finishLeave(app)
+    }
+
+    /** A Leave was saved and hasn't finished: it's finished now (at the start, before kids' mode starts). */
+    fun leavingSaved(context: Context): Boolean = prefs(context).getBoolean(LEAVING, false)
+
+    /**
+     * The rest of a Leave: the parents and everyone on its list are told (again, after a restart, while they're still
+     * contacts), every group hears a real leave, then everything is erased and Muninn runs as an ordinary one.
+     */
+    internal fun finishLeave(app: Muninn) {
         val msg = KidRules.leftMessage()
         // The parents stop looking after it; everyone else on its list stops treating it as a Kids' Device (7.18).
         val s = _state.value
         (s.parents + (s.cfg?.contacts?.map { it.k } ?: emptyList())).distinct().forEach { send(app, it, msg) }
+        leaveGroups(app)
         wiping.value = true
         Thread {
-            try { Thread.sleep(3000); wipe(app); KidMode.leave(app) } catch (_: Exception) {}
+            try {
+                Thread.sleep(3000); wipe(app); KidMode.leave(app)
+                prefs(app).edit().remove(LEAVING).commit()
+            } catch (_: Exception) {}
             finally { unlockedUntil.value = 0L; wiping.value = false }
         }.start()
+    }
+    private const val LEAVING = "leaving"
+
+    /** Round 17: every group a parent put it in hears a real leave, while the routes to its members still exist. */
+    private fun leaveGroups(app: Muninn) {
+        val gs = try { app.chat.groups.all.value.keys.toList() } catch (_: Exception) { emptyList() }
+        for (g in gs) try { app.chat.leaveGroup(g) } catch (_: Exception) {}
     }
 
     /** On the parent's list (or a parent): the only people this TV talks to, calls included. */
@@ -456,7 +557,13 @@ object KidTv {
             "config" -> {
                 val new = o.optJSONObject("cfg") ?: return false
                 // A parent taken off the TV whose phone still sends its config: told again that they were removed.
-                if (s.parents.isNotEmpty() && fromKey !in s.parents && new.optString("by") !in s.parents) { tellRemoved(app, fromKey); return false }
+                if (s.parents.isNotEmpty() && fromKey !in s.parents && new.optString("by") !in s.parents) {
+                    // Round 17: a second parent who scanned the same pairing code (their own config, through the code's
+                    // invite): told it's set up already, so their phone stops saying "Setting it up".
+                    if (inviteOk && new.opt("by") == fromKey && s.cfg?.contacts?.none { it.k == fromKey } != false) send(app, fromKey, KidRules.takenMessage())
+                    else tellRemoved(app, fromKey)
+                    return false
+                }
                 val pairing = s.parents.isEmpty()
                 val parents = if (pairing) {
                     // Pairing: only from the one who scanned a code this TV showed in the last hour, signing for themselves.
@@ -475,12 +582,21 @@ object KidTv {
                 // k11 (7.18): a config from an older parent app (no k11 field) keeps this device's chatting level,
                 // quiet times and PIN; one that carries a k11 field sets them.
                 // It also only adds people and parents: taking someone off needs a parent app with k11.
-                val cfg = try { KidRules.keepK11(TvRules.parse(new), s.cfg) } catch (e: Exception) { return false }
+                val parsed = try { TvRules.parse(new) } catch (e: Exception) { return false }
+                var cfg = try { KidRules.keepK11(parsed, s.cfg) } catch (e: Exception) { return false }
+                // Round 17 (7.18): removals win. A config with k11 keeps track of who it took off; an older parent app's
+                // config can't bring them back (people or parents), and other families' devices that left stay off.
+                var goneC = s.goneC; var goneP = s.goneP
+                if (KidRules.hasK11(new)) { if (s.cfg != null) KidRules.tombstones(s.cfg, parsed, goneC, goneP).let { (c, p) -> goneC = c; goneP = p } }
+                else cfg = KidRules.stripGone(cfg, goneC, goneP).first
+                val left = KidRules.leftAfter(s.left, parsed)
+                cfg = KidRules.withoutLeft(cfg, left.keys)
                 KidMode.markPaired(app)
-                // A parent's settings reached this device: Muninn runs normally, so the crash count starts over (SafeStart).
-                SafeStart.healthy(app)
-                // A parent signed it at this time: a trusted time for quiet times (an older one, resent late, moves nothing).
-                heardTime(cfg.ts)
+                // A parent's settings reached this device: once Muninn has kept running a while after it, the crash count
+                // starts over (SafeStart; round 17: not at once, so a crash loop still counts).
+                SafeStart.parentHeard(app)
+                // A parent signed it at this time: one source of trusted time for quiet times, checked against the others.
+                heardTime(cfg.ts, "parent:${cfg.by}")
                 // Parents this config takes off: their phones stop looking after the TV (sent while they're still contacts).
                 if (!pairing) for (k in TvRules.dropped(s.parents, cfg.parents)) send(app, k, TvRules.removedMessage(cfg.raw))
                 apply(app, cfg, fromKey, mailbox)
@@ -497,7 +613,7 @@ object KidTv {
                 // Noise removal (7.10) the same way: a parent's new pick wins over the TV's own.
                 val parentNr = s.cfg == null || cfg.nr != s.cfg.nr
                 val next = (if (parentMic) KidState(cfg.parents, cfg) else KidState(cfg.parents, cfg, s.micLocal, s.micAt))
-                    .copy(nrLocal = if (parentNr) null else s.nrLocal)
+                    .copy(nrLocal = if (parentNr) null else s.nrLocal, left = left, goneC = goneC, goneP = goneP)
                 save(app, next)
                 _state.value = next
                 tune(next)
@@ -513,7 +629,7 @@ object KidTv {
                 // k2: a parent's "Update TV". Only from a parent; the answer says which Muninn the TV runs now.
                 val cur = s.cfg ?: return false
                 if (fromKey !in s.parents) return false
-                SafeStart.healthy(app)
+                SafeStart.parentHeard(app)
                 TvUpdate.checkNow(app)
                 answer(app, listOf(fromKey), cur.v, cur.raw)
                 true
@@ -522,7 +638,7 @@ object KidTv {
                 // u1 (7.17): a parent's Update now, from anywhere. Only from a current parent; they hear each step.
                 if (s.cfg != null && fromKey !in s.parents) { tellRemoved(app, fromKey); return false }
                 if (!TvUpd.fromParent(fromKey, s.parents, s.cfg != null) || !TvUpd.isNow(o)) return false
-                SafeStart.healthy(app)
+                SafeStart.parentHeard(app)
                 TvUpdate.remoteNow(app, fromKey)
                 true
             }
@@ -584,6 +700,8 @@ object KidTv {
                 if (!KidRules.unlockOk(fromKey, s.parents, asked, askedAt, id, now)) return false
                 asked = null
                 unlockedUntil.value = now + KidRules.UNLOCK_MS
+                // A parent answered: asks start again from a minute apart.
+                prefs(app).edit().remove(ASK_N).apply()
                 true
             }
             "havtext" -> {
@@ -600,6 +718,22 @@ object KidTv {
             // A card (7.6) for a Kids' Device: someone's parent invited it to talk with another device. A Kids' Device takes
             // people only from its own parents' configs, so it's taken (no resending) and nothing changes.
             "card" -> s.cfg != null && approved(fromKey)
+            "left" -> {
+                // Round 17 (7.18): another family's Kids' Device on the list left kids' mode. It's an ordinary Muninn now
+                // (anyone holding it can add strangers): no longer talked to, and this device's parents are told, so
+                // their page says so and their next config leaves it off.
+                val cur = s.cfg ?: return false
+                if (!KidRules.isLeft(o) || fromKey in s.parents || cur.contacts.none { it.k == fromKey }) return false
+                val left = s.left + (fromKey to nowMs())
+                val next = s.copy(cfg = KidRules.withoutLeft(cur, left.keys), left = left)
+                save(app, next)
+                _state.value = next
+                io.github.ravenor907.muninn.net.call.CallManager.call.value?.let { c -> if (c.peerKey == fromKey) io.github.ravenor907.muninn.net.call.CallManager.hangup() }
+                dropContacts(app, listOf(fromKey))
+                val msg = KidRules.kidLeftMessage(fromKey)
+                s.parents.forEach { send(app, it, msg) }
+                true
+            }
             "disconnect" -> {
                 val d = o.optJSONObject("d") ?: return false
                 val cur = s.cfg ?: return false
@@ -608,6 +742,8 @@ object KidTv {
                 // A parent who said the TV may be used normally from now on: the pairing screen offers it again.
                 if (o.optBoolean("free")) KidMode.free(app)
                 answer(app, s.parents, cur.v)   // their apps stop resending; sent before the contacts go
+                // Round 17: every group hears a real leave, while the routes to its members still exist.
+                leaveGroups(app)
                 Thread { try { Thread.sleep(3000); wipe(app) } catch (_: Exception) {} finally { wiping.value = false } }.start()
                 true
             }
@@ -621,13 +757,43 @@ object KidTv {
      */
     private fun apply(app: Muninn, cfg: TvConfig, fromKey: String, mailbox: String?) {
         val keep = cfg.contacts.map { it.k }.toSet() + cfg.parents
-        app.contacts.all.value.filter { it.chatKey !in keep && !it.groupOnly }.forEach {
-            app.chat.deleteConversation(it.chatKey)
-            app.chat.removeContact(it.chatKey)
-        }
+        dropContacts(app, app.contacts.all.value.filter { it.chatKey !in keep && !it.groupOnly }.map { it.chatKey })
         for (p in cfg.contacts) upsert(app, p.k, p.n, p.p.takeIf { it.length == 64 })
         for (k in cfg.parents) if (cfg.contacts.none { it.k == k })
             upsert(app, k, app.contacts.get(k)?.name ?: "Parent", if (k == fromKey) mailbox else null)
+    }
+
+    /**
+     * Round 17: people taken off the list stop being contacts at once, but their conversation stays a day (out of sight:
+     * the kids' screens show only people on the list), so two parents' changes crossing, or a person taken off and put
+     * back, never erases it. [purgeDropped] deletes it once the day is over, if they're still off.
+     */
+    private fun dropContacts(app: Muninn, keys: List<String>) {
+        if (keys.isEmpty()) return
+        keys.forEach { try { app.chat.removeContact(it) } catch (_: Exception) {} }
+        val p = prefs(app)
+        val now = System.currentTimeMillis()
+        val list = p.getStringSet(DROP_LATER, emptySet()).orEmpty().filter { e -> keys.none { e.startsWith("$it@") } } + keys.map { "$it@$now" }
+        p.edit().putStringSet(DROP_LATER, list.takeLast(400).toSet()).apply()
+    }
+    private const val DROP_LATER = "dropLater"
+
+    /** Conversations of people off the list for a day are deleted now; anyone back on the list keeps theirs. */
+    internal fun purgeDropped(app: Muninn, force: Boolean = false) {
+        val p = prefs(app)
+        val list = p.getStringSet(DROP_LATER, emptySet()).orEmpty()
+        if (list.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val keep = mutableSetOf<String>()
+        for (e in list) {
+            val i = e.lastIndexOf('@')
+            val k = if (i > 0) e.substring(0, i) else continue
+            val at = e.substring(i + 1).toLongOrNull() ?: 0L
+            if (approved(k) && !force) continue
+            if (force || now - at !in 0L until 86_400_000L) { if (app.contacts.get(k) == null) try { app.chat.deleteConversation(k) } catch (_: Exception) {} }
+            else keep += e
+        }
+        p.edit().putStringSet(DROP_LATER, keep).apply()
     }
 
     private fun upsert(app: Muninn, key: String, name: String, mailbox: String?) {
@@ -682,7 +848,10 @@ object KidTv {
         // k14: anything a quiet time held, and the group members already asked about.
         KidHoldStore.clear(app)
         // Wrong PIN tries count only against the PIN they were typed for, never the next family's.
-        prefs(app).edit().remove(HELD_ASKED).remove(PIN_FAILS).remove(PIN_AT).remove(PIN_BOOT).apply()
+        prefs(app).edit().remove(HELD_ASKED).remove(PIN_FAILS).remove(PIN_AT).remove(PIN_BOOT)
+            .remove(ASK_N).remove(ASK_AT).remove(ASK_BOOT).remove(DROP_LATER).apply()
+        // Round 17: nothing of kids' mode stays running (read aloud).
+        KidSpeak.shutdown()
         // Everything else kids' mode changed (sizes, look, how long messages stay, drafts, waiting asks): put back.
         KidReset.restore(app)
         unlockedUntil.value = 0L
@@ -700,6 +869,11 @@ object KidTv {
         stopWatch()
         statusJob = statusTimer.scheduleWithFixedDelay({ try { if (_state.value.cfg != null) sendStatus(app, null) } catch (_: Exception) {} },
             1L, 360L, java.util.concurrent.TimeUnit.MINUTES)
+        // Round 17: what a quiet time held goes once it's over, with Muninn on screen or not; conversations of people off
+        // the list for a day go.
+        holdJob = statusTimer.scheduleWithFixedDelay({
+            try { if (_state.value.cfg != null && !wiping.value) { KidHoldStore.release(app); purgeDropped(app) } } catch (_: Exception) {}
+        }, 1L, 1L, java.util.concurrent.TimeUnit.MINUTES)
         invites = CoroutineScope(SupervisorJob() + Dispatchers.Default).launch {
             app.chat.groups.pending.collect { list ->
                 // Only while it's a Kids' Device: an ordinary Muninn answers its own invites.
@@ -711,11 +885,13 @@ object KidTv {
         }
     }
     @Volatile private var statusJob: java.util.concurrent.ScheduledFuture<*>? = null
+    @Volatile private var holdJob: java.util.concurrent.ScheduledFuture<*>? = null
     @Volatile private var invites: kotlinx.coroutines.Job? = null
 
     /** Left kids' mode: no more status to parents, and group invites are the person's own to answer again. */
     internal fun stopWatch() {
         statusJob?.cancel(false); statusJob = null
+        holdJob?.cancel(false); holdJob = null
         invites?.cancel(); invites = null
     }
 
@@ -739,7 +915,9 @@ object Tv : TvHandler {
             if (this.app !== app) { this.app = app; first = true; KidTv.load(app); TvParent.load(app) }
             b?.tvHandler = this
         }
-        if (first && KidMode.on(app)) startKids(app)
+        // Round 17: a Leave cut short last time (Muninn stopped during it) is finished now, before kids' mode starts again.
+        if (first && KidMode.saved(app) && KidTv.leavingSaved(app)) KidTv.finishLeave(app)
+        else if (first && KidMode.on(app)) startKids(app)
     }
     @Volatile private var kidsStarted = false
 

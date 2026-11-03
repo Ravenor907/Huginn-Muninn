@@ -67,6 +67,8 @@ object CallManager {
     private class LockedRing(val app: Muninn, val callId: String, val at: Long)
     @Volatile private var lockedRing: LockedRing? = null
     private val lockedSeen = LinkedHashMap<String, Long>()
+    /** Round 17: rings while locked, at most 3 in 10 minutes. */
+    private val lockedLimit = LockedRingLimit()
     /** Call id to (answered: true, declined: false; when), for the offer to find after unlocking. */
     private val lockedChoice = LinkedHashMap<String, Pair<Boolean, Long>>()
     /** How long a choice made on the locked ringing screen waits for its offer. */
@@ -97,6 +99,8 @@ object CallManager {
             }
             // Extreme battery saver: calls ring only while Muninn is open.
             if (a.quietUntilOpen()) return@execute
+            // Round 17: anyone holding the ring key could ring without end: at most 3 in 10 minutes while locked.
+            if (!lockedLimit.take(android.os.SystemClock.elapsedRealtime())) return@execute
             val r = LockedRing(a, callId, now)
             lockedRing = r
             _call.value = Ui(callId, "", LOCKED_NAME, false, CallSession.Phase.INCOMING, 0, false, false, false, false, false, false, false, "",

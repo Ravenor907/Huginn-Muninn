@@ -43,9 +43,13 @@ object TvBanner {
     /** [title] and [text] are what the notification shows (already private when previews are off). Never during a call. */
     fun show(c: Context, title: String, text: String, key: String) {
         val app = c.applicationContext
-        if (!Settings.canDrawOverlays(app) || io.github.ravenor907.muninn.net.call.CallManager.call.value != null) return
+        if (!Settings.canDrawOverlays(app) || inCall()) return
         main.post { try { put(app, title, text, key) } catch (_: Exception) { view = null } }
     }
+
+    /** A call or a group call on (or ringing): no banner. */
+    private fun inCall(): Boolean = io.github.ravenor907.muninn.net.call.CallManager.call.value != null ||
+        io.github.ravenor907.muninn.net.call.RoomManager.busy || io.github.ravenor907.muninn.net.call.RoomManager.ring.value != null
 
     private fun put(c: Context, title: String, text: String, key: String) {
         dismiss()
@@ -102,7 +106,8 @@ object TvBanner {
         while (true) {
             delay(500)
             val b = try {
-                if (app.ready.value && !app.visible && KidMode.on(app)) {
+                // Round 17: never over a call (its Hang up sits where the banner would).
+                if (app.ready.value && !app.visible && KidMode.on(app) && !inCall()) {
                     val t = app.net.transfer.value
                     val nearby = TransferView.nearby(t.id, t.active, t.sending, t.preparing, t.started > 0, t.done, t.total, t.files.map { it.name }, t.peer)
                     val ended = app.net.finished.value?.let { (ok, msg) -> TransferView.ended(app.net.finishedId, ok, msg) }

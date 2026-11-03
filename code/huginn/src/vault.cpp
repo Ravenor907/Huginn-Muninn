@@ -25,6 +25,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QStorageInfo>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QVariant>
@@ -41,6 +42,7 @@
 #include <memory>
 
 #include <QElapsedTimer>
+#include <QEventLoop>
 
 #include <openssl/core_names.h>
 #include <openssl/evp.h>
@@ -392,6 +394,9 @@ Vault::Vault(QObject *parent)
     m_combo.setSingleShot(true);
     m_combo.setInterval(1000);
     connect(&m_combo, &QTimer::timeout, this, &Vault::panic);
+    // Round 17: how far sealing for a new lock is, a few times a second (sealProgress).
+    m_sealTick.setInterval(250);
+    connect(&m_sealTick, &QTimer::timeout, this, &Vault::sealProgressChanged);
     // The controller: main.cpp makes it before the vault, as a child of the app.
     if (auto *pad = qApp ? qApp->findChild<Gamepad *>(QString(), Qt::FindDirectChildrenOnly) : nullptr) {
         connect(pad, &Gamepad::pressed, this, [this](const QString &b) { button(b, true); });
@@ -405,6 +410,17 @@ Vault::~Vault()
     // An unlock still working out the key posts its answer here: it is waited for (a second or two at most).
     if (m_unlockThread)
         m_unlockThread->wait();
+    // Round 17: sealing for a new lock stops (the old folder and its key stay as they were); what was saved meanwhile
+    // is written with the key still in use, before the saving thread finishes.
+    if (m_sealThread) {
+        m_sealStop->store(true);
+        m_sealThread->wait();
+    }
+    if (m_sealing) {
+        m_sealing = false;
+        if (!m_key.isEmpty() && !m_restarting)
+            flushHeld();
+    }
     // Everything asked of the saving thread is written before Huginn ends; one stuck on a file for half a minute is
     // left behind rather than waited on forever (destroying a running thread would end Huginn badly).
     if (m_saves->finish(30000))
@@ -454,7 +470,9 @@ bool Vault::turnOffLock(const QString &secret)
         return false;
     m_weak = false;
     m_screenLocked = false;
+    m_grantFor.clear();
     Q_EMIT changed();
+    Q_EMIT lockChanged();
     return true;
 }
 
@@ -666,33 +684,28 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     // The lock was off: the data key sat unprotected in vault.key, so a copy of it may be out there. A new one, and
     // every file sealed again with it, before the new lock guards it.
     const bool wasOff = !first && exists() && !hasLock();
-    if (wasOff && m_busy)
+    if (m_sealing)
+        return false;   // already sealing (LockPanel shows how far)
+    if (wasOff && m_busy) {
+        m_secretError = QStringLiteral("A backup is being made. Set the lock once it's done.");
         return false;   // a backup is reading the files with the old key
+    }
     if (first) {
         m_key = random(32);
     } else if (wasOff) {
-        // The new lock's vault.key is made first and goes in with the files sealed with the new key, in one swap
-        // (replaceAll): cut off anywhere, the next start finds either the old folder with its open key, or the new one
-        // with its lock (finishSwap), never files sealed with a key vault.key doesn't hold.
-        const QByteArray fresh = random(32);
-        const QByteArray blob = lockBlob(secret, pattern, fresh);
-        if (blob.isEmpty())
+        // Round 17: everything is sealed again one file at a time on a thread of its own (startSeal), so the window
+        // never freezes and the photos are never all in memory at once. setSecret answers false; sealing says it's
+        // under way and secretFinished() how it ended.
+        // Minor (round 17): a save still waiting or being retried would land in the new folder sealed with the old
+        // key. Everything sealed with the old key must be on disk first, or nothing starts.
+        if (!drainSaves(30000)) {
+            m_secretError = QStringLiteral("Huginn is still saving. Try again in a moment.");
             return false;
-        drainSaves(30000);   // everything sealed with the old key is on disk before it is sealed again
-        Files files = collect(m_key, dataDir());
-        QString error;
-        const bool swapped = replaceAll(fresh, dataDir(), files, &error, blob);
-        for (auto &e : files)
-            e.second.fill(0);
-        if (!swapped) {
-            CrashLog::note(QStringLiteral("vault: setting a lock didn't swap: %1").arg(error));
-            m_secretError = error;   // round 16: LockPanel says why
-            return false;   // what was there is as it was (or is finished at the next start)
         }
-        m_key.fill(0);
-        m_key = fresh;
+        startSeal(secret, pattern);
+        return false;
     }
-    if (!wasOff && !writeLock(secret, pattern)) {
+    if (!writeLock(secret, pattern)) {
         if (first)
             m_key.clear();
         return false;
@@ -700,9 +713,63 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     m_weak = false;
     m_screenLocked = false;
     m_lockNeeded = false;   // the new lock is set
+    m_grantFor.clear();
     Q_EMIT changed();
+    Q_EMIT lockChanged();
     if (first)
         Q_EMIT opened();
+    return true;
+}
+
+QString Vault::sealProgress() const
+{
+    if (!m_sealing || !m_sealTotal)
+        return {};
+    const int total = m_sealTotal->load(), done = m_sealDone->load();
+    if (total <= 0)
+        return QStringLiteral("Getting ready to seal your chats...");
+    const QLocale l;
+    return QStringLiteral("Sealing %1 of %2 files. Keep Huginn open.").arg(l.toString(qMin(done, total)), l.toString(total));
+}
+
+bool Vault::confirmLock(const QString &secret, const QString &what)
+{
+    if (!hasLock())
+        return true;   // nothing to ask with
+    if (m_restarting || m_key.size() != 32 || m_screenLocked || waitSeconds() > 0)
+        return false;
+    QFile lock(keyFile());
+    if (!lock.open(QIODevice::ReadOnly))
+        return false;
+    bool ok = false;
+    QByteArray given = openLock(QJsonDocument::fromJson(lock.readAll()).object(), secret, &ok);
+    const bool same = ok && given == m_key;
+    given.fill(0);
+    if (!same) {
+        wrongTry();
+        Q_EMIT changed();
+        return false;
+    }
+    settings().setValue(QStringLiteral("vault/fails"), 0);
+    m_grantFor = what;
+    // Long enough to pick a file and type a backup password; used once.
+    m_grantUntil = QDeadlineTimer::current().deadline() + 10 * 60 * 1000;
+    return true;
+}
+
+bool Vault::lockConfirmed(const QString &what) const
+{
+    if (!hasLock())
+        return true;
+    return !m_screenLocked && m_grantFor == what && QDeadlineTimer::current().deadline() < m_grantUntil;
+}
+
+bool Vault::takeGrant(const QString &what)
+{
+    if (!lockConfirmed(what))
+        return false;
+    m_grantFor.clear();
+    m_grantUntil = 0;
     return true;
 }
 
@@ -769,6 +836,13 @@ void Vault::eraseAll()
 {
     // What waits to be saved would only bring files back: dropped (the one being written ends first).
     m_saves->dropAll(30000);
+    // Round 17: sealing for a new lock stops, and what it held goes too (finishSeal swaps nothing in).
+    if (m_sealStop)
+        m_sealStop->store(true);
+    for (auto it = m_held.begin(); it != m_held.end(); ++it)
+        it->data.fill(0);
+    m_held.clear();
+    m_grantFor.clear();
     QDir(dataDir()).removeRecursively();
     // A restore's folders left beside it (finishSwap) go too.
     QDir(System::dataDir() + QStringLiteral("/chat.restore")).removeRecursively();
@@ -837,6 +911,13 @@ bool Vault::write(const QString &name, const QByteArray &data) const
         qWarning("vault: not saving over a file that couldn't be read");
         return false;
     }
+    // Round 17: sealing for a new lock: held until it ends, then written with the key in use then.
+    if (m_sealing) {
+        Held h;
+        h.data = data;
+        m_held.insert(name, h);
+        return true;
+    }
     // A save of the same file still waiting on the saving thread goes first: a file's saves stay in order.
     m_saves->waitFor(name, 10000);
     QDir().mkpath(QFileInfo(path(name)).absolutePath());
@@ -856,6 +937,12 @@ void Vault::writeLater(const QString &name, std::function<QByteArray()> make) co
     // Loaded as empty because it couldn't be read: saving now would replace what is really there.
     if (m_unreadable.contains(name)) {
         qWarning("vault: not saving over a file that couldn't be read");
+        return;
+    }
+    if (m_sealing) {   // round 17: held until sealing for a new lock ends (write())
+        Held h;
+        h.make = std::move(make);
+        m_held.insert(name, h);
         return;
     }
     SaveQueue::Job job;
@@ -909,6 +996,15 @@ QByteArray Vault::read(const QString &name, ReadStatus *status) const
         if (m_unreadable.remove(name) && m_unreadable.isEmpty())
             QMetaObject::invokeMethod(const_cast<Vault *>(this), [v = const_cast<Vault *>(this)] { Q_EMIT v->changed(); }, Qt::QueuedConnection);
         return plain;
+    }
+    // Round 17: saved while sealing for a new lock, and not on disk yet.
+    if (m_sealing) {
+        const auto held = m_held.constFind(name);
+        if (held != m_held.constEnd()) {
+            if (status)
+                *status = held->removed ? ReadMissing : ReadOk;
+            return held->removed ? QByteArray() : held->make ? held->make() : held->data;
+        }
     }
     // A save of it still on the saving thread is written first, so what is read is what was last saved.
     m_saves->waitFor(name, 10000);
@@ -998,6 +1094,12 @@ std::function<QByteArray(const QString &)> Vault::anyThreadReader() const
 
 void Vault::remove(const QString &name) const
 {
+    if (m_sealing) {   // round 17: the old folder stays as it is until sealing ends; removed then
+        Held h;
+        h.removed = true;
+        m_held.insert(name, h);
+        return;
+    }
     m_saves->waitFor(name, 10000);   // a save of it still waiting never brings it back
     QFile::remove(path(name));
 }
@@ -1232,14 +1334,24 @@ void Vault::restartHuginn(const QString &ifNot)
     Q_EMIT notice(ifNot);
 }
 
-Vault::Files Vault::everything() const
+Vault::Files Vault::everything(QString *why) const
 {
-    if (m_key.isEmpty())
+    if (m_key.isEmpty() || m_sealing)
         return {};
     if (beforeBackup)
         beforeBackup();
     drainSaves(30000);
-    Files files = collect(m_key, dataDir());
+    QStringList unreadable;
+    Files files = collect(m_key, dataDir(), &unreadable);
+    // Round 17: a file held by another program just now would be left behind (and erased with this device): stop.
+    if (!unreadable.isEmpty()) {
+        for (auto &e : files)
+            e.second.fill(0);
+        if (why)
+            *why = QStringLiteral("Huginn couldn't read %1 just now, so nothing moved. Another program, like antivirus or a backup tool, may be "
+                                  "using it. Try again in a moment.").arg(fileWords(unreadable.first()));
+        return {};
+    }
     files.emplace_back(kSettingsEntry, settingsBlob());
     return files;
 }
@@ -1249,6 +1361,22 @@ bool Vault::takeEverything(const Files &files, QString *error)
     if (m_key.isEmpty()) {
         *error = QStringLiteral("Open Chat and unlock it first.");
         return false;
+    }
+    if (m_sealing) {
+        *error = QStringLiteral("Huginn is sealing your chats for the new lock. Try again once it's done.");
+        return false;
+    }
+    // Round 17 (security m6): chats already here are kept first, as a restore keeps them, so a mistaken Move here
+    // never loses this device's own account.
+    drainSaves(30000);
+    if (QFileInfo::exists(dataDir() + QStringLiteral("/contacts.json")) || QFileInfo::exists(dataDir() + QStringLiteral("/chats.json"))
+        || QFileInfo::exists(dataDir() + QStringLiteral("/groups.json"))) {
+        const QString kept = keepCopy(dataDir());
+        if (kept.isEmpty()) {
+            *error = QStringLiteral("Couldn't keep a copy of what's here, so nothing changed. Is the disk full?");
+            return false;
+        }
+        CrashLog::note(QStringLiteral("vault: chats here before a move were kept as %1").arg(QFileInfo(kept).fileName()));
     }
     m_saves->dropAll(30000);   // the old chats' saves still waiting never land on the new files
     if (!replaceAll(m_key, dataDir(), files, error))
@@ -1479,7 +1607,41 @@ QString Vault::keepCopy(const QString &dir)
     return kept;
 }
 
-Vault::Files Vault::collect(const QByteArray &key, const QString &dir)
+namespace
+{
+// A file's bytes, with a few short tries (another program, like antivirus, may hold it for a moment). False when it
+// still couldn't be read.
+bool readTrying(const QString &file, QByteArray *out)
+{
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        QFile f(file);
+        if (f.open(QIODevice::ReadOnly)) {
+            *out = f.readAll();
+            if (f.error() == QFileDevice::NoError)
+                return true;
+        }
+        QThread::msleep(100 * (attempt + 1));
+    }
+    return false;
+}
+}
+
+QString Vault::fileWords(const QString &name)
+{
+    if (name == QLatin1String("chats.json") || name == QLatin1String("gchats.json"))
+        return QStringLiteral("your chat list");
+    if (name == QLatin1String("contacts.json"))
+        return QStringLiteral("your contacts");
+    if (name == QLatin1String("groups.json"))
+        return QStringLiteral("your groups");
+    if (name == QLatin1String("secrets.json") || name.startsWith(QLatin1String("ratchet/")) || name.endsWith(QLatin1String("keys.json")))
+        return QStringLiteral("your keys");
+    if (isMedia(name))
+        return QStringLiteral("a photo or video");
+    return QStringLiteral("one of its files");
+}
+
+Vault::Files Vault::collect(const QByteArray &key, const QString &dir, QStringList *unreadable, QStringList *damaged)
 {
     Files out;
     const QDir base(dir);
@@ -1489,16 +1651,25 @@ Vault::Files Vault::collect(const QByteArray &key, const QString &dir)
         const QString name = base.relativeFilePath(full);
         if (name == QLatin1String("vault.key") || !safeName(name))
             continue;
-        QFile f(full);
-        if (!f.open(QIODevice::ReadOnly))
+        QByteArray b;
+        if (!readTrying(full, &b)) {
+            // Round 17: never left out without a word (the caller stops; nothing is changed or deleted).
+            CrashLog::note(QStringLiteral("vault: a file couldn't be read just now: ") + kindOf(name));
+            if (unreadable)
+                unreadable->append(name);
             continue;
-        const QByteArray b = f.readAll();
+        }
         if (!b.startsWith(kMagic))
-            continue;   // not ours (a half-written temp file): leave it out
+            continue;   // not sealed, so not one of Huginn's saved files (a half-written temp file, a swap's mark)
         bool ok = false;
         const QByteArray plain = open(key, b.mid(kMagic.size()), &ok);
-        if (ok)
+        if (ok) {
             out.emplace_back(name, plain);
+        } else {
+            CrashLog::note(QStringLiteral("vault: a saved file doesn't open: ") + kindOf(name));
+            if (damaged)
+                damaged->append(name);
+        }
     }
     std::sort(out.begin(), out.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
     return out;
@@ -1608,6 +1779,18 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
         if (!done.open(QIODevice::WriteOnly) || done.write("1") != 1 || !done.flush())
             return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
     }
+    return swapIn(clean, QStringLiteral("restore"), error);
+}
+
+bool Vault::swapIn(const QString &dir, const QString &what, QString *error)
+{
+    const QString clean = QDir::cleanPath(dir);
+    const QString stage = clean + QStringLiteral(".restore"), old = clean + QStringLiteral(".old");
+    auto failed = [&](const QString &why) {
+        QDir(stage).removeRecursively();
+        *error = why;
+        return false;
+    };
     // Swap whole folders (renames on the same disk): the old one aside, the new one in, and only then the old one goes.
     // Cut off anywhere, the next start finishes or undoes it (finishSwap). Nothing in Huginn makes a "chat" folder
     // meanwhile (s_swap); one something else made (it has no vault.key) is cleared away, never swapped in over.
@@ -1628,7 +1811,8 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
         if (hadDir && strayChat(clean))
             QDir(clean).removeRecursively();
         if (hadDir && !renameDir(old, clean)) {
-            *error = QStringLiteral("The restore couldn't finish. Close Huginn and open it again to finish it.");
+            *error = what == QLatin1String("lock") ? QStringLiteral("Setting the lock couldn't finish. Close Huginn and open it again to finish it.")
+                                                    : QStringLiteral("The restore couldn't finish. Close Huginn and open it again to finish it.");
             return false;
         }
         return failed(QStringLiteral("Another program is using Huginn's chat folder, so nothing changed. Close it and try again."));
@@ -1647,6 +1831,181 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
     } else
         CrashLog::note(QStringLiteral("vault: the folder a swap put aside couldn't be deleted yet; it goes at the next start"));
     return true;
+}
+
+// Round 17: Set a lock after it was off. Every file is read, opened with the old key, sealed with a new one and written
+// into the stage one at a time on this thread (never the whole folder in memory), after checking there is room for the
+// second copy. Any file that can't be read stops it, and nothing changes. Only the two renames run on the window's
+// thread (finishSeal, under s_swap), as a restore's do; cut off anywhere, the next start finishes or undoes it.
+void Vault::startSeal(const QString &secret, bool pattern)
+{
+    const QString dir = QDir::cleanPath(dataDir());
+    const QByteArray oldKey = m_key;
+    m_sealDone = std::make_shared<std::atomic<int>>(0);
+    m_sealTotal = std::make_shared<std::atomic<int>>(0);
+    m_sealStop = std::make_shared<std::atomic<bool>>(false);
+    const auto done = m_sealDone, total = m_sealTotal;
+    const auto stop = m_sealStop;
+    m_sealing = true;
+    m_secretError.clear();
+    Q_EMIT changed();
+    Q_EMIT sealProgressChanged();
+    m_sealTick.start();
+    QThread *t = QThread::create([this, dir, oldKey, secret, pattern, done, total, stop] {
+        Busy::ThreadScope busy("sealing thread: sealing every file again for a new lock");
+        const QString stage = dir + QStringLiteral(".restore"), old = dir + QStringLiteral(".old");
+        QByteArray fresh = random(32);
+        QString error;
+        const auto fail = [&](const QString &why) {
+            QDir(stage).removeRecursively();
+            error = why;
+            return false;
+        };
+        const auto run = [&]() -> bool {
+            QStringList names;
+            qint64 bytes = 0;
+            {
+                const QDir base(dir);
+                QDirIterator it(dir, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+                while (it.hasNext()) {
+                    const QString full = it.next();
+                    const QString name = base.relativeFilePath(full);
+                    if (name == QLatin1String("vault.key") || name == kComplete || !safeName(name))
+                        continue;
+                    names << name;
+                    bytes += it.fileInfo().size();
+                }
+            }
+            total->store(int(names.size()));
+            // Room for a second copy for a moment (and a little more): said before anything is written.
+            QStorageInfo disk(QFileInfo(dir).absolutePath());
+            disk.refresh();
+            const qint64 need = bytes + (qint64(64) << 20);
+            if (disk.isValid() && disk.bytesAvailable() >= 0 && disk.bytesAvailable() < need)
+                return fail(QStringLiteral("Setting a lock needs about %1 free on this drive for a moment, while your chats are sealed again. "
+                                           "Free up space, then try again. Nothing changed.")
+                                .arg(QLocale().formattedDataSize(need)));
+            const QByteArray blob = lockBlob(secret, pattern, fresh);
+            if (blob.isEmpty())
+                return fail(QStringLiteral("Couldn't make the lock on this computer. Nothing changed."));
+            QString why;
+            if (!clearOld(old, nullptr, &why))
+                return fail(why);
+            QDir(stage).removeRecursively();
+            for (const QString &name : std::as_const(names)) {
+                if (stop->load())
+                    return fail(QStringLiteral("Stopped. Nothing changed."));
+                const QString from = dir + QLatin1Char('/') + name;
+                QByteArray b;
+                if (!QFileInfo::exists(from)) {
+                    done->fetch_add(1);
+                    continue;   // gone since the list was made (only Huginn's own tidying does that)
+                }
+                if (!readTrying(from, &b))
+                    return fail(QStringLiteral("Huginn couldn't read %1 just now, so nothing changed. Another program, like antivirus or a backup "
+                                               "tool, may be using it. Try again in a moment.")
+                                    .arg(fileWords(name)));
+                QByteArray out;
+                bool opened = false;
+                if (b.startsWith(kMagic)) {
+                    QByteArray plain = open(oldKey, b.mid(kMagic.size()), &opened);
+                    if (opened)
+                        out = kMagic + seal(fresh, plain);
+                    plain.fill(0);
+                }
+                // Never dropped: a file that isn't sealed (not one of Huginn's saved files) or doesn't open (damaged: it
+                // didn't open before either) goes across as it is.
+                if (!opened) {
+                    CrashLog::note(QStringLiteral("vault: a file was carried across a new lock as it was: ") + kindOf(name));
+                    out = b;
+                }
+                b.fill(0);
+                const QString target = stage + QLatin1Char('/') + name;
+                QDir().mkpath(QFileInfo(target).absolutePath());
+                QSaveFile f(target);
+                if (!f.open(QIODevice::WriteOnly) || f.write(out) != out.size() || !f.commit())
+                    return fail(QStringLiteral("Couldn't write your chats sealed with the new lock, so nothing changed. Is the disk full?"));
+                done->fetch_add(1);
+            }
+            QDir().mkpath(stage);
+            const QString stagedKey = stage + QStringLiteral("/vault.key");
+            const QFileDevice::Permissions owner = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+            QSaveFile k(stagedKey);
+            if (!k.open(QIODevice::WriteOnly))
+                return fail(QStringLiteral("Couldn't write the new lock, so nothing changed. Is the disk full?"));
+            k.setPermissions(owner);
+            if (k.write(blob) != blob.size() || !k.commit())
+                return fail(QStringLiteral("Couldn't write the new lock, so nothing changed. Is the disk full?"));
+            QFile::setPermissions(stagedKey, owner);
+            QFile mark(stage + QLatin1Char('/') + kComplete);
+            if (!mark.open(QIODevice::WriteOnly) || mark.write("1") != 1 || !mark.flush())
+                return fail(QStringLiteral("Couldn't write the new lock, so nothing changed. Is the disk full?"));
+            return true;
+        };
+        const bool ok = run();
+        QMetaObject::invokeMethod(this, [this, ok, error, fresh] { finishSeal(ok, error, fresh); }, Qt::QueuedConnection);
+        fresh.fill(0);
+    });
+    t->setObjectName(QStringLiteral("huginn-sealing"));
+    connect(t, &QThread::finished, t, &QObject::deleteLater);
+    m_sealThread = t;
+    t->start();
+}
+
+void Vault::finishSeal(bool ok, const QString &error, QByteArray fresh)
+{
+    m_sealTick.stop();
+    QString why = error;
+    const QString dir = System::dataDir() + QStringLiteral("/chat");
+    const bool stopped = (m_sealStop && m_sealStop->load()) || m_restarting || m_key.isEmpty();
+    if (ok && !stopped) {
+        ok = swapIn(dir, QStringLiteral("lock"), &why);
+    } else {
+        if (ok)
+            why = QStringLiteral("Stopped. Nothing changed.");
+        ok = false;
+        QDir(QDir::cleanPath(dir) + QStringLiteral(".restore")).removeRecursively();
+    }
+    if (ok) {
+        m_key.fill(0);
+        m_key = fresh;
+        m_key.detach();
+        m_weak = false;
+        m_screenLocked = false;
+        m_lockNeeded = false;
+        m_grantFor.clear();
+    } else {
+        CrashLog::note(QStringLiteral("vault: setting a lock didn't finish: %1").arg(why));
+        m_secretError = why;   // LockPanel says why
+    }
+    fresh.fill(0);
+    m_sealing = false;
+    // What was saved meanwhile goes to disk now, sealed with the key in use (the new one when it worked).
+    if (!m_key.isEmpty())
+        flushHeld();
+    m_held.clear();
+    Q_EMIT changed();
+    Q_EMIT sealProgressChanged();
+    if (ok)
+        Q_EMIT lockChanged();
+    Q_EMIT secretFinished(ok, ok ? QString() : why);
+}
+
+void Vault::flushHeld()
+{
+    QHash<QString, Held> held;
+    held.swap(m_held);
+    for (auto it = held.begin(); it != held.end(); ++it) {
+        if (it->removed) {
+            remove(it.key());
+        } else if (it->make) {
+            writeLater(it.key(), std::move(it->make));
+        } else {
+            if (!write(it.key(), it->data))
+                Q_EMIT saveLost(it.key());
+            it->data.fill(0);
+        }
+    }
 }
 
 QString Vault::finishSwap(const QString &dir)
@@ -1768,6 +2127,15 @@ void Vault::backupTo(const QString &path, const QString &password, bool withFile
         Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("The backup password needs at least %1 characters.").arg(kMinBackupPassword));
         return;
     }
+    if (m_sealing) {
+        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Huginn is sealing your chats for the new lock. Back up once it's done."));
+        return;
+    }
+    // Round 17 (B1): only after the current lock was given again (Settings › Back up asks). Used up once it's saved.
+    if (!lockConfirmed(QStringLiteral("backup"))) {
+        Q_EMIT done(QStringLiteral("backup"), false, QStringLiteral("Confirm your lock first: close this, then Back up again."));
+        return;
+    }
     if (beforeBackup)
         beforeBackup();
     drainSaves(30000);   // the backup reads the files from disk
@@ -1783,11 +2151,22 @@ void Vault::backupTo(const QString &path, const QString &password, bool withFile
     auto result = std::make_shared<QString>();
     auto good = std::make_shared<bool>(false);
     auto size = std::make_shared<qint64>(0);
+    auto skipped = std::make_shared<int>(0);
     m_busy = true;
     m_lastBackup.clear();
     Q_EMIT changed();
     QThread *t = QThread::create([=] {
-        Files all = collect(key, dir);
+        QStringList unreadable, damaged;
+        Files all = collect(key, dir, &unreadable, &damaged);
+        // Round 17: a file held by another program just now is never left out without a word: nothing is saved.
+        if (!unreadable.isEmpty()) {
+            for (auto &e : all)
+                e.second.fill(0);
+            *result = QStringLiteral("Huginn couldn't read %1 just now, so no backup was saved. Another program, like antivirus or a backup "
+                                     "tool, may be using it. Try again in a moment.").arg(fileWords(unreadable.first()));
+            return;
+        }
+        *skipped = int(damaged.size());
         Files files;
         for (auto &e : all)
             if (e.first != QLatin1String("move-out.bin") && (withFiles || !isMedia(e.first)))
@@ -1806,7 +2185,13 @@ void Vault::backupTo(const QString &path, const QString &password, bool withFile
         QDir().mkpath(QFileInfo(path).absolutePath());
         QSaveFile f(path);
         if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) {
-            *result = QStringLiteral("Couldn't save it there. Is the disk full, or the folder read-only?");
+            // Round 17: Windows' Controlled folder access refuses unsigned programs in Documents, Desktop and Pictures.
+            const bool denied = f.error() == QFileDevice::OpenError || f.error() == QFileDevice::PermissionsError;
+            *result = denied && Portable::controlledFolder(path)
+                          ? QStringLiteral("Windows didn't let Huginn save there. Controlled folder access (Windows Security › Virus & threat "
+                                           "protection › Ransomware protection) protects that folder. Save to Downloads or a USB drive instead.")
+                          : denied ? QStringLiteral("Huginn isn't allowed to save there. Pick another folder, like Downloads or a USB drive.")
+                                   : QStringLiteral("Couldn't save it there. Is the disk full, or the folder read-only?");
             return;
         }
         *size = bytes.size();
@@ -1814,17 +2199,25 @@ void Vault::backupTo(const QString &path, const QString &password, bool withFile
     });
     t->setObjectName(QStringLiteral("huginn-backup"));
     QPointer<Vault> self(this);
-    connect(t, &QThread::finished, this, [self, t, result, good, size, path, withFiles] {
+    connect(t, &QThread::finished, this, [self, t, result, good, size, skipped, path, withFiles] {
         t->deleteLater();
         if (!self)
             return;
+        if (*good) {
+            self->m_grantFor.clear();   // round 17: the lock given for it is used up
+            self->m_grantUntil = 0;
+        }
         if (*good)
             self->m_lastBackup = {{QStringLiteral("path"), QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath())},
                                   {QStringLiteral("folder"), QDir::toNativeSeparators(QFileInfo(path).absolutePath())},
                                   {QStringLiteral("size"), double(*size)}, {QStringLiteral("files"), withFiles}};
         self->m_busy = false;
         Q_EMIT self->changed();
-        Q_EMIT self->done(QStringLiteral("backup"), *good, *good ? QStringLiteral("Backup saved.") : *result);
+        const QString saved = *skipped > 0 ? QStringLiteral("Backup saved. %1 damaged %2 couldn't be opened, so %3 left out.")
+                                                 .arg(*skipped).arg(*skipped == 1 ? QStringLiteral("file") : QStringLiteral("files"),
+                                                                    *skipped == 1 ? QStringLiteral("it was") : QStringLiteral("they were"))
+                                           : QStringLiteral("Backup saved.");
+        Q_EMIT self->done(QStringLiteral("backup"), *good, *good ? saved : *result);
     });
     t->start();
 }
@@ -1833,6 +2226,10 @@ void Vault::openBackup(const QString &file, const QString &password)
 {
     if (m_busy)
         return;
+    if (m_sealing) {
+        Q_EMIT done(QStringLiteral("open"), false, QStringLiteral("Huginn is sealing your chats for the new lock. Try again once it's done."));
+        return;
+    }
     forgetOpened();
     // First setup can restore before there is a lock, and the lock screen's "Forgot it?" behind one (the backup has its
     // own password; nothing here is read). Otherwise Huginn must be open.
@@ -1896,6 +2293,15 @@ void Vault::restoreOpened()
     }
     if (locked() || screenLocked()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Unlock Huginn first."));
+        return;
+    }
+    if (m_sealing) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Huginn is sealing your chats for the new lock. Restore once it's done."));
+        return;
+    }
+    // Round 17 (security m6): replacing this account needs the current lock given again (Settings › Restore asks).
+    if (!takeGrant(QStringLiteral("restore"))) {
+        Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Confirm your lock first: close this, then Restore again."));
         return;
     }
     QString why;
@@ -2484,10 +2890,75 @@ bool Vault::stabilitySelfTest()
     v.remove(name);
     v.remove(fresh);
 
+    // Round 17 (B1): Back up, Restore, Move and linking take a grant only the current lock gives, once, for that one thing.
+    const QString secret = QStringLiteral("stability self-test only");
+    if (v.hasLock()) {
+        const bool none = !v.lockConfirmed(QStringLiteral("backup")) && !v.takeGrant(QStringLiteral("backup"));
+        const bool wrong = !v.confirmLock(QStringLiteral("not it at all"), QStringLiteral("backup")) && !v.lockConfirmed(QStringLiteral("backup"));
+        const bool right = v.confirmLock(secret, QStringLiteral("backup")) && v.lockConfirmed(QStringLiteral("backup"))
+                           && !v.lockConfirmed(QStringLiteral("link")) && !v.takeGrant(QStringLiteral("moveaway"));
+        const bool once = v.takeGrant(QStringLiteral("backup")) && !v.takeGrant(QStringLiteral("backup"));
+        check("a backup, move or link needs the current lock given again, once", none && wrong && right && once);
+    }
+
+    // Round 17: setting a lock after it was off seals every file again on its own thread, with what is saved meanwhile
+    // held and written after; nothing is left behind, and every file opens with the new key.
+    if (v.hasLock() && v.turnOffLock(secret)) {
+        const QString a = QStringLiteral("selftest-chats.json"), p = QStringLiteral("photos/selftest-photo");
+        const QByteArray big(300000, 'p');
+        v.write(a, QByteArrayLiteral("{\"a\":1}"));
+        v.write(p, big);
+        const QByteArray before = v.m_key;
+        bool finished = false, ok = false;
+        QEventLoop loop;
+        QObject::connect(&v, &Vault::secretFinished, &loop, [&](bool good, const QString &) {
+            finished = true;
+            ok = good;
+            loop.quit();
+        });
+        const bool started = !v.setSecret(secret, false) && v.sealing();
+        // Saved while it seals: held, read back as saved, and written after.
+        const bool held = v.write(QStringLiteral("selftest-meanwhile.json"), QByteArrayLiteral("[1]"))
+                          && v.read(QStringLiteral("selftest-meanwhile.json")) == QByteArrayLiteral("[1]");
+        if (started)
+            QTimer::singleShot(60000, &loop, &QEventLoop::quit);
+        if (started && !finished)
+            loop.exec();
+        check("setting a lock after it was off seals again in the background", started && held && finished && ok && !v.sealing() && v.hasLock());
+        check("every file opens with the new key, the one saved meanwhile too",
+              v.m_key != before && v.read(a) == QByteArrayLiteral("{\"a\":1}") && v.read(p) == big
+                  && v.read(QStringLiteral("selftest-meanwhile.json")) == QByteArrayLiteral("[1]"));
+        v.remove(a);
+        v.remove(p);
+        v.remove(QStringLiteral("selftest-meanwhile.json"));
+    }
+
+    // Round 17: collect() never leaves a file out without a word: a damaged one is named.
+    {
+        QTemporaryDir tmp;
+        const QByteArray key(32, '\x33');
+        const QString dir = tmp.path() + QStringLiteral("/chat");
+        QDir().mkpath(dir);
+        QFile good(dir + QStringLiteral("/good.json")), bad(dir + QStringLiteral("/bad.json"));
+        if (good.open(QIODevice::WriteOnly))
+            good.write(kMagic + seal(key, QByteArrayLiteral("1")));
+        good.close();
+        if (bad.open(QIODevice::WriteOnly))
+            bad.write(kMagic + QByteArrayLiteral("not sealed with this key, long enough to look like it"));
+        bad.close();
+        QStringList unreadable, damaged;
+        const Files got = collect(key, dir, &unreadable, &damaged);
+        check("a file that doesn't open is named, never dropped silently",
+              got.size() == 1 && got.front().first == QLatin1String("good.json") && damaged == QStringList{QStringLiteral("bad.json")} && unreadable.isEmpty());
+    }
+
     // Locking: only when asked (Lock now, the panic lock, Lock and close).
     check("not locked on its own", !v.screenLocked());
+    if (v.hasLock())
+        v.confirmLock(secret, QStringLiteral("link"));
     v.lockScreen();
     check("locks when asked", v.screenLocked() == v.hasLock());
+    check("locking drops a grant not yet used", !v.hasLock() || !v.lockConfirmed(QStringLiteral("link")));
     return all;
 }
 

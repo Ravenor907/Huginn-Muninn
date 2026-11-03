@@ -39,8 +39,8 @@ Item {
                 textFormat: Text.PlainText
                 id: glyph
                 anchors.centerIn: parent
-                // A held pair, like "lb+up": LB ▲.
-                text: root.key.split("+").map(k => k === "up" ? "▲" : k === "down" ? "▼" : /^p[1-4]$/.test(k) ? k.toUpperCase() : Gamepad.glyph(k)).join(" ")
+                // A held pair, like "lb+up": LB ▲. Read with Gamepad.style, so it follows the pad in hand.
+                text: root.key.split("+").map(k => k === "up" ? "▲" : k === "down" ? "▼" : /^p[1-4]$/.test(k) ? k.toUpperCase() : (Gamepad.style, Gamepad.glyph(k))).join(" ")
                 color: root.tone.fg
                 font.family: Theme.body
                 font.pixelSize: Theme.fs(13)

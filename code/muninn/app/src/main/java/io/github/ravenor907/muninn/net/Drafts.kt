@@ -32,12 +32,35 @@ object Drafts {
         fun with(photo: ByteArray?, clip: ByteArray?, ms: Int) = Taken(mode, photo, clip, ms)
     }
     val camera = ConcurrentHashMap<String, Taken>()
+    /** Round 17: goes up when a photo or video finished after its camera screen went (a fold, a new window), so the new one shows it. */
+    val cameraRev = kotlinx.coroutines.flow.MutableStateFlow(0)
     @Volatile private var loaded = false
     @Volatile private var dirty = false
     private val lock = Any()
 
     /** A group channel's draft key. */
     fun groupKey(g: String, ch: String) = "g:$g/$ch"
+
+    /**
+     * Round 17: [key]'s message went (a long one asked "Send as N messages?" first): its draft is emptied and an open
+     * chat reads it again, even one made anew while the question was up (a fold, a keyboard), so the text can't go twice.
+     */
+    fun sent(key: String) {
+        put(key, Draft())
+        _revision.value++
+    }
+
+    /** Round 17: a linked phone's chat shown on this companion (its key follows), and the Nearby room. */
+    const val MIRROR = "mirror:"
+    const val NEARBY = "nearby"
+    fun mirrorKey(peer: String) = MIRROR + peer
+
+    /** The phone was unlinked: the drafts of its chats go. */
+    fun dropMirrors() {
+        mirrorsGone = true
+        if (map.keys.removeIf { it.startsWith(MIRROR) }) dirty = true
+    }
+    @Volatile private var mirrorsGone = false
 
     fun get(app: io.github.ravenor907.muninn.Muninn, key: String): Draft { load(app); return map[key] ?: Draft() }
 
@@ -70,11 +93,51 @@ object Drafts {
     }
 
     private fun takeRefused() {
+        var any = false
         for (k in refused.keys.toList()) {
             val t = refused.remove(k) ?: continue
             map[k] = withReply(map[k] ?: Draft(), t)
-            dirty = true
+            dirty = true; any = true
         }
+        if (any) _revision.value++
+    }
+
+    private val _revision = kotlinx.coroutines.flow.MutableStateFlow(0)
+    /**
+     * Round 17: goes up when text was added to a draft from outside its chat (a share, a refused notification reply), so
+     * a chat already open reads its draft again instead of writing its older text over it.
+     */
+    val revision: kotlinx.coroutines.flow.StateFlow<Int> = _revision
+
+    /**
+     * Text shared in from another app (Share › Muninn): added to the draft of the chat picked (a person's key, or "g:" +
+     * a group id for its main channel), for the person to read and send. False while the drafts can't be read (locked).
+     */
+    fun addShared(app: io.github.ravenor907.muninn.Muninn, chat: String, text: String): Boolean {
+        if (text.isBlank()) return false
+        load(app)
+        if (!loaded) return false
+        val k = replyKey(chat)
+        map[k] = withReply(map[k] ?: Draft(), text)
+        dirty = true
+        _revision.value++
+        save(app)
+        return true
+    }
+
+    /**
+     * What a share of text holds ([subject] and [text] as another app gave them): the text, with the subject (a page's
+     * title) on the line before it when the text doesn't already have it. "" for nothing usable.
+     */
+    fun sharedText(subject: CharSequence?, text: CharSequence?): String {
+        val t = text?.toString()?.trim().orEmpty()
+        val s = subject?.toString()?.trim().orEmpty().replace('\n', ' ')
+        val all = when {
+            t.isEmpty() -> s
+            s.isEmpty() || t.contains(s) -> t
+            else -> s + "\n" + t
+        }
+        return all.take(KEEP_MAX)
     }
 
     /**
@@ -92,7 +155,7 @@ object Drafts {
 
     /** The draft keys of [all] that belong to no chat or group still here ([chats]: chat keys and "g:" + group ids). */
     fun orphans(all: Set<String>, chats: Set<String>): Set<String> =
-        all.filterTo(HashSet()) { k -> (if (k.startsWith("g:")) k.substringBefore('/') else k) !in chats }
+        all.filterTo(HashSet()) { k -> !k.startsWith(MIRROR) && k != NEARBY && (if (k.startsWith("g:")) k.substringBefore('/') else k) !in chats }
 
     /** Drops the drafts of chats and groups no longer here ([chats] as in [orphans]); only once they were read. */
     fun prune(app: io.github.ravenor907.muninn.Muninn, chats: Set<String>) {
@@ -110,7 +173,8 @@ object Drafts {
         synchronized(lock) {
             if (loaded || app.vault.locked.value) return
             val saved = try { app.vault.read(File(app.filesDir, FILE)) } catch (_: Exception) { null }
-            decode(saved).forEach { (k, v) -> map.putIfAbsent(k, v) }
+            decode(saved).forEach { (k, v) -> if (!(mirrorsGone && k.startsWith(MIRROR))) map.putIfAbsent(k, v) }
+            if (mirrorsGone) dirty = true
             loaded = true
             takeRefused()
         }
@@ -126,6 +190,16 @@ object Drafts {
                 try { app.vault.write(File(app.filesDir, FILE), text) } catch (_: Exception) { dirty = true }
             }
         }.start()
+    }
+
+    /** Writes them now, on this thread (a panic lock, just before the key is wiped and the process ends). */
+    fun saveNow(app: io.github.ravenor907.muninn.Muninn) {
+        if (!loaded || !dirty) return
+        dirty = false
+        val text = encode(map.toMap())
+        synchronized(lock) {
+            try { app.vault.write(File(app.filesDir, FILE), text) } catch (_: Exception) { dirty = true }
+        }
     }
 
     fun encode(all: Map<String, Draft>): String {

@@ -390,7 +390,7 @@ Rectangle {
         if (LocalSend.busy) {
             if (b === "b") {
                 if (cancelArmed) { cancelArmed = false; cancelTimer.stop(); if (LocalSend.sending) LocalSend.cancelSend(); else LocalSend.cancelReceive() }
-                else { cancelArmed = true; cancelTimer.restart(); Ui.say((Ui.main && Ui.main.padInUse ? "Press B" : "Press Esc") + " again to cancel") }
+                else { cancelArmed = true; cancelTimer.restart(); Ui.say((Ui.main && Ui.main.padInUse ? "Press " + Gamepad.glyph("b") : "Press Esc") + " again to cancel") }
                 return true
             }
             return b !== "left"

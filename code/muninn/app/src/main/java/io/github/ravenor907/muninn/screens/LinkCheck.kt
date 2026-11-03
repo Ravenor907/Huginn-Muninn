@@ -92,8 +92,9 @@ object LinkUi {
     private const val OFFERED = "linkOffered"
 
     /** A tablet (sw600dp or more), not a TV. */
+    /** Round 17: the device's own size (the application's), not a split, pop-up or small DeX window's. */
     fun tablet(ctx: android.content.Context): Boolean =
-        ctx.resources.configuration.smallestScreenWidthDp >= ChatNav.TABLET_SW_DP && !io.github.ravenor907.muninn.tv.KidMode.isTv(ctx)
+        ctx.applicationContext.resources.configuration.smallestScreenWidthDp >= ChatNav.TABLET_SW_DP && !io.github.ravenor907.muninn.tv.KidMode.isTv(ctx)
 
     /** First open on a tablet with nothing linked: "Link your phone" comes up once, after the lock and the name. */
     fun offerFirst(app: Muninn): Boolean {

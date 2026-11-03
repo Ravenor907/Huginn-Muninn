@@ -24,16 +24,21 @@ class ReplyReceiver : BroadcastReceiver() {
         val nm = NotificationManagerCompat.from(context)
         // Checked again here: the lock may have come due (or Kids' TV mode come on) since the notification showed.
         if (text.isEmpty()) { nm.cancel(key.hashCode()); return }
-        // Not sent: say so in its place, so the reply doesn't look sent (nothing about the chat shows on it).
-        // Muninn may have just restarted for this: everything is running before it's checked (starting goes off the main thread now).
-        try { app.ensureStarted() } catch (_: Exception) {}
-        // Refused: the typed reply waits in the chat's box (Drafts), so nothing typed is lost.
-        if (!app.canReply()) { try { Drafts.keepReply(app, key, text) } catch (_: Exception) {}; notSent(context, key); return }
+        // Round 17: everything below runs off the main thread (starting Muninn with many chats on a slow phone took long
+        // enough to risk "not responding").
         val pending = goAsync()
         Thread {
-            try { app.chat.replyFromNotification(key, text) } catch (_: Exception) {}
-            nm.cancel(key.hashCode())
-            pending.finish()
+            try {
+                // Muninn may have just restarted for this: everything is running before it's checked.
+                try { app.ensureStarted() } catch (_: Exception) {}
+                // Refused: the typed reply waits in the chat's box (Drafts), so nothing typed is lost. Not sent: said
+                // in its place, so the reply doesn't look sent (nothing about the chat shows on it).
+                if (!app.canReply()) { try { Drafts.keepReply(app, key, text) } catch (_: Exception) {}; notSent(context, key) }
+                else {
+                    try { app.chat.replyFromNotification(key, text) } catch (_: Exception) {}
+                    nm.cancel(key.hashCode())
+                }
+            } finally { pending.finish() }
         }.start()
     }
 

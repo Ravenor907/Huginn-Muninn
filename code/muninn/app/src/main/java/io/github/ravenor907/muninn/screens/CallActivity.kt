@@ -103,6 +103,21 @@ class CallActivity : ComponentActivity() {
 
     override fun onResume() { super.onResume(); keyguard = isLocked() }
 
+    // Round 17: on a Kids' TV a call is never live with nothing on screen (TvCallGuard): Home or another app ends it soon
+    // after, the TV turned off ends it, and the remote's search, mic and Assistant keys never leave the call screen.
+    override fun onStart() { super.onStart(); io.github.ravenor907.muninn.tv.TvCallGuard.shownNow() }
+
+    override fun onStop() { super.onStop(); io.github.ravenor907.muninn.tv.TvCallGuard.hidden(this) }
+
+    override fun onUserInteraction() { super.onUserInteraction(); io.github.ravenor907.muninn.tv.TvCallGuard.touched() }
+
+    private fun kidTv() = io.github.ravenor907.muninn.tv.TvMic.active && io.github.ravenor907.muninn.tv.KidMode.isTv(this)
+
+    override fun onSearchRequested(): Boolean = if (kidTv()) true else super.onSearchRequested()
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean =
+        if (kidTv() && io.github.ravenor907.muninn.tv.KidRules.isMicKey(keyCode)) true else super.onKeyDown(keyCode, event)
+
     override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); keyguard = isLocked() }
 
     /** Kids' TV: back to the show that was on when the call came (not to Muninn); else just closes. */

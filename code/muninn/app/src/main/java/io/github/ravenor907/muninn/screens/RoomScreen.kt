@@ -169,9 +169,13 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 Spacer(Modifier.height(16.dp))
                 // 2 across upright, 4 sideways, each at most 60% of the window high: every face fits on screen.
                 val tileConf = androidx.compose.ui.platform.LocalConfiguration.current
-                val tileW = RoomTiles.tileWidth(tileConf.screenWidthDp.toFloat(), tileConf.screenHeightDp.toFloat()).dp
-                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp),
-                    maxItemsInEachRow = RoomTiles.columns(tileConf.screenWidthDp.toFloat(), tileConf.screenHeightDp.toFloat())) {
+                val tileCols = RoomTiles.columns(tileConf.screenWidthDp.toFloat(), tileConf.screenHeightDp.toFloat())
+                // Round 17: sized from the width the row is really given (inside the padding and side insets).
+                androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val rowW = this.maxWidth
+                val tileW = RoomTiles.tileWidth(rowW.value, tileConf.screenHeightDp.toFloat(), tileCols).dp
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(RoomTiles.GAP.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = tileCols) {
                     if (vid.cameraOn) RoomSelfView(Modifier.width(tileW).aspectRatio(3f / 4f))
                     showing.forEach { p ->
                         val pic = vid.pics[p.key] ?: io.github.ravenor907.muninn.net.call.RoomVideo.Pic()
@@ -181,6 +185,7 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                             Text(if (hideNames) "?" else p.name, style = Type.small.copy(color = Palette.text), modifier = Modifier.align(Alignment.BottomStart).padding(6.dp))
                         }
                     }
+                }
                 }
                 Text("Video goes straight between phones, never through a server. Anyone who can't connect directly stays on voice.",
                     style = Type.small.copy(fontSize = 12.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))

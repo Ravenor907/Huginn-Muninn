@@ -112,7 +112,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
      */
     var keepPeers: ((String) -> Unit)? = null
     private val peers = ConcurrentHashMap<String, KnownPeer>()
-    private data class KnownPeer(val ip: String, val port: Int, val protocol: String, val seen: Long)
+    /** [fp]: the certificate that contact showed there (round 17): asked again only with it pinned, so nobody else gets anything. */
+    private data class KnownPeer(val ip: String, val port: Int, val protocol: String, val seen: Long, val fp: String = "")
 
     /** Our own server's port: the first free one from [SERVER_FIRST]. LocalSend's own app keeps 53317. */
     @Volatile var serverPort = SERVER_FIRST
@@ -325,8 +326,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (!running || !off() || wifiLevel == PowerLogic.Radio.OFF) return
         val fresh = System.currentTimeMillis() - 120_000
         for ((k, p) in peers.entries.toList()) {
+            // Round 17: only with the contact's own certificate pinned. Whoever has that address now (another network,
+            // another device) fails the handshake before this phone's certificate, hint or proof goes out. An address
+            // kept without one (an older version) is never asked; it's learned again once the contact is heard.
+            if (!LocalSendRules.mayAsk(p.protocol, p.fp)) continue
             if (found.values.any { it.chatKey == k && it.seen > fresh } || !asking(p.ip)) continue
-            pool.execute { register(p.ip, p.port, p.protocol, scan = false) }
+            pool.execute { register(p.ip, p.port, p.protocol, scan = false, expected = p.fp) }
         }
     }
 
@@ -337,7 +342,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
             val p = o.optJSONObject(k) ?: continue
             val ip = p.optString("ip")
             if (ip.isEmpty() || !isNeighbourText(ip)) continue
-            peers[k] = KnownPeer(ip, p.optInt("port", SERVER_FIRST), p.optString("protocol", "https"), p.optLong("seen"))
+            peers[k] = KnownPeer(ip, p.optInt("port", SERVER_FIRST), p.optString("protocol", "https"), p.optLong("seen"), p.optString("fp"))
         }
         askContacts()
     }
@@ -346,11 +351,12 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private fun keepPeer(key: String, d: Device) {
         if (isContact?.invoke(key) != true) return
         val old = peers[key]
-        if (old != null && old.ip == d.ip && old.port == d.port && old.protocol == d.protocol && d.seen - old.seen < 6 * 3_600_000L) return
-        peers[key] = KnownPeer(d.ip, d.port, d.protocol, d.seen)
+        val fp = if (d.protocol == "https") d.id else ""
+        if (old != null && old.ip == d.ip && old.port == d.port && old.protocol == d.protocol && Tls.same(old.fp, fp) && d.seen - old.seen < 6 * 3_600_000L) return
+        peers[key] = KnownPeer(d.ip, d.port, d.protocol, d.seen, fp)
         while (peers.size > MAX_PEERS) peers.entries.minByOrNull { it.value.seen }?.let { peers.remove(it.key) } ?: break
         val o = JSONObject()
-        peers.forEach { (k, p) -> o.put(k, JSONObject().put("ip", p.ip).put("port", p.port).put("protocol", p.protocol).put("seen", p.seen)) }
+        peers.forEach { (k, p) -> o.put(k, JSONObject().put("ip", p.ip).put("port", p.port).put("protocol", p.protocol).put("seen", p.seen).put("fp", p.fp)) }
         try { keepPeers?.invoke(o.toString()) } catch (_: Exception) {}
     }
 
@@ -414,7 +420,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 // A multicast message proves nothing: a device is only listed once its certificate answered (register).
                 if (!announce && known(ip, fp)) continue
                 // Nearby off: only a contact's own announcement is answered, straight to it (never on multicast).
-                if (off() && (!announce || contactIn(o) == null)) continue
+                // Round 17: and only when its chat key signed the certificate it names, so nobody can borrow a contact's hint.
+                if (off() && (!announce || contactIn(o)?.let { k -> Proof.routeOk(k, fp, o.optString("chatProof")) } != true)) continue
                 if (!asking(ip)) continue
                 pool.execute {
                     if (!register(ip, o.optInt("port", PORT), o.optString("protocol", "https"), scan = false, expected = fp) && announce && !silent()) {
@@ -432,7 +439,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
      * [expected]: the fingerprint the device announced; its certificate must match. Empty for a
      * scan, which can't know it yet: then the certificate it shows becomes its identity.
      */
-    private fun register(ip: String, port: Int, protocol: String, scan: Boolean, expected: String = ""): Boolean = try {
+    private fun register(ip: String, port: Int, protocol: String, scan: Boolean, expected: String = ""): Boolean = if (off() && !LocalSendRules.mayAsk(protocol, expected)) false else try {
         // Nearby off: only ever sent to a contact (their announcement or their last address), so it says who this is
         // (the hint, never the name) and shows the certificate the contact checks. A Kids' TV hidden from people
         // nearby only asks.
@@ -1110,4 +1117,13 @@ class LocalSend(private val context: Context, val identity: Identity) {
             else -> "$b bytes"
         }
     }
+}
+
+/** Round 17: what Nearby off may send, pure so it can be tested. */
+object LocalSendRules {
+    /**
+     * Nearby off: an address is asked (with this phone's certificate, hint and proof) only over HTTPS with the
+     * contact's certificate fingerprint pinned, so the handshake fails before anything goes to anyone else there.
+     */
+    fun mayAsk(protocol: String, fingerprint: String): Boolean = protocol == "https" && fingerprint.length >= 32
 }

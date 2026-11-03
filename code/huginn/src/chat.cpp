@@ -21,6 +21,8 @@
 #include "photos.h"
 #include "vault.h"
 #include "platform/scratch.h"
+#include "platform/crashlog.h"
+#include "schnorr.h"
 
 #include <QPointer>
 #include <QThreadPool>
@@ -217,14 +219,31 @@ void Chat::start()
     }
     m_startTries = 0;
     m_priv = QByteArray::fromBase64(secrets.value(QStringLiteral("chatPriv")).toString().toLatin1());
-    m_pub = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
-    // The public half is kept in settings only: a settings file that lost it (an upgrade that stopped partway) gets it
-    // back from the private half, never a chat run with an empty key.
-    if (m_pub.isEmpty() && !m_priv.isEmpty()) {
-        m_pub = ChatCrypto::publicFromPrivate(m_priv);
-        if (!m_pub.isEmpty()) {
-            m_settings.setValue(QStringLiteral("chat/pub"), m_pub.toBase64());
-            qWarning("chat: the public key was missing from settings; worked out again from the private key");
+    // Round 17 (M4): the public half in settings (a plain file, which a copied, damaged or swapped settings file can
+    // change) is only a copy: it is always worked out again from the sealed private half and put right when it differs,
+    // so hello, QR codes, invites and the safety emoji never carry a key that isn't this computer's.
+    {
+        const QByteArray stored = QByteArray::fromBase64(m_settings.value(QStringLiteral("chat/pub")).toByteArray());
+        const QByteArray derived = m_priv.isEmpty() ? QByteArray() : ChatCrypto::publicFromPrivate(m_priv);
+        if (derived.isEmpty()) {
+            // The sealed private half itself doesn't work: refused, never run on the copy in settings.
+            m_priv.fill(0);
+            m_priv.clear();
+            qWarning("chat: the chat key in the vault is damaged; not starting");
+            CrashLog::note(QStringLiteral("chat: the chat key in the vault doesn't work; chat not started"));
+            Q_EMIT notice(QStringLiteral("Huginn's chat key is damaged, so chats can't start. Nothing was changed. Restore a backup "
+                                         "(Settings › Devices and backup), or ask for help."));
+            return;
+        }
+        // The same key written another way (as another app wrote it, say) stays as it is: contacts know it by that.
+        if (ChatCrypto::samePublic(stored, derived)) {
+            m_pub = stored;
+        } else {
+            m_settings.setValue(QStringLiteral("chat/pub"), derived.toBase64());
+            qWarning("chat: the public key in settings didn't match the private key; put right");
+            if (!stored.isEmpty())
+                CrashLog::note(QStringLiteral("chat: the chat key's public half in settings didn't match its private half; put right"));
+            m_pub = derived;
         }
     }
     // Caps b1 and e1: my day keys and what contacts announced, read from the vault now it's open.
@@ -1127,7 +1146,16 @@ bool Chat::keySelfTest()
     const bool again = !kp.publicDer.isEmpty() && ChatCrypto::publicFromPrivate(kp.privateDer) == kp.publicDer
         && ChatCrypto::publicFromPrivate(QByteArray("not a key")).isEmpty();
     std::printf("a lost public chat key is worked out from the private one: %s\n", again ? "ok" : "FAILED");
-    return ok && again;
+    // Round 17 (M4): a swapped public half (another key pair's) never matches the private one, so start() puts it right;
+    // and the inbox address is always the one its secret makes.
+    const ChatCrypto::KeyPair other = ChatCrypto::newKeyPair();
+    const QByteArray nsec = Schnorr::newSecret();
+    const bool swapped = !ChatCrypto::samePublic(ChatCrypto::publicFromPrivate(kp.privateDer), other.publicDer)
+        && ChatCrypto::samePublic(ChatCrypto::publicFromPrivate(kp.privateDer), kp.publicDer)
+        && Schnorr::hex(Schnorr::publicKey(nsec)) == Schnorr::hex(Schnorr::publicKey(nsec)) && Schnorr::hex(Schnorr::publicKey(nsec)).size() == 64
+        && Schnorr::hex(Schnorr::publicKey(nsec)) != Schnorr::hex(Schnorr::publicKey(Schnorr::newSecret()));
+    std::printf("a swapped public chat key or inbox address is told from the real one: %s\n", swapped ? "ok" : "FAILED");
+    return ok && again && swapped;
 }
 
 QVariantList Chat::folders() const
@@ -1432,21 +1460,28 @@ void Chat::block(const QString &key, bool on)
         // Cap b1: they may hold my ring key, so a new one (and a new ring mailbox) goes to everyone else who may ring
         // this device. The old ring mailbox is still read for two days (main.cpp), then dropped. Cap n2: the nudge key
         // is made new with it and goes to the other contacts and group peers whose app says n2.
-        if (!was && m_ringKey) {
-            m_ringKey->renew();
-            if (m_nudgeKey)
-                m_nudgeKey->renew();
-            m_nostr->resubscribe();
-            const QString ringCap = QLatin1String(RingWire::kRingCap), nudgeCap = QLatin1String(RingWire::kRichNudgeCap);
-            for (const QString &k : m_contacts.keys())
-                if (k != key && !isBlocked(k) && (hasCap(k, ringCap) || hasCap(k, nudgeCap)))
-                    sendKeys(k, true);
-            for (const QString &k : m_gpeers.keys())
-                if (k != key && !isBlocked(k) && !isContact(k) && hasCap(k, nudgeCap))
-                    sendKeys(k, true);
-        }
+        if (!was)
+            renewRingKeys(key);
     }
     Q_EMIT changed();
+}
+
+bool Chat::renewRingKeys(const QString &except)
+{
+    if (!m_ringKey || !ready())
+        return false;
+    m_ringKey->renew();
+    if (m_nudgeKey)
+        m_nudgeKey->renew();
+    m_nostr->resubscribe();
+    const QString ringCap = QLatin1String(RingWire::kRingCap), nudgeCap = QLatin1String(RingWire::kRichNudgeCap);
+    for (const QString &k : m_contacts.keys())
+        if (k != except && !isBlocked(k) && (hasCap(k, ringCap) || hasCap(k, nudgeCap)))
+            sendKeys(k, true);
+    for (const QString &k : m_gpeers.keys())
+        if (k != except && !isBlocked(k) && !isContact(k) && hasCap(k, nudgeCap))
+            sendKeys(k, true);
+    return true;
 }
 
 void Chat::removeContact(const QString &key)
@@ -3103,6 +3138,19 @@ bool Chat::addPrivate(const QString &peer, const QVariantMap &m)
         if (str(v.toMap(), "id") == id)
             return false;
     l << m;
+    // Round 17 (Linux minor 7): a chat kept for good still holds only the newest 1,000 messages; the first time one goes
+    // from a chat, it says so (once per chat).
+    if (l.size() > 1000) {
+        QStringList told = m_settings.value(QStringLiteral("chat/capTold")).toStringList();
+        if (!told.contains(peer)) {
+            told << peer;
+            while (told.size() > 500)
+                told.removeFirst();
+            m_settings.setValue(QStringLiteral("chat/capTold"), told);
+            Q_EMIT notice(QStringLiteral("Huginn keeps the newest 1,000 messages in each chat, so the oldest ones in your chat with %1 now go.")
+                              .arg(nameOf(peer)));
+        }
+    }
     while (l.size() > 1000)
         l.removeFirst();
     saveSoon();   // once for a burst of messages (and at once when Huginn closes)
@@ -3602,7 +3650,7 @@ int Chat::receiveM1(const QString &room, const QString &fromKey, const QString &
             }
         } else if (!m.value(QStringLiteral("mine")).toBool() && str(m, "photo").isEmpty()
                    && RichWire::editWins(fromKey, fromKey, ts, m.value(QStringLiteral("edited")).toLongLong())) {
-            m.insert(QStringLiteral("text"), p.value(QStringLiteral("text")).toString().left(kMax));
+            m.insert(QStringLiteral("text"), GroupWire::clip(p.value(QStringLiteral("text")).toString(), kMax));
             m.insert(QStringLiteral("edited"), ts);
         }
     });

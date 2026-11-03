@@ -186,7 +186,8 @@ fun PatternPad(modifier: Modifier = Modifier, error: Boolean = false, enabled: B
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 fun center(i: Int) = Offset(size.width * ((i % 3) * 2 + 1) / 6f, size.height * ((i / 3) * 2 + 1) / 6f)
-                fun hit(p: Offset): Int? = (0..8).firstOrNull { (center(it) - p).getDistance() < size.width / 9f }
+                // Round 17: from the shorter side, so a pad squeezed in a short window never has touching circles.
+                fun hit(p: Offset): Int? = (0..8).firstOrNull { (center(it) - p).getDistance() < minOf(size.width, size.height) / 9f }
                 detectDragGestures(
                     onDragStart = { p -> drawing = false; dots.clear(); finger = p; hit(p)?.let { addDot(it) } },
                     onDrag = { change, _ -> finger = change.position; hit(change.position)?.let { addDot(it) } },

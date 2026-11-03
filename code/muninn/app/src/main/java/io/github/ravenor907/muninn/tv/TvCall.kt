@@ -117,7 +117,15 @@ fun TvCallScreen(@Suppress("UNUSED_PARAMETER") app: io.github.ravenor907.muninn.
             }
             if (hint && KidCallBack.of(call.phase) == KidCallBack.HINT)
                 Text(HANG_UP_HINT, style = tvText(24.sp, Palette.goldBright, FontWeight.SemiBold), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
+            // Round 17: half an hour with no key pressed (the TV may be off): any key, or OK on the button, keeps talking.
+            val still by TvCallGuard.still.collectAsState()
             val first = remember { FocusRequester() }
+            if (still && KidCallBack.endsHidden(call.phase)) {
+                Text(STILL_TALKING, style = tvText(30.sp, Palette.goldBright, FontWeight.SemiBold), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
+                val keep = remember { FocusRequester() }
+                Box(Modifier.padding(top = 12.dp).width(if (tv) 300.dp else 220.dp)) { BigButton("Keep talking", icon = "call", requester = keep) { TvCallGuard.touched() } }
+                LaunchedEffect(Unit) { delay(80); try { keep.requestFocus() } catch (_: Exception) {} }
+            }
             Row(Modifier.padding(top = if (showVideo) 20.dp else 36.dp), horizontalArrangement = Arrangement.spacedBy(if (tv) 20.dp else 12.dp)) {
                 when (call.phase) {
                     Phase.INCOMING -> {
@@ -159,6 +167,39 @@ enum class KidCallBack {
         const val OVER_TIMES = 8
         const val OVER_GAP_MS = 4_000L
 
+        /**
+         * Round 17: when the line shows (ms after the ring began), each one after the last has gone, spaced to what Android
+         * shows of an app's toasts from the background (3 in 20 s, 5 in 42 s, 6 in 68 s), so none is dropped, the last one
+         * still up as the 45 s ring ends.
+         */
+        val OVER_AT_MS = listOf(0L, 8_000L, 16_000L, 24_000L, 32_000L, 42_000L)
+
+        // ---- round 17: a call on a Kids' TV is never live with nothing on screen
+
+        /** Phases that end when the call screen is gone (Home, the Assistant, another app): calling out, or on. A ring stays. */
+        fun endsHidden(phase: Phase?): Boolean = phase != null && phase != Phase.INCOMING && phase != Phase.ENDED
+
+        /** The screen went off (the TV off, with HDMI-CEC): a ring is declined ("decline"), a call hung up ("hangup"), else "". */
+        fun screenOff(phase: Phase?): String = when {
+            phase == Phase.INCOMING -> "decline"
+            endsHidden(phase) -> "hangup"
+            else -> ""
+        }
+
+        /** How long a call goes on with its screen gone before it ends (opening Muninn again keeps it). */
+        const val HIDDEN_MS = 10_000L
+        /** No key pressed this long on a call: "Still talking?" (a TV turned off without HDMI-CEC can't tell Muninn). */
+        const val IDLE_MS = 30 * 60_000L
+        /** No answer to "Still talking?" this long: the call ends. */
+        const val STILL_MS = 60_000L
+
+        fun stillDue(lastKey: Long, now: Long): Boolean = now - lastKey >= IDLE_MS
+        fun stillOver(askedAt: Long, now: Long): Boolean = askedAt > 0L && now - askedAt >= STILL_MS
+
+        /** What the TV says the moment the call screen goes away mid-call. */
+        fun hiddenText(name: String): String =
+            "The call with ${if (name.isBlank()) "them" else name} ends in 10 seconds. Open Muninn to keep talking."
+
         /** Whether the line shows (again): the same call still rings, Muninn isn't on screen and may not draw over apps. */
         fun overDue(stillRinging: Boolean, visible: Boolean, overlay: Boolean): Boolean = stillRinging && !visible && !overlay
 
@@ -175,6 +216,9 @@ enum class KidCallBack {
 
 /** The words for Back during a call. */
 internal const val HANG_UP_HINT = "Press Hang up to end the call"
+
+/** Round 17: asked after half an hour with no key pressed on a call. */
+internal const val STILL_TALKING = "Still talking? The call ends in a minute unless you press a button."
 
 @Composable
 private fun status(c: CallManager.Ui): String {
@@ -240,6 +284,9 @@ object TvRing {
     private fun stop(c: Context) {
         player?.let { try { it.stop() } catch (_: Exception) {}; it.release() }
         player = null
+        // Round 17: a ring that ended with no call here (a group call's, or one that never came up) gives the sound back
+        // too, so the show isn't left paused and the next call starts clean.
+        if (!KidCallBack.live(CallManager.call.value?.phase)) TvCallFocus.release(c)
     }
 
     /** Once, on a Kids' TV: every new incoming call brings the call screen up. */
@@ -250,6 +297,8 @@ object TvRing {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         scope.launch {
             CallManager.call.collect { ui ->
+                // Round 17: a TV call is never live with nothing on screen (Home, the Assistant, the TV turned off).
+                TvCallGuard.onCall(app, ui)
                 if (TvMic.active) {
                     // The show playing pauses for any call (ringing, calling out, talking) and comes back after.
                     if (ui != null && ui.phase != Phase.ENDED) TvCallFocus.hold(app) else TvCallFocus.release(app)
@@ -264,16 +313,18 @@ object TvRing {
                     // Without "Show over other apps", Android 10 and newer keep the call screen from coming up over a show,
                     // and the TV has no notification shade. A plain text toast is the one thing Android still shows over
                     // another app: "Mom is calling. Open Muninn to answer.", again every few seconds while it rings.
+                    // Round 17: spaced so Android drops none, until the ring ends; never over the call screen itself.
                     val id = ui.callId
                     val text = KidCallBack.overText(ui.name)
                     scope.launch {
-                        repeat(KidCallBack.OVER_TIMES) {
+                        var at = 0L
+                        for (next in KidCallBack.OVER_AT_MS) {
+                            if (next > at) { delay(next - at); at = next }
                             val now = CallManager.call.value
-                            val visible = (app as? io.github.ravenor907.muninn.Muninn)?.visible == true
+                            val visible = (app as? io.github.ravenor907.muninn.Muninn)?.visible == true || TvCallGuard.shown
                             val overlay = try { android.provider.Settings.canDrawOverlays(app) } catch (_: Exception) { false }
                             if (!KidCallBack.overDue(now != null && now.callId == id && now.phase == Phase.INCOMING, visible, overlay)) return@launch
                             try { android.widget.Toast.makeText(app, text, android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
-                            delay(KidCallBack.OVER_GAP_MS)
                         }
                     }
                 }
@@ -327,8 +378,10 @@ object TvCallFocus {
         request = null
         val am = c.applicationContext.getSystemService(AudioManager::class.java) ?: return
         try { am.abandonAudioFocusRequest(r) } catch (_: Exception) {}
-        // What was playing comes back: by itself with the focus, or with Play if it's still paused a moment later.
-        if (wasPlaying) main.postDelayed({ if (!(try { am.isMusicActive } catch (e: Exception) { true })) key(am, android.view.KeyEvent.KEYCODE_MEDIA_PLAY) }, 900)
+        // What was playing comes back: by itself with the focus, or with Play if it's still paused a moment later. Round 17:
+        // Play only to what Muninn itself paused, with that show still in front (never to an app the kid opened since).
+        if (wasPlaying && pausedByKey && returnToShow && !TvCallGuard.left)
+            main.postDelayed({ if (!(try { am.isMusicActive } catch (e: Exception) { true })) key(am, android.view.KeyEvent.KEYCODE_MEDIA_PLAY) }, 900)
         pausedByKey = false; wasPlaying = false
         if (returnToShow) sendBackUntil = System.currentTimeMillis() + 4000
     }
@@ -344,6 +397,9 @@ object TvCallFocus {
     /** The call screen closes: behind whatever was on screen when the call came, else just closes. */
     fun leave(a: android.app.Activity) {
         if (returnToShow) try { a.moveTaskToBack(true) } catch (_: Exception) {}
+        // Round 17: the call screen has stepped back itself, so Muninn opened a moment later stays (a kid who wants to
+        // message Mom right after the call).
+        sendBackUntil = 0L
         a.finish()
     }
 

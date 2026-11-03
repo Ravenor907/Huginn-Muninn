@@ -11,6 +11,8 @@
 #include <QThread>
 #include <QTimer>
 #include <QVariant>
+#include <QStringList>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -67,12 +69,29 @@ public:
     Q_INVOKABLE bool setSecret(const QString &secret, bool pattern);
     // Why the last setSecret() didn't save, when there is something to tell (round 16: a folder in the way), else "".
     Q_INVOKABLE QString secretError() const { return m_secretError; }
+    // Round 17: setting a lock after it was off seals every file again, one at a time, on a thread of its own (with lots
+    // of photos that takes a while). setSecret() then answers false with sealing true; sealProgress says how far it is
+    // ("Sealing 1,240 of 3,900 files"), and secretFinished(ok, error) tells how it ended. Free space is checked first.
+    // Whatever Huginn saves meanwhile is held in memory and written once it ends, with the key then in use.
+    Q_PROPERTY(bool sealing READ sealing NOTIFY changed)
+    Q_PROPERTY(QString sealProgress READ sealProgress NOTIFY sealProgressChanged)
+    bool sealing() const { return m_sealing; }
+    QString sealProgress() const;
+
+    // Round 17 (B1): Back up, Restore, Move here, Move from this device and linking another device ask for the current
+    // lock first. confirmLock() checks it (a wrong one counts as a wrong try, as unlocking does) and grants what (one of
+    // "backup", "restore", "movehere", "moveaway", "link") once, for a few minutes; the C++ that does the work takes the
+    // grant (takeGrant), so no button can skip the question. Without a lock there is nothing to ask: always granted.
+    // Lock now, the panic lock and every lock change drop a grant not yet used.
+    Q_INVOKABLE bool confirmLock(const QString &secret, const QString &what);
+    Q_INVOKABLE bool lockConfirmed(const QString &what) const;
+    bool takeGrant(const QString &what);
     // True once, after unlocking with a lock shorter than new ones may be: suggest a stronger one.
     Q_INVOKABLE bool askStronger();
     // Shows the lock screen again; the data key stays in memory while Huginn runs, so incoming
     // messages are still saved (encrypted) in the background.
     // Without a lock there is nothing to unlock with, so nothing happens.
-    Q_INVOKABLE void lockScreen() { if (!hasLock()) return; m_screenLocked = true; Q_EMIT changed(); }
+    Q_INVOKABLE void lockScreen() { if (!hasLock()) return; m_screenLocked = true; m_grantFor.clear(); m_grantUntil = 0; Q_EMIT changed(); Q_EMIT lockedNow(); }
     // Huginn never locks on its own: only Lock now, the panic lock, or Lock and close when leaving (Main.qml) do.
     // Restored after "Forgot it?" also counts: nothing shows until a new lock is set (lockNeeded).
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
@@ -187,8 +206,12 @@ public:
     // Photos, voice and video messages: in a backup only when files and pictures are.
     static bool isMedia(const QString &name);
     static bool safeName(const QString &name);
-    // Every file in a chat folder, opened with the data key (vault.key itself stays out).
-    static Files collect(const QByteArray &key, const QString &dir);
+    // Every file in a chat folder, opened with the data key (vault.key itself stays out). Round 17: nothing is left out
+    // without a word. A file that couldn't be read just now (another program holding it, after a few tries) goes in
+    // *unreadable; one that is sealed but doesn't open with key (damaged) in *damaged. Callers stop on unreadable ones.
+    static Files collect(const QByteArray &key, const QString &dir, QStringList *unreadable = nullptr, QStringList *damaged = nullptr);
+    // What kind of file a name in the chat folder is, in words for the screen ("your chat list", "a photo").
+    static QString fileWords(const QString &name);
     // Writes the files, sealed with the data key, into a fresh folder next to dir ("<dir>.restore", with vault.key:
     // keyFile when given, else the one in dir), marks it complete, then swaps whole folders: dir becomes "<dir>.old",
     // the stage becomes dir, and only then is the old one deleted. A failure at any point leaves dir as it was.
@@ -203,9 +226,10 @@ public:
     static bool backupVectorTest(const QString &path);
 
     // ---------------------------------------------------------------- moving to another device (cap x1, move.cpp)
-    // Everything a backup holds (the settings blob too), read now.
-    Files everything() const;
+    // Everything a backup holds (the settings blob too), read now. Empty, with why, when a file couldn't be read.
+    Files everything(QString *why = nullptr) const;
     // Replaces everything here with files (like a restore) and restarts Huginn. False with error when it can't.
+    // Round 17: chats already here are kept first (a "chat-kept-<date>" folder beside them), as a restore does.
     bool takeEverything(const Files &files, QString *error);
     // This computer's chat settings as a backup carries them, with set put in and drop taken out.
     static QByteArray settingsWith(const QVariantMap &set, const QStringList &drop);
@@ -234,6 +258,12 @@ Q_SIGNALS:
     // A file given to the saving thread still couldn't be written after its retries (another program holding it,
     // a full disk): what it held is still in memory, so Chat marks it to be saved again and says so.
     void saveLost(const QString &name);
+    void secretFinished(bool ok, const QString &error);   // see sealing
+    void sealProgressChanged();
+    // Round 17: Lock now or the panic lock just put the lock up (main.cpp clears notifications that name anyone).
+    void lockedNow();
+    // Round 17: the lock was set, changed or turned off (main.cpp renews the ring and nudge keys).
+    void lockChanged();
 
 private:
     // Starts Huginn again (it waits for this copy to close) and closes this one. When it can't start, this copy
@@ -263,6 +293,22 @@ private:
     bool m_busy = false;
     bool m_restarting = false;   // restored: nothing may be saved until Huginn starts again
     bool m_lockNeeded = false;   // see lockNeeded()
+    // Round 17: a lock confirmed for one thing (confirmLock), until then (QDeadlineTimer's clock, ms).
+    QString m_grantFor;
+    qint64 m_grantUntil = 0;
+    // Round 17: sealing everything again with a new key (see sealing), on its own thread.
+    struct Held { bool removed = false; QByteArray data; std::function<QByteArray()> make; };
+    mutable QHash<QString, Held> m_held;   // saves made meanwhile, written once it ends
+    bool m_sealing = false;
+    std::shared_ptr<std::atomic<int>> m_sealDone, m_sealTotal;
+    std::shared_ptr<std::atomic<bool>> m_sealStop;
+    QPointer<QThread> m_sealThread;
+    QTimer m_sealTick;
+    void startSeal(const QString &secret, bool pattern);
+    void finishSeal(bool ok, const QString &error, QByteArray fresh);
+    void flushHeld();
+    // The second half of replaceAll(): a complete stage swapped in for dir. what names it in errors ("restore", "lock").
+    static bool swapIn(const QString &dir, const QString &what, QString *error);
     // The files the backup just opened puts here (a Muninn backup made into Huginn's own). Empty with why when none.
     Files openedFiles(QString *why) const;
     Files m_opened;

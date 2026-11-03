@@ -19,6 +19,10 @@ Column {
     property bool down: false
     property bool early: false
     property double startedAt: 0
+    // The clock at the last tick: a gap of more than 2 s (the device slept, or the clock stepped) ends the hold
+    // unconfirmed, as letting go too soon does. A hold never confirms across a sleep.
+    property double lastTick: 0
+    function slept() { const d = Date.now() - lastTick; return d < 0 || d > 2000 }
     signal confirmed()
 
     spacing: Theme.px(4)
@@ -30,6 +34,7 @@ Column {
         early = false
         progress = 0
         startedAt = Date.now()
+        lastTick = startedAt
         ticker.start()
     }
     // Let go: before the 5 seconds were up, nothing happens and the note says to keep holding.
@@ -37,6 +42,7 @@ Column {
         if (!down) return
         down = false
         ticker.stop()
+        if (slept()) { progress = 0; early = true; return }
         if (Date.now() - startedAt >= duration) { progress = 1; hold.confirmed(); return }
         progress = 0
         early = true
@@ -62,6 +68,8 @@ Column {
         interval: 30
         repeat: true
         onTriggered: {
+            if (hold.slept()) { hold.letGo(); return }
+            hold.lastTick = Date.now()
             hold.progress = Math.min(1, (Date.now() - hold.startedAt) / hold.duration)
             if (hold.progress < 1) return
             stop()

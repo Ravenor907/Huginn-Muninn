@@ -16,6 +16,7 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -72,11 +73,13 @@ class RoomActivity : ComponentActivity() {
             getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked == true) }
         setContent {
             MuninnTheme {
+                // Round 17: with Muninn's lock up, the room shows no names and nobody can be managed from here.
+                val appLocked = io.github.ravenor907.muninn.ui.AppLock.locked.collectAsState().value
                 val a = asking
                 if (a != null && app != null) RoomJoinSheet(app, a.first, a.second, onCancel = { asking = null; finish() }) { muted, output ->
                     asking = null
                     joinNow(a.first, a.second, muted, output)
-                } else RoomScreen(onBack = { if (!enterPip()) finish() }, onJoinRing = { withMic { mic -> say(RoomManager.answerRing(listen = !mic)) } }, hideNames = hide(),
+                } else RoomScreen(onBack = { if (!enterPip()) finish() }, onJoinRing = { withMic { mic -> say(RoomManager.answerRing(listen = !mic)) } }, hideNames = hide() || appLocked,
                     pip = pip, onAllowMic = { askMicToTalk.launch(Manifest.permission.RECORD_AUDIO) })
             }
         }

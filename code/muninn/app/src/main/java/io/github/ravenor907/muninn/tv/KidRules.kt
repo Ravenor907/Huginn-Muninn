@@ -189,6 +189,53 @@ object KidRules {
         return if (now == null || wall > now) TimeAnchor(wall, elapsed) else cur
     }
 
+    /** Readings that agree within this are one time. */
+    const val AGREE_MS = 10 * 60_000L
+    /** A reading no other source backs moves the trusted time forward at most this far, and never back. */
+    const val SOLO_STEP_MS = 10 * 60_000L
+    /** A reading is used for this long after it came (by uptime). */
+    const val READING_MS = 12 * 3_600_000L
+    /** The sources kept (one reading each: every relay, every parent). */
+    const val MAX_SOURCES = 12
+
+    /** [readings] with [source]'s newest reading [r]: one per source, the most recent [MAX_SOURCES]. */
+    fun addReading(readings: Map<String, TimeAnchor>, source: String, r: TimeAnchor): Map<String, TimeAnchor> {
+        if (r.wall < MIN_WALL) return readings
+        return (readings - source + (source to r)).entries.sortedByDescending { it.value.at }.take(MAX_SOURCES).associate { it.key to it.value }
+    }
+
+    /**
+     * Round 17 (7.18): the trusted time from every source's newest reading ([readings]: a relay's Date, a parent's signed
+     * config time), each carried to [elapsed] by the device's uptime. The largest group of readings that agree within
+     * [AGREE_MS] wins (a tie: the group nearest the current trusted time), and its median is the time. Two or more sources
+     * that agree move it either way, by any amount. One source alone moves it forward at most [SOLO_STEP_MS] and never back,
+     * so one relay's clock or one parent's fast phone can't shift quiet times. Between readings the uptime counts.
+     */
+    fun clockFrom(cur: TimeAnchor?, readings: Map<String, TimeAnchor>, elapsed: Long): TimeAnchor? {
+        val est = readings.values.filter { it.wall >= MIN_WALL && elapsed - it.at in 0L..READING_MS }.map { it.wall + (elapsed - it.at) }.sorted()
+        if (est.isEmpty()) return cur
+        val now = trustedNow(cur, elapsed)
+        var bestI = 0; var bestJ = 0
+        var j = 0
+        for (i in est.indices) {
+            if (j < i) j = i
+            while (j + 1 < est.size && est[j + 1] - est[i] <= AGREE_MS) j++
+            val size = j - i + 1
+            val bestSize = bestJ - bestI + 1
+            val better = size > bestSize || (size == bestSize && now != null &&
+                kotlin.math.abs(est[(i + j) / 2] - now) < kotlin.math.abs(est[(bestI + bestJ) / 2] - now))
+            if (better) { bestI = i; bestJ = j }
+        }
+        val target = est[(bestI + bestJ) / 2]
+        val agree = bestJ - bestI + 1
+        if (now == null) return TimeAnchor(target, elapsed)
+        val d = target - now
+        if (kotlin.math.abs(d) < 1_000L) return cur
+        if (agree >= 2) return TimeAnchor(target, elapsed)
+        if (d < 0 || d > SOLO_STEP_MS) return cur
+        return TimeAnchor(target, elapsed)
+    }
+
     /** The quiet time on at [epochMs] in zone [tz] (empty or unknown: [fallback], the device's own), or null. */
     fun quietAt(list: List<QuietTime>, epochMs: Long, tz: String, fallback: java.util.TimeZone): QuietTime? {
         if (list.isEmpty()) return null
@@ -240,14 +287,38 @@ object KidRules {
         return MessageDigest.isEqual(pinHash(pin, p.salt, p.r).toByteArray(), p.h.toByteArray())
     }
 
-    /** How long the next try must wait after [fails] wrong PINs in a row: none for the first 5, then 30 s, doubling, at most 15 min. */
+    /** Round 17: the longest wait between tries, after many wrong PINs. */
+    const val MAX_WAIT_MS = 4 * 3_600_000L
+    /** Round 17: a new PIN a parent sets has at least this many digits (an older, shorter one keeps working). */
+    const val PIN_NEW_MIN = 6
+    /** Round 17: after this many wrong PINs in a row the parents are told (in the device's status). */
+    const val PIN_WARN = 10
+
+    /** Whether a parent may set [pin] as a new PIN: [PIN_NEW_MIN] to [PIN_MAX] digits. */
+    fun newPinOk(pin: String): Boolean = pinValid(pin) && pin.length >= PIN_NEW_MIN
+
+    /** How long the next try must wait after [fails] wrong PINs in a row: none for the first 5, then 30 s, doubling, at most 4 hours. */
     fun waitMs(fails: Int): Long {
         if (fails < FREE_TRIES) return 0
-        return minOf(30_000L shl minOf(fails - FREE_TRIES, 5), 15 * 60_000L)
+        return minOf(30_000L shl minOf(fails - FREE_TRIES, 9), MAX_WAIT_MS)
     }
 
-    /** Wrong tries that still count at [now] (elapsedRealtime): none once an hour went by since the last one. */
-    fun failsNow(t: PinTries, now: Long): Int = if (t.fails <= 0 || now - t.at >= FAIL_RESET_MS) 0 else t.fails
+    /**
+     * Wrong tries that still count at [now] (elapsedRealtime). A few mistakes ([FREE_TRIES] or fewer) are forgotten an hour
+     * after the last one; once the waits have begun, only the right PIN starts the count over (round 17: guessing never
+     * gets faster by waiting).
+     */
+    fun failsNow(t: PinTries, now: Long): Int = when {
+        t.fails <= 0 -> 0
+        t.fails < FREE_TRIES && now - t.at >= FAIL_RESET_MS -> 0
+        else -> t.fails
+    }
+
+    /**
+     * Round 17: the try counted before the PIN is checked (written at once), so a try cut short by stopping the app still
+     * counts; the right PIN then starts the count over.
+     */
+    fun counted(t: PinTries, now: Long): PinTries = PinTries(failsNow(t, now) + 1, now)
 
     /** How long before the next try at [now] (ms, 0: now). A time before the last try (a restart) waits the whole wait. */
     fun waitLeft(t: PinTries, now: Long): Long {
@@ -288,6 +359,33 @@ object KidRules {
 
     /** Someone at the device may ask a parent's phone again (elapsedRealtime; [last] 0: never asked). */
     fun askAgainOk(last: Long, now: Long): Boolean = last <= 0L || now - last !in 0L until ASK_GAP_MS
+
+    /** Round 17: the gaps after asks nobody answered: 1, 2, 5 and 15 minutes, then an hour. */
+    private val ASK_GAPS = longArrayOf(60_000L, 2 * 60_000L, 5 * 60_000L, 15 * 60_000L, 60 * 60_000L)
+
+    /** How long after an ask the next may go, when [unanswered] asks in a row got no answer (the first: a minute). */
+    fun askGap(unanswered: Int): Long = ASK_GAPS[(unanswered - 1).coerceIn(0, ASK_GAPS.size - 1)]
+
+    /** "You can ask again in 5 minutes." (or "in a minute"), for a wait of [ms]. */
+    fun askAgainText(ms: Long): String {
+        val m = ((ms + 59_999) / 60_000).coerceAtLeast(1)
+        return if (m == 1L) "You can ask again in a minute." else "You can ask again in $m minutes."
+    }
+
+    /**
+     * Round 17: what a key on a remote or keyboard does on the PIN keypad (Android key codes): "0" to "9" for the number
+     * keys (and the number pad's), "Delete" for its delete key, else null. Enter isn't taken: on many remotes it is the OK
+     * of whichever key has focus.
+     */
+    fun padKey(code: Int): String? = when (code) {
+        in 7..16 -> (code - 7).toString()
+        in 144..153 -> (code - 144).toString()
+        67 -> "Delete"
+        else -> null
+    }
+
+    /** Someone at the device may ask again at [now] after [unanswered] unanswered asks, the last at [last] (0: never). */
+    fun askAgainOk(last: Long, now: Long, unanswered: Int): Boolean = last <= 0L || now - last !in 0L until askGap(unanswered)
 
     /** Reads a config's "pin". Throws IllegalArgumentException("pin") if it isn't well-formed. */
     fun pinIn(v: Any?): KidPin {
@@ -367,6 +465,59 @@ object KidRules {
         val l = try { KidLook.keptFrom(h, saved) } catch (e: Exception) { h }
         return try { KidK14.keptFrom(l, saved) } catch (e: Exception) { l }
     }
+
+    // ---- round 17 (7.18): removals win over an older parent app, and devices that left kids' mode
+
+    /** The most people (and parents) kept as taken off. */
+    const val MAX_GONE = 200
+
+    /**
+     * People ([goneC]) and parents ([goneP]) a parent app with k11 took off, after config [new] replaced [cur]: those it
+     * drops are added, those it lists again are no longer gone. Only a config with a k11 field changes them.
+     */
+    fun tombstones(cur: TvConfig, new: TvConfig, goneC: Set<String>, goneP: Set<String>): Pair<Set<String>, Set<String>> {
+        val nc = new.contacts.map { it.k }.toSet()
+        val np = new.parents.toSet()
+        val c = (goneC + cur.contacts.map { it.k }.filter { it !in nc }) - nc
+        val p = (goneP + cur.parents.filter { it !in np }) - np
+        return c.toList().takeLast(MAX_GONE).toSet() to p.toList().takeLast(MAX_GONE).toSet()
+    }
+
+    /**
+     * An older parent app's config [c] (no k11 field) can't bring back anyone a newer parent took off: people in [goneC]
+     * and parents in [goneP] are left out (never its signer). Returns the config and the keys left out.
+     */
+    fun stripGone(c: TvConfig, goneC: Set<String>, goneP: Set<String>): Pair<TvConfig, List<String>> {
+        val outC = c.contacts.filter { it.k in goneC && it.k != c.by }.map { it.k }
+        val outP = c.parents.filter { it in goneP && it != c.by }
+        if (outC.isEmpty() && outP.isEmpty()) return c to emptyList()
+        return c.copy(contacts = c.contacts.filter { it.k !in outC }, parents = c.parents.filter { it !in outP }) to (outC + outP).distinct()
+    }
+
+    /** The people a device talks to: [c]'s, without other Kids' Devices that left kids' mode ([left]; never a parent). */
+    fun withoutLeft(c: TvConfig, left: Collection<String>): TvConfig =
+        if (left.isEmpty()) c else c.copy(contacts = c.contacts.filter { it.k !in left || it.k in c.parents })
+
+    /**
+     * Devices that left kids' mode ([left]: key to the trusted time it was heard) after config [c] arrived: a k11 config
+     * signed after that ([c].ts) that lists one again (its parent added it back on purpose) clears it.
+     */
+    fun leftAfter(left: Map<String, Long>, c: TvConfig): Map<String, Long> =
+        if (!hasK11(c.raw)) left else left.filter { (k, at) -> !(c.ts > at && c.contacts.any { it.k == k }) }
+
+    /** Device to its parents (round 17): [k], another family's Kids' Device on its list, left kids' mode. */
+    fun kidLeftMessage(k: String): String = JSONObject().put("t", "kidleft").put("k", k).toString()
+
+    /** The key in a well-formed "kidleft", else null. */
+    fun kidLeftIn(o: JSONObject): String? {
+        if (Canon.keys(o) != setOf("t", "k") || o.opt("t") != "kidleft") return null
+        return (o.opt("k") as? String)?.takeIf { KidK14.keyOk(it) }
+    }
+
+    /** Device to a parent whose config came after another parent paired it (round 17): it's taken. */
+    fun takenMessage(): String = JSONObject().put("t", "taken").toString()
+
+    fun isTaken(o: JSONObject): Boolean = Canon.keys(o) == setOf("t") && o.opt("t") == "taken"
 
     /** PBKDF2 (RFC 8018) with HMAC-SHA256, one 32-byte block. */
     internal fun pbkdf2(pass: ByteArray, salt: ByteArray, rounds: Int): ByteArray {

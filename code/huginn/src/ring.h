@@ -144,9 +144,16 @@ public:
     // Round 16: whether a taken nudge sounds, the count-th on its notification: a contact's (known) the first time; the
     // shared "Group message" one whenever take() allows (at most once per kAlertEveryMs, however long it stays locked).
     static bool sounds(const Take &t, int count) { return t.alert && (count == 1 || !t.n.known); }
+    // Round 17 (security m2): a contact can put any name in a nudge, so a new name each time could make a new alerting
+    // notification each time. Contacts' nudges alert at most kKnownAlerts times per kAlertEveryMs, and at most
+    // kKnownShown names show while locked; any more fold into one "New messages" notification naming nobody.
+    static constexpr int kKnownAlerts = 3;
+    static constexpr int kKnownShown = 5;
 
 private:
     qint64 m_lastAlert = -kAlertEveryMs;
+    QList<qint64> m_knownAlerts;   // when contacts' nudges last alerted
+    QStringList m_knownKeys;       // contact-named notifications shown since the lock
 };
 
 // Cap n1: at most one nudge per recipient per RingWire::kNudgeEveryMs.
@@ -248,8 +255,12 @@ public:
     // A nudge's content opened the same way (caps n1 and n2): true with what it says.
     bool nudge(const QString &content, RingWire::Nudge *n);
     // Someone was blocked: a new key pair and ring mailbox, so they can't ring this device any more. The old one is read
-    // for kOldKeepMs (contacts who haven't heard of the new one yet).
+    // for kOldKeepMs (contacts who haven't heard of the new one yet). Round 17: also every kRenewMs, and whenever the
+    // lock is set, changed or turned off, so a copy of the file taken once stops working (Chat::renewRingKeys).
     void renew();
+    static constexpr qint64 kRenewMs = 7 * 86400000LL;
+    // When the current key was made (ms; 0 after forget()).
+    qint64 madeAt();
     // True (once) when the old ring mailbox just stopped being read.
     bool dropOld();
     // Erase everything and Move: the file goes, and no ring mailbox is read. A new key is made only when publicKey() or
@@ -267,6 +278,7 @@ private:
     QString m_path;
     Pair m_now, m_old;
     qint64 m_oldUntil = 0;   // ms; 0: no old one
+    qint64 m_made = 0;       // ms: when m_now was made
     bool m_loaded = false;
     bool m_forgotten = false;
 };
@@ -286,6 +298,7 @@ public:
     // A nudge's content opened: true with what it says. Never a ring.
     bool nudge(const QString &content, RingWire::Nudge *n) { return m_keys.nudge(content, n); }
     void renew() { m_keys.renew(); }
+    qint64 madeAt() { return m_keys.madeAt(); }
     bool dropOld() { return m_keys.dropOld(); }
     void forget() { m_keys.forget(); }
 

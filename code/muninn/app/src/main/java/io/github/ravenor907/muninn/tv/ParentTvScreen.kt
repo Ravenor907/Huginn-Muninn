@@ -169,8 +169,10 @@ private fun UnlockCard(app: Muninn, t: ManagedTv, tvName: String) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp).clip(Corner).border(1.dp, Palette.gold, Corner).padding(14.dp)) {
         Text("Unlock $tvName?", style = Type.big.copy(fontSize = 17.sp))
         Text("Asked at $at. " + TvParent.unlockText(tvName), style = Type.small, modifier = Modifier.padding(top = 4.dp))
-        Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MButton("Unlock", kind = Kind.Accent) { TvParent.answerUnlock(app, t.key, true) }
+        // Round 17: Unlock opens Leave kids' mode on the device, so it takes a hold, never a stray tap.
+        io.github.ravenor907.muninn.ui.HoldToConfirm("Hold to unlock", "Hold to unlock the parent settings on $tvName",
+            { TvParent.answerUnlock(app, t.key, true) }, Modifier.fillMaxWidth().padding(top = 10.dp), danger = false)
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MButton("Not now") { TvParent.answerUnlock(app, t.key, false) }
         }
     }
@@ -758,7 +760,7 @@ private fun Permissions(app: Muninn, t: ManagedTv) {
 /** The parent page's line while "Show over other apps" is off on the device. */
 internal fun overNote(kind: String): String =
     "Calls can't come up over other apps on this $kind while Show over other apps is off. A call still rings and a short line " +
-        "says who is calling, but the kid has to open Muninn to answer."
+        "saying who is calling comes and goes while it rings, but the kid has to open Muninn to answer."
 
 /** What Muninn takes on the device, and Clear history. */
 @Composable
@@ -1058,7 +1060,8 @@ private fun KidAccessPart(app: Muninn, t: ManagedTv) {
 private fun PinDialog(onCancel: () -> Unit, onSave: (String) -> Unit) {
     var a by remember { mutableStateOf("") }
     var b by remember { mutableStateOf("") }
-    val ok = KidRules.pinValid(a) && a == b
+    // Round 17: a new PIN has at least 6 digits (a shorter one set before keeps working on the device).
+    val ok = KidRules.newPinOk(a) && a == b
     val digits = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword)
     AlertDialog(
         onDismissRequest = onCancel,
@@ -1066,8 +1069,8 @@ private fun PinDialog(onCancel: () -> Unit, onSave: (String) -> Unit) {
         title = { Text("Parent PIN", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Field(a, { v -> a = v.filter { it in '0'..'9' }.take(KidRules.PIN_MAX) }, "${KidRules.PIN_MIN} to ${KidRules.PIN_MAX} digits", keyboard = digits, secret = true)
-                Text("${KidRules.PIN_GOOD} digits or more is much harder to guess.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+                Field(a, { v -> a = v.filter { it in '0'..'9' }.take(KidRules.PIN_MAX) }, "${KidRules.PIN_NEW_MIN} to ${KidRules.PIN_MAX} digits", keyboard = digits, secret = true)
+                Text("Not a birthday or a pattern like 123456: a kid can guess those.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
                 Field(b, { v -> b = v.filter { it in '0'..'9' }.take(KidRules.PIN_MAX) }, "The same again", Modifier.padding(top = 8.dp), keyboard = digits, secret = true)
                 if (b.length >= a.length && b.isNotEmpty() && a != b) Text("They don't match.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             }

@@ -14,6 +14,25 @@ class_name = "RelayLimits"
 tag = "v1"
 new_sqlite_classes = ["RelayLimits"]
 
+# Optional Worker variables (dashboard, Variables and Secrets, Type: Text), never needed for a working Worker:
+#   DAILY_MINUTES   the day's TURN budget for everyone, in minutes of login handed out (default 24000; see relay.md "Limits")
+#   LEGACY_UNTIL    a Unix time (seconds) after which logins without an install token are refused
+#
+# Optional: the Workers rate limiting binding, a per-location counter in front of everything else (relay.md "Junk
+# requests"). The Worker uses it when it is bound and works the same without it. Uncomment to turn it on; if a deploy
+# says the account can't use it, comment it out again.
+# [[ratelimits]]
+# name = "RATE"
+# namespace_id = "9071"
+#   [ratelimits.simple]
+#   limit = 20
+#   period = 60
+#
+# workers_dev = true leaves the Worker open on workers.dev, where every request, junk included, counts against the free
+# plan's 100,000 a day and nothing can stand in front of it. With a domain on this account, the better setup is a route
+# on that domain, workers_dev = false, and the free plan's rate limiting rule on /turn and /register (relay.md "Junk
+# requests"); that needs the apps' WORKER_URL changed in the same release.
+
 # Secrets, set once in the Cloudflare dashboard (Worker > Settings > Variables and Secrets), never in this file:
 #   TURN_KEY_ID
 #   TURN_KEY_API_TOKEN

@@ -436,11 +436,21 @@ class MainActivity : ComponentActivity() {
         if (i == null || (i.action != Intent.ACTION_SEND && i.action != Intent.ACTION_SEND_MULTIPLE)) return
         // A Kids' Device takes nothing from other apps' Share: there's no chat list to pick from, and nothing waits for later.
         if (io.github.ravenor907.muninn.tv.KidMode.saved(this)) return
+        // Opened again from Recents (Android 8 to 11 keep the task's first intent): that share was already handled.
+        if (i.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
         val uris = if (i.action == Intent.ACTION_SEND) listOfNotNull(if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM))
             else (if (Build.VERSION.SDK_INT >= 33) i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java) else @Suppress("DEPRECATION") i.getParcelableArrayListExtra(Intent.EXTRA_STREAM)).orEmpty()
-        if (uris.isEmpty()) return
+        // Round 17: text or a link (a page from a browser): pick a chat, and it waits in that chat's box to be sent.
+        val sharedText = if (uris.isEmpty() && i.action == Intent.ACTION_SEND)
+            io.github.ravenor907.muninn.net.Drafts.sharedText(i.getCharSequenceExtra(Intent.EXTRA_SUBJECT), i.getCharSequenceExtra(Intent.EXTRA_TEXT)) else ""
+        if (uris.isEmpty() && sharedText.isEmpty()) return
         // Taken now: the window's intent no longer says Share, so nothing hands it over a second time.
         if (i === intent) setIntent(Intent(i).setAction(Intent.ACTION_MAIN))
+        if (uris.isEmpty()) {
+            io.github.ravenor907.muninn.screens.ShareTo.text = sharedText
+            show("chat")
+            return
+        }
         val busy = app.ready.value && app.net.transfer.value.active
         Thread {
             // One GIF: it goes into a chat, animated (cap a1). Anything else waits in Files.
@@ -504,7 +514,7 @@ class MainActivity : ComponentActivity() {
         if (!ready || appLocked || panic || vaultLocked) {
             // Locked again: a linked tablet's own chats are sealed away again too.
             LaunchedEffect(Unit) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
-            LockScreen(app) { ok -> if (ok) { io.github.ravenor907.muninn.ui.AppLock.opened(); app.startAsync { startNet(); suggestStronger() } } }
+            LockScreen(app) { ok -> if (ok) { io.github.ravenor907.muninn.ui.AppLock.opened(); Ui.unpark(); app.startAsync { startNet(); suggestStronger() } } }
             return
         }
         // Restored after "Forgot it?": a new lock first, with no Skip, before any chat shows (the old lock isn't in the backup).
@@ -875,7 +885,9 @@ class MainActivity : ComponentActivity() {
  * over it (or after it, without the lock). Sheets kept in a screen's own state go with that screen, which the lock replaces.
  */
 internal fun closeForLock() {
-    Ui.ask.value?.let { a -> Ui.ask.value = null; try { a.onCancel() } catch (_: Exception) {} }
-    ChatNav.hold = ""; ChatNav.menuGroup = ""; ChatNav.callPick = false
+    // Never answered by the lock: a real question (a Kids' Device's ask) waits and shows again after unlock.
+    Ui.park()
+    ChatNav.hold = ""; ChatNav.menuGroup = ""; ChatNav.callPick = false; ChatNav.callSome = ""
+    io.github.ravenor907.muninn.screens.LinkUi.rescan = null; io.github.ravenor907.muninn.screens.LinkUi.relinking = false
     io.github.ravenor907.muninn.screens.LockGate.close()
 }

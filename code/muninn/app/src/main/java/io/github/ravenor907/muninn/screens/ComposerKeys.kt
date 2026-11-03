@@ -38,7 +38,14 @@ class BoxEcho {
     private var sawEmpty = false
 
     /** Enter sent [text] at [now] (ms). */
-    fun send(text: String, now: Long) { sent = text; at = now; sawEmpty = false }
+    fun send(text: String, now: Long) { sent = text; at = now; sawEmpty = false; keyed = false }
+
+    /**
+     * Round 17: a key on a hardware keyboard was pressed (not one the keyboard app took). What the box shows next is
+     * typing, never an echo, so a fast first letter of the next message that matches the end of the last isn't erased.
+     */
+    fun typed() { keyed = true }
+    private var keyed = false
 
     /** The box now holds [box]; [text] is the last text the screen has. One of [PASS], [SKIP] or [CLEAR]. */
     fun seen(box: String, text: String, now: Long): Int {
@@ -48,7 +55,7 @@ class BoxEcho {
             when {
                 box == s -> return SKIP
                 box.isEmpty() -> sawEmpty = true
-                fresh && sawEmpty && s.endsWith(box) -> { sent = null; return CLEAR }
+                fresh && sawEmpty && !keyed && s.endsWith(box) -> { sent = null; return CLEAR }
                 else -> sent = null
             }
             if (!fresh) sent = null

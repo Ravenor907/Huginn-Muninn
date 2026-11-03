@@ -275,7 +275,49 @@ class CallSession(
                 if (note.isNotEmpty()) { note = ""; host.changed(this) }
                 myRelay = r
                 relayOkAt = System.currentTimeMillis()
+                login?.let { scheduleRenew(it) }
                 refreshCands()
+            }
+        }
+    }
+
+    // ---- Renewal (relay.md "Renewal"): a login lasts 10 minutes, so a longer call gets a fresh one and a new allocation
+    // 2 minutes before it ends. The old allocation carries the media for HANDOVER_MS more, while the peer learns the new
+    // address in "cands"; a peer of any version follows a changed relay address.
+    private var renewFor = 0L
+    private var renewTries = 0
+
+    private fun scheduleRenew(login: TurnCreds.Login) {
+        renewFor = login.expiresMs
+        renewTries = 0
+        val wait = login.expiresMs - TurnCreds.RENEW_BEFORE_MS - System.currentTimeMillis()
+        if (wait > 0) later(wait) { if (renewFor == login.expiresMs) renewRelay() }
+    }
+
+    private fun renewRelay() {
+        if (!host.internetAllowed()) return
+        val m = media ?: return
+        val forExp = renewFor
+        // Busy (a restart is underway): a little later, unless the restart's own relay has taken over the renewing.
+        if (relayBusy) { later(5_000) { if (renewFor == forExp) renewRelay() }; return }
+        relayBusy = true
+        work.execute {
+            val login = (try { host.relayLogin() } catch (e: Exception) { null })?.takeIf { it.expiresMs > forExp }
+            val r = login?.let { m.renewRelay(it, host::resolve) }
+            exec.execute {
+                relayBusy = false
+                if (phase == Phase.ENDED || renewFor != forExp) return@execute
+                if (r == null || login == null) {
+                    // Refused or not reached: once more a little later. The allocation in use lasts until its login ends,
+                    // and after that the free paths, or a restart, carry the call.
+                    if (renewTries++ < 1) later(20_000) { if (renewFor == forExp) renewRelay() }
+                    return@execute
+                }
+                myRelay = r
+                relayOkAt = System.currentTimeMillis()
+                refreshCands()
+                later(TurnCreds.HANDOVER_MS) { m.finishRenew() }
+                scheduleRenew(login)
             }
         }
     }

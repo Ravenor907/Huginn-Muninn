@@ -49,8 +49,8 @@ The usual ending is `.hmbak` (older ones were `.mbk`). The name doesn't matter: 
 - The GCM additional data is every byte before the nonce (magic, length and header). A changed header fails like a
   changed body or a wrong password; the apps can't tell those apart and say "Wrong password. Try again."
 - Readers MUST refuse key settings weaker than the apps write (scrypt N below 65536, not a power of two, r below 8,
-  PBKDF2 under 100000 rounds) and ones so big they would run out of memory (N r 128 over 1 GiB). The header is read
-  before the password is checked.
+  PBKDF2 under 100000 rounds) and ones so big they would run out of memory (N r 128 over 1 GiB; Muninn, from round 17,
+  over 256 MiB or p over 4, still well above what either app writes). The header is read before the password is checked.
 - Nothing else is readable without the password: not the names, not how many files there are.
 
 ### 2.2 Inside

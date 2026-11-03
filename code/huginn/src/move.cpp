@@ -539,6 +539,12 @@ QString Move::showCode()
     const QJsonObject cur = load(QStringLiteral("in"));
     if (jstr(cur, "state") == QLatin1String("hello") || jstr(cur, "state") == QLatin1String("receiving"))
         return jstr(cur, "code");
+    // Round 17 (security m6): moving here replaces this account, so only after the current lock was given again
+    // (Linked devices › Move here asks; no lock set: nothing to ask).
+    if (!m_vault->takeGrant(QStringLiteral("movehere"))) {
+        Q_EMIT notice(QStringLiteral("Confirm your lock first: Linked devices › Move here."), true);
+        return QString();
+    }
     const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
     QByteArray secret(16, 0);
     for (char &c : secret)
@@ -765,6 +771,12 @@ void Move::take(const QString &text)
         return;
     }
     c.a = addrs;
+    // Round 17 (B1): everything here goes to that device, so only after the current lock was given again (Linked
+    // devices › Move from this device asks; no lock set: nothing to ask).
+    if (!m_vault->takeGrant(QStringLiteral("moveaway"))) {
+        Q_EMIT notice(QStringLiteral("Confirm your lock first: Linked devices › Move from this device."), true);
+        return;
+    }
     const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
     const QString mine = b64(kp.publicDer);
     const QByteArray k = MoveWire::key(kp.privateDer, c.e, c.s, c.e, mine);
@@ -794,14 +806,15 @@ void Move::go()
     m_locked = true;
     m_chat->setMoving(true);
     Vault::Files entries;
+    QString why;
     if (jstr(o, "app") == QLatin1String("huginn"))
-        entries = m_vault->everything();
+        entries = m_vault->everything(&why);
     else
         entries.emplace_back(kCommon, compact(common()));
     if (entries.empty()) {
         m_locked = false;
         m_chat->setMoving(false);
-        Q_EMIT notice(QStringLiteral("Couldn't gather your chats. Unlock Chat and try again."), true);
+        Q_EMIT notice(why.isEmpty() ? QStringLiteral("Couldn't gather your chats. Unlock Chat and try again.") : why, true);
         return;
     }
     Vault::Files keep;
@@ -959,7 +972,7 @@ void Move::answerLink(bool yes)
     m_linkCode.clear();
     m_linkAsk.clear();
     if (yes && !code.isEmpty()) {
-        const QString err = m_link->link(code, true);
+        const QString err = m_link->linkMoved(code);
         if (!err.isEmpty())
             Q_EMIT notice(err, true);
     }

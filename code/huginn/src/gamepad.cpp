@@ -182,8 +182,10 @@ void Gamepad::close(qint32 id)
         return;
     // Whatever this pad held is let go, unless another pad holds the same button.
     const QSet<QString> held = it.value().held;
+    m_closing = true;
     for (const QString &b : held)
         up(id, b);
+    m_closing = false;
     SDL_GameControllerClose(it.value().ctl);
     m_pads.erase(it);
     if (mergeSticks())
@@ -249,7 +251,10 @@ void Gamepad::up(qint32 pad, const QString &button)
         m_repeatButton.clear();
         m_repeat.stop();
     }
-    Q_EMIT released(button);
+    if (m_closing)
+        Q_EMIT lost(button);
+    else
+        Q_EMIT released(button);
 }
 
 bool TapTwins::press(qint32 pad, const QString &button, qint64 nowMs)

@@ -23,6 +23,9 @@ Item {
         if (why !== "") Ui.say(why, true)
     }
     function decline() { if (group) Rooms.declineRing(); else Calls.decline() }
+    // Round 17: for its first half second (Main.guardOverlay) a tap on Answer or Decline is ignored too, so a tap
+    // meant for what was on screen never answers or declines.
+    function tapGuarded() { return !!Ui.main && Ui.main.guardedNow(dlg) }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.82) }
     MouseArea { anchors.fill: parent }
@@ -77,9 +80,9 @@ Item {
             Row {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: Theme.px(16)
-                HButton { text: "Decline"; kind: "danger"; onClicked: dlg.decline() }
-                HButton { text: dlg.group ? "Join" : dlg.video ? "Voice only" : "Answer"; kind: dlg.video ? "normal" : "accent"; onClicked: dlg.answer() }
-                HButton { visible: dlg.video; text: "Answer with video"; kind: "accent"; onClicked: Calls.answerVideo() }
+                HButton { text: "Decline"; kind: "danger"; onClicked: if (!dlg.tapGuarded()) dlg.decline() }
+                HButton { text: dlg.group ? "Join" : dlg.video ? "Voice only" : "Answer"; kind: dlg.video ? "normal" : "accent"; onClicked: if (!dlg.tapGuarded()) dlg.answer() }
+                HButton { visible: dlg.video; text: "Answer with video"; kind: "accent"; onClicked: if (!dlg.tapGuarded()) Calls.answerVideo() }
             }
         }
     }

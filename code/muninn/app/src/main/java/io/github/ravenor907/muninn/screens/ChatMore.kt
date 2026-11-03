@@ -242,7 +242,9 @@ internal fun videoFrame(bytes: ByteArray?): ImageBitmap? {
 @Composable
 internal fun VideoThumb(m: Chat.Msg, bytes: () -> ByteArray?) {
     val frame by produceState<ImageBitmap?>(null, m.id) { value = withContext(Dispatchers.IO) { videoFrame(bytes()) } }
-    Box(Modifier.size(200.dp, 260.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Color.Black), contentAlignment = Alignment.Center) {
+    // Round 17: shaped like the clip (a sideways one isn't cropped to its middle).
+    val box = io.github.ravenor907.muninn.net.Videos.bubble(frame?.width ?: 0, frame?.height ?: 0)
+    Box(Modifier.size(box.first.dp, box.second.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Color.Black), contentAlignment = Alignment.Center) {
         frame?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
         Box(Modifier.size(52.dp).clip(CircleShape).background(Color(0x99000000)), contentAlignment = Alignment.Center) { MIcon("play", Color.White, 24.dp, filled = true) }
         Text(io.github.ravenor907.muninn.net.Voice.length(m.video), style = Type.small.copy(color = Color.White),
@@ -258,6 +260,8 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
     val player = remember { MediaPlayer() }
     // The video's own shape (width / height, already turned as recorded): a sideways clip is never squeezed into a tall box.
     var ratio by remember(bytes) { mutableStateOf(9f / 16f) }
+    // Round 17: where it was when its surface went (screen off, a minimised window), so it goes on from there.
+    val at = remember { intArrayOf(0) }
     DisposableEffect(Unit) { onDispose { try { player.release() } catch (_: Exception) {} } }
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -276,13 +280,20 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
                                 player.setDataSource(BytesSource(bytes))
                                 player.setDisplay(h)
                                 player.setOnVideoSizeChangedListener { _, w, hh -> if (w > 0 && hh > 0) ratio = w.toFloat() / hh }
-                                player.setOnPreparedListener { it.start() }
+                                player.setOnPreparedListener { mp ->
+                                    if (at[0] > 0 && at[0] < mp.duration - 200) mp.seekTo(at[0])
+                                    // Paused or finished before: it stays so, and the button still says Play.
+                                    if (playing) mp.start()
+                                }
                                 player.setOnCompletionListener { playing = false }
                                 player.prepareAsync()
                             } catch (e: Exception) { Ui.say("This video can't be played.", true) }
                         }
                         override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
-                        override fun surfaceDestroyed(h: SurfaceHolder) { try { player.stop() } catch (_: Exception) {} }
+                        override fun surfaceDestroyed(h: SurfaceHolder) {
+                            try { at[0] = player.currentPosition } catch (_: Exception) {}
+                            try { player.stop() } catch (_: Exception) {}
+                        }
                     })
                 }
             }, modifier = Modifier.aspectRatio(ratio))

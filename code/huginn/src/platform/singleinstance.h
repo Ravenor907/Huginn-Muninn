@@ -4,6 +4,8 @@
 #include <QString>
 #include <QStringList>
 
+class QTimer;
+
 class QWindow;
 
 class QLocalServer;
@@ -35,6 +37,15 @@ public:
     Outcome outcome() const { return m_outcome; }
     // What to say on screen for NotAnswering or CantWrite ("" otherwise).
     QString problemText() const;
+    // Round 17: the lock is another computer's (the data folder is synced, like OneDrive or Dropbox, or shared): its
+    // name, else "". Its lock is never taken as stale by itself: two computers would both run on the same chats.
+    QString otherComputer() const { return m_otherHost; }
+    // "Open here anyway" (asked first): that computer's lock is taken, for a copy that crashed there or a drive that
+    // moved here. False when it still couldn't be taken.
+    bool takeAnyway();
+    // Round 17: once claimed, the lock file is looked at every half minute. A synced folder that put another
+    // computer's lock (or a conflict copy of one) beside or in place of this one's says so with sharedElsewhere.
+    void watchShared();
     static constexpr int kRestartWaitMs = 15000;
     // A copy that doesn't answer the knock in this long is hung (or closing and stuck). Only a stuck closing one is
     // asked to end itself, and its lock is taken once it has.
@@ -64,6 +75,7 @@ public:
 
 Q_SIGNALS:
     void activated();   // another copy was started
+    void sharedElsewhere(const QString &host);
 
 private:
     void release();
@@ -82,5 +94,7 @@ private:
     QLockFile *m_lock = nullptr;
     QLocalServer *m_server = nullptr;
     QString m_dir;
+    QString m_otherHost;
+    QTimer *m_watch = nullptr;
     Outcome m_outcome = Claimed;
 };

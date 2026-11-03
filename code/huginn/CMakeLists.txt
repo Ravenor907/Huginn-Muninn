@@ -257,6 +257,7 @@ qt_add_qml_module(huginn
         qml/SettingsPage.qml
         qml/ContactsPage.qml
         qml/LockPanel.qml
+        qml/LockCheck.qml
         qml/PatternPad.qml
         qml/Composer.qml
         qml/FindBar.qml

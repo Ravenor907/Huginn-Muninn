@@ -27,6 +27,7 @@
 #include "platform/singleinstance.h"
 #include "platform/winstart.h"
 #include "platform/winupdate.h"
+#include <cstring>
 #include <QNetworkInformation>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -198,11 +199,16 @@ int main(int argc, char *argv[])
     // The Windows portable build keeps everything in the data folder beside Huginn.exe (settings as an INI file there,
     // never the registry): set before anything opens a setting or a folder.
     Portable::setUp();
+    // Round 17: a staged update asked by the copy that unpacked it whether it may save where it must go (Windows'
+    // Controlled folder access allows programs by path): it tries, answers with its exit code and ends. Nothing else runs.
+    for (int i = 1; i < argc; ++i)
+        if (std::strcmp(argv[i], "--update-probe") == 0)
+            return Portable::canWriteForUpdate() ? WinUpdate::kProbeOk : WinUpdate::kProbeBlocked;
     s_previous = qInstallMessageHandler(messages);
     // Labs › Performance check: settings being tried (display mode, drawing, render loop) go in before Qt starts.
     PerfCheck::applyAtStart(argc, argv);
 #ifndef Q_OS_WIN
-    // SteamOS Game Mode: gamescope shows games through Xwayland, and Huginn takes the same path as every game
+    // Game mode (gamescope): gamescope shows games through Xwayland, and Huginn takes the same path as every game
     // there (gamescope's frame pacing is built around it), unless a platform was set by hand.
     if (System::detectGameMode() && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM") && !qEnvironmentVariableIsEmpty("DISPLAY"))
         qputenv("QT_QPA_PLATFORM", "xcb");
@@ -338,12 +344,21 @@ int main(int argc, char *argv[])
         const bool f = System::handheldSelfTest();
         // One controller seen as two devices taps once (round 15, R9).
         const bool g = TapTwins::selfTest();
-        return selfTested(a && b && c && d && e && f && g);
+        // A voice message held on Y goes only to the chat it started in, never across a sleep (round 17).
+        const bool h = Voice::selfTest();
+        return selfTested(a && b && c && d && e && f && g && h);
     }
 
     // Said on screen when Huginn can't keep its data where it is (Windows: a folder it can't write, like Program
     // Files): it never falls back to somewhere else.
     auto stopWith = [](const QString &text) {
+        // Round 17: the staged update that can't go on (Controlled folder access blocking it, say): it gives up, Huginn
+        // starts again from its own folder and says why there, so a failed update never leaves nothing running.
+        if (WinUpdate::giveUpStaged(text)) {
+            Platform::noStartLog();
+            PerfCheck::notStarting();
+            return 1;
+        }
         QMessageBox::warning(nullptr, QStringLiteral("Huginn"), text);
         Platform::noStartLog();
         PerfCheck::notStarting();   // nothing was drawn: no failed start to count
@@ -390,11 +405,32 @@ int main(int argc, char *argv[])
         // open on another computer or account using this folder), or a data folder that can't be written (a full
         // disk, read-only): said on screen, never a silent quit.
         const QString why = one->problemText();
-        if (!why.isEmpty())
-            return stopWith(why);
-        Platform::noStartLog();
-        PerfCheck::notStarting();   // this copy draws nothing: no failed start to count
-        return 0;
+        // Round 17: another computer's lock (a synced folder) is never taken by itself. Close is the default; Open here
+        // anyway is for a copy that crashed there, or a drive moved here.
+        bool tookAnyway = false;
+        if (!why.isEmpty() && !one->otherComputer().isEmpty()) {
+            QMessageBox box(QMessageBox::Warning, QStringLiteral("Huginn"), why);
+            QPushButton *close = box.addButton(QStringLiteral("Close"), QMessageBox::AcceptRole);
+            QPushButton *anyway = box.addButton(QStringLiteral("Open here anyway"), QMessageBox::DestructiveRole);
+            box.setDefaultButton(close);
+            box.exec();
+            if (box.clickedButton() == anyway) {
+                tookAnyway = one->takeAnyway();
+                if (!tookAnyway)
+                    return stopWith(QStringLiteral("Huginn still couldn't open its folder. Close Huginn on the other computer, then try again."));
+            } else {
+                Platform::noStartLog();
+                PerfCheck::notStarting();
+                return 0;
+            }
+        }
+        if (!tookAnyway) {
+            if (!why.isEmpty())
+                return stopWith(why);
+            Platform::noStartLog();
+            PerfCheck::notStarting();   // this copy draws nothing: no failed start to count
+            return 0;
+        }
     }
     // Windows: an update staged beside Huginn.exe is finished by the staged Huginn.exe itself, now that the copy before
     // it has closed; it then starts Huginn from its own folder and this copy ends (WinUpdate::finishAtStart).
@@ -565,13 +601,28 @@ int main(int argc, char *argv[])
     // Two days after a block renewed the ring and nudge keys, the old mailboxes are no longer read.
     auto *ringOld = new QTimer(&app);
     ringOld->setInterval(3600000);
-    QObject::connect(ringOld, &QTimer::timeout, nostr, [ringKey, nudgeKey, nostr] {
+    // Round 17 (security M7): a copy of ring-key.json or nudge-key.json taken once stops working within a week: both are
+    // made new every RingKey::kRenewMs (checked hourly and at each unlock; only while unlocked, as they go out sealed)
+    // and whenever the lock is set, changed or turned off, and announced as after a block.
+    auto renewIfDue = [ringKey, chat] {
+        const qint64 made = ringKey->madeAt(), now = QDateTime::currentMSecsSinceEpoch();
+        if (made > 0 && now - made >= RingKey::kRenewMs && chat->renewRingKeys())
+            CrashLog::note(QStringLiteral("ring: the ring and nudge keys were renewed on schedule"));
+    };
+    QObject::connect(ringOld, &QTimer::timeout, nostr, [ringKey, nudgeKey, nostr, renewIfDue] {
         const bool ringGone = ringKey->dropOld();
         const bool nudgeGone = nudgeKey->dropOld();
         if (ringGone || nudgeGone)
             nostr->resubscribe();
+        renewIfDue();
     });
     ringOld->start();
+    QObject::connect(vault, &Vault::opened, chat, [renewIfDue] { QTimer::singleShot(5000, qApp, renewIfDue); });
+    QObject::connect(vault, &Vault::lockChanged, chat, [chat] {
+        // Chat may still be starting (the first lock is set before it opens): then the scheduled check catches it.
+        if (chat->renewRingKeys())
+            CrashLog::note(QStringLiteral("ring: the ring and nudge keys were renewed after a lock change"));
+    });
     // Caps n1 and n2: a nudge while the vault is locked says a real message came (lockedNudge, set below once the
     // message sound is made). Unlocked, a nudge is ignored: the message itself notifies.
     auto lockedNudge = std::make_shared<std::function<void(const RingWire::Nudge &)>>();
@@ -883,6 +934,24 @@ int main(int argc, char *argv[])
     if (!quiet)
         Platform::setUpTray([] { return Settings::silenced(); }, [vault] { return vault->hasLock() && !vault->screenLocked(); },
                             [chat](const QString &what) { Q_EMIT chat->trayAction(what); });
+    // Round 17: Lock now and the panic lock take Huginn's notifications (who and what) out of Windows' notification
+    // center and the desktop's list too, not only off the screen.
+    if (!quiet)
+        QObject::connect(vault, &Vault::lockedNow, &app, [] { Platform::clearShown(); });
+    // Round 17: a synced folder (OneDrive, Dropbox) that brought another computer's lock in while this one runs: said at
+    // once, as two copies on one folder break the chats.
+    if (!quiet) {
+        QObject::connect(one, &SingleInstance::sharedElsewhere, &app, [](const QString &host) {
+            auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Huginn"),
+                                        QStringLiteral("Huginn is also open on another computer (%1) that uses this same synced folder. Two copies "
+                                                       "on one folder break your chats. Close Huginn on one of them now, and give each computer "
+                                                       "its own Huginn folder that isn't synced.")
+                                            .arg(host));
+            box->setAttribute(Qt::WA_DeleteOnClose);
+            box->show();
+        });
+        one->watchShared();
+    }
     auto *direct = new Direct(&app);
     // A linked phone's photos, voice and files come over the home Wi-Fi only, never over Direct connect's hotspot.
     linked->homeWifi = [direct] { return !direct->on(); };

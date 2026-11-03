@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QBuffer>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
 
@@ -35,16 +36,26 @@ public:
     QString error() const { return m_error; }
 
     Q_INVOKABLE bool start(const QString &key);
-    // Stops and sends to that chat (too short = nothing sent).
-    Q_INVOKABLE void finish(const QString &key);
+    // Stops and sends to the chat it was started for (too short = nothing sent). Round 17: a recording only ever
+    // goes to that chat. When key isn't it (the chat or channel changed under a held Y or microphone), it's thrown
+    // away instead (dropped()). Returns whether it went on to be sent.
+    Q_INVOKABLE bool finish(const QString &key);
     Q_INVOKABLE void cancel();
     Q_INVOKABLE void play(const QString &id);
     Q_INVOKABLE void stop();
     Q_INVOKABLE static QString length(int ms);
+    // Round 17: the rules, on their own for the self-test. A recording started for target may be sent when let go
+    // in key; a gap between ticks of gapMs (wall clock, either way) means the device slept or the clock jumped.
+    static bool sendable(const QString &target, const QString &key) { return !target.isEmpty() && key == target; }
+    static bool slept(qint64 gapMs) { return gapMs > 10000 || gapMs < -10000; }
+    static bool selfTest();
 
 Q_SIGNALS:
     void changed();
     void tick();
+    // A recording thrown away by Voice itself, never sent: finish() for another chat, or the device slept (or the
+    // clock jumped) while it was recording. Main says "Recording cancelled."
+    void dropped();
 
 private:
     QString tempFile() const;
@@ -58,6 +69,9 @@ private:
     QByteArray m_sound;
     QTimer m_ticker;
     bool m_recording = false;
-    qint64 m_started = 0;
+    // How long it has been recording: a steady clock, so a clock change never makes a clip 5 minutes long.
+    QElapsedTimer m_since;
+    // The wall clock at the last tick: a gap of more than 10 s means the device slept (or the clock jumped).
+    qint64 m_lastTick = 0;
     QString m_sendTo, m_target, m_playing, m_error;
 };

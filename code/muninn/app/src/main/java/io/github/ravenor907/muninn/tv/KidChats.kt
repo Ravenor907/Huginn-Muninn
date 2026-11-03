@@ -74,9 +74,29 @@ internal object KidChats {
     /** The chatting level now, from the device's config (checked when something is sent, not only when a button shows). */
     private fun level(): Int = KidTv.state.value.cfg?.chat ?: KidRules.QUICK_ONLY
 
-    /** A quick message, or text a kid typed ([typed]: only at a level that allows typing). */
-    fun sendText(app: Muninn, k: String, text: String, typed: Boolean = false) {
-        if (typed && !KidRules.canSend(level(), "text")) return
+    /**
+     * A quick message, or text a kid typed ([typed]: only at a level that allows typing). Round 17: during a quiet time
+     * (or before the device knows the time, while quiet times are set) it's held for anyone who isn't a parent, as voice
+     * messages and photos are, and goes once it's over. Returns what to tell the kid.
+     */
+    fun sendText(app: Muninn, k: String, text: String, typed: Boolean = false): String {
+        if (typed && !KidRules.canSend(level(), "text")) return TvWords.ASK_PARENT
+        val parents = KidTv.state.value.parents
+        val quiet = KidTv.quietNow()
+        if (quiet != null && KidK14.holds(k, parents, quiet)) {
+            KidHoldStore.hold(app, k, if (typed) "text" else "quick", text.toByteArray(Charsets.UTF_8), 0)
+            return KidK14.willSend(quiet, android.text.format.DateFormat.is24HourFormat(app))
+        }
+        if (KidTv.timeUnsure() && k !in parents) {
+            KidHoldStore.hold(app, k, if (typed) "text" else "quick", text.toByteArray(Charsets.UTF_8), 0)
+            return KidK14.WILL_SEND_SOON
+        }
+        sendTextNow(app, k, text)
+        return "Sending"
+    }
+
+    /** Text that goes now (a held one, once the quiet time is over). */
+    internal fun sendTextNow(app: Muninn, k: String, text: String) {
         if (isGroup(k)) app.chat.sendGroupText(gid(k), "", text) else app.chat.sendPrivate(k, text)
     }
 
@@ -148,6 +168,12 @@ internal object KidSpeak {
     }
 
     fun stop() { try { tts?.stop() } catch (_: Exception) {} }
+
+    /** Round 17: left kids' mode: the speech engine is let go. */
+    fun shutdown() {
+        try { tts?.stop(); tts?.shutdown() } catch (_: Exception) {}
+        tts = null; ready = false; waiting = null
+    }
 }
 
 /**
@@ -198,11 +224,15 @@ internal object KidHoldStore {
         if (list.value.isEmpty()) return
         val s = KidTv.state.value
         val cfg = s.cfg ?: return
-        val (send, keep) = KidK14.release(list.value, s.parents, KidTv.quietNow()) { k -> KidChats.isGroup(k) || KidTv.approved(k) }
+        // Round 17: while quiet times are set and the device doesn't know the time yet, nothing goes to anyone but a parent.
+        val quiet = KidTv.quietNow() ?: (if (KidTv.timeUnsure()) KidK14.UNSURE else null)
+        val (send, keep) = KidK14.release(list.value, s.parents, quiet) { k -> KidChats.isGroup(k) || KidTv.approved(k) }
         for (h in send) {
             val bytes = try { app.vault.readBytes(blob(app, h.id)) } catch (_: Exception) { null }
-            if (bytes != null && KidRules.canSend(cfg.chat, h.kind)) {
-                if (h.kind == "voice") KidChats.sendVoice(app, h.k, bytes, h.ms) else KidChats.sendPhoto(app, h.k, bytes)
+            if (bytes != null && KidRules.canSend(cfg.chat, h.kind)) when (h.kind) {
+                "voice" -> KidChats.sendVoice(app, h.k, bytes, h.ms)
+                "photo" -> KidChats.sendPhoto(app, h.k, bytes)
+                else -> KidChats.sendTextNow(app, h.k, String(bytes, Charsets.UTF_8))
             }
         }
         list.value.filter { h -> keep.none { it.id == h.id } }.forEach { blob(app, it.id).delete() }

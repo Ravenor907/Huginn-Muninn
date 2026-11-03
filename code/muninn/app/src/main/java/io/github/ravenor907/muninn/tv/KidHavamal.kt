@@ -182,10 +182,14 @@ object HavParent {
     }
 }
 
-/** Today, by the device's local date (days since 1970-01-01), moving on at midnight. */
+/**
+ * Today, by the device's local date (days since 1970-01-01), moving on at midnight. Round 17: by the trusted time quiet
+ * times use (moving the device's clock forward shows no verses early), in the device's own time zone.
+ */
 @Composable
 private fun havToday(): Long {
-    val day by produceState(LocalDate.now().toEpochDay()) { while (true) { delay(60_000); value = LocalDate.now().toEpochDay() } }
+    fun today(): Long = java.time.Instant.ofEpochMilli(KidTv.nowMs()).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toEpochDay()
+    val day by produceState(today()) { while (true) { delay(60_000); value = today() } }
     return day
 }
 
@@ -253,6 +257,16 @@ private fun HavDialog(cfg: TvConfig, today: HavVerse, earlier: List<HavVerse>, m
     DisposableEffect(Unit) {
         tts[0] = try { TextToSpeech(context.applicationContext) { status -> ready = status == TextToSpeech.SUCCESS } } catch (e: Exception) { null }
         onDispose { try { tts[0]?.stop(); tts[0]?.shutdown() } catch (_: Exception) {}; tts[0] = null }
+    }
+    // Round 17: reading aloud stops when a call rings or starts (it would talk over the ring and into the call), and when
+    // Muninn goes behind another screen.
+    val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
+    LaunchedEffect(call != null) { if (call != null) try { tts[0]?.stop() } catch (_: Exception) {} }
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) try { tts[0]?.stop() } catch (_: Exception) {} }
+        owner.lifecycle.addObserver(o)
+        onDispose { owner.lifecycle.removeObserver(o) }
     }
     val first = remember { FocusRequester() }
     val big = if (tv) 30.sp else 21.sp

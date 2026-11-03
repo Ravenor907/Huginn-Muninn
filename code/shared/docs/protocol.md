@@ -363,8 +363,9 @@ the new key has to be invited again.
   many, 2 to 10). A receiver places a part before the same sender's first part of that set with a higher `pi` already
   in the chat, else last, so every member reads the parts in order even when one came later (part 1 waits for its link
   preview). The fields are kept with the message. Apps that don't know them ignore them and show the parts as they
-  come; a part with an unusable `ps`, `pi` or `pn` is shown as a plain message. Muninn `Groups.placePart` (test
-  `GroupsTest`), Huginn `GroupWire::partPlace` (self-test).
+  come; a part with an unusable `ps`, `pi` or `pn` is shown as a plain message. Round 17: that earlier part is looked
+  for only among the chat's last 200 messages, and when it is more than an hour old the new part goes last. Muninn
+  `Groups.placePart` (tests `GroupsTest`, `Round17Test`), Huginn `GroupWire::partPlace` (self-test).
 
 ### 3.9 Room `gphoto`: photos and voice messages
 
@@ -588,6 +589,17 @@ path to work. The allocation is released when the call ends. A TURN error answer
 nonce) is used even without MESSAGE-INTEGRITY (many servers send it without); only success answers must
 carry a valid one. Cloudflare hands out IPv4 relayed addresses only (it ignores REQUESTED-ADDRESS-FAMILY),
 so both sides always get the same family, whatever network the device is on.
+
+**Relay renewal (round 17).** A login lasts as long as the Worker's `ttl` says (10 minutes for an app that sends `rn`, 30
+for older ones), and a TURN allocation can't outlive the login it was made with. So 2 minutes before the login ends, a
+call in progress fetches a fresh login and makes a second allocation, gives it a permission for the peer's `relay`
+candidate, and sends its address in `cands`. Media keeps going out through the old allocation for 45 s more while the
+peer takes the new address (anything arriving on either counts), then moves to the new one, and the old one is released.
+Nothing new is on the wire: a peer of any version already follows a `relay` candidate that changes mid-call, as after a
+network change. If the Worker refuses the renewal (its budgets, `code/shared/docs/relay.md` "Limits"), the old
+allocation works until its login ends; then the free paths carry the call, and with none live for 4 s the usual new
+allocation (as after a network change) asks again. The Worker's budgets and how it turns junk away cheaply are in
+`relay.md` ("Limits", "Junk requests").
 
 **Wi-Fi.** When Chat reaches the peer on the shared Wi-Fi, send to the peer's Wi-Fi address (from Chat's
 discovery) at the port of its `lan` candidate or `lp`. Packets on this path are accepted only from that
@@ -1382,6 +1394,21 @@ newer config from such an older app, it keeps its own list too and sends the who
 parent's phone agree. Its page shows "Name's phone needs an update to manage this device" for a parent whose app lacks
 `k11`.
 
+**Removals win (1.4, round 17).** Add-only must never bring back someone a parent with `k11` took off. The device keeps,
+beside the signed config, the people (`contacts`) and the parents a config with `k11` dropped, and forgets one again when a
+config with `k11` lists them. A config without `k11` leaves those out (never its own signer), on arrival and after a restart.
+A parent's phone with `k11` keeps the same lists (its own removals, and those in another parent's `k11` config it takes):
+when the device's `applied` shows an older app's config that lists one of them again, the phone leaves them out too and
+tells its person "<Name>'s older Muninn tried to put <people> back on <device>. They stay off. Ask <Name> to update
+Muninn." Nothing on the wire changes.
+
+**Two parents at once (1.4, round 17).** Two phones that sign the same version still end on the one with the lower hash
+(7.2). Each phone remembers the hash it signed and what the device ran before its change. A phone whose config has the
+lower hash waits for the device to take it and says nothing. A phone whose config lost doesn't ask its person to make the
+change again: it puts its own change (what it changed from the device's earlier config) on top of the winner and sends that
+as the next version, so both changes end up on the device, and its person reads that both are on it. After a restart of
+the app (the earlier config isn't kept), it says the change didn't go through instead.
+
 **Names.** Each person has one name on the device, the same for every parent: the `n` in the config's `contacts`. A
 parent's app sets it on the device's page; until then it is the name the person gave themselves, never a nickname the
 parent's phone keeps for them. A parent's app takes the names from the device's config when it takes that config.
@@ -1390,16 +1417,23 @@ parent's phone keeps for them. A parent's app takes the names from the device's 
 During a quiet time the device refuses (403) every envelope in rooms `private`, `photo`, `rich`, `mx`, `live`, `unsend`,
 `call`, `group`, `gmsg` and `gphoto` from anyone but its parents (receipts, `tvconfig` and a call already under way still
 pass). The sender's app keeps the message and resends it as usual (a day, until delivered), so it arrives after the quiet
-time ends; nothing rings or shows on the device meanwhile. Its home screen shows only the parents then. The kids can't add
+time ends; nothing rings or shows on the device meanwhile. Its home screen shows only the parents then. The same holds
+for what the kids send (round 17): a quick message, typed text, a voice message or a photo for anyone but a parent waits
+on the device until the quiet time is over (and, while quiet times are set, until the device has a trusted time after a
+restart), then goes, with Muninn on screen or not. The kids can't add
 anyone: the device takes contacts only from configs (7.2), and its screens have no scan, add or code. A card (7.6) sent to
 a Kids' Device is taken and changes nothing.
 
 **Trusted time.** Quiet times never follow the device's clock or time zone alone. They are worked out in `tz` at a trusted
-time: the latest of a parent's config `ts` (taken when the device accepts that config) and a relay's clock (the `Date` of
-its answer when a connection opens), plus the device's uptime since (Android's elapsedRealtime). A later reading replaces an
-earlier one; an earlier one (an old config resent late) changes nothing. Changing the device's clock or zone has no effect.
-The trusted time is kept while the device stays on; after the device restarts, until a trusted time comes again, its own
-clock stands in.
+time made from readings, one per source: each relay's clock (the `Date` of its answer when a connection opens) and each
+parent's config `ts` (taken when the device accepts that config), each carried forward by the device's uptime since it came
+(Android's elapsedRealtime; readings older than 12 hours are dropped, at most 12 sources). Round 17: the largest group of
+readings that agree within 10 minutes wins (a tie: the group nearest the current trusted time), and its median is the time.
+Two or more sources that agree move it either way, by any amount. One source alone moves it forward at most 10 minutes and
+never back, so one relay's clock or one parent's fast phone can't shift quiet times. Between readings the uptime counts.
+Changing the device's clock or zone has no effect. The trusted time is kept while the device stays on; after the device
+restarts, until a trusted time comes again, its own clock stands in for what the kids see, while anything the kids send
+to someone other than a parent waits (below).
 
 **Other Kids' Devices and groups.** A parent can put another Kids' Device (their own, or another family's) on "Who it can
 talk to"; it then talks with this one once each is on the other's list (a parent who looks after both does both in one
@@ -1407,13 +1441,28 @@ step). A Kids' Device takes a group invite, or being put straight into a group (
 parents, and takes it without asking; any other invite is declined. It takes rooms `group`, `gmsg`, `gphoto` and
 `greceipt` only from its parents and from people in a group it is in. Its screens show those groups (as tiles on a TV, as
 chats on a tablet or phone; not during a quiet time). A parent's app shows a Kids' Device in its group pickers only to that device's parents.
+A Kids' Device takes no group calls (round 17): a `vring` only leaves a missed call, it never joins a voice room, and a
+parent's app neither rings nor announces a group call to a Kids' Device it knows.
+
+**Other families' devices that leave (round 17).** A Kids' Device takes `left` from someone on its list who isn't a parent:
+from then on it doesn't talk to that key (it's an ordinary Muninn now, and anyone holding it can add strangers), and it
+tells each of its parents with `kidleft`. Their phones take it off the list, so the next config leaves it out, and tell
+their person. A config with `k11` signed after the device heard `left` that lists the key again (a parent added it back on
+purpose) brings it back.
 
 **Locked in.** Kids' mode stays on inside Muninn. On the device, "For a parent" opens only with the parent PIN or a parent's
 yes; it then stays open for 10 minutes and offers Android's settings page for Muninn and Leave kids' mode; closing it locks
-it again at once. Five wrong PINs in a row make the next try wait 30 seconds, doubling each time, at most 15 minutes; wrong
-tries are forgotten after a right PIN and an hour after the last one. During a wait the PIN isn't checked at all, and fewer
-than 4 digits is no try. The waits, the 10 minutes and an ask's 10 minutes all count by the device's uptime, never its clock
-(a restart of the device starts a wait over). Someone at the device can ask the parents' phones once a minute. On a tablet
+it again at once. Five wrong PINs in a row make the next try wait 30 seconds, doubling each time, at most 4 hours (round 17;
+it was 15 minutes). Up to five wrong tries are forgotten an hour after the last one; once the waits have begun, only a right
+PIN starts the count over. Each try is counted before the PIN is checked (and put back by a right one), one check at a time,
+so stopping the app mid-check or trying from two dialogs at once gains nothing. During a wait the PIN isn't checked at all,
+and fewer than 4 digits is no try. After 10 wrong tries in a row the device's `status` (7.7) carries `"pinfail":<n>` (an
+integer; apps that don't know it ignore it), and a parent's phone tells its person. A new PIN a parent sets has 6 to 8
+digits; a 4 or 5 digit PIN set before keeps working. The waits, the 10 minutes and an ask's 10 minutes all count by the
+device's uptime, never its clock (a restart of the device starts a wait over). Someone at the device can ask the parents'
+phones once a minute; asks nobody answered wait longer each time (1, 2, 5 and 15 minutes, then an hour), also over a restart,
+until a parent says yes. A parent's phone asks its person once per open ask (a new ask from the same device while one is
+open replaces it quietly), and Unlock takes a hold. On a tablet
 or phone this doesn't stop Home, other apps or Android's own Settings (Clear storage, Uninstall): apps say so and suggest
 Android's App pinning or Family Link. A device whose data was cleared can't tell anyone (its keys are gone); every 6 hours
 a device sends its status (7.7) to its parents, whose phones show when it was last heard from and tell their person once
@@ -1423,7 +1472,15 @@ when it hasn't been heard from for 36 hours. Messages in room `tvconfig`:
 |---|---|---|
 | `unlockask` | the device, to each parent whose app says `k11` | `id`: 32 lowercase hex, fresh for each ask |
 | `unlock` | a parent | `id` of that ask. The device takes it only from a current parent, for the ask it has open, within 10 minutes of asking; it then opens "For a parent" for 10 minutes |
-| `left` | the device, to every parent and everyone on its list | none (exactly `{"t":"left"}`): someone with the PIN or a parent's yes left kids' mode. The device then erases itself as a disconnect does (7.3) and runs as an ordinary Muninn. A parent's phone stops looking after a device it looks after (the contact stays); any phone that knew it as a Kids' Device (a card, Send its code, `kidadd`) treats it as an ordinary contact again, in group pickers too |
+| `left` | the device, to every parent and everyone on its list | none (exactly `{"t":"left"}`): someone with the PIN or a parent's yes left kids' mode. The device then erases itself as a disconnect does (7.3) and runs as an ordinary Muninn. A parent's phone stops looking after a device it looks after (the contact stays); any phone that knew it as a Kids' Device (a card, Send its code, `kidadd`) treats it as an ordinary contact again, in group pickers too. Another Kids' Device that has it on its list stops talking to it (round 17, above) |
+| `kidleft` | a Kids' Device, to each of its parents | `k`: the chat key (1 to 200 characters) of another family's Kids' Device on its list that sent it `left`. The parent's phone takes it off that device's list and tells its person. Apps that don't know it ignore it (round 17) |
+| `taken` | a Kids' Device, to someone whose own config came through the device's pairing code after another parent paired it | none (exactly `{"t":"taken"}`). Their phone stops setting it up and says to ask a parent to add them. Apps that don't know it ignore it (round 17) |
+
+**Leaving (round 17).** Leave is saved on the device before anything is sent. It then sends `left`, sends a real group
+`leave` (3.4) to every group a parent put it in, waits 3 seconds and erases itself; a Leave cut short (the app stopped,
+the battery out) is finished at the next start, `left` sent again first. A parent's disconnect sends the group leaves the
+same way. The device keeps its chat key after leaving (people who know it keep reaching it as an ordinary contact); the
+`left` above is what tells everyone it no longer is a Kids' Device.
 
 Exactly these fields; anything else is malformed and ignored. A parent's app asks its person before it sends `unlock`: a
 notification that names the ask, and a card on the device's page (a dialog only when no other dialog is open). After 10
@@ -1437,7 +1494,7 @@ the config with `pin` taken out. That config's signature can't hold then, so a p
 every kind of Kids' Device; a device without `u1` but with `k2` is asked with the k2 `update`.
 
 **Daily Hávamál (`k12`).** One verse of the Hávamál a day on the kids' home (the first row of the chat list on a tablet or
-phone, a tile after the people on a TV), the same verse all day by the device's local date, cycling through the app's list (Henry
+phone, a tile after the people on a TV), the same verse all day by the device's local date (round 17: of the trusted time, in the device's zone), cycling through the app's list (Henry
 Adams Bellows' translation, 1923, public domain), with a line for children on what it means, Read aloud (the device's
 text-to-speech, when it has one) and the verses shown before (at most 30, since it came on). A device whose app says
 `k12` takes three more optional config fields. A parent's app puts `hav` and `havw` in only for such a device (always,
@@ -1689,6 +1746,13 @@ chat, answered with `receipt` `delivered` (and `read`), retried for a day, unsen
 out. The receiver looks the quoted message up in that chat; one that isn't there (deleted, or never arrived)
 shows as "Not here any more". A reply to a contact without `m1` goes as `private` with just the text.
 
+**A long message in parts (round 17).** A 1:1 text longer than one message, sent as up to 10 messages, goes as `rich`
+(to an app with `m1`) and carries `ps`, `pi` and `pn` in each part, exactly as in 3.8. The receiver places a part
+before that sender's first part of the same `ps` with a higher `pi` already in the chat, else last, so the parts read
+in order even when part 1 waits for its link preview or a relay delivers them out of order. Apps that don't know the
+fields ignore them; unusable ones make a plain message. As in 3.8, only among the last 200 messages and beside a part
+under an hour old. Muninn `Chat.placePart` (tests `ChatOrderTest`, `Round17Test`).
+
 ### 11.3 Room `mx`: reactions and edits of 1:1 messages
 
 ```json
@@ -1938,12 +2002,16 @@ unstamped frame never switches the guard off:
 - Round 15's rule (an unstamped `sync`, `ping` or `pong` without `l4` taken, and the device no longer one that stamps)
   is withdrawn: one replayed frame could turn the guard off. A round 15 app still stamps, so it is unaffected.
 
-**Clocks more than 36 hours apart (round 15, receiver only; Huginn does this, and nothing on the wire changes).** A
-frame that came straight over the Wi-Fi or Bluetooth is live (a relay can't have kept it), so it's taken whatever its
-`lts` says (its `ln` is still checked and remembered), and the receiver keeps how far that device's clock is from its own
-(when more than an hour, updated when it moves by more than 10 minutes). A frame by relay is taken when its `lts` is
-within 36 hours of the receiver's clock, or of the receiver's clock moved by that kept difference. Only a relay frame
-that is neither is dropped. Either way, the first time in a run that a device's `lts` is more than 36 hours off, the
+**Clocks more than 36 hours apart (round 15, receiver only; Huginn does this).** Round 17: arriving over the Wi-Fi or
+Bluetooth says where a frame came from, not when it was made (anyone on the network can hand over bytes copied from a
+relay), so every frame, on every route, is taken only when its `lts` is within 36 hours of the receiver's clock, or of the
+receiver's clock moved by a kept difference. That difference (kept when more than an hour, updated when it moves by more
+than 10 minutes) is learned only from a `pong` straight over the Wi-Fi or Bluetooth that answers the receiver's own
+`ping` within 30 seconds. The `ping` carries `"pn"`, 16 random hex digits, and a device that answers a `ping` SHOULD say
+the same `"pn"` back in its `pong`; a `pong` with a different `pn` teaches nothing (one without `pn`, from an app before
+round 17, is matched by time alone). Huginn and Muninn (`LinkWire.pong`, test `Round17Test`) both say it back. Never
+from a frame that came on its own. Every other frame more than 36 hours off
+both is dropped. Either way, the first time in a run that a device's `lts` is more than 36 hours off, the
 receiver says so once: "<device>'s clock and this computer's are about N days apart. Set the right date and time on
 whichever is wrong." A receiver without this drops every frame more than 36 hours off, as above.
 
@@ -2624,6 +2692,10 @@ Room `live` `active` (11.4) carries two more fields:
 - `v` is an integer, 1 <= v < 2^53, higher with every change of the picture or colour. `col` is `#rrggbb` (either case).
   `pic` is standard base64 of a JPEG, exactly 256 x 256, at most 24 KB (24576 bytes) decoded; `""` means no picture
   (clears one). Fields not listed are ignored. Vectors: `profile`, `pictures`.
+- **`nm` (Muninn, optional, round 17 documents it):** the sender's chosen name, at most 40 characters after trimming,
+  with no control characters (else ignored). A receiver takes it out of format and direction characters as for nudge
+  names (23.3), and applies it to the contact's own name only when no nickname is set on that device, saying so ("Ann is
+  now called Annie."). It never renames a group peer who isn't a contact. Huginn ignores it.
 - A sender makes the picture from the centre square of what was chosen, scaled to 256 x 256, encoded as JPEG at
   quality 80, then 70, 60, 50, 40, 30, 20, the first that is **12 KB (12288 bytes) or less** (vectors: `limits`), and
   with every metadata block removed (as photos are, Photos.scrub). 12 KB keeps one relay event under 64 KB (20.1): a
@@ -2761,13 +2833,16 @@ can't ring. With `b1` it can:
   is not in backups. Erase everything and Move (on the device moved from) delete the file; a new ring key is made only
   once there is a vault again.
 - Its public half goes in every receipt to a **contact** whose caps include `b1` (never to a group-only peer, never
-  to someone blocked): `"rk"` (base64 SPKI) and `"rp"` (the ring mailbox, 64 lowercase hex). A receiver takes both
+  to someone blocked, and from round 17 never to a contact whose calls are turned off on this device): `"rk"` (base64 SPKI) and `"rp"` (the ring mailbox, 64 lowercase hex). A receiver takes both
   from an authentic receipt of a contact or group peer when `rk` is a P-256 SPKI as in 23.1 and `rp` is 64 lowercase
   hex, and keeps the latest.
 - **Blocking someone** makes a new ring key and ring mailbox, so whoever was blocked can't ring the device any more.
   An empty receipt `{"ids":[],"s":"delivered"}` with the new `rk` and `rp` goes at once to every other contact whose
-  caps include `b1`. The old ring mailbox is still read (and signed in as) for 2 days, for rings from contacts who
-  haven't heard of the new one yet, then dropped.
+  caps include `b1`. The old ring mailbox is still read (and signed in as) for 2 days, then dropped. From round 17 a
+  ring that opens only with the old key never rings (whoever was blocked could still use it); the old mailbox is read
+  for nudges only. **Turning calls off** for a contact renews the ring key the same way (the new one goes to every other
+  `b1` contact whose calls are on), and turning them on again sends the current one to that contact. Muninn also rings
+  at most 3 times in 10 minutes while locked, as a locked device can't tell who rings.
 - A caller sending a 1:1 `offer` (5.2, not one inside a voice room) to someone whose caps include `b1` and whose ring
   key it holds also publishes, once per call, a **ring envelope** to their ring mailbox, padded and expiring like
   any other event (section 20):

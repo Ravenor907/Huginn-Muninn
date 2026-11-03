@@ -229,7 +229,7 @@ class E1B1Test {
         assertFalse(RingWire.waitForDayKey(false, 0L, r))
     }
 
-    /** After a block: a new ring key and mailbox; the old one still opens and is listened on for 2 days, then goes. */
+    /** After a block: a new ring key and mailbox; the old mailbox is listened on for 2 days (nudges only), then goes. */
     @Test fun ringKeyRenewAfterBlock() {
         val f = java.io.File.createTempFile("ring", ".json").also { it.delete() }
         try {
@@ -242,7 +242,8 @@ class E1B1Test {
             assertTrue(a.mailbox != oldBox)
             assertEquals(listOf(a.mailbox, oldBox), a.mailboxes(t + 1000))
             val call = "AAECAwQFBgcICQoLDA0ODw"
-            assertEquals(call to 7L, a.open(RingWire.ringContent(oldPub, call, 7L), t + 1000))
+            // Round 17: the replaced key never rings again (blocked, or calls turned off).
+            assertNull(a.open(RingWire.ringContent(oldPub, call, 7L), t + 1000))
             assertEquals(call to 8L, a.open(RingWire.ringContent(a.publicKey, call, 8L), t + 1000))
             // Read back from the file the same.
             val b = RingKey(f)

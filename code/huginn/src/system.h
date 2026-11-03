@@ -62,7 +62,7 @@ public:
     static QString displayPath(const QUrl &url);
     static bool inFlatpak();
 
-    // SteamOS Game Mode (gamescope) or Steam's Big Picture, from the environment alone (works before the app exists).
+    // Game mode (gamescope) or Steam's Big Picture, from the environment alone (works before the app exists).
     static bool detectGameMode();
     // How much bigger than its design size a w by h screen (device-independent pixels, after the system's own
     // scaling) of physical size mm must draw to be readable. 1.0 for monitors and TVs.

@@ -149,7 +149,7 @@ class KidDeviceTest {
         assertEquals(0L, KidRules.waitMs(4))
         assertEquals(30_000L, KidRules.waitMs(5))
         assertEquals(60_000L, KidRules.waitMs(6))
-        assertEquals(15 * 60_000L, KidRules.waitMs(50))
+        assertEquals(KidRules.MAX_WAIT_MS, KidRules.waitMs(50))
         // In the config: only the hash, well-formed or refused.
         val c = cfg(9, TvExtras(chat = 2, pin = p))
         TvRules.check(c)

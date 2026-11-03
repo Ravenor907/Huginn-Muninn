@@ -307,19 +307,30 @@ private fun RemoteVideo(v: CallVideo.State, modifier: Modifier) =
 /** A decoded picture ([onSurface] gets the TextureView's surface), fitted whole and turned [rotation] degrees. Also the room's shared screen. */
 @Composable
 fun VideoPicture(onSurface: (Surface?) -> Unit, width: Int, height: Int, rotation: Int, modifier: Modifier, description: String) {
+    // Round 17: the latest picture size and turn are kept beside the view, and the fit is worked out again whenever
+    // the view gets a size or changes it (a turn, a window resize, a new view after coming back), not only when the
+    // picture changes.
+    val pic = remember { PictureFit() }
     AndroidView(factory = { ctx ->
-        TextureView(ctx).apply {
-            surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                private var surface: Surface? = null
-                override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { surface = Surface(st); onSurface(surface) }
-                override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { onSurface(null); surface?.release(); surface = null; return true }
-                override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-            }
+        val tv = TextureView(ctx)
+        tv.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            private var surface: Surface? = null
+            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { surface = Surface(st); onSurface(surface); pic.fitTo(tv) }
+            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) { pic.fitTo(tv) }
+            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { onSurface(null); surface?.release(); surface = null; return true }
+            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
         }
+        tv.addOnLayoutChangeListener { _, l, t, r, b, oldL, oldT, oldR, oldB -> if (r - l != oldR - oldL || b - t != oldB - oldT) pic.fitTo(tv) }
+        tv
     }, update = { tv ->
-        tv.setTransform(Vp8.fit(tv.width.toFloat(), tv.height.toFloat(), width, height, rotation))
+        pic.w = width; pic.h = height; pic.r = rotation
+        pic.fitTo(tv)
     }, modifier = modifier.semantics { contentDescription = description })
+}
+
+/** A [VideoPicture]'s latest picture size and turn, applied to its view at the view's current size. */
+private class PictureFit(var w: Int = 0, var h: Int = 0, var r: Int = 0) {
+    fun fitTo(tv: TextureView) { tv.setTransform(Vp8.fit(tv.width.toFloat(), tv.height.toFloat(), w, h, r)) }
 }
 
 /** Your own camera, small in the corner (picture in picture), mirrored like a mirror. */

@@ -52,6 +52,10 @@ object Panic {
     fun lock(context: Context): Boolean {
         if (!enabled(context) || needsLock(context)) return false
         _locked.value = true
+        // Kept outside the vault, written before the process ends: the fresh, locked Muninn that starts again still
+        // shows no names until someone unlocks it.
+        try { prefs(context).edit().putBoolean(PANICKED, true).commit() } catch (_: Exception) {}
+        store = prefs(context)
         // The app-wide lock goes up too: every dialog closes, and nothing (Reply included) gets past it.
         AppLock.raise()
         clearMessages(context)
@@ -75,6 +79,8 @@ object Panic {
         Thread {
             // A moment for the hangup to reach the other side and the "Locked" toast to show.
             try { Thread.sleep(700) } catch (_: Exception) {}
+            // What was being typed is sealed in the vault first, so unlocking brings it back.
+            try { io.github.ravenor907.muninn.net.Drafts.saveNow(app) } catch (_: Exception) {}
             try { app.vault.lock() } catch (_: Exception) {}
             android.os.Process.killProcess(android.os.Process.myPid())
         }.start()
@@ -82,14 +88,30 @@ object Panic {
     @Volatile private var forgetting = false
 
     /** The person unlocked: message text may show in notifications again (if they allow previews). */
-    fun unlocked() { _locked.value = false }
+    fun unlocked(context: Context? = null) {
+        _locked.value = false
+        try { (context?.let { prefs(it) } ?: store)?.edit()?.remove(PANICKED)?.apply() } catch (_: Exception) {}
+    }
 
-    /** Takes down every message notification. Leaves the "Listening" and transfer ones alone. */
+    /** At start-up: a panic lock from before the process ended is still on (only with a lock set). */
+    fun restore(context: Context, hasPassword: Boolean) {
+        val p = prefs(context)
+        store = p
+        if (p.getBoolean(PANICKED, false)) { if (hasPassword) _locked.value = true else p.edit().remove(PANICKED).apply() }
+    }
+
+    @Volatile private var store: android.content.SharedPreferences? = null
+    private const val PANICKED = "panicked"
+
+    /**
+     * Takes down every notification Muninn put up (messages, quiet hours and Do not disturb ones, locked nudges, missed
+     * calls, Kids' Device notices). Leaves only the "Listening" and transfer ones, which name nobody.
+     */
     fun clearMessages(context: Context) {
         try {
             val nm = context.getSystemService(NotificationManager::class.java)
             nm.activeNotifications.forEach { sb ->
-                if (sb.notification.channelId == Muninn.MESSAGES) nm.cancel(sb.tag, sb.id)
+                if (!panicKeeps(sb.notification.channelId)) nm.cancel(sb.tag, sb.id)
             }
         } catch (_: Exception) {}
     }
@@ -153,3 +175,9 @@ object Panic {
     private const val GAP = 350L       // ms between counted shakes
     private const val WINDOW = 2000L   // 3 shakes within 2 seconds
 }
+
+/** The notification channels a panic lock leaves up: the "Listening" one and transfers. Every other one is cleared. */
+internal val PANIC_KEEPS = setOf("listening_quiet", "transfers")
+
+/** True if a panic lock leaves a notification on [channel] up. */
+internal fun panicKeeps(channel: String?): Boolean = channel != null && channel in PANIC_KEEPS

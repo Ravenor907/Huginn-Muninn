@@ -87,6 +87,12 @@ void relayChecks()
         check(reg.value(QStringLiteral("pow")).toDouble() == 7.0 && reg.value(QStringLiteral("id")).toString() == id && !b.contains(QStringLiteral("tok"))
                   && withTok.value(QStringLiteral("tok")).toString() == QLatin1String("x.y"),
               "relay registration body, and tok only when there is a token");
+        check(!withTok.contains(QStringLiteral("rn")) && !reg.contains(QStringLiteral("rn"))
+                  && QJsonDocument::fromJson(RelayCredentials::body(key, 1, "s", QString(), true)).object().value(QStringLiteral("rn")).toInt() == 1
+                  && RelayCredentials::retryMs(QJsonObject{{QStringLiteral("retry"), 3600.0}}, 86400000) == 3600000
+                  && RelayCredentials::retryMs(QJsonObject{{QStringLiteral("retry"), 5.0}}, 86400000) == 60000
+                  && RelayCredentials::retryMs(QJsonObject(), 86400000) == -1,
+              "relay renewal: rn only on a login, and a 429 waits as long as it says");
         const QString sid = QString(64, QLatin1Char('a'));
         const QString kept = RelayCredentials::tokenOf(QJsonObject{{QStringLiteral("tok"), QStringLiteral("1800604800.abc")}, {QStringLiteral("exp"), 1800604800.0}}, sid);
         check(kept == sid + QStringLiteral("|1800604800.abc|1800604800") && RelayCredentials::tokenFor(kept, sid, 1800000000) == QLatin1String("1800604800.abc")

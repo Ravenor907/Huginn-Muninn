@@ -1853,7 +1853,16 @@ bool FileLink::openFile(const QString &path)
     if (!QFileInfo(path).isFile())
         return false;
     // A program, or a name made to look like something else: asked first (Main.qml), never opened by one click.
-    const QString warn = Sharing::openWarning(QFileInfo(path).fileName());
+    QString warn = Sharing::openWarning(QFileInfo(path).fileName());
+    // Round 17 (m8): received onto a drive that can't keep Windows' "from the internet" mark, so Windows won't warn:
+    // an Office file (which can run macros) or a PDF is asked about here instead.
+    if (warn.isEmpty() && Sharing::unmarked(path)) {
+        const QString kind = Sharing::kindOf(path);
+        if (kind == QLatin1String("Document") || kind == QLatin1String("Spreadsheet") || kind == QLatin1String("PDF document"))
+            warn = QStringLiteral("\"%1\" came from someone else, and this drive can't keep the mark that makes Windows check it before it "
+                                  "opens. Open it only if you were expecting it.")
+                       .arg(QFileInfo(path).fileName());
+    }
     if (!warn.isEmpty()) {
         Q_EMIT askOpen(path, warn);
         return true;
@@ -1873,10 +1882,21 @@ QVariantList FileLink::portalUrls(const QString &key) const
     k = k.trimmed();
     if (k.isEmpty() || k.size() > 256)
         return out;
+    // Round 17 (Linux minor 3): a portal that's missing or stuck never holds the window for long: a short wait, and once
+    // it didn't answer at all this run it isn't asked again (the drop falls back to plain paths).
+    static bool portalGone = false;
+    if (portalGone)
+        return out;
     QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.portal.Documents"), QStringLiteral("/org/freedesktop/portal/documents"),
                                                     QStringLiteral("org.freedesktop.portal.FileTransfer"), QStringLiteral("RetrieveFiles"));
     m.setArguments({k, QVariantMap()});
-    const QDBusMessage r = QDBusConnection::sessionBus().call(m, QDBus::Block, 5000);
+    const QDBusMessage r = QDBusConnection::sessionBus().call(m, QDBus::Block, 1500);
+    if (r.type() == QDBusMessage::ErrorMessage) {
+        const QString e = r.errorName();
+        if (e == QLatin1String("org.freedesktop.DBus.Error.NoReply") || e == QLatin1String("org.freedesktop.DBus.Error.ServiceUnknown")
+            || e == QLatin1String("org.freedesktop.DBus.Error.TimedOut") || e == QLatin1String("org.freedesktop.DBus.Error.Disconnected"))
+            portalGone = true;
+    }
     if (r.type() != QDBusMessage::ReplyMessage || r.arguments().isEmpty())
         return out;
     for (const QString &p : r.arguments().constFirst().toStringList())
@@ -1899,8 +1919,19 @@ bool FileLink::showInFolder(const QString &path) const
     if (!fi.exists())
         return false;
 #ifdef Q_OS_WIN
-    // Explorer opens the folder with the file picked.
-    return QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,") + QDir::toNativeSeparators(fi.absoluteFilePath())});
+    // Explorer opens the folder with the file picked. Round 17 (m9): by its full path in Windows' own folder (never
+    // found by search order, which looks in Huginn's folder first), and the file's path in quotes, as Explorer splits
+    // /select, at commas ("a,b.pdf").
+    QString windir = qEnvironmentVariable("WINDIR");
+    if (windir.isEmpty())
+        windir = qEnvironmentVariable("SystemRoot");
+    const QString explorer = QDir::toNativeSeparators(QDir(windir.isEmpty() ? QStringLiteral("C:/Windows") : windir).filePath(QStringLiteral("explorer.exe")));
+    if (!QFileInfo::exists(explorer))
+        return false;
+    QProcess p;
+    p.setProgram(explorer);
+    p.setNativeArguments(QStringLiteral("/select,\"") + QDir::toNativeSeparators(fi.absoluteFilePath()) + QLatin1Char('"'));
+    return p.startDetached();
 #else
     // The desktop's file manager (inside the Flatpak through the OpenURI portal).
     return QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));

@@ -28,6 +28,8 @@ Item {
     readonly property bool cards: choices.some(c => !!c.detail)
     // Set after opening (Ui.askAppend): the most characters the answer may hold, 0 for no limit.
     property int limit: 0
+    // Set after opening: what opened it (a chat's message box), so that one can close it again (Composer.dropAbove).
+    property var owner: null
     signal accepted(string text)
     signal cancelled()
 
@@ -66,6 +68,7 @@ Item {
         moreText = ""
         moreOpen = false
         limit = 0
+        owner = null
         draftKey = t + "|" + (ctx || "") + "|" + (initial || "")
         const draft = isPassword ? "" : (drafts[draftKey] || "")
         field.text = draft || initial || ""

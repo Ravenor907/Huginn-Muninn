@@ -311,8 +311,25 @@ LockedNudgeLimit::Take LockedNudgeLimit::take(int mode, const RingWire::Nudge &n
     Take t;
     t.n = n;
     t.key = RingWire::nudgeGroupKey(mode, n);
-    if (n.known)
+    if (n.known) {
+        // Round 17 (security m2): at most kKnownShown names; any more fold into one notification naming nobody.
+        if (mode > 0 && !m_knownKeys.contains(t.key)) {
+            if (m_knownKeys.size() >= kKnownShown) {
+                t.n.from.clear();
+                t.n.chat.clear();
+                t.key = QStringLiteral("+");
+            } else {
+                m_knownKeys << t.key;
+            }
+        }
+        // And at most kKnownAlerts alerts per kAlertEveryMs among them.
+        while (!m_knownAlerts.isEmpty() && nowMs - m_knownAlerts.first() >= kAlertEveryMs)
+            m_knownAlerts.removeFirst();
+        t.alert = m_knownAlerts.size() < kKnownAlerts;
+        if (t.alert)
+            m_knownAlerts << nowMs;
         return t;
+    }
     // From the nudge key: one shared "Group message" notification, alerting at most once per kAlertEveryMs.
     t.n = RingWire::anonymous(n);
     t.key = RingWire::nudgeGroupKey(mode, t.n);
@@ -325,6 +342,8 @@ LockedNudgeLimit::Take LockedNudgeLimit::take(int mode, const RingWire::Nudge &n
 void LockedNudgeLimit::clear()
 {
     m_lastAlert = -kAlertEveryMs;
+    m_knownAlerts.clear();
+    m_knownKeys.clear();
 }
 
 QString RingWire::nudgeTitle(int mode, const Nudge &n)
@@ -641,11 +660,17 @@ void RingKey::load()
         const QJsonObject old = o.value(QStringLiteral("old")).toObject();
         m_old = pairOf(old);
         m_oldUntil = m_old.mailbox.isEmpty() ? 0 : old.value(QStringLiteral("until")).toInteger();
+        m_made = o.value(QStringLiteral("made")).toInteger();
     }
     if (m_now.mailbox.isEmpty()) {
         m_now.keys = ChatCrypto::newKeyPair();
         m_now.secret = Schnorr::newSecret();
         m_now.mailbox = Schnorr::hex(Schnorr::publicKey(m_now.secret));
+        m_made = nowMs();
+        save();
+    } else if (m_made <= 0 || m_made > nowMs() + 86400000LL) {
+        // Round 17: a file from before keys were renewed on a schedule (or a clock far off): counted from now.
+        m_made = nowMs();
         save();
     }
     m_loaded = !m_now.keys.privateDer.isEmpty() && !m_now.mailbox.isEmpty();
@@ -654,6 +679,7 @@ void RingKey::load()
 bool RingKey::save() const
 {
     QJsonObject o = pairJson(m_now.keys, m_now.secret);
+    o.insert(QStringLiteral("made"), m_made);
     if (m_oldUntil > 0 && !m_old.mailbox.isEmpty()) {
         QJsonObject old = pairJson(m_old.keys, m_old.secret);
         old.insert(QStringLiteral("until"), m_oldUntil);
@@ -747,7 +773,16 @@ void RingKey::renew()
     m_now.keys = ChatCrypto::newKeyPair();
     m_now.secret = Schnorr::newSecret();
     m_now.mailbox = Schnorr::hex(Schnorr::publicKey(m_now.secret));
+    m_made = nowMs();
     save();
+}
+
+qint64 RingKey::madeAt()
+{
+    if (m_forgotten)
+        return 0;
+    load();
+    return m_made;
 }
 
 bool RingKey::dropOld()
@@ -770,6 +805,7 @@ void RingKey::forget()
     m_now = Pair();
     m_old = Pair();
     m_oldUntil = 0;
+    m_made = 0;
     m_loaded = false;
     m_forgotten = true;
 }
@@ -906,6 +942,20 @@ bool RingWire::selfTest(const QString &vectorsPath)
             check("a Group message nudge sounds once per 2 minutes, not once per lock",
                   LockedNudgeLimit::sounds(a, 1) && !LockedNudgeLimit::sounds(b, 2) && !LockedNudgeLimit::sounds(raw, 3) && LockedNudgeLimit::sounds(later, 4)
                       && LockedNudgeLimit::sounds(c, 1) && !LockedNudgeLimit::sounds(c, 2));
+            // Round 17 (security m2): a contact sending a new name each time gets at most 3 alerts in 2 minutes and at most
+            // 5 named notifications; the rest fold into one naming nobody.
+            {
+                LockedNudgeLimit many;
+                QList<LockedNudgeLimit::Take> takes;
+                for (int i = 0; i < 8; ++i)
+                    takes << many.take(1, Nudge{t0, QStringLiteral("Name%1").arg(i), QString(), QStringLiteral("msg")}, t0 + i * 1000);
+                const LockedNudgeLimit::Take again = many.take(1, Nudge{t0, QStringLiteral("Name9"), QString(), QStringLiteral("msg")},
+                                                               t0 + LockedNudgeLimit::kAlertEveryMs + 1000);
+                check("contacts' nudges are limited too: 3 alerts per 2 minutes, 5 names, then one notification",
+                      takes.at(0).alert && takes.at(2).alert && !takes.at(3).alert && nudgeTitle(1, takes.at(4).n) == QLatin1String("Name4")
+                          && takes.at(5).n.from.isEmpty() && takes.at(5).key == takes.at(7).key && nudgeTitle(1, takes.at(6).n) == QLatin1String("Huginn")
+                          && again.alert && again.key == takes.at(5).key);
+            }
             check("old nudges are dropped", nudgeFresh(Nudge{1000}, 1000 + kNudgeMaxAgeMs) && !nudgeFresh(Nudge{1000}, 1001 + kNudgeMaxAgeMs));
             check("senders known to be unable to nudge",
                   cantNudge({QStringLiteral("r1"), QStringLiteral("b1")}, false) && !cantNudge({QStringLiteral("r1"), QStringLiteral("n1")}, false)

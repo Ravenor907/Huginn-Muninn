@@ -6,6 +6,7 @@ import Huginn
 // "off": Settings › Turn off the lock: the current one is drawn or typed again first.
 // "own": Settings › Linked devices › This device's own chats: the current one opens them while a phone is linked.
 // "renew": restored after "Forgot it?" (Vault.lockNeeded): a new lock, like "setup", with no way to skip it.
+// "confirm" (round 17, LockCheck.qml): the current one, before Back up, Restore, Move or linking another device.
 // Everything Huginn keeps is locked with it; nobody can reset it. "Forgot it?" under the unlock puts a backup back
 // (BackupPanel's restore, erasing what's here, held to confirm), then a new lock is set. The pattern sits in the
 // lower half (Settings › Privacy and lock › Pattern position: Top, Middle or Lower).
@@ -13,7 +14,7 @@ Item {
     id: panel
     property string mode: Vault.exists ? "unlock" : "setup"
     // Unlocking, or turning the lock off: the current pattern or password is asked for.
-    readonly property bool asks: mode === "unlock" || mode === "off" || mode === "own"
+    readonly property bool asks: mode === "unlock" || mode === "off" || mode === "own" || mode === "confirm"
     // Setting one: a password (a passphrase) with a mouse and keyboard; the pattern with a controller or on a handheld.
     property bool usePattern: asks ? Vault.usesPattern : (System.handheld || System.gameMode || (!!Ui.main && Ui.main.padInUse))
     property var first: null
@@ -32,7 +33,13 @@ Item {
     property bool compact: false
     // The least height that still gives the pattern 200 px (a page that scrolls uses it).
     readonly property real minHeight: intro.implicitHeight + Theme.px(200) + foot.implicitHeight
-    signal finished(string how)   // "setup", "unlock", "change", "off" or "own": what just finished
+    signal finished(string how)   // "setup", "unlock", "change", "off", "own" or "confirm": what just finished
+    // "confirm": what the lock is given for (Vault.confirmLock).
+    property string grantFor: ""
+    // Round 17: setting a lock after it was off seals everything again on a thread of its own (Vault.sealing).
+    property bool sealAsked: false
+    property bool sealPattern: false
+    readonly property bool busy: Vault.unlocking || Vault.sealing
     signal cancelled()
 
     implicitWidth: Theme.px(520)
@@ -52,6 +59,10 @@ Item {
             Ui.say(pattern ? "Pattern set." : "Password set.")
             first = null; note = ""; bad = false
             finished(mode === "setup" ? "setup" : mode === "renew" ? "renew" : "change")
+        } else if (Vault.sealing) {
+            // Sealing every file again with the new lock: the progress shows here, and secretFinished says how it ended.
+            sealAsked = true; sealPattern = pattern
+            first = null; note = ""; bad = false
         } else { note = Vault.secretError() || "That didn't save. Try again."; bad = true }
     }
     // Unlocking works out the key (and reads the chats) off the window's thread: a ring turns until it's done.
@@ -71,6 +82,20 @@ Item {
             if (ok) { panel.note = ""; panel.bad = false; panel.finished("unlock") }
             else { panel.note = "That's not it. Try again."; panel.bad = true; panel.wait = Vault.waitSeconds; pad.shake() }
         }
+        function onSecretFinished(ok, error) {
+            if (!panel.sealAsked) return
+            panel.sealAsked = false
+            if (ok) {
+                Ui.say(panel.sealPattern ? "Pattern set. Your chats are sealed with it." : "Password set. Your chats are sealed with it.")
+                panel.note = ""; panel.bad = false
+                panel.finished("change")
+            } else { panel.note = error || "That didn't save. Try again."; panel.bad = true }
+        }
+    }
+    function tryConfirm(secret) {
+        if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
+        if (Vault.confirmLock(secret, grantFor)) { note = ""; bad = false; finished("confirm") }
+        else { note = "That's not it. Try again."; bad = true; wait = Vault.waitSeconds; pad.shake() }
     }
     function tryOff(secret) {
         if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
@@ -87,6 +112,7 @@ Item {
         if (mode === "unlock") { tryUnlock(secret); return }
         if (mode === "off") { tryOff(secret); return }
         if (mode === "own") { tryOwn(secret); return }
+        if (mode === "confirm") { tryConfirm(secret); return }
         if (dots.length < 6) { note = "Connect at least 6 dots."; bad = true; pad.shake(); return }
         if (first === null) { first = dots; note = "Draw it again to confirm."; bad = false; return }
         if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
@@ -98,6 +124,7 @@ Item {
         if (mode === "unlock") { tryUnlock(t); pw.text = ""; return }
         if (mode === "off") { tryOff(t); pw.text = ""; return }
         if (mode === "own") { tryOwn(t); pw.text = ""; return }
+        if (mode === "confirm") { tryConfirm(t); pw.text = ""; return }
         if (t.length < 6) { note = "At least 6 characters."; bad = true; return }
         if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
         pw.text = ""; pw2.text = ""
@@ -146,7 +173,8 @@ Item {
             textFormat: Text.PlainText
             anchors.horizontalCenter: parent.horizontalCenter
             text: panel.mode === "setup" ? "SET A LOCK" : panel.mode === "renew" ? "SET A NEW LOCK" : panel.mode === "change" ? "CHANGE THE LOCK"
-                : panel.mode === "off" ? "TURN OFF THE LOCK" : panel.mode === "own" ? "THIS DEVICE'S OWN CHATS" : "HUGINN"
+                : panel.mode === "off" ? "TURN OFF THE LOCK" : panel.mode === "own" ? "THIS DEVICE'S OWN CHATS"
+                : panel.mode === "confirm" ? "CONFIRM IT'S YOU" : "HUGINN"
             color: Theme.text; font.family: Theme.display; font.pixelSize: Theme.fs(22); font.weight: Font.Bold; font.letterSpacing: Theme.px(3)
         }
         Text {
@@ -174,6 +202,7 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             visible: text !== ""
             text: panel.wait > 0 ? "Too many tries. Wait " + panel.wait + " s."
+                : panel.sealAsked && Vault.sealing ? Vault.sealProgress
                 : panel.note !== "" ? panel.note
                 : ""
             color: panel.bad || panel.wait > 0 ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(14)
@@ -198,7 +227,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 width: Math.min(Theme.px(260), room.height, parent.width); height: width
                 error: panel.bad
-                enabled: panel.wait === 0 && !Vault.unlocking
+                enabled: panel.wait === 0 && !panel.busy
                 onDone: d => panel.onPattern(d)
             }
             Column {
@@ -209,12 +238,12 @@ Item {
                 spacing: Theme.px(8)
                 PwField { id: pw; placeholder: panel.asks ? "Password" : "New password (6 or more)"; onEnter: panel.asks ? panel.submitPassword() : pw2.forceActiveFocus() }
                 PwField { id: pw2; visible: !panel.asks; placeholder: "Type it again"; onEnter: panel.submitPassword() }
-                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : panel.mode === "own" ? "Open" : "Save"; enabled: panel.wait === 0 && !Vault.unlocking; onClicked: panel.submitPassword() }
+                HButton { anchors.horizontalCenter: parent.horizontalCenter; kind: "primary"; text: panel.mode === "unlock" ? "Unlock" : panel.mode === "off" ? "Turn off" : panel.mode === "own" ? "Open" : panel.mode === "confirm" ? "Confirm" : "Save"; enabled: panel.wait === 0 && !panel.busy; onClicked: panel.submitPassword() }
             }
             // The progress ring while Huginn unlocks: an arc drawn once, turned (still when motion is off).
             Item {
                 id: ring
-                visible: Vault.unlocking && panel.unlockAsked
+                visible: (Vault.unlocking && panel.unlockAsked) || (Vault.sealing && panel.sealAsked)
                 anchors.centerIn: parent
                 width: Theme.px(56); height: width
                 Rectangle { anchors.fill: parent; radius: width / 2; color: Theme.groundDeep; opacity: 0.85 }
@@ -242,7 +271,7 @@ Item {
                     }
                 }
                 Accessible.role: Accessible.ProgressBar
-                Accessible.name: "Unlocking"
+                Accessible.name: panel.sealAsked ? "Sealing your chats" : "Unlocking"
             }
         }
     }
@@ -275,7 +304,7 @@ Item {
             TapHandler { onTapped: panel.forgot() }
         }
         HButton {
-            visible: panel.cancelable || panel.mode === "change" || panel.mode === "off" || panel.mode === "own"
+            visible: (panel.cancelable || panel.mode === "change" || panel.mode === "off" || panel.mode === "own") && !panel.sealAsked
             anchors.horizontalCenter: parent.horizontalCenter
             kind: "plain"; text: panel.cancelText
             onClicked: panel.cancelled()
@@ -318,11 +347,20 @@ Item {
         TapHandler { onTapped: input.forceActiveFocus() }
     }
 
+    // Round 17: where Steam's keyboard would cover the fields (and Unlock or Save), the password is typed in the prompt
+    // at the top instead, which sits above it (as a message is). Setting one asks twice, then saves.
+    function typeIn(second) {
+        if (!System.keyboardCovers) { const f = second ? pw2 : pw; f.forceActiveFocus(); System.showSteamKeyboard(); return }
+        const go = mode === "unlock" ? "Unlock" : mode === "off" ? "Turn off" : mode === "own" ? "Open" : "Save"
+        if (asks) Ui.ask("Password", "", "", go, t => { pw.text = t; panel.submitPassword() }, true, true)
+        else if (!second) Ui.ask("New password (6 or more)", "", "", "Next", t => { pw.text = t; panel.typeIn(true) }, true, true)
+        else Ui.ask("Type it again", "", "", go, t => { pw2.text = t; panel.submitPassword() }, true, true)
+    }
     function handleButton(b) {
         if (usePattern && pad.handleButton(b)) return true
         // Setting one: A in the first field goes on to the second.
-        if (b === "a" && !usePattern && !asks && pw.text.length && pw2.text.length === 0) { pw2.forceActiveFocus(); System.showSteamKeyboard(); return true }
-        if (b === "a" && !usePattern) { if (pw.text.length) submitPassword(); else { pw.forceActiveFocus(); System.showSteamKeyboard() } return true }
+        if (b === "a" && !usePattern && !asks && pw.text.length && pw2.text.length === 0) { typeIn(true); return true }
+        if (b === "a" && !usePattern) { if (pw.text.length) submitPassword(); else typeIn(false); return true }
         if ((b === "lb" || b === "next" || b === "prev") && !asks) { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "y" && canForget) { forgot(); return true }
         // A new lock after "Forgot it?" can't be skipped.

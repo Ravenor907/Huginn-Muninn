@@ -1,5 +1,6 @@
 package io.github.ravenor907.muninn.ui
 
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -286,7 +287,9 @@ fun ToggleRow(title: String, detail: String, on: Boolean, onChange: (Boolean) ->
 
 @Composable
 fun Field(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier, single: Boolean = true, keyboard: KeyboardOptions = KeyboardOptions.Default,
-          secret: Boolean = false, onDone: (() -> Unit)? = null) {
+          secret: Boolean = false, onDone: (() -> Unit)? = null,
+          /** Round 17: given, the box can be focused from outside (a hardware keyboard on the lock screen). */
+          focus: androidx.compose.ui.focus.FocusRequester? = null) {
     // [onDone]: the keyboard's Done key and Enter on a hardware keyboard submit (a password lock), else nothing changes.
     val done = onDone
     Box(modifier.fillMaxWidth().clip(Corner).background(Palette.groundDeep).border(1.dp, Palette.lineMuted, Corner).padding(12.dp)) {
@@ -296,7 +299,8 @@ fun Field(value: String, onChange: (String) -> Unit, hint: String, modifier: Mod
             keyboardActions = if (done != null) androidx.compose.foundation.text.KeyboardActions(onDone = { done() }) else androidx.compose.foundation.text.KeyboardActions.Default,
             textStyle = Type.normal.copy(color = Palette.text),
             cursorBrush = SolidColor(Palette.accent),
-            modifier = Modifier.fillMaxWidth().then(if (done == null) Modifier else Modifier.onPreviewKeyEvent { ev ->
+            modifier = Modifier.fillMaxWidth().then(if (focus != null) Modifier.focusRequester(focus) else Modifier)
+                .then(if (done == null) Modifier else Modifier.onPreviewKeyEvent { ev ->
                 val code = ev.nativeKeyEvent.keyCode
                 if (code != android.view.KeyEvent.KEYCODE_ENTER && code != android.view.KeyEvent.KEYCODE_NUMPAD_ENTER) false
                 else { if (ev.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && ev.nativeKeyEvent.repeatCount == 0) done(); true }
@@ -345,7 +349,7 @@ private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTa
 data class Ask(
     val title: String, val message: String, val confirm: String, val danger: Boolean = false, val hold: Boolean = false,
     /** "": no cancel button (a notice with one answer). */
-    val cancel: String = "Cancel", val onCancel: () -> Unit = {},
+    val cancel: String = "Cancel", val onCancel: () -> Unit = NO_ANSWER,
     /** An optional second action, shown beside the main one. */
     val extra: String? = null, val onExtra: () -> Unit = {},
     /** The second action is hard to undo too: held like the main one. */
@@ -353,33 +357,89 @@ data class Ask(
     val spoken: String = "", val onConfirm: () -> Unit,
 )
 
+/** An [Ask]'s Cancel that does nothing. An Ask whose Cancel is anything else is a real question (Decline, Not now). */
+val NO_ANSWER: () -> Unit = {}
+
 object Ui {
     val ask = MutableStateFlow<Ask?>(null)
     val toast = MutableStateFlow<Pair<String, Boolean>?>(null)
-    fun sure(a: Ask) { ask.value = a }
+    fun sure(a: Ask) {
+        // Round 17: a real question that comes while the lock is up waits for it to be opened; nothing over the lock
+        // screen (its own "Forgot it?" questions have no answer on Cancel, so they still show).
+        if (AppLock.isLocked && a.onCancel !== NO_ANSWER) {
+            synchronized(parked) { if (parked.none { it === a }) parked.add(a); while (parked.size > MAX_PARKED) parked.removeAt(0) }
+            return
+        }
+        ask.value = a
+    }
     fun say(text: String, bad: Boolean = false) { toast.value = text to bad }
+
+    /** Questions the lock put aside unanswered, oldest first, shown again once it's opened. */
+    private val parked = ArrayList<Ask>()
+
+    /** The most kept aside; older ones go first (their own card or notification still has them). */
+    const val MAX_PARKED = 8
+
+    /**
+     * The lock went up: the open dialog closes without an answer. A real question (its Cancel answers something, such
+     * as a Kids' Device's ask) waits for [unpark]; anything else just closes. The lock never answers for the person.
+     */
+    fun park() {
+        synchronized(parked) {
+            val a = ask.value ?: return
+            ask.value = null
+            if (a.onCancel === NO_ANSWER || parked.any { it === a }) return
+            parked.add(a)
+            while (parked.size > MAX_PARKED) parked.removeAt(0)
+        }
+    }
+
+    /** The lock was opened, or a dialog was answered: the next waiting question shows, if nothing else is open. */
+    fun unpark() {
+        synchronized(parked) {
+            if (ask.value != null || parked.isEmpty()) return
+            ask.value = parked.removeAt(0)
+        }
+    }
+
+    /** How many questions wait (tests). */
+    fun parkedCount(): Int = synchronized(parked) { parked.size }
+
+    /** Tests: none waiting. */
+    internal fun clearParked() { synchronized(parked) { parked.clear() } }
+
+    /**
+     * Answers [a] once: a second tap that lands before the dialog goes (a slow phone) does nothing, so a confirm
+     * never runs twice. Then the next waiting question, if any.
+     */
+    fun answer(a: Ask, run: () -> Unit) {
+        if (ask.value !== a) return
+        ask.value = null
+        run()
+        unpark()
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskDialog(a: Ask) {
     AlertDialog(
-        onDismissRequest = { Ui.ask.value = null; a.onCancel() },
+        onDismissRequest = { Ui.answer(a) { a.onCancel() } },
         containerColor = Palette.panel,
         title = { Text(a.title, style = Type.big) },
         // Long messages at a large text size scroll instead of pushing the buttons off the screen.
         text = { Text(a.message, style = Type.normal, modifier = Modifier.verticalScroll(rememberScrollState())) },
         confirmButton = {
             if (a.hold) HoldToConfirm(holdLabel(a.confirm), a.spoken.ifEmpty { holdSpoken(a.confirm.removePrefix("Hold to ")) },
-                { Ui.ask.value = null; a.onConfirm() }, danger = a.danger)
-            else MButton(a.confirm, kind = if (a.danger) Kind.Danger else Kind.Accent) { Ui.ask.value = null; a.onConfirm() }
+                { Ui.answer(a) { a.onConfirm() } }, danger = a.danger)
+            else MButton(a.confirm, kind = if (a.danger) Kind.Danger else Kind.Accent) { Ui.answer(a) { a.onConfirm() } }
         },
         dismissButton = {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (a.cancel.isNotEmpty()) MButton(a.cancel) { Ui.ask.value = null; a.onCancel() }
+                if (a.cancel.isNotEmpty()) MButton(a.cancel) { Ui.answer(a) { a.onCancel() } }
                 a.extra?.let {
-                    if (a.holdExtra) HoldToConfirm(holdLabel(it), holdSpoken(it), { Ui.ask.value = null; a.onExtra() }, danger = a.danger)
-                    else MButton(it) { Ui.ask.value = null; a.onExtra() }
+                    if (a.holdExtra) HoldToConfirm(holdLabel(it), holdSpoken(it), { Ui.answer(a) { a.onExtra() } }, danger = a.danger)
+                    else MButton(it) { Ui.answer(a) { a.onExtra() } }
                 }
             }
         },

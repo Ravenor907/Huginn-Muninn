@@ -62,7 +62,11 @@ Rectangle {
         // The group's Files › Show in chat.
         if (a.showFile) { const f = a.showFile; Qt.callLater(() => page.showFile(f)) }
     }
-    onGidChanged: { channelId = "main"; sel = -1; Voice.stop() }
+    onGidChanged: { dropRecording(); channelId = "main"; sel = -1; Voice.stop() }
+    // A voice message held on Y (or the microphone) belongs to the channel it started in: another group or channel
+    // (LB, a tap, a notification) throws it away, never sends it there.
+    onChannelIdChanged: dropRecording()
+    function dropRecording() { if (Voice.recording) { Voice.cancel(); Ui.say("Recording cancelled.") } }
     onSideSelChanged: if (sideSel >= 0) sideList.positionViewAtIndex(sideSel, ListView.Contain)
     onSideChanged: {
         sideSel = -1
@@ -1817,6 +1821,7 @@ Rectangle {
         return false
     }
     function handleRelease(b) {
+        // Only to the channel it was started in: Voice throws it away (and says so) if this isn't that channel.
         if (b === "y" && Voice.recording) Voice.finish(chatKey)
         return true
     }

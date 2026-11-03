@@ -1,24 +1,50 @@
-// Logins last 30 minutes: the apps fetch a new one for each call (reused until 5 minutes before it ends).
-const TTL = 1800;
+// ---- Login lifetime (relay.md "Renewal").
+// A request with "rn": 1 comes from an app that renews its relay before the login ends (round 17 builds): it gets a
+// 10 minute login and fetches the next one about 2 minutes before this one ends, so a long call goes on. Apps without
+// "rn" (earlier builds) can't renew, so they keep the 30 minute login they were built for, and pay 3 times as much of
+// every budget below for it.
+export const TTL_RENEW = 600;
+export const TTL_OLD = 1800;
 const SKEW = 300;
-const PER_ID_DAILY = 30;
-// Per internet address (CF-Connecting-IP), so one place can't use up everyone's daily cap with made-up ids.
-// A household shares one address, so this is a few installs' worth.
-const PER_IP_DAILY = 60;
-// Round 14 (relay.md "Install tokens"): an install registers its id once, with a few seconds' proof of work, and gets a
-// short-lived token signed by the Worker (renewed with every login). Logins with a token count only against that
-// install, its address and a free-plan safety cap far above normal use. Requests without a token (apps before 1.36,
-// which only know APP_SECRET) share a pool of their own, so whoever pulls APP_SECRET out of an app can use up only
-// that pool, never the logins of installs with a token.
-const LEGACY_DAILY = 1000;
-// Round 15: the owner can end that pool once every app in use has a token. Set the Worker variable LEGACY_UNTIL to a
-// Unix time (seconds); from then on a login without a token is refused with "update_needed". Not set: never.
-const TOKEN_DAILY = 12000;
-// New registrations: per address and for everyone. A full day refuses new registrations, never logins.
+
+// ---- What a login costs (relay.md "Limits").
+// Every budget is counted in minutes of TURN login handed out (10 for a renewing login, 30 for an old one), not in
+// logins: what a login can cost the TURN account grows with how long it lasts. The Worker can't see the bytes relayed;
+// these minutes are the most it can bound.
+// Logins with an install token, per UTC day:
+export const ID_MINUTES = 480; //    per install: 8 hours of logins (48 renewing, 16 old)
+export const IP_MINUTES = 1440; //   per address group (IPv4 /24, IPv6 /48): a household or a small office
+// Logins without a token (apps before 1.36, or anyone with only APP_SECRET), per UTC day, much stricter, and in a pool
+// of their own, so using it up never touches the logins of installs with a token:
+export const LEGACY_ID_MINUTES = 60; //   per install: 2 logins
+export const LEGACY_IP_MINUTES = 120; //  per address group: 4 logins
+export const LEGACY_POOL_MINUTES = 900; // for everyone: 30 logins
+// The owner can end that pool: set the Worker variable LEGACY_UNTIL to a Unix time (seconds); from then on a login
+// without a token is refused with "update_needed". Not set: never.
+// For everyone, per UTC day: the Worker variable DAILY_MINUTES (the owner's TURN budget), else this.
+export const DAILY_MINUTES = 24000;
+// No hour may take more than a sixth of the day, so a burst can't use up the day in minutes.
+export const HOUR_SHARE = 6;
+// Past this share of the day's or the hour's budget the relay is "busy": logins without a token, and installs
+// registered less than YOUNG_S ago, are refused until the hour (or day) turns; established installs go on until the
+// budget is used up. A flood of fresh installs can then never take the relay away from the households already using it.
+export const SOFT_SHARE = 0.6;
+export const YOUNG_S = 2 * 86400;
+// New registrations: per address group and for everyone. A full day refuses new registrations, never logins.
 const REG_PER_IP_DAILY = 6;
 const REG_DAILY = 2000;
-// Every cap full: (12,000 + 1000) logins x 3 rows + 2000 registrations x 2 rows = 43,000 rows written a day, and as many
-// deleted the next day, under the free plan's 100,000.
+// Rows written a day with every budget used up: 2400 renewing logins x 4 rows + 30 old logins x 6 + 2000 registrations
+// x 2 = about 13,800, and as many deleted the next day, far under the free plan's 100,000.
+
+// ---- Cheap checks in front of the counts (relay.md "Junk requests").
+// Per Worker instance (isolate, in memory only, never stored): at most this many POSTs a minute from one address group
+// reach the signature check and the counts. Each Cloudflare location runs its own instances, so this is a speed bump
+// that costs nothing, not a hard cap; the counts in the Durable Object are the hard cap.
+export const ISOLATE_RATE = 20;
+// A refusal from the counts is remembered in memory until it ends, so the same install, address group or busy relay
+// is answered without asking the Durable Object again.
+const MEMO_MAX = 10000;
+
 // Leading zero bits of the registration hash (about 260,000 SHA-256 tries on average: about a tenth of a second on a
 // desktop, well under a second on a phone). A speed bump for mass registration, not a wall: the per-address and daily
 // registration caps are what hold.
@@ -27,7 +53,10 @@ export const POW_BITS = 18;
 export const TOKEN_TTL = 7 * 86400;
 const MAX_BODY = 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
-const TOKEN = /^(\d{1,12})\.([0-9a-f]{32})$/;
+// "<exp>.<mac>" (1.36 to 1.4 Workers) or "<exp>.<since>.<mac>" (since: when the install first registered).
+const TOKEN = /^(\d{1,12})(?:\.(\d{1,12}))?\.([0-9a-f]{32})$/;
+
+const enc = new TextEncoder();
 
 function json(status, data) {
   return new Response(JSON.stringify(data), {
@@ -42,22 +71,24 @@ function hexToBytes(hex) {
   return out;
 }
 
+// Imported HMAC keys are kept for the life of the instance: importing costs more than signing.
+const keyCache = new Map();
+function hmacKey(secret) {
+  let k = keyCache.get(secret);
+  if (!k) {
+    if (keyCache.size > 8) keyCache.clear();
+    k = crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+    keyCache.set(secret, k);
+  }
+  return k;
+}
+
 async function verifySig(secret, id, t, sig) {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"],
-  );
-  return crypto.subtle.verify("HMAC", key, hexToBytes(sig), enc.encode(id + "." + t));
+  return crypto.subtle.verify("HMAC", await hmacKey(secret), hexToBytes(sig), enc.encode(id + "." + t));
 }
 
 async function hmacHex(secret, text) {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode(text));
+  const mac = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(text));
   return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -65,7 +96,7 @@ async function hmacHex(secret, text) {
 // starts with POW_BITS zero bits. Binding t means work can't be stored up for later than the 300 s skew allows.
 export async function powOk(id, t, pow, bits = POW_BITS) {
   if (!Number.isSafeInteger(pow) || pow < 0) return false;
-  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("huginn-relay pow v1:" + id + ":" + t + ":" + pow)));
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("huginn-relay pow v1:" + id + ":" + t + ":" + pow)));
   let left = bits;
   for (const b of d) {
     if (left <= 0) return true;
@@ -85,27 +116,40 @@ function tokenKey(env) {
   return env.TOKEN_KEY || "relay token v1:" + env.TURN_KEY_API_TOKEN;
 }
 
-export async function makeToken(env, id, exp) {
-  return exp + "." + (await hmacHex(tokenKey(env), "tok:" + id + ":" + exp)).slice(0, 32);
+// A token carries when its install first registered (since), signed with it, so an install can't claim to be older.
+// since undefined: the 1.36 form without it (only checked, never issued any more).
+export async function makeToken(env, id, exp, since) {
+  if (since === undefined) return exp + "." + (await hmacHex(tokenKey(env), "tok:" + id + ":" + exp)).slice(0, 32);
+  return exp + "." + since + "." + (await hmacHex(tokenKey(env), "tok2:" + id + ":" + exp + ":" + since)).slice(0, 32);
 }
 
 // "ok", "bad" (not this Worker's, or not this id's) or "expired".
 export async function checkToken(env, id, tok, nowSec) {
+  return (await readToken(env, id, tok, nowSec)).v;
+}
+
+// {v, since}. A token in the older form counts as issued when it was (its exp less TOKEN_TTL), the most that is known.
+export async function readToken(env, id, tok, nowSec) {
   const m = typeof tok === "string" ? tok.match(TOKEN) : null;
-  if (!m) return "bad";
+  if (!m) return { v: "bad" };
   const exp = Number(m[1]);
-  if ((await makeToken(env, id, exp)) !== tok) return "bad";
-  if (exp <= nowSec || exp > nowSec + TOKEN_TTL + SKEW) return "expired";
-  return "ok";
+  const since = m[2] === undefined ? undefined : Number(m[2]);
+  if ((await makeToken(env, id, exp, since)) !== tok) return { v: "bad" };
+  if (exp <= nowSec || exp > nowSec + TOKEN_TTL + SKEW) return { v: "expired" };
+  return { v: "ok", since: since === undefined ? exp - TOKEN_TTL : since };
 }
 
 // A body over MAX_BODY bytes is refused: by its Content-Length before anything is read, and otherwise
 // (no length given) as soon as the bytes read pass it. Returns TOO_LARGE, null (not a JSON object) or the object.
 const TOO_LARGE = Symbol("too_large");
 
-async function readBody(request) {
+function lengthTooLarge(request) {
   const len = request.headers.get("content-length");
-  if (len !== null && !(/^\d{1,7}$/.test(len.trim()) && Number(len.trim()) <= MAX_BODY)) return TOO_LARGE;
+  return len !== null && !(/^\d{1,7}$/.test(len.trim()) && Number(len.trim()) <= MAX_BODY);
+}
+
+async function readBody(request) {
+  if (lengthTooLarge(request)) return TOO_LARGE;
   const bytes = new Uint8Array(MAX_BODY);
   let size = 0;
   if (request.body) {
@@ -123,7 +167,7 @@ async function readBody(request) {
   }
   try {
     const body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, size)));
-    return body && typeof body === "object" ? body : null;
+    return body && typeof body === "object" && !Array.isArray(body) ? body : null;
   } catch {
     return null;
   }
@@ -131,11 +175,16 @@ async function readBody(request) {
 
 // The address is never stored or logged. The count is kept under an HMAC of the address group and the day,
 // keyed with a secret only the Worker has (TURN_KEY_API_TOKEN), so the stored key can't be reversed by trying
-// every address. IPv6 addresses count by their /48 (the most a home or a phone line is usually given), so one
-// customer can't dodge the cap by moving around their own addresses.
+// every address. IPv4 addresses count by their /24 and IPv6 by their /48 (the most a home or a phone line is usually
+// given), so one customer can't dodge the cap by moving around their own addresses, and renting addresses one by one
+// gains little.
 export function addressGroup(raw) {
   const ip = String(raw || "unknown").trim().toLowerCase().split("%")[0];
-  if (!ip.includes(":")) return ip;
+  if (!ip.includes(":")) {
+    const m = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m || m.slice(1).some((x) => Number(x) > 255)) return ip;
+    return m.slice(1, 4).map(Number).join(".") + ".0/24";
+  }
   let text = ip;
   const v4 = text.match(/^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
@@ -154,35 +203,42 @@ export function addressGroup(raw) {
   const n = groups.map((g) => parseInt(g, 16));
   // An IPv4 address written as IPv6 (::ffff:a.b.c.d) counts as that IPv4 address.
   if (n.slice(0, 5).every((x) => x === 0) && n[5] === 0xffff) {
-    return [n[6] >> 8, n[6] & 255, n[7] >> 8, n[7] & 255].join(".");
+    return [n[6] >> 8, n[6] & 255, n[7] >> 8].join(".") + ".0/24";
   }
   return n.slice(0, 3).map((x) => x.toString(16)).join(":") + "::/48";
 }
 
 async function ipKey(secret, ip, day) {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const mac = await crypto.subtle.sign("HMAC", key, enc.encode("ip:" + day + ":" + addressGroup(ip)));
+  const mac = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode("ip:" + day + ":" + addressGroup(ip)));
   return [...new Uint8Array(mac)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// One SQLite-backed Durable Object keeps every daily count. All counting for one login happens in one
-// synchronous step inside it, so two requests at the same moment can't both slip under a cap.
-// Each login writes 3 rows (its pool, this install, this address); each registration 2 (all registrations, this
-// address). Rows from earlier days are deleted the first time the object sees a new day.
-// What each kind of request counts against: [row key, daily cap, the error's name]. The address and install rows are
-// shared by logins with and without a token; the pools are not.
-export function plan(kind, id, ip) {
-  if (kind === "reg") return [["rg", REG_DAILY, "reg"], ["r:" + ip, REG_PER_IP_DAILY, "ip_reg"]];
-  const pool = kind === "tok" ? ["t", TOKEN_DAILY, "global"] : ["g", LEGACY_DAILY, "global"];
-  return [pool, ["i:" + ip, PER_IP_DAILY, "ip"], ["u:" + id, PER_ID_DAILY, "id"]];
+// The day's budget for everyone: DAILY_MINUTES (a Worker variable) when it is a whole number from 60 up, else the default.
+export function dailyMinutes(env) {
+  const n = Number(env && env.DAILY_MINUTES);
+  return Number.isSafeInteger(n) && n >= 60 ? n : DAILY_MINUTES;
 }
+
+// One SQLite-backed Durable Object keeps every daily count. All checking and counting for one request happens in one
+// synchronous step inside it, so two requests at the same moment can't both slip under a cap.
+// What each kind of request counts against: [row key, cap, the error's name]. Logins add their cost in minutes to each
+// row; registrations add 1. Rows: "d" the day, "h<HH>" this hour, "u:" the install, "i:" the address group (all
+// logins), and for logins without a token also "g" their pool and "l:" their address group.
+export function plan(kind, id, ip, hour, daily) {
+  if (kind === "reg") return [["rg", REG_DAILY, "reg"], ["r:" + ip, REG_PER_IP_DAILY, "ip_reg"]];
+  const hourly = Math.ceil(daily / HOUR_SHARE);
+  const rows = [["d", daily, "global"], ["h" + hour, hourly, "global"]];
+  if (kind === "tok") return [...rows, ["i:" + ip, IP_MINUTES, "ip"], ["u:" + id, ID_MINUTES, "id"]];
+  return [...rows, ["g", LEGACY_POOL_MINUTES, "global"], ["l:" + ip, LEGACY_IP_MINUTES, "ip"],
+    ["i:" + ip, IP_MINUTES, "ip"], ["u:" + id, LEGACY_ID_MINUTES, "id"]];
+}
+const READ_KEYS = 6;
 export const SQL = {
   schema:
     "CREATE TABLE IF NOT EXISTS counts (day TEXT NOT NULL, k TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, k)) WITHOUT ROWID",
   wipe: "DELETE FROM counts WHERE day < ?",
-  read: "SELECT k, n FROM counts WHERE day = ? AND k IN (?, ?, ?)",
-  bump: "INSERT INTO counts (day, k, n) VALUES (?, ?, 1) ON CONFLICT (day, k) DO UPDATE SET n = n + 1",
+  read: "SELECT k, n FROM counts WHERE day = ? AND k IN (?, ?, ?, ?, ?, ?)",
+  bump: "INSERT INTO counts (day, k, n) VALUES (?, ?, ?) ON CONFLICT (day, k) DO UPDATE SET n = n + excluded.n",
 };
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -194,19 +250,43 @@ export class RelayLimits {
     this.wipedBefore = null;
   }
 
-  // kind: "legacy" (no token), "tok" (a login with a good token) or "reg" (a registration).
-  take(day, id, ip, kind = "legacy") {
+  // q: {day, hour (0 to 23), sec (seconds into the day), id, ip (address key), kind ("legacy", "tok" or "reg"),
+  // cost (minutes, logins only), young (a token install registered less than YOUNG_S ago), daily}.
+  // Returns {result: "ok" or the refusal's name, retry: seconds until it may work}.
+  take(q) {
+    const { day, id, ip } = q;
+    const kind = q.kind || "legacy";
+    const hour = String(q.hour ?? 0).padStart(2, "0");
+    const sec = q.sec ?? 0;
+    const daily = q.daily || DAILY_MINUTES;
+    const cost = kind === "reg" ? 1 : q.cost || TTL_OLD / 60;
     if (this.wipedBefore === null || day > this.wipedBefore) {
       this.sql.exec(SQL.wipe, day);
       this.wipedBefore = day;
     }
-    const rows = plan(kind, id, ip);
+    const rows = plan(kind, id, ip, hour, daily);
     const keys = rows.map((r) => r[0]);
-    while (keys.length < 3) keys.push(keys[0]);
+    while (keys.length < READ_KEYS) keys.push(keys[0]);
     const have = new Map(this.sql.exec(SQL.read, day, ...keys).toArray().map((r) => [r.k, Number(r.n)]));
-    for (const [k, cap, err] of rows) if ((have.get(k) || 0) >= cap) return err;
-    for (const [k] of rows) this.sql.exec(SQL.bump, day, k);
-    return "ok";
+    const used = (k) => have.get(k) || 0;
+    const toHour = 3600 - (sec % 3600);
+    const toDay = 86400 - sec;
+    if (kind !== "reg") {
+      const hourly = Math.ceil(daily / HOUR_SHARE);
+      // Used up for the day, or for this hour: nobody gets a login until it turns.
+      if (used("d") + cost > daily) return { result: "global", retry: toDay };
+      if (used("h" + hour) + cost > hourly) return { result: "global", retry: toHour };
+      // Busy: only installs that registered before it got busy go on.
+      const dayBusy = used("d") >= daily * SOFT_SHARE;
+      const hourBusy = used("h" + hour) >= hourly * SOFT_SHARE;
+      if ((dayBusy || hourBusy) && (kind === "legacy" || q.young)) return { result: "busy", retry: dayBusy ? toDay : toHour };
+    }
+    for (const [k, cap, err] of rows) {
+      if (k === "d" || k[0] === "h") continue;
+      if (used(k) + cost > cap) return { result: err, retry: toDay };
+    }
+    for (const [k] of rows) this.sql.exec(SQL.bump, day, k, cost);
+    return { result: "ok", retry: 0 };
   }
 
   async fetch(request) {
@@ -216,57 +296,147 @@ export class RelayLimits {
     } catch {
       return json(400, { error: "bad_request" });
     }
-    const { day, id, ip } = body || {};
-    const kind = body && body.kind !== undefined ? body.kind : "legacy";
-    if (typeof day !== "string" || !DAY.test(day) || typeof id !== "string" || !HEX64.test(id) || typeof ip !== "string" || !/^[0-9a-f]{32}$/.test(ip)
-        || !["legacy", "tok", "reg"].includes(kind)) {
+    const q = body && typeof body === "object" ? body : {};
+    const kind = q.kind !== undefined ? q.kind : "legacy";
+    if (typeof q.day !== "string" || !DAY.test(q.day) || typeof q.id !== "string" || !HEX64.test(q.id)
+        || typeof q.ip !== "string" || !/^[0-9a-f]{32}$/.test(q.ip) || !["legacy", "tok", "reg"].includes(kind)
+        || (q.hour !== undefined && !(Number.isInteger(q.hour) && q.hour >= 0 && q.hour < 24))
+        || (q.sec !== undefined && !(Number.isInteger(q.sec) && q.sec >= 0 && q.sec < 86400))
+        || (q.cost !== undefined && !(Number.isInteger(q.cost) && q.cost >= 1 && q.cost <= 60))
+        || (q.daily !== undefined && !(Number.isSafeInteger(q.daily) && q.daily >= 60))) {
       return json(400, { error: "bad_request" });
     }
-    return json(200, { result: this.take(day, id, ip, kind) });
+    return json(200, this.take({ ...q, kind, young: q.young === true }));
   }
 }
 
-async function takeQuota(env, id, ip, nowSec, kind) {
+// ---- In-memory, per instance (relay.md "Junk requests"). Never stored, gone when the instance ends.
+
+// Address group -> [minute, count].
+const rate = new Map();
+// "<kind>|<what>|<subject>" -> [until (s), error, retry from then]: refusals the counts gave, until they end.
+const memo = new Map();
+
+export function resetMemory() {
+  rate.clear();
+  memo.clear();
+}
+
+// false when this address group already sent its share this minute (to this instance).
+function rateOk(env, ip, nowSec) {
+  const cap = Number(env.ISOLATE_RATE) > 0 ? Number(env.ISOLATE_RATE) : ISOLATE_RATE;
+  const g = addressGroup(ip);
+  const minute = Math.floor(nowSec / 60);
+  const e = rate.get(g);
+  if (!e || e[0] !== minute) {
+    if (rate.size >= MEMO_MAX) rate.clear();
+    rate.set(g, [minute, 1]);
+    return true;
+  }
+  return ++e[1] <= cap;
+}
+
+function memoGet(keys, nowSec) {
+  for (const k of keys) {
+    const e = k && memo.get(k);
+    if (e && e[0] > nowSec) return { result: e[1], retry: e[0] - nowSec };
+  }
+  return null;
+}
+
+function memoPut(key, nowSec, result, retry) {
+  if (memo.size >= MEMO_MAX) memo.clear();
+  memo.set(key, [nowSec + retry, result]);
+}
+
+// The memo keys a request is answered from, and the one a refusal is kept under. Install and address refusals are
+// kept per kind and cost, since a cheaper login may still fit where a dearer one didn't.
+function memoKeys(kind, id, ipk, young, cost) {
+  const kc = kind + cost;
+  return {
+    id: kc + "|id|" + id,
+    ip: kc + "|ip|" + ipk,
+    global: (kind === "reg" ? "reg" : kind === "legacy" ? "legacy" : "all") + "|global|",
+    reg: "reg|reg|",
+    ip_reg: "reg|ip_reg|" + ipk,
+    busy: "busy",
+    // Asked, in order: which refusals already known apply to this request.
+    ask: kind === "reg"
+      ? ["reg|reg|", "reg|ip_reg|" + ipk]
+      : ["all|global|", kind === "legacy" ? "legacy|global|" : null, kind === "legacy" || young ? "busy" : null,
+        kc + "|ip|" + ipk, kc + "|id|" + id],
+  };
+}
+
+async function takeQuota(env, id, ip, nowSec, kind, cost, young) {
   const day = new Date(nowSec * 1000).toISOString().slice(0, 10);
+  const ipk = await ipKey(env.TURN_KEY_API_TOKEN, ip, day);
+  const mk = memoKeys(kind, id, ipk, young, cost);
+  const known = memoGet(mk.ask, nowSec);
+  if (known) return known;
   const stub = env.LIMITS.get(env.LIMITS.idFromName("limits"));
+  const sec = nowSec % 86400;
   const res = await stub.fetch("https://limits/take", {
     method: "POST",
-    body: JSON.stringify({ day, id, ip: await ipKey(env.TURN_KEY_API_TOKEN, ip, day), kind }),
+    body: JSON.stringify({ day, hour: Math.floor(sec / 3600), sec, id, ip: ipk, kind, cost: cost || undefined, young, daily: dailyMinutes(env) }),
   });
   if (res.status !== 200) throw new Error("limits");
-  const { result } = await res.json();
-  if (!["ok", "global", "ip", "id", "reg", "ip_reg"].includes(result)) throw new Error("limits");
-  return result;
+  const { result, retry } = await res.json();
+  if (!["ok", "global", "busy", "ip", "id", "reg", "ip_reg"].includes(result) || !Number.isInteger(retry) || retry < 0) {
+    throw new Error("limits");
+  }
+  // A legacy "global" may be its own pool only; a "global" for a token login is everyone's.
+  if (result !== "ok") memoPut(result === "global" && kind === "tok" ? "all|global|" : mk[result], nowSec, result, retry);
+  return { result, retry };
 }
 
 // What /turn and /register both check first: the body, the id, the time and the APP_SECRET signature.
 // Returns the body, or a Response to send back. A stale time says the Worker's time ("now", whole seconds) so the
 // app can correct its clock for one more try (the signature still needs APP_SECRET, so nothing new is exposed).
+// Ordered cheapest first: nothing is read, hashed or counted for a request that fails an earlier check.
 async function checkRequest(request, env, nowSec) {
   if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN || !env.APP_SECRET) {
     return json(503, { error: "not_configured" });
   }
+  if (lengthTooLarge(request)) return json(413, { error: "too_large" });
+  if (!rateOk(env, request.headers.get("CF-Connecting-IP"), nowSec)) return json(429, { error: "slow_down", retry: 60 });
+  // The Workers rate limiting binding, when the owner bound one (wrangler.toml): per Cloudflare location, free to ask.
+  if (env.RATE && typeof env.RATE.limit === "function") {
+    try {
+      const { success } = await env.RATE.limit({ key: addressGroup(request.headers.get("CF-Connecting-IP")) });
+      if (!success) return json(429, { error: "slow_down", retry: 60 });
+    } catch {
+      // A failing limiter costs only this speed bump; the counts still hold.
+    }
+  }
   const body = await readBody(request);
   if (body === TOO_LARGE) return json(413, { error: "too_large" });
   if (!body) return json(400, { error: "bad_request" });
-  const { id, t, sig } = body;
+  const { id, t, sig, rn } = body;
   if (typeof id !== "string" || !HEX64.test(id)) return json(400, { error: "bad_request" });
   if (typeof sig !== "string" || !HEX64.test(sig)) return json(400, { error: "bad_request" });
   if (!Number.isInteger(t)) return json(400, { error: "bad_request" });
+  if (rn !== undefined && rn !== 1 && rn !== true) return json(400, { error: "bad_request" });
   if (Math.abs(nowSec - t) > SKEW) return json(401, { error: "stale", now: nowSec });
   if (!(await verifySig(env.APP_SECRET, id, t, sig))) return json(401, { error: "bad_sig" });
   // Without the limits object the caps can't be kept, so nothing is handed out:
-  // the daily caps are the only thing guarding the TURN account.
+  // the caps are the only thing guarding the TURN account.
   if (!env.LIMITS) return json(503, { error: "limits_unavailable" });
   return body;
 }
 
-async function quotaOr(env, request, id, nowSec, kind) {
+async function quotaOr(env, request, id, nowSec, kind, cost = 0, young = false) {
   try {
-    return await takeQuota(env, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec, kind);
+    return await takeQuota(env, id, request.headers.get("CF-Connecting-IP") || "unknown", nowSec, kind, cost, young);
   } catch {
     return null;
   }
+}
+
+// A refusal: 429 with the error and how long until it may work ("retry", seconds). Apps that send "rn" wait that long;
+// older ones wait until the next UTC day, as before.
+function refused(q) {
+  return json(429, { error: q.result === "busy" ? "busy" : q.result + "_limit", retry: q.retry });
 }
 
 async function handleRegister(request, env, nowSec) {
@@ -277,9 +447,9 @@ async function handleRegister(request, env, nowSec) {
   if (!(await powOk(id, t, pow))) return json(401, { error: "bad_pow" });
   const quota = await quotaOr(env, request, id, nowSec, "reg");
   if (quota === null) return json(503, { error: "limits_unavailable" });
-  if (quota !== "ok") return json(429, { error: quota + "_limit" });
+  if (quota.result !== "ok") return refused(quota);
   const exp = nowSec + TOKEN_TTL;
-  return json(200, { tok: await makeToken(env, id, exp), exp });
+  return json(200, { tok: await makeToken(env, id, exp, nowSec), exp });
 }
 
 // Logins without a token have ended (LEGACY_UNTIL set and passed).
@@ -292,17 +462,20 @@ async function handleTurn(request, env, nowSec) {
   const body = await checkRequest(request, env, nowSec);
   if (body instanceof Response) return body;
   const { id, tok } = body;
+  const ttl = body.rn === undefined ? TTL_OLD : TTL_RENEW;
   // With a token: it must be this Worker's, for this id, and not run out (else the app registers again).
   let kind = "legacy";
+  let since = nowSec;
   if (tok === undefined && legacyOver(env, nowSec)) return json(403, { error: "update_needed" });
   if (tok !== undefined) {
-    const v = await checkToken(env, id, tok, nowSec);
-    if (v !== "ok") return json(401, { error: v === "expired" ? "token_expired" : "bad_token" });
+    const r = await readToken(env, id, tok, nowSec);
+    if (r.v !== "ok") return json(401, { error: r.v === "expired" ? "token_expired" : "bad_token" });
     kind = "tok";
+    since = r.since;
   }
-  const quota = await quotaOr(env, request, id, nowSec, kind);
+  const quota = await quotaOr(env, request, id, nowSec, kind, ttl / 60, kind === "tok" && nowSec - since < YOUNG_S);
   if (quota === null) return json(503, { error: "limits_unavailable" });
-  if (quota !== "ok") return json(429, { error: quota + "_limit" });
+  if (quota.result !== "ok") return refused(quota);
 
   let upstream;
   try {
@@ -316,7 +489,7 @@ async function handleTurn(request, env, nowSec) {
           Authorization: "Bearer " + env.TURN_KEY_API_TOKEN,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ttl: TTL }),
+        body: JSON.stringify({ ttl }),
       },
     );
   } catch {
@@ -346,24 +519,31 @@ async function handleTurn(request, env, nowSec) {
   }
   if (!urls.length || !username || !credential) return json(502, { error: "upstream" });
 
-  if (kind !== "tok") return json(200, { urls, username, credential, ttl: TTL });
-  // A login renews the token: an install that calls now and then never has to register again.
+  if (kind !== "tok") return json(200, { urls, username, credential, ttl });
+  // A login renews the token (keeping when the install registered): an install that calls now and then never has to
+  // register again.
   const exp = nowSec + TOKEN_TTL;
-  return json(200, { urls, username, credential, ttl: TTL, tok: await makeToken(env, id, exp), exp });
+  return json(200, { urls, username, credential, ttl, tok: await makeToken(env, id, exp, since), exp });
 }
 
+const NOT_FOUND = JSON.stringify({ error: "not_found" });
+const METHOD = JSON.stringify({ error: "method" });
+
+// Paths and methods are checked before anything else: a wrong one costs one Worker request and nothing more (no body
+// read, no hashing, no Durable Object request).
 export async function handle(request, env, nowSec = Math.floor(Date.now() / 1000)) {
   const { pathname } = new URL(request.url);
+  const post = request.method === "POST";
+  if (pathname === "/turn" || pathname === "/register") {
+    if (!post) return new Response(METHOD, { status: 405, headers: { "content-type": "application/json", allow: "POST" } });
+    return pathname === "/turn" ? handleTurn(request, env, nowSec) : handleRegister(request, env, nowSec);
+  }
   if (pathname === "/health") {
-    return request.method === "GET" ? json(200, { ok: true }) : json(405, { error: "method" });
+    if (request.method !== "GET") return new Response(METHOD, { status: 405, headers: { "content-type": "application/json", allow: "GET" } });
+    // Cacheable for a minute by anything in between; nothing secret in it.
+    return new Response('{"ok":true}', { status: 200, headers: { "content-type": "application/json", "cache-control": "public, max-age=60" } });
   }
-  if (pathname === "/turn") {
-    return request.method === "POST" ? handleTurn(request, env, nowSec) : json(405, { error: "method" });
-  }
-  if (pathname === "/register") {
-    return request.method === "POST" ? handleRegister(request, env, nowSec) : json(405, { error: "method" });
-  }
-  return json(404, { error: "not_found" });
+  return new Response(NOT_FOUND, { status: 404, headers: { "content-type": "application/json", "cache-control": "public, max-age=3600" } });
 }
 
 export default {

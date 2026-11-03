@@ -97,14 +97,23 @@ Stun::Address CallNet::fromHost(const QHostAddress &h, quint16 port)
 
 RelayCredentials::RelayCredentials(QObject *parent) : QObject(parent) {}
 
-QByteArray RelayCredentials::body(const QByteArray &identityKey, qint64 t, const QByteArray &secret, const QString &tok)
+QByteArray RelayCredentials::body(const QByteArray &identityKey, qint64 t, const QByteArray &secret, const QString &tok, bool renew)
 {
     const QByteArray id = CallCrypto::sha256(identityKey).toHex();
     const QByteArray sig = CallCrypto::hmacSha256(secret, id + "." + QByteArray::number(t)).toHex();
     QJsonObject o{{QStringLiteral("id"), QString::fromLatin1(id)}, {QStringLiteral("t"), t}, {QStringLiteral("sig"), QString::fromLatin1(sig)}};
     if (!tok.isEmpty())
         o.insert(QStringLiteral("tok"), tok);
+    if (renew)
+        o.insert(QStringLiteral("rn"), 1);
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+qint64 RelayCredentials::retryMs(const QJsonObject &o, qint64 untilTomorrowMs)
+{
+    if (!o.value(QStringLiteral("retry")).isDouble())
+        return -1;
+    return qBound(qint64(60000), qint64(o.value(QStringLiteral("retry")).toDouble()) * 1000, qMax(qint64(60000), untilTomorrowMs));
 }
 
 QByteArray RelayCredentials::regBody(const QByteArray &identityKey, qint64 t, const QByteArray &secret, qint64 pow)
@@ -271,7 +280,7 @@ void RelayCredentials::postTurn(const QString &tok)
     QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/turn")));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(10000);   // a captive or hostile network: give up soon, the call retries once
-    QNetworkReply *r = m_net.post(req, body(m_identity, workerNow(), QByteArray(RelayConfig::kAppSecret), tok));
+    QNetworkReply *r = m_net.post(req, body(m_identity, workerNow(), QByteArray(RelayConfig::kAppSecret), tok, true));
     connect(r, &QNetworkReply::finished, this, [this, r, tok] {
         r->deleteLater();
         const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
@@ -323,10 +332,14 @@ void RelayCredentials::postTurn(const QString &tok)
             finish(TurnLogin(), QStringLiteral("The internet relay didn't answer properly"));
             return;
         }
+        bool busy = false;
         if (status == 429) {
-            // Daily cap: not again until the next UTC day.
+            // A cap: not again until the next UTC day, or for as long as the Worker says ("retry", relay.md "Limits").
             const QDateTime tomorrow(QDateTime::currentDateTimeUtc().date().addDays(1), QTime(0, 0), QTimeZone::UTC);
-            m_blockedUntil = tomorrow.toMSecsSinceEpoch();
+            const qint64 untilTomorrow = tomorrow.toMSecsSinceEpoch() - nowMs();
+            const qint64 retry = retryMs(o, untilTomorrow);
+            busy = retry >= 0 && retry < untilTomorrow;
+            m_blockedUntil = nowMs() + (retry >= 0 ? retry : untilTomorrow);
         } else if (status >= 500) {
             // No answer at all (status 0, say before a hotel's login page) doesn't rest the relay.
             m_blockedUntil = nowMs() + 60000;
@@ -334,7 +347,7 @@ void RelayCredentials::postTurn(const QString &tok)
         // Worded like Muninn's TurnCreds; never a credential or an address.
         finish(TurnLogin(), status == 0 ? QStringLiteral("Couldn't reach the internet relay")
                             : status == 401 ? QStringLiteral("This device's clock looks wrong, so the internet relay said no")
-                            : status == 429 ? QStringLiteral("The internet relay is used up for today")
+                            : status == 429 ? (busy ? QStringLiteral("The internet relay is busy right now") : QStringLiteral("The internet relay is used up for today"))
                                             : QStringLiteral("The internet relay didn't answer properly"));
     });
 }

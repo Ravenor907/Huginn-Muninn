@@ -98,7 +98,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden">
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -206,7 +206,7 @@
             android:turnScreenOn="true"
             android:taskAffinity="io.github.ravenor907.muninn.call"
             android:excludeFromRecents="true"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:theme="@style/Theme.Muninn" />
         <service
             android:name=".net.call.CallService"
@@ -225,7 +225,7 @@
             android:autoRemoveFromRecents="true"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:theme="@style/Theme.Muninn" />
         <service
             android:name=".net.call.RoomService"

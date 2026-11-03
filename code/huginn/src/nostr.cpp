@@ -2,6 +2,7 @@
 #include "busy.h"
 #include "settings.h"
 #include "schnorr.h"
+#include "platform/crashlog.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -1263,6 +1264,24 @@ QByteArray Nostr::secret() const
     if (b.size() != 32)
         return QByteArray();
     m_secretCache = b;   // kept until the vault locks or is erased (forgetSecret)
+    // Round 17 (M4): the inbox address in settings is only a copy (a locked Huginn still listens on it), in a plain file
+    // a damaged or swapped settings file can change: once the secret is known it is worked out again and put right.
+    const QString derived = Schnorr::hex(Schnorr::publicKey(b));
+    if (!derived.isEmpty()) {
+        QSettings s = Settings::store();
+        const QString stored = s.value(QStringLiteral("nostr/pub")).toString();
+        if (stored != derived) {
+            s.setValue(QStringLiteral("nostr/pub"), derived);
+            if (!stored.isEmpty()) {
+                qWarning("nostr: the inbox address in settings didn't match its key; put right");
+                CrashLog::note(QStringLiteral("nostr: the inbox address in settings didn't match its key; put right"));
+            }
+        }
+        if (m_pub != derived) {
+            m_pub = derived;
+            QMetaObject::invokeMethod(const_cast<Nostr *>(this), &Nostr::publicKeyChanged, Qt::QueuedConnection);
+        }
+    }
     return b;
 }
 

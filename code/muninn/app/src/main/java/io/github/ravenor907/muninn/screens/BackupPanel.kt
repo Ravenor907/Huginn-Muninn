@@ -71,8 +71,9 @@ fun BackupPanel(app: Muninn) {
                 Text("Save it anywhere. It restores on a new phone or computer instead of this one. To use a computer as well, link it.",
                     style = Type.small, modifier = Modifier.padding(top = 4.dp))
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MButton("Back up", Modifier.weight(1f), Kind.Accent) { mode = "backup" }
-                    MButton("Restore from a backup", Modifier.weight(1f)) { mode = "restore" }
+                    // A backup carries the whole account and a restore replaces it: the current lock first.
+                    MButton("Back up", Modifier.weight(1f), Kind.Accent) { LockGate.ask(app, "Back up") { mode = "backup" } }
+                    MButton("Restore from a backup", Modifier.weight(1f)) { LockGate.ask(app, "Restore from a backup") { mode = "restore" } }
                 }
             }
         }
@@ -147,7 +148,7 @@ fun BackupFlow(app: Muninn, onClose: () -> Unit) {
             Text("No one can reset this password, so write it down somewhere safe. Without it the backup can't be opened.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
             Text("Next you pick where to save. Save it off this phone (Google Drive, or email it to yourself), so losing the phone doesn't lose it.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
             MButton(if (busy) "Saving…" else "Choose where to save", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
-                enabled = !busy && BackupFormat.strength(pw1) > 0 && pw1 == pw2) { io.github.ravenor907.muninn.ui.Picking.launch(saveTo, Backup.fileName()) }
+                enabled = !busy && BackupFormat.strength(pw1) > 0 && pw1 == pw2) { try { io.github.ravenor907.muninn.ui.Picking.launch(saveTo, Backup.fileName()) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }
             MButton("Back", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { step = "what" }
             if (busy) Bar(progress, Modifier.padding(top = 8.dp))
             if (error.isNotEmpty()) Text(error, style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
@@ -245,7 +246,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
                 Text("Choose the backup file. Any name works, from Huginn or Muninn.", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
                 Text("Look in Download, or wherever you saved it.", style = Type.small, modifier = Modifier.padding(top = 2.dp))
                 MButton("Choose file", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent) {
-                    if (practice) Ui.say("Practice: this opens the file picker.") else io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("*/*"))
+                    if (practice) Ui.say("Practice: this opens the file picker.") else try { io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) }
                 }
             }
             o == null -> {
@@ -256,7 +257,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
                 if (wrong) Text("Wrong password. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                 MButton(if (busy) "Checking…" else "Open", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
                     enabled = !busy && pw.isNotEmpty()) { openIt() }
-                MButton("Choose another file", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("*/*")) }
+                MButton("Choose another file", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }
             }
             else -> {
                 val s = BackupFormat.summary(o)

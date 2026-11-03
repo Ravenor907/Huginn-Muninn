@@ -24,6 +24,12 @@ QString localDir();
 // Every build checks its own data folder (the Flatpak's too). Windows: a "data" folder beside Huginn.exe that another
 // program keeps is never used; one that is Huginn's gets a mark (.huginn) the first time.
 QString folderProblem();
+// Round 17: --update-probe (a staged update asked by the copy that unpacked it): true when this copy may save in Huginn's
+// folder and its data folder (Windows' Controlled folder access allows programs by path). Always true elsewhere.
+bool canWriteForUpdate();
+// Round 17 (m5): path is in a folder Windows' Controlled folder access protects (Documents, Desktop, Pictures, Videos,
+// Music, Favorites), so a write refused there is probably that. False elsewhere.
+bool controlledFolder(const QString &path);
 // Windows: this Huginn was unzipped inside another Huginn's folder (Huginn\Huginn\Huginn.exe), so its data folder is new
 // while the old one, with chats, is one or two folders up: that folder, to say so. Empty otherwise.
 QString nestedCopy();

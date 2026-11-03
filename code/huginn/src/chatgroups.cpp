@@ -1237,7 +1237,7 @@ void Chat::takeGroupChange(const QString &g, const QString &from, const QJsonObj
             }
         } else if (!m.value(QStringLiteral("mine")).toBool() && str(m, "photo").isEmpty()
                    && RichWire::editWins(str(m, "from"), from, ts, m.value(QStringLiteral("edited")).toLongLong())) {
-            m.insert(QStringLiteral("text"), p.value(QStringLiteral("text")).toString().left(kMax));
+            m.insert(QStringLiteral("text"), GroupWire::clip(p.value(QStringLiteral("text")).toString(), kMax));
             m.insert(QStringLiteral("edited"), ts);
         }
     });
@@ -1439,7 +1439,7 @@ void Chat::storeGroupMessage(const QString &g, const QVariantMap &m, bool notify
         return;
     Group &gr = m_groups[g];
     // Round 16: a part of a long message goes before the same sender's later parts of that set (part 1 may come last).
-    const int at = GroupWire::partPlace(gr.messages, m);
+    const int at = GroupWire::partPlace(gr.messages, m, QDateTime::currentMSecsSinceEpoch());
     if (at < 0)
         gr.messages << m;
     else

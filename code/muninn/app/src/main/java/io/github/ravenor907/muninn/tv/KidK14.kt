@@ -454,6 +454,9 @@ object KidK14 {
 
     const val MAX_HELD = 10
 
+    /** What a quiet time holds: a voice message, a photo, a quick message or typed text. */
+    val HELD_KINDS = setOf("voice", "photo", "quick", "text")
+
     /** Whether something for [k] waits now: a quiet time is on and [k] isn't a parent. */
     fun holds(k: String, parents: Collection<String>, quiet: QuietTime?): Boolean = !KidRules.passes(k, parents, quiet)
 
@@ -470,6 +473,12 @@ object KidK14 {
         return live.filter { !holds(it.k, parents, quiet) } to live.filter { holds(it.k, parents, quiet) }
     }
 
+    /** Round 17: held while quiet times are set and the device doesn't know the time yet (after a restart with no network). */
+    const val WILL_SEND_SOON = "Will send once this device knows the time"
+
+    /** Stands for a quiet time while the device doesn't know the time ([WILL_SEND_SOON]): only parents get through. */
+    val UNSURE = QuietTime(KidRules.BED, KidRules.ALL_DAYS, 0, 1)
+
     /** "Will send at 7:00 AM": when the quiet time [q] ends, on the device's clock ([h24]). */
     fun willSend(q: QuietTime, h24: Boolean): String = "Will send at ${KidRules.clock(q.e, h24)}"
 
@@ -482,7 +491,8 @@ object KidK14 {
         try {
             val o = a.getJSONObject(i)
             val kind = o.getString("kind")
-            if (kind != "voice" && kind != "photo") null
+            // Round 17: a quick message or typed text is held too.
+            if (kind !in HELD_KINDS) null
             else Held(o.getString("id").takeIf { Regex("[0-9a-f]{32}").matches(it) } ?: return@mapNotNull null,
                 o.getString("k").takeIf { keyOk(it) } ?: return@mapNotNull null, kind, o.optInt("ms").coerceAtLeast(0), o.optLong("at"))
         } catch (_: Exception) { null }

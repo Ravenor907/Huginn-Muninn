@@ -14,12 +14,26 @@ object TurnCreds {
         override fun toString() = "Login(${urls.size} urls)"
     }
 
-    /** The request body: {"id", "t", "sig"} with sig = hex HMAC-SHA256(APP_SECRET, id + "." + t), and the install token [tok] when there is one. */
-    fun body(identityDer: ByteArray, tSec: Long, secret: String, tok: String? = null): String {
+    /**
+     * The request body: {"id", "t", "sig"} with sig = hex HMAC-SHA256(APP_SECRET, id + "." + t), and the install token [tok] when there is one.
+     * [renew]: "rn": 1, this app renews its relay before the login ends (relay.md "Renewal"), so the Worker gives a 10 minute login.
+     */
+    fun body(identityDer: ByteArray, tSec: Long, secret: String, tok: String? = null, renew: Boolean = false): String {
         val id = idOf(identityDer)
         val sig = CallCrypto.hex(CallCrypto.hmac256(secret.toByteArray(Charsets.UTF_8), "$id.$tSec".toByteArray(Charsets.UTF_8)))
-        return JSONObject().put("id", id).put("t", tSec).put("sig", sig).apply { if (tok != null) put("tok", tok) }.toString()
+        return JSONObject().put("id", id).put("t", tSec).put("sig", sig).apply { if (tok != null) put("tok", tok); if (renew) put("rn", 1) }.toString()
     }
+
+    /** A call renews its relay this long before the login ends (relay.md "Renewal"). */
+    const val RENEW_BEFORE_MS = 120_000L
+    /** After a renewal the old allocation still carries media this long, until the peer has the new address. */
+    const val HANDOVER_MS = 45_000L
+
+    /** How long a 429 says to wait ("retry", seconds), at least a minute and at most until the next UTC day; null without it (older Workers). */
+    fun retryMs(text: String, nowMs: Long): Long? = try {
+        val o = JSONObject(text)
+        if (o.opt("retry") is Number) (o.getLong("retry") * 1000).coerceIn(60_000L, nextUtcDayMs(nowMs) - nowMs) else null
+    } catch (e: Exception) { null }
 
     /** The relay id the Worker counts: lowercase hex SHA-256 of [identityDer]. */
     fun idOf(identityDer: ByteArray): String = CallCrypto.hex(CallCrypto.sha256(identityDer))
@@ -145,7 +159,7 @@ object TurnCreds {
         var tries = 0
         var r: Pair<Int, String>?
         while (true) {
-            r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/turn", body(identityDer, nowMs / 1000 + offsetS, RelayConfig.APP_SECRET, tok))
+            r = post(RelayConfig.WORKER_URL.trimEnd('/') + "/turn", body(identityDer, nowMs / 1000 + offsetS, RelayConfig.APP_SECRET, tok, renew = true))
             if (r == null || r.first != 401 || tries++ > 1) break
             val err = errorOf(r.second)
             val now = staleNow(r.second)
@@ -164,12 +178,12 @@ object TurnCreds {
                 tokenOf(text, id)?.let { kept -> try { store?.save(kept) } catch (_: Exception) {} }
                 cached = login; lastProblem = ""; return login
             }
-            status == 429 -> notBefore = nextUtcDayMs(nowMs)
+            status == 429 -> notBefore = nowMs + (retryMs(text, nowMs) ?: (nextUtcDayMs(nowMs) - nowMs))
             status >= 500 -> notBefore = nowMs + 60_000
         }
         lastProblem = when (status) {
             401 -> "The phone's clock looks wrong, so the internet relay said no"
-            429 -> "The internet relay is used up for today"
+            429 -> if (notBefore < nextUtcDayMs(nowMs)) "The internet relay is busy right now" else "The internet relay is used up for today"
             else -> "The internet relay didn't answer properly"
         }
         return null

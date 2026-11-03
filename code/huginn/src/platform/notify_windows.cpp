@@ -161,6 +161,19 @@ void setTrayState(int unread, bool muted)
     tray->setIcon(muted ? QIcon(base.pixmap(QSize(32, 32), QIcon::Disabled)) : base);
 }
 
+void clearShown()
+{
+    s_shown.clear();
+    s_newestAt = 0;
+    // Windows keeps a tray icon's balloons in the notification center until the icon itself goes (NIM_DELETE): it is
+    // taken away and put back at once, with its menu and tooltip as they were.
+    QSystemTrayIcon *tray = trayIcon(false);
+    if (!tray || !tray->isVisible())
+        return;
+    tray->hide();
+    tray->show();
+}
+
 uint notifyCall(uint, const QString &title, const QString &body, std::function<void(const QString &)>)
 {
     notify(title, body, 45000);

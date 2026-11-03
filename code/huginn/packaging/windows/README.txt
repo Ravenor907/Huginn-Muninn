@@ -26,7 +26,10 @@ https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.
 YOUR DATA
 Everything Huginn keeps (your identity, contacts, chats and settings) is in
 the "data" folder beside Huginn.exe. Huginn makes it the first time it runs,
-readable by your Windows account only. Settings > About shows where it is.
+readable by your Windows account and the computer's administrators only (not
+on a USB, memory card or network drive). Settings > About shows where it is.
+Don't open the same Huginn folder on two computers (a OneDrive or Dropbox
+folder, say): Huginn refuses to, as two copies on one folder break chats.
 
 UPDATING
 Huginn updates itself and keeps the data folder.

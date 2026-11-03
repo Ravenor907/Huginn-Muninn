@@ -145,6 +145,8 @@ private:
     void applyCands(const QJsonObject &msg);
     void startRelay();
     void restartRelay();
+    void scheduleRenew(qint64 expiresMs);   // relay.md "Renewal"
+    void renewRelay();
     void relayReady();
     void startProbe();
     void onLanEarly();
@@ -166,6 +168,9 @@ private:
     QByteArray m_theirEph;        // DER
     QJsonObject m_offer, m_answer;
     QPointer<TurnClient> m_turn;
+    QPointer<TurnClient> m_leaving;   // the allocation a renewal replaced: carries media for kHandoverMs more
+    qint64 m_renewFor = 0;            // the login end the renewal timer is set for
+    int m_renewTries = 0;
     bool m_relayDone = false;     // allocated or given up
     int m_relayTries = 0, m_restarts = 0;
     QString m_relayWhy;           // why the relay last failed ("" once it works); never an address

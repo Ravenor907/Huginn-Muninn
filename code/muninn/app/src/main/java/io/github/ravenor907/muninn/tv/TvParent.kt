@@ -89,6 +89,11 @@ data class ManagedTv(
     val gok: List<Pair<String, String>> = emptyList(), val gno: List<Pair<String, String>> = emptyList(),
     val holdAsks: List<HoldAsk> = emptyList(), val waitKid: Map<String, Long> = emptyMap(),
     val kidAsks: List<KidAddAsk> = emptyList(),
+    /**
+     * Round 17 (7.18): people ([goneC]) and parents ([goneP]) taken off the device by a parent app with k11 (this phone, or
+     * another parent's config it took): an older parent app's config can't bring them back.
+     */
+    val goneC: List<String> = emptyList(), val goneP: List<String> = emptyList(),
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -117,6 +122,16 @@ object TvParent {
     private val cards = ConcurrentHashMap<String, Pair<String, Long>>()
     /** Per TV: parents this phone just took off, told with the next config it signs. Not saved: the TV tells them too. */
     private val removed = ConcurrentHashMap<String, Set<String>>()
+    /**
+     * Round 17: per device, what it ran before this phone's change ([bases]), and the version, hash and state of the last
+     * config this phone signed ([signed]): when another parent's change at the same version wins, this phone's change is
+     * put on top of theirs. Not saved: after a restart the old message ("make it again") stands in.
+     */
+    private val bases = ConcurrentHashMap<String, ManagedTv>()
+    private data class Signed(val v: Long, val hash: String, val state: ManagedTv)
+    private val signed = ConcurrentHashMap<String, Signed>()
+    /** Round 17: per device, the wrong-PIN count its parents were last told about. Not saved. */
+    private val pinTold = ConcurrentHashMap<String, Int>()
     /** k12: per device, when this phone last sent it its translation. Not saved. */
     private val havSent = ConcurrentHashMap<String, Long>()
     @Volatile private var ticking = false
@@ -245,7 +260,11 @@ object TvParent {
         synchronized(lock) {
             val t = _tvs.value[key] ?: return
             if (t.disconnecting) return
-            put(f(t))
+            // Round 17: the first change since the device confirmed everything: what it ran is kept as the base.
+            if (flushes[key]?.isDone != false && t.pending.isEmpty() && t.applied >= t.v) bases[key] = t
+            val n = f(t)
+            // Who this change takes off (people or parents) is remembered; anyone put back is not.
+            put(n.copy(goneC = KidMerge.gone(t.reach, n.reach, n.goneC), goneP = KidMerge.gone(t.parents, n.parents, n.goneP)))
         }
         flushes.remove(key)?.cancel(false)
         flushes[key] = timer.schedule(Runnable { try { flush(key) } catch (_: Exception) {} }, 1200, TimeUnit.MILLISECONDS)
@@ -319,6 +338,7 @@ object TvParent {
             // change (from any parent, wherever they are) sends the same zone instead of its own phone's.
             put(t.copy(v = v, pending = listOf(plain), pendingV = v, since = System.currentTimeMillis(), extrasSent = extras != null, k11Sent = extras?.chat != null,
                 sharedWith = (t.sharedWith + newParents).distinct(), tz = KidRules.zoneToKeep(t.tz, extras?.tz)))
+            _tvs.value[key]?.let { signed[key] = Signed(v, Canon.hash(cfg), it) }
             tries[key] = 1 to System.currentTimeMillis() + RETRY[0]
             signed = cfg
         }
@@ -397,6 +417,10 @@ object TvParent {
         // k11 (7.18): someone at the device asks to open its parent settings, or it left kids' mode.
         if (o.optString("t") == "unlockask") return takeUnlockAsk(app, fromKey, o)
         if (o.optString("t") == "left") return takeLeft(app, fromKey, o)
+        // Round 17: another family's device on one of this phone's devices' lists left kids' mode; or the device was
+        // already set up by another parent when this phone scanned its code.
+        if (o.optString("t") == "kidleft") return takeKidLeft(app, fromKey, o)
+        if (o.optString("t") == "taken") return takeTaken(app, fromKey, o)
         // k14 (7.18): a group member the device holds, and another family's Kids' Device.
         if (o.optString("t") == "ghold") return takeHold(app, fromKey, o)
         if (o.optString("t") == "kidadd") return takeKidAdd(app, fromKey, o)
@@ -410,6 +434,7 @@ object TvParent {
         var resend = false
         var lostTo: String? = null
         var news: String? = null
+        var both: String? = null
         synchronized(lock) {
             val t = _tvs.value[fromKey]
             if (t == null) {
@@ -423,13 +448,33 @@ object TvParent {
             val dev = KidRules.deviceIn(o).ifEmpty { t.dev }
             // k12: the translation the device holds ("" for none), kept on whatever this phone takes below.
             val held = (o.opt("havh") as? String)?.takeIf { Regex("[0-9a-f]{64}").matches(it) } ?: ""
+            // Round 17: another parent's config at the version this phone just signed (7.2: the lower hash stays on the device).
+            val mine = signed[fromKey]
+            val sameV = runs != null && runs.by != me && mine != null && runs.v == mine.v && Canon.hash(runs.raw) != mine.hash
+            val theirsWins = sameV && KidMerge.lost(mine!!.hash, Canon.hash(runs!!.raw))
             when {
+                // Ours has the lower hash: the device takes it once it gets it (or already has). Nothing to adopt; keep
+                // waiting for its "applied", so neither phone says anything false.
+                sameV && !theirsWins && t.pending.isNotEmpty() -> put(t.copy(app = version, dev = dev))
+                // Theirs won, over a change of ours still on its way or one the device already ran: both changes go on,
+                // ours made again on top of theirs as the next version.
+                sameV && theirsWins && bases[fromKey] != null && (t.pending.isNotEmpty() || t.applied == runs!!.v) -> {
+                    val theirs = adopted(app, t, runs!!).copy(app = version, dev = dev)
+                    put(KidMerge.merge(bases[fromKey]!!, mine!!.state, theirs))
+                    bases[fromKey] = theirs
+                    signed.remove(fromKey)
+                    tries.remove(fromKey)
+                    both = app.chat.nameOf(runs.by)
+                    resend = true
+                }
                 // The TV runs something newer than this phone sent (or another parent's at the same version): their
                 // change, or this phone's own from before a backup was restored. This phone takes it, so it shows
                 // what's really on the TV.
                 runs != null && runs.v > t.applied && (runs.v > t.pendingV || (runs.v == t.pendingV && runs.by != me)) -> {
                     if (t.pending.isNotEmpty() && runs.by != me) lostTo = app.chat.nameOf(runs.by)
                     var next = adopted(app, t, runs).copy(app = version, dev = dev)
+                    // Round 17: who a parent app with k11 took off is remembered here too.
+                    if (KidRules.hasK11(runs.raw)) next = next.copy(goneC = KidMerge.gone(t.reach, next.reach, t.goneC), goneP = KidMerge.gone(t.parents, next.parents, t.goneP))
                     if (!KidRules.hasK11(runs.raw) && k11(app, fromKey)) {
                         // A co-parent's older app (no k11 field) may not have seen the newest list: the device took
                         // nobody off (7.18), and neither does this phone. Names stay as they were here, and the whole
@@ -438,6 +483,18 @@ object TvParent {
                         next = next.copy(reach = (next.reach + t.reach).distinct().take(TvRules.MAX_CONTACTS - 1),
                             others = next.others + t.others.filter { x -> next.others.none { it.k == x.k } },
                             parents = (next.parents + t.parents).distinct(), names = next.names + before)
+                        // Round 17: removals win. People and parents a newer parent app took off stay off (the device
+                        // leaves them out too), and this phone's person hears that the older app tried.
+                        val backC = next.reach.filter { it in t.goneC }
+                        val backP = next.parents.filter { it in t.goneP && it != runs.by }
+                        if (backC.isNotEmpty() || backP.isNotEmpty()) {
+                            next = next.copy(reach = next.reach - backC.toSet(), others = next.others.filter { it.k !in backC },
+                                parents = next.parents - backP.toSet())
+                            val who = app.chat.nameOf(runs.by)
+                            val tvName = app.contacts.get(fromKey)?.shown ?: "the Kids' Device"
+                            val names = (backC + backP).distinct().joinToString(", ") { k -> before[k] ?: app.chat.nameOf(k) }
+                            news = "$who's older Muninn tried to put $names back on $tvName. They stay off. Ask $who to update Muninn."
+                        }
                         resend = true
                     } else if (runs.by != me && t.applied > 0) {
                         // A co-parent's change that the others should hear about.
@@ -461,6 +518,8 @@ object TvParent {
                 }
                 else -> {
                     val done = v >= t.pendingV
+                    // Round 17: what the device confirmed is the new base for this phone's next change.
+                    if (done && runs != null && runs.v > (signed[fromKey]?.v ?: 0L)) { bases.remove(fromKey); signed.remove(fromKey) }
                     // Round 14: no zone kept here yet (set up before 1.35): the one the device runs is kept.
                     put(t.copy(applied = maxOf(t.applied, v), v = maxOf(t.v, v), pending = if (done) emptyList() else t.pending, app = version, dev = dev,
                         tz = KidRules.zoneToKeep(t.tz, runs?.takeIf { KidRules.hasK11(it.raw) }?.tz)))
@@ -481,13 +540,21 @@ object TvParent {
             _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
         }
         lostTo?.let { Ui.say("$it changed the Kids' Device just before you, so your last change didn't go through. Make it again.", true) }
+        both?.let { Ui.say("$it changed the Kids' Device at the same moment as you. Your change is going out again on top of theirs, so both are on it.") }
         news?.let { n ->
             Ui.say(n)
             try { app.notice(app.contacts.get(fromKey)?.shown ?: "Kids' Device", n, pageOf(fromKey), "change$fromKey") } catch (_: Exception) {}
         }
-        if (resend) change(fromKey) { it }
+        // Round 17: after a merge the base stays what the device runs (theirs), so the next version goes out as it is.
+        if (resend && both != null) flushSoon(fromKey)
+        else if (resend) change(fromKey) { it }
         else sendHavText(app, fromKey, force = false)
         return true
+    }
+
+    private fun flushSoon(key: String) {
+        flushes.remove(key)?.cancel(false)
+        flushes[key] = timer.schedule(Runnable { try { flush(key) } catch (_: Exception) {} }, 1200, TimeUnit.MILLISECONDS)
     }
 
     /** [t] as the TV's config [cfg] has it (another parent's, or newer than this phone's). */
@@ -573,6 +640,16 @@ object TvParent {
             if (it != "done") try { app.notice(name, TvRules.updateText(it), pageOf(fromKey), "update$fromKey") } catch (_: Exception) {}
         }
         if (adopt) change(fromKey) { it }
+        // Round 17: many wrong parent PINs in a row on the device: said once (again only when it keeps going).
+        val told = pinTold[fromKey] ?: 0
+        if (s.pinfail < KidRules.PIN_WARN) pinTold.remove(fromKey)
+        else if (s.pinfail >= told + KidRules.PIN_WARN || told == 0) {
+            pinTold[fromKey] = s.pinfail
+            val name = app.contacts.get(fromKey)?.shown ?: "Kids' Device"
+            val n = "Someone typed a wrong parent PIN ${s.pinfail} times in a row on $name. Each try now waits longer. Set a new PIN if it may be known."
+            Ui.say(n, true)
+            try { app.notice(name, n, pageOf(fromKey), "pinfail$fromKey") } catch (_: Exception) {}
+        }
         return true
     }
 
@@ -861,8 +938,12 @@ object TvParent {
         val t = _tvs.value[fromKey] ?: return false
         if (t.disconnecting) return true
         val name = app.contacts.get(fromKey)?.shown ?: "Kids' Device"
+        // Round 17: an ask from the same device while one is still open only replaces it, quietly (no new sound or
+        // dialog); Unlock takes a hold, so a sleepy tap never opens Leave kids' mode.
+        val open = unlockAsk(fromKey) != null
         unlockAsks.value = unlockAsks.value + (fromKey to UnlockAsk(id, System.currentTimeMillis()))
-        if (Ui.ask.value == null) Ui.sure(Ask("Unlock $name?", unlockText(name), "Unlock", cancel = "Not now", onCancel = { answerUnlock(app, fromKey, false) }) {
+        if (open) return true
+        if (Ui.ask.value == null) Ui.sure(Ask("Unlock $name?", unlockText(name), "Unlock", hold = true, cancel = "Not now", onCancel = { answerUnlock(app, fromKey, false) }) {
             answerUnlock(app, fromKey, true)
         })
         try { app.notice("Unlock $name?", "Someone at $name asks to open its parent settings. Tap to answer.", pageOf(fromKey), "unlock$fromKey") } catch (_: Exception) {}
@@ -906,6 +987,48 @@ object TvParent {
         val name = app.contacts.get(fromKey)?.shown ?: "The Kids' Device"
         Ui.say("$name left kids' mode")
         try { app.notice("$name left kids' mode", "Someone with the parent PIN or a parent's yes left kids' mode. It's a normal Muninn now.", fromKey, "left$fromKey") } catch (_: Exception) {}
+        return true
+    }
+
+    /**
+     * Round 17 (7.18): this phone's Kids' Device [fromKey] says another family's Kids' Device on its list left kids' mode.
+     * It's an ordinary Muninn now: it comes off the list (the device already stopped talking to it), and this phone's
+     * person is told.
+     */
+    private fun takeKidLeft(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        val k = KidRules.kidLeftIn(o) ?: return false
+        val t = _tvs.value[fromKey] ?: return false
+        if (t.disconnecting) return true
+        if (k == app.identity.publicKey || k in t.parents) return true
+        unmarkKid(app, k)
+        val had = k in t.reach || t.others.any { it.k == k } || k in t.waitKid
+        if (had) change(fromKey) { x -> x.copy(reach = x.reach - k, others = x.others.filter { it.k != k }, waitKid = x.waitKid - k) }
+        val tvName = app.contacts.get(fromKey)?.shown ?: "the Kids' Device"
+        val who = t.names[k] ?: app.chat.nameOf(k)
+        val n = "$who left kids' mode, so it's off $tvName's list. Add it again only if you trust whoever has it now."
+        Ui.say(n)
+        try { app.notice(tvName, n, pageOf(fromKey), "kidleft$fromKey$k") } catch (_: Exception) {}
+        return true
+    }
+
+    /**
+     * Round 17: this phone scanned a pairing code another parent had already used. The device stays theirs; this phone
+     * stops setting it up and says whom to ask.
+     */
+    private fun takeTaken(app: Muninn, fromKey: String, o: JSONObject): Boolean {
+        if (!KidRules.isTaken(o)) return false
+        synchronized(lock) {
+            val t = _tvs.value[fromKey] ?: return true
+            // Only while this phone never got it set up: a device it looks after never says this.
+            if (t.applied > 0 || t.disconnecting) return true
+            _tvs.value = _tvs.value - fromKey
+            save(app)
+        }
+        flushes.remove(fromKey)?.cancel(false)
+        tries.remove(fromKey)
+        bases.remove(fromKey); signed.remove(fromKey)
+        val tvName = app.contacts.get(fromKey)?.shown ?: "This Kids' Device"
+        Ui.say("$tvName is already set up by another parent. Ask them to add you as a parent from its page.", true)
         return true
     }
 
@@ -1199,6 +1322,7 @@ object TvParent {
             .put("holdAsks", JSONArray().apply { t.holdAsks.forEach { put(JSONObject(KidK14.holdMessage(it))) } })
             .put("waitKid", JSONObject().apply { t.waitKid.forEach { (k, v) -> put(k, v) } })
             .put("kidAsks", JSONArray().apply { t.kidAsks.forEach { put(JSONObject().put("a", JSONObject(KidK14.kidAddMessage(it.add))).put("from", it.from)) } })
+            .put("goneC", JSONArray(t.goneC)).put("goneP", JSONArray(t.goneP))
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -1243,7 +1367,8 @@ object TvParent {
                     val e = a.optJSONObject(i) ?: return@mapNotNull null
                     val add = e.optJSONObject("a")?.let { KidK14.kidAddIn(it) } ?: return@mapNotNull null
                     e.optString("from").takeIf { it.isNotEmpty() }?.let { KidAddAsk(add, it) }
-                } } ?: emptyList())
+                } } ?: emptyList(),
+                goneC = strs(x.optJSONArray("goneC")), goneP = strs(x.optJSONArray("goneP")))
         } catch (e: Exception) { null }
     }.toMap()
 }

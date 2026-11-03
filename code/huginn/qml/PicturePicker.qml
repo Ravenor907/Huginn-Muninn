@@ -62,10 +62,12 @@ Item {
             const n = cropChoices.length
             if (b === "b") run("back")
             else if (b === "a") run(cropChoices[focusIndex].id)
-            else if (b === "left" || b === "up") focusIndex = Math.max(0, focusIndex - 1)
-            else if (b === "right" || b === "down") focusIndex = Math.min(n - 1, focusIndex + 1)
-            else if (b === "lb") crop.zoomBy(-0.1)
-            else if (b === "rb") crop.zoomBy(0.1)
+            // Round 17: Up zooms in and Down out (RB is the pointer's click, so it never got here); Left and Right
+            // pick among Save and Back. LB still zooms out.
+            else if (b === "left") focusIndex = Math.max(0, focusIndex - 1)
+            else if (b === "right") focusIndex = Math.min(n - 1, focusIndex + 1)
+            else if (b === "up") crop.zoomBy(0.1)
+            else if (b === "down" || b === "lb") crop.zoomBy(-0.1)
             return true
         }
         const n = choices.length
@@ -292,7 +294,8 @@ Item {
                 textFormat: Text.PlainText
                 width: parent.width
                 wrapMode: Text.WordWrap
-                text: "Drag to move, scroll or pinch to zoom. Saved small (256 by 256). Sent only to your contacts and the groups you're in, encrypted like a message."
+                text: (Ui.main && Ui.main.padInUse ? "Up and Down zoom, Left and Right pick a button. " : "")
+                      + "Drag to move, scroll or pinch to zoom. Saved small (256 by 256). Sent only to your contacts and the groups you're in, encrypted like a message."
                 color: Theme.textMuted
                 font.family: Theme.body; font.pixelSize: Theme.fs(13)
             }

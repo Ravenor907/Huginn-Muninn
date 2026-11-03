@@ -119,7 +119,7 @@ fun PicturePicker(onDone: () -> Unit) {
                 }
                 Spacer(Modifier.height(12.dp))
                 Line(if (busy) "Opening…" else "Choose a picture", "From your photos", icon = "image") {
-                    if (!busy) io.github.ravenor907.muninn.ui.Picking.launch(choose, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    if (!busy) try { io.github.ravenor907.muninn.ui.Picking.launch(choose, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) }
                 }
                 Line("Take a photo", "With Muninn's camera", icon = "video") { camera = true }
                 Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {

@@ -121,9 +121,41 @@ class CallMedia(
         val old = turn
         turn = t
         old?.let { try { it.close() } catch (_: Exception) {} }
+        renewing?.let { renewing = null; try { it.close() } catch (_: Exception) {} }   // a renewal underway is no longer needed
         peerRelay.forgetSeen()
         peerRelay.advertised?.let { t.permit(it); addPath(CallLogic.Kind.RELAY, it) }
         return t.relayed
+    }
+
+    /** The allocation a renewal made (relay.md "Renewal"): it takes media from the peer at once, and over from [turn] in [finishRenew]. */
+    @Volatile private var renewing: TurnClient? = null
+
+    /**
+     * Renewal (blocking): a second allocation with a fresh login, before the one in use ends. Media still goes out through
+     * the old one until [finishRenew], while the peer learns the new address; what arrives on either counts. Its relayed
+     * address, or null.
+     */
+    fun renewRelay(login: TurnCreds.Login, resolve: (String) -> java.net.InetAddress?): InetSocketAddress? {
+        if (stopped || turn == null) return null
+        val self = arrayOfNulls<TurnClient>(1)
+        val t = TurnClient(login, resolve) { from, data -> if (turn === self[0] || renewing === self[0]) incoming(data, CallLogic.Kind.RELAY, from) }
+        self[0] = t
+        if (!t.start()) { t.close(); return null }
+        if (stopped) { t.close(); return null }
+        peerRelay.advertised?.let { t.permit(it) }
+        renewing?.let { try { it.close() } catch (_: Exception) {} }
+        renewing = t
+        return t.relayed
+    }
+
+    /** The renewal's allocation now carries the media; the old one is let go. */
+    fun finishRenew() {
+        val t = renewing ?: return
+        renewing = null
+        val old = turn
+        turn = t
+        old?.let { try { it.close() } catch (_: Exception) {} }
+        peerRelay.forgetSeen()
     }
 
     /** The peer's relayed address (from their offer, answer or cands). Never anything but a relay. */
@@ -273,7 +305,7 @@ class CallMedia(
         }
         markLive(kind, from, fresh = true)
         // Authentic, relayed from an address the peer didn't advertise: answer there too.
-        if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it) }
+        if (kind == CallLogic.Kind.RELAY && peerRelay.heard(from)) from?.let { turn?.permit(it); renewing?.permit(it) }
         if (!gotFirst) { gotFirst = true; events.onFirstMedia() }
         synchronized(counters) { bytesIn += data.size }
         when (o.type) {
@@ -796,6 +828,7 @@ class CallMedia(
         timer.shutdownNow()
         try { lan?.close() } catch (_: Exception) {}
         try { turn?.close() } catch (_: Exception) {}
+        try { renewing?.close() } catch (_: Exception) {}
         bluetooth?.onMedia(null)
         // Let the audio threads leave read() and write() before their objects go.
         try { mic?.join(500); player?.join(500) } catch (_: InterruptedException) {}

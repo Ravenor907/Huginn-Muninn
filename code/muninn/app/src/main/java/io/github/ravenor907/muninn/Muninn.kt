@@ -55,6 +55,8 @@ class Muninn : Application() {
         // A Kids' Device whose Muninn keeps crashing as it starts: only the updater runs (tv/SafeStart).
         io.github.ravenor907.muninn.tv.SafeStart.begin(this)
         vault = Vault(this)
+        // A panic lock from before the process ended stays on: no names on any notification until unlocked.
+        io.github.ravenor907.muninn.ui.Panic.restore(this, vault.hasPassword)
         identity = Identity(this, vault)
         io.github.ravenor907.muninn.ui.Access.apply {
             size = identity.uiSize; text = identity.textSize; contrast = identity.highContrast
@@ -530,8 +532,10 @@ class Muninn : Application() {
     fun canReply(): Boolean {
         val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(this) } catch (_: Exception) { true }
         val lockDue = try {
+            // The same grace a file or photo picker gets on the way back (Picking), so Reply and the window agree.
             io.github.ravenor907.muninn.ui.AppLock.due(vault.hasPassword, io.github.ravenor907.muninn.ui.AppLock.awaySince,
-                android.os.SystemClock.elapsedRealtime(), identity.lockAfter)
+                android.os.SystemClock.elapsedRealtime(), io.github.ravenor907.muninn.ui.Picking.lockAfter(identity.lockAfter,
+                    io.github.ravenor907.muninn.ui.Picking.since, io.github.ravenor907.muninn.ui.AppLock.awaySince))
         } catch (_: Exception) { true }
         // The lock is up (shown, or Lock now, or "Right away"): Reply opens the lock first, however recently Muninn was open.
         return io.github.ravenor907.muninn.ui.AppLock.canReply(ready.value, io.github.ravenor907.muninn.ui.Panic.locked.value, kids, lockDue,

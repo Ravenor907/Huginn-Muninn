@@ -16,6 +16,10 @@ QtObject {
     function has(fn) { return typeof Chat[fn] === "function" }
     // Locked (Main.lockedOut): no one's menu opens and nothing is sent.
     function locked() { return !!Ui.main && Ui.main.lockedOut === true }
+    // Round 17 (B1): the current lock first (Main.qml's LockCheck), then then().
+    function lockFirst(title, why, what, then) {
+        if (Ui.main) Ui.main.askLock(title, why, what, then)
+    }
     function contactMenu(k, n, ctx) {
         const c = ctx || {}
         if (!k || locked()) return
@@ -637,19 +641,25 @@ QtObject {
         Ui.pickFrom("Linked devices", [{ header: "Your phone", items: phone },
                                        { header: "Other ways", items: others },
                                        { header: "Move to another device", items: move }], a => {
+            // Round 17 (B1, security m6): moving either way replaces an account, so the current lock is asked first.
             if (a === "movehere") {
-                const code = Mover.showCode()
-                if (code === "") { Ui.say("Join your home Wi-Fi first.", true); return }
-                Chat.copyText(code, true)
-                Ui.note("Move code copied", "Paste it on the old device, on the same Wi-Fi. It's cleared from the clipboard in a minute.\n\n" + code)
+                lockFirst("Move here", "This replaces the account on this device. A copy of what's here is kept", "movehere", () => {
+                    const code = Mover.showCode()
+                    if (code === "") { Ui.say("Join your home Wi-Fi first.", true); return }
+                    Chat.copyText(code, true)
+                    Ui.note("Move code copied", "This replaces the account on this device (a copy of what's here is kept). Paste the code on the old device, on the same Wi-Fi. It's cleared from the clipboard in a minute.\n\n" + code)
+                })
             } else if (a === "moveaway") {
-                Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t))
+                lockFirst("Move from this device", "Everything moves to the new device, and this one is locked out", "moveaway",
+                          () => Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t)))
             } else if (a === "code" || a === "check") {
                 if (Ui.main) Ui.main.showLinkPhone(false)
             } else if (a === "link") {
-                Ui.ask("Show this PC's chats on another device", "Paste the code that device shows. To link to your phone, use Link this PC to my phone.", "", "Link", t => {
-                    const r = Linked.link(t)
-                    Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
+                lockFirst("Show this PC's chats on another device", "That device will see all of them", "link", () => {
+                    Ui.ask("Show this PC's chats on another device", "Paste the code that device shows. To link to your phone, use Link this PC to my phone.", "", "Link", t => {
+                        const r = Linked.link(t)
+                        Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
+                    })
                 })
             } else if (a === "ph") {
                 // Keep a read-only copy here, or take everything that came from the phone off this device.

@@ -101,9 +101,13 @@ bool linkOk(qint64 x, int max, int uses, bool off, bool makerIn, bool makerMay, 
 // Round 16 (3.8): one part of a long message, "ps" (the parts' set id, a logical id), "pi" (its place, 1 = the
 // first) and "pn" (how many, 2 to kMaxParts). partPlace: where a stored message (a map with from, ps, pi) goes in a
 // group's messages: before the same sender's first part of that set with a higher place, or -1 (last).
+// Round 17 (m10): only near the end, so a reused "ps" from days ago never puts a new message deep in the history: among
+// the last kPartWindow messages, and (nowMs given) only beside parts whose "time" is under kPartAgeMs old.
 const int kMaxParts = 10;
+const int kPartWindow = 200;
+const qint64 kPartAgeMs = 3600000;
 bool partOk(const QJsonValue &ps, const QJsonValue &pi, const QJsonValue &pn);
-int partPlace(const QVariantList &messages, const QVariantMap &m);
+int partPlace(const QVariantList &messages, const QVariantMap &m, qint64 nowMs = 0);
 
 // Checks shared/vectors/proto06-vectors.json (group section and canonical JSON, with chat-vectors.json next
 // to it for the keys), plus state limits, signing and group codes. Prints what it found.

@@ -5,12 +5,14 @@
 
 #ifdef Q_OS_WIN
 #include "singleinstance.h"
+#include "portable.h"
 
 #include "crashlog.h"
 #include "../settings.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -54,6 +56,7 @@ QByteArray parseDigest(const QByteArray &text)
 
 bool supported() { return false; }
 bool finishAtStart() { return false; }
+bool giveUpStaged(const QString &) { return false; }
 void cleanUp() {}
 void tidyOldLayout() {}
 QString folderProblem() { return {}; }
@@ -75,6 +78,9 @@ const QString kReady = QStringLiteral("update.ready");
 const QString kStaging = QStringLiteral("update-staging");
 // In lib\: every file the last update put there (one relative path a line). Only those are ever deleted by the next one.
 const QString kInstalled = QStringLiteral("lib/huginn-files.txt");
+// Round 17: in update-staging when Controlled folder access blocked the staged Huginn.exe. It stays a week, so the person
+// can pick it in Windows Security's Allow an app (which needs the file there).
+const QString kBlocked = QStringLiteral("update.blocked");
 
 // A swap that didn't go in: why, kept in settings ("update/failed" = "<version>|<sentence>"). The next start says so,
 // and timed checks don't download that version again until Check now (updater.cpp).
@@ -97,6 +103,20 @@ QString appDir()
     return QFileInfo(QDir::fromNativeSeparators(QString::fromStdWString(self))).absolutePath();
 }
 QString stagingDir() { return appDir() + QLatin1Char('/') + kStaging; }
+
+// Round 17: what to say when Controlled folder access (or another security program) keeps the staged copy from saving.
+// Moving out of the protected folders comes first; allowing the staged copy too is the second way.
+QString blockedText(const QString &root)
+{
+    return QStringLiteral("The update didn't go in: Windows' Controlled folder access (or another security program) doesn't let the new "
+                          "Huginn.exe save in Huginn's folder, so Huginn kept the version it had.\n\n"
+                          "Best: close Huginn and move its whole folder out of Documents, Desktop and Pictures, to a folder like "
+                          "C:\\Users\\<you>\\Huginn. Updates then just work.\n\n"
+                          "Or allow the new copy too: Windows Security › Virus & threat protection › Manage ransomware protection › Allow "
+                          "an app through Controlled folder access › Add an allowed app › Browse all apps, and pick %1. Then choose "
+                          "Check now in Settings › Updates and about.")
+        .arg(QDir::toNativeSeparators(root + QLatin1Char('/') + kStaging + QStringLiteral("/Huginn.exe")));
+}
 
 QByteArray fileSha256(const QString &path)
 {
@@ -147,6 +167,40 @@ QString safeRelative(QString p)
 struct Moved {
     QString target, aside;   // aside empty: there was no old file
 };
+
+// Round 17 (m4): the swap's journal, in Huginn's folder while new files go in (one relative path a line). Every new file
+// is copied in first as "<name>.huginn-new" (the slow part, nothing replaced yet); only then is this written and each
+// one renamed into place. A start that finds it (the power went in that moment) finishes those renames first.
+const QString kJournal = QStringLiteral("update.swap");
+const QString kNew = QStringLiteral(".huginn-new");
+
+// Finishes a swap the journal says was under way: every "<name>.huginn-new" still there goes into place. True when
+// there was one.
+bool finishJournal(const QString &root)
+{
+    QFile j(root + QLatin1Char('/') + kJournal);
+    if (!j.exists())
+        return false;
+    QStringList rels;
+    if (j.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        rels = QString::fromUtf8(j.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        j.close();
+    }
+    int finished = 0;
+    for (const QString &rel : std::as_const(rels)) {
+        const QString target = root + QLatin1Char('/') + rel;
+        if (!QFileInfo::exists(target + kNew))
+            continue;
+        QFile::remove(target + kAside);
+        if (QFileInfo::exists(target))
+            QFile::rename(target, target + kAside);
+        if (QFile::rename(target + kNew, target))
+            ++finished;
+    }
+    j.remove();
+    CrashLog::note(QStringLiteral("update: finished a swap that was cut off (%1 files)").arg(finished));
+    return true;
+}
 
 // Puts back what was moved, after a failed swap.
 void rollBack(const QList<Moved> &moved)
@@ -279,8 +333,19 @@ void cleanUp()
     const QString root = appDir();
     if (root.isEmpty())
         return;
-    // A staged update that is ready is finished by finishAtStart(), not removed.
-    if (!QFileInfo::exists(stagingDir() + QLatin1Char('/') + kReady))
+    // Round 17 (m4): a swap cut off between its renames is finished first; new files copied in before it was cut off,
+    // with no journal, are taken away (the old version is whole).
+    finishJournal(root);
+    for (const QString &dir : {root, root + QStringLiteral("/lib")}) {
+        QDirIterator it(dir, {QLatin1Char('*') + kNew}, QDir::Files | QDir::Hidden, dir == root ? QDirIterator::NoIteratorFlags : QDirIterator::Subdirectories);
+        while (it.hasNext())
+            QFile::remove(it.next());
+    }
+    // A staged update that is ready is finished by finishAtStart(), not removed. Round 17: one Controlled folder access
+    // blocked stays a week, so its Huginn.exe can be picked in Allow an app.
+    const QFileInfo blocked(stagingDir() + QLatin1Char('/') + kBlocked);
+    const bool keepBlocked = blocked.exists() && blocked.lastModified().daysTo(QDateTime::currentDateTime()) < 7;
+    if (!QFileInfo::exists(stagingDir() + QLatin1Char('/') + kReady) && !keepBlocked)
         QDir(stagingDir()).removeRecursively();
     deleteAsides(root);
     tidyOldLayout();
@@ -318,12 +383,32 @@ bool finishAtStart()
         QList<Moved> moved;
         QSet<QString> fresh;
         QString failed;
+        // Round 17 (m4): first every new file is copied in beside the old one ("<name>.huginn-new"): cut off here,
+        // nothing of the old version has changed (the next start's cleanUp takes them away).
+        QStringList copied;
         for (const QString &rel : files) {
             const QString target = root + QLatin1Char('/') + rel;
-            fresh.insert(QDir::cleanPath(target).toLower());
             QDir().mkpath(QFileInfo(target).absolutePath());
+            QFile::remove(target + kNew);
+            if (!QFile::copy(staging + QLatin1Char('/') + rel, target + kNew)) {
+                failed = rel;
+                break;
+            }
+            copied << rel;
+        }
+        // Then the journal, and only quick renames: cut off now, the next start finishes them (finishJournal).
+        if (failed.isEmpty()) {
+            QSaveFile j(root + QLatin1Char('/') + kJournal);
+            if (!j.open(QIODevice::WriteOnly | QIODevice::Text) || j.write(files.join(QLatin1Char('\n')).toUtf8() + '\n') < 0 || !j.commit())
+                failed = kJournal;
+        }
+        for (const QString &rel : files) {
+            if (!failed.isEmpty())
+                break;
+            const QString target = root + QLatin1Char('/') + rel;
+            fresh.insert(QDir::cleanPath(target).toLower());
             Moved m{target, {}};
-            if (!retry([&] { return moveAside(target, &m.aside); }) || !QFile::copy(staging + QLatin1Char('/') + rel, target)) {
+            if (!retry([&] { return moveAside(target, &m.aside); }) || !QFile::rename(target + kNew, target)) {
                 if (!m.aside.isEmpty())
                     QFile::rename(m.aside, target);
                 failed = rel;
@@ -331,6 +416,11 @@ bool finishAtStart()
             }
             moved << m;
         }
+        if (!failed.isEmpty()) {
+            for (const QString &rel : std::as_const(copied))
+                QFile::remove(root + QLatin1Char('/') + rel + kNew);
+        }
+        QFile::remove(root + QLatin1Char('/') + kJournal);
         if (!failed.isEmpty()) {
             rollBack(moved);
             noteFailed(QCoreApplication::applicationVersion(),
@@ -419,6 +509,32 @@ bool finishAtStart()
 #endif
 }
 
+bool giveUpStaged(const QString &why)
+{
+#ifdef HUGINN_WINDOWS_PORTABLE
+    const QString here = appDir();
+    if (here.isEmpty() || QFileInfo(here).fileName().compare(kStaging, Qt::CaseInsensitive) != 0)
+        return false;
+    const QString root = QFileInfo(here).absolutePath();
+    QFile::remove(here + QLatin1Char('/') + kReady);   // never tried again by itself
+    const bool blocked = !Portable::canWriteForUpdate();
+    if (blocked) {
+        QFile mark(here + QLatin1Char('/') + kBlocked);
+        if (mark.open(QIODevice::WriteOnly))
+            mark.write("1");
+    }
+    noteFailed(Settings::store().value(QStringLiteral("update/trying")).toString(),
+               blocked ? blockedText(root)
+                       : QStringLiteral("The update didn't finish (%1), so Huginn kept the version it had. Try again later with Check now in "
+                                        "Settings › Updates and about.").arg(why.left(300)));
+    if (!SingleInstance::startAgain(root + QStringLiteral("/Huginn.exe"), root))
+        CrashLog::note(QStringLiteral("update: couldn't start Huginn again after a blocked update"));
+    return true;
+#else
+    return false;
+#endif
+}
+
 void install(const QString &zipPath, QObject *context, std::function<void(bool, bool, const QString &)> done)
 {
     // On the next turn of the event loop, so "Installing…" is on screen while the zip unpacks.
@@ -453,6 +569,38 @@ void install(const QString &zipPath, QObject *context, std::function<void(bool, 
         }
         mark.close();
         QFile::remove(zipPath);
+
+        // Round 17: Controlled folder access allows programs by path, so the staged Huginn.exe may not save where this one
+        // can. It is asked first (--update-probe tries a write in Huginn's folder and its data folder, then ends); only one
+        // that can is handed the update, so the restart never leaves nothing running.
+        {
+            QProcess probe;
+            probe.setProgram(staged);
+            probe.setArguments({QStringLiteral("--update-probe")});
+            probe.setWorkingDirectory(staging);
+            probe.start();
+            const bool ran = probe.waitForStarted(10000) && probe.waitForFinished(20000);
+            if (!ran)
+                probe.kill();
+            const bool canWrite = ran && probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == kProbeOk;
+            if (!canWrite) {
+                const bool blocked = ran && probe.exitStatus() == QProcess::NormalExit && probe.exitCode() == kProbeBlocked;
+                CrashLog::note(QStringLiteral("update: the staged Huginn.exe %1").arg(blocked ? QStringLiteral("can't save in Huginn's folder")
+                                                                                         : QStringLiteral("didn't run")));
+                QFile::remove(staging + QLatin1Char('/') + kReady);
+                if (blocked) {
+                    QFile keep(staging + QLatin1Char('/') + kBlocked);
+                    if (keep.open(QIODevice::WriteOnly))
+                        keep.write("1");
+                    done(false, false, blockedText(appDir()));
+                } else {
+                    QDir(staging).removeRecursively();
+                    done(false, false, QStringLiteral("The new Huginn.exe didn't start (antivirus may have blocked or quarantined it), so Huginn "
+                                                      "kept the version it had. Try again later with Check now in Settings › Updates and about."));
+                }
+                return;
+            }
+        }
 
         // Nothing of the running copy is touched. The staged Huginn.exe waits until this one has saved and closed,
         // puts its files in place and starts Huginn from its own folder (finishAtStart()).

@@ -41,9 +41,27 @@ Item {
         field.forceActiveFocus()
         if (System.keyboardCovers) writeAbove()
     }
+    // Round 17: Send sends what's in the prompt as it is (it has no @ suggestions, so a message ending in an @name is
+    // sent, not left in the box with the name filled in). It sends only to the chat the prompt was opened for: a chat
+    // or channel change under it (a tap on the message banner, a notification) closes it unsent (dropAbove).
     function writeAbove() {
-        Ui.askMessage(box.placeholder !== "" ? box.placeholder : "Message", "", field.text, "Send", t => { box.setText(t); box.enter() })
+        const to = box.target
+        Ui.askMessage(box.placeholder !== "" ? box.placeholder : "Message", "", field.text, "Send", t => {
+            if (box.target !== to) { Ui.say("The chat changed, so that message wasn't sent.", true); return }
+            box.setText(t)
+            box.submit()
+        })
+        if (Ui.prompt) Ui.prompt.owner = box
     }
+    // The prompt at the top, if it's still open for this box: closed (what was typed is kept as its draft), unsent.
+    function dropAbove() {
+        const p = Ui.prompt
+        if (!p || !p.visible || p.owner !== box) return
+        p.cancel()
+        Ui.say("The chat changed, so that message wasn't sent.", true)
+    }
+    onTargetChanged: dropAbove()
+    Component.onDestruction: dropAbove()
     // Characters typed (shown from 1,800; more than 2,000 don't send).
     readonly property int typedCount: field.length < Ui.messageMax - 200 ? field.length : Ui.textLength(field.text.trim())
     readonly property bool hasFocus: field.activeFocus

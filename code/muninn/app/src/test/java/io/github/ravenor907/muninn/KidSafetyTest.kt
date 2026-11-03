@@ -203,14 +203,18 @@ class KidSafetyTest {
         assertFalse(short.checked)
         assertEquals(t5, ts)
         assertEquals("Type at least 4 digits", KidRules.pinText(short))
-        // An hour after the last wrong try, they're forgotten.
+        // Round 17: a few mistakes are forgotten an hour after the last one; once the waits have begun, only the right PIN
+        // starts over, and the waits keep doubling (12 wrong: 64 minutes).
+        val few = PinTries(3, now)
+        assertEquals(0, KidRules.failsNow(few, now + KidRules.FAIL_RESET_MS))
         val many = PinTries(12, now)
-        assertEquals(15 * 60_000L, KidRules.waitLeft(many, now))
-        assertEquals("Wait 15 minutes, then try again.", KidRules.waitText(KidRules.waitLeft(many, now)))
-        assertEquals(0, KidRules.failsNow(many, now + KidRules.FAIL_RESET_MS))
-        assertEquals(0L, KidRules.waitLeft(many, now + KidRules.FAIL_RESET_MS))
-        val (afterHour, _) = KidRules.tryPin("9999", p, many, now + KidRules.FAIL_RESET_MS)
-        assertEquals(0L, afterHour.wait)
+        assertEquals(64 * 60_000L, KidRules.waitLeft(many, now))
+        assertEquals("Wait 64 minutes, then try again.", KidRules.waitText(KidRules.waitLeft(many, now)))
+        assertEquals(12, KidRules.failsNow(many, now + KidRules.FAIL_RESET_MS))
+        assertEquals(0L, KidRules.waitLeft(many, now + 64 * 60_000L))
+        val (afterWait, tAfter) = KidRules.tryPin("9999", p, many, now + 64 * 60_000L)
+        assertEquals(128 * 60_000L, afterWait.wait)
+        assertEquals(13, tAfter.fails)
         // An uptime before the last try (the device restarted): the whole wait, never none.
         assertEquals(30_000L, KidRules.waitLeft(PinTries(5, 50_000), 1_000))
         // Asking a parent's phone: once a minute.

@@ -462,8 +462,10 @@ public:
             told.removeFirst();
         m_settings.setValue(QStringLiteral("chat/keepTold"), told);
         const int days = where.startsWith(QLatin1String("g:")) ? groupDays(where.mid(2)) : chatDays(where);
+        // Round 17 (Linux minor 7): kept for good still has a limit, said once too.
         if (days <= 0)
-            return {};
+            return where.startsWith(QLatin1String("g:")) ? QStringLiteral("Huginn keeps the newest 2,000 messages here.")
+                                                          : QStringLiteral("Huginn keeps the newest 1,000 messages in each chat.");
         return days == 1 ? QStringLiteral("Messages here are kept for 1 day, then they go from every device.")
                          : QStringLiteral("Messages here are kept for %1 days, then they go from every device.").arg(days);
     }
@@ -485,6 +487,11 @@ public:
     void setRingKey(RingKey *ring) { m_ringKey = ring; }
     // Cap n2: this device's nudge key, outside the vault (main.cpp makes it). It only ever takes nudges, never rings.
     void setNudgeKey(NudgeKey *key) { m_nudgeKey = key; }
+    // Round 17: a new ring key and nudge key (both mailboxes too), announced to every contact and group peer who may use
+    // them, except one just blocked. After a block, every RingKey::kRenewMs, and on every lock change (main.cpp). The
+    // old mailboxes are still read for two days. Only while unlocked (the keys go out sealed); false when it couldn't.
+    bool renewRingKeys(const QString &except = QString());
+    Vault *vault() const { return m_vault; }
     // Labs (labs.*): bug reports to the Labs contact, and on the Huginn with the Labs key, its inbox.
     void setLabs(Labs *labs) { m_labs = labs; }
     // Mute for me, volume, group timeouts and bans (cap g2, moderation.*), made in main.cpp.

@@ -7,7 +7,7 @@ Files:
 
 - `worker.js`: the Worker, and the `RelayLimits` object that keeps the daily counts.
 - `wrangler.toml`: the Worker's name, the `LIMITS` binding and the storage setup, for `wrangler deploy`.
-- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `21 tests passed`.
+- `test.mjs`: a local check. Run `node test.mjs` in this folder. It should end with `39 tests passed`.
 - `package.json` and `package-lock.json`: the exact wrangler version the deploy installs (`npm ci`).
 
 ## How it gets to Cloudflare
@@ -97,30 +97,31 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
 
 ## Good to know
 
-- Limits: each app install gets at most 30 logins a day, each internet address at most 60 a day (a home
-  shares one address, so this is a few installs' worth). Since 1.4 each install registers once (a second or less of
-  work on the device, at most 6 new installs a day per address and 2000 for everyone) and gets a token that each login
-  renews. Logins with a token share a cap of 12,000 a day; logins without one (older apps, or anyone who pulled
-  `APP_SECRET` out of an app) share 1000 a day of their own, so they can never use up the others.
-  Optional, for later: once nobody uses an app from before tokens any more, add a Worker variable (not a secret) named
-  `LEGACY_UNTIL` holding a Unix time in seconds. From then on logins without a token are refused, so that pool can't
-  be used up at all. Leave it out to keep older apps' calls working.
-  An IPv6 address counts by its /48, the most one home or phone line is usually given, so one customer can't
-  get around the cap by moving between their own addresses. The day resets at midnight UTC. When a limit is hit the Worker
-  answers 429.
+- Limits (details in `code/shared/docs/relay.md`, "Limits"): every budget counts minutes of relay login handed out.
+  New app builds get 10 minute logins and renew them during long calls; older builds get 30 minute logins, which
+  count 3 times as much. Each day: 480 minutes per app install, 1440 per address group (an IPv4 /24 or an IPv6 /48,
+  so renting addresses one by one gains little), and 24,000 for everyone, at most a sixth of that in any one hour.
+  Logins without an install token (very old apps, or anyone who pulled `APP_SECRET` out of an app) get far less: 60
+  minutes per install, 120 per address group and 900 for all of them together, so they can never use up the others.
+  Past 60% of the day's or hour's budget the relay is "busy": only installs registered at least 2 days earlier still
+  get logins. When the relay says no, calls go on over Wi-Fi, Bluetooth and direct paths. The day resets at midnight UTC.
+- Optional Worker variables (Type: Text, not Secret): `DAILY_MINUTES` sets the day's budget for everyone (pick it from
+  what you are willing to pay for TURN; 24,000 minutes is 400 hours of login). `LEGACY_UNTIL`, a Unix time in seconds:
+  from then on logins without a token are refused. Every app since 1.36 has a token, so this can be set now.
+- Junk requests: everything that reaches the Worker counts against the free plan's 100,000 requests a day. The Worker
+  turns junk away before it costs anything else (no storage request, no TURN login), but only a rule in front of it can
+  keep junk from counting. That needs a domain on this Cloudflare account; `wrangler.toml` and relay.md ("Junk
+  requests") say how. Until then a flood can, at worst, stop the relay until the next UTC day.
 - The counts live in one small storage object at Cloudflare (`RelayLimits`, bound as `LIMITS`). Each login
   is checked and counted in one step inside it, so logins at the same moment can't go over a limit.
-- Addresses are never stored or logged. The per-address count is kept under a keyed hash (HMAC) of the address
+- Addresses are never stored or logged. The per-address count is kept under a keyed hash (HMAC) of the address group
   and the day. The key is the Worker's `TURN_KEY_API_TOKEN` secret, so the stored value can't be turned back
   into an address by trying them all. All counts from earlier days are deleted when a new day starts.
 - If the storage object is missing or not working, the Worker refuses every request (answers 503).
-  That is on purpose: the caps are what protect the TURN account.
-- Free plan budget, per login: 1 Worker request, 1 storage object request, 3 storage rows written (and the
-  same 3 or fewer deleted the next day); per registration 1 of each and 2 rows. The free plan allows 100,000 Worker
-  requests, 100,000 storage object requests and 100,000 rows written a day. With every cap full that is at most
-  15,000 requests of each kind and 86,000 rows written and deleted, so it stays free. No new secret is needed: tokens
-  are signed with a key made from `TURN_KEY_API_TOKEN` (or a `TOKEN_KEY` secret, if you add one).
-- Each login lasts 30 minutes. The apps ask for a fresh one for a call when less than 5 minutes are left.
+  That is on purpose: the limits are what protect the TURN account.
+- Free plan budget: with every limit used up, about 13,800 storage rows written a day (and as many deleted the next
+  day), against the free 100,000. No new secret is needed: tokens are signed with a key made from `TURN_KEY_API_TOKEN`
+  (or a `TOKEN_KEY` secret, if you add one).
 - A request body over 1 KB is refused (413) before it is read.
 - TURN data is billed by Cloudflare per GB relayed. Check **Realtime** in the dashboard for usage; step H's alert
   emails you when usage passes the limit you chose.

@@ -133,7 +133,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** Theirs: where that file was saved in Downloads (a content URI, for Open), or "" if it wasn't. */
                    val saved: String = "",
                    /** An animated GIF (cap a1), stored like a photo under [photo]. */
-                   val gif: Boolean = false)
+                   val gif: Boolean = false,
+                   /** Round 17: a part of a long message ("ps", "pi", "pn", as in groups, 3.8 and 11.2): its set, place and count. */
+                   val part: String = "", val partAt: Int = 0, val partOf: Int = 0)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false,
@@ -913,7 +915,25 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** They see when I'm active (with Active status on). Default yes. */
     fun showsActive(peerKey: String) = contacts.get(peerKey)?.hideActive != true
 
-    fun setCallsAllowed(peerKey: String, on: Boolean) { contacts.get(peerKey)?.let { contacts.set(it.copy(noCalls = !on)) } }
+    fun setCallsAllowed(peerKey: String, on: Boolean) {
+        val c = contacts.get(peerKey) ?: return
+        val was = c.noCalls
+        contacts.set(c.copy(noCalls = !on))
+        if (was == !on) return
+        // Round 17 (cap b1): a locked phone can't tell who rings, so calls off works like a block for the ring key: a new
+        // one goes to every other contact who may call, and what they hold no longer rings. Back on: they get it again.
+        ringKey?.let { r ->
+            bg {
+                try {
+                    if (!on) {
+                        r.renew()
+                        nostr.resubscribe()
+                        announceKeys { RingWire.RING_CAP in it.caps && it.chatKey != peerKey && !it.noCalls }
+                    } else announceKeys { RingWire.RING_CAP in it.caps && it.chatKey == peerKey }
+                } catch (_: Exception) {}
+            }
+        }
+    }
     fun setFilesAllowed(peerKey: String, on: Boolean) { contacts.get(peerKey)?.let { contacts.set(it.copy(noFiles = !on)) } }
     fun setShowsActive(peerKey: String, on: Boolean) {
         val c = contacts.get(peerKey) ?: return
@@ -1216,12 +1236,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         var re = ""
         var poll: More.Poll? = null
         var lp: More.Preview? = null
+        var part: TextPart? = null
         if (envRoom == "rich") {
             val p = try { JSONObject(plain) } catch (e: Exception) { return 400 to "{}" }
             if (!Rich.ok("rich", p)) return 400 to "{}"
             opened = p.getString("text"); re = p.optString("re")
             // Cap m2: a poll or a link preview. A malformed one is left out; the text still shows.
             if (More.ok("rich", p)) { poll = More.pollOf(p); lp = More.previewOf(p) }
+            // Round 17: a part of a long message (unusable fields: a plain message).
+            part = Groups.partOf(p)
         }
         val room = if (envRoom == "rich") "private" else envRoom
         // No more than 5 messages in 10 seconds from anyone: nobody can flood a room. Counted only once
@@ -1243,7 +1266,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if ((room == "private" || room == "nearby") && Proto06.chars(opened) > MAX) return 400 to "{}"
         val text = opened
         val msgId = sentId.ifEmpty { UUID.randomUUID().toString() }
-        val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re, poll = poll, preview = lp)
+        val msg = Msg(msgId, fromKey, name, text, false, now, via = via, re = re, poll = poll, preview = lp,
+            part = part?.set ?: "", partAt = part?.i ?: 0, partOf = part?.n ?: 0)
         // A message from them ends their "typing".
         if (room == "private" && fromKey in _typing.value) _typing.update { it - fromKey }
         when (room) {
@@ -1419,7 +1443,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             "link" -> {
                 // Linked devices (companion style): only from a device paired with this one, or answering my link code.
                 val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
-                if (!Link.receive(fromKey, p, LinkWire.lanOk(via, directOn()))) return 403 to "{}"
+                if (!Link.receive(fromKey, p, LinkWire.lanOk(via, directOn()), relayed = via == "internet")) return 403 to "{}"
             }
             "file" -> {
                 val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
@@ -1989,8 +2013,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      */
     private fun withKeys(peerKey: String, o: JSONObject): JSONObject {
         val caps = capsOf(peerKey)
-        // The ring key only to contacts (never a group peer or someone met close by).
-        if (RingWire.RING_CAP in caps && isContact(peerKey)) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
+        // The ring key only to contacts (never a group peer or someone met close by), and never to one with calls off.
+        if (RingWire.RING_CAP in caps && isContact(peerKey) && callsAllowed(peerKey)) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
         if (RingWire.WRAP_CAP in caps) try { wrapKeys.current().let { d -> o.put("wk", d.pub).put("wt", d.t) } } catch (_: Exception) {}
         // Cap n2: the nudge key to a contact or group peer (never anyone blocked). It can only nudge, never ring.
         if (NudgeWire.RICH_CAP in caps && contacts.get(peerKey) != null && peerKey !in id.muted())
@@ -2050,7 +2074,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** [re]: the id of the message this answers (a reply, cap m1; to an app without m1 it goes as plain text). */
     /** The new message's id ("" when there was nothing to send). */
-    fun sendPrivate(peerKey: String, text: String, re: String = ""): String {
+    fun sendPrivate(peerKey: String, text: String, re: String = "", part: TextPart? = null): String {
         val t = ChatWire.clip(text.trim(), MAX)
         if (t.isEmpty()) return ""
         val name = nameOf(peerKey)
@@ -2058,7 +2082,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val r = route(peerKey)
         typingSent.remove(peerKey)
         val mine = Msg(UUID.randomUUID().toString(), peerKey, id.username, t, true, System.currentTimeMillis(), via = r, state = "sending",
-            re = re.takeIf { Rich.isMsgId(it) } ?: "")
+            re = re.takeIf { Rich.isMsgId(it) } ?: "", part = part?.set ?: "", partAt = part?.i ?: 0, partOf = part?.n ?: 0)
         send(peerKey, name, r, mine)
         return mine.id
     }
@@ -2308,13 +2332,21 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** Replying from a notification: a chat ([key] a contact) or a group ("g:<id>", into the channel of its last message). */
     fun replyFromNotification(key: String, text: String) {
         val g = if (key.startsWith("g:")) key.removePrefix("g:") else null
-        if (g != null) {
-            val last = groups.messages.value[g]?.lastOrNull { !it.mine }
-            groups.markRead(g)
-            sendGroupText(g, last?.ch ?: Proto06.MAIN, text)
-        } else {
-            markRead(key)
-            sendPrivate(key, text)
+        // Round 17: a reply longer than one message goes in parts (as from the chat), never cut. Too long even for that:
+        // it waits in the chat's box instead.
+        val parts = Drafts.split(text, MAX)
+        if (parts.size > Drafts.MAX_PARTS) {
+            (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.let { Drafts.keepReply(it, key, text) }
+            notices.tryEmit("That reply was too long to send. It waits in the chat.")
+            return
+        }
+        val set = Proto06.newLogicalId()
+        val ch = if (g != null) groups.messages.value[g]?.lastOrNull { !it.mine }?.ch ?: Proto06.MAIN else ""
+        if (g != null) groups.markRead(g) else markRead(key)
+        parts.forEachIndexed { i, p ->
+            val part = if (parts.size > 1) TextPart(set, i + 1, parts.size) else null
+            if (i > 0) try { Thread.sleep(50) } catch (_: InterruptedException) {}
+            if (g != null) sendGroupText(g, ch, p, "", part) else sendPrivate(key, p, "", part)
         }
     }
 
@@ -2363,7 +2395,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Sealed once; every try and every route sends these same bytes.
         val body = outbox.fresh(m.id, stale(m.peerKey)) {
             // A reply, poll or link preview goes as "rich" to an app that has m1; the same text without them to any other.
-            val rich = (m.re.isNotEmpty() || m.poll != null || m.preview != null) && hasM1(m.peerKey)
+            val rich = (m.re.isNotEmpty() || m.poll != null || m.preview != null || m.part.isNotEmpty()) && hasM1(m.peerKey)
             listOf(envelope(if (rich) "rich" else "private", m.peerKey, if (rich) richPayload(m) else m.text, m.id).toString())
         }?.firstOrNull() ?: return
         var any = false
@@ -2420,6 +2452,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun richPayload(m: Msg): String = JSONObject(Rich.richText(m.text, m.re)).apply {
         m.poll?.let { put("poll", More.pollJson(it)) }
         m.preview?.let { put("lp", More.previewJson(it)) }
+        // Round 17: a part of a long message says which, so the other side reads them in order (11.2).
+        if (m.part.isNotEmpty()) put("ps", m.part).put("pi", m.partAt).put("pn", m.partOf)
     }.toString()
 
     private fun markSent(m: Msg, how: String) {
@@ -3146,7 +3180,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun addPrivate(peer: String, m: Msg): Boolean = edit { map ->
         val list = map[peer].orEmpty()
         if (deleted.containsKey(m.id) || list.any { it.id == m.id }) return@edit false
-        map[peer] = (list + m).takeLast(1000)
+        // A part of their long message goes before their later parts that came first (round 17).
+        map[peer] = placePart(list, m, System.currentTimeMillis())
         true
     }.also { added ->
         if (added && m.mine && m.state.isNotEmpty()) queue(peer, m.id)
@@ -3176,7 +3211,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"),
             video = it.optInt("vid"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"),
             poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it), file = it.optString("fn"), saved = it.optString("sv"),
-            gif = it.optBoolean("gif"))
+            gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"), partOf = it.optInt("pn"))
     }
 
     /** Cap m2 parts of a stored message (only the ones it has). */
@@ -3189,6 +3224,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (m.file.isNotEmpty()) o.put("fn", m.file)
         if (m.saved.isNotEmpty()) o.put("sv", m.saved)
         if (m.gif) o.put("gif", true)
+        if (m.part.isNotEmpty()) o.put("ps", m.part).put("pi", m.partAt).put("pn", m.partOf)
     }
 
     private fun save() {
@@ -3248,6 +3284,22 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     companion object {
+        /**
+         * Round 17: [m], their part of a long 1:1 message, goes before the first of their parts of the same set with a
+         * higher place among the last [Groups.PART_WINDOW] in [list] (those came first), unless that part is over
+         * [Groups.PART_AGE_MS] old at [now] (0: no age check); anything else goes last. The most kept is 1000.
+         */
+        fun placePart(list: List<Msg>, m: Msg, now: Long = 0L): List<Msg> {
+            var at = -1
+            if (!m.mine && m.part.isNotEmpty()) for (i in maxOf(0, list.size - Groups.PART_WINDOW) until list.size) {
+                val x = list[i]
+                if (x.mine || x.part != m.part || x.partAt <= m.partAt) continue
+                at = if (Groups.partTooOld(x.time, now)) -1 else i
+                break
+            }
+            return (if (at < 0) list + m else list.subList(0, at) + m + list.subList(at, list.size)).takeLast(1000)
+        }
+
         const val PATH = "/api/huginn/v1/message"
         /** Round 14: the caps this app said when it last started (outside the vault), to notice going back to stable. */
         const val LAST_CAPS = "lastCaps"

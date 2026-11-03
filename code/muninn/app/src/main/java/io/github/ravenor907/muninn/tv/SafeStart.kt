@@ -21,8 +21,11 @@ import java.util.concurrent.TimeUnit
  * The counting rules are free of Android for the unit tests.
  */
 object SafeStart {
-    /** Crashes in a row, with the same install, before the safe mode. */
-    const val LIMIT = 3
+    /**
+     * Crashes in a row, with the same install, before the safe mode. Round 17: 2, since Android itself stops starting an
+     * app in the background after it crashed twice quickly.
+     */
+    const val LIMIT = 2
     /** A crash this soon after the start counts. */
     const val WINDOW_MS = 60_000L
     /** Running normally this long clears the count. */
@@ -34,6 +37,11 @@ object SafeStart {
     private const val VERSION = "version"
     private const val BOOT = "boot"
     private const val SINCE = "since"
+    /** Round 17: this start hasn't been healthy yet, and when it began (the clock, to find its exit). */
+    private const val PENDING = "pending"
+    private const val STARTED = "started"
+    @Volatile private var startedAt = 0L
+    @Volatile private var healthyNow = false
     private const val HOUR = 60 * 60_000L
     /** The broadcast that starts Muninn again after the safe mode let go of the process ([StartAtBoot]). */
     const val TRY_AGAIN = "io.github.ravenor907.muninn.SAFE_TRY_AGAIN"
@@ -64,6 +72,26 @@ object SafeStart {
     /** Whether a crash [aliveMs] after the start counts. */
     fun counts(aliveMs: Long): Boolean = aliveMs in 0 until WINDOW_MS
 
+    /** Android's reasons a process ended (ApplicationExitInfo): a crash in Java or Kotlin, a native crash, or not responding. */
+    const val REASON_CRASH = 4
+    const val REASON_CRASH_NATIVE = 5
+    const val REASON_ANR = 6
+
+    /**
+     * Round 17 (Android 11 and newer): the last start counts as a crash when it never ran long enough to be [healthy]
+     * ([reachedHealthy] false) and Android says it ended in a crash, a native crash (opus, voice, WebRTC) or not
+     * responding, at any time before it was healthy. Being stopped for memory, or by the person, never counts.
+     */
+    fun exitCounts(reason: Int, reachedHealthy: Boolean): Boolean =
+        !reachedHealthy && (reason == REASON_CRASH || reason == REASON_CRASH_NATIVE || reason == REASON_ANR)
+
+    /** Before Android 11 (only Java and Kotlin crashes are seen): a crash counts until the start is healthy. */
+    fun countsUntilHealthy(aliveMs: Long, healthy: Boolean): Boolean = !healthy && aliveMs in 0 until HEALTHY_MS
+
+    /** When a parent's frame makes the start healthy: [AFTER_PARENT_MS] after it, and never before [HEALTHY_MS] from the start. */
+    fun healthyIn(aliveMs: Long): Long = maxOf(AFTER_PARENT_MS, HEALTHY_MS - aliveMs.coerceAtLeast(0L))
+    const val AFTER_PARENT_MS = 60_000L
+
     /** The install this is: its version and when it went in (installing the same version again counts as new). */
     private fun installKey(c: Context): String = try {
         val pi = c.packageManager.getPackageInfo(c.packageName, 0)
@@ -86,20 +114,31 @@ object SafeStart {
             val boot = bootCount(c)
             val now = System.currentTimeMillis()
             val since = p.getLong(SINCE, 0L)
-            val crashes = startFrom(p.getInt(CRASHES, 0), p.getString(VERSION, null) ?: "", version, p.getInt(BOOT, -1), boot, since, now)
+            val exits = android.os.Build.VERSION.SDK_INT >= 30
+            // Round 17: the last start never became healthy and Android says how it ended: a native crash, a crash after the
+            // first minute and not responding count too (Android 11 and newer).
+            var stored = p.getInt(CRASHES, 0)
+            if (exits && p.getBoolean(PENDING, false) && exitCounts(lastExit(c, p.getLong(STARTED, 0L)), false)) stored += 1
+            val crashes = startFrom(stored, p.getString(VERSION, null) ?: "", version, p.getInt(BOOT, -1), boot, since, now)
             active = safe(crashes)
             // The count this start goes on from is written now, so a trial start that crashes again lands straight back.
             val e = p.edit().putInt(CRASHES, crashes).putString(VERSION, version).putInt(BOOT, boot)
             if (active) { if (since <= 0L || trialDue(since, now)) e.putLong(SINCE, now) } else e.remove(SINCE)
+            e.putBoolean(PENDING, !active).putLong(STARTED, now)
             e.commit()
             val started = android.os.SystemClock.elapsedRealtime()
-            val before = Thread.getDefaultUncaughtExceptionHandler()
-            Thread.setDefaultUncaughtExceptionHandler { t, ex ->
-                try {
-                    if (counts(android.os.SystemClock.elapsedRealtime() - started))
-                        p.edit().putInt(CRASHES, crashes + 1).putString(VERSION, version).putInt(BOOT, boot).commit()
-                } catch (_: Exception) {}
-                before?.uncaughtException(t, ex)
+            startedAt = started
+            healthyNow = false
+            // Before Android 11 only Java and Kotlin crashes can be seen: each one counts until the start is healthy.
+            if (!exits) {
+                val before = Thread.getDefaultUncaughtExceptionHandler()
+                Thread.setDefaultUncaughtExceptionHandler { t, ex ->
+                    try {
+                        if (countsUntilHealthy(android.os.SystemClock.elapsedRealtime() - started, healthyNow))
+                            p.edit().putInt(CRASHES, crashes + 1).putString(VERSION, version).putInt(BOOT, boot).commit()
+                    } catch (_: Exception) {}
+                    before?.uncaughtException(t, ex)
+                }
             }
             // A few minutes running normally: this install starts normally again.
             if (!active) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ healthy(c) }, HEALTHY_MS)
@@ -109,8 +148,29 @@ object SafeStart {
     /** Muninn runs normally (a few minutes went by, or a parent's settings or update arrived): the count starts over. */
     fun healthy(c: Context) {
         if (active) return
-        try { prefs(c).edit().putInt(CRASHES, 0).remove(SINCE).apply() } catch (_: Exception) {}
+        healthyNow = true
+        try { prefs(c).edit().putInt(CRASHES, 0).remove(SINCE).putBoolean(PENDING, false).apply() } catch (_: Exception) {}
     }
+
+    /**
+     * Round 17: a parent's settings or update arrived. The count starts over only once Muninn has kept running a while
+     * after it ([healthyIn]): a crash loop a parent's Update now lands in still counts.
+     */
+    fun parentHeard(c: Context) {
+        if (active || healthyNow) return
+        val app = c.applicationContext
+        val alive = android.os.SystemClock.elapsedRealtime() - startedAt
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ healthy(app) }, healthyIn(alive))
+    }
+
+    /** Why the start that began at [since] (the clock) ended, from Android (0 when not known). */
+    private fun lastExit(c: Context, since: Long): Int = try {
+        if (android.os.Build.VERSION.SDK_INT < 30) 0 else {
+            val am = c.getSystemService(android.app.ActivityManager::class.java)
+            am?.getHistoricalProcessExitReasons(c.packageName, 0, 5).orEmpty()
+                .firstOrNull { it.processName == c.packageName && it.timestamp >= since }?.reason ?: 0
+        }
+    } catch (_: Exception) { 0 }
 
     /** Whether the safe mode is due its normal try now. */
     fun trialDueNow(c: Context): Boolean = try { trialDue(prefs(c).getLong(SINCE, 0L), System.currentTimeMillis()) } catch (_: Exception) { false }

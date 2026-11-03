@@ -170,9 +170,20 @@ class EverydayTest {
         assertEquals(4, RoomTiles.columns(1280f, 728f))
         val w = RoomTiles.tileWidth(1280f, 728f)
         assertTrue(w * 4f / 3f <= 728f * RoomTiles.TALL + 0.01f)
-        // A phone upright: 2 across, side by side.
+        // A phone upright: 2 across, side by side, inside the page's 40 dp of padding (round 17).
         assertEquals(2, RoomTiles.columns(400f, 800f))
-        assertTrue(RoomTiles.tileWidth(400f, 800f) * 2 + RoomTiles.GAP <= 400f)
+        assertTrue(RoomTiles.tileWidth(400f, 800f) * 2 + RoomTiles.GAP <= 400f - 40f)
+        // Round 17: every full row fits the width the row really has, upright and sideways, phone to 11" tablet.
+        for ((w, h) in listOf(412f to 892f, 800f to 1280f, 600f to 960f, 1280f to 752f, 960f to 552f, 840f to 700f)) {
+            val cols = RoomTiles.columns(w, h)
+            val tile = RoomTiles.tileWidth(w, h)
+            assertTrue("$w x $h", tile * cols + RoomTiles.GAP * (cols - 1) <= w - 40f)
+            // Given the row's own width (padding and insets already off), the same holds.
+            val row = w - 40f - 48f
+            val t2 = RoomTiles.tileWidth(row, h, cols)
+            assertTrue("row $row", t2 * cols + RoomTiles.GAP * (cols - 1) <= row)
+            assertTrue(t2 * 4f / 3f <= h * RoomTiles.TALL + 0.01f)
+        }
         // A 16:9 shared screen on a landscape tablet is at most 60% of the window high.
         assertTrue(RoomTiles.screenWidth(1280f, 728f, 16f / 9f) / (16f / 9f) <= 728f * RoomTiles.TALL + 0.01f)
     }

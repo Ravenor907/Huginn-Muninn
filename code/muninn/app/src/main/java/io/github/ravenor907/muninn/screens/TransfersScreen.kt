@@ -406,6 +406,8 @@ internal fun FileRulesDialog(app: Muninn, g: String, fs: String, fm: Int, done: 
 /** Files shared into Muninn from another app, waiting for "Send to" (MainActivity's share sheet). */
 object ShareTo {
     val pending = androidx.compose.runtime.mutableStateListOf<Uri>()
+    /** Round 17: text or a link shared in (no files): it goes into the picked chat's message box, for the person to send. */
+    var text by androidx.compose.runtime.mutableStateOf("")
 }
 
 /**
@@ -414,7 +416,7 @@ object ShareTo {
  */
 @Composable
 internal fun ShareToDialog(app: Muninn, openChat: (String) -> Unit) {
-    if (ShareTo.pending.isEmpty()) return
+    if (ShareTo.pending.isEmpty()) { ShareTextDialog(app, openChat); return }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val people by app.chat.contacts.all.collectAsState()
@@ -454,5 +456,38 @@ internal fun ShareToDialog(app: Muninn, openChat: (String) -> Unit) {
             }
         },
         confirmButton = { MButton("Cancel") { ShareTo.pending.clear() } },
+    )
+}
+
+/** Round 17: text or a link shared in: pick a person or a group, and it waits in that chat's message box to be sent. */
+@Composable
+private fun ShareTextDialog(app: Muninn, openChat: (String) -> Unit) {
+    val shared = ShareTo.text
+    if (shared.isEmpty()) return
+    val people by app.chat.contacts.all.collectAsState()
+    val groups by app.chat.groups.all.collectAsState()
+    fun toChat(where: String) {
+        ShareTo.text = ""
+        if (!io.github.ravenor907.muninn.net.Drafts.addShared(app, where, shared)) { Ui.say("Unlock Muninn first, then share it again.", true); return }
+        openChat(where)
+    }
+    AlertDialog(
+        onDismissRequest = { ShareTo.text = "" },
+        containerColor = Palette.panel,
+        title = { Text("Send to", style = Type.big) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(shared.take(200), style = Type.small, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 8.dp))
+                val contacts = people.filter { !it.groupOnly }.sortedBy { app.chat.nameOf(it.chatKey).lowercase() }
+                if (contacts.isNotEmpty()) Text("PEOPLE", style = Type.small, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
+                contacts.forEach { c -> Line(app.chat.nameOf(c.chatKey), icon = "user") { toChat(c.chatKey) } }
+                val live = groups.values.filter { !it.readOnly }
+                if (live.isNotEmpty()) Text("GROUPS", style = Type.small, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                live.forEach { gr -> Line(gr.state.name, icon = "people") { toChat(io.github.ravenor907.muninn.net.Folders.groupKey(gr.state.g)) } }
+                if (contacts.isEmpty() && live.isEmpty()) Text("No chats yet. Add someone first.", style = Type.small)
+            }
+        },
+        confirmButton = { MButton("Cancel") { ShareTo.text = "" } },
     )
 }

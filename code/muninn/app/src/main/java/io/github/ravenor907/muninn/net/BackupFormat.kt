@@ -126,11 +126,17 @@ object BackupFormat {
         return h to (MAGIC.size + 4 + len)
     }
 
+    /** Round 17: the most memory and lanes a backup's scrypt may ask of a phone. */
+    const val SCRYPT_MAX_BYTES = 1L shl 28
+    const val SCRYPT_MAX_P = 4
+
     private fun sane(h: Header): Boolean = when {
         h.v == 1 -> h.rounds in 100_000..10_000_000
         h.v == 3 && h.kdf != "scrypt" -> false   // both apps must be able to open it
-        h.kdf == "scrypt" -> h.n in 65_536..1_048_576 && (h.n and (h.n - 1)) == 0 && h.r in 8..32 && h.p in 1..16 &&
-            h.n.toLong() * h.r * 128 <= (1L shl 30)
+        // Round 17: at most 256 MiB and 4 lanes on a phone (both apps write at most 128 MiB, p 2): a crafted file can't
+        // run it out of memory or hang it before the password is even checked.
+        h.kdf == "scrypt" -> h.n in 65_536..1_048_576 && (h.n and (h.n - 1)) == 0 && h.r in 8..32 && h.p in 1..SCRYPT_MAX_P &&
+            h.n.toLong() * h.r * 128 <= SCRYPT_MAX_BYTES
         h.kdf == "argon2id" -> h.m in 65_536..1_048_576 && h.t in 3..16 && h.p in 1..16
         else -> false
     }

@@ -236,6 +236,9 @@ Rectangle {
 
     onOpenKeyChanged: {
         sel = -1; Voice.stop(); finder.close()
+        // A voice message held on Y (or the microphone) belongs to the chat it started in: another chat (a tap in the
+        // list, a notification) throws it away, never sends it here.
+        if (Voice.recording) { Voice.cancel(); Ui.say("Recording cancelled.") }
         if (zone === "head") zone = "messages"
         replyId = ""; editId = ""; reactFor = ""; threadRoot = ""; side = ""
         compose.text = ""
@@ -2085,7 +2088,8 @@ Rectangle {
         return false
     }
     function handleRelease(b) {
-        if (b === "y" && Voice.recording && openKey !== "") Voice.finish(openKey)
+        // Only to the chat it was started in: Voice throws it away (and says so) if this isn't that chat.
+        if (b === "y" && Voice.recording) Voice.finish(openKey)
         return true
     }
     // Ctrl+F: find in this chat.

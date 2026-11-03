@@ -76,6 +76,10 @@ Item {
     // Closes without running either callback (the question went away on its own).
     function dismiss() { visible = false; holdButton.reset(); cancelCallback = null }
 
+    // Round 17: a question that opened by itself (a nearby-sharing request) ignores taps and clicks on its buttons for
+    // its first half second too, as it does the controller's buttons (Main.guardOverlay), so a tap meant for what was
+    // there never answers it.
+    function tapGuarded() { return !!Ui.main && Ui.main.guardedNow(dlg) }
     function startHold() { if (hold) holdButton.press(); else confirm() }
     function stopHold() { if (hold) holdButton.release() }
 
@@ -140,7 +144,7 @@ Item {
                     Text {
                         textFormat: Text.PlainText
                         anchors.verticalCenter: parent.verticalCenter
-                        text: (Ui.main && Ui.main.padInUse && dlg.extraText === "" ? "Y: " : "") + dlg.rememberText
+                        text: (Ui.main && Ui.main.padInUse && dlg.extraText === "" ? (Gamepad.style, Gamepad.glyph("y")) + ": " : "") + dlg.rememberText
                         color: Theme.text
                         font.family: Theme.body
                         font.pixelSize: Theme.fs(14)
@@ -175,31 +179,31 @@ Item {
                 HButton {
                     id: go
                     visible: !dlg.hold
-                    text: (Ui.main && Ui.main.padInUse ? "A: " : "") + dlg.confirmText
+                    text: (Ui.main && Ui.main.padInUse ? (Gamepad.style, Gamepad.glyph("a")) + ": " : "") + dlg.confirmText
                     kind: dlg.danger ? "danger" : "primary"
-                    onClicked: dlg.confirm()
+                    onClicked: if (!dlg.tapGuarded()) dlg.confirm()
                 }
                 HoldToConfirm {
                     id: holdButton
                     visible: dlg.hold
                     label: dlg.holdLabel
                     spoken: dlg.holdSpoken
-                    prefix: Ui.main && Ui.main.padInUse ? "A: " : ""
+                    prefix: Ui.main && Ui.main.padInUse ? (Gamepad.style, Gamepad.glyph("a")) + ": " : ""
                     danger: dlg.danger
                     onConfirmed: dlg.confirm()
                 }
                 HButton {
                     visible: !dlg.single && dlg.extraText !== ""
-                    text: (Ui.main && Ui.main.padInUse ? "Y: " : "") + dlg.extraText
-                    onClicked: dlg.extra()
+                    text: (Ui.main && Ui.main.padInUse ? (Gamepad.style, Gamepad.glyph("y")) + ": " : "") + dlg.extraText
+                    onClicked: if (!dlg.tapGuarded()) dlg.extra()
                 }
                 HButton {
                     visible: !dlg.single && dlg.otherText !== ""
-                    text: (Ui.main && Ui.main.padInUse ? "X: " : "") + dlg.otherText
+                    text: (Ui.main && Ui.main.padInUse ? (Gamepad.style, Gamepad.glyph("x")) + ": " : "") + dlg.otherText
                     kind: dlg.otherDanger ? "danger" : "normal"
-                    onClicked: dlg.other()
+                    onClicked: if (!dlg.tapGuarded()) dlg.other()
                 }
-                HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: dlg.cancel() }
+                HButton { visible: !dlg.single; text: dlg.cancelText; kind: "plain"; onClicked: if (!dlg.tapGuarded()) dlg.cancel() }
             }
         }
     }

@@ -32,6 +32,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
@@ -112,6 +114,9 @@ private fun KidLocked(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Un
         val typed = pin
         scope.launch {
             val r = withContext(Dispatchers.Default) { KidTv.tryPin(context, typed) }
+            // Round 17: only this dialog, still up, opens the settings: a check that ends after it closed opens nothing
+            // (withContext gives up here once the dialog is gone).
+            if (r.ok) KidTv.openWithPin()
             checking = false
             pin = ""
             line = KidRules.pinText(r)
@@ -138,7 +143,7 @@ private fun KidLocked(app: Muninn, cfg: TvConfig, tv: Boolean, onClose: () -> Un
             val at = { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(KidTv.lastAskWall)) }
             asked = when (KidTv.askUnlock(app)) {
                 KidTv.Asked.SENT -> "Asked at ${at()}. A parent can say yes on their phone."
-                KidTv.Asked.TOO_SOON -> "Asked at ${at()}. You can ask again in a minute."
+                KidTv.Asked.TOO_SOON -> "Asked at ${at()}. ${KidRules.askAgainText(KidTv.askWait(context))}"
                 KidTv.Asked.CHECKING -> "Checking the parents' phones. Try again in a moment."
                 KidTv.Asked.NEEDS_UPDATE -> "A parent's phone needs an update first"
             }
@@ -174,7 +179,18 @@ private fun KidUnlocked(app: Muninn, tv: Boolean, left: Long, onClose: () -> Uni
 private fun Keypad(tv: Boolean, onDigit: (Char) -> Unit, onDelete: () -> Unit, onOk: () -> Unit) {
     val first = remember { FocusRequester() }
     val rows = listOf(listOf("1", "2", "3"), listOf("4", "5", "6"), listOf("7", "8", "9"), listOf("Delete", "0", "OK"))
-    Column(Modifier.padding(top = 14.dp).widthIn(max = if (tv) 420.dp else 320.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Round 17: a remote's (or keyboard's) number keys type digits, its delete key deletes and Enter is OK.
+    Column(Modifier.padding(top = 14.dp).widthIn(max = if (tv) 420.dp else 320.dp)
+        .onPreviewKeyEvent { e ->
+            if (e.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+            val code = e.nativeKeyEvent.keyCode
+            when (val d = KidRules.padKey(code)) {
+                null -> false
+                "Delete" -> { onDelete(); true }
+                "OK" -> { onOk(); true }
+                else -> { onDigit(d[0]); true }
+            }
+        }, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         rows.forEach { row ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { k ->

@@ -29,4 +29,8 @@ void setUpTray(std::function<bool()> muted, std::function<bool()> canLock, std::
 uint notifyCall(uint replaces, const QString &title, const QString &body, std::function<void(const QString &)> onAction);
 // Takes a notification made by notifyCall away (does nothing for 0).
 void closeNotification(uint id);
+// Round 17: Lock now and the panic lock take every notification Huginn showed (who and what) out of the system's
+// notification list: Windows' notification center (the tray icon is taken away and put back, which removes its
+// balloons), and the desktop's on Linux. A ringing call's stays.
+void clearShown();
 }

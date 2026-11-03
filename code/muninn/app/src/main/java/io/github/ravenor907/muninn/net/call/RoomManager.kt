@@ -251,8 +251,11 @@ object RoomManager {
 
     private fun members(group: String): List<String> {
         val mine = me()
-        return state(group)?.members?.map { it.k }?.filter { it != mine && canRoom(it) } ?: emptyList()
+        // Round 17: a Kids' Device takes no group calls: it's never rung or told about one.
+        return state(group)?.members?.map { it.k }?.filter { it != mine && canRoom(it) && !kidDevice(it) } ?: emptyList()
     }
+
+    private fun kidDevice(k: String): Boolean = try { io.github.ravenor907.muninn.tv.TvParent.isKidDevice(k) } catch (e: Exception) { false }
 
     private fun sendRoom(t: String, to: String, group: String, room: String) {
         val a = app ?: return
@@ -306,6 +309,8 @@ object RoomManager {
      */
     fun join(group: String, room: String, startMuted: Boolean = false, output: String = AudioRoute.AUTOMATIC, listen: Boolean = false): String? {
         if (app == null) return "Unlock Muninn first."
+        // Round 17: a Kids' Device takes no group calls.
+        if (app?.let { try { io.github.ravenor907.muninn.tv.KidMode.on(it) } catch (e: Exception) { false } } == true) return "Group calls aren't on this device."
         if (Opus.loadError != null) return "Calling isn't working on this phone."
         if (CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true) return "Hang up the call first."
         if (!RoomLogic.isRoomId(room)) return "That isn't a voice room."
@@ -669,6 +674,8 @@ object RoomManager {
                 if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, group); return }
                 val a = app ?: return
                 if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
+                // Round 17: a Kids' Device takes no group calls (it has no way to answer one): never rung, only a missed call.
+                if (try { io.github.ravenor907.muninn.tv.KidMode.on(a) } catch (e: Exception) { false }) { missed(who, grp, group); return }
                 // Extreme battery saver: group calls ring only while Muninn is open.
                 if (a.quietUntilOpen()) return
                 // A muted group: no ringing and no notification; its voice rooms show who is in the call.

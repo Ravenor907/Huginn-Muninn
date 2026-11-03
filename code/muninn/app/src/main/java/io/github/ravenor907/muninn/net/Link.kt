@@ -121,6 +121,18 @@ object LinkWire {
      * [phone]: it is this device's phone (this device is the companion); else a computer or tablet linked to this phone.
      */
     fun olderText(phone: Boolean) = "Your linked ${if (phone) "phone" else "computer"} is on an older version. Link again to keep using it."
+    /**
+     * The phone's "pong" to a companion's "ping" [ping]: caps l4, and (round 17, as Huginn 1.41) the ping's own "pn"
+     * said back when it has one (a string of at most 32 characters), so the companion learns this clock only from a
+     * real answer (15). A ping without "pn" gets a pong without it, as before.
+     */
+    fun pong(ping: JSONObject): JSONObject {
+        val o = JSONObject().put("t", "pong").put("caps", L4)
+        val pn = ping.opt("pn") as? String
+        if (!pn.isNullOrEmpty() && pn.length <= 32) o.put("pn", pn)
+        return o
+    }
+
     /** A device name from a "ping" ("dn"): one line, at most 40 characters. */
     fun deviceName(s: String) = s.trim().replace(Regex("\\s+"), " ").take(40)
 
@@ -203,11 +215,14 @@ class LinkReplay {
 
     /** Taken (true), or dropped: too old or far ahead, seen before, or unstamped from a device that stamps. */
     @Synchronized
-    fun take(from: String, p: JSONObject, nowMs: Long): Boolean {
+    fun take(from: String, p: JSONObject, nowMs: Long, counts: Boolean = true): Boolean {
         val ln = p.opt("ln")
         if (ln == null) {
             if (from !in stamps) return true
             if (p.optString("t") == "hello") return true
+            // Round 17: only one that came straight (the Wi-Fi or Bluetooth) counts toward "on an older version": a
+            // relay could replay old stored frames while the device sleeps. Dropped either way.
+            if (!counts) return false
             val q = quiet.getOrPut(from) { longArrayOf(nowMs, 0L) }
             q[1]++
             if (from !in older && olderBy(q[0], q[1], nowMs)) { older.add(from); news.add(from); dirty = true }
@@ -667,6 +682,8 @@ object Link {
         assemblies.clear(); asked.clear()
         _pending.value = emptyList(); askedAt = 0L
         _ownShown.value = false
+        // Round 17: what was half typed in the phone's chats here goes with them.
+        Drafts.dropMirrors()
     }
 
     /** Settings › Devices and backup › This device's own chats, after the lock: shown instead of the phone's. */
@@ -818,7 +835,7 @@ object Link {
      * From [from], already opened. [lan]: it came on the home Wi-Fi ([LinkWire.lanOk]); "get" and "part" are only taken
      * that way. False: not from a device linked with this one.
      */
-    fun receive(from: String, p: JSONObject, lan: Boolean = false): Boolean {
+    fun receive(from: String, p: JSONObject, lan: Boolean = false, relayed: Boolean = false): Boolean {
         val h = host ?: return false
         val t = p.optString("t")
         val comp = _companions.value.firstOrNull { it.key == from }
@@ -827,7 +844,7 @@ object Link {
         // Unstamped from one that stamped: it may have gone back to stable, so its caps are asked for again (cap l4).
         // Round 16: never taken, whatever it says; one that keeps sending only those is on an older version, and the
         // person is asked to link it again (Link again, with the usual emoji).
-        if ((comp != null || ph != null) && !replayOk(h, from, p)) {
+        if ((comp != null || ph != null) && !replayOk(h, from, p, relayed)) {
             if (!p.has("ln") && ph != null && replay.probeDue(from, System.currentTimeMillis())) probeCaps(h, ph)
             if (replay.found(from)) _older.value = replay.olderOnes()
             return true
@@ -935,7 +952,7 @@ object Link {
                     _companions.value = _companions.value.map { if (it.key == c.key) c else it }
                     save()
                 }
-                h.send(comp, JSONObject().put("t", "pong").put("caps", LinkWire.L4).toString())
+                h.send(comp, LinkWire.pong(p).toString())
             }
             // Cap l2: read on the companion, so read here too (receipts go from here, the notification goes).
             comp != null && t == "read" -> {
@@ -1210,9 +1227,9 @@ object Link {
         _older.value = replay.olderOnes()
     }
 
-    private fun replayOk(h: Host, from: String, p: JSONObject): Boolean {
+    private fun replayOk(h: Host, from: String, p: JSONObject, relayed: Boolean = false): Boolean {
         ensureReplay(h)
-        val ok = replay.take(from, p, System.currentTimeMillis())
+        val ok = replay.take(from, p, System.currentTimeMillis(), counts = !relayed)
         if (replay.dirty) {
             try { h.write(REPLAY, replay.save()) } catch (_: Exception) {}
             _older.value = replay.olderOnes()

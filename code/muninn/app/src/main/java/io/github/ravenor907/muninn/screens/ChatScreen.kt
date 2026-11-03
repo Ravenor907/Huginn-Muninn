@@ -1046,7 +1046,12 @@ private fun DayLabel(t: Long) {
 @Composable
 private fun NearbyRoom(app: Muninn) {
     val msgs by app.chat.nearby.collectAsState()
-    var text by remember { mutableStateOf("") }
+    // Round 17: the Nearby room keeps its half-typed message too.
+    val draftRev by Drafts.revision.collectAsState()
+    val draft0 = remember(draftRev) { Drafts.get(app, Drafts.NEARBY) }
+    var text by remember(draftRev) { mutableStateOf(draft0.text) }
+    androidx.compose.runtime.SideEffect { Drafts.put(Drafts.NEARBY, Drafts.Draft(text)) }
+    DisposableEffect(Unit) { onDispose { Drafts.save(app) } }
     var on by remember { mutableStateOf(app.identity.nearbyRoom) }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.lastOrNull()?.id) { if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
@@ -1096,8 +1101,10 @@ private fun Conversation(app: Muninn, key: String) {
     // What their app speaks isn't known yet: ask once (protocol 0.6, 1.2).
     LaunchedEffect(key) { app.chat.probeCaps(key); app.chat.pruneSoon() }
     // A half-typed message, and what it answers or edits, are kept per chat (Drafts): leaving, switching, folding or a restart keeps them.
-    val draft0 = remember(key) { Drafts.get(app, key) }
-    var text by remember { mutableStateOf(draft0.text) }
+    // Round 17: text added from outside (a share, a refused notification reply) is read again, never written over.
+    val draftRev by Drafts.revision.collectAsState()
+    val draft0 = remember(key, draftRev) { Drafts.get(app, key) }
+    var text by remember(draftRev) { mutableStateOf(draft0.text) }
     val list = rememberLazyListState()
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.markRead(key); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
     // Redraw as they come into or go out of range (route, and when to ask "Keep in touch?").
@@ -1402,7 +1409,7 @@ private fun Conversation(app: Muninn, key: String) {
                 sendPhoto(p.uri, false)   // a shared copy stays until the next share clears it
             }, onFile = { gifs = gifs - p; sendAsFile(p.uri, "animation.gif") { p.done() } }) { gifs = gifs - p; p.done() }
         }
-        if (attaching) AttachDialog(onPhotos = { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+        if (attaching) AttachDialog(onPhotos = { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) } },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
             onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
         DirectFiles(key, name) { p, file, n -> scope.launch(Dispatchers.IO) { app.chat.sendFile(p, file, n)?.let { Ui.say(it, true) } } }
@@ -1434,7 +1441,8 @@ private fun Conversation(app: Muninn, key: String) {
                 app.chat.editMessage(key, e.id, text)?.let { Ui.say(it, true) }; editing = null; text = ""
             } else {
                 val re = replyTo?.id ?: ""
-                sendLong(text, { replyTo = null; text = "" }) { p, first -> app.chat.sendPrivate(key, p, if (first) re else "") }
+                // Each part says which it is, so the other side reads them in order (round 17, as in groups).
+                sendLongParts(text, { replyTo = null; text = ""; Drafts.sent(key) }) { p, part -> app.chat.sendPrivate(key, p, if (part == null || part.i == 1) re else "", part) }
             }
         }
     }
@@ -1629,7 +1637,11 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (tight) 2 else 6),
                     modifier = Modifier.fillMaxWidth().then(if (onImage != null) Modifier.contentReceiver(receiver) else Modifier)
                         // A hardware keyboard: Enter sends, Shift+Enter is a new line, Tab and Shift+Tab move on (never typed in).
-                        .onPreviewKeyEvent { ev -> composerKey(ev, focus) { sendFromBox() } }
+                        .onPreviewKeyEvent { ev ->
+                            // A key that reaches the box after a send is typing (round 17); Enter itself sends just after.
+                            if (ev.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && ev.nativeKeyEvent.device?.isVirtual == false) echo.typed()
+                            composerKey(ev, focus) { sendFromBox() }
+                        }
                         .semantics { contentDescription = hint })
             }
             IconAction("smile", "Emoji", Palette.textMuted, size = 20.dp) { emoji = true }
@@ -2580,8 +2592,9 @@ private fun GroupConversation(app: Muninn, g: String) {
     val msgs = chats[g].orEmpty().filter { it.ch == ch || (ch == Proto06.MAIN && s.channel(it.ch)?.t != "text") }
     // Each channel keeps its own half-typed message and what it answers or edits (Drafts).
     val draftKey = Drafts.groupKey(g, ch)
-    val draft0 = remember(draftKey) { Drafts.get(app, draftKey) }
-    var text by remember(ch) { mutableStateOf(draft0.text) }
+    val draftRev by Drafts.revision.collectAsState()
+    val draft0 = remember(draftKey, draftRev) { Drafts.get(app, draftKey) }
+    var text by remember(ch, draftRev) { mutableStateOf(draft0.text) }
     val list = rememberLazyListState()
     LaunchedEffect(g) { app.chat.pruneSoon() }
     LaunchedEffect(msgs.lastOrNull()?.id) { app.chat.groupRead(g); if (msgs.isNotEmpty()) if (Access.reduceMotion) list.scrollToItem(msgs.size - 1) else list.animateScrollToItem(msgs.size - 1) }
@@ -2885,7 +2898,7 @@ private fun GroupConversation(app: Muninn, g: String) {
         }
         // Cap f2: a file to everyone in the group, by the best route to each; its cards show here and in Transfers.
         val pickGroupFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendFileFrom(app, context, scope, key, uri) }
-        if (attaching) AttachDialog(onPhotos = { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+        if (attaching) AttachDialog(onPhotos = { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) } },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
             onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickGroupFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
         DirectFiles(key, s.name)
@@ -2909,7 +2922,8 @@ private fun GroupConversation(app: Muninn, g: String) {
         if (!grp.readOnly && adminsOnlyHere) Panel(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
             Text("Only admins post here", style = Type.normal.copy(color = Palette.textMuted), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
-        if (!grp.readOnly && !adminsOnlyHere) Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
+        // Keyed by channel (round 17): typing just before a switch never lands in the other channel.
+        if (!grp.readOnly && !adminsOnlyHere) androidx.compose.runtime.key(draftKey) { Composer(text, { text = it }, if (editing != null) "Edit your message" else "Message #$chName", banner = banner, onPhoto = {
             attaching = true
         }, onImage = { uri -> scope.launch {
             if (withContext(Dispatchers.IO) { Photos.isGif(context, uri) }) sendGif(PendingGif(uri).also { gifs = gifs + it }) else picked = uri
@@ -2924,13 +2938,13 @@ private fun GroupConversation(app: Muninn, g: String) {
                 app.chat.groups.editText(g, e.id, text)?.let { Ui.say(it, true) }; editing = null; text = ""
             } else {
                 val re = replyTo?.id ?: ""
-                sendLongParts(text, { replyTo = null; text = "" }) { p, part ->
+                sendLongParts(text, { replyTo = null; text = ""; Drafts.sent(draftKey) }) { p, part ->
                     val first = part == null || part.i == 1
                     if (!app.chat.sendGroupText(g, ch, p, if (first) re else "", part) && first && app.chat.groups.myStatus(g).isEmpty() && !adminsOnlyHere)
                         Ui.say("That couldn't be sent.", true)
                 }
             }
-        }
+        } }
     }
     }
     }
@@ -3334,7 +3348,14 @@ private fun MirrorChatScreen(peer: String, back: () -> Unit) {
     val c = chats[peer]
     val pendingAll by io.github.ravenor907.muninn.net.Link.pending.collectAsState()
     val waiting = pendingAll.filter { it.peer == peer }
-    var text by remember { mutableStateOf("") }
+    // Round 17: what's half typed here is kept like any chat's draft (a fold, a keyboard, another chat, the lock).
+    val mirrorApp = LocalContext.current.applicationContext as Muninn
+    val draftKey = Drafts.mirrorKey(peer)
+    val draftRev by Drafts.revision.collectAsState()
+    val draft0 = remember(draftKey, draftRev) { Drafts.get(mirrorApp, draftKey) }
+    var text by remember(draftRev) { mutableStateOf(draft0.text) }
+    androidx.compose.runtime.SideEffect { Drafts.put(draftKey, Drafts.Draft(text)) }
+    DisposableEffect(draftKey) { onDispose { Drafts.save(mirrorApp) } }
     val state = rememberLazyListState()
     val msgs = c?.msgs.orEmpty()
     LaunchedEffect(msgs.size + waiting.size) { if (msgs.isNotEmpty() || waiting.isNotEmpty()) state.scrollToItem(msgs.size + waiting.size - 1) }

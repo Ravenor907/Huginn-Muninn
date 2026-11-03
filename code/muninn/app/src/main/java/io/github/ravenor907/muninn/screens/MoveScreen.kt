@@ -58,7 +58,7 @@ fun MoveSection(app: Muninn) {
     Section("Move here")
     Panel {
         Text("Bring everything here over home Wi-Fi.", style = Type.small)
-        MButton("Move here", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { showing = true }
+        MButton("Move here", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { LockGate.ask(app, "Move here") { showing = true } }
     }
     Section("Move from this device")
     Panel {

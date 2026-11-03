@@ -2,6 +2,7 @@
 #include "portable.h"
 #include "../busy.h"
 #include "winstart.h"
+#include "crashlog.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -43,6 +44,46 @@ const char kAppId[] = "io.github.ravenor907.Huginn";
 const QString kRestarted = QStringLiteral("--restarted");
 
 bool inFlatpak() { return QFile::exists(QStringLiteral("/.flatpak-info")); }
+
+// Round 17 (m3): the data folder as the file system knows it, so another spelling of the same path (other letter case,
+// a subst or mapped drive letter, a junction, an 8.3 name) gives the same socket name.
+QString canonicalDir(const QString &dir)
+{
+#ifdef Q_OS_WIN
+    const std::wstring path = QDir::toNativeSeparators(dir).toStdWString();
+    HANDLE h = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        std::wstring buf(32768, L'\0');
+        const DWORD n = GetFinalPathNameByHandleW(h, buf.data(), DWORD(buf.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        CloseHandle(h);
+        if (n > 0 && n < buf.size()) {
+            buf.resize(n);
+            return QString::fromStdWString(buf).toLower();
+        }
+    }
+    const QString c = QFileInfo(dir).canonicalFilePath();
+    return (c.isEmpty() ? QDir::cleanPath(dir) : c).toLower();
+#else
+    const QString c = QFileInfo(dir).canonicalFilePath();
+    return c.isEmpty() ? QDir::cleanPath(dir) : c;
+#endif
+}
+
+// The name a lock file says it was taken on ("" when it can't be read).
+QString lockHost(const QString &file)
+{
+    QLockFile probe(file);
+    qint64 pid = 0;
+    QString host, app;
+    return probe.getLockInfo(&pid, &host, &app) ? host : QString();
+}
+
+bool sameHost(const QString &host)
+{
+    const QString here = QSysInfo::machineHostName();
+    return host.isEmpty() || here.isEmpty() || host.compare(here, Qt::CaseInsensitive) == 0;
+}
 
 #ifndef Q_OS_WIN
 // The other Flatpak copies of Huginn (each runs in its own sandbox, so their process ids aren't visible here).
@@ -89,7 +130,7 @@ SingleInstance::SingleInstance(QObject *parent, const QString &where)
     const QString dir = where.isEmpty() ? Portable::dataDir() : where;
     QDir().mkpath(dir);
     m_dir = dir;
-    const QByteArray h = QCryptographicHash::hash(dir.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+    const QByteArray h = QCryptographicHash::hash(canonicalDir(dir).toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
     m_name = QStringLiteral("io.github.ravenor907.Huginn-") + QString::fromLatin1(h);
     m_lock = new QLockFile(dir + QStringLiteral("/instance.lock"));
     // Beside the lock while its copy is closing (written on aboutToQuit, gone when the process lets the lock go).
@@ -182,12 +223,14 @@ QString SingleInstance::problemText() const
     qint64 pid = 0;
     QString host, app;
     m_lock->getLockInfo(&pid, &host, &app);
-    const QString here = QSysInfo::machineHostName();
     // Another computer opened the same folder (a network drive, a synced or shared folder).
-    if (!host.isEmpty() && !here.isEmpty() && host.compare(here, Qt::CaseInsensitive) != 0)
-        return QStringLiteral("Huginn is already open on another computer (%1) that uses this same folder. Close it there first: "
-                              "two copies can't share one data folder.")
-            .arg(host);
+    if (!m_otherHost.isEmpty() || !sameHost(host))
+        return QStringLiteral("Huginn is open on another computer (%1) that uses this same folder (a folder synced by OneDrive, Dropbox or "
+                              "another sync app, or a shared one). Two copies on one folder break your chats, so this one won't open.\n\n"
+                              "Close Huginn on %1 and wait for the folder to sync, then open it here. Better still, give each computer "
+                              "its own Huginn folder that isn't synced, and link them instead (Settings › Devices and backup).\n\n"
+                              "Only if Huginn really isn't open on %1 (it crashed there, or this drive was moved here) choose Open here anyway.")
+            .arg(m_otherHost.isEmpty() ? host : m_otherHost);
 #ifdef Q_OS_WIN
     // Another Windows account on this computer: its process can't be looked at from this one.
     if (pid > 0) {
@@ -333,6 +376,19 @@ bool SingleInstance::takeOverStaleLock()
         m_outcome = Shown;
         return false;
     }
+    // Round 17: a lock taken on another computer (a synced folder, like OneDrive or Dropbox, brought it here; or a
+    // shared one) is never deleted as stale: no process here holds it, but that computer may well be running on these
+    // chats. Said instead, with "Open here anyway" (main.cpp).
+    {
+        qint64 pid = 0;
+        QString host, app;
+        if (m_lock->getLockInfo(&pid, &host, &app) && !sameHost(host)) {
+            m_otherHost = host;
+            qWarning("single instance: the lock is another computer's; not taken");
+            m_outcome = NotAnswering;
+            return false;
+        }
+    }
     // Nobody answers. A copy that was killed left its lock: take it.
     if (m_lock->removeStaleLockFile() && m_lock->tryLock(200)) {
         qWarning("single instance: took over the lock of a copy that ended");
@@ -391,6 +447,51 @@ bool SingleInstance::takeOverStaleLock()
     QFile::remove(m_endAsk);
     qWarning("single instance: the running copy didn't end; leaving it");
     return false;
+}
+
+bool SingleInstance::takeAnyway()
+{
+    if (m_otherHost.isEmpty())
+        return false;
+    CrashLog::note(QStringLiteral("single instance: took another computer's lock when asked (Open here anyway)"));
+    if (m_lock->removeStaleLockFile() && m_lock->tryLock(500)) {
+        m_otherHost.clear();
+        m_outcome = Claimed;
+        listen();
+        return true;
+    }
+    return false;
+}
+
+void SingleInstance::watchShared()
+{
+    if (m_watch || !m_lock->isLocked())
+        return;
+    m_watch = new QTimer(this);
+    m_watch->setInterval(30000);
+    connect(m_watch, &QTimer::timeout, this, [this] {
+        QString other;
+        // This copy's own lock, replaced by a synced copy of another computer's.
+        const QString mine = lockHost(m_dir + QStringLiteral("/instance.lock"));
+        if (!sameHost(mine))
+            other = mine;
+        // A sync app's conflict copy beside it ("instance-PC2.lock", "instance (1).lock", "instance.lock.conflict").
+        const QStringList beside = QDir(m_dir).entryList({QStringLiteral("instance*.lock*")}, QDir::Files | QDir::Hidden);
+        for (const QString &n : beside) {
+            if (!other.isEmpty() || n == QLatin1String("instance.lock"))
+                continue;
+            const QString h = lockHost(m_dir + QLatin1Char('/') + n);
+            const QFileInfo fi(m_dir + QLatin1Char('/') + n);
+            if (!sameHost(h) && fi.lastModified().secsTo(QDateTime::currentDateTime()) < 24 * 3600)
+                other = h;
+        }
+        if (other.isEmpty())
+            return;
+        m_watch->stop();   // said once a run
+        CrashLog::note(QStringLiteral("single instance: another computer's lock appeared in this folder"));
+        Q_EMIT sharedElsewhere(other);
+    });
+    m_watch->start();
 }
 
 #ifndef Q_OS_WIN
@@ -586,6 +687,27 @@ bool SingleInstance::selfTest()
         SingleInstance stuck(nullptr, notDir);
         check(!stuck.claim(false) && stuck.outcome() == CantWrite && stuck.problemText().contains(QLatin1String("can't save")),
               "a data folder that can't be written is said as that");
+    }
+    // 5. Round 17: another computer's lock (a synced folder, like OneDrive or Dropbox, brought it here) is never deleted
+    // as stale; this copy says so and stays closed, and only Open here anyway takes it.
+    {
+        const QString synced = dir + QStringLiteral("/synced");
+        QDir().mkpath(synced);
+        const QString file = synced + QStringLiteral("/instance.lock");
+        QFile lf(file);
+        if (lf.open(QIODevice::WriteOnly))
+            lf.write("4242\nHuginn\nanother-computer-r17\n");
+        lf.close();
+        SingleInstance here(nullptr, synced);
+        const bool refused = !here.claim(false) && here.outcome() == NotAnswering && here.otherComputer() == QLatin1String("another-computer-r17")
+                             && QFileInfo::exists(file) && here.problemText().contains(QLatin1String("another computer"));
+        check(refused, "another computer's lock in a synced folder is never taken as stale");
+        check(here.takeAnyway(), "Open here anyway takes another computer's lock");
+    }
+    // 6. Round 17 (m3): the same folder spelled another way gives the same socket name.
+    {
+        SingleInstance a(nullptr, dir), b(nullptr, dir + QStringLiteral("/./"));
+        check(a.m_name == b.m_name, "the same folder spelled another way is the same copy");
     }
     std::printf("instance self-test: %s\n", fail ? "FAILED" : "passed");
     return fail == 0;

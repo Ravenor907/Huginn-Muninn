@@ -366,3 +366,21 @@ object CallLogic {
     /** A failed relay login fetch is tried once more, unless the relay is resting or used up for today (asking again can't help). */
     fun retryLogin(problem: String) = !problem.contains("resting") && !problem.contains("used up")
 }
+
+/**
+ * Round 17: a locked phone can't tell who rings, so rings while locked are limited: at most [max] in [windowMs], then
+ * silent until the window moves on (the calls are still seen once Muninn is unlocked). Pure, so it can be tested.
+ */
+class LockedRingLimit(private val max: Int = 3, private val windowMs: Long = 10 * 60_000L) {
+    private val at = ArrayDeque<Long>()
+
+    /** True if a ring at [now] may ring; counted only when it may. */
+    @Synchronized fun take(now: Long): Boolean {
+        while (at.isNotEmpty() && (now - at.first() >= windowMs || now < at.first())) at.removeFirst()
+        if (at.size >= max) return false
+        at.addLast(now)
+        return true
+    }
+
+    @Synchronized fun clear() = at.clear()
+}

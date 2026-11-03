@@ -31,6 +31,14 @@ bool finishAtStart();
 // moved aside, and files from other folder layouts (everything at the top, or a launcher at the top with the app in lib\).
 void cleanUp();
 void tidyOldLayout();   // the folder-layout part of cleanUp(), kept for callers that run it later
+// Round 17: the staged Huginn.exe started with --update-probe answers (exit code 0) only when it may write where the update
+// must go: Windows' Controlled folder access allows apps by path, so an allowed Huginn.exe doesn't make the staged one
+// allowed. install() asks it first and never hands over to a copy that can't write.
+constexpr int kProbeOk = 0, kProbeBlocked = 3;
+// Round 17: this copy is the staged update and can't go on (it can't save where it must): the update is given up, the
+// reason kept for the next start, and Huginn is started again from its own folder, so a failed update never leaves
+// nothing running. False when this copy isn't a staged update.
+bool giveUpStaged(const QString &why);
 // done: ok (the update is staged and ready), restarting (the staged copy was started; this one must close now) and what to say.
 void install(const QString &zipPath, QObject *context, std::function<void(bool ok, bool restarting, const QString &message)> done);
 }

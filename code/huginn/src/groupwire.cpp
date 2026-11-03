@@ -630,17 +630,25 @@ bool GroupWire::partOk(const QJsonValue &ps, const QJsonValue &pi, const QJsonVa
     return n >= 2 && n <= kMaxParts && i >= 1 && i <= n;
 }
 
-int GroupWire::partPlace(const QVariantList &messages, const QVariantMap &m)
+int GroupWire::partPlace(const QVariantList &messages, const QVariantMap &m, qint64 nowMs)
 {
     const QString set = m.value(QStringLiteral("ps")).toString();
     if (set.isEmpty())
         return -1;
     const QString from = m.value(QStringLiteral("from")).toString();
     const int at = m.value(QStringLiteral("pi")).toInt();
-    for (int i = 0; i < messages.size(); ++i) {
+    for (int i = qMax(0, int(messages.size()) - kPartWindow); i < messages.size(); ++i) {
         const QVariantMap x = messages.at(i).toMap();
-        if (x.value(QStringLiteral("ps")).toString() == set && x.value(QStringLiteral("from")).toString() == from && x.value(QStringLiteral("pi")).toInt() > at)
-            return i;
+        if (x.value(QStringLiteral("ps")).toString() != set || x.value(QStringLiteral("from")).toString() != from || x.value(QStringLiteral("pi")).toInt() <= at)
+            continue;
+        if (nowMs > 0) {
+            qint64 t = qint64(x.value(QStringLiteral("time")).toDouble());
+            if (t > 0 && t < 100000000000LL)
+                t *= 1000;   // seconds
+            if (t > 0 && qAbs(nowMs - t) > kPartAgeMs)
+                return -1;   // that set is old: this one goes last
+        }
+        return i;
     }
     return -1;
 }
@@ -907,6 +915,18 @@ bool GroupWire::selfTest(const QString &vectorsPath)
             ids << x.toMap().value(QStringLiteral("id")).toString();
         check(ids == QStringList{QStringLiteral("p1"), QStringLiteral("p2"), QStringLiteral("p3"), QStringLiteral("bo1")}, QStringLiteral("long message parts are placed by index"));
         check(partPlace(QVariantList{part("x2", 2, "cy")}, part("a1", 1, "amy")) == -1, QStringLiteral("another sender's parts don't move them"));
+        // Round 17 (m10): a set from days ago, or one further back than the last 200 messages, never pulls a new part up.
+        const qint64 now = 1800000000000LL;
+        QVariantMap oldPart = part("o2", 2, "amy");
+        oldPart.insert(QStringLiteral("time"), double(now - 3 * 86400000LL));
+        QVariantMap freshPart = part("f2", 2, "amy");
+        freshPart.insert(QStringLiteral("time"), double(now - 60000));
+        QVariantList deep{part("d2", 2, "amy")};
+        for (int i = 0; i < kPartWindow; ++i)
+            deep << QVariantMap{{QStringLiteral("id"), QStringLiteral("m%1").arg(i)}, {QStringLiteral("from"), QStringLiteral("bo")}};
+        check(partPlace(QVariantList{oldPart}, part("n1", 1, "amy"), now) == -1 && partPlace(QVariantList{freshPart}, part("n1", 1, "amy"), now) == 0
+                  && partPlace(deep, part("n1", 1, "amy")) == -1,
+              QStringLiteral("a part is placed only near the end, beside parts under an hour old"));
         check(partOk(set, 2, 3) && !partOk(QStringLiteral("nope"), 1, 2) && !partOk(set, 0, 2) && !partOk(set, 3, 2) && !partOk(set, 1, 1)
                   && !partOk(set, 1, kMaxParts + 1) && !partOk(set, QStringLiteral("1"), 2) && !partOk(set, 1.5, 2) && !partOk(QJsonValue(), 1, 2),
               QStringLiteral("a part says ps, pi and pn; anything unusable is no part"));

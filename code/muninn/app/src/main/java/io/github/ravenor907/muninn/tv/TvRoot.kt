@@ -370,7 +370,9 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
     }
     val tv = remember { KidMode.isTv(context) }
     // k11 (7.18): a quiet time on now (checked every half minute): only the parents show, and only they get through.
-    val quiet by produceState(KidTv.quietNow(), cfg) { while (true) { value = KidTv.quietNow(); delay(30_000) } }
+    // Round 17: looked at every few seconds (it was half a minute), so a quiet time starts on time, also right after the
+    // device wakes.
+    val quiet by produceState(KidTv.quietNow(), cfg) { while (true) { value = KidTv.quietNow(); delay(5_000) } }
     val shown = person?.takeIf { KidRules.passes(it.k, cfg.parents, quiet) }
     if (person != null && shown == null) LaunchedEffect(person.k) { TvNav.home() }
     var parent by remember { mutableStateOf(false) }
@@ -428,7 +430,15 @@ private fun TvAllow(app: Muninn) {
         if (!KidMode.isTv(context) && !io.github.ravenor907.muninn.net.MessageService.unrestricted(context))
             io.github.ravenor907.muninn.net.MessageService.askUnrestricted(context)
     }
-    val several = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { KidTv.permsChanged(app); askBattery() }
+    // Round 17: on a TV, then "Show over other apps" (Android has only a page for it), with the reason on screen, so a
+    // call comes up over a show instead of a line that comes and goes.
+    fun askOverlay() {
+        if (!KidMode.isTv(context)) return
+        val on = try { android.provider.Settings.canDrawOverlays(context) } catch (_: Exception) { true }
+        if (TvRules.setupAsks(false, true, false, true, tv = true, overlayOn = on).contains("overlay") && TvUpdate.open(context, "overlay"))
+            try { android.widget.Toast.makeText(context.applicationContext, TvRules.OVERLAY_WHY, android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
+    }
+    val several = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { KidTv.permsChanged(app); askBattery(); askOverlay() }
     fun line(text: String) = try { android.widget.Toast.makeText(context.applicationContext, text, android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
     fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
     // Just paired: the microphone and notifications are asked for at once, while the parent is still at the TV.
@@ -441,7 +451,7 @@ private fun TvAllow(app: Muninn) {
             notifyPrompt, notifyPrompt && granted(Manifest.permission.POST_NOTIFICATIONS))
         KidTv.setupAsked(context)
         val perms = asks.mapNotNull { TvUpdate.permission(it) }
-        if (perms.isEmpty()) { askBattery(); return@LaunchedEffect }
+        if (perms.isEmpty()) { askBattery(); askOverlay(); return@LaunchedEffect }
         perms.forEach { TvUpdate.markAsked(context, it) }
         Ui.say(SETUP_LINE)
         try { several.launch(perms.toTypedArray()) } catch (_: Exception) {}
@@ -781,7 +791,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                     val label = if (sent == q.id) KidK14.tileWord(sentState) else q.text
                     QuickTile(label, sent == q.id && sentState == "Sent", req(q.id), Modifier.weight(1f)) {
                         // While it says how it's doing, more presses do nothing: one message per press-and-wait.
-                        if (sent != q.id) { KidChats.sendText(app, p.k, q.text); sent = q.id; sentAt = System.currentTimeMillis() }
+                        if (sent != q.id) { KidChats.sendText(app, p.k, q.text).let { r -> if (r != "Sending") Ui.say(r) }; sent = q.id; sentAt = System.currentTimeMillis() }
                     }
                 }
                 repeat(TvRules.QUICK_SHOWN - quick.size) { Spacer(Modifier.weight(1f)) }
@@ -822,7 +832,7 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                     Text("“${o.text}”", style = tvText(32.sp, weight = FontWeight.SemiBold), textAlign = TextAlign.Center)
                     // The remote starts on Again, so a stray OK never sends words that came out wrong.
                     DialogButtons(listOf(
-                        "Send" to { KidChats.sendText(app, p.k, o.text); overlay = null; Ui.say("Sending") },
+                        "Send" to { Ui.say(KidChats.sendText(app, p.k, o.text)); overlay = null },
                         "Again" to { listen() },
                     ), focus = 1)
                 }

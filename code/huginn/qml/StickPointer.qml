@@ -87,6 +87,18 @@ Item {
         if (shown) idle.restart()
     }
 
+    // Round 17: the controller went away while this was held. Let go off the window, so it's no click and drops
+    // nothing where the pointer was.
+    function lose(b) {
+        if (b === "ls") { l3Down = false; return }
+        if (b === "rs") { r3Click = false; return }
+        if (!host) return
+        injecting = true
+        Gamepad.pointerButton(host, -10, -10, b === "rt" ? 2 : 1, false)
+        injecting = false
+        lastX = -10; lastY = -10
+    }
+
     Timer {
         id: idle
         interval: 5000

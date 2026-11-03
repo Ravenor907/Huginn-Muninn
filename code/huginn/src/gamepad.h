@@ -88,6 +88,9 @@ public:
 Q_SIGNALS:
     void pressed(const QString &button);
     void released(const QString &button);
+    // Round 17: a button let go because its controller went away (a flat battery, undocking, Steam making its pad
+    // again, sleep), not by a thumb. Main treats it as a cancel: nothing is sent, stepped or clicked.
+    void lost(const QString &button);
     void connectedChanged();
     void styleChanged();
     void stickChanged();
@@ -130,6 +133,7 @@ private:
     double m_rightX = 0;
     double m_rightY = 0;
     bool m_relaxed = false;
+    bool m_closing = false;                   // close() is letting go of a pad's buttons: lost(), not released()
     Qt::MouseButtons m_held = Qt::NoButton;   // stick-pointer buttons down right now
     QElapsedTimer m_clock;                    // timestamps for those events (double clicks)
     TapTwins m_twins;                         // one pad seen twice: one tap, not two (R9)

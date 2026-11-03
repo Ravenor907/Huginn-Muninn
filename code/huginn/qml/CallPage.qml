@@ -34,7 +34,7 @@ Rectangle {
         if (hangArmed) { endCall(); return }
         hangArmed = true
         hangTimer.restart()
-        Ui.say((Ui.main && Ui.main.padInUse ? "Press B" : "Press Esc") + " again to hang up")
+        Ui.say((Ui.main && Ui.main.padInUse ? "Press " + Gamepad.glyph("b") : "Press Esc") + " again to hang up")
     }
     onVisibleChanged: if (!visible) { hangArmed = false; hangTimer.stop() }
 

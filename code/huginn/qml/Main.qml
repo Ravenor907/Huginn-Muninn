@@ -63,6 +63,7 @@ Window {
         if (lockedOut) lockDown()
         else {
             Qt.callLater(showSendRequest)   // a nearby-sharing request that came while locked is asked now
+            sayHeld()   // round 17: the latest toast held behind the lock
             // Back to the page that was open before the lock (a group, a channel, Settings), unless a notification
             // clicked while locked says where to go (afterUnlock), or everything was erased meanwhile.
             const back = beforeLock
@@ -76,7 +77,13 @@ Window {
     // The page open when the lock came down: {name, args}, opened again once unlocked.
     property var beforeLock: null
     function lockDown() {
-        if (pageName !== "dms") { beforeLock = { name: pageName, args: pageArgs }; pageName = "dms"; pageArgs = ({}) }
+        // Round 17: only where it was (a channel, a part of the page, a Settings section), never one-shot asks like
+        // showFile or groupOptions, which would run again on unlock.
+        if (pageName !== "dms") {
+            const kept = {}
+            for (const k of ["channel", "zone", "section"]) if (pageArgs && pageArgs[k] !== undefined) kept[k] = pageArgs[k]
+            beforeLock = { name: pageName, args: kept }; pageName = "dms"; pageArgs = ({})
+        }
         else beforeLock = null
         focusZone = "content"
         railIndex = 0
@@ -588,10 +595,14 @@ Window {
             if (moveCover.visible && !prompt.visible && !confirm.visible) return moveCover.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (linkPhone.visible && !prompt.visible && !confirm.visible) return linkPhone.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (backupPanel.visible && !prompt.visible && !confirm.visible) return backupPanel.prompts.concat([{ key: "back", label: "Hide buttons" }])
+            // Round 17 (B1): the lock asked before Back up, Move or linking.
+            if (lockCheck.visible && !prompt.visible && !confirm.visible) return [{ key: "a", label: "Confirm" }, { key: "b", label: "Cancel" }, { key: "back", label: "Hide buttons" }]
             if (setup.visible && !prompt.visible && !confirm.visible) return setup.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (prompt.visible && !confirm.visible) return prompt.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (app.overlay() === newsBanner) return newsBanner.prompts.concat([{ key: "back", label: "Hide buttons" }])
-            const lb = [{ key: "lb", label: "Next section" }]
+            // Round 17: no "Next section" while LB is the page's (its own LB chip says what it does) or while a voice
+            // message is held on Y (LB is ignored then: Main.press).
+            const lb = app.pageOwnsLb() || Voice.recording ? [] : [{ key: "lb", label: "Next section" }]
             // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
             const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
             // In voice: hold LB, then Up or Down.
@@ -607,7 +618,7 @@ Window {
         // button's chip can't be held either, so a tap does nothing.
         onPrompt: k => {
             if (app.padTalks && k === TalkKey.padButton) return
-            if (k === "lb" && !app.overlay()) app.stepSection(1)
+            if (k === "lb" && !app.overlay() && !app.pageOwnsLb()) { if (!Voice.recording) app.stepSection(1) }
             else app.press(k)
         }
     }
@@ -852,11 +863,23 @@ Window {
     FirstSetup { id: setup; z: 28.3 }
     // Settings › Backup and first setup's Restore from a backup (over first setup; questions show above it).
     BackupPanel { id: backupPanel; z: 28.6 }
+    // Round 17 (B1): the current lock, asked before Back up, Restore, Move and linking another device (LockCheck.qml).
+    LockCheck { id: lockCheck; z: 29 }
+    // what: "backup", "restore", "movehere", "moveaway" or "link". then runs once the lock is given (at once without one).
+    function askLock(title, why, what, then) {
+        if (app.touring) { then(); return }
+        lockCheck.open(title, why, what, then)
+    }
     // forgot: the lock screen's "Forgot it?" (what's here is erased, not kept, and a new lock is set after).
     function openBackup(mode, fromSetup, sample, forgot) {
         if (backupPanel.visible || (app.touring && !sample)) return
         // Locked: only the lock screen's "Forgot it?" restore.
         if (lockedOut && !forgot) return
+        // Round 17: a restore from first setup once a lock is set asks for it too (Vault.restoreOpened takes that grant).
+        if (fromSetup && mode === "restore" && !sample && !forgot && Vault.hasLock && !Vault.lockConfirmed("restore")) {
+            askLock("Restore", "This replaces what's here. A copy is kept first", "restore", () => app.openBackup(mode, fromSetup, sample, forgot))
+            return
+        }
         if (!fromSetup) app.closePanels()
         backupPanel.open(mode, !!fromSetup, !!sample, "", !!forgot)
     }
@@ -936,11 +959,12 @@ Window {
         if (rail.menuOpen) rail.closeMenu()
         if (linkPhone.visible) linkPhone.close()
         if (backupPanel.visible) backupPanel.close()
+        if (lockCheck.visible) lockCheck.close()
     }
     // Linked devices: always says where this computer's chats are mirrored.
     Rectangle {
         readonly property var on: Linked.companions.filter(c => c.ok)
-        visible: on.length > 0
+        visible: on.length > 0 && !app.lockedOut   // round 17: the linked devices' names never show over the lock
         anchors { right: parent.right; bottom: parent.bottom; margins: Theme.px(10) }
         z: 30
         radius: Theme.radius
@@ -1154,7 +1178,7 @@ Window {
                 elide: Text.ElideRight
                 text: [newsBanner.count > 1 ? newsBanner.count + (System.gameMode ? " new while you were playing" : " new while you were away")
                        : newsBanner.away ? (System.gameMode ? "While you were playing" : "While you were away") : "",
-                       app.padInUse ? "A: Open  B: Close" : ""].filter(x => x !== "").join("  ·  ")
+                       app.padInUse ? (Gamepad.style, Gamepad.glyph("a")) + ": Open  " + (Gamepad.style, Gamepad.glyph("b")) + ": Close" : ""].filter(x => x !== "").join("  ·  ")
                 color: Theme.accent
                 font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
             }
@@ -1286,9 +1310,12 @@ Window {
     // The phone: Link your phone shows a code again. Another device: paste the code it shows.
     function relinkOlder(d) {
         if (d.phone) { showLinkPhone(false); return }
-        Ui.ask("Link " + d.name + " again", "Paste the code " + d.name + " shows.", "", "Link", t => {
-            const r = Linked.link(t)
-            Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
+        // Round 17 (B1): linking another device shows it this PC's chats, so the lock is asked first.
+        app.askLock("Link " + d.name + " again", "It will show this PC's chats", "link", () => {
+            Ui.ask("Link " + d.name + " again", "Paste the code " + d.name + " shows.", "", "Link", t => {
+                const r = Linked.link(t)
+                Ui.say(r === "" ? "Check the 4 emoji match." : r, r !== "")
+            })
         })
     }
     Connections {
@@ -1296,10 +1323,26 @@ Window {
         function onChanged() { app.askOwnNameSoon(); app.askOlderSoon() }
         function onPicturesChanged() { app.askOwnNameSoon() }
     }
+    // Round 17: while locked, a toast never says who or what ("File from Mira: ...", "Missed call from Mira"): only
+    // "New activity". The latest real one is said once Huginn is unlocked.
+    property string heldNotice: ""
+    property int heldCount: 0
+    function sayUnlessLocked(text, bad) {
+        if (!app.lockedOut) { Ui.say(text, bad); return }
+        if (text === "") return
+        if (text.indexOf("New activity") < 0) { app.heldNotice = text; app.heldCount++ }
+        Ui.say("New activity.")
+    }
+    function sayHeld() {
+        if (heldNotice === "") return
+        const t = heldNotice, more = heldCount - 1
+        heldNotice = ""; heldCount = 0
+        Qt.callLater(() => Ui.say(more > 0 ? t + " (and " + more + " more while locked)" : t))
+    }
     // Chat: notices, and a toast for a message unless that chat is on screen (main.cpp plays the sound).
     Connections {
         target: Chat
-        function onNotice(text) { Ui.say(text) }
+        function onNotice(text) { app.sayUnlessLocked(text) }
         function onLiveChanged() {
             const a = Chat.active, t = Date.now(), seen = Object.assign({}, app.lastActive)
             for (const k in a) seen[k] = t
@@ -1358,11 +1401,11 @@ Window {
     // Calls: how a call ended, as a toast.
     Connections {
         target: Calls
-        function onFinished(t) { Ui.say(t) }
+        function onFinished(t) { app.sayUnlessLocked(t) }
     }
     Connections {
         target: Rooms
-        function onFinished(t) { Ui.say(t) }
+        function onFinished(t) { app.sayUnlessLocked(t) }
     }
     // Push to talk on Windows only hears the key while Huginn is in front (Huginn never watches keys in other apps, on
     // purpose), and on Linux too when the desktop offers no shortcut portal (GlobalKeys.everywhere false). It can't tell when the key was held behind a game, so the first time Huginn is back in front after being
@@ -1459,8 +1502,10 @@ Window {
     Connections {
         target: LocalSend
         function onRequestChanged() { app.showSendRequest() }
-        function onFinished(ok, message) { Ui.say(message, !ok) }
+        function onFinished(ok, message) { app.sayUnlessLocked(message, !ok) }
         function onPinNeeded(deviceId, wrong) {
+            // Round 17: a send started before the lock never asks over it (the device's name, and a send from behind it).
+            if (app.lockedOut) { LocalSend.cancelSend(); Ui.say("Sending stopped: Huginn is locked."); return }
             Ui.ask(wrong ? "That PIN didn't work. Try again" : "Enter the PIN shown on the other device", "LocalSend", "", "Send",
                    pin => LocalSend.send(deviceId, Transfer.shared, pin), false)
         }
@@ -1479,6 +1524,7 @@ Window {
         if (callPage.visible) return callPage
         if (roomBar.sharePicker.visible) return roomBar.sharePicker   // Share screen: what to share
         if (prompt.visible) return prompt
+        if (lockCheck.visible) return lockCheck   // round 17: the lock asked before Back up, Move or linking
         if (moveCover.visible) return moveCover
         if (linkPhone.visible) return linkPhone
         if (backupPanel.visible) return backupPanel
@@ -1520,19 +1566,53 @@ Window {
             if (g.o === o) return g
         return null
     }
+    // How long ago a guard started. A clock stepped backwards (after a sleep) counts as long ago, so it never keeps
+    // every button ignored for as long as the step.
+    function sinceGuard(g) { const d = Date.now() - g.at; return d < 0 ? 1e9 : d }
     function overlayGuarded() {
         const o = overlay()
         const g = o !== null ? guardOf(o) : null
-        return g !== null && Date.now() - g.at < 500
+        return g !== null && sinceGuard(g) < 500
+    }
+    // That overlay's own half second (a tap or click on its buttons is ignored then too: IncomingCall, ConfirmDialog).
+    function guardedNow(o) {
+        const g = o ? guardOf(o) : null
+        return g !== null && sinceGuard(g) < 500
     }
     Connections {
         target: incomingCall
         function onVisibleChanged() { if (incomingCall.visible) app.guardOverlay(incomingCall) }
+        // A ring that changes while it shows (a 1:1 call arriving over a group's ring: Join becomes Answer): a new
+        // half second, so an A meant for the one before never answers the new one.
+        function onWhoChanged() { if (incomingCall.visible) app.guardOverlay(incomingCall) }
+        function onGroupChanged() { if (incomingCall.visible) app.guardOverlay(incomingCall) }
+        function onVideoChanged() { if (incomingCall.visible) app.guardOverlay(incomingCall) }
     }
     // The overlay on top right now: a voice message held on Y stops when anything opens over the chat (a ring, a
     // question, a panel), and is thrown away, never sent by the Y release that the overlay takes.
     readonly property var topOverlay: overlay()
-    onTopOverlayChanged: if (topOverlay !== null) dropVoice()
+    onTopOverlayChanged: {
+        if (topOverlay !== null) dropVoice()
+        // Round 17: a question that opened by itself under another one (a ring under a menu or the Delete question)
+        // gets its half second when that one goes and it comes to the top, not only when it first showed. (One
+        // that opens with nothing over it is guarded where it opens.)
+        if (topBefore !== null && selfOpening(topOverlay)) guardOverlay(topOverlay)
+        topBefore = topOverlay
+    }
+    property var topBefore: null
+    function selfOpening(o) {
+        if (o === null) return false
+        if (o === incomingCall || o === newsBanner) return true
+        return o === confirm && (confirm.tag === "localsend" || confirm.tag === "older")
+    }
+    // The lock (the panic lock too) throws away a voice message being held, never sends it.
+    readonly property bool screenDown: Vault.screenLocked
+    onScreenDownChanged: if (screenDown) dropVoice()
+    // Voice threw one away by itself (let go in another chat, or the device slept while it was held).
+    Connections {
+        target: Voice
+        function onDropped() { Ui.say("Recording cancelled.") }
+    }
     Connections {
         target: app
         function onInVoiceChanged() { if (app.inVoice) app.dropVoice() }
@@ -1584,6 +1664,8 @@ Window {
     // go back and forward instead (and it doesn't move on when let go).
     property bool lbHeld: false
     property bool lbUsed: false
+    // The page has LB right now (the chat lock's pattern or password, a phone chat's channels).
+    function pageOwnsLb() { const p = page(); return !!p && !!p.ownsShoulders && focusZone === "content" }
     function press(b) {
         // Select (View) shows or hides the button legend; any other button hides it and does its job.
         if (b === "back") { legend = !legend; return }
@@ -1599,6 +1681,8 @@ Window {
         const p = page()
         // The page has LB right now (the chat lock's pattern or password).
         const pageShoulders = p && p.ownsShoulders && focusZone === "content"
+        // A voice message held on Y belongs to this chat: LB, Tab and Shift+Tab don't switch section or channel then.
+        if (Voice.recording && (b === "lb" || b === "next" || b === "prev")) return
         if (b === "lb" && !pageShoulders) { lbHeld = true; lbUsed = false; return }
         if (lbHeld && (b === "left" || b === "right")) { lbUsed = true; stepSection(b === "left" ? -1 : 1); return }
         if (lbHeld && inVoice && (b === "up" || b === "down")) { lbUsed = true; voiceKey("lb+" + b); return }
@@ -1620,9 +1704,10 @@ Window {
         for (const g of guards) {
             if (!g.held[b]) continue
             delete g.held[b]
-            if (g.o === overlay() && Date.now() - g.at < 10000) eaten = true
+            if (g.o === overlay() && sinceGuard(g) < 10000) eaten = true
         }
-        if (eaten) return
+        // An eaten LB release still ends the hold (or the D-pad would keep switching sections), and never steps.
+        if (eaten) { if (b === "lb") { lbHeld = false; lbUsed = true } return }
         if (b === "lb" && lbHeld) {
             lbHeld = false
             if (!lbUsed && !overlay()) stepSection(1)
@@ -1672,6 +1757,20 @@ Window {
             }
             if (app.isPointerButton(button)) stick.release(button)
             else app.release(button)
+        }
+        // Round 17: let go because the controller went away, not by a thumb: a cancel. A voice message held on Y is
+        // thrown away, LB never steps a section, the pointer's button never clicks; holds (Hold to erase) just stop.
+        function onLost(button) {
+            if (!app.padDown[button]) return
+            delete app.padDown[button]
+            if (TalkKey.pad(button, false)) {
+                if (button === "lb") app.lbHeld = false
+                return
+            }
+            if (app.isPointerButton(button)) { stick.lose(button); return }
+            if (button === "y") app.dropVoice()
+            if (button === "lb") app.lbUsed = true
+            app.release(button)
         }
         function onConnectedChanged() { if (!Gamepad.connected) { app.padDown = ({}); app.heldNow = ({}); app.lbHeld = false; app.legend = false; app.padInUse = false; stick.hide(true) } }
     }
@@ -1803,6 +1902,11 @@ Window {
             // A question that opened by itself, then a banner over it at once: A within half a second is still not an
             // answer (each keeps its own guard).
             { page: "dms", guarded: true, file: "10c-confirm-guarded" },
+            // Round 17: a request that came under a menu gets its own half second when the menu closes, and an LB let
+            // go inside it ends the LB hold. A failed check is a QML warning, which fails the tour.
+            { page: "dms", uncovered: true, file: "10d-confirm-uncovered" },
+            // Round 17: the prompt at the top that a chat's box opened closes unsent when that chat changes under it.
+            { page: "dms", zone: "messages", promptDrop: true, file: "10e-prompt-chat-changed" },
             { page: "dms", zone: "messages", newGroup: true, file: "11-new-group" },
             { page: "settings", section: "look", file: "12-look" },
             { page: "g:tour-crew", file: "13-group" },
@@ -1897,6 +2001,8 @@ Window {
             { page: "dms", zone: "messages", draftPrompt: true, handheld: true, file: "87d-handheld-draft-prompt-1080p" },
             // Open on a received program whose name hides what it is: asked first, never run by one click.
             { page: "dms", zone: "messages", openProgram: true, file: "88-open-program" },
+            // Round 17 (B1): Back up (and Move, Restore, linking) asks for the current lock first.
+            { page: "settings", section: "devices", lockCheck: true, file: "89-confirm-lock" },
             { page: "dms", setup: "welcome", file: "60-setup-welcome" },
             { page: "dms", setup: "lock", file: "61-setup-lock" },
             { page: "dms", setup: "name", file: "62-setup-name" },
@@ -1914,7 +2020,7 @@ Window {
             profileCard.visible = false; shortcutsPanel.visible = false; personPanel.visible = false
             transfersPanel.visible = false; chatFiles.visible = false
             labsReport.visible = false; labsInbox.visible = false; appStorage.visible = false; perfPanel.visible = false; linkPhone.visible = false
-            setup.visible = false; backupPanel.visible = false
+            setup.visible = false; backupPanel.visible = false; lockCheck.visible = false
             const shown = app.page()
             if (shown && shown.more) shown.more.sharedOpen = false
             if (step === 0) { savedTheme = Settings.theme; savedSeason = Settings.season; savedDensity = Settings.density; savedSize = Settings.uiSize; savedLabs = Settings.labs; savedText = Settings.textSize }
@@ -1969,11 +2075,37 @@ Window {
             if (s.setup) Qt.callLater(() => setup.open(false, s.setup, s.stop || 0))
             if (s.backup) Qt.callLater(() => backupPanel.open("backup", false, true, s.backup))
             if (s.restore) Qt.callLater(() => backupPanel.open("restore", false, true, s.restore))
+            if (s.lockCheck) Qt.callLater(() => lockCheck.sample("Back up", "A backup holds your whole account"))
             if (s.find) Qt.callLater(() => { const p = app.page(); if (p && p.openFind) p.openFind(s.find) })
             if (s.memberMenu) Qt.callLater(() => { const p = app.page(); if (p && p.memberMenu) p.memberMenu(p.members.find(m => m.key === "s")) })
             if (s.volume) Qt.callLater(() => ModActions.volumeMenu("s", "Sam", null, true))
             if (s.ctx) Qt.callLater(() => app.tourMenu(s.ctx))
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
+            if (s.uncovered) {
+                confirm.open("Mira wants to send a file", "photo.jpg (2 MB). It'll be saved in Downloads.", "Accept", null, false, false, null, "localsend")
+                confirm.cancelText = "Decline"
+                app.guards = []   // its own half second long gone, as when it opened under the menu
+                app.tourMenu("group")
+                if (ctxMenu.visible && app.overlay() === ctxMenu) {
+                    app.heldNow["lb"] = true   // LB held as the menu closes
+                    app.lbHeld = true
+                    app.lbUsed = false
+                    ctxMenu.close()
+                    if (app.overlay() !== confirm || !app.overlayGuarded()) console.warn("Tour check: a request uncovered by a menu has no half second")
+                    app.press("a")
+                    if (!confirm.visible) console.warn("Tour check: A answered a request just uncovered by a menu")
+                    app.release("lb")
+                    if (app.lbHeld) console.warn("Tour check: LB let go inside the half second stays held")
+                }
+            }
+            if (s.promptDrop) Qt.callLater(() => {
+                const p = app.page()
+                if (!p || !p.mainCompose) return
+                p.mainCompose.writeAbove()
+                if (!prompt.visible) return
+                p.mainCompose.dropAbove()
+                if (prompt.visible) console.warn("Tour check: the prompt at the top stayed open when its chat changed")
+            })
             if (s.guarded) {
                 confirm.open("Mira wants to send a file", "photo.jpg (2 MB). It'll be saved in Downloads.", "Accept", null, false, false, null, "localsend")
                 confirm.cancelText = "Decline"

@@ -53,7 +53,10 @@ bool huginnsOwn(const QString &name)
         QStringLiteral("Huginn-start.log"), QStringLiteral("ring-key.json"), QStringLiteral("nudge-key.json"), QStringLiteral("QtProject.ini"),
         QStringLiteral(".huginn-write-test"), kMark, kMoving, QStringLiteral("instance.lock"), QStringLiteral("instance.closing"),
         QStringLiteral("instance.end")};
-    return kNames.contains(name, Qt::CaseInsensitive) || name.startsWith(QLatin1String("chat-kept-"), Qt::CaseInsensitive);
+    return kNames.contains(name, Qt::CaseInsensitive) || name.startsWith(QLatin1String("chat-kept-"), Qt::CaseInsensitive)
+           || name.startsWith(QLatin1String(".huginn-write-test-"), Qt::CaseInsensitive)
+           // Round 17: a sync app's conflict copies of the single-instance lock ("instance-PC2.lock").
+           || (name.startsWith(QLatin1String("instance"), Qt::CaseInsensitive) && name.contains(QLatin1String(".lock"), Qt::CaseInsensitive));
 }
 
 // A file anywhere under dir.
@@ -284,12 +287,22 @@ bool probeWrite(const QString &dir, DWORD *err)
         }
         *err = 0;
     }
-    const std::wstring file = folder + L"\\.huginn-write-test";
-    HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
+    // Round 17 (m1): a name of this process's own, so two starts at once (a double click on a slow drive) never collide.
+    const std::wstring file = folder + L"\\.huginn-write-test-" + std::to_wstring(GetCurrentProcessId());
+    HANDLE h = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        if (h != INVALID_HANDLE_VALUE)
+            break;
         *err = GetLastError();
-        return false;
+        // Held a moment by another program (antivirus scanning the file): tried again shortly.
+        if (*err != ERROR_SHARING_VIOLATION)
+            return false;
+        Sleep(200);
     }
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    *err = 0;
     std::vector<char> block(4096, 'x');
     DWORD wrote = 0;
     bool ok = WriteFile(h, block.data(), DWORD(block.size()), &wrote, nullptr) && wrote == block.size();
@@ -349,9 +362,11 @@ QString cantWriteText(const QString &root, unsigned long err, bool full)
         if (known && !me.empty() && sid == me)
             return QStringLiteral("Windows won't let this account save in Huginn's data folder (%1), though the folder is this "
                                   "account's own. Controlled folder access in Windows Security, or another security program, is "
-                                  "probably blocking Huginn. Allow Huginn.exe there (Windows Security › Virus & threat protection › "
-                                  "Manage ransomware protection › Allow an app through Controlled folder access), or move the whole "
-                                  "Huginn folder out of Documents, Pictures and Desktop to a folder like C:\\Users\\<you>\\Huginn.")
+                                  "probably blocking Huginn.\n\nBest: move the whole Huginn folder out of Documents, Pictures and Desktop "
+                                  "to a folder like C:\\Users\\<you>\\Huginn, and open it from there. Updates then just work too.\n\n"
+                                  "Or allow Huginn.exe there (Windows Security › Virus & threat protection › Manage ransomware protection › "
+                                  "Allow an app through Controlled folder access). Each update then needs its new copy allowed as well "
+                                  "(update-staging\\Huginn.exe in Huginn's folder); Huginn says so when one comes.")
                 .arg(where);
         // Round 16: a folder made private by 1.36's first beta has no administrators in its list, so File Explorer's
         // Continue can't open it. Taking ownership always works; then Huginn puts its permissions right by itself.
@@ -450,7 +465,7 @@ QString folderProblem()
         wrote = repairOwn(root, &err);
 #else
     const unsigned long err = 0;
-    QFile probe(root + QStringLiteral("/.huginn-write-test"));
+    QFile probe(root + QStringLiteral("/.huginn-write-test-") + QString::number(QCoreApplication::applicationPid()));
     const QByteArray block(4096, 'x');
     const bool wrote = QDir().mkpath(root) && probe.open(QIODevice::WriteOnly) && probe.write(block) == block.size() && probe.flush();
     probe.close();
@@ -467,6 +482,39 @@ QString folderProblem()
             mark.write("Huginn's data folder. Everything Huginn keeps is in here.\n");
     }
     return {};
+}
+
+bool canWriteForUpdate()
+{
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    if (s_root.isEmpty() || !s_problem.isEmpty())
+        return false;
+    // The data folder (beside the main copy) and the main copy's own folder, where the update's files go.
+    DWORD err = 0;
+    return probeWrite(s_root, &err) && probeWrite(QFileInfo(s_root).absolutePath(), &err);
+#else
+    return true;
+#endif
+}
+
+bool controlledFolder(const QString &path)
+{
+#ifdef Q_OS_WIN
+    // Qt reads Windows' own known folders, so ones moved elsewhere (into OneDrive, say) are found too.
+    const QString p = QDir::cleanPath(QDir::fromNativeSeparators(path)) + QLatin1Char('/');
+    for (const QStandardPaths::StandardLocation where : {QStandardPaths::DocumentsLocation, QStandardPaths::DesktopLocation, QStandardPaths::PicturesLocation,
+                                                         QStandardPaths::MusicLocation, QStandardPaths::MoviesLocation}) {
+        for (const QString &dir : QStandardPaths::standardLocations(where)) {
+            const QString d = QDir::cleanPath(QDir::fromNativeSeparators(dir));
+            if (!d.isEmpty() && p.startsWith(d + QLatin1Char('/'), Qt::CaseInsensitive))
+                return true;
+        }
+    }
+    return false;
+#else
+    Q_UNUSED(path);
+    return false;
+#endif
 }
 
 QString nestedCopy()
@@ -554,6 +602,23 @@ bool onlyThisAccount(const QString &dir, DWORD *err)
     }
     LocalFree(sd);
     return ok;
+}
+
+// Round 17 (m2): a folder made by "Run as administrator" (or by an administrator with UAC off) is owned by the
+// Administrators group, not by an account. When this account may change the owner (full control through the folder
+// above, as in its own user folder), it becomes the owner, so the private list below can be set. False when it can't.
+bool takeOwnership(const QString &dir)
+{
+    const std::wstring me = mySid();
+    PSID sid = nullptr;
+    if (me.empty() || !ConvertStringSidToSidW(me.c_str(), &sid))
+        return false;
+    std::wstring path = QDir::toNativeSeparators(dir).toStdWString();
+    const DWORD r = SetNamedSecurityInfoW(path.data(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, sid, nullptr, nullptr, nullptr);
+    LocalFree(sid);
+    CrashLog::note(r == ERROR_SUCCESS ? QStringLiteral("data: the data folder an administrator's run made is this account's now")
+                                      : QStringLiteral("data: couldn't take the data folder an administrator's run made (error %1)").arg(r));
+    return r == ERROR_SUCCESS;
 }
 
 // The folder's own list is emptied and it takes its permissions from the folder above again (undoes onlyThisAccount).
@@ -662,7 +727,7 @@ QString makePrivate()
                 CrashLog::note(QStringLiteral("data: couldn't give the data folder its drive's permissions back (error %1)").arg(err));
             }
         }
-    } else if (ownerOf(s_root, &owner, &ownerName) && !me.empty() && owner != me) {
+    } else if (ownerOf(s_root, &owner, &ownerName) && !me.empty() && owner != me && !(owner == L"S-1-5-32-544" && takeOwnership(s_root))) {
         why = QStringLiteral("owned by another account");
     } else {
         DWORD err = 0;
@@ -681,8 +746,9 @@ QString makePrivate()
         return {};
     return QStringLiteral("Other people who use this computer, or anyone with this drive, can copy Huginn's folder (%1), "
                           "because Windows can't keep it private to your account here (a USB or network drive, a drive formatted "
-                          "FAT32 or exFAT, or a folder another account set up).\n\nSet a lock in Settings › Privacy and lock: your "
-                          "chats and keys are then sealed with it, wherever the folder goes.")
+                          "FAT32 or exFAT, a folder another account set up, or one made while Huginn ran as an administrator)."
+                          "\n\nSet a lock in Settings › Privacy and lock: your chats and keys are then sealed with it, wherever the "
+                          "folder goes.")
         .arg(QDir::toNativeSeparators(QFileInfo(s_root).absolutePath()));
 #else
     return {};

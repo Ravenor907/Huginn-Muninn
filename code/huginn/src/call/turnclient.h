@@ -48,7 +48,14 @@ public:
     // done is called exactly once, never from inside get().
     void get(const QByteArray &identityKey, std::function<void(const TurnLogin &login, const QString &why)> done);
     // Builds the request body (also used by the self-test); tok is the install token, left out when empty.
-    static QByteArray body(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret, const QString &tok = QString());
+    // renew: "rn": 1, this app renews its relay before the login ends (relay.md "Renewal"), so the Worker gives 10 minutes.
+    static QByteArray body(const QByteArray &identityKey, qint64 unixSeconds, const QByteArray &secret, const QString &tok = QString(),
+                           bool renew = false);
+    // A call renews its relay this long before the login ends; the old allocation carries media kHandoverMs more.
+    static constexpr qint64 kRenewBeforeMs = 120000;
+    static constexpr int kHandoverMs = 45000;
+    // How long a 429 says to wait ("retry", seconds) in ms, at least a minute and at most untilTomorrowMs; -1 without it.
+    static qint64 retryMs(const QJsonObject &o, qint64 untilTomorrowMs);
 
     // Install tokens (relay.md "Install tokens"): an install registers once with a proof of work and gets a token the
     // Worker signed, renewed by every login; logins with it never share a pool with requests that only know APP_SECRET.

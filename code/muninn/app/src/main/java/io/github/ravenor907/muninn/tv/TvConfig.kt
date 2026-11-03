@@ -411,11 +411,13 @@ object TvRules {
      * (TV clock). [own]: the level was set on the TV itself ("own":true), so a parent's phone takes it
      * without comparing clocks.
      */
-    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false, off: List<String>? = null, update: String? = null): String =
+    fun statusMessage(mic: Int, used: Long, ts: Long, own: Boolean = false, off: List<String>? = null, update: String? = null, pinfail: Int = 0): String =
         JSONObject().put("t", "status").put("mic", mic.coerceIn(0, MAX_MIC)).put("used", used.coerceIn(0L, MAX_INT)).put("ts", ts.coerceIn(0L, MAX_INT))
             .apply {
                 if (own) put("own", true); off?.let { put("off", JSONArray(it.filter { p -> p in PERMS }.distinct())) }
                 update?.takeIf { it in UPDATE_STATES }?.let { put("update", it) }
+                // Round 17 (7.18): wrong parent PINs in a row on the device, once there are many.
+                if (pinfail > 0) put("pinfail", pinfail.coerceAtMost(1_000_000))
             }.toString()
     /** Parent to TV: "send me your status". */
     fun usageMessage(): String = JSONObject().put("t", "usage").toString()
@@ -426,7 +428,8 @@ object TvRules {
      * A TV's status (7.7). [own]: the level was set on the TV (absent: false). [off]: k8 (7.13), the
      * permissions still off on the TV (null: the TV didn't say).
      */
-    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false, val off: List<String>? = null, val update: String? = null)
+    data class Status(val mic: Int, val used: Long, val ts: Long, val own: Boolean = false, val off: List<String>? = null, val update: String? = null,
+                      val pinfail: Int = 0)
 
     /** A TV's status, or null if it isn't well-formed (7.7). "own", when present, must be a boolean. */
     fun status(o: JSONObject): Status? {
@@ -442,7 +445,9 @@ object TvRules {
         } else null
         // The TV's last update ("update"): an app that doesn't know a state ignores it.
         val update = (o.opt("update") as? String)?.takeIf { it in UPDATE_STATES }
-        return Status(m.toInt(), u, t, own, off, update)
+        // Round 17: "pinfail", wrong parent PINs in a row; anything else there is ignored.
+        val pf = o.opt("pinfail").let { if (Canon.isInt(it)) (it as Number).toLong().coerceIn(0L, 1_000_000L).toInt() else 0 }
+        return Status(m.toInt(), u, t, own, off, update, pf)
     }
 
     // ---- the TV's own updates, in its status: what a parent's phone shows for a TV without u1 (TvUpd)
@@ -502,6 +507,16 @@ object TvRules {
         if (hasMic && !micOn) add("mic")
         if (notifyPrompt && !notifyOn) add("notify")
     }
+
+    /**
+     * Round 17: on a TV, "Show over other apps" too (still off), so a call comes up over a show instead of a line that
+     * comes and goes. Asked last, with [OVERLAY_WHY] on screen, while the parent is still at the TV.
+     */
+    fun setupAsks(hasMic: Boolean, micOn: Boolean, notifyPrompt: Boolean, notifyOn: Boolean, tv: Boolean, overlayOn: Boolean): List<String> =
+        setupAsks(hasMic, micOn, notifyPrompt, notifyOn) + (if (tv && !overlayOn) listOf("overlay") else emptyList())
+
+    /** What the TV says while it opens Android's "Show over other apps" page at pairing. */
+    const val OVERLAY_WHY = "Parent: turn on Muninn on the next page, so calls can come up over shows and games."
 
     /** What a parent may type for a quick message: anything up to [QUICK_TILE], and an older, longer one only shorter. */
     fun quickEdit(old: String, new: String, max: Int = QUICK_TILE): String {

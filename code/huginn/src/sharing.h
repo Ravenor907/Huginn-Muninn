@@ -50,8 +50,13 @@ QString kindOf(const QString &name);
 // one whose real kind Windows hides behind another extension, or a name with hidden direction marks).
 QString openWarning(const QString &name);
 // Windows: marks a received file as from the internet (its Zone.Identifier stream), so Windows checks it before it
-// runs. Does nothing elsewhere.
-void markFromInternet(const QString &path);
+// runs. Does nothing elsewhere. Round 17 (m8): false when the drive can't keep the mark (FAT32, exFAT: a handheld's
+// memory card); the file is then noted (unmarked) and asked about before it opens.
+bool markFromInternet(const QString &path);
+// Received this run, and the mark couldn't be written: opening a program or an Office file asks first.
+bool unmarked(const QString &path);
+// A character that changes which way text runs or takes no room (it only ever hides what a file name is).
+bool hiddenChar(char16_t c);
 
 // A decline's "why" (27.4) in plain words for the sender: "rules", "space", "no".
 QString declineText(const QString &why);

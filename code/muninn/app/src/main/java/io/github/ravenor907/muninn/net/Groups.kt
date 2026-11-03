@@ -555,7 +555,7 @@ class Groups(
             poll = poll, preview = preview, part = part?.set ?: "", partAt = part?.i ?: 0)
         // Round 16: a part of a long message goes before its later parts already here (part 1 waits for its link preview).
         // Sent with an earlier time (after a link preview): placed by its time, before the parts that went meanwhile.
-        if (part != null) chats[g] = placePart(chats[g].orEmpty(), made)
+        if (part != null) chats[g] = placePart(chats[g].orEmpty(), made, now())
         else if (at > 0L) chats[g] = inOrder(chats[g].orEmpty(), made) else addMsg(made)
         // A poll's text says the same for apps without m2; they ignore "poll" and "lp". Apps before round 16 ignore the part.
         val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time)
@@ -1256,7 +1256,7 @@ class Groups(
         val pt = partOf(p)
         val msg = GMsg(id, g, chId, from, name, text, false, now(), re = p.optString("re"),
             poll = if (m2) More.pollOf(p) else null, preview = if (m2) More.previewOf(p) else null, part = pt?.set ?: "", partAt = pt?.i ?: 0)
-        if (pt != null) chats[g] = placePart(chats[g].orEmpty(), msg) else addMsg(msg)
+        if (pt != null) chats[g] = placePart(chats[g].orEmpty(), msg, now()) else addMsg(msg)
         if (host.held(g, from)) host.heldBy(g, from, name, s.name)
         else {
             unread.add(g)
@@ -1629,12 +1629,32 @@ class Groups(
             return TextPart(set, i, n)
         }
 
+        /** Round 17 (as Huginn 1.41): a part is placed only among this many latest messages ... */
+        const val PART_WINDOW = 200
+        /** ... and (a [now] given) only beside a part under this old; else it goes last. */
+        const val PART_AGE_MS = 60 * 60_000L
+
+        /** Whether a part made at [time] (ms, or seconds from an old app) is too old at [now] (0: no age check) to place beside. */
+        fun partTooOld(time: Long, now: Long): Boolean {
+            if (now <= 0L) return false
+            val t = if (time in 1L until 100_000_000_000L) time * 1000 else time
+            return t > 0L && kotlin.math.abs(now - t) > PART_AGE_MS
+        }
+
         /**
          * [m], a part of a long message, goes before the first of the same sender's parts of that set with a higher
-         * place (they came first); else last. Everything else keeps its place.
+         * place (they came first), looked for only among the last [PART_WINDOW] messages; when that part is over
+         * [PART_AGE_MS] old at [now], or there is none, [m] goes last. Everything else keeps its place.
          */
-        fun placePart(list: List<GMsg>, m: GMsg): List<GMsg> {
-            val at = list.indexOfFirst { it.from == m.from && it.part == m.part && it.partAt > m.partAt }
+        fun placePart(list: List<GMsg>, m: GMsg, now: Long = 0L): List<GMsg> {
+            val from = maxOf(0, list.size - PART_WINDOW)
+            var at = -1
+            if (m.part.isNotEmpty()) for (i in from until list.size) {
+                val x = list[i]
+                if (x.from != m.from || x.part != m.part || x.partAt <= m.partAt) continue
+                at = if (partTooOld(x.time, now)) -1 else i
+                break
+            }
             return (if (at < 0) list + m else list.subList(0, at) + m + list.subList(at, list.size)).takeLast(1000)
         }
 

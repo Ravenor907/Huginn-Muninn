@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -100,7 +101,19 @@ fun CameraScreen(video: Boolean, keep: String = "", onPhoto: (ByteArray) -> Unit
         if (keep.isEmpty()) return
         Drafts.camera[keep]?.let { Drafts.camera[keep] = it.with(p, c?.first, c?.second ?: 0) }
     }
-    androidx.compose.runtime.SideEffect { keepTaken(photo, clip) }
+    // Written back only when this screen changed it (taken, discarded): a new screen never writes its empty state over
+    // a photo or video that finished after the old screen went (round 17).
+    val written = remember { arrayOf<Any?>(kept?.photo, kept?.clip) }
+    androidx.compose.runtime.SideEffect {
+        if (photo !== written[0] || clip?.first !== written[1]) { keepTaken(photo, clip); written[0] = photo; written[1] = clip?.first }
+    }
+    // One that finished after this screen opened (the old screen's recording or photo, after a fold or a new window).
+    val camRev by Drafts.cameraRev.collectAsState()
+    LaunchedEffect(camRev) {
+        if (keep.isEmpty() || recording != null || photo != null || clip != null) return@LaunchedEffect
+        val k = Drafts.camera[keep] ?: return@LaunchedEffect
+        k.clip?.let { c -> written[1] = c; clip = c to k.ms } ?: k.photo?.let { p -> written[0] = p; photo = p }
+    }
     // The file being recorded: kept when the screen goes mid-recording, so the stopped video can still be kept.
     val recFile = remember { arrayOfNulls<File>(1) }
     var busy by remember { mutableStateOf(false) }
@@ -165,7 +178,12 @@ fun CameraScreen(video: Boolean, keep: String = "", onPhoto: (ByteArray) -> Unit
                         // Shrunk and scrubbed like any photo: location and camera details never leave the phone.
                         val jpeg = Photos.prepare(context, Uri.fromFile(f), false)
                         f.delete()
-                        ContextCompat.getMainExecutor(context).execute { busy = false; if (jpeg == null) Ui.say("That photo didn't work. Try again.", true) else photo = jpeg }
+                        ContextCompat.getMainExecutor(context).execute {
+                            busy = false
+                            if (jpeg == null) Ui.say("That photo didn't work. Try again.", true)
+                            // Kept from here, not only by the screen: one that went meanwhile (a fold) still has it.
+                            else { photo = jpeg; keepTaken(jpeg, null); Drafts.cameraRev.value++ }
+                        }
                     }.start()
                 }
                 override fun onError(e: ImageCaptureException) { busy = false; Ui.say("That photo didn't work. Try again.", true) }
@@ -186,11 +204,12 @@ fun CameraScreen(video: Boolean, keep: String = "", onPhoto: (ByteArray) -> Unit
             if (ev is VideoRecordEvent.Finalize) {
                 recording = null
                 val ms = (ev.recordingStats.recordedDurationNanos / 1_000_000).toInt().coerceIn(1, More.VIDEO_MAX_MS)
+                // Round 17: stopped by the camera going (screen off, Home, a minimised window) is kept too; its file is whole.
                 val ok = !ev.hasError() || ev.error == VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED ||
-                    ev.error == VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED
+                    ev.error == VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED || ev.error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE
                 val bytes = if (ok && f.exists()) f.readBytes() else null
                 f.delete()
-                if (bytes != null && More.isVideo(bytes) && ms >= 500) { clip = bytes to ms; keepTaken(null, bytes to ms) }
+                if (bytes != null && More.isVideo(bytes) && ms >= 500) { clip = bytes to ms; keepTaken(null, bytes to ms); Drafts.cameraRev.value++ }
                 else Ui.say("That was too short to send. Tap to start, tap again to stop.", true)
             }
         }

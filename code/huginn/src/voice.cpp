@@ -16,6 +16,7 @@
 #include <QMediaRecorder>
 #include <QStandardPaths>
 #include <QUrl>
+#include <cstdio>
 #include <memory>
 
 Voice::Voice(Chat *chat, QObject *parent)
@@ -24,6 +25,16 @@ Voice::Voice(Chat *chat, QObject *parent)
 {
     m_ticker.setInterval(150);
     connect(&m_ticker, &QTimer::timeout, this, [this] {
+        const qint64 wall = QDateTime::currentMSecsSinceEpoch();
+        const qint64 gap = wall - m_lastTick;
+        m_lastTick = wall;
+        // Asleep while Y (or the microphone) was held, or the clock stepped: the hold was never let go on purpose.
+        // Thrown away, never sent.
+        if (m_recording && slept(gap)) {
+            cancel();
+            Q_EMIT dropped();
+            return;
+        }
         Q_EMIT tick();
         if (m_recording && elapsed() >= 5 * 60 * 1000 && !m_target.isEmpty())
             finish(m_target);   // the 5-minute limit: send what there is
@@ -42,13 +53,27 @@ QString Voice::tempFile() const
     return Scratch::path(QStringLiteral("huginn-voice.aac"));
 }
 
-int Voice::elapsed() const { return m_recording ? int(QDateTime::currentMSecsSinceEpoch() - m_started) : 0; }
+int Voice::elapsed() const { return m_recording && m_since.isValid() ? int(qMin<qint64>(m_since.elapsed(), 24 * 3600 * 1000)) : 0; }
 
 qreal Voice::progress() const
 {
     if (!m_player || m_player->duration() <= 0)
         return 0;
     return qreal(m_player->position()) / m_player->duration();
+}
+
+bool Voice::selfTest()
+{
+    const QString mom = QStringLiteral("k1"), main = QStringLiteral("g:family:main");
+    // Let go in the chat it started in: sent. In another chat or channel, or nowhere: thrown away.
+    const bool same = sendable(mom, mom) && sendable(main, main);
+    const bool other = !sendable(mom, QStringLiteral("k2")) && !sendable(main, QStringLiteral("g:family:games"))
+        && !sendable(main, QStringLiteral("g:crew:main")) && !sendable(mom, QString()) && !sendable(QString(), QString());
+    // Ticks 150 ms apart (or a slow second) carry on; a sleep, or the clock stepped either way, ends it.
+    const bool clock = !slept(150) && !slept(3000) && slept(10001) && slept(600000) && slept(-60000) && !slept(-100);
+    const bool ok = same && other && clock;
+    std::printf("voice: a held message goes only to its own chat, never across a sleep: %s\n", ok ? "ok" : "FAILED");
+    return ok;
 }
 
 QString Voice::length(int ms)
@@ -93,22 +118,30 @@ bool Voice::start(const QString &key)
     m_recorder->setOutputLocation(QUrl::fromLocalFile(tempFile()));
     m_recorder->record();
     m_recording = true;
-    m_started = QDateTime::currentMSecsSinceEpoch();
+    m_since.start();
+    m_lastTick = QDateTime::currentMSecsSinceEpoch();
     m_ticker.start();
     Q_EMIT changed();
     return true;
 }
 
-void Voice::finish(const QString &key)
+bool Voice::finish(const QString &key)
 {
     if (!m_recording)
-        return;
-    m_sendTo = key;
+        return false;
+    // Only ever to the chat it was started for: let go in another chat, it's thrown away.
+    if (!sendable(m_target, key)) {
+        cancel();
+        Q_EMIT dropped();
+        return false;
+    }
+    m_sendTo = m_target;
     const int ms = qMin(elapsed(), 5 * 60 * 1000);
     m_recording = false;
     // The file is complete once the recorder says it has stopped.
     auto once = std::make_shared<QMetaObject::Connection>();
-    *once = connect(m_recorder, &QMediaRecorder::recorderStateChanged, this, [this, ms, key, once](QMediaRecorder::RecorderState s) {
+    const QString to = m_target;
+    *once = connect(m_recorder, &QMediaRecorder::recorderStateChanged, this, [this, ms, to, once](QMediaRecorder::RecorderState s) {
         if (s != QMediaRecorder::StoppedState)
             return;
         disconnect(*once);
@@ -120,12 +153,13 @@ void Voice::finish(const QString &key)
         }
         Scratch::shred(tempFile());
         if (ms >= 700 && !aac.isEmpty())
-            m_chat->sendVoice(key, aac, ms);
+            m_chat->sendVoice(to, aac, ms);
         m_sendTo.clear();
     });
     m_recorder->stop();
     m_ticker.stop();
     Q_EMIT changed();
+    return true;
 }
 
 void Voice::cancel()

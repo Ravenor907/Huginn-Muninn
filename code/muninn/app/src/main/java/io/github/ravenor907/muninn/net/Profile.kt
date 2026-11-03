@@ -98,12 +98,25 @@ object ProfileWire {
 
     const val MAX_NAME = 40
 
-    /** The chosen name a profile message carries ("nm"), or null when it has none or it isn't usable. */
+    /**
+     * The chosen name a profile message carries ("nm"), or null when it has none or it isn't usable. Round 17: cleaned
+     * like a nudge's name (no control, format or direction characters, trimmed, at most [MAX_NAME]).
+     */
     fun nameOf(p: JSONObject): String? {
-        val n = (p.opt("nm") as? String)?.trim() ?: return null
-        if (n.isEmpty() || n.length > MAX_NAME || n.any { it.code < 0x20 || it.code == 0x7F }) return null
-        return n
+        val raw = (p.opt("nm") as? String)?.trim() ?: return null
+        if (raw.isEmpty() || raw.length > MAX_NAME || raw.any { it.code < 0x20 || it.code == 0x7F }) return null
+        return NudgeWire.clean(raw).ifEmpty { null }
     }
+
+    /**
+     * Round 17: the name a contact's "nm" leaves here: [n] when it differs and no nickname was set on this phone,
+     * else null (nothing changes; a name set here always wins).
+     */
+    fun renameTo(current: String, nickname: String?, n: String?): String? =
+        if (n == null || !nickname.isNullOrEmpty() || n == current) null else n
+
+    /** What's said when a contact's own name changes here. */
+    fun renamedText(old: String, new: String): String = "$old is now called $new."
 
     fun defaultColour(key: String): String {
         val h = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
@@ -425,7 +438,13 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
             val cur = peers[fromKey]
             if (cur != null && !ProfileWire.takes(cur.v, v)) return true
             // A new chosen name: the contact's name here follows (a nickname set on this phone still shows first).
-            ProfileWire.nameOf(p)?.let { n -> contacts.get(fromKey)?.let { c -> if (c.name != n) contacts.set(c.copy(name = n)) } }
+            // Round 17: never over a name set on this phone, and said out loud when it changes.
+            contacts.get(fromKey)?.let { c ->
+                ProfileWire.renameTo(c.name, c.nickname, ProfileWire.nameOf(p))?.let { n ->
+                    contacts.set(c.copy(name = n))
+                    try { chat.notices.tryEmit(ProfileWire.renamedText(c.name, n)) } catch (_: Exception) {}
+                }
+            }
             val e = Entry(v, p.getString("col").lowercase(), bytes)
             peers[fromKey] = e
             bitmaps.remove(fromKey)

@@ -288,11 +288,11 @@ private fun HeldList(app: Muninn, cfg: TvConfig, quiet: QuietTime?, maxH: Dp) {
         }
         if (held.size == 1 || open) held.forEach { h ->
             val who = cfg.contacts.firstOrNull { it.k == h.k }?.n ?: groupsAll[h.k.removePrefix("g:")]?.state?.name ?: "someone"
-            val what = if (h.kind == "voice") "Voice message" else "Photo"
-            val line = "$what to $who. " + (quiet?.let { KidK14.willSend(it, h24) } ?: "Sending soon")
+            val what = when (h.kind) { "voice" -> "Voice message"; "photo" -> "Photo"; else -> "Message" }
+            val line = "$what to $who. " + (quiet?.let { KidK14.willSend(it, h24) } ?: if (KidTv.timeUnsure()) KidK14.WILL_SEND_SOON else "Sending soon")
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(CARD)).background(Palette.panel).padding(start = 14.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                MIcon(if (h.kind == "voice") "mic" else "image", Palette.accent, 22.dp)
+                MIcon(when (h.kind) { "voice" -> "mic"; "photo" -> "image"; else -> "chat" }, Palette.accent, 22.dp)
                 Text(line, style = Type.normal.copy(fontSize = 16.sp), maxLines = 3, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 10.dp))
                 Box(Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button) { KidHoldStore.cancel(app, h.id) }
@@ -588,7 +588,7 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
     }
     fun sendTyped() {
         val t = TvRules.clean(text, 2000)
-        if (t.isNotEmpty()) { KidChats.sendText(app, p.k, t, typed = true); setText("") }
+        if (t.isNotEmpty()) { KidChats.sendText(app, p.k, t, typed = true).let { r -> if (r != "Sending") Ui.say(r) }; setText("") }
     }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         // Not tied to this screen either: a photo picked as a quiet time starts is held, not lost.
@@ -705,7 +705,7 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
                 val now = System.currentTimeMillis()
                 if (KidK14.chipOk(KidPhoneNav.chipAt, now)) {
                     KidPhoneNav.chipAt = now
-                    KidChats.sendText(app, p.k, q.text)
+                    KidChats.sendText(app, p.k, q.text).let { r -> if (r != "Sending") Ui.say(r) }
                     sent = q.id
                     sentAt = now
                     KidSpeak.say(context, KidK14.spoken(q))

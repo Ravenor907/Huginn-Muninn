@@ -205,6 +205,21 @@ class TurnTest {
         assertEquals("a0115b4186fe1780017780b84bf5a20f0501934df65efb994e35c88f745e188c", o.getString("sig"))
         assertEquals(1_800_000_000L, (o.get("t") as Number).toLong())
     }
+    /** Renewal and the Worker's "retry" (relay.md "Renewal", "Limits"): "rn" only on a login, and a 429 waits as long as it says. */
+    @Test
+    fun renewAndRetry() {
+        val der = ByteArray(91) { it.toByte() }
+        assertFalse(JSONObject(TurnCreds.body(der, 1L, "s")).has("rn"))
+        assertEquals(1, JSONObject(TurnCreds.body(der, 1L, "s", renew = true)).getInt("rn"))
+        assertFalse(JSONObject(TurnCreds.regBody(der, 1L, "s", 7)).has("rn"))
+        val now = 1_800_000_000_000L   // 08:00 UTC
+        assertEquals(3_600_000L, TurnCreds.retryMs("""{"error":"busy","retry":3600}""", now))
+        assertEquals(60_000L, TurnCreds.retryMs("""{"error":"slow_down","retry":5}""", now))
+        assertEquals(TurnCreds.nextUtcDayMs(now) - now, TurnCreds.retryMs("""{"error":"id_limit","retry":999999}""", now))
+        assertNull(TurnCreds.retryMs("""{"error":"id_limit"}""", now))
+        assertTrue(TurnCreds.HANDOVER_MS < TurnCreds.RENEW_BEFORE_MS)   // the old allocation is let go before its login ends
+    }
+
     /** Install tokens (relay.md): the proof of work matches the Worker's and Huginn's, and a refused token is registered again. */
     @Test
     fun installTokens() {

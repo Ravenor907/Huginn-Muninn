@@ -361,11 +361,28 @@ object NudgeWire {
      */
     class LockedLimit(private val alertEveryMs: Long = ALERT_EVERY_MS) {
         private var lastAlert = Long.MIN_VALUE / 2
+        /** Round 17: when contacts' nudges alerted, and the separate notifications they have, while locked. */
+        private val knownAlerts = ArrayDeque<Long>()
+        private val knownKeys = LinkedHashSet<String>()
         /** What to show: [n] as it will read, the notification's key, and whether it may sound. */
         data class Take(val n: Nudge, val key: String, val alert: Boolean)
         @Synchronized
         fun take(show: Show, n: Nudge, nowMs: Long): Take {
-            if (n.known) return Take(n, groupKey(show, n), true)
+            if (n.known) {
+                // Round 17: any contact can sign a ring-key nudge under any name. At most [KNOWN_KEYS] separate
+                // notifications while locked (past that, one shared one with no name), and at most [KNOWN_ALERTS]
+                // alerts in [alertEveryMs] in all, whatever names they claim.
+                var shown = n
+                var key = groupKey(show, n)
+                if (key !in knownKeys) {
+                    if (knownKeys.size >= KNOWN_KEYS) { shown = n.copy(from = "", chat = ""); key = groupKey(show, shown) }
+                    else knownKeys.add(key)
+                }
+                while (knownAlerts.isNotEmpty() && (nowMs - knownAlerts.first() >= alertEveryMs || nowMs < knownAlerts.first())) knownAlerts.removeFirst()
+                val alert = knownAlerts.size < KNOWN_ALERTS
+                if (alert) knownAlerts.addLast(nowMs)
+                return Take(shown, key, alert)
+            }
             // Never a name the sender chose, even one that slipped past [anonymous].
             val shown = n.copy(from = "", chat = "")
             val key = groupKey(show, shown)
@@ -375,9 +392,13 @@ object NudgeWire {
         }
         /** Unlocked: start over. */
         @Synchronized
-        fun clear() { lastAlert = Long.MIN_VALUE / 2 }
+        fun clear() { lastAlert = Long.MIN_VALUE / 2; knownAlerts.clear(); knownKeys.clear() }
         companion object {
             const val ALERT_EVERY_MS = 2 * 60_000L
+            /** Round 17: contacts' nudges alert at most this often per [ALERT_EVERY_MS], all together. */
+            const val KNOWN_ALERTS = 3
+            /** Round 17: the most separate contact-named notifications while locked. */
+            const val KNOWN_KEYS = 5
             /**
              * Round 16: whether a taken nudge alerts, the [count]-th on its notification: a contact's ([Nudge.known]) the
              * first time; the shared "Group message" one whenever [take] allows (at most once per [ALERT_EVERY_MS],
@@ -603,17 +624,20 @@ class RingKey(private val file: File) {
     /** Their Nostr secrets, the same order. */
     fun nostrSecrets(nowMs: Long = System.currentTimeMillis()): List<ByteArray> = live(nowMs).map { it.secret }
 
-    /** A ring envelope's content opened: (call id, ts), or null. */
+    /**
+     * A ring envelope's content opened: (call id, ts), or null. Round 17: only with the current key. A key replaced
+     * after a block or calls turned off never rings again; its mailbox is still read for [OLD_MS], for nudges only.
+     */
     fun open(content: String, nowMs: Long = System.currentTimeMillis()): Pair<String, Long>? =
-        live(nowMs).firstNotNullOfOrNull { RingWire.openRingContent(content, it.keys) }
+        RingWire.openRingContent(content, load().now.keys)
 
     /** A nudge's content opened (caps n1 and n2): what it says, or null. */
     fun nudge(content: String, nowMs: Long = System.currentTimeMillis()): NudgeWire.Nudge? =
         live(nowMs).firstNotNullOfOrNull { NudgeWire.openContent(content, it.keys) }
 
     /**
-     * Someone was blocked: a new ring key and ring mailbox, so what they hold no longer rings this phone. The old
-     * mailbox is still listened on for [OLD_MS] (calls from the others until the new key reaches them).
+     * Someone was blocked (or their calls turned off): a new ring key and ring mailbox, so what they hold no longer rings
+     * this phone. The old mailbox is still listened on for [OLD_MS], for nudges from the others until the new key reaches them.
      */
     fun renew(nowMs: Long = System.currentTimeMillis()) = synchronized(this) {
         val a = load()

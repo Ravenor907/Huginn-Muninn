@@ -225,6 +225,8 @@ object Move {
         if (!a.ready.value) return
         // Done, and when: kept in the restored vault, so the old device hears "done" and may ask to link for 10 minutes.
         val done = s.put("state", "done").put("at", System.currentTimeMillis())
+        // What was here is kept in a "kept-" folder first, as Restore does, so a mistaken move loses nothing.
+        try { a.vault.keepCopy() } catch (_: Exception) { }
         Backup.restore(a, a.vault, BackupFormat.Opened(BackupFormat.Header(1, ByteArray(0), 0, "", "muninn"),
             files + (FILE to JSONObject().put("in", done).toString().toByteArray())))
         show(a, "in", JSONObject().put("state", "done").put("from", s.optString("from")).put("at", done.optLong("at")))

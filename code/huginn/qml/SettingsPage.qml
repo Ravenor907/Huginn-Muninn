@@ -889,6 +889,8 @@ Rectangle {
     }
     // Where a toggle's value lives.
     function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
+    // A switch as it shows (invert: it reads the other way round from the setting).
+    function switchOn(r) { return !!source(r)[r.key] !== !!r.invert }
     // A switch flipped.
     function flip(r) {
         const o = source(r)
@@ -915,13 +917,14 @@ Rectangle {
     }
 
     // ------------------------------------------------------------- chat backup (BackupPanel.qml)
+    // Round 17 (B1, security m6): a backup holds the whole account, and a restore replaces it: the current lock first.
     function startBackup() {
         if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
-        Ui.main.openBackup("backup", false)
+        Ui.main.askLock("Back up", "A backup holds your whole account", "backup", () => Ui.main.openBackup("backup", false))
     }
     function startRestore() {
         if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
-        Ui.main.openBackup("restore", false)
+        Ui.main.askLock("Restore", "This replaces what's here. A copy is kept first", "restore", () => Ui.main.openBackup("restore", false))
     }
 
     // Calls › Talk key: Change, or with a keyboard key, Change or Remove (the controller button alone, or voice activity).
@@ -1053,13 +1056,24 @@ Rectangle {
             return false
         }
         const r = rows[row]
+        const toggle = !!r && r.kind === "toggle"
         const sideways = r && (r.kind === "segmented" || r.kind === "accent" || r.kind === "size" || r.kind === "slider" || r.kind === "swatches" || r.kind === "grounds")
         switch (b) {
         case "up": row = Math.max(0, row - 1); return true
         case "down": row = Math.min(rows.length - 1, row + 1); return true
         case "a": change(0); return true
-        case "left": if (sideways) change(-1); else back(); return true
-        case "right": change(1); return true
+        // Round 17: on a switch, Right turns it on and Left turns it off (Left on one that's off goes back), once a
+        // press: a held D-pad's repeats never flip it over and over (Handheld mode switching full screen).
+        case "left":
+            if (toggle && Gamepad.repeating()) return true
+            if (toggle && switchOn(r)) flip(r)
+            else if (sideways) change(-1)
+            else back()
+            return true
+        case "right":
+            if (toggle) { if (!Gamepad.repeating() && !switchOn(r)) flip(r) }
+            else change(1)
+            return true
         case "b": back(); return true
         }
         return false

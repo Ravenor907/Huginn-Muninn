@@ -272,9 +272,16 @@ void CallSession::startRelay()
             old->stop();
             old->deleteLater();
         }
-        connect(turn, &TurnClient::allocated, self, [self, turn] {
+        if (self->m_leaving) {   // a renewal's handover underway: this allocation replaces both
+            self->m_leaving->stop();
+            self->m_leaving->deleteLater();
+            self->m_leaving = nullptr;
+        }
+        const qint64 exp = login.expiresMs;
+        connect(turn, &TurnClient::allocated, self, [self, turn, exp] {
             if (turn != self->m_turn)
                 return;
+            self->scheduleRenew(exp);
             self->m_relayDone = true;
             self->m_relayWhy.clear();
             if (self->m_peerRelayed.valid())
@@ -306,6 +313,95 @@ void CallSession::startRelay()
                 self->m_media->receive(bytes, CallMedia::Relay, from);
         });
         turn->start();
+    });
+}
+
+// Renewal (relay.md "Renewal"): a login lasts 10 minutes, so a longer call gets a fresh one and a new allocation 2 minutes
+// before it ends. Media keeps going out through the old allocation for kHandoverMs while the peer learns the new address
+// in "cands" (a peer of any version follows a changed relay address); what arrives on either counts.
+void CallSession::scheduleRenew(qint64 expiresMs)
+{
+    m_renewFor = expiresMs;
+    m_renewTries = 0;
+    const qint64 wait = expiresMs - RelayCredentials::kRenewBeforeMs - wallMs();
+    if (wait <= 0)
+        return;
+    QPointer<CallSession> self(this);
+    QTimer::singleShot(int(qMin<qint64>(wait, 24 * 3600000)), this, [self, expiresMs] {
+        if (self && self->m_state != Ended && self->m_renewFor == expiresMs)
+            self->renewRelay();
+    });
+}
+
+void CallSession::renewRelay()
+{
+    // No relay up (a restart is underway): that restart's allocation sets its own renewal.
+    if (!m_getLogin || !internet || m_state == Ended || !m_turn || !m_turn->ready())
+        return;
+    const qint64 forExp = m_renewFor;
+    QPointer<CallSession> self(this);
+    m_getLogin([self, forExp](const TurnLogin &login, const QString &) {
+        if (!self || self->m_state == Ended || self->m_renewFor != forExp)
+            return;
+        if (!login.valid() || login.expiresMs <= forExp) {
+            // Refused or not reached: once more a little later. The allocation in use lasts until its login ends,
+            // and after that the free paths, or a restart, carry the call.
+            if (self->m_renewTries++ < 1)
+                QTimer::singleShot(20000, self, [self, forExp] {
+                    if (self && self->m_state != Ended && self->m_renewFor == forExp)
+                        self->renewRelay();
+                });
+            return;
+        }
+        auto *next = new TurnClient(login, self);
+        const qint64 exp = login.expiresMs;
+        connect(next, &TurnClient::data, self, [self](const Stun::Address &from, const QByteArray &bytes) {
+            if (self->m_media)
+                self->m_media->receive(bytes, CallMedia::Relay, from);
+        });
+        connect(next, &TurnClient::failed, self, [self, next, forExp](const QString &why) {
+            if (next == self->m_turn) {   // it had taken over: as for any relay that fails
+                self->m_relayWhy = why == QLatin1String(TurnClient::kCantReach) ? why : QStringLiteral("Couldn't reach the internet relay");
+                self->relayReady();
+                Q_EMIT self->pathsChanged();
+                return;
+            }
+            next->stop();
+            next->deleteLater();
+            if (self->m_renewFor == forExp && self->m_renewTries++ < 1)
+                QTimer::singleShot(20000, self, [self, forExp] {
+                    if (self && self->m_state != Ended && self->m_renewFor == forExp)
+                        self->renewRelay();
+                });
+        });
+        connect(next, &TurnClient::allocated, self, [self, next, exp, forExp] {
+            if (self->m_state == Ended || self->m_renewFor != forExp || !self->m_turn) {
+                next->stop();
+                next->deleteLater();
+                return;
+            }
+            QPointer<TurnClient> old = self->m_turn;
+            self->m_leaving = old;
+            self->m_turn = next;   // "cands" now carry the new address; media stays on the old one for now
+            if (self->m_peerRelayed.valid())
+                next->addPeer(self->m_peerRelayed);
+            self->relayReady();
+            Q_EMIT self->pathsChanged();
+            self->scheduleRenew(exp);
+            QTimer::singleShot(RelayCredentials::kHandoverMs, self, [self, old, next] {
+                if (!self)
+                    return;
+                if (self->m_turn == next && self->m_media && self->m_peerRelayed.valid())
+                    self->m_media->setRelay(next, self->m_peerRelayed);
+                if (old) {
+                    old->stop();
+                    old->deleteLater();
+                }
+                if (self->m_leaving == old)
+                    self->m_leaving = nullptr;
+            });
+        });
+        next->start();
     });
 }
 

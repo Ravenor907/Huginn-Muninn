@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonValue>
+#include <QSet>
 #include <QStringList>
 #include <cmath>
 #include <cstdio>
@@ -24,7 +25,17 @@ bool hiddenMark(char16_t c)
     return (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || (c >= 0x200b && c <= 0x200f) || c == 0x061c || c == 0xfeff
         || c == 0x2060 || c == 0x180e;
 }
+// Round 17 (m8): received files whose Mark of the Web couldn't be written (this run).
+QSet<QString> &unmarkedPaths()
+{
+    static QSet<QString> s;
+    return s;
 }
+}
+
+bool Sharing::hiddenChar(char16_t c) { return hiddenMark(c); }
+
+bool Sharing::unmarked(const QString &path) { return unmarkedPaths().contains(QDir::cleanPath(path)); }
 
 const char Sharing::kCap[] = "f2";
 const char Sharing::kEveryone[] = "everyone";
@@ -149,12 +160,13 @@ QString Sharing::safeName(const QString &name, const QString &fallback)
         out.chop(1);
     if (out.isEmpty())
         return fallback;
-    // CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9, with or without an extension: Windows won't make them.
+    // CON, PRN, AUX, NUL, COM1 to COM9, LPT1 to LPT9, with or without an extension: Windows won't make them. Round 17
+    // (m8): nor COM and LPT with a superscript 1, 2 or 3.
     const QString stem = out.section(QLatin1Char('.'), 0, 0).trimmed().toUpper();
     static const QStringList reserved{QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"), QStringLiteral("NUL"),
                                       QStringLiteral("CONIN$"), QStringLiteral("CONOUT$")};
-    const bool numbered = stem.size() == 4 && (stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT")))
-        && stem.at(3) >= QLatin1Char('1') && stem.at(3) <= QLatin1Char('9');
+    const auto digit = [](QChar d) { return (d >= QLatin1Char('1') && d <= QLatin1Char('9')) || d == QChar(0x00B9) || d == QChar(0x00B2) || d == QChar(0x00B3); };
+    const bool numbered = stem.size() == 4 && (stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT"))) && digit(stem.at(3));
     if (reserved.contains(stem) || numbered)
         out.prepend(QLatin1Char('_'));
     return out;
@@ -176,9 +188,9 @@ QString Sharing::kindOf(const QString &name)
     };
     if (in({"pdf"}))
         return QStringLiteral("PDF document");
-    if (in({"doc", "docx", "odt", "rtf", "txt", "md", "pages"}))
+    if (in({"doc", "docx", "docm", "odt", "rtf", "txt", "md", "pages", "ppt", "pptx", "pptm", "odp"}))
         return QStringLiteral("Document");
-    if (in({"xls", "xlsx", "ods", "csv"}))
+    if (in({"xls", "xlsx", "xlsm", "ods", "csv"}))
         return QStringLiteral("Spreadsheet");
     if (in({"jpg", "jpeg", "png", "gif", "webp", "heic", "bmp"}))
         return QStringLiteral("Picture");
@@ -195,7 +207,10 @@ QString Sharing::kindOf(const QString &name)
     if (in({"exe", "msi", "msix", "msixbundle", "appx", "appxbundle", "appinstaller", "msp", "bat", "cmd", "com", "scr", "pif", "cpl", "msc",
             "lnk", "url", "website", "js", "jse", "vbs", "vbe", "wsf", "wsh", "wsc", "hta", "ps1", "psm1", "psd1", "reg", "jar", "jnlp", "iso",
             "img", "vhd", "vhdx", "application", "gadget", "chm", "hlp", "inf", "ins", "isp", "sct", "scf", "shb", "settingcontent-ms",
-            "library-ms", "search-ms", "xll", "sh", "run", "py", "pl", "desktop", "deb", "rpm", "appimage", "flatpak", "flatpakref", "flatpakrepo"}))
+            "library-ms", "search-ms", "xll", "sh", "run", "py", "pl", "desktop", "deb", "rpm", "appimage", "flatpak", "flatpakref", "flatpakrepo",
+            // Round 17 (m8): a remote desktop to a stranger's server, click-once apps, troubleshooters, themes (which can
+            // leak the Windows sign-in), sandbox setups, cabinets, saved web pages and more Windows scripts.
+            "rdp", "appref-ms", "diagcab", "theme", "themepack", "desktopthemepack", "wsb", "cab", "mht", "mhtml", "ps1xml", "xbap"}))
         return QStringLiteral("Program");
     return QStringLiteral("File");
 }
@@ -223,21 +238,31 @@ QString Sharing::openWarning(const QString &name)
         .arg(name, ext);
 }
 
-void Sharing::markFromInternet(const QString &path)
+bool Sharing::markFromInternet(const QString &path)
 {
 #ifdef Q_OS_WIN
     // The Mark of the Web, as a browser leaves it: Windows' SmartScreen and its "Open File" warning then look at the
-    // file before it runs. A drive without streams (FAT32, exFAT) simply can't keep it.
+    // file before it runs. A drive without streams (FAT32, exFAT) can't keep it: then Huginn itself asks before a
+    // program or an Office file opens (unmarked).
     const std::wstring stream = QDir::toNativeSeparators(path).toStdWString() + L":Zone.Identifier";
     HANDLE h = CreateFileW(stream.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE)
-        return;
-    static const char zone[] = "[ZoneTransfer]\r\nZoneId=3\r\n";
-    DWORD wrote = 0;
-    WriteFile(h, zone, DWORD(sizeof(zone) - 1), &wrote, nullptr);
-    CloseHandle(h);
+    bool ok = h != INVALID_HANDLE_VALUE;
+    if (ok) {
+        static const char zone[] = "[ZoneTransfer]\r\nZoneId=3\r\n";
+        DWORD wrote = 0;
+        ok = WriteFile(h, zone, DWORD(sizeof(zone) - 1), &wrote, nullptr) && wrote == DWORD(sizeof(zone) - 1);
+        CloseHandle(h);
+    }
+    if (!ok) {
+        QSet<QString> &s = unmarkedPaths();
+        if (s.size() > 2000)
+            s.clear();
+        s.insert(QDir::cleanPath(path));
+    }
+    return ok;
 #else
     Q_UNUSED(path);
+    return true;
 #endif
 }
 
@@ -302,6 +327,13 @@ bool Sharing::selfTest()
     check(safeName(QStringLiteral("CON"), QStringLiteral("x")) == QLatin1String("_CON") && safeName(QStringLiteral("nul.txt"), QStringLiteral("x")) == QLatin1String("_nul.txt")
               && safeName(QStringLiteral("COM3"), QStringLiteral("x")) == QLatin1String("_COM3") && safeName(QStringLiteral("lpt9.log"), QStringLiteral("x")) == QLatin1String("_lpt9.log"),
           QStringLiteral("name: reserved"));
+    // Round 17 (m8): COM and LPT with a superscript digit are Windows' too; and more kinds that run things are programs.
+    check(safeName(QStringLiteral("COM") + QChar(0x00B2), QStringLiteral("x")).startsWith(QLatin1Char('_'))
+              && safeName(QStringLiteral("LPT") + QChar(0x00B9) + QStringLiteral(".txt"), QStringLiteral("x")).startsWith(QLatin1Char('_'))
+              && kindOf(QStringLiteral("work.rdp")) == QLatin1String("Program") && kindOf(QStringLiteral("dark.themepack")) == QLatin1String("Program")
+              && kindOf(QStringLiteral("page.mhtml")) == QLatin1String("Program") && kindOf(QStringLiteral("box.wsb")) == QLatin1String("Program")
+              && kindOf(QStringLiteral("deck.pptx")) == QLatin1String("Document"),
+          QStringLiteral("name: superscript reserved names, and more program kinds"));
     check(safeName(QStringLiteral("COM10"), QStringLiteral("x")) == QLatin1String("COM10") && safeName(QStringLiteral("Console"), QStringLiteral("x")) == QLatin1String("Console"),
           QStringLiteral("name: not reserved"));
     check(safeName(QStringLiteral("Ana & Bo?"), QStringLiteral("x")) == QLatin1String("Ana & Bo_"), QStringLiteral("name: characters"));
