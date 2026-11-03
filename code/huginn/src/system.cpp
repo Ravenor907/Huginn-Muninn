@@ -40,7 +40,6 @@
 #include <rhi/qrhi.h>
 #include <windows.h>
 #include <objbase.h>
-#include <shellapi.h>
 #include <shobjidl.h>
 #include <QColor>
 #include <QFont>
@@ -840,8 +839,9 @@ void showTouchKeyboard(bool show)
         dir = qEnvironmentVariable("CommonProgramFiles");
     if (dir.isEmpty())
         return;
-    const std::wstring exe = QDir::toNativeSeparators(dir + QStringLiteral("/microsoft shared/ink/TabTip.exe")).toStdWString();
-    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNOACTIVATE);
+    const QString exe = QDir::toNativeSeparators(dir + QStringLiteral("/microsoft shared/ink/TabTip.exe"));
+    if (!QFileInfo::exists(exe) || !QProcess::startDetached(exe, {}))
+        return;
     QTimer::singleShot(600, qApp, [] {
         if (!touchKeyboardUp())
             toggleTouchKeyboard();
