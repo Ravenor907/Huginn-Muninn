@@ -11,13 +11,17 @@ const PER_IP_DAILY = 60;
 // which only know APP_SECRET) share a pool of their own, so whoever pulls APP_SECRET out of an app can use up only
 // that pool, never the logins of installs with a token.
 const LEGACY_DAILY = 1000;
+// Round 15: the owner can end that pool once every app in use has a token. Set the Worker variable LEGACY_UNTIL to a
+// Unix time (seconds); from then on a login without a token is refused with "update_needed". Not set: never.
 const TOKEN_DAILY = 12000;
 // New registrations: per address and for everyone. A full day refuses new registrations, never logins.
 const REG_PER_IP_DAILY = 6;
 const REG_DAILY = 2000;
 // Every cap full: (12,000 + 1000) logins x 3 rows + 2000 registrations x 2 rows = 43,000 rows written a day, and as many
 // deleted the next day, under the free plan's 100,000.
-// Leading zero bits of the registration hash (about 260,000 SHA-256 tries on average, well under a second on a phone).
+// Leading zero bits of the registration hash (about 260,000 SHA-256 tries on average: about a tenth of a second on a
+// desktop, well under a second on a phone). A speed bump for mass registration, not a wall: the per-address and daily
+// registration caps are what hold.
 export const POW_BITS = 18;
 // A token is good for this long after it was issued (each login with it issues a new one).
 export const TOKEN_TTL = 7 * 86400;
@@ -278,12 +282,19 @@ async function handleRegister(request, env, nowSec) {
   return json(200, { tok: await makeToken(env, id, exp), exp });
 }
 
+// Logins without a token have ended (LEGACY_UNTIL set and passed).
+export function legacyOver(env, nowSec) {
+  const until = Number(env.LEGACY_UNTIL);
+  return env.LEGACY_UNTIL !== undefined && env.LEGACY_UNTIL !== "" && Number.isFinite(until) && nowSec >= until;
+}
+
 async function handleTurn(request, env, nowSec) {
   const body = await checkRequest(request, env, nowSec);
   if (body instanceof Response) return body;
   const { id, tok } = body;
   // With a token: it must be this Worker's, for this id, and not run out (else the app registers again).
   let kind = "legacy";
+  if (tok === undefined && legacyOver(env, nowSec)) return json(403, { error: "update_needed" });
   if (tok !== undefined) {
     const v = await checkToken(env, id, tok, nowSec);
     if (v !== "ok") return json(401, { error: v === "expired" ? "token_expired" : "bad_token" });

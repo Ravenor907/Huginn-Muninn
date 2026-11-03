@@ -325,6 +325,11 @@ private fun KidAddCards(app: Muninn, t: ManagedTv) {
             Text("Let ${a.add.n} talk with $child?", style = Type.big.copy(fontSize = 17.sp))
             Text("${app.chat.nameOf(a.from)} put their Kids' Device for ${a.add.n} on its list. It can talk with $child once you add it here too.",
                 style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            // A co-parent asking for a device another parent shared first: said as it is.
+            KidK14.sharedFirstBy(TvParent.sharedBy(a.add.k), a.from)?.let { first ->
+                Text("${app.chat.nameOf(first)} shared this device with you first; ${app.chat.nameOf(a.from)} says they're also its parent.",
+                    style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            }
             Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton("Add", kind = Kind.Accent) { TvParent.answerKidAdd(app, t.key, a.add.k, true) }
                 MButton("Not now") { TvParent.answerKidAdd(app, t.key, a.add.k, false) }
@@ -715,7 +720,7 @@ private fun Apps(app: Muninn, t: ManagedTv) {
     }
     if (sendingApp) io.github.ravenor907.muninn.screens.AppPicker(
         onCancel = { sendingApp = false },
-        onFile = { sendingApp = false; try { apkPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } },
+        onFile = { sendingApp = false; try { io.github.ravenor907.muninn.ui.Picking.launch(apkPicker, arrayOf("application/vnd.android.package-archive", "application/octet-stream")) } catch (e: Exception) { Ui.say("This phone has no file picker.", true) } },
     ) { a ->
         sendingApp = false
         val prep = app.net.preparing("", listOf(a.label))
@@ -746,7 +751,14 @@ private fun Permissions(app: Muninn, t: ManagedTv) {
             }
         }
     }
+    // Android won't let a call screen come up over another app without this one; said as it is.
+    if (t.off?.contains("overlay") == true) Note(overNote(kidDeviceKind(app, t).replaceFirstChar { it.lowercase() }))
 }
+
+/** The parent page's line while "Show over other apps" is off on the device. */
+internal fun overNote(kind: String): String =
+    "Calls can't come up over other apps on this $kind while Show over other apps is off. A call still rings and a short line " +
+        "says who is calling, but the kid has to open Muninn to answer."
 
 /** What Muninn takes on the device, and Clear history. */
 @Composable
@@ -951,12 +963,12 @@ private fun DailyHavamal(app: Muninn, t: ManagedTv) {
     val m = mine
     if (m == null) {
         MButton(if (importing) "Importing…" else "Import a translation", Modifier.fillMaxWidth().padding(vertical = 6.dp), enabled = !importing) {
-            try { pick.launch(arrayOf("text/plain")) } catch (_: Exception) { Ui.say("Can't open files here", true) }
+            try { io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("text/plain")) } catch (_: Exception) { Ui.say("Can't open files here", true) }
         }
     } else {
         InfoRow(Havamal.matchedLine(m.matched, m.of), "")
         MButton(if (importing) "Importing…" else "Import another", Modifier.fillMaxWidth().padding(vertical = 6.dp), enabled = !importing) {
-            try { pick.launch(arrayOf("text/plain")) } catch (_: Exception) { Ui.say("Can't open files here", true) }
+            try { io.github.ravenor907.muninn.ui.Picking.launch(pick, arrayOf("text/plain")) } catch (_: Exception) { Ui.say("Can't open files here", true) }
         }
         HoldToConfirm("Hold to remove", "Hold for 5 seconds to remove your translation", { HavParent.remove(app); Ui.say("Removed") },
             Modifier.fillMaxWidth().padding(top = 8.dp))

@@ -57,6 +57,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import io.github.ravenor907.muninn.net.Drafts
 import io.github.ravenor907.muninn.net.More
 import io.github.ravenor907.muninn.net.Photos
 import io.github.ravenor907.muninn.net.Videos
@@ -73,9 +74,11 @@ import java.io.File
  * The camera inside Muninn: a photo, or a video message of up to a minute ([video]). The front and back cameras
  * switch with one button. Nothing is sent until the person sees what they took and taps Send; Discard throws it away.
  * Pictures and videos are made in the app's own cache and deleted once sent or thrown away.
+ * [keep]: a chat's key in Drafts.camera, so a photo or video waiting for Send (and one being recorded, stopped and kept)
+ * outlives the lock coming up, a fold or a recreation, in memory only. "" keeps nothing.
  */
 @Composable
-fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArray, Int) -> Unit, close: () -> Unit) {
+fun CameraScreen(video: Boolean, keep: String = "", onPhoto: (ByteArray) -> Unit, onVideo: (ByteArray, Int) -> Unit, close: () -> Unit) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     fun granted(p: String) = ContextCompat.checkSelfPermission(context, p) == PackageManager.PERMISSION_GRANTED
@@ -89,9 +92,17 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
     var recording by remember { mutableStateOf<Recording?>(null) }
     var startedAt by remember { mutableLongStateOf(0L) }
     var elapsed by remember { mutableLongStateOf(0L) }
-    // What was taken, waiting for Send or Discard.
-    var photo by remember { mutableStateOf<ByteArray?>(null) }
-    var clip by remember { mutableStateOf<Pair<ByteArray, Int>?>(null) }
+    // What was taken, waiting for Send or Discard (and kept under [keep] while this chat's camera is open).
+    val kept = remember { if (keep.isEmpty()) null else Drafts.camera[keep] }
+    var photo by remember { mutableStateOf(kept?.photo) }
+    var clip by remember { mutableStateOf(kept?.let { k -> k.clip?.let { c -> c to k.ms } }) }
+    fun keepTaken(p: ByteArray?, c: Pair<ByteArray, Int>?) {
+        if (keep.isEmpty()) return
+        Drafts.camera[keep]?.let { Drafts.camera[keep] = it.with(p, c?.first, c?.second ?: 0) }
+    }
+    androidx.compose.runtime.SideEffect { keepTaken(photo, clip) }
+    // The file being recorded: kept when the screen goes mid-recording, so the stopped video can still be kept.
+    val recFile = remember { arrayOfNulls<File>(1) }
     var busy by remember { mutableStateOf(false) }
     val dir = remember { File(context.cacheDir, "camera").also { it.mkdirs() } }
     val imageCapture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
@@ -122,9 +133,11 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
         onDispose { dm?.unregisterDisplayListener(l) }
     }
     DisposableEffect(Unit) { onDispose {
+        val busyFile = if (recording != null) recFile[0] else null
         recording?.stop()
         try { ProcessCameraProvider.getInstance(context).get().unbindAll() } catch (_: Exception) {}
-        dir.listFiles()?.forEach { it.delete() }
+        // The video still being finished is left for its own callback, which keeps it and deletes the file.
+        dir.listFiles()?.forEach { if (it != busyFile) it.delete() }
     } }
     // (Re)binds the camera for the chosen side: the preview plus a photo or a video use, never both (some phones can't).
     LaunchedEffect(front, allowed, photo, clip) {
@@ -164,6 +177,7 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
         if (!granted(Manifest.permission.RECORD_AUDIO)) { ask.launch(arrayOf(Manifest.permission.RECORD_AUDIO)); return }
         turnNow()
         val f = File(dir, "video-${System.nanoTime()}.mp4")
+        recFile[0] = f
         // Small enough to go through the relays like a photo: about 2 MB, a minute at most.
         val opts = FileOutputOptions.Builder(f).setFileSizeLimit(Photos.INTERNET_PIECES.toLong() * Photos.PIECE - 64 * 1024)
             .setDurationLimitMillis(More.VIDEO_MAX_MS.toLong()).build()
@@ -176,7 +190,7 @@ fun CameraScreen(video: Boolean, onPhoto: (ByteArray) -> Unit, onVideo: (ByteArr
                     ev.error == VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED
                 val bytes = if (ok && f.exists()) f.readBytes() else null
                 f.delete()
-                if (bytes != null && More.isVideo(bytes) && ms >= 500) clip = bytes to ms
+                if (bytes != null && More.isVideo(bytes) && ms >= 500) { clip = bytes to ms; keepTaken(null, bytes to ms) }
                 else Ui.say("That was too short to send. Tap to start, tap again to stop.", true)
             }
         }

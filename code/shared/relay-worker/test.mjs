@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import assert from "node:assert/strict";
-import worker, { handle, addressGroup, RelayLimits, SQL, POW_BITS, TOKEN_TTL, powOk, makeToken } from "./worker.js";
+import worker, { handle, addressGroup, RelayLimits, SQL, POW_BITS, TOKEN_TTL, powOk, makeToken, legacyOver } from "./worker.js";
 
 const SECRET = "test-app-secret";
 const ID = "a".repeat(64);
@@ -486,6 +486,18 @@ await test("a stale time says the Worker's time", async () => {
   // Corrected by that offset, the next try works.
   const t = NOW - 400 + (r.data.now - (NOW - 400));
   assert.equal((await call(env(), { id: ID, t, sig: sign(ID, t) })).status, 200);
+});
+
+await test("LEGACY_UNTIL ends logins without a token, never those with one", async () => {
+  assert.equal(legacyOver({}, NOW), false);
+  assert.equal(legacyOver({ LEGACY_UNTIL: "" }, NOW), false);
+  assert.equal(legacyOver({ LEGACY_UNTIL: String(NOW + 1) }, NOW), false);
+  const e = { ...env(), LEGACY_UNTIL: String(NOW) };
+  const r = await call(e, { id: ID, t: NOW, sig: sign(ID, NOW) });
+  assert.equal(r.status, 403);
+  assert.equal(r.data.error, "update_needed");
+  const tok = (await register(e)).data.tok;
+  assert.equal((await call(e, { id: ID, t: NOW, sig: sign(ID, NOW), tok })).status, 200);
 });
 
 console.log(passed + " tests passed");

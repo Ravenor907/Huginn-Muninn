@@ -400,7 +400,9 @@ class MainActivity : ComponentActivity() {
         // opening Muninn goes straight back to the call, where Answer or Hang up is.
         if (io.github.ravenor907.muninn.tv.TvCallFocus.sendBack()) {
             moveTaskToBack(true)
-        } else if (io.github.ravenor907.muninn.tv.KidMode.saved(this) && io.github.ravenor907.muninn.tv.KidCallBack.live(io.github.ravenor907.muninn.net.call.CallManager.call.value?.phase)) {
+        } else if (io.github.ravenor907.muninn.tv.KidMode.saved(this) && io.github.ravenor907.muninn.net.call.CallManager.call.value.let { c ->
+                io.github.ravenor907.muninn.tv.KidCallBack.jumpBack(io.github.ravenor907.muninn.tv.KidCallBack.live(c?.phase),
+                    io.github.ravenor907.muninn.tv.KidMode.isTv(this), c?.callId.orEmpty(), io.github.ravenor907.muninn.tv.KidCallBack.barHidden) }) {
             try { io.github.ravenor907.muninn.screens.CallActivity.show(this) } catch (_: Exception) {}
         }
         // "Check for updates automatically" off: nothing asks GitHub here (Check now still does). A Kids' TV follows its parent (k7).

@@ -94,7 +94,7 @@ struct Nudge {
     QString kind = QStringLiteral("msg");
     bool known = true;
 };
-// Round 14: a nudge from the nudge key names nobody: "from" goes, only the group's name ("chat") stays.
+// A nudge from the nudge key names nobody: "from", "chat" and "kind" go (round 15, protocol.md 23.3).
 Nudge anonymous(const Nudge &n);
 // A nudge older than this by its own ts is a replay or long gone: dropped.
 constexpr qint64 kNudgeMaxAgeMs = 2LL * 86400000;
@@ -127,14 +127,13 @@ QString nudgeText(int mode, const QString &kind, int count);
 bool selfTest(const QString &vectorsPath);
 }
 
-// Round 14: what a locked device does with nudges that name nobody (from the nudge key, so maybe not a contact). Each
-// new group name gets its own notification, at most kMaxKeys per lock, then they fold into one naming nothing; they
-// sound at most once per kAlertEveryMs in all. A contact's nudge (known) sounds as before.
+// What a locked device does with nudges from the nudge key (maybe not a contact). Round 15 (protocol.md 23.3): nothing
+// the sender chose is shown; they all share one "Group message" notification that counts up, and sound at most once
+// per kAlertEveryMs in all. A contact's nudge (known) keeps its names and sounds as before.
 class LockedNudgeLimit
 {
 public:
     static constexpr qint64 kAlertEveryMs = 120000;
-    static constexpr int kMaxKeys = 3;
     struct Take {
         RingWire::Nudge n;   // as it will read
         QString key;         // its notification
@@ -144,7 +143,6 @@ public:
     void clear();
 
 private:
-    QSet<QString> m_keys;
     qint64 m_lastAlert = -kAlertEveryMs;
 };
 
@@ -185,6 +183,12 @@ public:
     // Chat::unwrap with copies of the keys: my chat key and the day keys (kept()). Safe on any thread: it uses only what
     // it is given. ok only when it opened (or the content wasn't sealed) and there is something in it.
     static QByteArray openEnvelope(const QString &content, const ChatCrypto::KeyPair &me, const QList<Day> &days, qint64 nowS, bool *ok);
+    // A save the saving thread gave up on: written again from memory (nothing when never read).
+    void saveAgain() const
+    {
+        if (m_loaded)
+            save();
+    }
 
 private:
     void load();
@@ -206,6 +210,12 @@ public:
     // Their day key to wrap with now, or empty (none yet, or older than a week: then the wrapping is the plain one).
     QString wrapFor(const QString &key, qint64 nowS);
     void forget(const QString &key);
+    // A save the saving thread gave up on: written again from memory (nothing when never read).
+    void saveAgain() const
+    {
+        if (m_loaded)
+            save();
+    }
 
 private:
     void load();

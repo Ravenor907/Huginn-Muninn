@@ -92,10 +92,15 @@ object PowerLogic {
         val talking: Boolean = false,
         /** Extreme battery saver: nothing in the background, Muninn only fetches while open (see [manual]). */
         val extreme: Boolean = false,
+        /**
+         * Any Kids' Device (phone, tablet or TV). Quiet hours, Android's Do Not Disturb and Extreme saver never slow it
+         * down: parents' calls must always ring, so it keeps its normal "Check for messages" cadence.
+         */
+        val kidDevice: Boolean = false,
     )
 
     /** Extreme battery saver is in charge: nothing runs in the background (a Kids' TV always listens). */
-    fun manual(i: Inputs): Boolean = i.extreme && !i.kidsTv
+    fun manual(i: Inputs): Boolean = i.extreme && !i.kidsTv && !i.kidDevice
 
     /** What Extreme saver turns off (looking close by in the background, link previews), kept to turn back on after. */
     fun extremeSnapshot(closeBy: Boolean, previews: Boolean): String = (if (closeBy) "c" else "") + (if (previews) "p" else "")
@@ -141,7 +146,7 @@ object PowerLogic {
     fun effective(i: Inputs): Check {
         if (manual(i)) return Check.OPEN
         val q = i.quiet
-        if (q == null || quietHeld(i)) return i.check
+        if (q == null || i.kidDevice || quietHeld(i)) return i.check
         return if (q.ordinal > i.check.ordinal) q else i.check
     }
 
@@ -297,7 +302,7 @@ object PowerLogic {
      * ("Only when open"), as they would have with the quiet hours mode itself.
      */
     fun alert(i: Inputs, fromRightAway: Boolean): Alert = when {
-        fromRightAway || i.kidsTv || !quietHeld(i) -> Alert.LOUD
+        fromRightAway || i.kidsTv || i.kidDevice || !quietHeld(i) -> Alert.LOUD
         i.quiet == Check.OPEN -> Alert.NONE
         else -> Alert.QUIET
     }

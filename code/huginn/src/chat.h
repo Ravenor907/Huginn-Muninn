@@ -90,6 +90,9 @@ public:
     Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent = nullptr);
 
     bool ready() const { return m_ready; }
+    // A file another part keeps (Link's link-replay.json, ...): when the saving thread gives up on it, again() writes it
+    // from memory (round 15, N2).
+    void onSaveLost(const QString &name, std::function<void()> again) { m_resavers.insert(name, std::move(again)); }
     // For the self-tests: one of the vault's files as it is on disk now (what a restart reads back).
     QByteArray savedFile(const QString &name) const;
     QVariantList nearby() const { return m_nearby; }
@@ -672,6 +675,7 @@ private:
     // A save didn't go through: said on screen (at most once a minute) and tried again in a few seconds, unless the
     // vault holds that file back (it couldn't be read this run).
     void saveDidntGo(const QString &file, const std::function<void()> &again);
+    QHash<QString, std::function<void()>> m_resavers;   // onSaveLost: files other parts keep, written again from memory
     // cap m1
     int receiveM1(const QString &room, const QString &fromKey, const QString &name, const QString &mailbox, const QString &sentId, const QJsonObject &p);
     void queueMx(const QString &key, const QByteArray &plain);
@@ -823,6 +827,7 @@ private:
     bool m_openedCap = false, m_openedHasCaps = false;
     bool m_openedReplaceCaps = false;                   // it was an empty receipt: its caps replace (noteCaps)
     int m_openedDays = 0;                               // its "days" (cap d1), 0 when none
+    qint64 m_openedPv = 0;                              // its "pv" (cap p2), 0 when none
     QStringList m_openedCaps;
     bool m_openedBound = false;                         // it came sealed with its clear fields (cap s1)
     QString m_proofFp, m_proof;                         // cap s1: my chat key's signature over my certificate (made once)

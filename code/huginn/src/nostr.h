@@ -59,8 +59,9 @@ public:
     // and relays that ask get a sign-in as each.
     std::function<QStringList()> ringMailboxes;
     std::function<QList<QByteArray>()> ringSecrets;
-    // Every event for the ring mailbox (its content): never kept, never handed to onEnvelope.
-    std::function<void(const QString &content)> onRing;
+    // Every event for the ring mailbox (its content): never kept, never handed to onEnvelope. live: it came after the
+    // relay's end of stored events on that request, so it was sent just now (not kept on the relay).
+    std::function<void(const QString &content, bool live)> onRing;
     // The events already taken are kept in the vault (main.cpp): keepSeen saves the list, restoreSeen
     // reads it back when the vault opens (with what came while it was locked). keepSeen returns whether the list was written.
     std::function<bool(const QByteArray &stored)> keepSeen;
@@ -154,6 +155,7 @@ private:
         bool opened = false;
         bool tried = false;    // the relay thread tried to open it (and couldn't, when !opened)
         bool ring = false;     // for the ring mailbox (cap b1): onRing, never onEnvelope
+        bool live = false;     // a ring that came after its request's EOSE (sent now, not kept on the relay)
         int gen = 0;           // which inbox request it came on
     };
     struct Batch {

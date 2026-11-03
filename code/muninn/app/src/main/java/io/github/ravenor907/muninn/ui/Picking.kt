@@ -16,7 +16,8 @@ object Picking {
     /** Opens [launcher] as a picker Muninn asked for. */
     fun <I> launch(launcher: ActivityResultLauncher<I>, input: I) {
         since = android.os.SystemClock.elapsedRealtime().coerceAtLeast(1L)
-        launcher.launch(input)
+        // No picker on this device (or it wouldn't open): no grace is left behind for the next trip away.
+        try { launcher.launch(input) } catch (e: Exception) { since = 0L; throw e }
     }
 
     /** The lock time to use for an absence that began at [awaySince]: at least [GRACE] when a picker opened just before. */

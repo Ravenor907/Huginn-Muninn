@@ -30,9 +30,15 @@ QString nestedCopy();
 // Windows: the data folder is inside OneDrive. Its files are kept on this computer from now on (pinned), and the
 // first time for each folder this returns what to say on screen (empty otherwise).
 QString syncedWarning();
-// Windows: the data folder is made readable and writable by this Windows account (and the system) only, once per
-// folder. A drive without permissions (FAT32, exFAT) can't: noted in crash.log.
-void makePrivate();
+// Windows: the data folder is made readable and writable by this Windows account (and the system and administrators)
+// only, once per folder. Never on a drive that moves between computers (USB, a memory card, the network) or a folder
+// another account owns, so nobody is ever locked out of their own chats; a drive without permissions (FAT32, exFAT)
+// can't. Then it returns, until openWarned() is called, what to say to nudge toward a lock (empty otherwise).
+QString makePrivate();
+void openWarned();
+// What to say when root can't be written: a full disk, a write-protected drive, a folder private to another
+// Windows account (or another computer's), or anything else. err: Windows' error (0 when not known).
+QString cantWriteText(const QString &root, unsigned long err, bool full);
 // The self-tests and the screenshot tour: a throwaway data folder in the temp folder, emptied first.
 void isolate();
 // A Huginn from before the data folder (it locks its AppData folder) is still open after waiting up to ms: false.

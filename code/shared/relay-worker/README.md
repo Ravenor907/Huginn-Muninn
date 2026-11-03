@@ -102,6 +102,9 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
   work on the device, at most 6 new installs a day per address and 2000 for everyone) and gets a token that each login
   renews. Logins with a token share a cap of 12,000 a day; logins without one (older apps, or anyone who pulled
   `APP_SECRET` out of an app) share 1000 a day of their own, so they can never use up the others.
+  Optional, for later: once nobody uses an app from before tokens any more, add a Worker variable (not a secret) named
+  `LEGACY_UNTIL` holding a Unix time in seconds. From then on logins without a token are refused, so that pool can't
+  be used up at all. Leave it out to keep older apps' calls working.
   An IPv6 address counts by its /48, the most one home or phone line is usually given, so one customer can't
   get around the cap by moving between their own addresses. The day resets at midnight UTC. When a limit is hit the Worker
   answers 429.

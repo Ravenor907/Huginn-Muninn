@@ -136,7 +136,8 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
                     }
                 } else {
                     Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
-                        keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+                        keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt() })
                 }
                 when {
                     waiting -> Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
@@ -451,7 +452,8 @@ fun ConfirmLock(app: Muninn, what: String, modifier: Modifier = Modifier, onCanc
     }
     else Column(modifier.imePadding().verticalScroll(androidx.compose.foundation.rememberScrollState()), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
         top()
-        Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+        Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
+            onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt(pw) })
         MButton(if (busy) "Checking…" else "Continue", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt(pw) }
         cancel()
     }

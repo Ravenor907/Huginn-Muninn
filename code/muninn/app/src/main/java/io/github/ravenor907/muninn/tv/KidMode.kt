@@ -477,6 +477,8 @@ object KidTv {
                 // It also only adds people and parents: taking someone off needs a parent app with k11.
                 val cfg = try { KidRules.keepK11(TvRules.parse(new), s.cfg) } catch (e: Exception) { return false }
                 KidMode.markPaired(app)
+                // A parent's settings reached this device: Muninn runs normally, so the crash count starts over (SafeStart).
+                SafeStart.healthy(app)
                 // A parent signed it at this time: a trusted time for quiet times (an older one, resent late, moves nothing).
                 heardTime(cfg.ts)
                 // Parents this config takes off: their phones stop looking after the TV (sent while they're still contacts).
@@ -511,6 +513,7 @@ object KidTv {
                 // k2: a parent's "Update TV". Only from a parent; the answer says which Muninn the TV runs now.
                 val cur = s.cfg ?: return false
                 if (fromKey !in s.parents) return false
+                SafeStart.healthy(app)
                 TvUpdate.checkNow(app)
                 answer(app, listOf(fromKey), cur.v, cur.raw)
                 true
@@ -519,6 +522,7 @@ object KidTv {
                 // u1 (7.17): a parent's Update now, from anywhere. Only from a current parent; they hear each step.
                 if (s.cfg != null && fromKey !in s.parents) { tellRemoved(app, fromKey); return false }
                 if (!TvUpd.fromParent(fromKey, s.parents, s.cfg != null) || !TvUpd.isNow(o)) return false
+                SafeStart.healthy(app)
                 TvUpdate.remoteNow(app, fromKey)
                 true
             }

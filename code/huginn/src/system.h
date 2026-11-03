@@ -50,6 +50,10 @@ class System : public QObject
     Q_PROPERTY(bool batterySaving READ batterySaving NOTIFY powerChanged)
     // No key, mouse, touch or controller input for 30 seconds.
     Q_PROPERTY(bool inputIdle READ inputIdle NOTIFY inputIdleChanged)
+    // The on-screen keyboard can be opened now (showSteamKeyboard), and it covers the lower half of the window when it
+    // is up. Both follow the last input: in game mode always; elsewhere only while the controller or touch is in use.
+    Q_PROPERTY(bool keyboardAvailable READ keyboardAvailable NOTIFY keyboardChanged)
+    Q_PROPERTY(bool keyboardCovers READ keyboardCovers NOTIFY keyboardChanged)
 
 public:
     System(Settings *settings, const QString &tourDir, bool windowed, QObject *parent = nullptr);
@@ -74,6 +78,9 @@ public:
     static bool handheldRule(bool knownModel, bool smallScreen, bool controller, bool gameMode);
     // --privacy-selftest: the model table, the two-of-three rule and a laptop with a pad that must not count.
     static bool handheldSelfTest();
+    // The on-screen keyboard can be opened (keyboardAvailable), from what's known: Handheld mode, the tour, game mode,
+    // the controller or touch in use, Windows, Steam there to show its keyboard.
+    static bool keyboardRule(bool gameLike, bool tour, bool gameMode, bool padOrTouch, bool windows, bool steam);
     // main(): whether a controller was there at start (the last fact Automatic needs).
     void noteControllerAtStart(bool connected);
     bool handheld() const { return m_handheld; }
@@ -112,15 +119,18 @@ public:
     // The screenshot tour only: draw Handheld mode for a stop (the tour otherwise always draws the desktop layout).
     Q_INVOKABLE void setTourHandheld(bool on);
     // The on-screen keyboard in game mode and Handheld mode: Steam's where Steam is there (started from it, or running
-    // beside Huginn on Linux), else Windows' touch keyboard on Windows. Elsewhere it does nothing.
+    // beside Huginn on Linux), else Windows' touch keyboard on Windows. Elsewhere it does nothing. Outside game mode it
+    // opens only for the controller or touch (keyboardAvailable), never over a mouse or a real keyboard.
     Q_INVOKABLE void showSteamKeyboard();
     // That keyboard covers the lower half of the window: prompts sit at the top while it's up, and message boxes are
     // written in the prompt at the top.
-    Q_INVOKABLE bool keyboardCovers() const;
+    bool keyboardCovers() const;
     // showSteamKeyboard() opens something here (the "Keyboard" button chip shows only then).
-    Q_INVOKABLE bool keyboardAvailable() const;
-    // Main.qml: the controller is what's being used (not a keyboard). On Windows, the touch keyboard is only for it.
-    Q_INVOKABLE void setControllerInUse(bool on) { m_controllerInUse = on; }
+    bool keyboardAvailable() const;
+    // Main.qml: the controller is what's being used (padInUse). A mouse or a keyboard's keys turn it off there.
+    Q_INVOKABLE void setControllerInUse(bool on);
+    // Main.qml: a real keyboard's key (not the controller's stand-ins from the on-screen keyboard): touch no longer counts.
+    Q_INVOKABLE void noteKeyboardUsed();
     Q_INVOKABLE void hideSteamKeyboard();
     // The computer's own file picker, several at once. Empty when nothing was picked.
     Q_INVOKABLE QStringList pickFiles() const;
@@ -158,6 +168,7 @@ Q_SIGNALS:
     void handheldChanged();
     void powerChanged();
     void inputIdleChanged();
+    void keyboardChanged();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -196,11 +207,17 @@ private:
     // Steam is there to show its keyboard: game mode, started from Steam, or (Linux, outside game mode) its client
     // running beside Huginn, looked for now and then without waiting (checkSteam).
     bool steamKeyboard() const;
-    void checkSteam() const;
-    mutable bool m_steamRunning = false;
+    void checkSteam();
+    // The controller or touch is what's in use now (the on-screen keyboard is for them only, outside game mode).
+    bool padOrTouch() const { return m_controllerInUse || m_touchInUse; }
+    void setTouchInUse(bool on);
+    void setSteamRunning(bool on);
+    bool m_steamRunning = false;
     bool m_controllerInUse = false;
-    mutable bool m_steamChecking = false;
-    mutable qint64 m_steamCheckedAt = 0;
+    bool m_touchInUse = false;
+    bool m_steamChecking = false;
+    qint64 m_steamCheckedAt = 0;
+    QTimer m_steamPoll;   // Linux: Steam looked for again every 10 seconds while the controller or touch is in use
     void watchScreen(QScreen *screen);
     void refit();
     void noteGraphics(const QString &what, bool software, const QString &loop);

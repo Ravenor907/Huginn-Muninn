@@ -570,7 +570,7 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, more: Boolean, fromLis
             hold = true, holdExtra = true, spoken = holdSpoken("leave ${s.name}"),
             extra = "Leave, keep history", onExtra = {
                 if (io.github.ravenor907.muninn.net.call.RoomManager.room.value?.g == g) io.github.ravenor907.muninn.net.call.RoomManager.leave()
-                app.chat.groups.leave(g)?.let { Ui.say(it, true) } ?: Ui.say("You left ${s.name}.")
+                app.chat.leaveGroup(g)?.let { Ui.say(it, true) } ?: Ui.say("You left ${s.name}.")
             },
             onConfirm = {
                 if (io.github.ravenor907.muninn.net.call.RoomManager.room.value?.g == g) io.github.ravenor907.muninn.net.call.RoomManager.leave()
@@ -623,6 +623,10 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                     Field(nick, { nick = it.take(40) }, "Nickname (${contact.name})", Modifier.padding(top = 8.dp))
                 }
                 Field(note, { note = it.take(500) }, "Note, only you see it", Modifier.padding(vertical = 8.dp), single = false)
+                // Cap p2 (protocol.md 22.4): asks them for their current picture, in case one never arrived.
+                NavRow("Refresh picture", "Ask for their current one", icon = "refresh") {
+                    Ui.say(if (app.chat.profile?.refresh(key) == true) "Asked $name for their picture." else "Their app can't be asked for it yet.")
+                }
             }
 
             // Who they are to you (Family, Work, Folk) decides how long messages stay, so it's said that way.

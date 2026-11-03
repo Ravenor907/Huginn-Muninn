@@ -336,7 +336,9 @@ int main(int argc, char *argv[])
         const bool e = PerfCheck::selfTest();
         // Handheld mode's detection: the known models, the two-of-three rule, a laptop with a pad.
         const bool f = System::handheldSelfTest();
-        return selfTested(a && b && c && d && e && f);
+        // One controller seen as two devices taps once (round 15, R9).
+        const bool g = TapTwins::selfTest();
+        return selfTested(a && b && c && d && e && f && g);
     }
 
     // Said on screen when Huginn can't keep its data where it is (Windows: a folder it can't write, like Program
@@ -403,12 +405,14 @@ int main(int argc, char *argv[])
     }
     // Windows, first start of this version: Huginn's AppData folders and registry settings move into the data folder.
     // Nothing starts on an empty folder while the old data is still elsewhere.
+    QString openFolderNote;
     if (!quiet) {
         QString why;
         if (!Portable::moveOldData(&why))
             return stopWith(why);
         // Windows: the data folder is this account's only, and one inside OneDrive is kept on this computer and said once.
-        Portable::makePrivate();
+        // One that can't be private is said once too, once the vault shows whether a lock already seals it.
+        openFolderNote = Portable::makePrivate();
         const QString synced = Portable::syncedWarning();
         if (!synced.isEmpty())
             QMessageBox::warning(nullptr, QStringLiteral("Huginn"), synced);
@@ -463,6 +467,11 @@ int main(int argc, char *argv[])
         return QJsonDocument(o).toJson(QJsonDocument::Compact);
     }, &app);
     auto *vault = new Vault(&app);
+    // Windows: a data folder other accounts can read, and no lock sealing it: nudged toward a lock once.
+    if (!openFolderNote.isEmpty() && vault->exists() && !vault->hasLock()) {
+        QMessageBox::information(nullptr, QStringLiteral("Huginn"), openFolderNote);
+        Portable::openWarned();
+    }
     if (quiet && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // the throwaway profile only: no lock to draw
     auto *updater = new Updater(settings, &app);
@@ -566,11 +575,11 @@ int main(int argc, char *argv[])
     // Caps n1 and n2: a nudge while the vault is locked says a real message came (lockedNudge, set below once the
     // message sound is made). Unlocked, a nudge is ignored: the message itself notifies.
     auto lockedNudge = std::make_shared<std::function<void(const RingWire::Nudge &)>>();
-    nostr->onRing = [ringKey, nudgeKey, calls, vault, lockedNudge](const QString &content) {
+    nostr->onRing = [ringKey, nudgeKey, calls, vault, lockedNudge](const QString &content, bool live) {
         QString call;
         qint64 ts = 0;
         if (ringKey->open(content, &call, &ts)) {
-            calls->ringLocked(call, ts);
+            calls->ringLocked(call, ts, live);
             return;
         }
         // Round 14: the ring key only contacts hold, so its nudge may name them; the nudge key may be any group peer's,
@@ -647,6 +656,8 @@ int main(int argc, char *argv[])
             profile->setMyPicture(img);
     };
     QObject::connect(linked, &Link::picturesChanged, profile, [linked, profile] { profile->setLinkedPictures(linked->contactPictures()); });
+    // Cap p2: Refresh on a person's page while the phone is the account here: the phone asks them.
+    profile->askPhone = [linked](const QString &key) { return linked->askPicture(key); };
     // The phone lists this computer by its device name (Settings › Linked devices), kept up to date by "ping".
     linked->deviceName = [settings] { return settings->deviceName(); };
     QObject::connect(profile, &Profile::changed, linked, [linked] { linked->sendMe(false); });

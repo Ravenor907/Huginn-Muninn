@@ -20,6 +20,7 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <aclapi.h>
+#include <winioctl.h>
 #include <sddl.h>
 #include <cstdlib>
 #include <string>
@@ -198,6 +199,148 @@ QString localDir()
     return !s_root.isEmpty() ? s_root : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
 }
 
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+namespace
+{
+// This process's Windows account, as a SID string ("" when it can't be read).
+std::wstring mySid()
+{
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return {};
+    DWORD n = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &n);
+    std::vector<BYTE> buf(n ? n : 1);
+    const bool got = n > 0 && GetTokenInformation(token, TokenUser, buf.data(), n, &n);
+    CloseHandle(token);
+    if (!got)
+        return {};
+    LPWSTR sid = nullptr;
+    if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER *>(buf.data())->User.Sid, &sid))
+        return {};
+    std::wstring out(sid);
+    LocalFree(sid);
+    return out;
+}
+
+// Who owns a folder: the SID string, and the account's name when this computer knows it ("" when it doesn't, as for an
+// account of another computer or of an earlier Windows). False when the owner can't be read.
+bool ownerOf(const QString &dir, std::wstring *sidText, QString *name)
+{
+    PSID owner = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    std::wstring path = QDir::toNativeSeparators(dir).toStdWString();
+    if (GetNamedSecurityInfoW(path.data(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &sd) != ERROR_SUCCESS
+        || !owner) {
+        if (sd)
+            LocalFree(sd);
+        return false;
+    }
+    LPWSTR text = nullptr;
+    if (ConvertSidToStringSidW(owner, &text)) {
+        *sidText = text;
+        LocalFree(text);
+    }
+    wchar_t user[256], domain[256];
+    DWORD un = 256, dn = 256;
+    SID_NAME_USE use;
+    if (LookupAccountSidW(nullptr, owner, user, &un, domain, &dn, &use))
+        *name = QString::fromWCharArray(user, int(un));
+    LocalFree(sd);
+    return !sidText->empty();
+}
+
+// Writes a little more than one byte into dir and flushes it (a full disk shows here too). On failure *err is
+// Windows' own error, which tells a full disk from a folder this account may not open.
+bool probeWrite(const QString &dir, DWORD *err)
+{
+    *err = 0;
+    const std::wstring folder = QDir::toNativeSeparators(dir).toStdWString();
+    if (!QDir().mkpath(dir)) {
+        // Asked again directly, for the reason.
+        if (!CreateDirectoryW(folder.c_str(), nullptr)) {
+            *err = GetLastError();
+            if (*err != ERROR_ALREADY_EXISTS)
+                return false;
+        }
+        *err = 0;
+    }
+    const std::wstring file = folder + L"\\.huginn-write-test";
+    HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        *err = GetLastError();
+        return false;
+    }
+    std::vector<char> block(4096, 'x');
+    DWORD wrote = 0;
+    bool ok = WriteFile(h, block.data(), DWORD(block.size()), &wrote, nullptr) && wrote == block.size();
+    if (ok)
+        ok = FlushFileBuffers(h) != 0;
+    if (!ok)
+        *err = GetLastError();
+    CloseHandle(h);
+    return ok;
+}
+}
+#endif
+
+// What to say when the data folder can't be written. err: Windows' error (0 elsewhere or when not known); full:
+// the disk has less than 1 MB free.
+QString cantWriteText(const QString &root, unsigned long err, bool full)
+{
+    const QString where = QDir::toNativeSeparators(root);
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    const QString folder = QDir::toNativeSeparators(QFileInfo(root).absolutePath());
+    const bool diskFull = full || err == ERROR_DISK_FULL || err == ERROR_HANDLE_DISK_FULL;
+    if (diskFull)
+        return QStringLiteral("The disk Huginn's folder is on (%1) is full, so Huginn can't save anything. Free up some space on it, then open "
+                              "Huginn again.")
+            .arg(folder);
+    if (err == ERROR_WRITE_PROTECT)
+        return QStringLiteral("Huginn's folder (%1) is on a drive that is write-protected, so Huginn can't save anything. Turn off the "
+                              "drive's write protection, or move the Huginn folder to a folder of your own, like C:\\Users\\<you>\\Huginn, and "
+                              "open it again.")
+            .arg(folder);
+    if (err == ERROR_ACCESS_DENIED) {
+        // The data folder is private to the account that set it up (makePrivate): whose is it?
+        std::wstring sid;
+        QString name;
+        const bool known = ownerOf(root, &sid, &name);
+        const std::wstring me = mySid();
+        const QString recover = QStringLiteral("If these chats are yours from another computer or from before Windows was installed again, "
+                                               "open the \"data\" folder in File Explorer and choose Continue when it asks for permission "
+                                               "(it needs an administrator's OK), then open Huginn again.");
+        if (known && !me.empty() && sid != me && !name.isEmpty())
+            return QStringLiteral("Huginn's data folder (%1) belongs to the Windows account \"%2\" on this computer, and only that account "
+                                  "can open it. Sign in as %2 to use these chats, or give this account its own copy of Huginn: unzip "
+                                  "it into a folder of your own, like C:\\Users\\<you>\\Huginn.")
+                .arg(where, name);
+        if (known && !me.empty() && sid != me)
+            return QStringLiteral("Huginn's data folder (%1) was set up by a Windows account this computer doesn't know: on another "
+                                  "computer, or before Windows was installed again. Only that account can open it.\n\n%2")
+                .arg(where, recover);
+        return QStringLiteral("Windows won't let this account into Huginn's data folder (%1). It's private to the Windows account that "
+                              "set it up. If that's another account on this computer, sign in to it, or give this account its own "
+                              "copy of Huginn in a folder of its own.\n\n%2")
+            .arg(where, recover);
+    }
+    if (!s_root.isEmpty())
+        return QStringLiteral("Huginn can't save anything in its folder (%1)%2. Check that the drive is still connected and isn't "
+                              "read-only, or move the Huginn folder to a folder of your own that isn't synced to the cloud, like "
+                              "C:\\Users\\<you>\\Huginn, and open it again.")
+            .arg(folder, err ? QStringLiteral(" (Windows error %1)").arg(err) : QString());
+#else
+    Q_UNUSED(err);
+#endif
+    if (full)
+        return QStringLiteral("The disk Huginn's data folder is on (%1) is full, so Huginn can't save anything. Free up some space, then "
+                              "open Huginn again.")
+            .arg(where);
+    return QStringLiteral("Huginn can't save in its data folder (%1). Check the folder's permissions and that the disk isn't read-only or "
+                          "full, then open Huginn again.")
+        .arg(where);
+}
+
 QString folderProblem()
 {
     if (!s_problem.isEmpty())
@@ -206,13 +349,6 @@ QString folderProblem()
     const QString root = !s_root.isEmpty() ? s_root : dataDir();
     if (root.isEmpty())
         return {};
-    const QString cantSave = !s_root.isEmpty()
-        ? QStringLiteral("Huginn can't save anything in its folder (%1). Free up space on the disk, or move the Huginn folder to a folder "
-                         "of your own that isn't synced to the cloud, like C:\\Users\\<you>\\Huginn, and open it again.")
-              .arg(QDir::toNativeSeparators(QFileInfo(s_root).absolutePath()))
-        : QStringLiteral("Huginn can't save in its data folder (%1). Free up space on the disk or check the folder's permissions, then "
-                         "open Huginn again.")
-              .arg(QDir::toNativeSeparators(root));
     // A "data" folder beside Huginn.exe that another program keeps (it holds things and none of them are Huginn's):
     // never used, and so never erased.
     if (!s_root.isEmpty() && QFileInfo(s_root).isDir() && !QFileInfo::exists(s_root + QLatin1Char('/') + kMark)) {
@@ -226,17 +362,23 @@ QString folderProblem()
                 .arg(QDir::toNativeSeparators(s_root));
     }
     // Qt doesn't read Windows permissions by default, so just try writing: a little more than one byte, flushed, so
-    // a full disk shows here too.
+    // a full disk shows here too. Windows says why it failed: a full disk, a write-protected drive, or a folder that is
+    // private to another account each get their own words.
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    DWORD err = 0;
+    const bool wrote = probeWrite(root, &err);
+#else
+    const unsigned long err = 0;
     QFile probe(root + QStringLiteral("/.huginn-write-test"));
     const QByteArray block(4096, 'x');
     const bool wrote = QDir().mkpath(root) && probe.open(QIODevice::WriteOnly) && probe.write(block) == block.size() && probe.flush();
     probe.close();
     probe.remove();
-    if (!wrote)
-        return cantSave;
+#endif
     const QStorageInfo disk(root);
-    if (disk.isValid() && disk.bytesAvailable() >= 0 && disk.bytesAvailable() < 1024 * 1024)
-        return cantSave;
+    const bool full = disk.isValid() && disk.bytesAvailable() >= 0 && disk.bytesAvailable() < 1024 * 1024;
+    if (!wrote || full)
+        return cantWriteText(root, err, full);
     // Taken as Huginn's own from now on.
     if (!s_root.isEmpty() && !QFileInfo::exists(s_root + QLatin1Char('/') + kMark)) {
         QFile mark(s_root + QLatin1Char('/') + kMark);
@@ -301,38 +443,79 @@ QString syncedBy(const QString &root)
     return {};
 }
 
-// Only this Windows account (and the system itself) may open the data folder and everything in it: a protected
-// list, nothing taken from the folder above (which may let every account in, like C:\ or a USB stick).
-bool onlyThisAccount(const QString &dir)
+// Only this Windows account, the system itself and administrators may open the data folder and everything in it: a
+// protected list, nothing taken from the folder above (which may let every account in, like C:\ or a USB stick).
+// Administrators are in so the folder can always be got back (File Explorer's Continue, after a Windows reinstall);
+// other standard accounts are kept out. *err: Windows' error when it fails.
+bool onlyThisAccount(const QString &dir, DWORD *err)
 {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+    *err = 0;
+    const std::wstring sid = mySid();
+    if (sid.empty()) {
+        *err = GetLastError();
         return false;
-    DWORD n = 0;
-    GetTokenInformation(token, TokenUser, nullptr, 0, &n);
-    std::vector<BYTE> buf(n ? n : 1);
-    const bool got = n > 0 && GetTokenInformation(token, TokenUser, buf.data(), n, &n);
-    CloseHandle(token);
-    if (!got)
-        return false;
-    LPWSTR sid = nullptr;
-    if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER *>(buf.data())->User.Sid, &sid))
-        return false;
-    const std::wstring sddl = L"D:P(A;OICI;FA;;;" + std::wstring(sid) + L")(A;OICI;FA;;;SY)";
-    LocalFree(sid);
+    }
+    const std::wstring sddl = L"D:P(A;OICI;FA;;;" + sid + L")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
     PSECURITY_DESCRIPTOR sd = nullptr;
-    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &sd, nullptr))
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &sd, nullptr)) {
+        *err = GetLastError();
         return false;
+    }
     BOOL present = FALSE, defaulted = FALSE;
     PACL dacl = nullptr;
     bool ok = GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted) && present && dacl;
     std::wstring path = QDir::toNativeSeparators(dir).toStdWString();
-    if (ok)
-        ok = SetNamedSecurityInfoW(path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl,
-                                   nullptr)
-            == ERROR_SUCCESS;
+    if (ok) {
+        const DWORD r = SetNamedSecurityInfoW(path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr,
+                                              nullptr, dacl, nullptr);
+        ok = r == ERROR_SUCCESS;
+        *err = r;
+    }
     LocalFree(sd);
     return ok;
+}
+
+// The folder's own list is emptied and it takes its permissions from the folder above again (undoes onlyThisAccount).
+bool inheritAgain(const QString &dir, DWORD *err)
+{
+    ACL empty;
+    if (!InitializeAcl(&empty, sizeof(empty), ACL_REVISION)) {
+        *err = GetLastError();
+        return false;
+    }
+    std::wstring path = QDir::toNativeSeparators(dir).toStdWString();
+    *err = SetNamedSecurityInfoW(path.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                                 &empty, nullptr);
+    return *err == ERROR_SUCCESS;
+}
+
+// A drive that moves between computers (a USB stick or USB disk, a memory card): its folder is never made private to
+// this computer's account, because on the next computer (or after a Windows reinstall) nobody could open it.
+bool movableDrive(const QString &dir)
+{
+    wchar_t vol[MAX_PATH + 1] = {0};
+    const std::wstring path = QDir::toNativeSeparators(dir).toStdWString();
+    if (!GetVolumePathNameW(path.c_str(), vol, MAX_PATH))
+        return false;
+    const UINT type = GetDriveTypeW(vol);
+    if (type == DRIVE_REMOVABLE || type == DRIVE_REMOTE || type == DRIVE_CDROM)
+        return true;
+    // A USB disk says it is fixed: its bus tells. "C:\" becomes "\\.\C:".
+    std::wstring dev(vol);
+    if (dev.size() < 2 || dev[1] != L':')
+        return false;
+    dev = L"\\\\.\\" + dev.substr(0, 2);
+    HANDLE h = CreateFileW(dev.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+        return false;
+    STORAGE_PROPERTY_QUERY q = {};
+    q.PropertyId = StorageDeviceProperty;
+    q.QueryType = PropertyStandardQuery;
+    STORAGE_DEVICE_DESCRIPTOR desc = {};
+    DWORD got = 0;
+    const bool asked = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, &q, sizeof(q), &desc, sizeof(desc), &got, nullptr) != 0;
+    CloseHandle(h);
+    return asked && (desc.BusType == BusTypeUsb || desc.BusType == BusTypeSd || desc.BusType == BusTypeMmc || desc.RemovableMedia);
 }
 }
 #endif
@@ -368,22 +551,71 @@ QString syncedWarning()
 #endif
 }
 
-void makePrivate()
+QString makePrivate()
 {
 #if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
     if (s_root.isEmpty() || !QFileInfo(s_root).isDir())
+        return {};
+    QSettings s = Settings::store();
+    // "private2": done for this folder already (with administrators in). A folder made private by 1.36's first beta
+    // is done again, so an administrator can always get it back.
+    if (s.value(QStringLiteral("portable/private2")).toString() == s_root)
+        return {};
+    // Never anything that could keep someone out of their own chats: a drive that goes from computer to computer,
+    // or a folder another Windows account owns (it may be using it too). Huginn keeps working; a lock seals the files.
+    QString why;
+    std::wstring owner;
+    QString ownerName;
+    const std::wstring me = mySid();
+    if (movableDrive(s_root)) {
+        why = QStringLiteral("a removable or network drive");
+        // 1.36's first beta made it private anyway: it takes its permissions from the drive again, so the next
+        // computer can open it.
+        if (s.value(QStringLiteral("portable/private")).toString() == s_root) {
+            DWORD err = 0;
+            if (inheritAgain(s_root, &err)) {
+                s.remove(QStringLiteral("portable/private"));
+                s.sync();
+                CrashLog::note(QStringLiteral("data: the data folder on a removable drive is open to its drive's permissions again"));
+            } else {
+                CrashLog::note(QStringLiteral("data: couldn't give the data folder its drive's permissions back (error %1)").arg(err));
+            }
+        }
+    } else if (ownerOf(s_root, &owner, &ownerName) && !me.empty() && owner != me) {
+        why = QStringLiteral("owned by another account");
+    } else {
+        DWORD err = 0;
+        if (onlyThisAccount(s_root, &err)) {
+            s.setValue(QStringLiteral("portable/private2"), s_root);
+            s.sync();
+            CrashLog::note(QStringLiteral("data: the data folder is readable by this account (and administrators) only"));
+            return {};
+        }
+        // A drive without permissions (a USB stick formatted FAT32 or exFAT).
+        why = QStringLiteral("error %1").arg(err);
+    }
+    CrashLog::note(QStringLiteral("data: the data folder stays open to other accounts (%1)").arg(why));
+    // Said once for each folder (and only when no lock is set: main.cpp asks).
+    if (s.value(QStringLiteral("portable/openWarned")).toString() == s_root)
+        return {};
+    return QStringLiteral("Other people who use this computer, or anyone with this drive, can copy Huginn's folder (%1), "
+                          "because Windows can't keep it private to your account here (a USB or network drive, a drive formatted "
+                          "FAT32 or exFAT, or a folder another account set up).\n\nSet a lock in Settings › Privacy and lock: your "
+                          "chats and keys are then sealed with it, wherever the folder goes.")
+        .arg(QDir::toNativeSeparators(QFileInfo(s_root).absolutePath()));
+#else
+    return {};
+#endif
+}
+
+void openWarned()
+{
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    if (s_root.isEmpty())
         return;
     QSettings s = Settings::store();
-    if (s.value(QStringLiteral("portable/private")).toString() == s_root)
-        return;   // done for this folder already
-    if (onlyThisAccount(s_root)) {
-        s.setValue(QStringLiteral("portable/private"), s_root);
-        s.sync();
-        CrashLog::note(QStringLiteral("data: the data folder is readable by this account only"));
-    } else {
-        // A drive without permissions (a USB stick formatted FAT32 or exFAT): the lock is what keeps the chats sealed.
-        CrashLog::note(QStringLiteral("data: couldn't make the data folder private to this account (error %1)").arg(GetLastError()));
-    }
+    s.setValue(QStringLiteral("portable/openWarned"), s_root);
+    s.sync();
 #endif
 }
 
@@ -718,6 +950,22 @@ bool selfTest()
         QDir().mkpath(tmp.path() + QStringLiteral("/empty/chat/sub"));
         return !holdsFiles(tmp.path() + QStringLiteral("/empty/chat")) && holdsFiles(into + QStringLiteral("/chat"));
     }());
+    // Only a full disk is told to free up space; a folder Windows keeps another account out of never is.
+    check("a full disk says so", cantWriteText(tmp.path(), 0, true).contains(QStringLiteral("full")));
+    check("a folder that can't be written isn't called full", !cantWriteText(tmp.path(), 0, false).contains(QStringLiteral("Free up")));
+#if defined(Q_OS_WIN) && defined(HUGINN_WINDOWS_PORTABLE)
+    check("Windows: a disk-full error says full", cantWriteText(tmp.path(), ERROR_DISK_FULL, false).contains(QStringLiteral("full")));
+    check("Windows: access denied speaks of the account, not of space",
+          [&] {
+              const QString t = cantWriteText(tmp.path(), ERROR_ACCESS_DENIED, false);
+              return t.contains(QStringLiteral("account")) && !t.contains(QStringLiteral("Free up"));
+          }());
+    check("Windows: this account owns a folder it made", [&] {
+        std::wstring sid;
+        QString name;
+        return ownerOf(tmp.path(), &sid, &name) && sid == mySid();
+    }());
+#endif
     return all;
 }
 }

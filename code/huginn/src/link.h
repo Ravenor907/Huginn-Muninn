@@ -18,29 +18,47 @@ class Chat;
 
 // Round 14 (protocol.md 15, "Replay"): room "link" is sealed with the static key (v1), so a relay could send an old frame
 // again days later ("send" a message again, "unlink"). Every link frame now carries "lts" (the sender's time, ms) and
-// "ln" (16 random bytes, hex). A receiver drops one more than kMaxAgeMs away from its own clock, and one whose "ln" it
-// took before (remembered kMaxAgeMs past the frame's time). Once a device has sent one stamped frame, its frames without
-// a stamp are dropped too (an app before 1.36 never stamps, so its frames are still taken). "chat", "part", "ping" and
-// "pong" change nothing when they come twice: checked for time only, so history pages don't fill the list.
-// The same as Muninn's LinkReplay.
+// "ln" (16 random bytes, hex). A receiver drops one from a relay more than kMaxAgeMs away from its own clock (one that
+// came straight over Wi-Fi or Bluetooth is live, so it's taken, the difference kept for its relay frames, and the
+// clocks are said to be off), and one whose "ln"
+// it took before (remembered kMaxAgeMs past the later of its time and now). A device that stamps is kept in a set: its
+// frames without a stamp are dropped (an app before 1.36 never stamps, so its frames are still taken). Round 15, cap l4
+// (protocol.md 15, "Going back to stable"): an unstamped "sync", "ping" or "pong" without "l4" in its caps is taken and
+// takes the device out of the set (it went back to an older app); a stamped frame puts it back; a "hello" is taken
+// unstamped (it needs its one-time token). "chat", "part", "ping" and "pong" change nothing when they come twice:
+// checked for time only, so history pages don't fill the list. The same as Muninn's LinkReplay.
 class LinkReplay
 {
 public:
     static constexpr qint64 kMaxAgeMs = 36LL * 3600 * 1000;   // less than the 2 days Seen and the "send" ids are kept
     static constexpr int kMaxSeen = 20000;
+    static constexpr qint64 kOffsetMinMs = 3600LL * 1000;     // a device clock this far off is remembered (round 15)
+    static const char kStampCap[];                            // "l4": this app stamps link frames (round 15)
+    // What became of a frame: taken, or dropped as a replay or a bad stamp, as too far from this clock (from a relay),
+    // or as unstamped from a device that stamps.
+    enum class Verdict { Taken, Dropped, Skewed, Unstamped };
     // msg with "lts" and "ln" added.
     static QJsonObject stamp(QJsonObject msg, qint64 nowMs);
-    // Taken (true), or dropped: too old or far ahead, seen before, or unstamped from a device that stamps.
-    bool take(const QString &from, const QJsonObject &p, qint64 nowMs);
-    // Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}}.
+    // direct: it came over Wi-Fi or Bluetooth (live, never a relay's copy), so its time isn't held against it.
+    Verdict judge(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false);
+    bool take(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false) { return judge(from, p, nowMs, direct) == Verdict::Taken; }
+    // A device linked again or unlinked: whether it stamps is learned anew.
+    void forget(const QString &from);
+    // How far the frame's own time is from nowMs (ms, 0 when it has none).
+    static qint64 skewOf(const QJsonObject &p, qint64 nowMs);
+    // Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "o": {device: clock offset}}.
     QByteArray save();
     void load(const QByteArray &json);
     bool dirty() const { return m_dirty; }
+    // The last judge() took the device out of the set (it went back to an app that doesn't stamp).
+    bool left() const { return m_left; }
 
 private:
     QHash<QString, qint64> m_seen;   // from + "\n" + ln -> dropped from the list after this (ms)
     QSet<QString> m_stamps;          // devices known to stamp
+    QHash<QString, qint64> m_offset; // round 15: a device's clock minus this one's (ms), as its last Wi-Fi or Bluetooth frame said
     bool m_dirty = false;
+    bool m_left = false;
 };
 
 // Linked devices, companion style (shared/docs/protocol.md section 15), the same as Muninn's Link.kt.
@@ -194,6 +212,8 @@ public:
     // On a companion: a new name, status or custom status for the phone (the account), sent to it as "setme" and
     // shown here at once. "" when sent, else what to tell the person.
     Q_INVOKABLE QString setMe(const QString &name, const QString &status, const QString &custom);
+    // Cap p2 (protocol.md 22.4): Refresh on a person's page while the phone is the account; false when no phone takes it.
+    bool askPicture(const QString &peer);
     Q_INVOKABLE bool openOwn(const QString &secret);
     Q_INVOKABLE void closeOwn();
 
@@ -201,7 +221,10 @@ public:
     // False: not from a device linked with this one.
     bool receive(const QString &fromKey, const QJsonObject &p, const QString &via);
     // Round 14: stamped before it goes (every route of one send carries the same stamp); checked as it comes.
-    bool replayOk(const QString &from, const QJsonObject &p);
+    // via: the route it came on (only a relay's frame is held to the 36 hours).
+    LinkReplay::Verdict replayVerdict(const QString &from, const QJsonObject &p, const QString &via);
+    void loadReplay();
+    void forgetStamps(const QString &key);   // round 15: linked again or unlinked, so whether it stamps is learned anew
     // On the phone: a message in or out of a 1:1 chat (Chat::addPrivate), for the companions.
     void onMessage(const QString &peer, const QVariantMap &m);
     // On a companion: messages past each chat's limit (cap d1, the phone's "d") go, as on the phone.
@@ -288,6 +311,7 @@ public:
     static void pruneItems(QHash<QString, Item> &set, qint64 now);
     static bool acctInternetOk(const QJsonObject &msg);
     static bool saysL1(const QString &caps);
+    static QString linkCaps();   // "l1 l2 l3 l4", in "sync" and "ping"
 
 Q_SIGNALS:
     void changed();
@@ -324,6 +348,10 @@ private:
     QHash<QString, qint64> m_synced;            // per companion: when its history was last asked for or sent
     qint64 m_askedAt = 0;                       // the companion's side: when Refresh last asked
     qint64 m_heardAt = 0, m_pingAt = 0, m_pongAt = 0;   // the companion's side, cap l2: the phone last heard, pinged, answered
+    qint64 m_reprobeAt = 0;                     // round 15: an unstamped frame from a phone that stamped: pinged again then
+    void reprobe();                             // asks the phone what it is now (its "pong" says l4 or not), once a minute
+    QSet<QString> m_skewSaid;                   // devices whose clock was said to be off this run
+    void sayClockOff(const QString &from, qint64 skewMs);
     QSet<QString> m_readOwed;                   // the companion's side: chats whose "read" goes to the phone soon
     QSet<QString> m_freshPages;                 // the companion's side: chats new from this sync's pages (their history counts as read)
     QTimer m_readSoon;

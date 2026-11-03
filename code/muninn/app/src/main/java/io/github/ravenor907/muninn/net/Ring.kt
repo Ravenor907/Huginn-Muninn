@@ -222,12 +222,18 @@ object NudgeWire {
     /**
      * What a nudge says. An n1 nudge names nobody and is a "msg". [known]: it opened with the ring key, which only
      * contacts get, so its "from" is a contact's own word. One that opened with the nudge key may come from any group
-     * peer, so it never names a person ([anonymous]).
+     * peer, so it shows no name at all, neither a person's nor a group's ([anonymous]).
      */
     data class Nudge(val ts: Long, val from: String = "", val chat: String = "", val kind: String = "msg", val known: Boolean = true)
 
-    /** Round 14: a nudge from the nudge key names nobody: "from" goes, only the group's name ("chat") stays. */
-    fun anonymous(n: Nudge): Nudge = n.copy(from = "", known = false)
+    /**
+     * Round 15: a nudge from the nudge key names nothing the sender chose: "from" and the group's name ("chat") both go,
+     * so no one in a group can make a locked phone show "Mom". It reads [GROUP_TITLE], with a count.
+     */
+    fun anonymous(n: Nudge): Nudge = n.copy(from = "", chat = "", known = false)
+
+    /** The fixed title of a nudge naming nobody (the nudge key). */
+    const val GROUP_TITLE = "Group message"
 
     /** A nudge older than this (by its own ts) is a replay or long gone: dropped. */
     const val MAX_AGE_MS = 2 * 86_400_000L
@@ -303,16 +309,20 @@ object NudgeWire {
     /** What a locked nudge's notification shows: Settings › Notifications › What notifications show. */
     enum class Show { NOTHING, NAME, MESSAGE }
 
-    /** One notification per sender and chat; with Nothing, one for everything. One naming nobody ([Nudge.known] false): per group. */
+    /** One notification per sender and chat; with Nothing, one for everything. Those naming nobody ([Nudge.known] false): one for all. */
     fun groupKey(show: Show, n: Nudge): String = when {
         show == Show.NOTHING -> ""
-        !n.known -> "?\n" + n.chat
+        !n.known -> "?"
         else -> n.from + "\n" + n.chat
     }
 
-    /** Its title: who it's from, and the group ("from · chat"). "Muninn" with Nothing, or for a nudge naming nobody (n1). */
+    /**
+     * Its title: who it's from, and the group ("from · chat"). "Muninn" with Nothing, or for an n1 nudge naming nobody.
+     * One from the nudge key ([Nudge.known] false) is always [GROUP_TITLE], whatever it claims.
+     */
     fun title(show: Show, n: Nudge): String = when {
         show == Show.NOTHING -> "Muninn"
+        !n.known -> GROUP_TITLE
         n.from.isNotEmpty() && n.chat.isNotEmpty() -> n.from + " · " + n.chat
         n.from.isNotEmpty() -> n.from
         n.chat.isNotEmpty() -> n.chat
@@ -345,34 +355,29 @@ object NudgeWire {
 
     /**
      * Round 14: what a locked device does with nudges that name nobody (from the nudge key, so maybe not a contact).
-     * Each new group name gets its own notification, at most [MAX_KEYS] of them per lock; after that they fold into one
-     * that names nothing. They alert at most once per [ALERT_EVERY_MS] in all, whatever they claim to be, so no one
-     * in a group can buzz a locked phone over and over. Nudges from contacts ([Nudge.known]) alert as before.
+     * Round 15: they all share one "Group message" notification that counts up ([anonymous] drops every name), and
+     * alert at most once per [ALERT_EVERY_MS] in all, whatever they claim to be, so no one in a group can buzz a locked
+     * phone over and over. Nudges from contacts ([Nudge.known]) alert as before.
      */
     class LockedLimit(private val alertEveryMs: Long = ALERT_EVERY_MS) {
-        private val keys = LinkedHashSet<String>()
         private var lastAlert = Long.MIN_VALUE / 2
         /** What to show: [n] as it will read, the notification's key, and whether it may sound. */
         data class Take(val n: Nudge, val key: String, val alert: Boolean)
         @Synchronized
         fun take(show: Show, n: Nudge, nowMs: Long): Take {
             if (n.known) return Take(n, groupKey(show, n), true)
-            var shown = n
-            var key = groupKey(show, n)
-            if (key !in keys) {
-                if (keys.size >= MAX_KEYS) { shown = n.copy(chat = ""); key = groupKey(show, shown) }
-                keys.add(key)
-            }
+            // Never a name the sender chose, even one that slipped past [anonymous].
+            val shown = n.copy(from = "", chat = "")
+            val key = groupKey(show, shown)
             val alert = nowMs - lastAlert >= alertEveryMs
             if (alert) lastAlert = nowMs
             return Take(shown, key, alert)
         }
         /** Unlocked: start over. */
         @Synchronized
-        fun clear() { keys.clear(); lastAlert = Long.MIN_VALUE / 2 }
+        fun clear() { lastAlert = Long.MIN_VALUE / 2 }
         companion object {
             const val ALERT_EVERY_MS = 2 * 60_000L
-            const val MAX_KEYS = 3
         }
     }
 

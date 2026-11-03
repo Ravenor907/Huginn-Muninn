@@ -61,10 +61,23 @@ Window {
     readonly property bool lockedOut: !touring && Vault.exists && Vault.screenLocked
     onLockedOutChanged: {
         if (lockedOut) lockDown()
-        else Qt.callLater(showSendRequest)   // a nearby-sharing request that came while locked is asked now
+        else {
+            Qt.callLater(showSendRequest)   // a nearby-sharing request that came while locked is asked now
+            // Back to the page that was open before the lock (a group, a channel, Settings), unless a notification
+            // clicked while locked says where to go (afterUnlock), or everything was erased meanwhile.
+            const back = beforeLock
+            beforeLock = null
+            if (back && Vault.exists && afterUnlock === "" && pageName === "dms") {
+                openPage(back.name, back.args)
+                railIndex = Math.max(0, railItems.findIndex(e => e.id === section))
+            }
+        }
     }
+    // The page open when the lock came down: {name, args}, opened again once unlocked.
+    property var beforeLock: null
     function lockDown() {
-        if (pageName !== "dms") { pageName = "dms"; pageArgs = ({}) }
+        if (pageName !== "dms") { beforeLock = { name: pageName, args: pageArgs }; pageName = "dms"; pageArgs = ({}) }
+        else beforeLock = null
         focusZone = "content"
         railIndex = 0
         // Report a bug stays, behind its own lock. Every other panel, question and menu goes.
@@ -877,7 +890,12 @@ Window {
     // Where a clicked notification goes: its chat (a contact's key, "g:<group>" or "g:<group>:<channel>", a phone's
     // "mirror:<peer>#<channel>"; "" the chat list). Locked: the chat list with the lock, then that chat once unlocked.
     function openNoticed(where) {
-        if (Vault.screenLocked || where === "") { app.afterUnlock = Vault.screenLocked ? where : ""; app.openPage("dms", {}); return }
+        if (Vault.screenLocked || where === "") {
+            app.afterUnlock = Vault.screenLocked ? where : ""
+            if (Vault.screenLocked && where !== "") app.beforeLock = null   // the clicked chat wins over the page before the lock
+            app.openPage("dms", {})
+            return
+        }
         if (where.startsWith("mirror:")) app.openPage("dms", { mirror: where.substring(7) })   // a chat from the phone ("<peer>#<channel>" opens that tab)
         else if (where.startsWith("g:")) {
             const parts = where.split(":")
@@ -1463,18 +1481,25 @@ Window {
     // A question that opens by itself (a ring, a nearby-sharing request, a notice that came while away) never takes a
     // press meant for what was on screen: for half a second after it shows, every button is ignored, and a button
     // already held when it showed is let go without answering. It takes a fresh press.
-    property var guarded: null
-    property real guardedAt: 0
-    property var guardedHeld: ({})
+    // Each guarded question keeps its own half second and its own held buttons, so one that opens on top of another
+    // (a message banner during a ring) never takes the other's guard away.
+    property var guards: []
+    // Buttons down now that will be let go (controller buttons, and Enter, Space and Menu on a keyboard).
     property var heldNow: ({})
     function guardOverlay(o) {
-        guarded = o
-        guardedAt = Date.now()
-        guardedHeld = Object.assign({}, heldNow)
+        const kept = guards.filter(g => g.o !== o && g.o.visible)
+        kept.push({ o: o, at: Date.now(), held: Object.assign({}, heldNow) })
+        guards = kept
+    }
+    function guardOf(o) {
+        for (const g of guards)
+            if (g.o === o) return g
+        return null
     }
     function overlayGuarded() {
         const o = overlay()
-        return o !== null && o === guarded && Date.now() - guardedAt < 500
+        const g = o !== null ? guardOf(o) : null
+        return g !== null && Date.now() - g.at < 500
     }
     Connections {
         target: incomingCall
@@ -1536,7 +1561,6 @@ Window {
     property bool lbHeld: false
     property bool lbUsed: false
     function press(b) {
-        heldNow[b] = true
         // Select (View) shows or hides the button legend; any other button hides it and does its job.
         if (b === "back") { legend = !legend; return }
         legend = false
@@ -1566,8 +1590,15 @@ Window {
     }
     function release(b) {
         delete heldNow[b]
-        // Held from before a question opened by itself: its release isn't an answer.
-        if (guardedHeld[b]) { delete guardedHeld[b]; if (overlay() === guarded) return }
+        // Held from before a question opened by itself: its release isn't an answer (for the one on top).
+        // (A question closed and asked again later doesn't keep eating them: only within 10 seconds of it showing.)
+        let eaten = false
+        for (const g of guards) {
+            if (!g.held[b]) continue
+            delete g.held[b]
+            if (g.o === overlay() && Date.now() - g.at < 10000) eaten = true
+        }
+        if (eaten) return
         if (b === "lb" && lbHeld) {
             lbHeld = false
             if (!lbUsed && !overlay()) stepSection(1)
@@ -1585,7 +1616,8 @@ Window {
     // The controller reaches Huginn even while a game is in front: only presses made with Huginn active and
     // focused count. A press that counted still gets its release.
     readonly property bool padLive: Qt.application.state === Qt.ApplicationActive && app.active
-    // Windows' touch keyboard comes up for the controller only (System.keyboardAvailable), never over a real keyboard.
+    // The on-screen keyboard (Steam's, or Windows' touch keyboard) comes up for the controller or touch only
+    // (System.keyboardAvailable), never over a mouse or a real keyboard, a docked handheld on the desktop too.
     onPadInUseChanged: System.setControllerInUse(padInUse)
     property var padDown: ({})
     Connections {
@@ -1605,7 +1637,7 @@ Window {
             // A question that just opened by itself (guardOverlay): the press is dropped, release and all.
             if (app.overlayGuarded()) { delete app.padDown[button]; return }
             if (app.isPointerButton(button)) { app.legend = false; stick.press(button) }
-            else app.press(button)
+            else { app.heldNow[button] = true; app.press(button) }
         }
         function onReleased(button) {
             if (!app.padDown[button]) return
@@ -1703,7 +1735,11 @@ Window {
             if ((event.key === Qt.Key_Escape || event.key === Qt.Key_Backspace) && app.focusZone === "rail" && !app.overlay()) { app.padInUse = false; event.accepted = true; return }
             // In a call, Space mutes (a controller's X still turns the camera on and off).
             const b = event.key === Qt.Key_Space && callPage.visible && !incomingCall.visible ? "a" : map[event.key]
-            if (b) { if (!app.touring) app.padInUse = false; app.press(b); event.accepted = true }
+            // Only the keys whose release comes back here (Enter, Menu or F10, Space) count as held.
+            const releases = event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Menu || event.key === Qt.Key_F10
+                             || (event.key === Qt.Key_Space && b === "x")
+            if (b && releases) app.heldNow[b] = true
+            if (b) { if (!app.touring) { app.padInUse = false; System.noteKeyboardUsed() } app.press(b); event.accepted = true }
             // A key that isn't a controller stand-in still puts the legend away.
             else app.legend = false
         }
@@ -1740,6 +1776,9 @@ Window {
             { page: "dms", hold: true, file: "10-confirm" },
             // A hold let go too soon: "Keep holding for 5 seconds" under Hold to block.
             { page: "dms", holdEarly: true, file: "10b-confirm-keep-holding" },
+            // A question that opened by itself, then a banner over it at once: A within half a second is still not an
+            // answer (each keeps its own guard).
+            { page: "dms", guarded: true, file: "10c-confirm-guarded" },
             { page: "dms", zone: "messages", newGroup: true, file: "11-new-group" },
             { page: "settings", section: "look", file: "12-look" },
             { page: "g:tour-crew", file: "13-group" },
@@ -1911,6 +1950,15 @@ Window {
             if (s.volume) Qt.callLater(() => ModActions.volumeMenu("s", "Sam", null, true))
             if (s.ctx) Qt.callLater(() => app.tourMenu(s.ctx))
             if (s.hold) confirm.open("Erase everything?", "Messages, photos, voice, contacts, keys and the lock are deleted for good, and Huginn closes.", "Hold to erase", null, true, true)
+            if (s.guarded) {
+                confirm.open("Mira wants to send a file", "photo.jpg (2 MB). It'll be saved in Downloads.", "Accept", null, false, false, null, "localsend")
+                confirm.cancelText = "Decline"
+                app.heldNow["a"] = true   // A held as it showed: its release is no answer either
+                app.guardOverlay(confirm)
+                app.guardOverlay(newsBanner)
+                app.press("a")
+                app.release("a")
+            }
             if (s.holdEarly) { confirm.open("Block Mira?", "They aren't told.", "Block", null, true, true); confirm.startHold(); confirm.stopHold() }
             if (s.openProgram) {
                 Ui.sure("Open this file?", "\"invoice.pdf.exe\" looks like a pdf document but is a program (.exe). Opening it runs it, and a program from someone else can take over this computer. Open it only if you were expecting it.",

@@ -203,7 +203,7 @@ Item {
     // A text field with the controller: Steam's keyboard covers the lower half, so with it up the text is typed in the
     // prompt at the top (as the message box does), then lands in the field and goes on as Enter would.
     function typeIn(field, title, confirmText, done) {
-        if (!System.keyboardCovers()) {
+        if (!System.keyboardCovers) {
             field.forceActiveFocus()
             System.showSteamKeyboard()
             return

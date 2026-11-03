@@ -119,6 +119,26 @@ Chat::Chat(LocalSend *net, Vault *vault, Nostr *nostr, Ble *ble, QObject *parent
         } else if (name == QLatin1String("gchats.json")) {
             m_gchatsDirty = true;
             saveDidntGo(name, [this] { if (m_gchatsDirty) saveGroupChats(); });
+        } else if (name == QLatin1String("groups.json")) {
+            // Round 15 (N2): every file with a copy in memory is written again from it, not only announced.
+            m_groupsDirty = true;
+            saveDidntGo(name, [this] { if (m_groupsDirty) saveGroups(); });
+        } else if (name == QLatin1String("wrapkeys.json")) {
+            saveDidntGo(name, [this] { if (m_wrapKeys) m_wrapKeys->saveAgain(); });
+        } else if (name == QLatin1String("peerkeys.json")) {
+            saveDidntGo(name, [this] { if (m_peerKeys) m_peerKeys->saveAgain(); });
+        } else if (name.startsWith(QLatin1String("ratchet/"))) {
+            // Its contact, found by the file's name: their ratchet state as it is now.
+            QString whose;
+            for (auto it = m_peers.cbegin(); it != m_peers.cend() && whose.isEmpty(); ++it)
+                if (ratchetFile(it.key()) == name)
+                    whose = it.key();
+            for (auto it = m_capable.cbegin(); it != m_capable.cend() && whose.isEmpty(); ++it)
+                if (ratchetFile(it.key()) == name)
+                    whose = it.key();
+            saveDidntGo(name, [this, whose] { if (!whose.isEmpty()) saveRatchet(whose); });
+        } else if (const auto again = m_resavers.constFind(name); again != m_resavers.cend()) {
+            saveDidntGo(name, again.value());
         } else {
             saveDidntGo(name, [] {});
         }
@@ -1582,6 +1602,7 @@ int Chat::receive(const QByteArray &body, const QString &via, const QString &fro
     m_pendingPeer.reset();
     m_openedFrom.clear();
     m_openedReplaceCaps = false;
+    m_openedPv = 0;
     const QJsonObject o = QJsonDocument::fromJson(body).object();
     // The Nearby room: at most 10 messages in 10 seconds from one address or link, whatever keys they use.
     if (!from.isEmpty() && o.value(QStringLiteral("room")).toString() == QLatin1String("nearby") && !roomRate(from))
@@ -1594,6 +1615,9 @@ int Chat::receive(const QByteArray &body, const QString &via, const QString &fro
         noteCaps(m_openedFrom, m_openedHasCaps, m_openedCaps, m_openedReplaceCaps);
         noteDays(m_openedFrom, m_openedDays);
         noteS1(m_openedFrom, m_openedCaps.contains(QLatin1String(Proof::kCap)), m_openedBound);
+        // Cap p2: their profile version rides on everything they send; a newer one than here is asked for.
+        if (m_profile && m_openedPv > 0)
+            m_profile->sawVersion(m_openedFrom, m_openedPv);
     }
     m_openedFrom.clear();
     return code;
@@ -1700,6 +1724,7 @@ QByteArray Chat::open(const QJsonObject &o, const QString &fromKey, bool *ok)
         m_openedCap = ChatWire::saysCapable(o);
         m_openedCaps = ChatWire::capsOf(o, &m_openedHasCaps);
         m_openedDays = Limits::envelopeDays(o);
+        m_openedPv = Profile::versionOf(o.value(QStringLiteral("pv")));
     }
     return *ok ? plain : QByteArray();
 }
@@ -2520,6 +2545,9 @@ QJsonObject Chat::seal(const QJsonObject &fields, const QString &theirKey, const
     QJsonObject f = fields;
     if (hasD1(theirKey))
         f.insert(QStringLiteral("days"), myDays(theirKey));
+    // Cap p2: my profile version on everything to an app that says p2, so a picture it missed is asked for.
+    if (m_profile && m_profile->myVersion() >= 1 && hasCap(theirKey, QLatin1String(Profile::kCap2)))
+        f.insert(QStringLiteral("pv"), QJsonValue(m_profile->myVersion()));
     // Cap s1: the clear fields are sealed in too, for an app that reads them.
     const QJsonObject o = ChatWire::seal(f, keyWith(theirKey), theirKey, plain, peer, kNewKey, strict(theirKey));
     if (peer && ChatWire::isRatchet(o))
@@ -3735,6 +3763,25 @@ int Chat::receiveProfile(const QString &fromKey, const QString &sentId, const QJ
         return 403;
     if (m_recentM1.size() > 500)
         m_recentM1.clear();
+    // Cap p2: someone asks for my picture ("profile?"), or says mine came ("profile-ok"); counted apart from pictures.
+    if (Profile::isCtl(p)) {
+        QList<qint64> &c = m_recentM1[QStringLiteral("profilectl|") + fromKey];
+        while (!c.isEmpty() && now() - c.first() > 10000)
+            c.removeFirst();
+        if (c.size() >= Profile::kCtlPer10s)
+            return 429;
+        c << now();
+        if (!m_profile || !hasCap(fromKey, QLatin1String(Profile::kCap2)) || !Profile::ctlOk(p))
+            return 400;
+        commitPeer();
+        if (!sentId.isEmpty())
+            m_seen.add(fromKey, sentId, now());
+        if (p.value(QStringLiteral("t")).toString() == QLatin1String("profile?"))
+            m_profile->askedBy(fromKey);
+        else
+            m_profile->acked(fromKey, Profile::versionOf(p.value(QStringLiteral("v"))));
+        return 200;
+    }
     QList<qint64> &q = m_recentM1[QStringLiteral("profile|") + fromKey];
     while (!q.isEmpty() && now() - q.first() > Profile::kRateMs)
         q.removeFirst();
@@ -3746,6 +3793,8 @@ int Chat::receiveProfile(const QString &fromKey, const QString &sentId, const QJ
     commitPeer();
     if (!sentId.isEmpty())
         m_seen.add(fromKey, sentId, now());
+    // Cap p2: taken (even an older version), so their app stops sending it.
+    m_profile->ack(fromKey, Profile::versionOf(p.value(QStringLiteral("v"))));
     return 200;
 }
 

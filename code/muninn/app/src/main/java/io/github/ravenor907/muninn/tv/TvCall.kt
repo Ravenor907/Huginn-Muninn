@@ -151,6 +151,25 @@ enum class KidCallBack {
 
         /** Whether a call in [phase] is one to go back to (ringing here, or on): the kids' screens offer the way back. */
         fun live(phase: Phase?): Boolean = phase != null && phase != Phase.ENDED
+
+        /** The line a TV shows over another app while a call rings and Muninn may not show over other apps. */
+        fun overText(name: String): String = (if (name.isBlank()) "Someone" else name) + " is calling. Open Muninn to answer."
+
+        /** How many times that line shows, [OVER_GAP_MS] apart, while the call still rings and Muninn isn't on screen. */
+        const val OVER_TIMES = 8
+        const val OVER_GAP_MS = 4_000L
+
+        /** Whether the line shows (again): the same call still rings, Muninn isn't on screen and may not draw over apps. */
+        fun overDue(stillRinging: Boolean, visible: Boolean, overlay: Boolean): Boolean = stillRinging && !visible && !overlay
+
+        /** The call whose "Back to the call" bar was dismissed on a kids' phone or tablet (in memory only). */
+        @Volatile var barHidden = ""
+
+        /**
+         * Whether opening Muninn goes straight back to a call: always on a TV; on a phone or tablet not once the kid
+         * dismissed the bar for this call ([hidden]), so they can look at a chat or open "For a parent" during it.
+         */
+        fun jumpBack(live: Boolean, tv: Boolean, callId: String, hidden: String): Boolean = live && (tv || callId != hidden)
     }
 }
 
@@ -228,7 +247,8 @@ object TvRing {
         if (watching) return
         watching = true
         val app = c.applicationContext
-        CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        scope.launch {
             CallManager.call.collect { ui ->
                 if (TvMic.active) {
                     // The show playing pauses for any call (ringing, calling out, talking) and comes back after.
@@ -241,6 +261,21 @@ object TvRing {
                         app.startActivity(Intent(app, CallActivity::class.java).setAction(CallActivity.SHOW)
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
                     } catch (_: Exception) {}
+                    // Without "Show over other apps", Android 10 and newer keep the call screen from coming up over a show,
+                    // and the TV has no notification shade. A plain text toast is the one thing Android still shows over
+                    // another app: "Mom is calling. Open Muninn to answer.", again every few seconds while it rings.
+                    val id = ui.callId
+                    val text = KidCallBack.overText(ui.name)
+                    scope.launch {
+                        repeat(KidCallBack.OVER_TIMES) {
+                            val now = CallManager.call.value
+                            val visible = (app as? io.github.ravenor907.muninn.Muninn)?.visible == true
+                            val overlay = try { android.provider.Settings.canDrawOverlays(app) } catch (_: Exception) { false }
+                            if (!KidCallBack.overDue(now != null && now.callId == id && now.phase == Phase.INCOMING, visible, overlay)) return@launch
+                            try { android.widget.Toast.makeText(app, text, android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
+                            delay(KidCallBack.OVER_GAP_MS)
+                        }
+                    }
                 }
             }
         }

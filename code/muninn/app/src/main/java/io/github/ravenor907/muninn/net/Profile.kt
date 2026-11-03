@@ -29,6 +29,8 @@ import java.util.concurrent.Executors
  *    256x256 JPEG; a receiver takes at most 24 KB, a sender keeps it at 12 KB or less so one relay event carries it.
  *  - room "live" "active" carries "st" (online, away or dnd) and "cs" (custom status, at most 80 characters);
  *    invisible goes as not active with no "st". Rich.check knows the fields.
+ *  - cap p2 (22.4): "pv" on every envelope to a p2 app, "profile?" asks, "profile-ok" answers a picture; to a p2 app
+ *    a picture counts as sent only once its "profile-ok" came, and goes again with backoff until then.
  */
 object ProfileWire {
     const val CAP = "p1"
@@ -123,6 +125,70 @@ object ProfileWire {
 
     /** A custom status as typed: control characters out, 80 code points at most. */
     fun cleanCustom(s: String): String = Rich.cut(s.filter { it.code >= 0x20 && it.code != 0x7F }.trim(), Rich.MAX_CUSTOM)
+
+    // ------------------------------------------------------------------ cap p2 (22.4): pictures that always arrive
+
+    /**
+     * Cap p2: "pv" (my profile version) on every envelope to an app that says p2, "profile?" to ask for someone's
+     * current one, "profile-ok" to say one came. A picture to a p2 app is marked sent only on its "profile-ok".
+     */
+    const val CAP2 = "p2"
+    const val ASK = "profile?"
+    const val ACK = "profile-ok"
+    /** At most one "profile?" to a person in this long (one a "pv" or a Refresh may start). */
+    const val ASK_MS = 5 * 60_000L
+    /** Refresh by hand: no sooner than this after the last ask. */
+    const val REFRESH_MS = 10_000L
+    /** At most one picture sent because a person asked, per person, in this long. */
+    const val ANSWER_MS = 60_000L
+    /** "profile?" and "profile-ok" from one sender: at most this many in 10 s (apart from the picture's 1 in 10 s). */
+    const val CTL_PER_10S = 5
+    /** No "profile-ok": sent again after 2, 4, 8 ... minutes, at most 6 hours apart, at most this many times. */
+    const val FIRST_RETRY_MS = 2 * 60_000L
+    const val MAX_RETRY_MS = 6 * 3_600_000L
+    const val MAX_TRIES = 10
+
+    /** A usable version ("v" or "pv"): a whole number, 1 <= v < 2^53; null for anything else. */
+    fun versionOf(x: Any?): Long? = when (x) {
+        is Int -> x.toLong().takeIf { it >= 1 }
+        is Long -> x.takeIf { it >= 1 && it < (1L shl 53) }
+        else -> null
+    }
+
+    /** The sender's profile version an envelope carries ("pv"), or null. */
+    fun pvOf(o: JSONObject): Long? = versionOf(o.opt("pv"))
+
+    fun askMsg(): String = JSONObject().put("t", ASK).toString()
+    fun ackMsg(v: Long): String = JSONObject().put("t", ACK).put("v", v).toString()
+
+    /** "profile?" or "profile-ok" (the small ones in room "profile"), from the plaintext; false for anything else. */
+    fun isCtl(plain: String): Boolean = try { JSONObject(plain).opt("t").let { it == ASK || it == ACK } } catch (e: Exception) { false }
+
+    /** Well-formed "profile?" (other fields ignored) or "profile-ok" with a usable "v". */
+    fun ctlOk(p: JSONObject): Boolean = when (p.opt("t")) {
+        ASK -> true
+        ACK -> versionOf(p.opt("v")) != null
+        else -> false
+    }
+
+    /** Someone says their version is [pv] and I keep [have] (0: nothing): ask for it. */
+    fun wants(have: Long, pv: Long) = pv > have
+
+    /** Nothing asked of them yet ([last] 0), or the last ask was at least [gap] ago. */
+    fun mayAsk(last: Long, now: Long, gap: Long = ASK_MS) = last == 0L || now - last >= gap
+
+    /** The wait after the [tries]-th send with no "profile-ok": 2 minutes doubling, at most 6 hours. */
+    fun retryMs(tries: Int): Long {
+        if (tries <= 1) return FIRST_RETRY_MS
+        val shift = minOf(tries - 1, 20)
+        return minOf(FIRST_RETRY_MS shl shift, MAX_RETRY_MS)
+    }
+
+    /** Send now: never sent ([tries] 0), or not yet [MAX_TRIES] and the wait after the last send ([at]) is over. */
+    fun due(tries: Int, at: Long, now: Long) = tries == 0 || (tries < MAX_TRIES && now - at >= retryMs(tries))
+
+    /** A "profile-ok" for [v] marks my version [mine] as theirs only when it is that version. */
+    fun acks(mine: Long, v: Long) = mine >= 1 && v == mine
 }
 
 /**
@@ -145,6 +211,12 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     private val lock = Any()
     private val peers = ConcurrentHashMap<String, Entry>()
     private val sent = ConcurrentHashMap<String, Long>()
+    /** Cap p2: my version [v] sent [n] times to someone with no "profile-ok" yet, the last at [at] (memory only). */
+    private class Try(val v: Long, val n: Int, val at: Long)
+    private val tries = ConcurrentHashMap<String, Try>()
+    /** Cap p2: when I last asked each person for theirs, and last sent mine because they asked (memory only). */
+    private val asked = ConcurrentHashMap<String, Long>()
+    private val answered = ConcurrentHashMap<String, Long>()
     @Volatile private var me = Entry(0, "", ByteArray(0))
     /** Decoded pictures, up to a sixteenth of the memory Android gives Muninn (by bytes, not by count). */
     private val bitmaps = object : LruCache<String, Bitmap>(MemoryBudget.bytes(
@@ -316,6 +388,9 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         synchronized(lock) {
             peers.remove(key)
             sent.remove(key)
+            tries.remove(key)
+            asked.remove(key)
+            answered.remove(key)
             bitmaps.remove(key)
             file(key).delete()
             saveSent()
@@ -323,6 +398,72 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         heard.remove(key)
         _statuses.update { it - key }
         publishPictures()
+    }
+
+    // ------------------------------------------------------------------ cap p2 (22.4)
+
+    /** My profile version, for "pv" on my envelopes (0: I have none yet, and no "pv" goes). */
+    fun myVersion(): Long = me.v
+
+    /** [key]'s app says p2. */
+    fun saysP2(key: String): Boolean = contacts.get(key)?.caps?.contains(ProfileWire.CAP2) == true
+
+    /** A contact, or a group peer while a group is shared; never anyone blocked or in the trash. */
+    private fun inTouch(key: String): Boolean {
+        val c = contacts.get(key) ?: return false
+        if (key in chat.blocked.value || chat.trash.has(key)) return false
+        return !c.groupOnly || chat.groups.sharesGroup(key)
+    }
+
+    /** Takes the slot for [key] in [map] when the last one is at least [gap] ago; false when it's too soon. */
+    private fun claim(map: ConcurrentHashMap<String, Long>, key: String, gap: Long): Boolean {
+        val now = System.currentTimeMillis()
+        var ok = false
+        map.compute(key) { _, last -> if (ProfileWire.mayAsk(last ?: 0L, now, gap)) { ok = true; now } else last }
+        return ok
+    }
+
+    private fun ask(key: String) {
+        sender.execute { try { chat.sendProfile(key, ProfileWire.askMsg()) } catch (_: Exception) {} }
+    }
+
+    /** An envelope from [key] opened and says their version is [pv]: newer than the one here, so ask (once in 5 minutes). */
+    fun sawVersion(key: String, pv: Long) {
+        if (!ProfileWire.wants(peers[key]?.v ?: 0L, pv) || !saysP2(key) || !inTouch(key)) return
+        if (claim(asked, key, ProfileWire.ASK_MS)) ask(key)
+    }
+
+    /**
+     * Refresh on a person's page: ask [key] for their current picture now (no sooner than 10 s after the last ask).
+     * False when their app can't be asked (no p2) or they're not someone I'm in touch with.
+     */
+    fun refresh(key: String): Boolean {
+        if (!saysP2(key) || !inTouch(key)) return false
+        if (claim(asked, key, ProfileWire.REFRESH_MS)) ask(key)
+        return true
+    }
+
+    /** [key] asked for mine ("profile?"): it goes again now, and until its "profile-ok" (once a minute at most). */
+    fun askedBy(key: String) {
+        if (me.v == 0L || !saysP2(key) || !inTouch(key) || !claim(answered, key, ProfileWire.ANSWER_MS)) return
+        tries.remove(key)
+        if (sent.remove(key) != null) synchronized(lock) { saveSent() }
+        sender.execute { try { reconcile() } catch (_: Exception) {} }
+    }
+
+    /** A picture from [key] was taken (200): a p2 app hears "profile-ok" with its version, so it stops sending it. */
+    fun ack(key: String, v: Long) {
+        if (!saysP2(key)) return
+        sender.execute { try { chat.sendProfile(key, ProfileWire.ackMsg(v)) } catch (_: Exception) {} }
+    }
+
+    /** [key] says my version [v] came: only now is it marked sent to them. */
+    fun acked(key: String, v: Long) {
+        if (!ProfileWire.acks(me.v, v)) return
+        tries.remove(key)
+        if (sent[key] == v) return
+        sent[key] = v
+        synchronized(lock) { saveSent() }
     }
 
     // ------------------------------------------------------------------ sending
@@ -336,7 +477,8 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
     /**
      * My picture and colour to everyone who should have this version and doesn't yet: contacts, and members of my
      * groups (who are group peers in Contacts), only those whose app said p1, never anyone blocked or in the trash.
-     * One is marked sent only once a route took it, so someone out of reach gets it on a later pass.
+     * One is marked sent only once a route took it, so someone out of reach gets it on a later pass. Cap p2: an app
+     * that says p2 has it only once its "profile-ok" came; until then it goes again after 2, 4, 8 ... minutes.
      */
     private fun reconcile() {
         if (Move.locked) return
@@ -344,6 +486,7 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
         if (mine.v == 0L) return
         val plain = ProfileWire.msg(mine.v, if (mine.pic.isEmpty()) "" else java.util.Base64.getEncoder().encodeToString(mine.pic), mine.col, chat.chosenName())
         val blocked = chat.blocked.value
+        val now = System.currentTimeMillis()
         var changed = false
         for (c in contacts.all.value) {
             val k = c.chatKey
@@ -351,6 +494,12 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
             // A group peer gets it only while we're in a group together; once that's over, their picture goes.
             if (c.groupOnly && !chat.groups.sharesGroup(k)) { if (peers.containsKey(k)) forget(k); continue }
             if (sent[k] == mine.v) continue
+            if (ProfileWire.CAP2 in c.caps) {
+                val t = tries[k]?.takeIf { it.v == mine.v }
+                if (!ProfileWire.due(t?.n ?: 0, t?.at ?: 0L, now)) continue
+                if (chat.sendProfile(k, plain)) tries[k] = Try(mine.v, (t?.n ?: 0) + 1, now)
+                continue
+            }
             if (chat.sendProfile(k, plain)) { sent[k] = mine.v; changed = true }
         }
         if (changed) synchronized(lock) { saveSent() }

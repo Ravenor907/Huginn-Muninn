@@ -175,6 +175,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private val liveTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
     /** Cap p1: profile messages per sender (one in 10 s). */
     private val profileTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
+    /** Cap p2: "profile?" and "profile-ok" per sender (5 in 10 s), counted apart from the pictures. */
+    private val profileCtlTimes = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val typingSent = ConcurrentHashMap<String, Long>()
     @Volatile private var foreground = false
     @Volatile private var activeSent = 0L
@@ -409,6 +411,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 if (status.isNotEmpty()) profile?.setStatus(status)
                 profile?.setCustomStatus(custom)
             }
+            // Cap p2 (protocol.md 22.4): Refresh on a linked computer.
+            override fun askPicture(peer: String) { profile?.refresh(peer) }
             // Cap l1 (protocol.md 15.1): the whole account for a linked computer, and its changes back.
             override fun account(): Map<String, JSONObject> {
                 val out = LinkedHashMap<String, JSONObject>()
@@ -418,7 +422,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 profile?.pictureBytes("me")?.takeIf { it.isNotEmpty() }?.let { out["pic|me"] = JSONObject().put("pic", b64.encodeToString(it)) }
                 val blocked = id.muted()
                 for (c in contacts.all.value) {
-                    if (c.groupOnly || trash.has(c.chatKey)) continue
+                    if (trash.has(c.chatKey)) continue
+                    if (c.groupOnly) {
+                        // Cap p2 (22.4): a group peer's picture too, while a group is shared, so the companion's group views show it.
+                        if (groups.sharesGroup(c.chatKey)) profile?.pictureBytes(c.chatKey)?.takeIf { it.isNotEmpty() }
+                            ?.let { out["pic|${c.chatKey}"] = JSONObject().put("pic", b64.encodeToString(it)) }
+                        continue
+                    }
                     out["contact|${c.chatKey}"] = JSONObject().put("n", c.name).put("vf", c.verified).put("bl", c.chatKey in blocked).apply {
                         c.nickname?.let { put("nn", it) }
                         c.mailbox?.let { put("p", it) }
@@ -956,6 +966,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         synchronized(lock) { _met.update { it - peerKey }; saveMet() }
         // Not in touch any way now: their profile picture goes too.
         if (contacts.get(peerKey) == null) profile?.forget(peerKey)
+        dropDrafts(peerKey)
     }
 
     /**
@@ -1193,6 +1204,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Caps b1, e1 and n2: their app says so now, so my ring key, day key and nudge key go to them.
         if ((RingWire.RING_CAP in caps && RingWire.RING_CAP !in c.caps) || (RingWire.WRAP_CAP in caps && RingWire.WRAP_CAP !in c.caps) ||
             (NudgeWire.RICH_CAP in caps && NudgeWire.RICH_CAP !in c.caps)) sendKeys(fromKey)
+        // Cap p2: their profile version rides on everything they send; a newer one than here is asked for.
+        if (ProfileWire.CAP2 in caps) ProfileWire.pvOf(o)?.let { profile?.sawVersion(fromKey, it) }
     }
 
     private fun handle(o: JSONObject, envRoom: String, fromKey: String, name: String, mailbox: String?, sentId: String, via: String,
@@ -1216,7 +1229,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Only those quiet for 10 s go: clearing them all would let a flood of new keys wipe everyone's count.
         if (recent.size > 500) recent.entries.removeIf { e -> synchronized(e.value) { e.value.all { now - it > 10_000 } } }
         val q = recent.getOrPut(fromKey) { ArrayDeque() }
-        if (room == "tvconfig" || room == "call" || room == "mx" || room == "live" || room == "intro" || room == "file" || room == "profile") { if (!groupRate(room, fromKey)) return 429 to "{}" }
+        if (room == "tvconfig" || room == "call" || room == "mx" || room == "live" || room == "intro" || room == "file" || room == "profile") {
+            // Cap p2: "profile?" and "profile-ok" are counted apart from the picture's one in 10 s.
+            if (!groupRate(if (room == "profile" && ProfileWire.isCtl(plain)) PROFILE_CTL else room, fromKey)) return 429 to "{}"
+        }
         // Linked devices: only a paired device (or one answering my link code) gets past Link.receive, and a sync sends many at once.
         else if (room != "receipt" && room != "link") synchronized(q) {
             while (q.isNotEmpty() && now - q.first() > 10_000) q.removeFirst()
@@ -1261,7 +1277,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 val c = contacts.get(fromKey)
                 if (c == null || (c.groupOnly && !groups.sharesGroup(fromKey))) return 403 to "{}"
                 val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+                // Cap p2: someone asks for my picture, or says mine came.
+                if (p.opt("t") == ProfileWire.ASK || p.opt("t") == ProfileWire.ACK) {
+                    if (ProfileWire.CAP2 !in c.caps || !ProfileWire.ctlOk(p)) return 400 to "{}"
+                    if (p.opt("t") == ProfileWire.ASK) profile?.askedBy(fromKey) else profile?.acked(fromKey, ProfileWire.versionOf(p.opt("v"))!!)
+                    return 200 to "{}"
+                }
                 if (profile?.receive(fromKey, p) != true) return 400 to "{}"
+                // Cap p2: taken (even an older version), so their app stops sending it.
+                profile?.ack(fromKey, (p.opt("v") as Number).toLong())
             }
             "call" -> {
                 // Contacts and group peers; someone met only while close by or on the same Wi-Fi.
@@ -2605,6 +2629,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val sk = sharedKey(theirKey)
         // Cap d1: how long I keep our chat, next to "caps" (only to an app that reads it).
         if (hasD1(theirKey)) myDays(theirKey).let { d -> items.forEach { it.first.put("days", d) } }
+        // Cap p2: my profile version on everything to an app that says p2, so a picture it missed is asked for.
+        profile?.let { pr -> pr.myVersion().takeIf { it >= 1 && pr.saysP2(theirKey) }?.let { v -> items.forEach { it.first.put("pv", v) } } }
         // Cap s1: the clear fields are sealed in too, for an app that reads them.
         val bind = strict(theirKey)
         // Cap e1: room "file" goes through the ratchet too, for an app that says e1.
@@ -2694,7 +2720,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val link = if (id.linkPreviews) More.firstLink(t) else null
         if (link == null) return groups.sendText(g, ch, t, re)
         if (t.isEmpty()) return false
-        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link)) }
+        // The time is taken now, before the preview is fetched: the parts after this one (sent a moment later) stay after it.
+        val at = System.currentTimeMillis()
+        bg { groups.sendText(g, ch, t, re, preview = LinkPreview.fetch(link), at = at) }
         return true
     }
 
@@ -2772,10 +2800,19 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     }
 
     /** Leaves the group or, once out of it, deletes it here; its folder entries go too. */
-    fun deleteGroup(g: String): Boolean = groups.delete(g).also { if (it) folders.forget(Folders.groupKey(g)) }
+    fun deleteGroup(g: String): Boolean = groups.delete(g).also { if (it) { folders.forget(Folders.groupKey(g)); dropDrafts("g:$g") } }
 
     /** Leave in one step: its history goes now; the leave still reaches everyone (Groups.leaveAndDelete). Null when done. */
-    fun leaveAndDeleteGroup(g: String): String? = groups.leaveAndDelete(g).also { if (it == null) { folders.forget(Folders.groupKey(g)); flags.forget(Folders.groupKey(g)) } }
+    fun leaveAndDeleteGroup(g: String): String? = groups.leaveAndDelete(g).also { if (it == null) { folders.forget(Folders.groupKey(g)); flags.forget(Folders.groupKey(g)); dropDrafts("g:$g") } }
+
+    /** Leaves group [g] (its history stays, read only): its half-typed messages go, nothing can be sent there now. */
+    fun leaveGroup(g: String): String? = groups.leave(g).also { if (it == null) dropDrafts("g:$g") }
+
+    /** A chat ("g:" + id for a group) is gone: its drafts and what waited in memory go too (Drafts.forget). */
+    private fun dropDrafts(key: String) {
+        val app = context.applicationContext as? io.github.ravenor907.muninn.Muninn ?: return
+        try { Drafts.forget(app, key) } catch (_: Exception) {}
+    }
 
     /** Seals one group envelope (or a photo's pieces) for its member and sends it on every route. */
     private fun sendGroupOut(o: Groups.Out) {
@@ -2844,7 +2881,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** gmsg: 5 in 10 s per sender, like private messages. group: 20 in 10 s. greceipt: not limited (2.4). */
     private fun groupRate(room: String, k: String): Boolean {
         val (map, max) = when (room) { "gmsg" -> recent to 5; "group", "tvconfig", "mx", "intro" -> groupTimes to 20; "call", "file" -> callTimes to 30; "live" -> liveTimes to 30
-            "profile" -> profileTimes to 1; else -> return true }
+            "profile" -> profileTimes to 1; PROFILE_CTL -> profileCtlTimes to ProfileWire.CTL_PER_10S; else -> return true }
         val now = System.currentTimeMillis()
         if (map.size > 500) map.clear()
         val q = map.getOrPut(k) { ArrayDeque() }
@@ -2920,6 +2957,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      */
     fun deleteChat(peerKey: String) {
         deleteConversation(peerKey)
+        dropDrafts(peerKey)
         _unread.update { it - peerKey }
         flags.read(peerKey)
         if (isContact(peerKey)) flags.clear(peerKey, true)
@@ -2969,6 +3007,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             changed
         }
         if (gone.isNotEmpty()) { forget(gone); gone.forEach { outbox.drop(it); outbox.drop(UNSEND + it); tries.remove(it) } }
+        pruneDrafts()
+    }
+
+    /** Drafts of chats and groups no longer here (auto-deleted, gone while away) go too ([Drafts.prune]). */
+    private fun pruneDrafts() {
+        val app = context.applicationContext as? io.github.ravenor907.muninn.Muninn ?: return
+        try {
+            val here = HashSet<String>()
+            here += _private.value.filterValues { it.isNotEmpty() }.keys
+            here += contacts.all.value.map { it.chatKey }
+            here += _met.value.keys
+            here += groups.all.value.keys.map { "g:$it" }
+            Drafts.prune(app, here)
+        } catch (_: Exception) {}
     }
 
     // ------------------------------------------------------------------ message limits (cap d1, section 16)
@@ -3210,6 +3262,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val DAY = ChatWire.DAY
         /** Outbox key for a message's unsend envelope. */
         private const val UNSEND = "unsend:"
+        /** Cap p2: the rate bucket for "profile?" and "profile-ok" in room "profile" (never a room on the wire). */
+        private const val PROFILE_CTL = "profile ctl"
         /** Wait before each new try: 5 s, 10 s, 20 s, 1 min, then every 5 min (until relays hold it, see NetLogic). */
         val RETRY = NetLogic.RETRY
         /** A change to the chats is written this long after it (more changes meanwhile share the write). */

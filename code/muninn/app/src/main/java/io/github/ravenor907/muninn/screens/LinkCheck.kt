@@ -285,7 +285,8 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
                 if (pattern) Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
                     PatternPad(error = wrong, enabled = !busy && !waiting, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
                 } else Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
-                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt(pw) })
                 if (waiting) Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
                 else if (wrong) Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             }

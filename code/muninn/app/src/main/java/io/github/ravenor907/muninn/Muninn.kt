@@ -212,6 +212,11 @@ class Muninn : Application() {
         watchIdle()
         // Unlocked again later (the lock came due while Muninn was running): the same catching up.
         scope.launch { vault.locked.drop(1).collect { locked -> if (!locked) unlocked() else lockedNow() } }
+        // Round 15: whether anyone here can't nudge this phone is written while unlocked, whenever contacts or their caps
+        // change, so a reboot, process death or panic lock finds it ready (not only a lock seen going up).
+        scope.launch {
+            kotlinx.coroutines.flow.combine(contacts.all, chat.blocked) { _, _ -> Unit }.collect { if (!vault.locked.value) keepLockedFallback() }
+        }
         unlocked()
         // The message service asked to listen before everything was running: the Wi-Fi side starts now too.
         if (nostr.keepAlive) listen()
@@ -220,14 +225,23 @@ class Muninn : Application() {
     /** Locked: the pair keys and decoded pictures kept in memory go, and nothing held back is posted. */
     private fun lockedNow() {
         // Round 14: whether anyone here can't nudge this phone (known caps without n1 or n2), kept outside the vault.
-        try {
-            val blocked = chat.blocked.value
-            val old = contacts.all.value.any { it.chatKey !in blocked && io.github.ravenor907.muninn.net.NudgeWire.cantNudge(it.caps, it.groupOnly) }
-            getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().putBoolean(LOCKED_FALLBACK, old).apply()
-        } catch (_: Exception) {}
+        keepLockedFallback()
         try { chat.forgetKeyCache() } catch (_: Exception) {}
         io.github.ravenor907.muninn.ui.PhotoCache.clear()
         coalesce.clear()
+    }
+
+    /**
+     * Whether anyone here can't nudge this phone (known caps without n1 or n2), kept outside the vault for
+     * [lockedActivity]. Written (at once, with commit) only when it changes.
+     */
+    private fun keepLockedFallback() {
+        try {
+            val blocked = chat.blocked.value
+            val old = contacts.all.value.any { it.chatKey !in blocked && io.github.ravenor907.muninn.net.NudgeWire.cantNudge(it.caps, it.groupOnly) }
+            val prefs = getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
+            if (!prefs.contains(LOCKED_FALLBACK) || prefs.getBoolean(LOCKED_FALLBACK, false) != old) prefs.edit().putBoolean(LOCKED_FALLBACK, old).commit()
+        } catch (_: Exception) {}
     }
 
     /** Rapid messages in one chat make one notification ([io.github.ravenor907.muninn.net.NotifyCoalescer]). */

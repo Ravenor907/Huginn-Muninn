@@ -90,6 +90,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `k12` | Daily Hávamál on a Kids' Device (7.18): config fields `hav`, `havw` and `havh`, `havh` in `applied`, and `havtext`. Muninn only. |
 | `k13` | a Kids' Device's colors and the kid's name (7.18): config fields `look`, `season`, `accent`, `lookpick` and `kname`. Muninn only. |
 | `k14` | a Kids' Device's accessibility, the child's name, group members a parent approves and other families' Kids' Devices (7.18): config fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait`, `e` on a quick message, and `ghold`, `kidadd`, `kidok`. Muninn only. |
+| `p2` | profile pictures that always arrive (22.4): `pv` on every envelope, `profile?` and `profile-ok` in room `profile`, a picture marked sent only on its `profile-ok`, and `pask` in room `link`. Needs `p1`. Muninn and Huginn. |
+| `l4` | stamped link frames (section 15, "Replay"): the sender stamps every frame in room `link` with `lts` and `ln`. Like `l1`, only in room `link` (`caps` on `sync`, `ping` and `pong`). Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -431,7 +433,7 @@ Plaintext `{"t": <type>, "call": <call id>, ...}`.
   ring; with no second copy within 30 s it is a missed call, as before. Further than 10 minutes: a missed call at once.
   Muninn `CallLogic.SkewGate`, Huginn `CallSkewGate`, reference `call_skew_judge` in `proto06_ref.py`. Nothing on the
   wire changes; an older callee still applies only the 60 s / 120 s window. Locked ring envelopes (23.2) keep the
-  window as it is.
+  window, except one that arrives live (see 23.2).
 - `codec`: `"opus16"` (5.5). An answer to an unknown codec is `decline`.
 - `ble`: true if this device can carry media to the other over Bluetooth LE right now (5.6).
 - `cands` and `lp`: below. `cands` is always there in `offer`, `answer` and `cands` (an empty array when
@@ -1509,7 +1511,7 @@ a parent" in that group). The device asks each parent whose app says `k14`, once
 | t | from | fields |
 |---|---|---|
 | `ghold` | the device, to its parents | `g`: the group id. `k`: the member's chat key. `n`: their name (1 to 40). `gn`: the group's name (1 to 40). A parent's phone shows "Approve Sam in Soccer for Ava?" (a notification, a card on the device's page, a dialog when none is open). Approve puts (`g`, `k`) in `gok`; Decline keeps them hidden and isn't asked again |
-| `kidadd` | a parent, to the parent who handed them another family's Kids' Device | `tv`: that device. `k`: their own Kids' Device, now on its list. `n`: their child's name. `code`: `k`'s contact code (at most 2000 characters). The other parent's phone asks "Let Leo talk with Ava?", saying that only the sender vouches for it; Add puts `k` on `tv`'s list and answers `kidok`. One already on the list is answered `kidok` at once. Ignored when `k` is the receiving phone, the sender, `tv` or one of its own devices; a contact there not known as a Kids' Device; or a device another parent handed over (by card or Send its code): only that parent asks for it |
+| `kidadd` | a parent, to the parent who handed them another family's Kids' Device | `tv`: that device. `k`: their own Kids' Device, now on its list. `n`: their child's name. `code`: `k`'s contact code (at most 2000 characters). The other parent's phone asks "Let Leo talk with Ava?", saying that only the sender vouches for it; Add puts `k` on `tv`'s list and answers `kidok`. One already on the list is answered `kidok` at once. Ignored when `k` is the receiving phone, the sender, `tv` or one of its own devices, or a contact there not known as a Kids' Device. Round 15: a device another parent handed over (by card or Send its code) is still asked about when a different parent asks (a co-parent), and the ask and the card on the device's page add "Mom shared this device with you first; Dad says they're also its parent." Limit: nothing proves a device is a child's or who its parents are, so the receiving parent decides on who is asking; a device never seen before says "It's new to you" |
 | `kidok` | a parent, to the other family's parent | `tv`: their Kids' Device. `k`: the asker's, now on `tv`'s list. The asker's phone takes `k` off `wait` |
 
 **Send its code.** People › Send its code shares the device's contact code with two more fields: `"kid":1` and `"by"` (the
@@ -1904,6 +1906,31 @@ stamped frame, its frames without `lts` and `ln` are dropped. Frames from an app
 as before, and such an app ignores the two fields. A dropped frame is answered as if taken (nothing tells a relay which
 it was). Muninn `LinkReplay`, Huginn `LinkReplay`.
 
+**Going back to stable (cap `l4`).** An app that stamps says `l4` in `caps` on every `sync`, `ping` and `pong` it sends
+(a phone's `pong` is `{"t": "pong", "caps": "l4"}`; a companion adds `l4` to its usual caps). A device that stamped and
+then went back to an app that doesn't (Labs, Go back to stable) is noticed this way:
+- An unstamped `sync`, `ping` or `pong` whose `caps` lack `l4`, from a device that stamped: taken, and that device no
+  longer counts as one that stamps, so its unstamped frames are taken again. The receiver catches up on what it dropped
+  meanwhile (a companion sends the phone `sync`; a phone's own `sync` handling sends the chats again).
+- Any other unstamped frame from a device that stamps stays dropped. A companion then asks the phone for its caps again
+  with `{"t": "ping", "caps": "l4"}` (at most every 2 minutes); the phone's `pong` answers it. A phone waits for the
+  companion's next `ping` or `sync` (on opening, and every minute while it's in front).
+- A stamped frame from the device again (updated back to the beta) makes it one that stamps once more: replays and old
+  frames are dropped as above.
+- `hello` needs the one-time link token (section 15), so it is taken unstamped; a device linked again (a `hello` taken,
+  or a link code scanned) is learned anew.
+- Limit: nothing proves an unstamped frame is new. A relay holding an unstamped `sync`, `ping` or `pong` from before the
+  device ever stamped could send it to turn the guard off, until the device's next stamped frame turns it back on.
+
+**Clocks more than 36 hours apart (round 15, receiver only; Huginn does this, and nothing on the wire changes).** A
+frame that came straight over the Wi-Fi or Bluetooth is live (a relay can't have kept it), so it's taken whatever its
+`lts` says (its `ln` is still checked and remembered), and the receiver keeps how far that device's clock is from its own
+(when more than an hour, updated when it moves by more than 10 minutes). A frame by relay is taken when its `lts` is
+within 36 hours of the receiver's clock, or of the receiver's clock moved by that kept difference. Only a relay frame
+that is neither is dropped. Either way, the first time in a run that a device's `lts` is more than 36 hours off, the
+receiver says so once: "<device>'s clock and this computer's are about N days apart. Set the right date and time on
+whichever is wrong." A receiver without this drops every frame more than 36 hours off, as above.
+
 **Routes.** A linked pair is usually in one household, behind one internet address that relays rate-limit, so link
 traffic MUST stay off the relays except for small live frames:
 - History (`chat` pages), media (`get`, `part`) and a `me` that carries `pic` go **only** over the LAN route (the HTTPS
@@ -1912,7 +1939,7 @@ traffic MUST stay off the relays except for small live frames:
   again (at least every 30 s it looks, or when the device shows up there). The companion says "History comes over on
   home Wi-Fi".
 - Only small live frames may use the internet: `msg`, `send`, `hello`, `unlink`, `result`, `sync`, `setme`, `me`
-  without `pic`, and with cap `l2` (15.2) `ping`, `pong` and `read`. They also go on Bluetooth and the LAN, but to **at most 2 relays** (open ones first), never all of them,
+  without `pic`, with cap `l2` (15.2) `ping`, `pong` and `read`, and with cap `p2` (22.4) `pask`. They also go on Bluetooth and the LAN, but to **at most 2 relays** (open ones first), never all of them,
   and they wait for a relay in an outbox of their own (at most 40) that never pushes out a real message (real messages
   are sent first when a relay comes back, and keep their own cap of 200). A `me` sent away from the home Wi-Fi drops
   `pic` and says `"pk": true`: the companion keeps the picture it has until the full `me` comes over the LAN.
@@ -2037,7 +2064,7 @@ phone side; Huginn as a phone and Muninn as a companion leave `l1` out and link 
 | `k` | `id` | `v` |
 |---|---|---|
 | `me` | `"me"` | `{n, st, cs}` as in `me` (section 15) |
-| `pic` | `"me"` or a contact's chat key | `{"pic": base64 JPEG}`, a picture as section 22 takes it (anything else shows none) |
+| `pic` | `"me"`, a contact's chat key, or (cap `p2`, 22.4) a group peer's while a group is shared | `{"pic": base64 JPEG}`, a picture as section 22 takes it (anything else shows none) |
 | `contact` | the chat key | `{n: their name, nn: my nickname for them (omitted when none), p: mailbox, vf: verified, bl: blocked}` |
 | `group` | the group id | `{n: name, role: "owner" \| "admin" \| "member", gone: "" \| "left" \| "removed" (omitted when ""), st: the signed group state (3.2)}` |
 | `folder` | the folder id | `{n: name (at most 24 characters), k: [chat keys and "g:" + group id]}` (section 4) |
@@ -2413,7 +2440,9 @@ finished sending what it held (its EOSE cursor) less **40 minutes**: the 10-minu
 clock that is off (it was 20 minutes, so a sender about 10 minutes slow was lost for good: relays filter live events by
 `since` too, and retries reuse the same event). What comes again is dropped as already seen. Muninn keeps the cursor in
 the relay's own time (its `Date` at connecting, believed within a day), so a receiver whose clock is fast doesn't move it
-ahead (`NetLogic.cursor`); Huginn keeps it by its own clock, covered by the same margin. Never further back than the
+ahead (`NetLogic.cursor`); Huginn (Qt's web socket doesn't show the `Date`) keeps it at the earlier of its own clock and
+the newest `created_at` that relay handed over on the inbox request (senders' times, blurred back), so a fast clock here
+never moves it past what is still to come; a relay that handed over nothing keeps its cursor as it was. Never further back than the
 longest message limit and a day, as before. Nothing on the wire changes.
 
 ## 21. Proven routes and bound envelopes (cap `s1`)
@@ -2588,7 +2617,7 @@ Room `live` `active` (11.4) carries two more fields:
   sender and envelope id like `mx` (a copy from another route is dropped before it is opened). Sent once on every route
   (the relays hold it); never answered, never retried on its own: the sender keeps, per person, the version last taken
   by a route, and sends again only when the version changed or no route had taken it yet (every minute, and whenever
-  contacts or groups change).
+  contacts or groups change). To an app that says `p2` this changes (22.4): it is answered and sent again until then.
 - **Who gets it**: every contact, and every member of every group the sender is in (through that member's own
   session, like every group envelope; a member who is not a contact is a group peer, 3.7), but only those whose caps
   say `p1` (an app without it answers 400 and could not show it), and never anyone blocked, in the trash, or no longer
@@ -2613,6 +2642,42 @@ move (18). Between Muninn and Huginn `@move.json` (18.4) carries it as
 `"profile": {"v", "col", "pic", "st", "cs"}`; the new device keeps `v`, so people who had version 3 take version 4
 after the move. Received pictures travel too (they are vault files), with the per-person sent versions, so nothing is
 sent twice.
+
+### 22.4 Pictures that always arrive (cap `p2`)
+
+With `p1` alone a picture is marked sent as soon as a route takes it, so one a relay dropped, or one that waited on the
+relays longer than they keep it, never arrives. With `p2` (only between two apps that both say it; `p1` stays as it is
+for everyone else):
+
+- **`pv` on every envelope.** Every envelope sealed to a contact or group peer whose caps say `p2` (messages, receipts,
+  `live`, `mx`, group rooms, everything through the seal) carries `"pv": n` in the clear, next to `caps`: the sender's
+  own profile version `v` (22.2). Left out while the sender has no profile (`v` 0). A whole number, 1 <= pv < 2^53; a
+  receiver ignores anything else. It is not one of the fields bound by `s1` (21): a changed `pv` can at most cause one
+  `profile?`, which only ever brings the sender's real picture, sealed.
+- **Asking.** A receiver that opens an envelope from a contact or a group peer it shares a group with, whose caps say
+  `p2`, and whose `pv` is higher than the version it keeps for them (0: none), sends room `profile`
+  `{"t": "profile?"}` (other fields ignored), at most once per person in 5 minutes.
+- **Answering.** An app with a profile that takes `profile?` from a contact or group peer that says `p2` (never anyone
+  blocked or in the trash) forgets that person's sent version and sends its picture (22.2) at once, at most once per
+  person a minute.
+- **Acknowledging.** A receiver that takes (200) a `profile` message from an app that says `p2`, even one with a version
+  it already has, answers `{"t": "profile-ok", "v": n}` with that message's `v`. The sender marks its version sent to
+  that person only on a `profile-ok` whose `v` is its current version; a route taking it no longer counts. Until then it
+  sends the picture again 2, 4, 8 ... minutes after the last send, at most 6 hours apart, at most 10 times (in memory
+  only; a new version, a `profile?` or starting again begins anew). After that only a `profile?` sends it again.
+  `profile-ok` is never answered.
+- **Limits.** `profile?` and `profile-ok` are sealed through the ratchet in room `profile` like a picture, deduped the
+  same way, and counted apart from pictures: at most 5 in 10 seconds per sender (429). From an app whose caps don't say
+  `p2`, or a `profile-ok` without a usable `v`: 400. Someone not a contact or group peer: 403. An app with only `p1`
+  never gets them (it would answer 400).
+- **Refresh.** A person's page has Refresh their picture: it sends `profile?` to them at once (no sooner than 10
+  seconds after the last ask), for someone whose app says `p2`.
+- **Group peers** follow every rule here like contacts, while a group is shared.
+- **A linked companion (15.1).** The phone's account items carry `pic` for group peers too (while a group is shared),
+  so group views on the companion show them, and a newer picture the phone takes reaches the companion as any item
+  change does. Refresh on the companion, for one of the phone's people, sends room `link`
+  `{"t": "pask", "peer": "<chat key>"}` to an `l1` phone, which sends `profile?` from itself as above (a phone that
+  doesn't know `pask` ignores it). Both apps: Muninn `ProfileWire` (tests `P2Test`), Huginn `Profile` (self-test `p2`).
 
 ## 23. The ring key and the sealed relay wrapping (caps `b1`, `e1`, `n1`, `n2`)
 
@@ -2694,7 +2759,11 @@ can't ring. With `b1` it can:
   sign-in (NIP-42) signs in as the ring mailbox too, so a ring envelope arrives without anything from the vault.
   An event for the ring mailbox is only ever tried with the ring key and then dropped: never kept or opened otherwise.
 - **Locked**, a well-formed ring that opens and is fresh like an offer (no more than 60 s old, 120 s ahead) rings
-  "Incoming call" with no name, as long as any call rings (45 s). Answer is kept (Muninn opens its unlock screen); once
+  "Incoming call" with no name, as long as any call rings (45 s). A ring is sent once per call, so the offer's two-copy
+  check for clocks that differ (5.2) can't be made; instead (Huginn, round 15; a receiver may do the same) a ring that
+  arrives live on a relay (after that relay's `EOSE` for the ring mailbox request, so it wasn't kept there) rings when
+  its `ts` is within 10 minutes of the callee's clock either way. One that came among the stored events keeps the
+  60 s / 120 s window. Answer is kept (Muninn opens its unlock screen); once
   unlocked, the offer (kept sealed with everything else that came while locked, or fetched from the relays again) is
   answered at once, even if it is up to 105 s old.
   Decline: once unlocked, the offer is answered with `decline`. **Unlocked**, a ring envelope is ignored: the offer
@@ -2758,11 +2827,12 @@ below, for senders known to be unable to nudge.
   **Who it names (1.36).** Only contacts get the ring key, so a nudge that opens with it says what a contact sent. The
   nudge key goes to every group peer too, and a nudge names its sender only by the sender's own word, so a group member
   who isn't a contact could put up "Mom" on a locked phone. So a nudge that opens with the **nudge key never names a
-  person**: its `from` is dropped and only `chat` (the group's name) shows; a 1:1 one says "Muninn" (Huginn: "Huginn"),
-  "New message". Such nudges are also held down: each group name gets one notification, at most 3 per lock period, and
-  any after that fold into one naming nothing; together they alert (sound, vibration) at most once per 2 minutes,
-  whatever names they carry; and a tap opens the chat list, never a chat by name (Muninn `NudgeWire.LockedLimit`,
-  Huginn `LockedNudgeLimit`). Nudges from the ring key alert as before.
+  person**. Round 15: it shows nothing the sender chose either: `from` and `chat` (a group's name is the sender's word
+  too) are both dropped, and every such nudge shares one notification titled "Group message" (with Nothing:
+  "Muninn", Huginn: "Huginn") whose text counts up ("New message", "3 new messages"). Together they alert (sound,
+  vibration) at most once per 2 minutes, whatever they carry, and a tap opens the chat list, never a chat by name
+  (Muninn `NudgeWire.LockedLimit`, Huginn `LockedNudgeLimit`). Nudges from the ring key (contacts) keep their names and
+  alert as before.
   What it shows follows the device's "What notifications show" setting, which is kept
   outside the vault:
   - Name only, and Name and message: the title is `from` (a group's: `from · chat`), the text what came: "New
@@ -2770,7 +2840,7 @@ below, for senders known to be unable to nudge.
     while locked). A nudge naming nobody (`n1`) says "Muninn" (Huginn: "Huginn"), "New message".
   - Nothing: "Muninn" (Huginn: "Huginn"), "New message".
 
-  One notification per sender and chat (with Nothing, one for all; from the nudge key, one per group as above), updated
+  One notification per sender and chat (with Nothing, one for all; from the nudge key, one for all as above), updated
   as more come ("3 new messages") and alerting only the first time. Quiet hours, Do not disturb and Extreme battery saver apply as for any message. On
   Muninn, a tap opens the lock screen, then that chat once unlocked when exactly one contact (1:1) or group (by
   `chat`) has that name, else the chat list; unlocking takes these notifications down (the messages themselves then

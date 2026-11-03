@@ -607,12 +607,16 @@ void CallManager::notifyIncoming(bool on)
                                           [self = QPointer<CallManager>(this)](const QString &a) { if (self) self->onNotificationAction(a); });
 }
 
-void CallManager::ringLocked(const QString &callId, qint64 ts)
+void CallManager::ringLocked(const QString &callId, qint64 ts, bool live)
 {
     // Unlocked: the offer itself rings, with the name.
     if (!m_vault || !m_vault->locked() || callId.isEmpty() || callId == m_lockedCall || m_handled.contains(callId))
         return;
-    if ((m_session && m_session->state() != CallSession::Ended) || !RingWire::ringFresh(ts, nowMs()))
+    // Round 15 (interop M3): a ring is sent once per call, so the offer's two-copy check can't be made here. One that
+    // came live (the relay's stored events were over) was sent just now: a caller's clock up to 10 minutes off rings.
+    const qint64 t = nowMs();
+    const bool skewedLive = live && ts >= t - CallSkewGate::kSkewMs && ts <= t + CallSkewGate::kSkewMs;
+    if ((m_session && m_session->state() != CallSession::Ended) || !(RingWire::ringFresh(ts, t) || skewedLive))
         return;
     m_lockedCall = callId;
     m_lockedChoice = 0;

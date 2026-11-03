@@ -244,6 +244,8 @@ private:
     mutable QSet<QString> m_unreadable;
     QString keyFile() const;
     bool writeLock(const QString &secret, bool pattern) const;
+    // vault.key's bytes for a lock on key (the KDF runs here): written by writeLock, or swapped in with the files.
+    static QByteArray lockBlob(const QString &secret, bool pattern, const QByteArray &key);
     bool writeKeyFile(const QByteArray &bytes) const;
     void wrongTry();   // counts a wrong pattern or password (the wait doubles every 5)
     QByteArray m_key;

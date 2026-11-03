@@ -113,9 +113,10 @@ class MessageService : Service() {
     }
 }
 
-/** After the phone restarts or Muninn updates, start listening again. */
+/** After the phone restarts or Muninn updates, or a Kids' Device's safe mode tries a normal start, start listening again. */
 class StartAtBoot : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) MessageService.start(context)
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED ||
+            intent.action == io.github.ravenor907.muninn.tv.SafeStart.TRY_AGAIN) MessageService.start(context)
     }
 }

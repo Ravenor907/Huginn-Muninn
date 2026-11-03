@@ -21,6 +21,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QEvent>
+#include <QMouseEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QGuiApplication>
@@ -184,6 +185,9 @@ System::System(Settings *settings, const QString &tourDir, bool windowed, QObjec
     detectHandheld();
     refit();
     checkSteam();   // Steam beside Huginn (Linux Handheld mode): known before the first keyboard is wanted
+    m_steamPoll.setInterval(10000);
+    connect(&m_steamPoll, &QTimer::timeout, this, &System::checkSteam);
+    connect(this, &System::handheldChanged, this, &System::keyboardChanged);
     watchPower();
     // Input: every key, mouse, touch and controller press notes the time; 30 seconds without any is idle.
     m_inputClock.start();
@@ -337,11 +341,20 @@ void System::noteInput()
 bool System::eventFilter(QObject *watched, QEvent *event)
 {
     switch (event->type()) {
-    case QEvent::KeyPress:
     case QEvent::MouseButtonPress:
+        // A real mouse (or a touchpad) click: touch is no longer what's in use. A click Qt or the system made from a
+        // touch, and the controller's pointer (it keeps padInUse on), don't count.
+        if (static_cast<QMouseEvent *>(event)->source() == Qt::MouseEventNotSynthesized && !m_controllerInUse)
+            setTouchInUse(false);
+        noteInput();
+        break;
+    case QEvent::TouchBegin:
+        setTouchInUse(true);
+        noteInput();
+        break;
+    case QEvent::KeyPress:
     case QEvent::MouseMove:
     case QEvent::Wheel:
-    case QEvent::TouchBegin:
     case QEvent::TouchUpdate:
     case QEvent::TabletPress:
         noteInput();
@@ -476,6 +489,17 @@ bool System::handheldSelfTest()
         const QString got = handheldModelFor(QLatin1String(c.product), QLatin1String(c.family), QLatin1String(c.board), QLatin1String(c.vendor));
         if (got != QLatin1String(c.want)) {
             std::printf("handheld model for \"%s\" by \"%s\": got \"%s\", want \"%s\"\n", c.product, c.vendor, got.toUtf8().constData(), c.want);
+            ok = false;
+        }
+    }
+    // Round 15 (R2): the on-screen keyboard outside game mode only for the controller or touch, never a mouse or keys.
+    {
+        const bool docked = !keyboardRule(true, false, false, false, false, true) && !keyboardRule(true, false, false, false, true, false);
+        const bool pad = keyboardRule(true, false, false, true, false, true) && keyboardRule(true, false, false, true, true, false)
+            && !keyboardRule(true, false, false, true, false, false);
+        const bool game = keyboardRule(true, false, true, false, false, false) && !keyboardRule(false, false, true, true, true, true);
+        if (!docked || !pad || !game) {
+            std::printf("on-screen keyboard rule wrong (mouse %d, controller %d, game mode %d)\n", docked, pad, game);
             ok = false;
         }
     }
@@ -833,18 +857,32 @@ void showTouchKeyboard(bool show)
         return;
     if (toggleTouchKeyboard() || !show)
         return;
-    // Its host starts with Windows' touch keyboard program; once it's there, the toggle works.
+    // Its host starts with Windows' touch keyboard program; once it's there, the toggle works. TabTip.exe asks for UI
+    // access, so only the shell can start it (a plain process start fails with "elevation required"). Qt's
+    // QDesktopServices opens it through the shell from Qt's own library, so Huginn.exe starts no program itself.
     QString dir = qEnvironmentVariable("CommonProgramW6432");
     if (dir.isEmpty())
         dir = qEnvironmentVariable("CommonProgramFiles");
-    if (dir.isEmpty())
+    if (dir.isEmpty()) {
+        CrashLog::note(QStringLiteral("touch keyboard: no common program folder"));
         return;
+    }
     const QString exe = QDir::toNativeSeparators(dir + QStringLiteral("/microsoft shared/ink/TabTip.exe"));
-    if (!QFileInfo::exists(exe) || !QProcess::startDetached(exe, {}))
+    if (!QFileInfo::exists(exe)) {
+        CrashLog::note(QStringLiteral("touch keyboard: TabTip.exe isn't there"));
         return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(exe))) {
+        CrashLog::note(QStringLiteral("touch keyboard: the shell didn't start TabTip.exe"));
+        return;
+    }
+    // Started: the toggle shows it once its host answers (asked again a little later on a slow start).
     QTimer::singleShot(600, qApp, [] {
-        if (!touchKeyboardUp())
-            toggleTouchKeyboard();
+        if (!touchKeyboardUp() && !toggleTouchKeyboard())
+            QTimer::singleShot(900, qApp, [] {
+                if (!touchKeyboardUp() && !toggleTouchKeyboard())
+                    CrashLog::note(QStringLiteral("touch keyboard: started, but its host didn't answer"));
+            });
     });
 }
 }
@@ -855,23 +893,30 @@ bool System::steamKeyboard() const
     if (steamAround(m_gameMode))
         return true;
 #ifdef Q_OS_LINUX
-    checkSteam();
     return m_steamRunning;
 #else
     return false;
 #endif
 }
 
+void System::setSteamRunning(bool on)
+{
+    if (on == m_steamRunning)
+        return;
+    m_steamRunning = on;
+    Q_EMIT keyboardChanged();
+}
+
 // Steam's client running beside Huginn (Handheld mode on the desktop): its keyboard can come up there too. Looked for
-// at most every 10 seconds, without waiting: in the Flatpak on the host (the sandbox sees only its own processes),
-// elsewhere in /proc. The answer counts from the next ask.
-void System::checkSteam() const
+// at start and every 10 seconds while the controller or touch is in use, without waiting: in the Flatpak on the host
+// (the sandbox sees only its own processes), elsewhere in /proc. keyboardChanged says when the answer changes.
+void System::checkSteam()
 {
 #ifdef Q_OS_LINUX
     if (!gameLike() || m_steamChecking || !m_tourDir.isEmpty())
         return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (m_steamCheckedAt != 0 && now - m_steamCheckedAt < 10000)
+    if (m_steamCheckedAt != 0 && now - m_steamCheckedAt < 9000)
         return;
     m_steamCheckedAt = now;
     if (!inFlatpak()) {
@@ -886,41 +931,85 @@ void System::checkSteam() const
                 break;
             }
         }
-        m_steamRunning = found;
+        setSteamRunning(found);
         return;
     }
     m_steamChecking = true;
-    auto *ps = new QProcess(const_cast<System *>(this));
+    auto *ps = new QProcess(this);
     connect(ps, &QProcess::finished, this, [this, ps](int code, QProcess::ExitStatus status) {
-        m_steamRunning = status == QProcess::NormalExit && code == 0;
         m_steamChecking = false;
+        setSteamRunning(status == QProcess::NormalExit && code == 0);
         ps->deleteLater();
     });
     connect(ps, &QProcess::errorOccurred, this, [this, ps](QProcess::ProcessError e) {
         if (e != QProcess::FailedToStart)
             return;
-        m_steamRunning = false;
         m_steamChecking = false;
+        setSteamRunning(false);
         ps->deleteLater();
     });
     ps->start(QStringLiteral("flatpak-spawn"), {QStringLiteral("--host"), QStringLiteral("pgrep"), QStringLiteral("-x"), QStringLiteral("steam")});
 #endif
 }
 
+void System::setControllerInUse(bool on)
+{
+    if (on == m_controllerInUse)
+        return;
+    const bool was = padOrTouch();
+    m_controllerInUse = on;
+    if (on)
+        m_touchInUse = false;   // the controller is the latest; a tap turns touch back on
+    if (padOrTouch() == was)
+        return;
+#ifdef Q_OS_LINUX
+    if (padOrTouch()) {
+        checkSteam();
+        m_steamPoll.start();
+    } else {
+        m_steamPoll.stop();
+    }
+#endif
+    Q_EMIT keyboardChanged();
+}
+
+void System::setTouchInUse(bool on)
+{
+    if (on == m_touchInUse || !m_tourDir.isEmpty())
+        return;
+    const bool was = padOrTouch();
+    m_touchInUse = on;
+    if (padOrTouch() == was)
+        return;
+#ifdef Q_OS_LINUX
+    if (padOrTouch()) {
+        checkSteam();
+        m_steamPoll.start();
+    } else {
+        m_steamPoll.stop();
+    }
+#endif
+    Q_EMIT keyboardChanged();
+}
+
+void System::noteKeyboardUsed()
+{
+    setTouchInUse(false);
+}
+
 void System::showSteamKeyboard()
 {
     // Steam's own keyboard types into whatever has focus, in game mode and Handheld mode (when Steam is there to
-    // show it). On a Windows handheld with no Steam, Windows' touch keyboard. Desktop users have a real keyboard.
-    // The screenshot tour opens nothing outside its window.
-    if (!gameLike() || !m_tourDir.isEmpty())
+    // show it). On a Windows handheld with no Steam, Windows' touch keyboard. A mouse or a real keyboard in use
+    // (a docked handheld on the desktop) gets nothing. The screenshot tour opens nothing outside its window.
+    if (!keyboardAvailable() || !m_tourDir.isEmpty())
         return;
     if (steamKeyboard()) {
         openSteamUrl(QStringLiteral("steam://open/keyboard"));
         return;
     }
 #ifdef Q_OS_WIN
-    if (m_controllerInUse)
-        showTouchKeyboard(true);
+    showTouchKeyboard(true);
 #endif
 }
 
@@ -929,18 +1018,31 @@ bool System::keyboardCovers() const
     return m_tourDir.isEmpty() && keyboardAvailable();
 }
 
+bool System::keyboardRule(bool gameLike, bool tour, bool gameMode, bool padOrTouch, bool windows, bool steam)
+{
+    if (!gameLike)
+        return false;
+    if (tour)
+        return true;   // the tour's handheld stops show the legend as on the device
+    // Game mode: Steam's keyboard is how anything is typed there (a touch there may come as a mouse click).
+    if (gameMode)
+        return true;
+    // The desktop (a docked handheld too, Steam running or started from it): only for the controller or touch, never
+    // over a mouse or a real keyboard (Main.qml's padInUse, and a tap or a click seen in eventFilter).
+    if (!padOrTouch)
+        return false;
+    // Windows: Steam's keyboard when started from Steam, else Windows' touch keyboard. Elsewhere only Steam's.
+    return windows || steam;
+}
+
 bool System::keyboardAvailable() const
 {
-    if (!gameLike())
-        return false;
-    if (!m_tourDir.isEmpty())
-        return true;   // the tour's handheld stops show the legend as on the device
 #ifdef Q_OS_WIN
-    // Windows' touch keyboard while the controller is what's in use: a keyboard's keys turn that off (Main.qml).
-    return steamKeyboard() || m_controllerInUse;
+    const bool windows = true;
 #else
-    return steamKeyboard();
+    const bool windows = false;
 #endif
+    return keyboardRule(gameLike(), !m_tourDir.isEmpty(), m_gameMode, padOrTouch(), windows, steamKeyboard());
 }
 
 void System::hideSteamKeyboard()

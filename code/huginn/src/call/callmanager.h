@@ -125,7 +125,9 @@ public:
     // Cap b1 (shared/docs/protocol.md section 23): a ring envelope opened while Huginn is locked. It rings with
     // "Incoming call" and no name (nothing else is known). Answer or Decline on the notification is kept, and the
     // offer itself, read once Huginn is unlocked, follows it.
-    void ringLocked(const QString &callId, qint64 ts);
+    // live: it came as it was sent (after the relay's stored events), so a caller whose clock is off by up to
+    // CallSkewGate::kSkewMs still rings (round 15, interop M3); one a relay kept rings only inside the usual window.
+    void ringLocked(const QString &callId, qint64 ts, bool live = false);
     // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
     void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
     QByteArray relayId();

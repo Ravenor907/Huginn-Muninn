@@ -39,7 +39,7 @@ Item {
     // prompt at the top instead, carrying on what's typed, and its Send sends from here.
     function writeHere() {
         field.forceActiveFocus()
-        if (System.keyboardCovers()) writeAbove()
+        if (System.keyboardCovers) writeAbove()
     }
     function writeAbove() {
         Ui.askMessage(box.placeholder !== "" ? box.placeholder : "Message", "", field.text, "Send", t => { box.setText(t); box.enter() })
@@ -226,7 +226,7 @@ Item {
                     // at the top (writeAbove), and the pages do the same for the controller (writeHere).
                     onActiveFocusChanged: {
                         if (!activeFocus || focusReason === Qt.ActiveWindowFocusReason || focusReason === Qt.PopupFocusReason) return
-                        if (!System.keyboardCovers()) System.showSteamKeyboard()
+                        if (!System.keyboardCovers) System.showSteamKeyboard()
                         else if (focusReason === Qt.MouseFocusReason) Qt.callLater(box.writeAbove)
                     }
                     Keys.onPressed: event => {

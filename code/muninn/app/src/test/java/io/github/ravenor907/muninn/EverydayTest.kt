@@ -78,6 +78,43 @@ class EverydayTest {
     }
 
     @Test
+    fun aCutNeverSplitsALetterFromItsMark() {
+        // "e" and a combining acute accent show as one letter; an odd limit lands between the two.
+        val text = "e\u0301".repeat(1500)
+        val parts = Drafts.split(text, 2001)
+        assertEquals(text, parts.joinToString(""))
+        parts.forEach { assertTrue(it.length % 2 == 0 && it.first() == 'e') }
+        assertEquals(2000, parts[0].length)
+        // A plain cut where nothing joins.
+        assertEquals(5, Drafts.graphemeCut("abcdefgh", 5))
+        assertEquals(3, Drafts.graphemeCut("abce\u0301fg", 4))
+        assertEquals(5, Drafts.graphemeCut("abce\u0301fg", 5))
+    }
+
+    @Test
+    fun draftsGoWithTheirChat() {
+        val all = setOf("alice", "bob", Drafts.groupKey("g1", "main"), Drafts.groupKey("g1", "x"), Drafts.groupKey("g2", "main"))
+        assertEquals(setOf("bob", Drafts.groupKey("g2", "main")), Drafts.orphans(all, setOf("alice", "g:g1")))
+        assertTrue(Drafts.orphans(all, all.map { if (it.startsWith("g:")) it.substringBefore('/') else it }.toSet()).isEmpty())
+        // A refused notification reply waits in the box: a group's goes to its main channel.
+        assertEquals(Drafts.groupKey("g1", "main"), Drafts.replyKey("g:g1"))
+        assertEquals("alice", Drafts.replyKey("alice"))
+        assertEquals("see you", Drafts.withReply(Drafts.Draft(), "see you").text)
+        assertEquals("half\nsee you", Drafts.withReply(Drafts.Draft("half", re = "m1"), "see you").text)
+        assertEquals("m1", Drafts.withReply(Drafts.Draft("half", re = "m1"), "see you").re)
+    }
+
+    @Test
+    fun aLatePartKeepsItsPlace() {
+        fun m(id: String, t: Long) = io.github.ravenor907.muninn.net.Groups.GMsg(id, "g", "main", "me", "Me", id, true, t)
+        val list = listOf(m("old", 100), m("p2", 300), m("p3", 350))
+        val out = io.github.ravenor907.muninn.net.Groups.inOrder(list, m("p1", 250))
+        assertEquals(listOf("old", "p1", "p2", "p3"), out.map { it.id })
+        assertEquals(listOf("old", "p2", "p3", "new"), io.github.ravenor907.muninn.net.Groups.inOrder(list, m("new", 400)).map { it.id })
+        assertEquals("first", io.github.ravenor907.muninn.net.Groups.inOrder(list, m("first", 1)).first().id)
+    }
+
+    @Test
     fun tooLongIsMoreThanTheMostParts() {
         val text = "x ".repeat(Drafts.MAX_PARTS * 1000 + 500)
         assertTrue(Drafts.split(text, 2000).size > Drafts.MAX_PARTS)

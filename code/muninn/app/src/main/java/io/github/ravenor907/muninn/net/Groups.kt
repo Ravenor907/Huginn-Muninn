@@ -533,17 +533,22 @@ class Groups(
 
     // ------------------------------------------------------------------ messages (3.8, 3.9)
 
-    /** [re]: the message this answers (cap m1: "re" in the gmsg; apps without m1 just show the text). */
-    fun sendText(g: String, ch: String, text: String, re: String = "", poll: More.Poll? = null, preview: More.Preview? = null): Boolean = act {
+    /**
+     * [re]: the message this answers (cap m1: "re" in the gmsg; apps without m1 just show the text). [at]: the time it
+     * was sent, taken before a link preview was fetched, so the parts of a long message keep their order (0: now).
+     */
+    fun sendText(g: String, ch: String, text: String, re: String = "", poll: More.Poll? = null, preview: More.Preview? = null, at: Long = 0L): Boolean = act {
         val t = text.trim()
         if (t.isEmpty() || Proto06.chars(t) > Proto06.MAX_TEXT) return@act false
         val (s, chId) = target(g, ch) ?: return@act false
         val id = Proto06.newLogicalId()
-        val time = now()
+        val time = if (at > 0L) at else now()
         val to = s.members.map { it.k }.filter { it != me }.toSet()
         val quote = re.takeIf { r -> Proto06.isLogicalId(r) && chats[g].orEmpty().any { it.id == r } } ?: ""
-        addMsg(GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to, re = quote,
-            poll = poll, preview = preview))
+        val made = GMsg(id, g, chId, me, host.myName, t, true, time, state = if (to.isEmpty()) "sent" else "sending", to = to, re = quote,
+            poll = poll, preview = preview)
+        // Sent with an earlier time (after a link preview): placed by its time, before the parts that went meanwhile.
+        if (at > 0L) chats[g] = inOrder(chats[g].orEmpty(), made) else addMsg(made)
         // A poll's text says the same for apps without m2; they ignore "poll" and "lp".
         val plain = JSONObject().put("g", g).put("ch", chId).put("id", id).put("sv", s.v).put("text", t).put("ts", time)
             .apply { if (quote.isNotEmpty()) put("re", quote); poll?.let { put("poll", More.pollJson(it)) }; preview?.let { put("lp", More.previewJson(it)) } }.toString()
@@ -1600,6 +1605,11 @@ class Groups(
     }
 
     companion object {
+        /** [list] with [m] after the last message not newer than it (a part sent late with its earlier time). */
+        fun inOrder(list: List<GMsg>, m: GMsg): List<GMsg> {
+            val at = list.indexOfLast { it.time <= m.time } + 1
+            return (list.subList(0, at) + m + list.subList(at, list.size)).takeLast(1000)
+        }
         /** [GMsg.unsent] of a message an admin removed for everyone (no name holds a control character). */
         const val REMOVED = "\u0001admin"
         /** Cap g4 (28.5): why a join wasn't taken. */

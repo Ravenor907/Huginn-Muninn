@@ -12,6 +12,28 @@
 struct _SDL_GameController;
 class QQuickWindow;
 
+// Round 15 (R9): one controller seen as two devices (Steam's virtual pad and the raw one) whose copies don't overlap in
+// time (down and up on one, then down and up on the other, in one poll): the second copy's press within kTwinMs of the
+// first's release, on another pad, is the same tap, never a second one. Its release goes with it.
+class TapTwins
+{
+public:
+    static constexpr qint64 kTwinMs = 40;
+    // A press that would count (no other pad holds the button): false when it's the other copy of one just let go.
+    bool press(qint32 pad, const QString &button, qint64 nowMs);
+    // A release that would count: false when its press didn't (and it's let go quietly).
+    bool release(qint32 pad, const QString &button, qint64 nowMs);
+    static bool selfTest();
+
+private:
+    struct Up {
+        qint32 pad = -1;
+        qint64 at = 0;
+    };
+    QHash<QString, Up> m_lastUp;   // per button: the pad that last let it go, and when
+    QSet<QString> m_twin;          // pad + "|" + button: a press taken as the other copy
+};
+
 // Reads controllers through SDL. In Game Mode Steam hands non-Steam apps a virtual Xbox pad,
 // so this is the same path every Steam game uses. The D-pad holds to repeat. The sticks are
 // read as they are: the left one scrolls, the right one moves the on-screen pointer (Main.qml).
@@ -104,6 +126,7 @@ private:
     bool m_relaxed = false;
     Qt::MouseButtons m_held = Qt::NoButton;   // stick-pointer buttons down right now
     QElapsedTimer m_clock;                    // timestamps for those events (double clicks)
+    TapTwins m_twins;                         // one pad seen twice: one tap, not two (R9)
     qint64 m_lastActive = -100000;            // m_clock time of the last press, release or stick move
     bool inUse() const;
 };

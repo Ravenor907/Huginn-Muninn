@@ -8,7 +8,7 @@ import Huginn
 //
 // HOOKS (chatpeople.cpp), each through has() so this still works on a build without them:
 //   Chat.callsAllowed / setCallsAllowed, Chat.filesAllowed / setFilesAllowed, Chat.showsActive / setShowsActive,
-//   Chat.isRightAway / setRightAway, Chat.chatColor / setChatColor
+//   Chat.isRightAway / setRightAway, Chat.chatColor / setChatColor, Profile.askPicture (Refresh their picture, cap p2)
 Item {
     id: panel
     property string key: ""
@@ -49,7 +49,8 @@ Item {
     ] : [
         { id: "nick", label: "Nickname", value: nick !== "" ? nick : "None" },
         { id: "note", label: "Note", value: note !== "" ? note : "None" },
-        { id: "color", label: "Chat color", swatches: true }
+        { id: "color", label: "Chat color", swatches: true },
+        { id: "picture", label: "Refresh their picture", value: "Ask again" }
     ]
 
     function show(k, n, x) {
@@ -74,6 +75,8 @@ Item {
         else if (id === "note")
             Ui.ask("Note about " + shownName, "Only you see it", Chat.noteOf(k), "Save", t => { Chat.setNote(k, t); panel.revision++ }, false, true)
         else if (id === "color") pickColor(1)
+        // Cap p2: asks them for their current picture, in case one never arrived.
+        else if (id === "picture") { if (typeof Profile.askPicture === "function") Ui.say(Profile.askPicture(k)) }
         // The list opens over this panel (it stays open on the same row); back here after a pick or B.
         else if (id === "days") PeopleActions.daysMenu(k, () => { panel.reopen(); if (Ui.main) Ui.main.restoreFocus() })
         else if (id === "direct") { Calls.setTrusted(k, !Calls.trusted(k)); revision++ }

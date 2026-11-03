@@ -328,6 +328,8 @@ private:
     QHash<QString, qint64> m_eoseAt;
     QHash<QString, qint64> m_cursorWait;   // EOSE came; the cursor moves once every event before it is answered
     QSet<QString> m_eosed;
+    QSet<QString> m_ringEosed;         // relays whose ring mailbox request is live (its EOSE came): a ring there is live
+    QHash<QString, qint64> m_newest;   // the newest created_at each relay handed over on the inbox (round 15: the cursor)
     bool m_refused = false;
     qint64 m_since = 0;                // "nostr/since" as it was at start, then the last event taken
     struct Page {
@@ -433,6 +435,7 @@ void NostrWorker::open(const QString &url)
     m_authClosed.remove(url);
     m_askedAgain.remove(url);
     m_eosed.remove(url);
+    m_ringEosed.remove(url);
     m_pages.remove(url);
     connect(ws, &QWebSocket::connected, this, [this, url, ws] {
         Busy::ThreadScope busy("relay thread: connections");
@@ -516,6 +519,7 @@ void NostrWorker::gone(const QString &url, QWebSocket *ws)
     m_links.erase(it);
     drop(ws);
     m_eosed.remove(url);
+    m_ringEosed.remove(url);
     m_pages.remove(url);
     m_cursorWait.remove(url);
     Busy::count(QStringLiteral("relay dropped: ") + hostOf(url));
@@ -635,6 +639,9 @@ qint64 NostrWorker::sinceFor(const QString &url) const
 
 void NostrWorker::storedEvent(const QString &url, const QString &sub, qint64 createdAt)
 {
+    // Round 15 (interop M4): the newest event time this relay handed over on the inbox (stored or live), for the cursor.
+    if ((sub == m_subId || sub == m_pageSubId) && createdAt > m_newest.value(url, 0))
+        m_newest.insert(url, createdAt);
     // Only stored events count (before EOSE), on the inbox request or a page request still going.
     if (sub == m_subId ? m_eosed.contains(url) : (sub != m_pageSubId || m_pages.value(url).until == 0))
         return;
@@ -646,6 +653,12 @@ void NostrWorker::storedEvent(const QString &url, const QString &sub, qint64 cre
 
 void NostrWorker::endOfStored(const QString &url, QWebSocket *ws, const QString &sub)
 {
+    // Cap b1 (round 15): from here a ring on this relay came as it was sent, not from what the relay kept.
+    if (sub == m_ringSubId) {
+        if (m_links.value(url).ws == ws)
+            m_ringEosed.insert(url);
+        return;
+    }
     if (sub != m_subId && sub != m_pageSubId)
         return;
     if (m_links.value(url).ws != ws)
@@ -677,9 +690,13 @@ void NostrWorker::endOfStored(const QString &url, QWebSocket *ws, const QString 
         ws->sendTextMessage(compact(QJsonArray{QStringLiteral("CLOSE"), m_pageSubId}));
     m_pages.remove(url);
     // Everything this relay held has come: next time only what is newer. Not while something was left for later, and
-    // not before Nostr has answered for every event handed to it.
-    m_cursorWait.insert(url, now());
-    commitCursors();
+    // not before Nostr has answered for every event handed to it. Round 15 (interop M4): the cursor is never ahead of
+    // the newest event this relay handed over (senders' times, blurred back), so a clock here that runs fast by any
+    // amount doesn't move it past messages still to come. With no event from it yet, the cursor stays as it was.
+    if (m_newest.contains(url)) {
+        m_cursorWait.insert(url, qMin(now(), m_newest.value(url)));
+        commitCursors();
+    }
 }
 
 void NostrWorker::commitCursors()
@@ -709,6 +726,7 @@ void NostrWorker::subscribe(QWebSocket *ws)
             url = it.key();
     // Stored events are counted again from here (a full page asks for the ones before it).
     m_eosed.remove(url);
+    m_ringEosed.remove(url);
     m_pages.remove(url);
     const QString pub = m_keys.pub;
     if (!pub.isEmpty()) {
@@ -838,6 +856,7 @@ void NostrWorker::handle(const QString &url, const QJsonObject &ev)
             in.id = raw;
             in.content = ev.value(QStringLiteral("content")).toString();
             in.ring = true;
+            in.live = m_ringEosed.contains(url);
             m_batch.events << in;
             deliverSoon();
             return;
@@ -1142,7 +1161,7 @@ void Nostr::take(const Batch &b)
             noteSeen(in.id);
             noteSeenSoon();
             if (onRing)
-                onRing(in.content);
+                onRing(in.content, in.live);
             continue;
         }
         const bool ok = in.opened && onOpened ? onOpened(in.body) : onEnvelope && onEnvelope(in.content);
@@ -1545,7 +1564,6 @@ bool Nostr::threadSelfTest()
         });
         waitFor([&] { return n.m_eoseAt.contains(url); }, 3000);
         check("the cursor moves once every event is answered", n.m_eoseAt.contains(url) && bodies.size() == 3 && bodies.last() == "three");
-
         // A burst comes in a few batches, not one call per event.
         QStringList burst;
         for (int i = 0; i < 200; ++i)
@@ -1558,6 +1576,23 @@ bool Nostr::threadSelfTest()
         waitFor([&] { return bodies.size() >= 203; }, 10000);
         const int batches = n.m_batches - before;
         check("a burst of 200 events is handed over in batches", bodies.size() == 203 && batches >= 1 && batches <= 20);
+        // Round 15 (interop M4): the cursor is never ahead of the newest event the relay handed over, so a fast clock
+        // here can't skip what comes later; a relay that handed over nothing keeps no cursor.
+        {
+            const QString slow = QStringLiteral("wss://selftest-slow.invalid");
+            const qint64 then = now() - 7200;
+            const QString old = compact(QJsonArray{QStringLiteral("EVENT"), QStringLiteral("$SUB"),
+                                                   event(Kind, QJsonArray{QJsonValue(QJsonArray{QStringLiteral("p"), pub})},
+                                                         QString::fromLatin1(QByteArray("slow").toBase64()), Schnorr::newSecret(), then)});
+            const QString empty = QStringLiteral("wss://selftest-empty.invalid");
+            n.post([slow, old, empty, eose](NostrWorker *w) {
+                w->feed(slow, old);
+                w->feed(slow, eose);
+                w->feed(empty, eose);
+            });
+            waitFor([&] { return n.m_eoseAt.contains(slow); }, 3000);
+            check("the cursor never runs ahead of the newest event", n.m_eoseAt.value(slow) == then && !n.m_eoseAt.contains(empty));
+        }
 
         // A page EOSE with no page asked for is ignored: it never moves a relay's cursor.
         const QString other = QStringLiteral("wss://selftest-page.invalid");

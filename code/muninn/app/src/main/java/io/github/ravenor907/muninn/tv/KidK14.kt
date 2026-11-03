@@ -423,19 +423,25 @@ object KidK14 {
     /**
      * Whether a "kidadd" from [from] for device [k] onto this phone's device [tv] may be asked about. Never this phone ([me]),
      * the sender, the device itself, or one of this phone's own devices ([mine]); never someone already a contact here who
-     * isn't known as a Kids' Device ([contact], [knownKid]); and never a device another parent handed over ([handedBy], from a
-     * card or Send its code): only its own parent asks for it.
+     * isn't known as a Kids' Device ([contact], [knownKid]). A device another parent handed over ([handedBy], from a card or
+     * Send its code) is still asked about when someone else asks (a co-parent): [kidAddText] then says who shared it first.
      */
     fun kidAddOk(k: String, from: String, me: String, tv: String, mine: Boolean, contact: Boolean, knownKid: Boolean, handedBy: String?): Boolean = when {
         k == me || k == from || k == tv || mine -> false
         contact && !knownKid -> false
-        handedBy != null && handedBy != from -> false
         else -> true
     }
 
-    /** The ask on the parent's phone: who says so, and that only they can vouch for it. [new]: never seen on this phone. */
-    fun kidAddText(who: String, kid: String, child: String, new: Boolean): String =
+    /** Who first shared device [k] here when it wasn't the asker [from] (a co-parent asking): shown in [kidAddText]. */
+    fun sharedFirstBy(handedBy: String?, from: String): String? = handedBy?.takeIf { it != from }
+
+    /**
+     * The ask on the parent's phone: who says so, and that only they can vouch for it. [new]: never seen on this phone.
+     * [firstBy]: the name of the parent who shared this device first, when someone else asks (a co-parent).
+     */
+    fun kidAddText(who: String, kid: String, child: String, new: Boolean, firstBy: String? = null): String =
         "$who says this is their Kids' Device for $kid. Only add it if you trust $who." +
+            (if (firstBy != null) " $firstBy shared this device with you first; $who says they're also its parent." else "") +
             (if (new) " It's new to you." else "") + " Add it to who $child can talk to?"
 
     /** "Waiting for Leo's parent to add Ava" on the parent's page. */

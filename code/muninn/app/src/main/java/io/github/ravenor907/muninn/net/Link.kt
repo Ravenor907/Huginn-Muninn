@@ -99,8 +99,8 @@ object LinkWire {
         // Cap l1 (15.1): a small change without a picture; the full account only on the home Wi-Fi.
         "acct" -> LinkAccount.internetOk(o)
         "msg", "send", "hello", "unlink", "result", "sync", "setme" -> true
-        // Cap l2 (15.2): small live frames too.
-        "ping", "pong", "read" -> true
+        // Cap l2 (15.2): small live frames too. Cap p2 (22.4): "pask", Refresh on the companion.
+        "ping", "pong", "read", "pask" -> true
         else -> false
     }
 
@@ -110,6 +110,12 @@ object LinkWire {
     /** Cap l3 (15.3): a "msg" with an id the companion has is that message edited or deleted, and replaces it quietly. */
     const val L3 = "l3"
     fun saysL3(caps: String) = caps.split(' ').any { it == L3 }
+    /**
+     * Cap l4 (15, "Replay"): this app stamps every link frame ("lts" and "ln"). Said in "caps" on "sync", "ping" and
+     * "pong"; one of those that comes unstamped and without it says the device went back to an app that doesn't stamp.
+     */
+    const val L4 = "l4"
+    fun saysL4(caps: String) = caps.split(' ').any { it == L4 }
     /** A device name from a "ping" ("dn"): one line, at most 40 characters. */
     fun deviceName(s: String) = s.trim().replace(Regex("\\s+"), " ").take(40)
 
@@ -171,17 +177,34 @@ object LinkWire {
  * took before (remembered [MAX_AGE_MS] past the frame's time). Once a device has sent one stamped frame, its frames
  * without a stamp are dropped too (an app before 1.36 never stamps, so its frames are still taken). Frames that change
  * nothing when they come twice ([UNREMEMBERED]) are checked for time only, so history pages don't fill the list.
+ *
+ * Going back to stable (cap l4): an unstamped "sync", "ping" or "pong" whose "caps" lack "l4" says the device runs an
+ * app that doesn't stamp any more. It is taken and the device no longer counts as one that stamps ([left] says so once,
+ * so the receiver catches up). Its next stamped frame makes it one again. Other unstamped frames from a device that
+ * stamps stay dropped, and the receiver asks for its caps again ([probeDue]). A "hello" needs its one-time link token,
+ * so it is taken unstamped too, and a device linked again starts over ([forget]).
  */
 class LinkReplay {
     private val seen = LinkedHashMap<String, Long>()   // from + "\n" + ln -> drop from the list after this (ms)
     private val stamps = HashSet<String>()              // devices known to stamp
+    private val gone = HashSet<String>()               // devices that just stopped stamping, for [left]
+    private val probed = HashMap<String, Long>()       // device -> when its caps were last asked for
     @Volatile var dirty = false; private set
 
     /** Taken (true), or dropped: too old or far ahead, seen before, or unstamped from a device that stamps. */
     @Synchronized
     fun take(from: String, p: JSONObject, nowMs: Long): Boolean {
         val ln = p.opt("ln")
-        if (ln == null) return from !in stamps
+        if (ln == null) {
+            if (from !in stamps) return true
+            val t = p.optString("t")
+            if (t == "hello") return true
+            if (t in CAPS_FRAMES && !LinkWire.saysL4(p.optString("caps"))) {
+                stamps.remove(from); gone.add(from); dirty = true
+                return true
+            }
+            return false
+        }
         val lts = p.opt("lts")
         if (ln !is String || !NONCE.matches(ln) || lts !is Number || lts is Double || lts is Float) return false
         val t = lts.toLong()
@@ -195,6 +218,27 @@ class LinkReplay {
         while (seen.size > MAX_SEEN) seen.remove(seen.keys.first())
         dirty = true
         return true
+    }
+
+    /** Whether [from] just stopped stamping (once): the receiver asks it for what was dropped meanwhile. */
+    @Synchronized
+    fun left(from: String): Boolean = gone.remove(from)
+
+    /** Whether to ask [from] for its caps again after one of its unstamped frames was dropped (at most every [PROBE_MS]). */
+    @Synchronized
+    fun probeDue(from: String, nowMs: Long): Boolean {
+        if (from !in stamps) return false
+        val last = probed[from]
+        if (last != null && nowMs - last in 0 until PROBE_MS) return false
+        probed[from] = nowMs
+        return true
+    }
+
+    /** [from] was linked again: it starts over, stamped or not. */
+    @Synchronized
+    fun forget(from: String) {
+        if (stamps.remove(from)) dirty = true
+        gone.remove(from); probed.remove(from)
     }
 
     /** Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}}. */
@@ -219,6 +263,10 @@ class LinkReplay {
         const val MAX_AGE_MS = 36 * 60 * 60_000L
         const val MAX_SEEN = 20_000
         val UNREMEMBERED = setOf("chat", "part", "ping", "pong")
+        /** The frames that carry "caps" (cap l4 in them says the sender stamps). */
+        val CAPS_FRAMES = setOf("sync", "ping", "pong")
+        /** Asking a device for its caps again: at most this often. */
+        const val PROBE_MS = 2 * 60_000L
         private val NONCE = Regex("^[0-9a-f]{32}$")
         private val rng = java.security.SecureRandom()
 
@@ -304,6 +352,8 @@ object Link {
         fun myProfile(): JSONObject = JSONObject().put("n", myName()).put("st", "online")
         /** On the phone: a companion's "setme" (an empty name or status leaves that one as it is). */
         fun setMyProfile(name: String, status: String, custom: String) {}
+        /** Cap p2 (22.4), on the phone: Refresh on a companion, so the phone asks [peer] for their current picture. */
+        fun askPicture(peer: String) {}
         /** Cap l1 (15.1), on the phone: the account as it is now, "k|id" to its value (LinkAccount.KINDS). */
         fun account(): Map<String, JSONObject> = emptyMap()
         /** Cap l1: a companion's change that won (a nickname, a block, a removed contact, a folder, my name or status). */
@@ -459,6 +509,7 @@ object Link {
         val d = Device(k, o.optString("p"), o.optString("n").take(40).ifBlank { "Linked device" }, ok = confirmed)
         _companions.value = _companions.value.filterNot { it.key == k } + d
         heard[k] = System.currentTimeMillis(); relinkSeen.remove(k)
+        forgetStamps(k)
         save()
         h.send(d, JSONObject().put("t", "hello").put("i", o.optString("i")).put("n", h.myName()).put("p", h.myMailbox()).toString())
         if (confirmed) { syncAll(d); sendMe(true) }
@@ -478,7 +529,7 @@ object Link {
         _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
             _phone.value = p.copy(ok = true); _ownShown.value = false; save()
             // "f": the first one after the emoji, which the phone takes even inside the 10 minutes.
-            h.send(p, JSONObject().put("t", "sync").put("f", true).toString())
+            h.send(p, JSONObject().put("t", "sync").put("f", true).put("caps", LinkWire.L4).toString())
         }
     }
 
@@ -741,7 +792,15 @@ object Link {
         val comp = _companions.value.firstOrNull { it.key == from }
         val ph = _phone.value?.takeIf { it.key == from }
         // Round 14: a frame from a linked device that's too old, came before, or lacks the stamp it always has: dropped quietly.
-        if ((comp != null || ph != null) && !replayOk(h, from, p)) return true
+        // Unstamped from one that stamped: it may have gone back to stable, so its caps are asked for again (cap l4).
+        if ((comp != null || ph != null) && !replayOk(h, from, p)) {
+            if (!p.has("ln") && ph != null && replay.probeDue(from, System.currentTimeMillis())) probeCaps(h, ph)
+            return true
+        }
+        // It just went back to an app that doesn't stamp: what it sent meanwhile was dropped, so this side catches up.
+        if ((comp != null || ph != null) && replay.left(from)) {
+            if (ph != null && ph.ok) h.send(ph, JSONObject().put("t", "sync").put("caps", LinkWire.L4).toString())
+        }
         if (comp != null) {
             // Heard from now; written down at most once an hour, enough for the 14 days in [askReplace].
             val now = System.currentTimeMillis()
@@ -752,6 +811,8 @@ object Link {
             // Pairing: the phone answers my link code with its token.
             t == "hello" && comp == null -> {
                 if (!takeToken(p.optString("i"), System.currentTimeMillis())) return false
+                // Linked again: whether it stamps is learned anew (cap l4).
+                forgetStamps(from)
                 val name = p.optString("n").take(40).trim()
                 if (ph != null) {
                     // The same phone linked again: its chats stay, and the 4 emoji are checked again before anything shows.
@@ -832,7 +893,7 @@ object Link {
             comp != null && !comp.ok && t == "send" -> answerSend(h, comp, p.optString("id"), false, "confirm")
             // Not checked here yet, but a first "sync" that says "relink" is kept for this phone's own They match (J11-1).
             comp != null && !comp.ok && t == "sync" && p.optBoolean("f") && p.optBoolean("relink") -> relinkSeen.add(comp.key)
-            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct" || t == "ping" || t == "read") -> {}
+            comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct" || t == "ping" || t == "read" || t == "pask") -> {}
             // Cap l2 (15.2): the companion asks whether this phone is there, says it takes "read" and gives its device name.
             comp != null && t == "ping" -> {
                 val dn = LinkWire.deviceName(p.optString("dn"))
@@ -843,7 +904,7 @@ object Link {
                     _companions.value = _companions.value.map { if (it.key == c.key) c else it }
                     save()
                 }
-                h.send(comp, JSONObject().put("t", "pong").toString())
+                h.send(comp, JSONObject().put("t", "pong").put("caps", LinkWire.L4).toString())
             }
             // Cap l2: read on the companion, so read here too (receipts go from here, the notification goes).
             comp != null && t == "read" -> {
@@ -854,6 +915,8 @@ object Link {
                     later { h.readUpTo(peer, upTo) }
                 }
             }
+            // Cap p2 (22.4): Refresh on a companion (cap l1) asks the person from here; the new picture reaches it as l1 does.
+            comp != null && t == "pask" -> if (comp.l1) p.optString("peer").takeIf { it.isNotEmpty() && it.length <= 200 }?.let { k -> later { h.askPicture(k) } }
             // Cap l1: a companion's account changes. The later one wins per item; what won here goes to the other companions.
             comp != null && t == "acct" -> if (comp.l1) later { takeAccount(h, comp, p) }
             // A companion changed my name or status: the phone is the account, so it changes here and goes to every companion.
@@ -1093,6 +1156,21 @@ object Link {
     /** Stamps a frame before it goes (every route of one send carries the same stamp). */
     fun stamp(json: String): String = LinkReplay.stamp(json)
 
+    /** Cap l4: asks the phone for its caps (its "pong" says whether it still stamps). */
+    private fun probeCaps(h: Host, ph: Device) {
+        h.send(ph, JSONObject().put("t", "ping").put("caps", LinkWire.L4).toString())
+    }
+
+    /** A device linked again: whether it stamps is learned anew. */
+    private fun forgetStamps(k: String) {
+        val h = host ?: return
+        if (!replayLoaded) synchronized(replay) {
+            if (!replayLoaded) { try { replay.load(h.read(REPLAY)) } catch (_: Exception) {}; replayLoaded = true }
+        }
+        replay.forget(k)
+        if (replay.dirty) try { h.write(REPLAY, replay.save()) } catch (_: Exception) {}
+    }
+
     private fun replayOk(h: Host, from: String, p: JSONObject): Boolean {
         if (!replayLoaded) synchronized(replay) {
             if (!replayLoaded) { try { replay.load(h.read(REPLAY)) } catch (_: Exception) {}; replayLoaded = true }
@@ -1174,7 +1252,7 @@ object Link {
         val now = System.currentTimeMillis()
         if (!LinkWire.syncDue(askedAt, now)) return "Asked already. You can ask again in ${maxOf(1L, (LinkWire.REFRESH_EVERY_MS - (now - askedAt) + 59_999L) / 60_000L)} min."
         askedAt = now
-        h.send(ph, JSONObject().put("t", "sync").toString())
+        h.send(ph, JSONObject().put("t", "sync").put("caps", LinkWire.L4).toString())
         fetchMissing()
         return if (h.onLan(ph.key)) "Asked ${ph.name} for its chats." else "Asked ${ph.name}. History comes over on home Wi-Fi."
     }

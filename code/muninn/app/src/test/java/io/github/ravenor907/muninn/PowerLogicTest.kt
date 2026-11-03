@@ -53,6 +53,22 @@ class PowerLogicTest {
     }
 
     @Test
+    fun aKidsPhoneUnderDoNotDisturbStillRings() {
+        // A kids' phone or tablet: Android's Do Not Disturb (quiet = HOUR) or quiet hours never slow it.
+        val kid = phoneAway.copy(kidDevice = true, quiet = Check.HOUR)
+        assertEquals(Check.LIVE, PowerLogic.effective(kid))
+        assertEquals(Check.LIVE, PowerLogic.effective(kid.copy(quiet = Check.OPEN)))
+        assertEquals(Why.SCREEN_OFF, PowerLogic.plan(kid).why)
+        assertEquals(PowerLogic.AWAY_RELAYS, PowerLogic.plan(kid).relays)
+        assertEquals("", PowerLogic.because(kid))
+        assertEquals(PowerLogic.Alert.LOUD, PowerLogic.alert(kid, fromRightAway = false))
+        // Extreme saver never stops it either.
+        assertFalse(PowerLogic.manual(kid.copy(extreme = true)))
+        // The same phone out of kid mode follows Do Not Disturb.
+        assertEquals(Check.HOUR, PowerLogic.effective(kid.copy(kidDevice = false)))
+    }
+
+    @Test
     fun noWifiDiscoveryOffWifi() {
         assertEquals(Radio.OFF, PowerLogic.plan(phoneAway.copy(onWifi = false)).wifi)
         assertEquals(Radio.OFF, PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = false)).wifi)

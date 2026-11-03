@@ -194,7 +194,7 @@ cd ~/Downloads && curl -LO https://github.com/Ravenor907/Huginn-Muninn/releases/
 
 **Updates are built in.** Both apps check GitHub for a new release, download it, and check its signatures against the project key before anything is installed. A file that doesn't match is refused. Huginn then waits for you to press **Restart now**; Muninn waits for you to tap **Install**. Automatic checks can be turned off.
 
-**Windows SmartScreen.** Huginn.exe has no paid code-signing certificate, so the first time Windows may say "Windows protected your PC". Choose **More info**, then **Run anyway**. Everything Huginn keeps is in the `data` folder beside Huginn.exe: keep it when you update by hand.
+**Windows SmartScreen.** Huginn.exe has no paid code-signing certificate, so the first time Windows may say "Windows protected your PC". Choose **More info**, then **Run anyway**. On Windows 11 with **Smart App Control** on, Huginn.exe is blocked with no Run anyway choice: it's in Windows Security > App & browser control > Smart App Control, and on many versions of Windows turning it back on later means resetting Windows, so decide with care. Everything Huginn keeps is in the `data` folder beside Huginn.exe: keep it when you update by hand.
 
 **Android.** If Play Protect says it doesn't know the app, tap **More details**, then **Install anyway**.
 

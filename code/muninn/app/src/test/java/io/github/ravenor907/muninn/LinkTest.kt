@@ -3,6 +3,7 @@ package io.github.ravenor907.muninn
 import io.github.ravenor907.muninn.net.Chat
 import io.github.ravenor907.muninn.net.ChatCrypto
 import io.github.ravenor907.muninn.net.Link
+import io.github.ravenor907.muninn.net.LinkReplay
 import io.github.ravenor907.muninn.net.LinkWire
 import org.json.JSONArray
 import org.json.JSONObject
@@ -255,5 +256,49 @@ class LinkTest {
         assertFalse(kept.take("PC", send, t0 + 5_000))
         assertFalse(kept.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
         assertTrue(send.getString("ln") != unlink.getString("ln"))
+    }
+
+    /** Round 15: a device that went back to stable (no cap l4) is taken again; one that still stamps keeps its guard. */
+    @Test
+    fun goingBackToStableKeepsTheLink() {
+        val t0 = 1_800_000_000_000L
+        val r = LinkReplay()
+        val send = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"hi"}""", t0))
+        assertTrue(r.take("PC", send, t0))
+        assertFalse(r.left("PC"))
+        // Unstamped and not a caps frame: dropped, and its caps are asked for (not again within PROBE_MS).
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        assertTrue(r.probeDue("PC", t0))
+        assertFalse(r.probeDue("PC", t0 + LinkReplay.PROBE_MS - 1))
+        assertTrue(r.probeDue("PC", t0 + LinkReplay.PROBE_MS))
+        // An unstamped ping that still says l4: dropped (a stamping app never sends one).
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping","caps":"l1 l2 l3 l4"}"""), t0))
+        // Its unstamped "sync" without l4: taken, and from then on its frames are taken again.
+        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"sync","caps":"l1 l2 l3"}"""), t0))
+        assertTrue(r.left("PC"))
+        assertFalse(r.left("PC"))
+        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        assertFalse(r.probeDue("PC", t0 + 10 * LinkReplay.PROBE_MS))
+        // A plain pong from a phone back on stable works the same way.
+        val ph = LinkReplay()
+        assertTrue(ph.take("phone", org.json.JSONObject(LinkReplay.stamp("""{"t":"pong","caps":"l4"}""", t0)), t0))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        assertTrue(ph.take("phone", org.json.JSONObject("""{"t":"pong"}"""), t0))
+        assertTrue(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        // Updated again: its first stamped frame guards it once more, replays included.
+        val again = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"x"}""", t0))
+        assertTrue(r.take("PC", again, t0))
+        assertFalse(r.take("PC", again, t0 + 1))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        // A "hello" (one-time token) is taken unstamped; linking again starts over.
+        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"hello","i":"x"}"""), t0))
+        r.forget("PC")
+        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        // Kept between runs.
+        val kept = LinkReplay()
+        kept.load(ph.save())
+        assertTrue(kept.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        assertTrue(LinkWire.saysL4("l1 l4"))
+        assertFalse(LinkWire.saysL4("l1 l40"))
     }
 }

@@ -114,7 +114,7 @@ Item {
     MouseArea { anchors.fill: parent; onClicked: prompt.cancel() }
 
     // Steam's on-screen keyboard covers the lower half of the window: the box sits at the top, above it.
-    readonly property bool atTop: visible && System.keyboardCovers()
+    readonly property bool atTop: visible && System.keyboardCovers
     Rectangle {
         id: box
         anchors.centerIn: prompt.atTop ? undefined : parent
@@ -350,7 +350,7 @@ Item {
     readonly property bool canPaste: visible && (multiLine ? area.canPaste : field.canPaste)
     readonly property bool ltTalks: TalkKey.padButton === "lt" && Settings.pushToTalk && Rooms.inRoom
     readonly property string moreKey: !canPaste ? "x" : ltTalks ? "down" : "lt"
-    readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }].concat(System.keyboardAvailable() ? [{ key: "y", label: "Keyboard" }] : [],
+    readonly property var prompts: [{ key: "a", label: confirmText }, { key: "b", label: cancelText }].concat(System.keyboardAvailable ? [{ key: "y", label: "Keyboard" }] : [],
         canPaste ? [{ key: "x", label: "Paste" }] : [], moreLabel.length ? [{ key: moreKey, label: moreLabel }] : [])
     function handleButton(b) {
         switch (b) {

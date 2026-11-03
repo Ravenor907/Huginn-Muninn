@@ -159,6 +159,46 @@ class KidLeaveTest {
         assertFalse(SafeStart.counts(-1L))
     }
 
+    @Test fun theSafeModeNeverTrapsADevice() {
+        val h = 60 * 60_000L
+        // Same install, same boot: the count carries.
+        assertEquals(3, SafeStart.startFrom(3, "1.35@1", "1.35@1", 4, 4, 0L, 10L))
+        // Installed again (same version, new install time): starts over.
+        assertEquals(0, SafeStart.startFrom(3, "1.35@1", "1.35@2", 4, 4, 0L, 10L))
+        // The device restarted: starts over. An unknown boot count keeps the count.
+        assertEquals(0, SafeStart.startFrom(3, "1.35@1", "1.35@1", 4, 5, 5L, 10L))
+        assertEquals(3, SafeStart.startFrom(3, "1.35@1", "1.35@1", -1, 5, 0L, 10L))
+        // In the safe mode for TRIAL_MS: one normal try, with one crash away from the safe mode again.
+        assertEquals(SafeStart.LIMIT - 1, SafeStart.startFrom(3, "v", "v", 1, 1, 1_000L, 1_000L + SafeStart.TRIAL_MS))
+        assertEquals(3, SafeStart.startFrom(3, "v", "v", 1, 1, 1_000L, 1_000L + SafeStart.TRIAL_MS - 1))
+        assertFalse(SafeStart.safe(SafeStart.LIMIT - 1))
+        assertTrue(SafeStart.safe(SafeStart.LIMIT - 1 + 1))
+        // A clock set back counts as due; no time kept is never due.
+        assertTrue(SafeStart.trialDue(10 * h, 5 * h))
+        assertFalse(SafeStart.trialDue(0L, 100 * h))
+        // A few minutes, not seconds, of running normally clears the count.
+        assertTrue(SafeStart.HEALTHY_MS >= 2 * 60_000L && SafeStart.HEALTHY_MS <= 10 * 60_000L)
+        assertTrue(SafeStart.TRIAL_MS <= 6 * h)
+    }
+
+    @Test fun aCallOverAnotherAppSaysWhoIsCalling() {
+        assertEquals("Mom is calling. Open Muninn to answer.", KidCallBack.overText("Mom"))
+        assertEquals("Someone is calling. Open Muninn to answer.", KidCallBack.overText(" "))
+        assertTrue(KidCallBack.overDue(stillRinging = true, visible = false, overlay = false))
+        assertFalse(KidCallBack.overDue(stillRinging = false, visible = false, overlay = false))
+        assertFalse(KidCallBack.overDue(stillRinging = true, visible = true, overlay = false))
+        assertFalse(KidCallBack.overDue(stillRinging = true, visible = false, overlay = true))
+        // A kids' phone goes back to the call on opening until the kid dismisses its bar for that call; a TV always does.
+        assertTrue(KidCallBack.jumpBack(live = true, tv = false, callId = "c1", hidden = ""))
+        assertFalse(KidCallBack.jumpBack(live = true, tv = false, callId = "c1", hidden = "c1"))
+        assertTrue(KidCallBack.jumpBack(live = true, tv = false, callId = "c2", hidden = "c1"))
+        assertTrue(KidCallBack.jumpBack(live = true, tv = true, callId = "c1", hidden = "c1"))
+        assertFalse(KidCallBack.jumpBack(live = false, tv = true, callId = "c1", hidden = ""))
+        // The parent's page says plainly what Android allows while Show over other apps is off.
+        val note = io.github.ravenor907.muninn.tv.overNote("kids' TV")
+        assertTrue(note.contains("Calls can't come up over other apps on this kids' TV") && note.contains("open Muninn to answer"))
+    }
+
     // ---- quick message pictures through an older co-parent's change
 
     @Test fun anOlderCoParentsChangeKeepsThePictures() {
@@ -208,8 +248,14 @@ class KidLeaveTest {
         assertTrue(KidK14.kidAddOk(leo, bob, me, tv, mine = false, contact = true, knownKid = true, handedBy = bob))
         // Someone already here who isn't a Kids' Device can't be called one.
         assertFalse(KidK14.kidAddOk("carol", bob, me, tv, mine = false, contact = true, knownKid = false, handedBy = null))
-        // Another parent handed it over: only that parent asks for it.
-        assertFalse(KidK14.kidAddOk(leo, bob, me, tv, mine = false, contact = true, knownKid = true, handedBy = "leosmom"))
+        // Another parent handed it over and a co-parent asks: still asked about, naming who shared it first.
+        assertTrue(KidK14.kidAddOk(leo, bob, me, tv, mine = false, contact = true, knownKid = true, handedBy = "leosmom"))
+        assertEquals("leosmom", KidK14.sharedFirstBy("leosmom", bob))
+        assertNull(KidK14.sharedFirstBy(bob, bob))
+        assertNull(KidK14.sharedFirstBy(null, bob))
+        val co = KidK14.kidAddText("Dad", "Leo", "Ava", new = false, firstBy = "Mom")
+        assertTrue(co.contains("Mom shared this device with you first; Dad says they're also its parent."))
+        assertFalse(KidK14.kidAddText("Dad", "Leo", "Ava", new = false).contains("shared this device"))
         // Never this phone, the sender, the device itself or one of this phone's own.
         assertFalse(KidK14.kidAddOk(me, bob, me, tv, mine = false, contact = false, knownKid = false, handedBy = null))
         assertFalse(KidK14.kidAddOk(bob, bob, me, tv, mine = false, contact = true, knownKid = false, handedBy = null))

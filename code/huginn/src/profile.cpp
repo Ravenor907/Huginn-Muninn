@@ -13,6 +13,7 @@
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QImageReader>
@@ -21,6 +22,7 @@
 #include <QMetaObject>
 #include <QMutexLocker>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QUuid>
 #include <climits>
@@ -28,6 +30,7 @@
 #include <utility>
 
 const char Profile::kCap[] = "p1";
+const char Profile::kCap2[] = "p2";
 
 namespace
 {
@@ -149,6 +152,50 @@ QString Profile::cleanCustom(const QString &s)
             out += c;
     return RichWire::cut(out.trimmed(), RichWire::kMaxCustom);
 }
+
+// ------------------------------------------------------------------ cap p2 (22.4): the wire parts and rules
+
+qint64 Profile::versionOf(const QJsonValue &v)
+{
+    // A whole number, 1 <= v < 2^53 (a JSON number with a fraction, or anything else, is none).
+    if (!v.isDouble())
+        return 0;
+    const double d = v.toDouble();
+    if (!(d >= 1) || d >= 9007199254740992.0 || d != double(qint64(d)))
+        return 0;
+    return qint64(d);
+}
+
+QByteArray Profile::askMsg() { return compact({{QStringLiteral("t"), QStringLiteral("profile?")}}); }
+
+QByteArray Profile::ackMsg(qint64 v) { return compact({{QStringLiteral("t"), QStringLiteral("profile-ok")}, {QStringLiteral("v"), QJsonValue(v)}}); }
+
+bool Profile::isCtl(const QJsonObject &p)
+{
+    const QString t = p.value(QStringLiteral("t")).toString();
+    return t == QLatin1String("profile?") || t == QLatin1String("profile-ok");
+}
+
+bool Profile::ctlOk(const QJsonObject &p)
+{
+    const QString t = p.value(QStringLiteral("t")).toString();
+    if (t == QLatin1String("profile?"))
+        return true;
+    return t == QLatin1String("profile-ok") && versionOf(p.value(QStringLiteral("v"))) > 0;
+}
+
+bool Profile::mayAsk(qint64 last, qint64 now, qint64 gap) { return last == 0 || now - last >= gap; }
+
+qint64 Profile::retryMs(int tries)
+{
+    if (tries <= 1)
+        return kFirstRetryMs;
+    const int shift = tries - 1 < 20 ? tries - 1 : 20;
+    const qint64 wait = qint64(kFirstRetryMs) << shift;
+    return wait < kMaxRetryMs ? wait : qint64(kMaxRetryMs);
+}
+
+bool Profile::due(int tries, qint64 at, qint64 now) { return tries == 0 || (tries < kMaxTries && now - at >= retryMs(tries)); }
 
 QByteArray Profile::encode(const QImage &image)
 {
@@ -472,11 +519,97 @@ void Profile::forget(const QString &key)
         m_vault->remove(file(key));
     if (m_sent.remove(key))
         saveSent();
+    m_tries.remove(key);
+    m_asked.remove(key);
+    m_answered.remove(key);
     m_cache.remove(key);
     m_heard.remove(key);
     m_statuses.remove(key);
     Q_EMIT pictureChanged(key);
     Q_EMIT changed();
+}
+
+// ------------------------------------------------------------------ cap p2 (22.4)
+
+bool Profile::saysP2(const QString &key) const { return m_chat->hasCap(key, QLatin1String(kCap2)); }
+
+bool Profile::inTouch(const QString &key) const
+{
+    const Chat *c = m_chat;
+    return (c->isContact(key) || c->isGroupPeer(key)) && !c->isBlocked(key) && !c->isTrashed(key);
+}
+
+bool Profile::claim(QHash<QString, qint64> &map, const QString &key, qint64 gap)
+{
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (!mayAsk(map.value(key, 0), t, gap))
+        return false;
+    if (map.size() > 2000)
+        map.clear();
+    map.insert(key, t);
+    return true;
+}
+
+// Sent once the message being handled is done (its caps noted, its ratchet step kept), never from inside it.
+void Profile::sendSmall(const QString &key, const QByteArray &plain)
+{
+    QTimer::singleShot(0, this, [this, key, plain] {
+        Chat *c = m_chat;
+        if (!c->ready() || c->moving() || !inTouch(key) || (c->route(key).isEmpty() && c->mailboxOf(key).isEmpty()))
+            return;
+        c->deliver(key, c->envelope(QStringLiteral("profile"), key, plain, QUuid::createUuid().toString(QUuid::WithoutBraces)), c->mailboxOf(key));
+    });
+}
+
+void Profile::sawVersion(const QString &key, qint64 pv)
+{
+    if (!m_loaded || pv <= m_peers.value(key).v || !saysP2(key) || !inTouch(key))
+        return;
+    if (claim(m_asked, key, kAskMs))
+        sendSmall(key, askMsg());
+}
+
+QString Profile::askPicture(const QString &key)
+{
+    const QString asked = QStringLiteral("Asked for their picture.");
+    // Someone in touch with this computer: asked from here.
+    if (m_chat->ready() && inTouch(key) && saysP2(key)) {
+        if (claim(m_asked, key, kRefreshMs))
+            sendSmall(key, askMsg());
+        return asked;
+    }
+    // Otherwise a linked phone that is the account here asks its contact (cap l1).
+    if (m_phoneOn && askPhone && askPhone(key))
+        return asked;
+    return QStringLiteral("Their app can't be asked for it yet.");
+}
+
+void Profile::askedBy(const QString &key)
+{
+    if (!m_loaded || m_me.v == 0 || !saysP2(key) || !inTouch(key) || !claim(m_answered, key, kAnswerMs))
+        return;
+    // They say they don't have it: it goes now, and again until its "profile-ok".
+    m_tries.remove(key);
+    if (m_sent.remove(key))
+        saveSent();
+    reconcileSoon();
+}
+
+void Profile::ack(const QString &key, qint64 v)
+{
+    if (v > 0 && saysP2(key))
+        sendSmall(key, ackMsg(v));
+}
+
+void Profile::acked(const QString &key, qint64 v)
+{
+    if (m_me.v < 1 || v != m_me.v)
+        return;
+    m_tries.remove(key);
+    if (m_sent.value(key, 0) == v)
+        return;
+    m_sent.insert(key, v);
+    saveSent();
 }
 
 // ------------------------------------------------------------------ sending
@@ -489,7 +622,8 @@ void Profile::reconcileSoon()
 
 // My picture and colour to everyone who should have this version and doesn't yet: contacts, and members of my groups,
 // only those whose app said p1, never anyone blocked or in the trash. One is marked sent only once a route took it, so
-// someone out of reach gets it on a later pass.
+// someone out of reach gets it on a later pass. Cap p2: an app that says p2 has it only once its "profile-ok" came;
+// until then it goes again after 2, 4, 8 ... minutes (at most 6 hours apart, 10 times).
 void Profile::reconcile()
 {
     Busy::Scope busy("profile sharing");
@@ -510,11 +644,18 @@ void Profile::reconcile()
         }
     }
     const QByteArray plain = msg(m_me.v, m_me.pic, m_me.col);
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
     bool changed = false;
     for (const QString &k : std::as_const(keys)) {
         if (c->isBlocked(k) || c->isTrashed(k) || (!c->isContact(k) && !c->isGroupPeer(k)) || !c->hasCap(k, QLatin1String(kCap)))
             continue;
         if (m_sent.value(k, 0) == m_me.v)
+            continue;
+        const bool p2 = c->hasCap(k, QLatin1String(kCap2));
+        Try was = m_tries.value(k);
+        if (was.v != m_me.v)
+            was = Try{m_me.v, 0, 0};
+        if (p2 && !due(was.n, was.at, t))
             continue;
         // No way to reach them right now: nothing is sealed (that would use up a ratchet step and a save each pass).
         if (c->route(k).isEmpty() && c->mailboxOf(k).isEmpty())
@@ -522,6 +663,10 @@ void Profile::reconcile()
         const QJsonObject env = c->envelope(QStringLiteral("profile"), k, plain, QUuid::createUuid().toString(QUuid::WithoutBraces));
         if (c->deliver(k, env, c->mailboxOf(k)).isEmpty())
             continue;
+        if (p2) {
+            m_tries.insert(k, Try{m_me.v, was.n + 1, t});
+            continue;
+        }
         m_sent.insert(k, m_me.v);
         changed = true;
     }
@@ -731,7 +876,50 @@ bool Profile::selfTest(const QString &vectorsPath)
     const QByteArray enc = encode(big);
     check(!enc.isEmpty() && enc.size() <= kSendMaxBytes && pictureOk(enc) && ok(QJsonDocument::fromJson(msg(1, enc, QStringLiteral("#3a7bd5"))).object()), "encode");
     check(encode(QImage()).isEmpty(), "encode nothing");
+    check(p2SelfTest(), "cap p2");
     check(pass > 80, "the vectors have cases");
     std::printf("p1 self-test: %d passed, %d failed\n", pass, fail);
+    return fail == 0;
+}
+
+// Cap p2 (protocol.md 22.4): the wire shapes and rules, the same as Muninn's P2Test.
+bool Profile::p2SelfTest()
+{
+    int pass = 0, fail = 0;
+    auto check = [&](bool good, const char *what) {
+        good ? ++pass : ++fail;
+        if (!good)
+            std::printf("p2 self-test: FAILED %s\n", what);
+    };
+    const QStringList caps = QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' '));
+    check(caps.last() == QLatin1String(kCap2) && caps.contains(QLatin1String(kCap)), "caps say p2, last, and still p1");
+    const auto obj = [](const QByteArray &b) { return QJsonDocument::fromJson(b).object(); };
+    check(askMsg() == QByteArrayLiteral("{\"t\":\"profile?\"}"), "ask shape");
+    check(obj(ackMsg(5)).value(QStringLiteral("t")).toString() == QLatin1String("profile-ok") && obj(ackMsg(5)).value(QStringLiteral("v")).toInteger() == 5
+              && obj(ackMsg(5)).size() == 2,
+          "profile-ok shape");
+    check(ctlOk(obj(askMsg())) && ctlOk(obj(ackMsg(5))) && isCtl(obj(askMsg())) && isCtl(obj(ackMsg(5))), "small ones are well-formed");
+    check(ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile?\",\"x\":1}"))), "ask: other fields ignored");
+    check(!ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile-ok\"}"))) && !ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile-ok\",\"v\":0}")))
+              && !ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile-ok\",\"v\":\"5\"}"))) && !ctlOk(obj(QByteArrayLiteral("{\"t\":\"profile\",\"v\":5}"))),
+          "profile-ok needs a usable v");
+    check(!isCtl(obj(msg(2, QByteArray(), QStringLiteral("#3a7bd5")))) && !ok(obj(askMsg())) && !ok(obj(ackMsg(5))), "never taken for a picture");
+    check(versionOf(QJsonValue(1)) == 1 && versionOf(QJsonValue(qint64(9007199254740991LL))) == 9007199254740991LL && versionOf(QJsonValue(0)) == 0
+              && versionOf(QJsonValue(-3)) == 0 && versionOf(QJsonValue(2.5)) == 0 && versionOf(QJsonValue(QStringLiteral("4"))) == 0
+              && versionOf(QJsonValue()) == 0 && versionOf(QJsonValue(9007199254740992.0)) == 0,
+          "versions");
+    check(versionOf(obj(QByteArrayLiteral("{\"room\":\"private\",\"pv\":4}")).value(QStringLiteral("pv"))) == 4, "pv on an envelope");
+    const qint64 t = 1000000000;
+    check(mayAsk(0, t, kAskMs) && !mayAsk(t, t + kAskMs - 1, kAskMs) && mayAsk(t, t + kAskMs, kAskMs) && kAskMs == 300000
+              && kRefreshMs == 10000 && kAnswerMs == 60000 && kCtlPer10s == 5,
+          "asking is rate limited");
+    check(retryMs(1) == 120000 && retryMs(2) == 240000 && retryMs(3) == 480000 && retryMs(8) == 256LL * 60000 && retryMs(9) == 6LL * 3600000
+              && retryMs(1000) == 6LL * 3600000,
+          "retries back off");
+    const qint64 a = 5000000;
+    check(due(0, 0, a) && !due(1, a, a + 120000 - 1) && due(1, a, a + 120000) && !due(3, a, a + 7 * 60000) && due(3, a, a + 8 * 60000)
+              && due(kMaxTries - 1, a, a + 6LL * 3600000) && !due(kMaxTries, a, a + 100LL * 6 * 3600000) && kMaxTries == 10,
+          "retries stop after 10");
+    std::printf("p2 self-test: %d passed, %d failed\n", pass, fail);
     return fail == 0;
 }

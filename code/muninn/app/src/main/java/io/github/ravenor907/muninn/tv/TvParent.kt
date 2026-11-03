@@ -208,6 +208,8 @@ object TvParent {
     /** k14: who handed this phone each other family's Kids' Device (a card, or their ask): the parent to ask to add one back. */
     private const val KID_FROM_FILE = "tv-kidfrom.json"
     private val kidFrom = ConcurrentHashMap<String, String>()
+    /** Who first shared Kids' Device [kid] here (by card or Send its code), or null. */
+    fun sharedBy(kid: String): String? = kidFrom[kid]
 
     private fun noteKidFrom(app: Muninn, kid: String, parent: String) {
         if (kidFrom[kid] == parent) return
@@ -998,8 +1000,8 @@ object TvParent {
         val a = KidK14.kidAddIn(o) ?: return false
         if (app.contacts.get(fromKey) == null) return false
         loadKids(app)
-        // Only a device this parent could have paired counts: never this phone, its own devices or the sender, never someone
-        // already here who isn't known as a Kids' Device, and never a device another parent handed over (by card or code).
+        // Never this phone, its own devices or the sender, and never someone already here who isn't known as a Kids' Device.
+        // A device another parent handed over (by card or code) is still asked about: the ask names who shared it first.
         if (!KidK14.kidAddOk(a.k, fromKey, app.identity.publicKey, a.tv, isManaged(a.k), app.contacts.get(a.k) != null, isKidDevice(a.k), kidFrom[a.k])) return true
         var title = ""
         var text = ""
@@ -1019,7 +1021,8 @@ object TvParent {
             val who = app.chat.nameOf(fromKey)
             title = "Let ${a.n} talk with $child?"
             // Nothing can prove a device is a child's: said as it is, so the parent decides on who's asking.
-            text = KidK14.kidAddText(who, a.n, child, app.contacts.get(a.k) == null)
+            val firstBy = KidK14.sharedFirstBy(kidFrom[a.k], fromKey)?.let { app.chat.nameOf(it) }
+            text = KidK14.kidAddText(who, a.n, child, app.contacts.get(a.k) == null, firstBy)
         }
         if (Ui.ask.value == null) Ui.sure(Ask(title, text, "Add", cancel = "Not now", onCancel = { answerKidAdd(app, a.tv, a.k, false) }) {
             answerKidAdd(app, a.tv, a.k, true)

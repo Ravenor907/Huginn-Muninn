@@ -50,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -285,11 +286,21 @@ fun ToggleRow(title: String, detail: String, on: Boolean, onChange: (Boolean) ->
 
 @Composable
 fun Field(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier, single: Boolean = true, keyboard: KeyboardOptions = KeyboardOptions.Default,
-          secret: Boolean = false) {
+          secret: Boolean = false, onDone: (() -> Unit)? = null) {
+    // [onDone]: the keyboard's Done key and Enter on a hardware keyboard submit (a password lock), else nothing changes.
+    val done = onDone
     Box(modifier.fillMaxWidth().clip(Corner).background(Palette.groundDeep).border(1.dp, Palette.lineMuted, Corner).padding(12.dp)) {
         if (value.isEmpty()) Text(hint, style = Type.normal.copy(color = Palette.textFaint))
-        BasicTextField(value, onChange, singleLine = single, keyboardOptions = keyboard, textStyle = Type.normal.copy(color = Palette.text),
-            cursorBrush = SolidColor(Palette.accent), modifier = Modifier.fillMaxWidth(),
+        BasicTextField(value, onChange, singleLine = single,
+            keyboardOptions = if (done != null) keyboard.copy(imeAction = androidx.compose.ui.text.input.ImeAction.Done) else keyboard,
+            keyboardActions = if (done != null) androidx.compose.foundation.text.KeyboardActions(onDone = { done() }) else androidx.compose.foundation.text.KeyboardActions.Default,
+            textStyle = Type.normal.copy(color = Palette.text),
+            cursorBrush = SolidColor(Palette.accent),
+            modifier = Modifier.fillMaxWidth().then(if (done == null) Modifier else Modifier.onPreviewKeyEvent { ev ->
+                val code = ev.nativeKeyEvent.keyCode
+                if (code != android.view.KeyEvent.KEYCODE_ENTER && code != android.view.KeyEvent.KEYCODE_NUMPAD_ENTER) false
+                else { if (ev.nativeKeyEvent.action == android.view.KeyEvent.ACTION_DOWN && ev.nativeKeyEvent.repeatCount == 0) done(); true }
+            }),
             visualTransformation = if (secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None)
     }
 }

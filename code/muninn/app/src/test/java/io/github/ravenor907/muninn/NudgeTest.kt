@@ -160,8 +160,8 @@ class NudgeTest {
             assertNull(key.nudge(rang))
             assertNull(NudgeWire.nudgeMailbox(true, rang, key, 100L))
             assertNull(NudgeWire.nudgeMailbox(false, NudgeWire.richContent(key.publicKey, 1L, "A", "", "msg"), key, 100L))
-            // Round 14: the nudge key may be any group peer's, so its nudge names nobody, only the group.
-            assertEquals(Nudge(1L, "", "G", "msg", known = false), NudgeWire.nudgeMailbox(true, NudgeWire.richContent(key.publicKey, 1L, "Mom", "G", "msg"), key, 100L))
+            // Round 15: the nudge key may be any group peer's, so its nudge names nobody, not even the group.
+            assertEquals(Nudge(1L, "", "", "msg", known = false), NudgeWire.nudgeMailbox(true, NudgeWire.richContent(key.publicKey, 1L, "Mom", "G", "msg"), key, 100L))
             assertNull(NudgeWire.nudgeMailbox(true, NudgeWire.richContent(key.publicKey, 1L, "A", "", "msg"), key, 1L + NudgeWire.MAX_AGE_MS + 1))
             // NudgeKey has no way to open a ring, and the app hands its mailbox's events only to the nudge path.
             assertFalse(NudgeKey::class.java.declaredMethods.any { it.name == "open" })
@@ -279,39 +279,40 @@ class NudgeTest {
     }
 
     /**
-     * Round 14: a nudge that opened with the nudge key (any group peer) never names a person, only the group; at most
-     * 3 such notifications, then one naming nothing; at most one alert per 2 minutes for all of them. A contact's
-     * nudge (ring key) is as before.
+     * Round 15: a nudge that opened with the nudge key (any group peer) shows no name the sender chose: one "Group
+     * message" notification that counts up, at most one alert per 2 minutes. A contact's nudge (ring key) keeps its name.
      */
     @Test fun lockedLimitForNudgesNamingNobody() {
         val lim = NudgeWire.LockedLimit()
         val mom = NudgeWire.anonymous(Nudge(1L, "Mom", "", "msg"))
         assertEquals("", mom.from)
-        assertEquals("Muninn", NudgeWire.title(Show.NAME, mom))
-        val g = NudgeWire.anonymous(Nudge(1L, "Mom", "Gaming", "msg"))
-        assertEquals("Gaming", NudgeWire.title(Show.MESSAGE, g))
+        assertEquals(NudgeWire.GROUP_TITLE, NudgeWire.title(Show.NAME, mom))
+        assertEquals("Group message", NudgeWire.GROUP_TITLE)
+        val g = NudgeWire.anonymous(Nudge(1L, "Mom", "Mom", "msg"))
+        assertEquals("", g.chat)
+        assertEquals("Group message", NudgeWire.title(Show.MESSAGE, g))
+        assertEquals("Muninn", NudgeWire.title(Show.NOTHING, g))
         val t0 = 1_000_000L
         val a = lim.take(Show.NAME, g, t0)
         assertTrue(a.alert)
-        assertEquals("?\nGaming", a.key)
-        // A different claimed name in the same group: the same notification, and no second buzz.
+        assertEquals("?", a.key)
+        // Other claimed names and groups: the same notification, and no second buzz.
         val b = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(2L, "Mom2", "Gaming", "msg")), t0 + 1_000)
         assertEquals(a.key, b.key)
         assertFalse(b.alert)
-        assertFalse(lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G2", "msg")), t0 + 2_000).alert)
-        lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G3", "msg")), t0 + 3_000)
-        // A fourth group name folds into one naming nothing.
-        val d = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G4", "msg")), t0 + 4_000)
-        assertEquals("", d.n.chat)
-        assertEquals("Muninn", NudgeWire.title(Show.NAME, d.n))
-        val e = lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G5", "msg")), t0 + 5_000)
-        assertEquals(d.key, e.key)
+        // Even a nudge that kept its names is shown without them.
+        val raw = lim.take(Show.NAME, Nudge(3L, "Mom", "Family", "msg", known = false), t0 + 2_000)
+        assertEquals(a.key, raw.key)
+        assertEquals("", raw.n.from + raw.n.chat)
+        assertEquals("Group message", NudgeWire.title(Show.NAME, raw.n))
+        assertEquals("3 new messages", NudgeWire.text(Show.NAME, raw.n.kind, 3))
         // Two minutes on, one may buzz again.
         assertTrue(lim.take(Show.NAME, NudgeWire.anonymous(Nudge(3L, "x", "G6", "msg")), t0 + NudgeWire.LockedLimit.ALERT_EVERY_MS).alert)
         // A contact's nudge (ring key) still names them and alerts.
         val c = lim.take(Show.NAME, Nudge(4L, "Ann", "", "msg"), t0 + 6_000)
         assertTrue(c.alert)
         assertEquals("Ann", NudgeWire.title(Show.NAME, c.n))
+        assertEquals("Ann · Gaming", NudgeWire.title(Show.NAME, Nudge(4L, "Ann", "Gaming", "msg")))
         lim.clear()
         assertTrue(lim.take(Show.NAME, g, t0 + 7_000).alert)
     }
@@ -328,6 +329,10 @@ class NudgeTest {
         assertTrue(app.contains("nostr.onLocked = { lockedActivity() }"))
         val body = app.substringAfter("fun lockedActivity() {").substringBefore("\n    }\n")
         assertTrue(body.contains("LOCKED_FALLBACK") && body.contains("lockedAlerted") && body.contains("\"New activity\""))
+        // Round 15: written while unlocked whenever contacts or caps change, with commit, not only as the lock goes up.
+        assertTrue(app.contains("combine(contacts.all, chat.blocked)"))
+        val keep = app.substringAfter("private fun keepLockedFallback() {").substringBefore("\n    }\n")
+        assertTrue(keep.contains("LOCKED_FALLBACK") && keep.contains(".commit()"))
     }
 
     private fun source(name: String): String {

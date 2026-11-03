@@ -148,7 +148,8 @@ class Power(private val app: Muninn) {
 
     /** Extreme battery saver is in charge right now (a Kids' TV always listens and rings): [PowerLogic.manual]. */
     fun manual(): Boolean = PowerLogic.manual(PowerLogic.Inputs(extreme = extreme,
-        kidsTv = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }))
+        kidsTv = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false },
+        kidDevice = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }))
 
     /** Something arrived or Muninn was opened: wide awake again (Check less when it's quiet starts over). */
     fun activity() {
@@ -361,8 +362,10 @@ class Power(private val app: Muninn) {
             battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true) == false ||
             app.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
         // A Kids' TV on the mains stays fully connected; a kids' phone or tablet follows the normal battery rules (its
-        // "Check for messages" is Live, so calls and messages still come at once).
-        val kids = try { io.github.ravenor907.muninn.tv.KidMode.on(app) && io.github.ravenor907.muninn.tv.KidMode.isTv(app) } catch (_: Exception) { false }
+        // "Check for messages" is Live, so calls and messages still come at once). Quiet hours, Do Not Disturb and
+        // Extreme saver never slow any Kids' Device: parents' calls must ring ([PowerLogic.Inputs.kidDevice]).
+        val kidDevice = try { io.github.ravenor907.muninn.tv.KidMode.on(app) } catch (_: Exception) { false }
+        val kids = kidDevice && try { io.github.ravenor907.muninn.tv.KidMode.isTv(app) } catch (_: Exception) { false }
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
         val percent = if (level >= 0 && scale > 0) level * 100 / scale else 100
@@ -375,7 +378,8 @@ class Power(private val app: Muninn) {
             unrestricted = pm.isIgnoringBatteryOptimizations(app.packageName), onWifi = onWifi, check = check,
             battery = percent, lowBatterySave = lowBatterySave, quiet = quiet, closeBy = closeBy, sharing = sharing || (filesOpen.value && started > 0),
             idleMs = if (started > 0) 0 else idle, adaptive = adaptive,
-            rightAway = prefs.getBoolean(RIGHT_AWAY_ANY, false), talking = talking(), extreme = extreme,
+            rightAway = prefs.getBoolean(RIGHT_AWAY_ANY, false), talking = talking(), extreme = extreme && !kidDevice,
+            kidDevice = kidDevice,
         )
     }
 

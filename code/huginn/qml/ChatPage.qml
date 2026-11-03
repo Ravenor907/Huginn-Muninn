@@ -200,7 +200,7 @@ Rectangle {
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
-        : typingIn ? [{ key: "a", label: "Send" }].concat(System.keyboardAvailable() ? [{ key: "y", label: "Keyboard" }] : [], [{ key: "lt", label: "Options" }, { key: "b", label: "Done" }])
+        : typingIn ? [{ key: "a", label: "Send" }].concat(System.keyboardAvailable ? [{ key: "y", label: "Keyboard" }] : [], [{ key: "lt", label: "Options" }, { key: "b", label: "Done" }])
         : zone === "head" ? [{ key: "dpad", label: "Choose" }, { key: "a", label: headButtons[headSel] === "menu" ? "Menu"
                                                                                   : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
@@ -1959,12 +1959,12 @@ Rectangle {
         switch (b) {
         case "a":
             if (box.text.trim() !== "") box.enter()
-            else if (System.keyboardCovers()) writeAbove(box)
+            else if (System.keyboardCovers) writeAbove(box)
             else System.showSteamKeyboard()
             return true
         // Y: the keyboard again; where it would cover the box, the top prompt with what's typed so far.
         case "y":
-            if (System.keyboardCovers()) writeAbove(box)
+            if (System.keyboardCovers) writeAbove(box)
             else System.showSteamKeyboard()
             return true
         case "x": boxOptions(box); return true

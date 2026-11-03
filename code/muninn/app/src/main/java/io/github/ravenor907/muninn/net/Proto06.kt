@@ -115,7 +115,7 @@ object Proto06 {
      * the kids' TV are here; "c1" joins once calls do, so no app offers a call that would only ring out.
      */
     // Tokens Huginn reads come first and the Kids' TV ones last: a Huginn may keep only the first 16.
-    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3 g4 n1 n2 u1 k11 k12 k13 k14"
+    const val CAPS = "r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3 g4 n1 n2 u1 k11 k12 k13 k14 p2"
     /** Cap j1: group invite links and "Members can invite" (section 17). */
     const val J1 = "j1"
     fun caps(s: String): Set<String> = s.split(' ').filter { it.isNotEmpty() }.toSet()

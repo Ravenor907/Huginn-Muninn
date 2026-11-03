@@ -172,10 +172,11 @@ bool SingleInstance::claim(bool restarted)
 
 QString SingleInstance::problemText() const
 {
-    if (m_outcome == CantWrite)
-        return QStringLiteral("Huginn can't save in its data folder (%1). Free up space on the disk or check the folder's permissions, "
-                              "then open Huginn again.")
-            .arg(QDir::toNativeSeparators(m_dir));
+    if (m_outcome == CantWrite) {
+        // Looked at again for the reason (a full disk, another account's folder, a read-only drive), never guessed.
+        const QString why = Portable::folderProblem();
+        return !why.isEmpty() ? why : Portable::cantWriteText(m_dir, 0, false);
+    }
     if (m_outcome != NotAnswering)
         return {};
     qint64 pid = 0;

@@ -83,6 +83,15 @@ Link::Link(Chat *chat, QObject *parent)
     : QObject(parent)
     , m_chat(chat)
 {
+    // Round 15 (N2): a save the saving thread gave up on is written again from what's here.
+    m_chat->onSaveLost(QStringLiteral("link-replay.json"), [this] {
+        if (m_replayLoaded && m_chat->ready())
+            m_chat->m_vault->write(QStringLiteral("link-replay.json"), m_replay.save());
+    });
+    m_chat->onSaveLost(QStringLiteral("mirror.json"), [this] {
+        if (m_loaded && m_chat->ready())
+            saveMirror();
+    });
     connect(m_chat, &Chat::changed, this, [this] {
         if (!m_chat->ready() && m_loaded) {
             m_loaded = false;
@@ -332,36 +341,90 @@ QJsonObject LinkReplay::stamp(QJsonObject msg, qint64 nowMs)
     return msg;
 }
 
-bool LinkReplay::take(const QString &from, const QJsonObject &p, qint64 nowMs)
+const char LinkReplay::kStampCap[] = "l4";
+
+qint64 LinkReplay::skewOf(const QJsonObject &p, qint64 nowMs)
 {
-    if (!p.contains(QStringLiteral("ln")))
-        return !m_stamps.contains(from);
+    const QJsonValue ltv = p.value(QStringLiteral("lts"));
+    return ltv.isDouble() ? qint64(ltv.toDouble()) - nowMs : 0;
+}
+
+void LinkReplay::forget(const QString &from)
+{
+    const bool stamped = m_stamps.remove(from);
+    const bool offset = m_offset.remove(from);
+    if (stamped || offset)
+        m_dirty = true;
+}
+
+LinkReplay::Verdict LinkReplay::judge(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct)
+{
+    const QString type = p.value(QStringLiteral("t")).toString();
+    m_left = false;
+    if (!p.contains(QStringLiteral("ln"))) {
+        // Round 15, cap l4 (protocol.md 15, "Going back to stable"): an unstamped "sync", "ping" or "pong" without l4
+        // says the device went back to an app that doesn't stamp: taken, and it no longer has to. A "hello" needs its
+        // one-time token, so it's taken too. Anything else unstamped from a device that stamps stays dropped.
+        const bool says = type == QLatin1String("sync") || type == QLatin1String("ping") || type == QLatin1String("pong");
+        if (says && !p.value(QStringLiteral("caps")).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts).contains(QString::fromLatin1(kStampCap))) {
+            if (m_stamps.remove(from)) {
+                m_dirty = true;
+                m_left = true;
+            }
+            return Verdict::Taken;
+        }
+        if (type == QLatin1String("hello"))
+            return Verdict::Taken;
+        return m_stamps.contains(from) ? Verdict::Unstamped : Verdict::Taken;
+    }
     const QJsonValue lnv = p.value(QStringLiteral("ln")), ltv = p.value(QStringLiteral("lts"));
     const QString ln = lnv.toString();
     if (!lnv.isString() || ln.size() != 32 || !std::all_of(ln.cbegin(), ln.cend(), [](QChar c) { const char16_t u = c.unicode(); return (u >= u'0' && u <= u'9') || (u >= u'a' && u <= u'f'); }))
-        return false;
+        return Verdict::Dropped;
     const double d = ltv.toDouble();
     if (!ltv.isDouble() || d != std::floor(d))
-        return false;
+        return Verdict::Dropped;
     const qint64 t = qint64(d);
-    if (t < nowMs - kMaxAgeMs || t > nowMs + kMaxAgeMs)
-        return false;
+    // Only a relay could bring an old frame back; one straight over Wi-Fi or Bluetooth is live, whatever its clock says,
+    // and how far that device's clock is from this one is kept. A relay's frame is then held to the 36 hours from
+    // either this clock or this clock moved by that much, so a device with a wrong date keeps working over the internet
+    // once the two have met on Wi-Fi or Bluetooth (a replay is still more than 36 hours behind both).
+    const auto within = [&](qint64 at) { return t >= at - kMaxAgeMs && t <= at + kMaxAgeMs; };
+    if (direct) {
+        const qint64 off = t - nowMs;
+        if (qAbs(off) > kOffsetMinMs) {
+            // Kept again only when it moved by more than 10 minutes, so frames don't each write the file.
+            if (!m_offset.contains(from) || qAbs(m_offset.value(from) - off) > 600000) {
+                m_offset.insert(from, off);
+                m_dirty = true;
+            }
+        } else if (m_offset.remove(from)) {
+            m_dirty = true;
+        }
+    } else if (!within(nowMs) && !(m_offset.contains(from) && within(nowMs + m_offset.value(from)))) {
+        return Verdict::Skewed;
+    }
     for (auto it = m_seen.begin(); it != m_seen.end();) {
         if (it.value() < nowMs)
             it = m_seen.erase(it);
         else
             ++it;
     }
-    if (!m_stamps.contains(from)) {
-        m_stamps.insert(from);
-        m_dirty = true;
+    // A stamped frame makes it a device that stamps (again, after an update back to the beta).
+    const auto stamps = [&] {
+        if (!m_stamps.contains(from)) {
+            m_stamps.insert(from);
+            m_dirty = true;
+        }
+    };
+    if (type == QLatin1String("chat") || type == QLatin1String("part") || type == QLatin1String("ping") || type == QLatin1String("pong")) {
+        stamps();
+        return Verdict::Taken;
     }
-    const QString type = p.value(QStringLiteral("t")).toString();
-    if (type == QLatin1String("chat") || type == QLatin1String("part") || type == QLatin1String("ping") || type == QLatin1String("pong"))
-        return true;
     const QString key = from + QLatin1Char('\n') + ln;
     if (m_seen.contains(key))
-        return false;
+        return Verdict::Dropped;
+    stamps();
     m_seen.insert(key, qMax(nowMs, t) + kMaxAgeMs);
     while (m_seen.size() > kMaxSeen) {
         auto oldest = m_seen.begin();
@@ -371,7 +434,7 @@ bool LinkReplay::take(const QString &from, const QJsonObject &p, qint64 nowMs)
         m_seen.erase(oldest);
     }
     m_dirty = true;
-    return true;
+    return Verdict::Taken;
 }
 
 QByteArray LinkReplay::save()
@@ -383,7 +446,10 @@ QByteArray LinkReplay::save()
     QJsonArray st;
     for (const QString &k : std::as_const(m_stamps))
         st.append(k);
-    return QJsonDocument(QJsonObject{{QStringLiteral("s"), st}, {QStringLiteral("n"), n}}).toJson(QJsonDocument::Compact);
+    QJsonObject off;
+    for (auto it = m_offset.cbegin(); it != m_offset.cend(); ++it)
+        off.insert(it.key(), double(it.value()));
+    return QJsonDocument(QJsonObject{{QStringLiteral("s"), st}, {QStringLiteral("n"), n}, {QStringLiteral("o"), off}}).toJson(QJsonDocument::Compact);
 }
 
 void LinkReplay::load(const QByteArray &json)
@@ -395,18 +461,72 @@ void LinkReplay::load(const QByteArray &json)
     const QJsonObject n = o.value(QStringLiteral("n")).toObject();
     for (auto it = n.constBegin(); it != n.constEnd(); ++it)
         m_seen.insert(it.key(), qint64(it.value().toDouble()));
+    const QJsonObject off = o.value(QStringLiteral("o")).toObject();
+    for (auto it = off.constBegin(); it != off.constEnd(); ++it)
+        if (it.value().isDouble())
+            m_offset.insert(it.key(), qint64(it.value().toDouble()));
 }
 
-bool Link::replayOk(const QString &from, const QJsonObject &p)
+void Link::loadReplay()
 {
-    if (!m_replayLoaded) {
-        m_replayLoaded = true;
-        m_replay.load(m_chat->m_vault->read(QStringLiteral("link-replay.json")));
-    }
-    const bool ok = m_replay.take(from, p, now());
+    if (m_replayLoaded)
+        return;
+    m_replayLoaded = true;
+    m_replay.load(m_chat->m_vault->read(QStringLiteral("link-replay.json")));
+}
+
+void Link::forgetStamps(const QString &key)
+{
+    loadReplay();
+    m_replay.forget(key);
     if (m_replay.dirty())
         m_chat->m_vault->write(QStringLiteral("link-replay.json"), m_replay.save());
-    return ok;
+}
+
+LinkReplay::Verdict Link::replayVerdict(const QString &from, const QJsonObject &p, const QString &via)
+{
+    loadReplay();
+    const LinkReplay::Verdict v = m_replay.judge(from, p, now(), via == QLatin1String("wifi") || via == QLatin1String("bluetooth"));
+    if (m_replay.dirty())
+        m_chat->m_vault->write(QStringLiteral("link-replay.json"), m_replay.save());
+    return v;
+}
+
+void Link::reprobe()
+{
+    // Round 15 (cap l4): the phone sent a frame without a stamp after it had stamped (it went back to an older app, or
+    // the frame is a relay's old copy). A ping asks it what it is now; its pong (taken unstamped) says l4 or not.
+    // Sent whether or not this window is in front, at most every 2 minutes.
+    if (m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone)
+        return;
+    const qint64 t = now();
+    if (m_reprobeAt > 0 && t - m_reprobeAt < 120000)
+        return;
+    m_reprobeAt = t;
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()}, {QStringLiteral("dn"), myDeviceName()}});
+}
+
+void Link::sayClockOff(const QString &from, qint64 skewMs)
+{
+    // Round 15: a device whose clock is more than 36 hours from this one is said once a run. Its frames over Wi-Fi and
+    // Bluetooth are taken, and then its relay frames too (LinkReplay keeps the difference); a relay frame before that is
+    // dropped (it could be an old copy).
+    if (m_skewSaid.contains(from))
+        return;
+    m_skewSaid.insert(from);
+    QString name;
+    if (!m_phone.key.isEmpty() && m_phone.key == from)
+        name = m_phone.name;
+    for (const Device &d : std::as_const(m_companions))
+        if (d.key == from)
+            name = d.name;
+    if (name.isEmpty())
+        name = QStringLiteral("Your linked device");
+    const qint64 days = qMax<qint64>(2, (qAbs(skewMs) + 43200000) / 86400000);
+    Q_EMIT m_chat->notice(QStringLiteral("%1's clock and this computer's are about %2 days apart. Set the right date and time on whichever is "
+                                         "wrong. Until then, what comes over the internet may wait until both are on the home Wi-Fi.")
+                              .arg(name)
+                              .arg(days));
 }
 
 void Link::sendTo(const Device &d, const QJsonObject &msg)
@@ -431,7 +551,9 @@ bool Link::internetOk(const QJsonObject &msg)
     return t == QLatin1String("msg") || t == QLatin1String("send") || t == QLatin1String("hello") || t == QLatin1String("unlink")
         || t == QLatin1String("result") || t == QLatin1String("sync") || t == QLatin1String("setme")
         // Cap l2 (15.2).
-        || t == QLatin1String("ping") || t == QLatin1String("pong") || t == QLatin1String("read");
+        || t == QLatin1String("ping") || t == QLatin1String("pong") || t == QLatin1String("read")
+        // Cap p2 (22.4): Refresh, asked of the phone.
+        || t == QLatin1String("pask");
 }
 
 QString Link::errText(const QString &err)
@@ -563,6 +685,16 @@ QVariantMap Link::readMe(const QJsonObject &p)
     }
     return {{QStringLiteral("name"), n}, {QStringLiteral("status"), st}, {QStringLiteral("custom"), Profile::cleanCustom(jstr(p, "cs"))},
             {QStringLiteral("pic"), pic}};
+}
+
+bool Link::askPicture(const QString &peer)
+{
+    ensureLoaded();
+    // Cap p2 (protocol.md 22.4): the phone asks its contact for their current picture; it comes here as l1 pictures do.
+    if (peer.isEmpty() || m_phone.key.isEmpty() || !m_phone.ok || m_phone.gone || !m_phone.l1)
+        return false;
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("pask")}, {QStringLiteral("peer"), peer}});
+    return true;
 }
 
 QString Link::setMe(const QString &name, const QString &status, const QString &custom)
@@ -1060,6 +1192,7 @@ QString Link::link(const QString &text, bool confirmed)
     const Device d{k, jstr(o, "p"), name.isEmpty() ? QStringLiteral("Linked device") : name, confirmed};
     m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == k; }), m_companions.end());
     m_companions << d;
+    forgetStamps(k);   // round 15: linked anew, so whether it stamps is learned again
     save();
     sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}, {QStringLiteral("i"), jstr(o, "i")}, {QStringLiteral("n"), m_chat->username()},
                           {QStringLiteral("p"), m_chat->mailbox()}});
@@ -1078,6 +1211,7 @@ void Link::unlink(const QString &key)
         if (d.key == key)
             sendTo(d, bye);
     m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == key; }), m_companions.end());
+    forgetStamps(key);   // round 15: a link made again learns anew whether it stamps
     m_owed.remove(key);
     m_meOwed.remove(key);
     // Files waiting for it are dropped (one already going stops at its next part, which isn't taken any more).
@@ -1566,9 +1700,22 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
     // A phone unlinked with its copy kept here is linked no more: only a hello (linking it again) is taken from it.
     const bool samePhone = !m_phone.key.isEmpty() && m_phone.key == from;
     const bool ph = samePhone && !m_phone.gone;
-    // Round 14: a frame from a linked device that's too old, came before, or lacks the stamp it always has: dropped quietly.
-    if ((comp || ph) && !replayOk(from, p))
-        return true;
+    // Round 14: a frame from a linked device that's too old, came before, or lacks the stamp it has: dropped (answered as
+    // if taken). Round 15: a relay's frame off by more than 36 hours is said once; an unstamped one from a phone that
+    // stamped asks it again what it is now (cap l4).
+    if (comp || ph) {
+        const LinkReplay::Verdict v = replayVerdict(from, p, via);
+        const qint64 skew = LinkReplay::skewOf(p, now());
+        if (v == LinkReplay::Verdict::Skewed || (v == LinkReplay::Verdict::Taken && qAbs(skew) > LinkReplay::kMaxAgeMs))
+            sayClockOff(from, skew);
+        else if (v == LinkReplay::Verdict::Unstamped && ph)
+            reprobe();
+        if (v != LinkReplay::Verdict::Taken)
+            return true;
+        // It went back to an app that doesn't stamp: what was dropped meanwhile is asked for again (a Refresh).
+        if (m_replay.left() && ph && m_phone.ok)
+            sendTo(m_phone, syncFrame(false));
+    }
     if (ph)
         m_heardAt = now();   // cap l2: the phone is there (shown as its status)
     if (t == QLatin1String("hello") && !comp) {
@@ -1577,6 +1724,8 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         if (token.isEmpty() || !m_tokens.contains(token) || now() > m_tokens.value(token))
             return false;
         m_tokens.clear();   // once: every code shown so far stops working
+        // Round 15: linked anew, so whether it stamps is learned again from what it sends now.
+        forgetStamps(from);
         m_token.clear();
         m_code.clear();
         m_tokenUntil = 0;
@@ -1606,6 +1755,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         return true;
     }
     if (t == QLatin1String("unlink") && (comp || ph)) {
+        forgetStamps(from);
         if (comp)
             m_companions.erase(std::remove_if(m_companions.begin(), m_companions.end(), [&](const Device &x) { return x.key == from; }), m_companions.end());
         if (ph) {
@@ -1663,7 +1813,7 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
             }
         for (const Device &d : std::as_const(m_companions))
             if (d.key == from)
-                sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("pong")}});
+                sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("pong")}, {QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap)}});
         return true;
     }
     if (ph && t == QLatin1String("acct")) {
@@ -2110,6 +2260,12 @@ bool Link::acctInternetOk(const QJsonObject &msg)
     return compact(msg).size() <= kAcctLiveBytes;
 }
 
+QString Link::linkCaps()
+{
+    // l1 to l3 (15.1 to 15.3), and l4: this app stamps its link frames (15, "Replay").
+    return QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3 ") + QString::fromLatin1(LinkReplay::kStampCap);
+}
+
 bool Link::saysL1(const QString &caps)
 {
     return caps.split(QLatin1Char(' '), Qt::SkipEmptyParts).contains(QString::fromLatin1(kAcctCap));
@@ -2118,7 +2274,7 @@ bool Link::saysL1(const QString &caps)
 QJsonObject Link::syncFrame(bool first) const
 {
     // "caps": "l1" asks the phone for its whole account too; an old phone ignores it and links the old way.
-    QJsonObject o{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3")}};
+    QJsonObject o{{QStringLiteral("t"), QStringLiteral("sync")}, {QStringLiteral("caps"), linkCaps()}};
     if (first)
         o.insert(QStringLiteral("f"), true);
     return o;
@@ -2480,7 +2636,7 @@ void Link::ping()
     if (m_pingAt > 0 && t - m_pingAt < 60000)
         return;
     m_pingAt = t;
-    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3")},
+    sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()},
                                 {QStringLiteral("dn"), myDeviceName()}});
     Q_EMIT changed();
     // No answer in 20 seconds: the status says so.
@@ -2557,6 +2713,51 @@ bool Link::selfTest(const QJsonObject &v)
         check(oldApp && first && !again && !unstamped && !tooOld && pages && remembered && send.value(QStringLiteral("ln")).toString().size() == 32
                   && send.value(QStringLiteral("lts")).toDouble() == double(t0) && send.value(QStringLiteral("ln")) != later.value(QStringLiteral("ln")),
               "link frames: stamped, and a replay, an old one or an unstamped one after stamps is dropped");
+    }
+    // Round 15 (cap l4): a device that went back to an app that doesn't stamp is heard again once it says so.
+    {
+        const qint64 t0 = 1800000000000;
+        LinkReplay r;
+        const QString ph = QStringLiteral("PHONE");
+        const auto st = [](const char *type, qint64 at) { return LinkReplay::stamp(QJsonObject{{QStringLiteral("t"), QLatin1String(type)}}, at); };
+        const bool stamped = r.take(ph, st("msg", t0), t0);
+        const bool before = r.judge(ph, QJsonObject{{QStringLiteral("t"), QStringLiteral("msg")}}, t0 + 1000) == LinkReplay::Verdict::Unstamped;
+        // An unstamped ping that claims l4 is still dropped; its pong without l4 (as an older app answers a ping) is taken
+        // unstamped and takes it out of the set.
+        QJsonObject claims{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap)}};
+        const bool stillStamps = r.judge(ph, claims, t0 + 1500) == LinkReplay::Verdict::Unstamped && !r.left();
+        const bool pong = r.take(ph, QJsonObject{{QStringLiteral("t"), QStringLiteral("pong")}}, t0 + 2000) && r.left();
+        const bool after = r.take(ph, QJsonObject{{QStringLiteral("t"), QStringLiteral("msg")}}, t0 + 3000);
+        // Back on the beta: a pong that says l4 puts it back.
+        QJsonObject l4 = st("pong", t0 + 4000);
+        l4.insert(QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap));
+        const bool back = r.take(ph, l4, t0 + 4000) && !r.take(ph, QJsonObject{{QStringLiteral("t"), QStringLiteral("msg")}}, t0 + 5000);
+        // A hello is taken unstamped (linking again), and forget starts over.
+        const bool hello = r.take(ph, QJsonObject{{QStringLiteral("t"), QStringLiteral("hello")}}, t0 + 6000);
+        r.forget(ph);
+        const bool forgot = r.take(ph, QJsonObject{{QStringLiteral("t"), QStringLiteral("unlink")}}, t0 + 7000);
+        check(stamped && before && stillStamps && pong && after && back && hello && forgot, "link frames: a device that stops stamping is heard again (l4)");
+        // This app says l4 on sync and ping (and its pong), beside l1 to l3.
+        const QStringList caps = linkCaps().split(QLatin1Char(' '));
+        check(caps.contains(QStringLiteral("l4")) && caps.contains(QStringLiteral("l1")) && caps.contains(QStringLiteral("l3"))
+                  && QString::fromLatin1(LinkReplay::kStampCap) == QLatin1String("l4"),
+              "link caps: l4 is said");
+        // A clock 5 days off: a relay's frame is dropped as off, one over Wi-Fi or Bluetooth is taken, and after that its
+        // relay frames are too; a replay of that frame is still refused, and an old copy from before still is.
+        const qint64 off = 5LL * 86400000;
+        LinkReplay c;
+        const QString pc = QStringLiteral("PC");
+        const QJsonObject a = st("send", t0 - off), b = st("send", t0 - off + 60000), old = st("send", t0 - off - 3 * LinkReplay::kMaxAgeMs);
+        const bool relayFirst = c.judge(pc, a, t0) == LinkReplay::Verdict::Skewed;
+        const bool direct = c.take(pc, a, t0, true);
+        const bool relayAfter = c.take(pc, b, t0 + 60000);
+        const bool replay = !c.take(pc, a, t0 + 120000) && !c.take(pc, a, t0 + 120000, true);
+        const bool oldCopy = c.judge(pc, old, t0 + 180000) == LinkReplay::Verdict::Skewed;
+        LinkReplay kept;
+        kept.load(c.save());
+        const bool remembered = kept.take(pc, st("send", t0 - off + 240000), t0 + 240000);
+        check(relayFirst && direct && relayAfter && replay && oldCopy && remembered && LinkReplay::skewOf(a, t0) == -off,
+              "link frames: a clock days off keeps working once seen on Wi-Fi or Bluetooth");
     }
 
     // Paging and merging: pages of at most 100 messages and 20 KB of UTF-8 JSON, merged by id without losing any.

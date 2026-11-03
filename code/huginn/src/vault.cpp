@@ -142,11 +142,24 @@ qint64 sinceStart()
     return t.msecsSinceReference();
 }
 
+// Held while a restore (or a new lock) swaps the chat folder: nothing may make an empty "chat" in the moment it's
+// away (dataDir() and the saving thread wait for it), or the swap couldn't finish (round 15, R6). Recursive: the
+// thread swapping may ask for dataDir() itself.
+QRecursiveMutex s_swap;
+
 QString dataDir()
 {
     const QString dir = System::dataDir() + QStringLiteral("/chat");
+    QMutexLocker hold(&s_swap);
     QDir().mkpath(dir);
     return dir;
+}
+
+// A "chat" folder with no vault.key and no restore mark: one something made again while it was away (it holds
+// nothing of anyone's), never a folder of chats.
+bool strayChat(const QString &dir)
+{
+    return QFileInfo(dir).isDir() && !QFileInfo::exists(dir + QStringLiteral("/vault.key")) && !QFileInfo::exists(dir + QStringLiteral("/.restore-complete"));
 }
 
 QByteArray random(int n)
@@ -325,10 +338,14 @@ private:
         data.fill(0);
         // A file another program holds for a moment gets a second try.
         for (int attempt = 0; attempt < 2; ++attempt) {
-            QDir().mkpath(QFileInfo(job.file).absolutePath());
-            QSaveFile f(job.file);
-            if (f.open(QIODevice::WriteOnly) && f.write(sealed) >= 0 && f.commit())
-                return true;
+            {
+                // Never while the chat folder is being swapped (it would make an empty one in its place).
+                QMutexLocker hold(&s_swap);
+                QDir().mkpath(QFileInfo(job.file).absolutePath());
+                QSaveFile f(job.file);
+                if (f.open(QIODevice::WriteOnly) && f.write(sealed) >= 0 && f.commit())
+                    return true;
+            }
             QThread::msleep(150);
         }
         qWarning("vault: the saving thread couldn't write a file");
@@ -650,40 +667,34 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     const bool wasOff = !first && exists() && !hasLock();
     if (wasOff && m_busy)
         return false;   // a backup is reading the files with the old key
-    QByteArray old;
-    Files files;
     if (first) {
         m_key = random(32);
     } else if (wasOff) {
-        drainSaves(30000);   // everything sealed with the old key is on disk before it is sealed again
-        old = m_key;
-        files = collect(old, dataDir());
+        // The new lock's vault.key is made first and goes in with the files sealed with the new key, in one swap
+        // (replaceAll): cut off anywhere, the next start finds either the old folder with its open key, or the new one
+        // with its lock (finishSwap), never files sealed with a key vault.key doesn't hold.
         const QByteArray fresh = random(32);
-        QString error;
-        if (!replaceAll(fresh, dataDir(), files, &error)) {
-            replaceAll(old, dataDir(), files, &error);   // a swap that stopped partway: put the old sealing back
-            for (auto &e : files)
-                e.second.fill(0);
+        const QByteArray blob = lockBlob(secret, pattern, fresh);
+        if (blob.isEmpty())
             return false;
-        }
-        m_key = fresh;
-    }
-    if (!writeLock(secret, pattern)) {
-        if (first)
-            m_key.clear();
-        if (wasOff) {
-            // vault.key still holds the old key: the files go back to it.
-            QString error;
-            replaceAll(old, dataDir(), files, &error);
-            m_key = old;
-        }
+        drainSaves(30000);   // everything sealed with the old key is on disk before it is sealed again
+        Files files = collect(m_key, dataDir());
+        QString error;
+        const bool swapped = replaceAll(fresh, dataDir(), files, &error, blob);
         for (auto &e : files)
             e.second.fill(0);
+        if (!swapped) {
+            CrashLog::note(QStringLiteral("vault: setting a lock didn't swap: %1").arg(error));
+            return false;   // what was there is as it was (or is finished at the next start)
+        }
+        m_key.fill(0);
+        m_key = fresh;
+    }
+    if (!wasOff && !writeLock(secret, pattern)) {
+        if (first)
+            m_key.clear();
         return false;
     }
-    for (auto &e : files)
-        e.second.fill(0);
-    old.fill(0);
     m_weak = false;
     m_screenLocked = false;
     m_lockNeeded = false;   // the new lock is set
@@ -694,6 +705,12 @@ bool Vault::setSecret(const QString &secret, bool pattern)
 }
 
 bool Vault::writeLock(const QString &secret, bool pattern) const
+{
+    const QByteArray blob = lockBlob(secret, pattern, m_key);
+    return !blob.isEmpty() && writeKeyFile(blob);
+}
+
+QByteArray Vault::lockBlob(const QString &secret, bool pattern, const QByteArray &key)
 {
     const QByteArray salt = random(16);
     QJsonObject o{{QStringLiteral("mode"), QStringLiteral("password")}, {QStringLiteral("kind"), pattern ? QStringLiteral("pattern") : QStringLiteral("text")},
@@ -708,7 +725,7 @@ bool Vault::writeLock(const QString &secret, bool pattern) const
     } else {
         kek = scrypt(secret.toUtf8(), salt, kScryptN, kScryptR, kScryptP);
         if (kek.isEmpty())
-            return false;
+            return QByteArray();
         o.insert(QStringLiteral("kdf"), QStringLiteral("scrypt"));
         o.insert(QStringLiteral("N"), double(kScryptN));
         o.insert(QStringLiteral("r"), int(kScryptR));
@@ -716,9 +733,10 @@ bool Vault::writeLock(const QString &secret, bool pattern) const
     }
     // Only the lock itself guards the key: nothing outside Huginn (no Windows account binding), so the folder
     // opens on any computer with the right pattern or password.
-    const QByteArray wrapped = seal(kek, m_key);
+    const QByteArray wrapped = seal(kek, key);
+    kek.fill(0);
     o.insert(QStringLiteral("wrapped"), QString::fromLatin1(wrapped.toBase64()));
-    return writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
 // vault.key, readable and writable by this user only (like ring-key.json and the TLS key): with the lock off it
@@ -1505,6 +1523,13 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
     // Everything is written and checked in a new folder first, so a failure leaves Chat as it was.
     const QString clean = QDir::cleanPath(dir);
     const QString stage = clean + QStringLiteral(".restore"), old = clean + QStringLiteral(".old");
+    // Chats left aside by a swap that couldn't finish (finishSwap said where) are never deleted here: moved first.
+    if (QFileInfo(old).isDir()) {
+        *error = QStringLiteral("Your previous chats are still in %1. Move that folder somewhere else first (it opens with the lock it had), "
+                                "then try again.")
+                     .arg(QDir::toNativeSeparators(old));
+        return false;
+    }
     QDir(stage).removeRecursively();
     auto failed = [&](const QString &why) {
         QDir(stage).removeRecursively();
@@ -1541,13 +1566,24 @@ bool Vault::replaceAll(const QByteArray &key, const QString &dir, const Files &f
             return failed(QStringLiteral("Couldn't write the restored chats. Is the disk full?"));
     }
     // Swap whole folders (renames on the same disk): the old one aside, the new one in, and only then the old one goes.
-    // Cut off anywhere, the next start finishes or undoes it (finishSwap).
-    QDir(old).removeRecursively();
+    // Cut off anywhere, the next start finishes or undoes it (finishSwap). Nothing in Huginn makes a "chat" folder
+    // meanwhile (s_swap); one something else made (it has no vault.key) is cleared away, never swapped in over.
+    QMutexLocker hold(&s_swap);
     const bool hadDir = QFileInfo(clean).isDir();
     if (hadDir && !renameDir(clean, old))
         return failed(QStringLiteral("Another program is using Huginn's chat folder, so nothing changed. Close it and try again."));
-    if (!renameDir(stage, clean)) {
+    const auto moveIn = [&] {
+        if (renameDir(stage, clean))
+            return true;
+        if (!hadDir || !strayChat(clean))
+            return false;
+        CrashLog::note(QStringLiteral("vault: an empty chat folder appeared during a swap; cleared"));
+        return QDir(clean).removeRecursively() && renameDir(stage, clean);
+    };
+    if (!moveIn()) {
         // The old folder back in place; the new one stays beside it for the next start to finish (it is complete).
+        if (hadDir && strayChat(clean))
+            QDir(clean).removeRecursively();
         if (hadDir && !renameDir(old, clean)) {
             *error = QStringLiteral("The restore couldn't finish. Close Huginn and open it again to finish it.");
             return false;
@@ -1564,8 +1600,15 @@ QString Vault::finishSwap(const QString &dir)
 {
     const QString clean = QDir::cleanPath(dir);
     const QString stage = clean + QStringLiteral(".restore"), old = clean + QStringLiteral(".old");
-    const bool hasOld = QFileInfo(old).isDir(), hasStage = QFileInfo(stage).isDir(), hasDir = QFileInfo(clean).isDir();
+    const bool hasOld = QFileInfo(old).isDir(), hasStage = QFileInfo(stage).isDir();
     const bool stageComplete = hasStage && QFileInfo::exists(stage + QLatin1Char('/') + kComplete);
+    // A "chat" folder made again while the real one was aside (no vault.key, no mark) holds nothing: it counts as
+    // absent, so the swap is finished or undone as if cut off between the renames.
+    if (hasOld && strayChat(clean)) {
+        QDir(clean).removeRecursively();
+        CrashLog::note(QStringLiteral("vault: an empty chat folder made during a swap was cleared"));
+    }
+    const bool hasDir = QFileInfo(clean).isDir();
     QString said;
     if (hasDir && QFileInfo::exists(clean + QLatin1Char('/') + kComplete)) {
         // Swapped in; only the tidying was left.
@@ -2080,6 +2123,37 @@ bool Vault::backupSelfTest()
                                                                        && !QFileInfo::exists(cut + QStringLiteral(".restore"))
                                                                        && !QFileInfo::exists(cut + QStringLiteral(".old")));
         check("nothing to finish says nothing", finishSwap(cut).isEmpty());
+        // Round 15 (R6): an empty "chat" made again while the real one was aside never turns a finished restore into
+        // "previous chats are in chat.old"; the complete stage goes in, with its new lock.
+        QFile ownKey(cut + QStringLiteral("/vault.key"));
+        if (ownKey.open(QIODevice::WriteOnly))
+            ownKey.write("open key");
+        ownKey.close();
+        QDir().rename(cut, cut + QStringLiteral(".old"));
+        replaceAll(keyB, cut + QStringLiteral("-again"), back, &error, QByteArrayLiteral("new lock"));
+        QDir().rename(cut + QStringLiteral("-again"), cut + QStringLiteral(".restore"));
+        QFile again(cut + QStringLiteral(".restore/.restore-complete"));
+        if (again.open(QIODevice::WriteOnly))
+            again.write("1");
+        again.close();
+        QDir().mkpath(cut + QStringLiteral("/photos"));   // what an image thread's dataDir() used to make
+        const QString stray = finishSwap(cut);
+        check("an empty chat folder made during a swap is cleared and the restore finished",
+              stray.contains(QStringLiteral("finished")) && collect(keyB, cut) == want && !QFileInfo::exists(cut + QStringLiteral(".old"))
+                  && !QFileInfo::exists(cut + QStringLiteral(".restore")) && [&] {
+                         QFile k(cut + QStringLiteral("/vault.key"));
+                         return k.open(QIODevice::ReadOnly) && k.readAll() == "new lock";
+                     }());
+        // Chats left aside are never deleted by the next swap: it refuses and says where they are.
+        QDir().mkpath(cut + QStringLiteral(".old"));
+        QFile left(cut + QStringLiteral(".old/chats.json"));
+        if (left.open(QIODevice::WriteOnly))
+            left.write("previous");
+        left.close();
+        QString refused;
+        check("a swap never deletes chats left aside", !replaceAll(keyA, cut, stale, &refused) && refused.contains(QStringLiteral(".old"))
+                                                           && QFileInfo::exists(cut + QStringLiteral(".old/chats.json")) && collect(keyB, cut) == want);
+        QDir(cut + QStringLiteral(".old")).removeRecursively();
     }
     check("unsafe names refused", !safeName(QStringLiteral("../x")) && !safeName(QStringLiteral("/etc/x")) && !safeName(QStringLiteral("a//b"))
                                       && safeName(QStringLiteral("photos/abc")));

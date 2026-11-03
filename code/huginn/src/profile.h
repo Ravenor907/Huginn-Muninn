@@ -12,6 +12,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
+#include <functional>
 
 class Chat;
 class Vault;
@@ -22,6 +23,9 @@ class Vault;
 //    A receiver takes at most 24 KB; a sender keeps it at 12 KB or less so one relay event carries it.
 //  - Room "live" "active" carries "st" (online, away or dnd) and "cs" (a custom status, at most 80 characters);
 //    invisible is sent as not active with no "st". RichWire checks the fields.
+//  - Cap p2 (22.4): "pv" (my version) on every envelope to an app that says p2, so one that missed my picture asks
+//    ({"t":"profile?"}); a picture is answered {"t":"profile-ok","v"}, and to a p2 app it counts as sent only then
+//    (until then it goes again after 2, 4, 8 ... minutes). Refresh on a person's page asks them (askPicture).
 // Everything kept is in the vault (profile/me.json, profile/<hash>.json, profile/sent.json), so a backup and a move
 // carry it and Erase everything wipes it. shared/vectors/p1-vectors.json checks the wire parts (selfTest).
 class Profile : public QObject
@@ -40,6 +44,15 @@ public:
     static const int kSendMaxBytes = 12 * 1024;   // what a sender keeps under, so one relay event carries it
     static const int kSide = 256;
     static const qint64 kRateMs = 10000;   // one profile message per sender in this long
+    // Cap p2 (22.4).
+    static const char kCap2[];             // "p2"
+    static const qint64 kAskMs = 5 * 60000;   // at most one "profile?" to a person in this long (from a "pv")
+    static const qint64 kRefreshMs = 10000;   // Refresh by hand: no sooner than this after the last ask
+    static const qint64 kAnswerMs = 60000;    // at most one picture sent because a person asked, per person
+    static const int kCtlPer10s = 5;          // "profile?" and "profile-ok" per sender in 10 s (apart from pictures)
+    static const qint64 kFirstRetryMs = 2 * 60000;          // no "profile-ok": again after 2, 4, 8 ... minutes,
+    static const qint64 kMaxRetryMs = 6LL * 3600 * 1000;    // at most 6 hours apart,
+    static const int kMaxTries = 10;                        // at most this many times
 
     // Mine: online, away, dnd or invisible; the custom text (at most 80 characters); the colour of my initial disc.
     QString myStatus() const { return m_status; }
@@ -86,6 +99,20 @@ public:
     // here. Nothing of them is ever sent from here.
     void setLinkedPictures(const QHash<QString, QByteArray> &pics);
 
+    // Cap p2 (22.4). My version for "pv" (0: none, and no "pv" goes); an envelope from key that opened said "pv"; key
+    // asked for mine ("profile?"); a picture from key was taken (it hears "profile-ok"); key says mine came.
+    qint64 myVersion() const { return m_me.v; }
+    bool saysP2(const QString &key) const;
+    void sawVersion(const QString &key, qint64 pv);
+    void askedBy(const QString &key);
+    void ack(const QString &key, qint64 v);
+    void acked(const QString &key, qint64 v);
+    // Refresh on a person's page: asks them for their current picture (through a linked phone while it is the account
+    // here). Says what happened, for a toast.
+    Q_INVOKABLE QString askPicture(const QString &key);
+    // Set by main: a linked phone asks for us ("pask", cap l1); false when no phone takes it.
+    std::function<bool(const QString &)> askPhone;
+
     // The wire parts, shared with the self-test.
     static bool colourOk(const QJsonValue &v);
     static QSize jpegSize(const QByteArray &b);        // from the frame header; invalid when it isn't a JPEG
@@ -95,6 +122,16 @@ public:
     static QString defaultColour(const QString &key);
     static QString shownStatus(bool active, const QString &st, bool heard);
     static QString cleanCustom(const QString &s);
+    // Cap p2: a usable version ("v" or "pv": a whole number, 1 <= v < 2^53), else 0; the small messages; the rules.
+    static qint64 versionOf(const QJsonValue &v);
+    static QByteArray askMsg();
+    static QByteArray ackMsg(qint64 v);
+    static bool isCtl(const QJsonObject &p);           // "profile?" or "profile-ok"
+    static bool ctlOk(const QJsonObject &p);           // well-formed "profile?" or "profile-ok"
+    static bool mayAsk(qint64 last, qint64 now, qint64 gap);
+    static qint64 retryMs(int tries);
+    static bool due(int tries, qint64 at, qint64 now);
+    static bool p2SelfTest();
     // The JPEG to send: the centre square at 256x256, the first quality of the ladder that fits, or empty.
     static QByteArray encode(const QImage &image);
     static bool selfTest(const QString &vectorsPath);
@@ -129,6 +166,17 @@ private:
     QString m_status = QStringLiteral("online"), m_custom;
     QHash<QString, Entry> m_peers;
     QHash<QString, qint64> m_sent;
+    struct Try {
+        qint64 v = 0;
+        int n = 0;
+        qint64 at = 0;
+    };
+    QHash<QString, Try> m_tries;          // cap p2: my version v sent n times with no "profile-ok", the last at at
+    QHash<QString, qint64> m_asked;       // cap p2: when I last asked each person for theirs
+    QHash<QString, qint64> m_answered;    // cap p2: when I last sent mine because they asked
+    bool inTouch(const QString &key) const;
+    bool claim(QHash<QString, qint64> &map, const QString &key, qint64 gap);
+    void sendSmall(const QString &key, const QByteArray &plain);
     QHash<QString, QPair<QString, QString>> m_statuses;   // key -> (st, cs) while their app is open
     QSet<QString> m_heard;                                 // keys a live active ever came from
     QSet<QString> m_wasActive;

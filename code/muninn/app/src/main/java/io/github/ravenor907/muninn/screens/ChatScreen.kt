@@ -62,6 +62,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -1125,7 +1127,8 @@ private fun Conversation(app: Muninn, key: String) {
     // Cap a1: GIFs waiting to be sent, one panel at a time (picked, shared in or over the limits).
     var gifs by remember { mutableStateOf<List<PendingGif>>(emptyList()) }
     var attaching by remember { mutableStateOf(false) }
-    var camera by remember { mutableStateOf("") }
+    // The camera open, and what it took waiting for Send, stay with the chat (in memory only, Drafts.camera).
+    var camera by remember { mutableStateOf(Drafts.camera[key]?.mode.orEmpty()) }
     var polling by remember { mutableStateOf(false) }
     var shared by remember { mutableStateOf(false) }
     var sharedFiles by remember { mutableStateOf(false) }
@@ -1139,9 +1142,11 @@ private fun Conversation(app: Muninn, key: String) {
     }
     DisposableEffect(key) { onDispose { Drafts.save(app) } }
     var sheetFor by remember { mutableStateOf<Chat.Msg?>(null) }
-    var searching by remember { mutableStateOf(false) }
-    var query by remember { mutableStateOf("") }
+    // A search open here stays too (in memory only), like the draft: the lock coming up or a fold keeps it.
+    var searching by remember { mutableStateOf(Drafts.search.containsKey(key)) }
+    var query by remember { mutableStateOf(Drafts.search[key].orEmpty()) }
     var matchAt by remember { mutableStateOf(0) }
+    androidx.compose.runtime.SideEffect { keepOpen(key, searching, query, camera) }
     val typingMap by app.chat.typing.collectAsState()
     val activeMap by app.chat.active.collectAsState()
     val typingNow = key in typingMap
@@ -1249,7 +1254,7 @@ private fun Conversation(app: Muninn, key: String) {
         return
     }
     if (camera.isNotEmpty()) {
-        CameraScreen(camera == "video", onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) } },
+        CameraScreen(camera == "video", keep = key, onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) } },
             onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVideo(key, mp4, ms)?.let { Ui.say(it, true) } } }) { camera = "" }
         return
     }
@@ -1291,8 +1296,10 @@ private fun Conversation(app: Muninn, key: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
     // Sideways with the keyboard up there's little height left: the bar shrinks to one line and the extra lines
-    // under it wait, so the list and the box to type in always fit.
-    val tight = maxHeight < 320.dp
+    // under it wait, so the list and the box to type in always fit. Only while the keyboard is up (split screen or a
+    // short phone without it keeps every line), and the key-change warning never waits: it shrinks to one line.
+    val imeUp = WindowInsets.isImeVisible
+    val tight = imeUp && maxHeight < 320.dp
     Column(Modifier.fillMaxSize()) {
         ThreadBar(name, if (tight) "" else status, if (typingNow) "chat" else "shield", Palette.online, { Avatar(key, name, 40.dp, active = activeNow) }, compact = tight, actions = {
             // One Call button; Mute is in the menu. Someone met close by can be called too while on the same Wi-Fi.
@@ -1312,8 +1319,9 @@ private fun Conversation(app: Muninn, key: String) {
         // How long messages stay, with one tap to Person details to keep them longer (a contact's chat; someone just met keeps 7 days).
         if (c != null && !searching && !tight) KeepLine(keepDays) { openDetails(key) }
         // Their security key changed: say so until the code has been checked.
-        if (c?.keyChanged == true && !tight) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f))
+        if (c?.keyChanged == true) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = if (tight) 2.dp else 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(io.github.ravenor907.muninn.net.ChatWire.keyChangedText(name), style = Type.small.copy(color = Palette.danger), modifier = Modifier.weight(1f),
+                maxLines = if (tight) 1 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis)
             MButton("Compare emoji") { checkEmoji(app, key, name) }
         }
         if (!tight && c == null && m != null && app.chat.shouldAskKeep(key)) Panel(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
@@ -1530,12 +1538,26 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
     val textNow by rememberUpdatedState(text)
     val onTextNow by rememberUpdatedState(onText)
     val onImageNow by rememberUpdatedState(onImage)
-    LaunchedEffect(text) {
+    // [sent] counts Enter sends, so the box is matched to [text] after each one even when [text] looks unchanged.
+    var sent by remember { mutableStateOf(0) }
+    LaunchedEffect(text, sent) {
         val want = text
         if (field.text.toString() != want) field.edit { replace(0, length, want) }
     }
     // Never cut here: a long message is split or refused when sent (sendLong), with a line saying so before that.
     LaunchedEffect(field) { snapshotFlow { field.text.toString() }.collect { if (it != textNow) onTextNow(it.take(Drafts.KEEP_MAX)) } }
+    // Enter on a hardware keyboard sends what the box holds right now: its last letters reach [text] only a frame or
+    // two later. An open composition (a Korean or Japanese IME) is committed first: setting the text from here ends it
+    // and keeps its letters, so nothing comes back into the emptied box.
+    val sendFromBox: () -> Unit = {
+        val now = field.text.toString().take(Drafts.KEEP_MAX)
+        if (now.isNotBlank()) {
+            field.edit { replace(0, length, now) }
+            if (now != textNow) onTextNow(now)
+            onSendNow()
+            sent++
+        }
+    }
     val receiver = remember {
         object : ReceiveContentListener {
             override fun onReceive(transferableContent: TransferableContent): TransferableContent? {
@@ -1584,7 +1606,7 @@ private fun Composer(text: String, onText: (String) -> Unit, hint: String, onPho
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (tight) 2 else 6),
                     modifier = Modifier.fillMaxWidth().then(if (onImage != null) Modifier.contentReceiver(receiver) else Modifier)
                         // A hardware keyboard: Enter sends, Shift+Enter is a new line, Tab and Shift+Tab move on (never typed in).
-                        .onPreviewKeyEvent { ev -> composerKey(ev, focus) { if (textNow.isNotBlank()) onSendNow() } }
+                        .onPreviewKeyEvent { ev -> composerKey(ev, focus) { sendFromBox() } }
                         .semantics { contentDescription = hint })
             }
             IconAction("smile", "Emoji", Palette.textMuted, size = 20.dp) { emoji = true }
@@ -2548,22 +2570,28 @@ private fun GroupConversation(app: Muninn, g: String) {
         onDispose { if (app.openChat == key) app.openChat = "" }
     }
     val scope = rememberCoroutineScope()
-    var picked by remember { mutableStateOf<Uri?>(null) }
+    // Photos picked and waiting for Send stay with the channel, like a private chat's (in memory only).
+    val picked0 = remember(draftKey) { Drafts.picked[draftKey].orEmpty().map { Uri.parse(it) } }
+    var picked by remember(ch) { mutableStateOf(picked0.singleOrNull()) }
     var preparing by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Chat.Msg?>(null) }
     // Cap m2: several photos picked at once, the "+" menu, the camera ("photo" or "video"), a new poll, the Shared page.
-    var pickedMany by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var pickedMany by remember(ch) { mutableStateOf(if (picked0.size > 1) picked0 else emptyList()) }
     // Cap a1: GIFs waiting to be sent, one panel at a time (picked, shared in or over the limits).
     var gifs by remember { mutableStateOf<List<PendingGif>>(emptyList()) }
     var attaching by remember { mutableStateOf(false) }
-    var camera by remember { mutableStateOf("") }
+    var camera by remember(ch) { mutableStateOf(Drafts.camera[draftKey]?.mode.orEmpty()) }
     var polling by remember { mutableStateOf(false) }
     var shared by remember { mutableStateOf(false) }
     var sharedFiles by remember { mutableStateOf(false) }
     // Cap m1: answering, editing, and the message held for its sheet.
     var replyTo by remember(ch) { mutableStateOf(draft0.re.takeIf { it.isNotEmpty() }?.let { re -> msgs.firstOrNull { it.id == re } }) }
     var editing by remember(ch) { mutableStateOf(draft0.edit.takeIf { it.isNotEmpty() }?.let { ed -> msgs.firstOrNull { it.id == ed } }) }
-    androidx.compose.runtime.SideEffect { Drafts.put(draftKey, Drafts.Draft(text, replyTo?.id.orEmpty(), editing?.id.orEmpty())) }
+    androidx.compose.runtime.SideEffect {
+        Drafts.put(draftKey, Drafts.Draft(text, replyTo?.id.orEmpty(), editing?.id.orEmpty()))
+        val waiting = picked?.let { listOf(it.toString()) } ?: pickedMany.map { it.toString() }
+        if (waiting.isEmpty()) Drafts.picked.remove(draftKey) else Drafts.picked[draftKey] = waiting
+    }
     DisposableEffect(draftKey) { onDispose { Drafts.save(app) } }
     var sheetFor by remember { mutableStateOf<Groups.GMsg?>(null) }
     // An admin's hold on a channel chip: its dialog (NEW_VOICE: a new voice room).
@@ -2584,9 +2612,10 @@ private fun GroupConversation(app: Muninn, g: String) {
     }
     if (replyTo != null || editing != null) BackHandler { replyTo = null; if (editing != null) { editing = null; text = "" } }
     // Search in this channel (from the group's menu, like Media).
-    var searching by remember(ch) { mutableStateOf(false) }
-    var query by remember(ch) { mutableStateOf("") }
+    var searching by remember(ch) { mutableStateOf(Drafts.search.containsKey(draftKey)) }
+    var query by remember(ch) { mutableStateOf(Drafts.search[draftKey].orEmpty()) }
     var matchAt by remember(ch) { mutableStateOf(0) }
+    androidx.compose.runtime.SideEffect { keepOpen(draftKey, searching, query, camera) }
     if (searching) BackHandler { searching = false; query = "" }
     val matches = if (!searching || query.isBlank()) emptyList()
         else msgs.indices.filter { msgs[it].unsent.isEmpty() && msgs[it].text.contains(query.trim(), ignoreCase = true) }.reversed()
@@ -2663,7 +2692,7 @@ private fun GroupConversation(app: Muninn, g: String) {
         return
     }
     if (camera.isNotEmpty()) {
-        CameraScreen(camera == "video", onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendGroupPhoto(g, ch, jpeg) } },
+        CameraScreen(camera == "video", keep = draftKey, onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendGroupPhoto(g, ch, jpeg) } },
             onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendGroupVideo(g, ch, mp4, ms)?.let { Ui.say(it) } } }) { camera = "" }
         return
     }
@@ -2690,7 +2719,9 @@ private fun GroupConversation(app: Muninn, g: String) {
     androidx.compose.runtime.CompositionLocalProvider(LocalMineBubble provides mineTint(app, key)) {
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
     // Sideways with the keyboard up: one-line bar, and the extra lines wait, so the list and the box to type in fit.
-    val tight = maxHeight < 320.dp
+    // Only while the keyboard is up: split screen or a short phone without it keeps every line.
+    val imeUp = WindowInsets.isImeVisible
+    val tight = imeUp && maxHeight < 320.dp
     Column(Modifier.fillMaxSize()) {
         ThreadBar(if (texts.size > 1 || ChatNav.wide) "${s.name} · #$chName" else s.name,
             if (tight) "" else (if (groupMuted) "Muted · " else "") + "${s.members.size} ${if (s.members.size == 1) "person" else "people"} · encrypted", "shield", Palette.online,
@@ -3384,3 +3415,13 @@ private fun GifPanel(p: PendingGif, to: String, busy: Boolean, onSend: () -> Uni
 internal fun deletedHereOnly(): String =
     if (io.github.ravenor907.muninn.net.Link.companions.value.isEmpty()) "It's deleted on this phone only."
     else "It's deleted on this phone only. Your linked computer keeps its copy."
+
+/**
+ * A chat's open search and camera, kept in memory under [k] (Drafts) so the lock coming up, a fold or a recreation
+ * doesn't lose them. The camera's taken photo or video is kept by CameraScreen itself under the same key.
+ */
+private fun keepOpen(k: String, searching: Boolean, query: String, camera: String) {
+    if (searching) Drafts.search[k] = query else Drafts.search.remove(k)
+    if (camera.isEmpty()) Drafts.camera.remove(k)
+    else if (Drafts.camera[k]?.mode != camera) Drafts.camera[k] = Drafts.Taken(camera)
+}

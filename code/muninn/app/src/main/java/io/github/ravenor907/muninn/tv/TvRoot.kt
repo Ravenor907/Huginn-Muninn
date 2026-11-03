@@ -148,7 +148,7 @@ fun TvRoot(app: Muninn) {
         // The Seasonal look's leaves or snow fall behind everything (nothing is drawn in the other looks).
         io.github.ravenor907.muninn.ui.SeasonFall()
         // A release that kept crashing as it started: only the updater runs, looking for a fixed one (SafeStart).
-        if (SafeStart.active) TvNote(SAFE_TITLE, SAFE_LINE)
+        if (SafeStart.active) SafeNote()
         else if (!ready) TvStarting(app)
         else {
             val st by KidTv.state.collectAsState()
@@ -171,8 +171,42 @@ fun TvRoot(app: Muninn) {
     }
 }
 
-private const val SAFE_TITLE = "Muninn is waiting for a fix"
-private const val SAFE_LINE = "It looks for a new version every hour. A parent can also install Muninn again."
+internal const val SAFE_TITLE = "Muninn is waiting for a fix"
+internal const val SAFE_LINE = "It looks for a new version every hour, and tries starting normally again every few hours. " +
+    "Restarting this device, or installing Muninn again, also starts it normally."
+
+/**
+ * The safe mode's screen (SafeStart): what is going on, Try again (one normal start now), and Install the fix when a
+ * downloaded release waits for a press (Android's Install box) or for "install unknown apps" to be allowed.
+ */
+@Composable
+private fun SafeNote() {
+    val context = LocalContext.current
+    val tv = remember { KidMode.isTv(context) }
+    val st by TvUpdate.state.collectAsState()
+    // An update waiting for "install unknown apps" goes in once it's allowed; the normal try comes when it's due.
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (TvUpdate.canInstall(context)) TvUpdate.resume(context)
+            if (SafeStart.trialDueNow(context)) SafeStart.tryAgain(context, context.findActivity())
+            delay(3000)
+        }
+    }
+    BackHandler(enabled = true) {}
+    Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 27.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(SAFE_TITLE, style = tvTitle(34.sp), textAlign = TextAlign.Center)
+        Text(SAFE_LINE, style = tvText(24.sp, Palette.textMuted), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 14.dp))
+        if (st.status.isNotEmpty()) Text(st.status, style = tvText(22.sp, Palette.textMuted), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+        val fix = st.confirm != null || st.needsParent
+        val buttons = buildList<Pair<String, () -> Unit>> {
+            if (fix) add("Install the fix" to { TvUpdate.confirm(context) })
+            add("Try again" to { SafeStart.tryAgain(context, context.findActivity()) })
+        }
+        DialogButtons(buttons)
+    }
+    TvUpdatePrompt(tv)
+}
 
 @Composable
 private fun TvStarting(app: Muninn) {
@@ -366,11 +400,11 @@ private fun TvKids(app: Muninn, cfg: TvConfig) {
 private fun KidCallBar(tv: Boolean) {
     val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
     val c = call
-    var hidden by remember { mutableStateOf("") }
+    var hidden by remember { mutableStateOf(KidCallBack.barHidden) }
     if (c == null || !KidCallBack.live(c.phase) || hidden == c.callId) return
     val context = LocalContext.current
     val ringing = c.phase == io.github.ravenor907.muninn.net.call.CallSession.Phase.INCOMING
-    TvDialog(onBack = { if (tv) io.github.ravenor907.muninn.screens.CallActivity.show(context) else hidden = c.callId }) {
+    TvDialog(onBack = { if (tv) io.github.ravenor907.muninn.screens.CallActivity.show(context) else { hidden = c.callId; KidCallBack.barHidden = c.callId } }) {
         MIcon("call", Palette.goldBright, 72.dp)
         Text(if (ringing) "${c.name} is calling" else "On a call with ${c.name}", style = tvTitle(if (tv) 34.sp else 24.sp),
             textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
@@ -509,7 +543,7 @@ private fun TvHome(app: Muninn, cfg: TvConfig, focusKey: String, quiet: QuietTim
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Raven(Modifier.align(Alignment.TopStart))
         ParentLock(tv = true, modifier = Modifier.align(Alignment.TopEnd).padding(top = 27.dp, end = 48.dp), onClick = onParent)
-        if (quiet != null) QuietLine(quiet, tv = true, modifier = Modifier.align(Alignment.TopCenter).padding(top = 24.dp))
+        if (quiet != null) QuietLine(quiet, tv = true, modifier = Modifier.align(Alignment.TopCenter).padding(top = 27.dp, start = 48.dp, end = 48.dp))
         LazyRow(Modifier.fillMaxWidth(), state = list,
             horizontalArrangement = Arrangement.spacedBy(40.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
