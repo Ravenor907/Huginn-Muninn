@@ -362,7 +362,7 @@ void CallSession::renewIfUsed()
     m_renewDue = true;
     const qint64 forExp = m_renewFor;
     QPointer<CallSession> self(this);
-    QTimer::singleShot(int(qBound<qint64>(0, forExp - kRelayLapseMs - wallMs(), 24 * 3600000)), this, [self, forExp] {
+    QTimer::singleShot(int(qBound(qint64(0), qint64(forExp - kRelayLapseMs - wallMs()), qint64(24) * 3600000)), this, [self, forExp] {
         if (self && self->m_state != Ended && self->m_renewFor == forExp && self->m_renewDue)
             self->lapseRelay();
     });
@@ -477,7 +477,7 @@ void CallSession::renewRelay()
             Q_EMIT self->pathsChanged();
             self->scheduleRenew(exp);
             // Round 18: a renewal put off on standby may come late; the old allocation hands over before its login ends.
-            const qint64 handover = qBound<qint64>(5000, forExp - wallMs() - 15000, RelayCredentials::kHandoverMs);
+            const qint64 handover = qBound(qint64(5000), qint64(forExp - wallMs() - 15000), qint64(RelayCredentials::kHandoverMs));
             QTimer::singleShot(int(handover), self, [self, old, next] {
                 if (!self)
                     return;
