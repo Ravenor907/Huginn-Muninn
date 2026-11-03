@@ -247,7 +247,7 @@ public:
     QString publicKey();      // "rk"
     QString mailbox();        // "rp": where callers send ring envelopes
     // The ring mailboxes to read and their Nostr secrets (to sign in to relays that ask, NIP-42): the current one,
-    // and the one before a renew() for kOldKeepMs.
+    // and the ones before a renew() for kOldKeepMs each (round 18: the last two).
     QStringList mailboxes();
     QList<QByteArray> nostrSecrets();
     // A ring envelope's content opened (with the current key, or the old one while it's read): true with the call id and ts.
@@ -278,6 +278,10 @@ private:
     QString m_path;
     Pair m_now, m_old;
     qint64 m_oldUntil = 0;   // ms; 0: no old one
+    // Round 18 (m1): the one from the renewal before, still read until its own end, so two renewals within kOldKeepMs (a
+    // lock set and then changed the same day) never stop a mailbox a contact may still ring early.
+    Pair m_older;
+    qint64 m_olderUntil = 0;
     qint64 m_made = 0;       // ms: when m_now was made
     bool m_loaded = false;
     bool m_forgotten = false;

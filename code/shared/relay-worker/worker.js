@@ -10,10 +10,15 @@ const SKEW = 300;
 // ---- What a login costs (relay.md "Limits").
 // Every budget is counted in minutes of TURN login handed out (10 for a renewing login, 30 for an old one), not in
 // logins: what a login can cost the TURN account grows with how long it lasts. The Worker can't see the bytes relayed;
-// these minutes are the most it can bound.
-// Logins with an install token, per UTC day:
-export const ID_MINUTES = 480; //    per install: 8 hours of logins (48 renewing, 16 old)
-export const IP_MINUTES = 1440; //   per address group (IPv4 /24, IPv6 /48): a household or a small office
+// these minutes are the most it can bound. Round 18 (relay.md "On demand"): apps from 1.41 ask for a login only when a
+// call needs the relay and renew it only while the relay carries the call, so these minutes count time spent relaying,
+// not calls on Wi-Fi, Bluetooth or a direct path.
+// Logins with an install token, per UTC day, keyed by the install the token was signed for:
+export const ID_MINUTES = 900; //    per install: 15 hours of relaying (90 renewing logins, or 30 old ones)
+// Address groups (IPv4 /24, IPv6 /48) never limit an established install with a token: a carrier's shared addresses
+// (CGNAT), a school or an office can hold hundreds of households. Only installs registered less than YOUNG_S ago
+// share one budget per address group, so fresh tokens farmed on one network can't take more than this:
+export const YOUNG_IP_MINUTES = 1440; // per address group, for young installs only
 // Logins without a token (apps before 1.36, or anyone with only APP_SECRET), per UTC day, much stricter, and in a pool
 // of their own, so using it up never touches the logins of installs with a token:
 export const LEGACY_ID_MINUTES = 60; //   per install: 2 logins
@@ -21,26 +26,33 @@ export const LEGACY_IP_MINUTES = 120; //  per address group: 4 logins
 export const LEGACY_POOL_MINUTES = 900; // for everyone: 30 logins
 // The owner can end that pool: set the Worker variable LEGACY_UNTIL to a Unix time (seconds); from then on a login
 // without a token is refused with "update_needed". Not set: never.
-// For everyone, per UTC day: the Worker variable DAILY_MINUTES (the owner's TURN budget), else this.
-export const DAILY_MINUTES = 24000;
-// No hour may take more than a sixth of the day, so a burst can't use up the day in minutes.
-export const HOUR_SHARE = 6;
+// For everyone, per UTC day: the Worker variable DAILY_MINUTES (the owner's TURN budget), else this. Sized to the free
+// TURN allowance (1,000 GB a month): a relayed sound call carries about 40 kbps each way, and an allocation is billed
+// both for what it sends on to the peer's allocation and for what it hands to its own device, so about 80 kbps,
+// 0.6 MB a minute. 50,000 minutes x 0.6 MB = 30 GB a day, 900 to 930 GB a month (relay.md "Limits").
+export const DAILY_MINUTES = 50000;
+// No hour may take more than a quarter of the day (12,500 minutes: about 208 allocations relaying at once), so a burst
+// can't use up the day in minutes.
+export const HOUR_SHARE = 4;
 // Past this share of the day's or the hour's budget the relay is "busy": logins without a token, and installs
 // registered less than YOUNG_S ago, are refused until the hour (or day) turns; established installs go on until the
 // budget is used up. A flood of fresh installs can then never take the relay away from the households already using it.
 export const SOFT_SHARE = 0.6;
 export const YOUNG_S = 2 * 86400;
-// New registrations: per address group and for everyone. A full day refuses new registrations, never logins.
-const REG_PER_IP_DAILY = 6;
-const REG_DAILY = 2000;
-// Rows written a day with every budget used up: 2400 renewing logins x 4 rows + 30 old logins x 6 + 2000 registrations
-// x 2 = about 13,800, and as many deleted the next day, far under the free plan's 100,000.
+// New registrations: per address group and for everyone. A full day refuses new registrations, never logins (an install
+// that can't register logs in without a token). An install registers once and its token is renewed by every login.
+export const REG_PER_IP_DAILY = 20;
+export const REG_DAILY = 2000;
+// Rows written a day with every budget used up: 5000 renewing logins x at most 4 rows + 30 old logins x 5 + 2000
+// registrations x 2 = about 24,200, and as many deleted the next day: about 48,400, under the free plan's 100,000.
 
 // ---- Cheap checks in front of the counts (relay.md "Junk requests").
 // Per Worker instance (isolate, in memory only, never stored): at most this many POSTs a minute from one address group
 // reach the signature check and the counts. Each Cloudflare location runs its own instances, so this is a speed bump
-// that costs nothing, not a hard cap; the counts in the Durable Object are the hard cap.
-export const ISOLATE_RATE = 20;
+// that costs nothing, not a hard cap; the counts in the Durable Object are the hard cap. Round 18: 60, so a carrier's
+// shared addresses or a school (many households behind one group, each asking only when a call needs the relay) aren't
+// slowed down.
+export const ISOLATE_RATE = 60;
 // A refusal from the counts is remembered in memory until it ends, so the same install, address group or busy relay
 // is answered without asking the Durable Object again.
 const MEMO_MAX = 10000;
@@ -222,15 +234,15 @@ export function dailyMinutes(env) {
 // One SQLite-backed Durable Object keeps every daily count. All checking and counting for one request happens in one
 // synchronous step inside it, so two requests at the same moment can't both slip under a cap.
 // What each kind of request counts against: [row key, cap, the error's name]. Logins add their cost in minutes to each
-// row; registrations add 1. Rows: "d" the day, "h<HH>" this hour, "u:" the install, "i:" the address group (all
-// logins), and for logins without a token also "g" their pool and "l:" their address group.
-export function plan(kind, id, ip, hour, daily) {
+// row; registrations add 1. Rows: "d" the day, "h<HH>" this hour, "u:" the install; for a token login of a young
+// install also "y:" its address group; for logins without a token also "g" their pool and "l:" their address group.
+// Round 18: a token login is keyed by its install first, and an established install is never counted by address.
+export function plan(kind, id, ip, hour, daily, young = false) {
   if (kind === "reg") return [["rg", REG_DAILY, "reg"], ["r:" + ip, REG_PER_IP_DAILY, "ip_reg"]];
   const hourly = Math.ceil(daily / HOUR_SHARE);
   const rows = [["d", daily, "global"], ["h" + hour, hourly, "global"]];
-  if (kind === "tok") return [...rows, ["i:" + ip, IP_MINUTES, "ip"], ["u:" + id, ID_MINUTES, "id"]];
-  return [...rows, ["g", LEGACY_POOL_MINUTES, "global"], ["l:" + ip, LEGACY_IP_MINUTES, "ip"],
-    ["i:" + ip, IP_MINUTES, "ip"], ["u:" + id, LEGACY_ID_MINUTES, "id"]];
+  if (kind === "tok") return [...rows, ...(young ? [["y:" + ip, YOUNG_IP_MINUTES, "ip"]] : []), ["u:" + id, ID_MINUTES, "id"]];
+  return [...rows, ["g", LEGACY_POOL_MINUTES, "global"], ["l:" + ip, LEGACY_IP_MINUTES, "ip"], ["u:" + id, LEGACY_ID_MINUTES, "id"]];
 }
 const READ_KEYS = 6;
 export const SQL = {
@@ -264,7 +276,7 @@ export class RelayLimits {
       this.sql.exec(SQL.wipe, day);
       this.wipedBefore = day;
     }
-    const rows = plan(kind, id, ip, hour, daily);
+    const rows = plan(kind, id, ip, hour, daily, q.young === true);
     const keys = rows.map((r) => r[0]);
     while (keys.length < READ_KEYS) keys.push(keys[0]);
     const have = new Map(this.sql.exec(SQL.read, day, ...keys).toArray().map((r) => [r.k, Number(r.n)]));
@@ -352,7 +364,8 @@ function memoPut(key, nowSec, result, retry) {
 // The memo keys a request is answered from, and the one a refusal is kept under. Install and address refusals are
 // kept per kind and cost, since a cheaper login may still fit where a dearer one didn't.
 function memoKeys(kind, id, ipk, young, cost) {
-  const kc = kind + cost;
+  // A young install's address group refusal is its own: it never applies to an established install there.
+  const kc = kind + (kind === "tok" && young ? "y" : "") + cost;
   return {
     id: kc + "|id|" + id,
     ip: kc + "|ip|" + ipk,

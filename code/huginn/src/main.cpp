@@ -549,6 +549,12 @@ int main(int argc, char *argv[])
             vault->writeLater(QStringLiteral("nostrseen.json"), std::move(make));
     };
     QObject::connect(vault, &Vault::opened, nostr, [vault, nostr] { nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json"))); });
+    // Round 18 (m2): the relay cursors wait while the vault holds its saves (sealing for a new lock), and go once it's done.
+    nostr->holdCursors = [vault] { return vault->sealing(); };
+    QObject::connect(vault, &Vault::changed, nostr, [vault, nostr] {
+        if (!vault->sealing())
+            nostr->releaseCursors();
+    });
     if (!vault->locked())
         nostr->restoreSeen(vault->read(QStringLiteral("nostrseen.json")));
     chat = new Chat(localSend, vault, nostr, ble, &app);

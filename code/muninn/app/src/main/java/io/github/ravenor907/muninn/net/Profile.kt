@@ -115,6 +115,12 @@ object ProfileWire {
     fun renameTo(current: String, nickname: String?, n: String?): String? =
         if (n == null || !nickname.isNullOrEmpty() || n == current) null else n
 
+    /**
+     * Round 18: the contact's own name kept under a nickname: [n] when it differs from [current], else null. Kept quietly
+     * (the nickname still shows), so clearing the nickname later shows the name they use now, not an old one.
+     */
+    fun keepName(current: String, n: String?): String? = if (n == null || n == current) null else n
+
     /** What's said when a contact's own name changes here. */
     fun renamedText(old: String, new: String): String = "$old is now called $new."
 
@@ -440,9 +446,13 @@ class Profile(context: Context, private val vault: Vault, private val contacts: 
             // A new chosen name: the contact's name here follows (a nickname set on this phone still shows first).
             // Round 17: never over a name set on this phone, and said out loud when it changes.
             contacts.get(fromKey)?.let { c ->
-                ProfileWire.renameTo(c.name, c.nickname, ProfileWire.nameOf(p))?.let { n ->
-                    contacts.set(c.copy(name = n))
-                    try { chat.notices.tryEmit(ProfileWire.renamedText(c.name, n)) } catch (_: Exception) {}
+                val n = ProfileWire.nameOf(p)
+                ProfileWire.keepName(c.name, n)?.let { kept ->
+                    contacts.set(c.copy(name = kept))
+                    // Said only when it shows: a nickname set on this phone still shows first (round 18: their own name
+                    // is kept under it all the same).
+                    if (ProfileWire.renameTo(c.name, c.nickname, n) != null)
+                        try { chat.notices.tryEmit(ProfileWire.renamedText(c.name, kept)) } catch (_: Exception) {}
                 }
             }
             val e = Entry(v, p.getString("col").lowercase(), bytes)

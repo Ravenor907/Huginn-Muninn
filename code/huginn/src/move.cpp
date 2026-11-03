@@ -541,22 +541,27 @@ QString Move::showCode()
         return jstr(cur, "code");
     // Round 17 (security m6): moving here replaces this account, so only after the current lock was given again
     // (Linked devices › Move here asks; no lock set: nothing to ask).
-    if (!m_vault->takeGrant(QStringLiteral("movehere"))) {
+    if (!m_vault->lockConfirmed(QStringLiteral("movehere"))) {
         Q_EMIT notice(QStringLiteral("Confirm your lock first: Linked devices › Move here."), true);
         return QString();
     }
-    const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
-    QByteArray secret(16, 0);
-    for (char &c : secret)
-        c = char(QRandomGenerator::system()->bounded(256));
     // The Wi-Fi side must be up to be reached (and its port known: the first free one from 53318).
     if (!m_net->running())
         m_net->start();
     QStringList addrs;
     for (const auto &[ip, prefix] : mine())
         addrs << ip + QStringLiteral(":") + QString::number(m_net->serverPort());
+    // Round 18 (m4): no usable address ("Join your home Wi-Fi first."): the grant is kept for the next try, so it doesn't
+    // ask for the lock again. It is used up only once a code is made.
+    if (addrs.isEmpty())
+        return QString();
+    m_vault->takeGrant(QStringLiteral("movehere"));
+    const ChatCrypto::KeyPair kp = ChatCrypto::newKeyPair();
+    QByteArray secret(16, 0);
+    for (char &c : secret)
+        c = char(QRandomGenerator::system()->bounded(256));
     // Never the computer's name: the person's own chat name.
-    const QString c = addrs.isEmpty() ? QString() : MoveWire::code({addrs, b64(kp.publicDer), secret, m_chat->username().left(40), QStringLiteral("huginn")});
+    const QString c = MoveWire::code({addrs, b64(kp.publicDer), secret, m_chat->username().left(40), QStringLiteral("huginn")});
     QDir(partsDir()).removeRecursively();
     store(QStringLiteral("in"), {{QStringLiteral("state"), QStringLiteral("shown")}, {QStringLiteral("code"), c}, {QStringLiteral("priv"), b64(kp.privateDer)},
                                  {QStringLiteral("pub"), b64(kp.publicDer)}, {QStringLiteral("s"), b64(secret)}});

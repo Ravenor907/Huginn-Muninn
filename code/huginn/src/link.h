@@ -42,7 +42,8 @@ public:
     // direct: it came over Wi-Fi or Bluetooth. Round 17 (security M2): that says where a frame came from, not when it
     // was made (anyone on the network can hand over bytes captured from a relay), so every route is held to the
     // 36 hours. A device's clock offset is learned only from a pong over Wi-Fi or Bluetooth that answers this app's own
-    // ping (pinged) within kChallengeMs, echoing its "pn" when the device says it back; never from a frame on its own.
+    // ping (pinged) within kChallengeMs and echoes its "pn" (round 18: a pong without pn never sets, moves or clears
+    // it, so an older phone is held to the strict 36 hours); never from a frame on its own.
     static constexpr qint64 kChallengeMs = 30000;
     void pinged(const QString &to, const QString &pn, qint64 nowMs);
     Verdict judge(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false);

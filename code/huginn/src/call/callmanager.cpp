@@ -314,14 +314,8 @@ QString CallManager::duration(int s) const
 
 bool CallManager::canCall(const QString &key) const { return available() && !key.isEmpty() && m_signal->canCall(key); }
 
-void CallManager::prepare(const QString &key)
-{
-    const qint64 now = nowMs();
-    if (now - m_preparedAt < 60000 || !Settings::internetCallsOn() || !canCall(key) || !RelayConfig::configured() || m_signal->myKey().isEmpty())
-        return;
-    m_preparedAt = now;
-    getLogin([](const TurnLogin &, const QString &) {});
-}
+// Round 18 (relay.md "On demand"): no relay login is fetched ahead of a call any more (opening a chat used to fetch
+// one); a call asks only when it needs the relay.
 
 void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &)> done)
 {

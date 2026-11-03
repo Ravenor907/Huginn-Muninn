@@ -146,6 +146,10 @@ private:
     void startRelay();
     void restartRelay();
     void scheduleRenew(qint64 expiresMs);   // relay.md "Renewal"
+    void renewIfUsed();                     // round 18: renewed only while the relay carries the call
+    void lapseRelay();                      // round 18: a login not renewed is let go before it ends
+    void relayOnDemand();                   // round 18: the relay asked for once the call needs it
+    bool relayAtStart() const;              // round 18: no free path could carry this call, so the relay at once
     void renewRelay();
     void relayReady();
     void startProbe();
@@ -171,6 +175,10 @@ private:
     QPointer<TurnClient> m_leaving;   // the allocation a renewal replaced: carries media for kHandoverMs more
     qint64 m_renewFor = 0;            // the login end the renewal timer is set for
     int m_renewTries = 0;
+    bool m_renewDue = false;          // round 18: the renewal time came on standby; renewed if the relay takes over in time
+    bool m_loginAsked = false;        // round 18: a login fetch is underway
+    bool m_relayWanted = false;       // round 18: the peer sent a new relay address while no free path was fresh here
+    qint64 m_mediaAt = 0, m_freeAt = 0, m_relayAskedAt = 0;   // wall ms: media began, a free path last fresh, last on-demand ask
     bool m_relayDone = false;     // allocated or given up
     int m_relayTries = 0, m_restarts = 0;
     QString m_relayWhy;           // why the relay last failed ("" once it works); never an address

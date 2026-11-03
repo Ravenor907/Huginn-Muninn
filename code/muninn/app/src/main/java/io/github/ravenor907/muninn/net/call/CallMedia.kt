@@ -145,25 +145,51 @@ class CallMedia(
         peerRelay.advertised?.let { t.permit(it) }
         renewing?.let { try { it.close() } catch (_: Exception) {} }
         renewing = t
+        // Round 18 (R1): the peer's address may have changed while this allocation was being made (both renewing at
+        // about the same time): let the newest one in too.
+        peerRelay.advertised?.let { t.permit(it) }
         return t.relayed
     }
 
     /** The renewal's allocation now carries the media; the old one is let go. */
     fun finishRenew() {
         val t = renewing ?: return
+        // Round 18 (R1): before it carries media, the new allocation lets in every relayed address of the peer, the
+        // one that came during the handover included (it was permitted then too, see setPeerRelay).
+        for (a in CallLogic.handoverPermits(peerRelay)) t.permit(a)
         renewing = null
         val old = turn
         turn = t
         old?.let { try { it.close() } catch (_: Exception) {} }
         peerRelay.forgetSeen()
+        // And after: the advertised address again on the allocation now in use (a no-op when it already has it).
+        peerRelay.advertised?.let { t.permit(it) }
     }
 
     /** The peer's relayed address (from their offer, answer or cands). Never anything but a relay. */
     fun setPeerRelay(a: InetSocketAddress?) {
         if (!peerRelay.advertise(a) || a == null) return
         paths.removeAll { it.kind == CallLogic.Kind.RELAY }
-        turn?.let { it.permit(a); addPath(CallLogic.Kind.RELAY, a) }
+        // Round 18 (R1): the allocation in use and a renewal's new one both let it in, so a handover on both sides at
+        // about the same time never leaves the new allocation without a permission for the peer's new address.
+        for (t in CallLogic.permitOn(turn, renewing)) t.permit(a)
+        if (turn != null) addPath(CallLogic.Kind.RELAY, a)
     }
+
+    /** Round 18 (relay.md "On demand"): when the relay last carried media (not pings or pongs); 0 never. */
+    @Volatile var relayUsedAt = 0L; private set
+
+    /** Round 18: the login wasn't renewed (the relay wasn't carrying the call): both allocations are let go before it ends. */
+    fun dropRelay() {
+        val t = turn; val r = renewing
+        turn = null; renewing = null
+        paths.removeAll { it.kind == CallLogic.Kind.RELAY }
+        peerRelay.forgetSeen()
+        t?.let { try { it.close() } catch (_: Exception) {} }
+        r?.let { try { it.close() } catch (_: Exception) {} }
+    }
+
+    val hasRelay: Boolean get() = turn != null
 
     /** The peer on the same Wi-Fi: its discovered address and the port it put in "lp". */
     fun setPeerLan(a: InetSocketAddress?) {
@@ -425,7 +451,11 @@ class CallMedia(
         val rest = only == null && freeFresh(now)
         for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest)) when (dst.kind) {
             // Group video goes peer to peer only, never through the relay (it stays on voice there).
-            CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.send(dst.addr, p)
+            CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.let { t ->
+                t.send(dst.addr, p)
+                // Pings and pongs keep a standby relay alive; only what else it carries counts as the relay in use.
+                if (only == null) relayUsedAt = now
+            }
             CallLogic.Kind.WIFI, CallLogic.Kind.DIRECT -> try { lan?.send(DatagramPacket(p, p.size, dst.addr)) } catch (_: Exception) {}
             else -> {}
         }

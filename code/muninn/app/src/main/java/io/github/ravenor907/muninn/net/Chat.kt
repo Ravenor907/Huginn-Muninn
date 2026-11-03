@@ -103,6 +103,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     override fun sendTvRoomEverywhere(peerKey: String, plain: String) {
         bg { spread(peerKey, listOf(envelope("tvconfig", peerKey, plain, UUID.randomUUID().toString()).toString()), false, 2, contacts.get(peerKey)?.mailbox) }
     }
+    override fun sendTvRoomTaken(peerKey: String, plain: String, waitMs: Long): Boolean {
+        if (Move.locked) return false
+        val json = envelope("tvconfig", peerKey, plain, UUID.randomUUID().toString()).toString()
+        val stored = java.util.concurrent.CountDownLatch(1)
+        var taken = ble.send(peerKey, json, strict(peerKey)) && ble.proven(peerKey)
+        wifiTo(peerKey)?.let { if (net.post(it, PATH, json) == 200 && it.proven) taken = true }
+        val online = internet(peerKey, listOf(json), contacts.get(peerKey)?.mailbox, stored = { stored.countDown() })
+        return taken || (online && stored.await(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS))
+    }
 
     data class Msg(val id: String, val peerKey: String, val name: String, val text: String, val mine: Boolean, val time: Long,
                    val failed: Boolean = false, val via: String = "",

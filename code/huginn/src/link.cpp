@@ -422,14 +422,16 @@ LinkReplay::Verdict LinkReplay::judge(const QString &from, const QJsonObject &p,
     const qint64 t = qint64(d);
     // Round 17 (security M2): every frame, whatever route it came on, is held to the 36 hours from either this clock or
     // this clock moved by how far that device's clock is off. The offset is learned only from a pong straight over
-    // Wi-Fi or Bluetooth answering this app's own ping within 30 seconds (and echoing its "pn" when it says one), so a
-    // device with a wrong date keeps working once the two have met, and an old frame handed over on the LAN is still
-    // more than 36 hours behind both.
+    // Wi-Fi or Bluetooth answering this app's own ping within 30 seconds, so a device with a wrong date keeps working
+    // once the two have met, and an old frame handed over on the LAN is still more than 36 hours behind both.
+    // Round 18 (R1): the pong must echo this ping's "pn". A pong without one (Muninn before 1.41, or any pong captured
+    // before) never sets, moves or clears the offset, so for an older phone the strict 36 hours apply.
     const auto within = [&](qint64 at) { return t >= at - kMaxAgeMs && t <= at + kMaxAgeMs; };
     const auto asked = m_pings.constFind(from);
+    const QJsonValue pnv = p.value(QStringLiteral("pn"));
     const bool challenged = direct && type == QLatin1String("pong") && asked != m_pings.constEnd() && nowMs >= asked->at
-                            && nowMs - asked->at <= kChallengeMs
-                            && (!p.contains(QStringLiteral("pn")) || p.value(QStringLiteral("pn")).toString() == asked->pn);
+                            && nowMs - asked->at <= kChallengeMs && !asked->pn.isEmpty() && pnv.isString()
+                            && pnv.toString() == asked->pn;
     if (challenged) {
         m_pings.remove(from);
         const qint64 off = t - nowMs;
@@ -2908,6 +2910,38 @@ bool Link::selfTest(const QJsonObject &v)
         const bool lanReplay = lan.judge(pc, captured, t0 + 3 * 86400000LL, true) == LinkReplay::Verdict::Skewed
                                && lan.judge(pc, captured, t0 + 3 * 86400000LL) == LinkReplay::Verdict::Skewed;
         check(lanReplay, "link frames: an old frame over Wi-Fi or Bluetooth is held to the 36 hours too");
+        // Round 18 (R1): a pong without "pn" (an older phone's, or an old one replayed on the LAN within 30 s of our
+        // ping) never sets the offset, so a 3-day-old "send" stays refused; nor does it move or clear an offset a
+        // matching pong taught. Only the pong echoing this ping's pn does.
+        const qint64 days3 = 3 * 86400000LL;
+        LinkReplay noPn;
+        noPn.pinged(pc, QStringLiteral("0a0b0c0d0e0f1011"), t0);
+        const QJsonObject oldPong = st("pong", t0 - days3);
+        const QJsonObject oldSend = st("send", t0 - days3 + 500);
+        const bool bareSkewed = noPn.judge(pc, oldPong, t0 + 1000, true) == LinkReplay::Verdict::Skewed;
+        const bool sendRefused = noPn.judge(pc, oldSend, t0 + 2000, true) == LinkReplay::Verdict::Skewed
+                                 && noPn.judge(pc, oldSend, t0 + 2000) == LinkReplay::Verdict::Skewed;
+        QJsonObject emptyPn = st("pong", t0 - days3);
+        emptyPn.insert(QStringLiteral("pn"), QString());
+        LinkReplay blank;
+        blank.pinged(pc, QString(), t0);
+        const bool blankRefused = blank.judge(pc, emptyPn, t0 + 1000, true) == LinkReplay::Verdict::Skewed
+                                  && blank.judge(pc, oldSend, t0 + 2000, true) == LinkReplay::Verdict::Skewed;
+        // A learned offset (5 days) survives a pn-less pong within 30 s of the next ping, and the ping stays open.
+        LinkReplay held;
+        held.pinged(pc, QStringLiteral("1212343456567878"), t0);
+        QJsonObject good = st("pong", t0 - off + 1000);
+        good.insert(QStringLiteral("pn"), QStringLiteral("1212343456567878"));
+        const bool learned = held.take(pc, good, t0 + 1000, true);
+        held.pinged(pc, QStringLiteral("9090a0a0b0b0c0c0"), t0 + 60000);
+        const bool notMoved = held.judge(pc, st("pong", t0 - days3), t0 + 61000, true) == LinkReplay::Verdict::Skewed
+                              && held.take(pc, st("send", t0 - off + 62000), t0 + 62000)
+                              && held.judge(pc, st("send", t0 - days3 + 63000), t0 + 63000, true) == LinkReplay::Verdict::Skewed;
+        QJsonObject later = st("pong", t0 - off + 64000);
+        later.insert(QStringLiteral("pn"), QStringLiteral("9090a0a0b0b0c0c0"));
+        const bool stillOpen = held.take(pc, later, t0 + 64000, true);
+        check(bareSkewed && sendRefused && blankRefused && learned && notMoved && stillOpen,
+              "link frames: only a pong echoing this ping's pn teaches the clock offset (round 18)");
         // Round 17 (m11): a relay replaying unstamped frames never raises "on an older version"; after a ping nobody
         // answered with a stamped frame, they count.
         LinkReplay relayOnly;

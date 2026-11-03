@@ -514,21 +514,50 @@ object KidTv {
     /** A Leave was saved and hasn't finished: it's finished now (at the start, before kids' mode starts). */
     fun leavingSaved(context: Context): Boolean = prefs(context).getBoolean(LEAVING, false)
 
+    /** Round 18: a saved Leave that no longer applies (it had finished, or the device was paired again) is forgotten. */
+    internal fun clearLeaving(context: Context) { if (leavingSaved(context)) prefs(context).edit().remove(LEAVING).commit() }
+
     /**
      * The rest of a Leave: the parents and everyone on its list are told (again, after a restart, while they're still
      * contacts), every group hears a real leave, then everything is erased and Muninn runs as an ordinary one.
+     *
+     * Round 18 (R2): it runs on its own thread once Muninn is running (Tv.bridge needs app.ready; a Leave finished at the
+     * next start is called from Muninn.start, before that), waiting at most [KidRules.LEAVE_READY_MS]; if Muninn never
+     * gets there, nothing is wiped and the Leave stays saved for the next start. Each "left" is sent until it is taken (a
+     * relay stored it, or the Wi-Fi or Bluetooth took it), again after a pause for those not yet taken, for at most
+     * [KidRules.LEAVE_SEND_MS] in all; then the groups hear a real leave and, 3 s later, the device is wiped.
      */
     internal fun finishLeave(app: Muninn) {
-        val msg = KidRules.leftMessage()
-        // The parents stop looking after it; everyone else on its list stops treating it as a Kids' Device (7.18).
-        val s = _state.value
-        (s.parents + (s.cfg?.contacts?.map { it.k } ?: emptyList())).distinct().forEach { send(app, it, msg) }
-        leaveGroups(app)
+        if (wiping.value) return
         wiping.value = true
         Thread {
             try {
-                Thread.sleep(3000); wipe(app); KidMode.leave(app)
-                prefs(app).edit().remove(LEAVING).commit()
+                val readyBy = elapsed() + KidRules.LEAVE_READY_MS
+                while (!app.ready.value && elapsed() < readyBy) Thread.sleep(250)
+                val b = Tv.bridge(app)
+                if (b != null) {
+                    val msg = KidRules.leftMessage()
+                    // The parents stop looking after it; everyone else on its list stops treating it as a Kids' Device (7.18).
+                    val s = _state.value
+                    var left = (s.parents + (s.cfg?.contacts?.map { it.k } ?: emptyList())).distinct()
+                    try { app.nostr.connect() } catch (_: Exception) {}
+                    val until = elapsed() + KidRules.LEAVE_SEND_MS
+                    var round = 0
+                    while (left.isNotEmpty() && elapsed() < until) {
+                        val taken = HashSet<String>()
+                        for (k in left) {
+                            val wait = minOf(KidRules.LEAVE_ONE_MS, until - elapsed())
+                            if (wait <= 0) break
+                            if (try { b.sendTvRoomTaken(k, msg, wait) } catch (_: Exception) { false }) taken += k
+                        }
+                        left = KidRules.leaveStillLeft(left, taken)
+                        if (left.isEmpty()) break
+                        Thread.sleep(maxOf(0L, minOf(KidRules.leaveRetryGap(round++), until - elapsed())))
+                    }
+                    leaveGroups(app)
+                    Thread.sleep(3000); wipe(app); KidMode.leave(app)
+                    prefs(app).edit().remove(LEAVING).commit()
+                }
             } catch (_: Exception) {}
             finally { unlockedUntil.value = 0L; wiping.value = false }
         }.start()
@@ -592,6 +621,9 @@ object KidTv {
                 val left = KidRules.leftAfter(s.left, parsed)
                 cfg = KidRules.withoutLeft(cfg, left.keys)
                 KidMode.markPaired(app)
+                // Round 18: a config taken means this device isn't leaving (a Leave refuses configs while it runs): a Leave
+                // saved earlier never takes a newly paired device out of kids' mode at a later start.
+                clearLeaving(app)
                 // A parent's settings reached this device: once Muninn has kept running a while after it, the crash count
                 // starts over (SafeStart; round 17: not at once, so a crash loop still counts).
                 SafeStart.parentHeard(app)
@@ -916,6 +948,10 @@ object Tv : TvHandler {
             b?.tvHandler = this
         }
         // Round 17: a Leave cut short last time (Muninn stopped during it) is finished now, before kids' mode starts again.
+        // Round 18 (R2): finishLeave waits on its own thread until Muninn is running (this first call comes from
+        // Muninn.start, before ready), so "left" reaches the parents and other families before the wipe. A saved Leave on
+        // a device no longer in kids' mode had finished: forgotten.
+        if (first && KidTv.leavingSaved(app) && !KidMode.saved(app)) KidTv.clearLeaving(app)
         if (first && KidMode.saved(app) && KidTv.leavingSaved(app)) KidTv.finishLeave(app)
         else if (first && KidMode.on(app)) startKids(app)
     }

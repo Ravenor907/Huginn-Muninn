@@ -99,9 +99,6 @@ public:
     Q_INVOKABLE void setRemoteSink(QObject *videoSink);
     Q_INVOKABLE void setLocalSink(QObject *videoSink);
     Q_INVOKABLE bool canCall(const QString &key) const;
-    // A conversation with key is open: fetch the relay login now (cached for two hours), so a call
-    // doesn't wait for the relay Worker. At most one try a minute.
-    Q_INVOKABLE void prepare(const QString &key);
     Q_INVOKABLE void answer();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void hangup();
@@ -169,7 +166,6 @@ private:
     Chime *m_ringtone = nullptr;   // never QSoundEffect: it can crash on Windows (see Chime)
     QVariantList m_history;      // newest first: {id, key, name, out, result, started, seconds, missed}
     qint64 m_started = 0;
-    qint64 m_preparedAt = 0;
     uint m_notification = 0;
     QSet<QString> m_handled;     // call ids already answered with busy or logged as missed
     CallSkewGate m_skew;         // round 14: offers from a clock more than a minute off (5.2)

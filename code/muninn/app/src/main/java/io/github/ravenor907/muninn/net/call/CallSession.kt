@@ -109,6 +109,13 @@ class CallSession(
     private fun extras() = if (!c2Local) null else CallLogic.Extras(host.videoCodec(), wantVideo, shareDirect())
     private fun directCands() = if (shareDirect()) myDirect else emptyList()
 
+    /**
+     * Round 18 (relay.md "On demand"): ask for the relay at the start only when no free path could carry the call:
+     * not on the same Wi-Fi, no Bluetooth, and no direct path this side would try. Otherwise it is asked for once the
+     * call needs it (relayOnDemand), so a call on the LAN or direct costs the relay Worker nothing.
+     */
+    private fun relayAtStart() = CallLogic.relayAtStart(host.lanAddressOf(peerKey) != null, host.bluetoothFor(), shareDirect())
+
     private fun takeC2(s: CallLogic.Signal) {
         peerC2 = s.c2; peerVp8 = s.c2 && s.vp8; peerVideo = s.c2 && s.video; peerP2p = s.c2 && s.p2p
     }
@@ -130,7 +137,8 @@ class CallSession(
             CallLogic.OFFER_EVERY_MS, CallLogic.OFFER_EVERY_MS, TimeUnit.MILLISECONDS)
         timers += resend
         later(CallLogic.RING_MS) { if (phase == Phase.CALLING || phase == Phase.RINGING) end("noanswer", send = true) }
-        startRelay()
+        // Round 18: the relay now only when nothing free could carry the call; otherwise on demand (relayOnDemand).
+        if (relayAtStart()) startRelay()
         startProbe()
         every(500) { watch() }
     }
@@ -150,7 +158,8 @@ class CallSession(
         later(CallLogic.RING_MS) { if (phase == Phase.INCOMING) end("missed", send = false) }
         // Get the relay (and, for someone trusted, the STUN answer) ready while it rings, so answering doesn't wait
         // for it. Nothing is sent to them until the person answers; declining or missing the call releases it.
-        if (host.internetAllowed()) { media = host.newMedia(this); startRelay(); startProbe() }
+        // Round 18: the relay only when nothing free could carry the call; otherwise once the call needs it (relayOnDemand).
+        if (host.internetAllowed()) { media = host.newMedia(this); if (relayAtStart()) startRelay(); startProbe() }
     }
 
     /** The person tapped Answer. */
@@ -176,7 +185,7 @@ class CallSession(
         timers += resend
         set(Phase.CONNECTING)
         if (!m.startAudio(video = wantVideo || peerVideo)) note = "The microphone isn't available"
-        startRelay()
+        if (relayAtStart()) startRelay()
         every(500) { watch() }
     }
 
@@ -207,6 +216,9 @@ class CallSession(
     }
 
     private fun takeCands(s: CallLogic.Signal) {
+        // Round 18: a new relay address from the peer says it needs the relay; with no free path fresh here either,
+        // this side asks for its own at once (the relay path needs an allocation on both sides).
+        if (s.relay != null && s.relay != peerRelay && answeredAt > 0 && media?.freeFresh() == false) relayWanted = true
         if (s.relay != null) peerRelay = s.relay
         if (s.lanPort != null) peerLanPort = s.lanPort
         if (s.direct.isNotEmpty()) peerDirect = (peerDirect + s.direct).distinct().take(4)
@@ -247,6 +259,12 @@ class CallSession(
     private var restartedAt = 0L
     private var candsQueued = false
     private var relayOkAt = 0L
+    /** Round 18: when a free path was last fresh, when the relay was last asked for on demand, and the peer asking for it. */
+    private var freeAt = 0L
+    private var relayAskedAt = 0L
+    private var relayWanted = false
+    /** The renewal time came while the relay wasn't carrying the call: renewed if it starts to before the login ends. */
+    private var renewDue = false
 
     private fun startRelay(again: Boolean = false) {
         if (!host.internetAllowed() || (relayStarted && !again) || relayBusy) return
@@ -290,8 +308,49 @@ class CallSession(
     private fun scheduleRenew(login: TurnCreds.Login) {
         renewFor = login.expiresMs
         renewTries = 0
+        renewDue = false
         val wait = login.expiresMs - TurnCreds.RENEW_BEFORE_MS - System.currentTimeMillis()
-        if (wait > 0) later(wait) { if (renewFor == login.expiresMs) renewRelay() }
+        if (wait > 0) later(wait) { if (renewFor == login.expiresMs) renewIfUsed() }
+    }
+
+    /**
+     * Round 18 (relay.md "On demand"): renewed only while the relay carries the call. On standby (Wi-Fi or Direct carry
+     * it) the login isn't renewed: renewed later if the relay takes over before it ends (watch), else let go
+     * [CallLogic.RELAY_LAPSE_MS] before it ends; the call asks again if it needs the relay after that.
+     */
+    private fun renewIfUsed() {
+        val m = media ?: return
+        val now = System.currentTimeMillis()
+        if (CallLogic.renewRelayNow(m.relayUsedAt, now)) { renewRelay(); return }
+        renewDue = true
+        val forExp = renewFor
+        later(maxOf(0L, forExp - CallLogic.RELAY_LAPSE_MS - now)) { if (renewFor == forExp && renewDue) lapseRelay() }
+    }
+
+    private fun lapseRelay() {
+        renewDue = false
+        renewFor = 0
+        myRelay = null
+        media?.dropRelay()
+        host.changed(this)
+    }
+
+    /** Round 18: the relay when the call needs it (no free path fresh for RELAY_NEED_MS, or the peer asked), from watch(). */
+    private fun relayOnDemand(m: CallMedia, now: Long) {
+        if (!host.internetAllowed() || answeredAt == 0L) return
+        // A free path that works both ways, or Bluetooth carrying the call, needs no relay.
+        if (m.freeFresh(now) || bluetooth) { freeAt = now; relayWanted = false; return }
+        if (myRelay != null && m.hasRelay) {
+            // A renewal put off on standby: the relay carries the call now.
+            if (renewDue && CallLogic.renewRelayNow(m.relayUsedAt, now)) { renewDue = false; renewRelay() }
+            relayWanted = false
+            return
+        }
+        if (relayBusy || (!relayWanted && !CallLogic.relayNeeded(answeredAt, freeAt, now)) || now - relayAskedAt < CallLogic.RELAY_ASK_GAP_MS) return
+        relayWanted = false
+        relayAskedAt = now
+        relayTries = 0   // startRelay counts this one, so a failure of it gets its own second try
+        startRelay(again = true)
     }
 
     private fun renewRelay() {
@@ -316,7 +375,8 @@ class CallSession(
                 myRelay = r
                 relayOkAt = System.currentTimeMillis()
                 refreshCands()
-                later(TurnCreds.HANDOVER_MS) { m.finishRenew() }
+                // Round 18: a renewal put off on standby may come late; the old allocation hands over before its login ends.
+                later(CallLogic.handoverMs(forExp, relayOkAt)) { m.finishRenew() }
                 scheduleRenew(login)
             }
         }
@@ -398,6 +458,7 @@ class CallSession(
     private fun watch() {
         val m = media ?: return
         val now = System.currentTimeMillis()
+        if (phase == Phase.CONNECTING || phase == Phase.LIVE || phase == Phase.RECONNECTING) relayOnDemand(m, now)
         when (phase) {
             Phase.CONNECTING -> if (!m.anyLive() && answeredAt > 0 && now - answeredAt > CallLogic.NO_PATH_MS) end("nopath", send = true)
             Phase.LIVE -> if (!m.anyLive()) { deadSince = now; set(Phase.RECONNECTING) }

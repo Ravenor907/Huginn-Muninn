@@ -16,6 +16,12 @@ namespace
 const char kCodec[] = "opus16";
 const int kOfferWaitMs = 400;      // the offer waits this long at most for the relay and the STUN answer
 const int kCandsGapMs = 1000;      // "cands" at most this often (5.2, 5.8.8)
+// Round 18 (relay.md "On demand"): a login is asked for only when the call needs the relay, and renewed only while the
+// relay carries the call, so the Worker's budgets count time spent relaying. As in Muninn's CallLogic.
+const qint64 kRelayNeedMs = 2500;     // no free path fresh this long since the media began (or since one last was): ask
+const qint64 kRelayInUseMs = 60000;   // at renewal time, renewed only when the relay carried media within this
+const qint64 kRelayLapseMs = 30000;   // a login not renewed is let go this long before it ends
+const qint64 kRelayAskGapMs = 10000;  // on-demand asks at most this often
 qint64 wallMs() { return QDateTime::currentMSecsSinceEpoch(); }
 QString str(const QJsonObject &o, const char *k) { return o.value(QLatin1String(k)).toString(); }
 }
@@ -36,6 +42,9 @@ CallSession::CallSession(CallSignal *signal, const QString &peerKey, LoginFetche
     connect(&m_watch, &QTimer::timeout, this, [this] {
         if (!m_media)
             return;
+        relayOnDemand();
+        if (!m_media)
+            return;
         if (m_media->anyLive()) {
             m_downSince.invalidate();
             if (m_state == Connecting || m_state == Reconnecting) {
@@ -53,7 +62,7 @@ CallSession::CallSession(CallSignal *signal, const QString &peerKey, LoginFetche
         } else if (m_state == Reconnecting && m_downSince.isValid()) {
             if (m_downSince.elapsed() > 20000)
                 hangup(QStringLiteral("dropped"));
-            else if (m_downSince.elapsed() > 4000 && m_restarts < 3 && m_relayDone && (!m_restarted.isValid() || m_restarted.elapsed() > 6000))
+            else if (m_downSince.elapsed() > 4000 && m_restarts < 3 && m_relayDone && !m_loginAsked && (!m_restarted.isValid() || m_restarted.elapsed() > 6000))
                 restartRelay();   // the network changed under us (Wi-Fi to mobile data, say)
         }
     });
@@ -210,6 +219,10 @@ void CallSession::applyCands(const QJsonObject &msg)
     const Cands c = parseCands(msg);
     if (!c.ok)
         return;
+    // Round 18: a new relay address from the peer once the media runs says it needs the relay; with no free path fresh
+    // here either, this side asks for its own (the relay path needs an allocation on both sides).
+    if (c.relay.valid() && !(c.relay == m_peerRelayed) && m_media && m_mediaAt > 0 && !m_media->freeFresh())
+        m_relayWanted = true;
     if (c.relay.valid())
         m_peerRelayed = c.relay;
     if (c.lanPort)
@@ -249,8 +262,12 @@ void CallSession::startRelay()
         return;
     }
     QPointer<CallSession> self(this);
+    m_loginAsked = true;
     m_getLogin([self](const TurnLogin &login, const QString &why) {
-        if (!self || self->m_state == Ended)
+        if (!self)
+            return;
+        self->m_loginAsked = false;
+        if (self->m_state == Ended)
             return;
         if (!login.valid()) {
             self->m_relayWhy = why.isEmpty() ? QStringLiteral("The internet relay isn't available") : why;
@@ -329,8 +346,79 @@ void CallSession::scheduleRenew(qint64 expiresMs)
     QPointer<CallSession> self(this);
     QTimer::singleShot(int(qMin<qint64>(wait, 24 * 3600000)), this, [self, expiresMs] {
         if (self && self->m_state != Ended && self->m_renewFor == expiresMs)
-            self->renewRelay();
+            self->renewIfUsed();
     });
+}
+
+// Round 18 (relay.md "On demand"): renewed only while the relay carries the call. On standby (Wi-Fi or Direct carry it)
+// the login isn't renewed: renewed later if the relay takes over before it ends (relayOnDemand), else let go
+// kRelayLapseMs before it ends; the call asks again if it needs the relay after that.
+void CallSession::renewIfUsed()
+{
+    if (!m_media || m_media->relayUsedWithin(kRelayInUseMs)) {
+        renewRelay();
+        return;
+    }
+    m_renewDue = true;
+    const qint64 forExp = m_renewFor;
+    QPointer<CallSession> self(this);
+    QTimer::singleShot(int(qBound<qint64>(0, forExp - kRelayLapseMs - wallMs(), 24 * 3600000)), this, [self, forExp] {
+        if (self && self->m_state != Ended && self->m_renewFor == forExp && self->m_renewDue)
+            self->lapseRelay();
+    });
+}
+
+void CallSession::lapseRelay()
+{
+    m_renewDue = false;
+    m_renewFor = 0;
+    if (m_media)
+        m_media->setRelay(nullptr, m_peerRelayed);
+    for (TurnClient *t : {m_turn.data(), m_leaving.data()})
+        if (t) {
+            t->stop();
+            t->deleteLater();
+        }
+    m_turn = nullptr;
+    m_leaving = nullptr;
+    Q_EMIT pathsChanged();
+}
+
+bool CallSession::relayAtStart() const
+{
+    // Round 18: at the start, the relay only when no free path could carry the call: not on the same Wi-Fi, no
+    // Bluetooth, and no direct path this side would try. Otherwise it is asked for once the call needs it.
+    return lanHost().isEmpty() && !(m_signal && m_signal->bleReady(m_peer)) && !shareDirect();
+}
+
+void CallSession::relayOnDemand()
+{
+    if (!m_media || !m_getLogin || !internet || m_state == Ended || m_mediaAt == 0)
+        return;
+    const qint64 t = wallMs();
+    // A free path that works both ways, or Bluetooth carrying the call, needs no relay.
+    if (m_media->freeFresh() || m_media->live(CallMedia::Ble)) {
+        m_freeAt = t;
+        m_relayWanted = false;
+        return;
+    }
+    if (m_turn && m_turn->ready()) {
+        // A renewal put off on standby: the relay carries the call now.
+        if (m_renewDue && m_media->relayUsedWithin(5000)) {
+            m_renewDue = false;
+            renewRelay();
+        }
+        m_relayWanted = false;
+        return;
+    }
+    if ((m_turn && !m_relayDone) ||   // being made (a failed one is asked for again below, kRelayAskGapMs apart)
+        m_loginAsked || (!m_relayWanted && t - qMax(m_mediaAt, m_freeAt) < kRelayNeedMs) || t - m_relayAskedAt < kRelayAskGapMs)
+        return;
+    m_relayWanted = false;
+    m_relayAskedAt = t;
+    m_relayDone = false;
+    m_relayTries = 0;   // startRelay counts this one, so a failure of it gets its own second try
+    startRelay();
 }
 
 void CallSession::renewRelay()
@@ -388,7 +476,9 @@ void CallSession::renewRelay()
             self->relayReady();
             Q_EMIT self->pathsChanged();
             self->scheduleRenew(exp);
-            QTimer::singleShot(RelayCredentials::kHandoverMs, self, [self, old, next] {
+            // Round 18: a renewal put off on standby may come late; the old allocation hands over before its login ends.
+            const qint64 handover = qBound<qint64>(5000, forExp - wallMs() - 15000, RelayCredentials::kHandoverMs);
+            QTimer::singleShot(int(handover), self, [self, old, next] {
                 if (!self)
                     return;
                 if (self->m_turn == next && self->m_media && self->m_peerRelayed.valid())
@@ -529,15 +619,21 @@ void CallSession::start()
     m_lan = CallMedia::bindLan(this);
     setState(Calling);
     startProbe();
-    startRelay();
+    // Round 18: the relay now only when nothing free could carry the call; otherwise on demand (relayOnDemand).
+    const bool relayNow = relayAtStart();
+    if (relayNow)
+        startRelay();
+    else
+        m_relayDone = true;
     m_give.disconnect(this);
     connect(&m_give, &QTimer::timeout, this, [this] {
         if (!m_offerSent)
             sendOffer();
     });
-    // Ring them at once when the relay is quick (the login is usually cached); otherwise the offer
-    // goes without it and the relay follows in "cands".
+    // Ring them at once when the relay is quick; otherwise the offer goes without it and the relay follows in "cands".
     m_give.start(kOfferWaitMs);
+    if (!relayNow)
+        relayReady();   // no relay to wait for: the offer goes as soon as the STUN answer (if any) is in
 }
 
 void CallSession::sendOffer()
@@ -623,9 +719,13 @@ void CallSession::takeOffer(const QJsonObject &offer)
     setState(Incoming);
     send(QJsonObject{{QStringLiteral("t"), QStringLiteral("ring")}, {QStringLiteral("call"), m_callId}});
     // Get the relay (and, for someone trusted, the STUN answer) ready while it rings, so answering
-    // is quick. Nothing is sent to them until the person answers.
+    // is quick. Nothing is sent to them until the person answers. Round 18: the relay only when nothing free
+    // could carry the call; otherwise once the call needs it (relayOnDemand).
     startProbe();
-    startRelay();
+    if (relayAtStart())
+        startRelay();
+    else
+        m_relayDone = true;
     QTimer::singleShot(45000, this, [this] {
         if (m_state == Incoming)
             finish(QStringLiteral("Missed call"));
@@ -695,6 +795,7 @@ bool CallSession::startMedia()
         return false;
     m_media = new CallMedia(root, CallCrypto::tag(id), m_offerer, this);
     CallCrypto::wipe(root);   // the media's keyring has its own copy
+    m_mediaAt = wallMs();
     const bool room = offerExtra.contains(QStringLiteral("g")) || m_offer.contains(QStringLiteral("g"));
     m_media->setC2(bothC2(), room);
     if (m_lan)

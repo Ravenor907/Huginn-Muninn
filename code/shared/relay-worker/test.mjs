@@ -2,8 +2,8 @@ import { createHash, createHmac } from "node:crypto";
 import assert from "node:assert/strict";
 import worker, {
   handle, addressGroup, RelayLimits, SQL, POW_BITS, TOKEN_TTL, powOk, makeToken, legacyOver, resetMemory, dailyMinutes,
-  TTL_RENEW, TTL_OLD, ID_MINUTES, IP_MINUTES, LEGACY_ID_MINUTES, LEGACY_IP_MINUTES, LEGACY_POOL_MINUTES, DAILY_MINUTES,
-  HOUR_SHARE, SOFT_SHARE, YOUNG_S, ISOLATE_RATE,
+  TTL_RENEW, TTL_OLD, ID_MINUTES, YOUNG_IP_MINUTES, LEGACY_ID_MINUTES, LEGACY_IP_MINUTES, LEGACY_POOL_MINUTES, DAILY_MINUTES,
+  HOUR_SHARE, SOFT_SHARE, YOUNG_S, ISOLATE_RATE, REG_PER_IP_DAILY, REG_DAILY, plan,
 } from "./worker.js";
 
 const SECRET = "test-app-secret";
@@ -224,11 +224,11 @@ await test("bodies over 1 KB are 413", async () => {
 
 // ---- Per install (M5: tied to the install token, stricter without one).
 
-await test("per install with a token: 480 minutes a day (48 renewing logins, or 16 old ones)", async () => {
-  assert.equal(ID_MINUTES, 480);
+await test("per install with a token: 900 minutes a day (90 renewing logins, or 30 old ones)", async () => {
+  assert.equal(ID_MINUTES, 900);
   const e = env();
   const tok = await tokenFor(e, ID);
-  for (let i = 0; i < 48; i++) assert.equal((await call(e, login(ID, { tok, rn: 1 }))).status, 200, "login " + i);
+  for (let i = 0; i < 90; i++) assert.equal((await call(e, login(ID, { tok, rn: 1 }))).status, 200, "login " + i);
   const r = await call(e, login(ID, { tok, rn: 1 }));
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "id_limit");
@@ -238,10 +238,27 @@ await test("per install with a token: 480 minutes a day (48 renewing logins, or 
   assert.equal((await call(e, login(other, { tok: await tokenFor(e, other), rn: 1 }))).status, 200);
   const tomorrow = NOW + 86400;
   assert.equal((await call(e, login(ID, { tok, rn: 1, now: tomorrow }), { now: tomorrow })).status, 200);
-  // Old (30 minute) logins: 16 of them.
+  // Old (30 minute) logins: 30 of them.
   const e2 = env();
-  for (let i = 0; i < 16; i++) assert.equal((await call(e2, login(ID, { tok }))).status, 200);
+  for (let i = 0; i < 30; i++) assert.equal((await call(e2, login(ID, { tok }))).status, 200);
   assert.equal((await call(e2, login(ID, { tok }))).data.error, "id_limit");
+});
+
+await test("a family's day fits: 4 devices on one home network, 10 hours each of relayed calls", async () => {
+  const lim = new FakeLimits();
+  const e = env(lim);
+  for (let d = 0; d < 4; d++) {
+    const id = hexId(d, "5");
+    let tok = await tokenFor(e, id);
+    // 10 hours of relaying in renewing logins, all from the household's one address.
+    for (let i = 0; i < 60; i++) {
+      const t = NOW + i * 480;
+      const r = await call(e, login(id, { tok, rn: 1, now: t }), { ip: "198.51.100.7", now: t });
+      assert.equal(r.status, 200, "device " + d + " login " + i);
+      tok = r.data.tok;
+    }
+  }
+  assert.equal(lim.sql.rows.get(DAY + "|u:" + hexId(0, "5")), 600);
 });
 
 await test("per install without a token: 60 minutes a day (2 logins)", async () => {
@@ -255,25 +272,47 @@ await test("per install without a token: 60 minutes a day (2 logins)", async () 
 
 // ---- Per address group (M5: IPv4 /24, IPv6 /48).
 
-await test("per address group with tokens: 1440 minutes a day, across a whole /24", async () => {
-  assert.equal(IP_MINUTES, 1440);
+await test("a shared network (carrier NAT, a school): installs with a token are counted by install, not by address", async () => {
   const lim = new FakeLimits();
   const e = env(lim);
-  // 48 installs, each from its own address in 203.0.113.0/24, one old (30 minute) login each.
+  // 200 established installs behind one address, one old (30 minute) login each: 6000 minutes from one /24.
+  for (let i = 0; i < 200; i++) {
+    const id = hexId(i);
+    assert.equal((await call(e, login(id, { tok: await tokenFor(e, id) }), { ip: "203.0.113.1" })).status, 200, "install " + i);
+  }
+  assert.ok(!lim.keys().some((k) => k.includes("|y:") || k.includes("|i:")));
+});
+
+await test("per address group, young installs only: 1440 minutes a day, across a whole /24", async () => {
+  assert.equal(YOUNG_IP_MINUTES, 1440);
+  const lim = new FakeLimits();
+  const e = env(lim);
+  // 48 installs registered an hour ago, each from its own address in 203.0.113.0/24, one old (30 minute) login each.
   for (let i = 0; i < 48; i++) {
     const id = hexId(i);
-    assert.equal((await call(e, login(id, { tok: await tokenFor(e, id) }), { ip: "203.0.113." + (i + 1) })).status, 200);
+    assert.equal((await call(e, login(id, { tok: await tokenFor(e, id, NOW - 3600) }), { ip: "203.0.113." + (i + 1) })).status, 200);
   }
   const fresh = "d".repeat(64);
-  const ftok = await tokenFor(e, fresh);
+  const ftok = await tokenFor(e, fresh, NOW - 3600);
   const r = await call(e, login(fresh, { tok: ftok, rn: 1 }), { ip: "203.0.113.250" });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "ip_limit");
   assert.equal(r.data.retry, TO_DAY);
+  // An established install on the same /24 isn't touched by it (nor by the refusal remembered for young ones).
+  const est = "e".repeat(64);
+  assert.equal((await call(e, login(est, { tok: await tokenFor(e, est), rn: 1 }), { ip: "203.0.113.251" })).status, 200);
   // The next /24 is someone else, and the same one is fine the next day.
   assert.equal((await call(e, login(fresh, { tok: ftok, rn: 1 }), { ip: "203.0.114.1" })).status, 200);
   const tomorrow = NOW + 86400;
   assert.equal((await call(e, login(fresh, { tok: ftok, rn: 1, now: tomorrow }), { ip: "203.0.113.9", now: tomorrow })).status, 200);
+});
+
+await test("the rows a login counts against: by install first", async () => {
+  const keys = (rows) => rows.map((r) => r[0]);
+  assert.deepEqual(keys(plan("tok", "I", "A", "08", 50000)), ["d", "h08", "u:I"]);
+  assert.deepEqual(keys(plan("tok", "I", "A", "08", 50000, true)), ["d", "h08", "y:A", "u:I"]);
+  assert.deepEqual(keys(plan("legacy", "I", "A", "08", 50000)), ["d", "h08", "g", "l:A", "u:I"]);
+  assert.deepEqual(keys(plan("reg", "I", "A", "08", 50000)), ["rg", "r:A"]);
 });
 
 await test("per address group without a token: 120 minutes a day (4 logins), and a pool of 900 for everyone", async () => {
@@ -304,14 +343,14 @@ await test("addresses are never stored as they are", async () => {
   for (const k of lim.keys()) {
     assert.ok(!k.includes("203.0.113") && !k.includes("2001") && !k.includes("db8"), k);
   }
-  assert.equal(lim.keys().filter((k) => k.includes("|i:")).length, 2);
+  assert.equal(lim.keys().filter((k) => k.includes("|l:")).length, 2);
 });
 
 await test("address keys are keyed with the Worker secret, not a plain hash, and cover the /24", async () => {
   const ip = "203.0.113.42";
   const lim = new FakeLimits();
   await call(env(lim), login(ID), { ip });
-  const stored = lim.keys().find((k) => k.includes("|i:")).split("|i:")[1];
+  const stored = lim.keys().find((k) => k.includes("|l:")).split("|l:")[1];
   assert.match(stored, /^[0-9a-f]{32}$/);
   const sha = (x) => createHash("sha256").update(x).digest("hex").slice(0, 32);
   for (const guess of [ip, "ip:" + DAY + ":" + ip, DAY + ":" + ip, "ip:" + DAY + ":203.0.113.0/24"]) assert.notEqual(stored, sha(guess));
@@ -319,7 +358,7 @@ await test("address keys are keyed with the Worker secret, not a plain hash, and
   // Another secret gives another key for the same address.
   const lim2 = new FakeLimits();
   await call(env(lim2, { TURN_KEY_API_TOKEN: "other" }), login(ID), { ip });
-  assert.notEqual(lim2.keys().find((k) => k.includes("|i:")).split("|i:")[1], stored);
+  assert.notEqual(lim2.keys().find((k) => k.includes("|l:")).split("|l:")[1], stored);
 });
 
 await test("address groups: IPv4 by /24, IPv6 by /48", async () => {
@@ -337,15 +376,15 @@ await test("address groups: IPv4 by /24, IPv6 by /48", async () => {
   assert.equal(addressGroup(null), "unknown");
 });
 
-await test("one IPv6 /48 shares one address budget, across its /64s", async () => {
+await test("one IPv6 /48 shares one address budget for young installs, across its /64s", async () => {
   const e = env();
   for (let i = 0; i < 48; i++) {
     const id = hexId(i, "7");
     const ip = "2001:db8:1:" + (i + 1).toString(16) + "::" + (i * 7 + 1).toString(16);
-    assert.equal((await call(e, login(id, { tok: await tokenFor(e, id) }), { ip })).status, 200);
+    assert.equal((await call(e, login(id, { tok: await tokenFor(e, id, NOW - 3600) }), { ip })).status, 200);
   }
   const id = "8".repeat(64);
-  const tok = await tokenFor(e, id);
+  const tok = await tokenFor(e, id, NOW - 3600);
   const r = await call(e, login(id, { tok }), { ip: "2001:db8:1:ffff:ffff:ffff:ffff:ffff" });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "ip_limit");
@@ -355,21 +394,23 @@ await test("one IPv6 /48 shares one address budget, across its /64s", async () =
 await test("requests at the same moment can't go over a cap", async () => {
   const e = env();
   const tok = await tokenFor(e, ID);
-  const same = await Promise.all(Array.from({ length: 70 }, () => call(e, login(ID, { tok, rn: 1 }))));
-  assert.equal(same.filter((r) => r.status === 200).length, 48);
+  const same = await Promise.all(Array.from({ length: 120 }, () => call(e, login(ID, { tok, rn: 1 }))));
+  assert.equal(same.filter((r) => r.status === 200).length, 90);
   assert.ok(same.filter((r) => r.status === 429).every((r) => r.data.error === "id_limit"));
   const e2 = env();
-  const toks = await Promise.all(Array.from({ length: 70 }, (_, i) => tokenFor(e2, hexId(i, "9"))));
+  const toks = await Promise.all(Array.from({ length: 70 }, (_, i) => tokenFor(e2, hexId(i, "9"), NOW - 3600)));
   const many = await Promise.all(toks.map((tok2, i) => call(e2, login(hexId(i, "9"), { tok: tok2 }), { ip: "198.51.100.20" })));
   assert.equal(many.filter((r) => r.status === 200).length, 48);
 });
 
 // ---- For everyone: the day, the hour, and "busy" (M5: a daily cost cap that degrades gracefully).
 
-await test("the day's budget for everyone: 24,000 minutes, or DAILY_MINUTES", async () => {
-  assert.equal(dailyMinutes({}), 24000);
+await test("the day's budget for everyone: 50,000 minutes, or DAILY_MINUTES", async () => {
+  assert.equal(dailyMinutes({}), 50000);
   assert.equal(dailyMinutes({ DAILY_MINUTES: "6000" }), 6000);
-  for (const bad of ["", "abc", "10", "-5", "1.5"]) assert.equal(dailyMinutes({ DAILY_MINUTES: bad }), 24000);
+  for (const bad of ["", "abc", "10", "-5", "1.5"]) assert.equal(dailyMinutes({ DAILY_MINUTES: bad }), 50000);
+  // Sized to the free TURN allowance: 0.6 MB a relayed minute (about 80 kbps an allocation), at most 1,000 GB a month.
+  assert.ok((DAILY_MINUTES * 0.6 * 31) / 1000 <= 1000);
   const lim = new FakeLimits();
   const e = env(lim);
   lim.sql.rows.set(DAY + "|d", DAILY_MINUTES - 10);
@@ -393,8 +434,9 @@ await test("the day's budget for everyone: 24,000 minutes, or DAILY_MINUTES", as
   assert.equal((await call(e, login(ID, { tok, rn: 1, now: tomorrow }), { now: tomorrow })).status, 200);
 });
 
-await test("no hour takes more than a sixth of the day's budget", async () => {
-  assert.equal(HOURLY, 4000);
+await test("no hour takes more than a quarter of the day's budget (well over 53 relaying at once)", async () => {
+  assert.equal(HOURLY, 12500);
+  assert.ok(Math.floor(HOURLY / 60) >= 200);
   const lim = new FakeLimits();
   const e = env(lim);
   const tok = await tokenFor(e, ID);
@@ -464,12 +506,12 @@ await test("renewal: a two-hour call is 12 renewing logins and 120 minutes, and 
 
 // ---- Cheap checks in front of the counts (M6).
 
-await test("per instance: at most 20 POSTs a minute from one address group reach the checks", async () => {
-  assert.equal(ISOLATE_RATE, 20);
+await test("per instance: at most 60 POSTs a minute from one address group reach the checks", async () => {
+  assert.equal(ISOLATE_RATE, 60);
   const lim = new FakeLimits();
   const e = env(lim);
   delete e.ISOLATE_RATE;
-  for (let i = 0; i < 20; i++) assert.equal((await call(e, "junk", { ip: "192.0.2." + i })).status, 400);
+  for (let i = 0; i < 60; i++) assert.equal((await call(e, "junk", { ip: "192.0.2." + i })).status, 400);
   const r = await call(e, login(ID), { ip: "192.0.2.99" });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "slow_down");
@@ -547,21 +589,24 @@ await test("junk costs no Durable Object request, no TURN login and no row", asy
   assert.equal(upstreamCalls.length, 0);
 });
 
-await test("each token login writes 4 rows, a token-less one 6, a registration 2; earlier days are wiped", async () => {
+await test("each token login writes 3 rows (4 while young), a token-less one 5, a registration 2; earlier days are wiped", async () => {
   const lim = new FakeLimits();
   const e = env(lim);
   const tok = await tokenFor(e, ID);
   await call(e, login(ID, { tok, rn: 1 }));
-  assert.equal(lim.sql.written, 4);
+  assert.equal(lim.sql.written, 3);
   await call(e, login(ID));
-  assert.equal(lim.sql.written, 10);
+  assert.equal(lim.sql.written, 8);
   await call(e, { ...login(ID), pow: solve(ID, NOW) }, { path: "/register" });
-  assert.equal(lim.sql.written, 12);
-  assert.equal(lim.calls, 3);
+  assert.equal(lim.sql.written, 10);
+  const young = "b".repeat(64);
+  await call(e, login(young, { tok: await tokenFor(e, young, NOW - 3600), rn: 1 }));
+  assert.equal(lim.sql.written, 14);
+  assert.equal(lim.calls, 4);
   const tomorrow = NOW + 86400;
   await call(e, login(ID, { tok, rn: 1, now: tomorrow }), { now: tomorrow });
   const day2 = new Date(tomorrow * 1000).toISOString().slice(0, 10);
-  assert.equal(lim.keys().length, 4);
+  assert.equal(lim.keys().length, 3);
   assert.ok(lim.keys().every((k) => k.startsWith(day2 + "|")));
 });
 
@@ -582,15 +627,17 @@ await test("the SQL runs on real SQLite", async () => {
   const obj = new RelayLimits({ storage: { sql } });
   const ip = "0".repeat(32);
   const q = { day: DAY, hour: 8, sec: 28800, id: ID, ip, kind: "tok", cost: 10 };
-  for (let i = 0; i < 48; i++) assert.equal(obj.take(q).result, "ok");
+  for (let i = 0; i < 90; i++) assert.equal(obj.take(q).result, "ok");
   assert.deepEqual(obj.take(q), { result: "id", retry: TO_DAY });
-  assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("u:" + ID).n, 480);
-  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 4);
+  assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("u:" + ID).n, 900);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 3);
   for (let i = 0; i < 2; i++) assert.equal(obj.take({ ...q, kind: "legacy", cost: 30, id: "b".repeat(64) }).result, "ok");
   assert.equal(obj.take({ ...q, kind: "legacy", cost: 30, id: "b".repeat(64) }).result, "id");
-  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 7);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 6);
+  assert.equal(obj.take({ ...q, young: true, id: "c".repeat(64) }).result, "ok");
+  assert.equal(db.prepare("SELECT n FROM counts WHERE k = ?").get("y:" + ip).n, 10);
   assert.equal(obj.take({ ...q, day: "2099-01-01" }).result, "ok");
-  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 4);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM counts").get().c, 3);
 });
 
 await test("the limits object refuses malformed questions", async () => {
@@ -694,11 +741,13 @@ await test("register: no or wrong proof of work, or a bad signature, is refused"
   assert.equal((await call(e, null, { path: "/register", method: "GET" })).status, 405);
 });
 
-await test("register: 6 a day per address group, 2000 a day for everyone, and logins go on", async () => {
+await test("register: 20 a day per address group, 2000 a day for everyone, and logins go on", async () => {
+  assert.equal(REG_PER_IP_DAILY, 20);
+  assert.equal(REG_DAILY, 2000);
   const lim = new FakeLimits();
   const e = env(lim);
   const n = solve(ID, NOW);
-  for (let i = 0; i < 6; i++) assert.equal((await register(e, ID, { pow: n, ip: "203.0.113." + i })).status, 200);
+  for (let i = 0; i < 20; i++) assert.equal((await register(e, ID, { pow: n, ip: "203.0.113." + i })).status, 200);
   const r = await register(e, ID, { pow: n, ip: "203.0.113.77" });
   assert.equal(r.status, 429);
   assert.equal(r.data.error, "ip_reg_limit");

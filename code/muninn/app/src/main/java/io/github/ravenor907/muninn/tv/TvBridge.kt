@@ -17,6 +17,12 @@ interface TvBridge {
 
     /** The same on every route at once, the internet included (so nobody nearby can stand in the way, 7.11). */
     fun sendTvRoomEverywhere(peerKey: String, plain: String) = sendTvRoom(peerKey, plain)
+
+    /**
+     * Round 18: sends on every route now and blocks (never on the main thread) until it is taken: a relay said it stored it
+     * within [waitMs], or the Wi-Fi or Bluetooth took it from a route that proved it's them. False when nothing did.
+     */
+    fun sendTvRoomTaken(peerKey: String, plain: String, waitMs: Long): Boolean { sendTvRoom(peerKey, plain); return false }
 }
 
 interface TvHandler {

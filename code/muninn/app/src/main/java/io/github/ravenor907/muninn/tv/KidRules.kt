@@ -198,9 +198,14 @@ object KidRules {
     /** The sources kept (one reading each: every relay, every parent). */
     const val MAX_SOURCES = 12
 
-    /** [readings] with [source]'s newest reading [r]: one per source, the most recent [MAX_SOURCES]. */
+    /**
+     * [readings] with [source]'s newest reading [r]: one per source, the most recent [MAX_SOURCES]. Round 18: an older
+     * reading from the same source (a config signed earlier than the one already heard, arriving late) never replaces
+     * a newer one, as long as that newer one is still used.
+     */
     fun addReading(readings: Map<String, TimeAnchor>, source: String, r: TimeAnchor): Map<String, TimeAnchor> {
         if (r.wall < MIN_WALL) return readings
+        readings[source]?.let { had -> if (r.wall < had.wall && r.at - had.at in 0L..READING_MS) return readings }
         return (readings - source + (source to r)).entries.sortedByDescending { it.value.at }.take(MAX_SOURCES).associate { it.key to it.value }
     }
 
@@ -576,6 +581,22 @@ object KidRules {
     fun leftMessage(): String = JSONObject().put("t", "left").toString()
 
     fun isLeft(o: JSONObject): Boolean = Canon.keys(o) == setOf("t") && o.opt("t") == "left"
+
+    // ---- Round 18 (R2): a Leave's "left" is sent until each recipient's copy is taken (a relay stored it, or the Wi-Fi or
+    // Bluetooth took it), with a bounded wait, before the device wipes itself.
+
+    /** A Leave finished at the next start waits at most this long for Muninn to be running (else it is tried next start). */
+    const val LEAVE_READY_MS = 60_000L
+    /** All the sending (every round, every recipient) takes at most this long; the wipe follows either way. */
+    const val LEAVE_SEND_MS = 45_000L
+    /** How long one send waits for a relay to say it stored it. */
+    const val LEAVE_ONE_MS = 5_000L
+
+    /** The pause after send round [round] (0 first) before the recipients still left are tried again: 2, 4, 8, then 10 s. */
+    fun leaveRetryGap(round: Int): Long = minOf(10_000L, 2_000L shl round.coerceIn(0, 3))
+
+    /** Who still needs "left" after a round: [left] less those whose copy was taken. */
+    fun leaveStillLeft(left: List<String>, taken: Set<String>): List<String> = left.filter { it !in taken }
 
     /** The device kind in an "applied", or "" when it says none (or one this app doesn't know). */
     fun deviceIn(o: JSONObject): String = (o.opt("dev") as? String)?.takeIf { it in DEVICES } ?: ""

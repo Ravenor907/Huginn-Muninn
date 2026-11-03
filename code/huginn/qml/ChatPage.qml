@@ -254,7 +254,6 @@ Rectangle {
         }
         if (newFrom >= 0) Qt.callLater(() => list.positionViewAtIndex(page.newFrom, ListView.Beginning))
         if (openKey !== "") { Chat.markRead(openKey); if (!tour && Chat.isContact(openKey)) Chat.probeCaps(openKey) }
-        if (openKey !== "" && !tour) Calls.prepare(openKey)   // the relay login is ready before Call is pressed
         Chat.openChat = openKey
         // The first time this chat opens: how long its messages are kept (said once).
         if (openKey !== "" && !tour && !locked) { const keep = Chat.keepNoteOnce(openKey); if (keep !== "") Ui.say(keep) }

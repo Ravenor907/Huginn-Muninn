@@ -660,6 +660,9 @@ void RingKey::load()
         const QJsonObject old = o.value(QStringLiteral("old")).toObject();
         m_old = pairOf(old);
         m_oldUntil = m_old.mailbox.isEmpty() ? 0 : old.value(QStringLiteral("until")).toInteger();
+        const QJsonObject older = o.value(QStringLiteral("older")).toObject();
+        m_older = pairOf(older);
+        m_olderUntil = m_older.mailbox.isEmpty() ? 0 : older.value(QStringLiteral("until")).toInteger();
         m_made = o.value(QStringLiteral("made")).toInteger();
     }
     if (m_now.mailbox.isEmpty()) {
@@ -684,6 +687,11 @@ bool RingKey::save() const
         QJsonObject old = pairJson(m_old.keys, m_old.secret);
         old.insert(QStringLiteral("until"), m_oldUntil);
         o.insert(QStringLiteral("old"), old);
+    }
+    if (m_olderUntil > 0 && !m_older.mailbox.isEmpty()) {
+        QJsonObject older = pairJson(m_older.keys, m_older.secret);
+        older.insert(QStringLiteral("until"), m_olderUntil);
+        o.insert(QStringLiteral("older"), older);
     }
     const QByteArray data = compact(o);
     // Readable by this user only (like the certificate's key, tls.cpp), written beside the file and then swapped in.
@@ -728,6 +736,8 @@ QStringList RingKey::mailboxes()
         out << m_now.mailbox;
     if (m_oldUntil > nowMs() && !m_old.mailbox.isEmpty())
         out << m_old.mailbox;
+    if (m_olderUntil > nowMs() && !m_older.mailbox.isEmpty())
+        out << m_older.mailbox;
     return out;
 }
 
@@ -741,6 +751,8 @@ QList<QByteArray> RingKey::nostrSecrets()
         out << m_now.secret;
     if (m_oldUntil > nowMs() && m_old.secret.size() == 32)
         out << m_old.secret;
+    if (m_olderUntil > nowMs() && m_older.secret.size() == 32)
+        out << m_older.secret;
     return out;
 }
 
@@ -751,7 +763,9 @@ bool RingKey::open(const QString &content, QString *callId, qint64 *ts)
     load();
     if (RingWire::openRingContent(content, m_now.keys, callId, ts))
         return true;
-    return m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_old.keys, callId, ts);
+    if (m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_old.keys, callId, ts))
+        return true;
+    return m_olderUntil > nowMs() && !m_older.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_older.keys, callId, ts);
 }
 
 bool RingKey::nudge(const QString &content, RingWire::Nudge *n)
@@ -761,13 +775,20 @@ bool RingKey::nudge(const QString &content, RingWire::Nudge *n)
     load();
     if (RingWire::openNudgeContent(content, m_now.keys, n))
         return true;
-    return m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_old.keys, n);
+    if (m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_old.keys, n))
+        return true;
+    return m_olderUntil > nowMs() && !m_older.keys.privateDer.isEmpty() && RingWire::openNudgeContent(content, m_older.keys, n);
 }
 
 void RingKey::renew()
 {
     m_forgotten = false;
     load();
+    // Round 18 (m1): an old one still read keeps its own end, one place further back.
+    if (m_oldUntil > nowMs() && !m_old.mailbox.isEmpty()) {
+        m_older = m_old;
+        m_olderUntil = m_oldUntil;
+    }
     m_old = m_now;
     m_oldUntil = nowMs() + kOldKeepMs;
     m_now.keys = ChatCrypto::newKeyPair();
@@ -790,12 +811,20 @@ bool RingKey::dropOld()
     if (m_forgotten)
         return false;
     load();
-    if (m_oldUntil == 0 || m_oldUntil > nowMs())
-        return false;
-    m_old = Pair();
-    m_oldUntil = 0;
-    save();
-    return true;
+    bool gone = false;
+    if (m_olderUntil != 0 && m_olderUntil <= nowMs()) {
+        m_older = Pair();
+        m_olderUntil = 0;
+        gone = true;
+    }
+    if (m_oldUntil != 0 && m_oldUntil <= nowMs()) {
+        m_old = Pair();
+        m_oldUntil = 0;
+        gone = true;
+    }
+    if (gone)
+        save();
+    return gone;
 }
 
 void RingKey::forget()
@@ -805,6 +834,8 @@ void RingKey::forget()
     m_now = Pair();
     m_old = Pair();
     m_oldUntil = 0;
+    m_older = Pair();
+    m_olderUntil = 0;
     m_made = 0;
     m_loaded = false;
     m_forgotten = true;
@@ -1071,6 +1102,16 @@ bool RingWire::selfTest(const QString &vectorsPath)
         check("ring key renewed", c.publicKey() != pub && c.mailbox() != oldBox && c.mailboxes() == QStringList({c.mailbox(), oldBox})
                                       && c.nostrSecrets().size() == 2 && c.open(ringContent(pub, QStringLiteral("AAECAwQFBgcICQoLDA0ODw"), 7), &cid2, &t2)
                                       && t2 == 7 && !c.dropOld());
+        // Round 18 (m1): renewed again within two days: both earlier mailboxes are still read, the first one included.
+        const QString secondBox = c.mailbox();
+        c.renew();
+        RingKey c2(path);
+        QString cid3;
+        qint64 t3 = 0;
+        check("ring key renewed twice keeps both earlier mailboxes", c2.mailboxes() == QStringList({c2.mailbox(), secondBox, oldBox})
+                                                                       && c2.nostrSecrets().size() == 3
+                                                                       && c2.open(ringContent(pub, QStringLiteral("AAECAwQFBgcICQoLDA0ODw"), 9), &cid3, &t3)
+                                                                       && t3 == 9 && !c2.dropOld());
         // Erase everything: the file goes, and the next key is a new one.
         const QString cpub = c.publicKey();
         c.forget();

@@ -571,7 +571,9 @@ socket or TLS connection (below).
 
 **Relay (internet).** On starting a call, and on an offer arriving (the callee allocates while it rings,
 so answering doesn't wait for the relay), get a TURN
-login from the relay Worker over HTTPS (`code/shared/docs/relay.md`) and allocate on the TURN server (RFC 8656:
+login (round 18: only when no free path could carry the call, that is the peer isn't on the same Wi-Fi, there is no
+Bluetooth link and this side wouldn't try the direct path; otherwise only once the call needs the relay, see "Relay
+on demand" below) from the relay Worker over HTTPS (`code/shared/docs/relay.md`) and allocate on the TURN server (RFC 8656:
 Allocate with the long-term credential, Refresh before it lapses, a permission or ChannelBind for the
 peer's relayed address, refreshed every 4 minutes). Try UDP first, then TURN over TLS on port 443, then
 any other `turns:` URL. The TURN server's host name is looked up with the system resolver,
@@ -599,7 +601,24 @@ Nothing new is on the wire: a peer of any version already follows a `relay` cand
 network change. If the Worker refuses the renewal (its budgets, `code/shared/docs/relay.md` "Limits"), the old
 allocation works until its login ends; then the free paths carry the call, and with none live for 4 s the usual new
 allocation (as after a network change) asks again. The Worker's budgets and how it turns junk away cheaply are in
-`relay.md` ("Limits", "Junk requests").
+`relay.md` ("Limits", "Junk requests"). Round 18: while a renewal's handover runs, a new `relay` candidate from the peer
+gets a permission on both of this side's allocations, and the new allocation lets every relayed address of the peer in
+again just before it takes over, so two sides renewing at about the same time never lose the relay path. A renewal
+happens only while the relay carries media (below); one put off on standby may come late, so its handover is shorter
+(the old login's time left less 15 s, at least 5 s).
+
+**Relay on demand (round 18).** A login costs the Worker's budgets whether or not the relay is used, so it is asked for
+only when the call needs it, and renewed only while the relay carries the call:
+- Nothing is fetched ahead of a call (opening a chat fetches nothing).
+- At the start, only when no free path could carry the call (above).
+- During the call, when no Wi-Fi or Direct path answered a ping for 2.5 s since the media began (or since one last
+  did) and Bluetooth isn't carrying it, or when the peer sends a new `relay` candidate while no free path is fresh
+  here (the relay path needs both allocations). At most one such ask every 10 s; the allocation's address goes to the
+  peer in `cands` as usual.
+- At renewal time, renewed only when the relay carried media (not just its pings) in the last 60 s. Otherwise renewed
+  if the relay takes over before the login ends, else both allocations are released 30 s before it ends.
+Nothing new is on the wire: a peer of any version takes a `relay` candidate that appears mid-call (`relay.md`, "On
+demand").
 
 **Wi-Fi.** When Chat reaches the peer on the shared Wi-Fi, send to the peer's Wi-Fi address (from Chat's
 discovery) at the port of its `lan` candidate or `lp`. Packets on this path are accepted only from that
@@ -1478,8 +1497,12 @@ when it hasn't been heard from for 36 hours. Messages in room `tvconfig`:
 
 **Leaving (round 17).** Leave is saved on the device before anything is sent. It then sends `left`, sends a real group
 `leave` (3.4) to every group a parent put it in, waits 3 seconds and erases itself; a Leave cut short (the app stopped,
-the battery out) is finished at the next start, `left` sent again first. A parent's disconnect sends the group leaves the
-same way. The device keeps its chat key after leaving (people who know it keep reaching it as an ordinary contact); the
+the battery out) is finished at the next start, `left` sent again first. Round 18: that happens once the app is running
+(at most 60 s after the start; otherwise the Leave stays saved for the start after), never before the routes exist.
+Each `left` is sent until it is taken (a relay stored it, or the Wi-Fi or Bluetooth took it), those not yet taken again
+after 2, 4, 8 and then every 10 s, for at most 45 s in all; then the group leaves, the 3 seconds and the erase. A saved
+Leave is forgotten when the device takes a config (it is paired again), so it never takes a newly paired device out of
+kids' mode. A parent's disconnect sends the group leaves the same way. The device keeps its chat key after leaving (people who know it keep reaching it as an ordinary contact); the
 `left` above is what tells everyone it no longer is a Kids' Device.
 
 Exactly these fields; anything else is malformed and ignored. A parent's app asks its person before it sends `unlock`: a
@@ -2007,10 +2030,12 @@ Bluetooth says where a frame came from, not when it was made (anyone on the netw
 relay), so every frame, on every route, is taken only when its `lts` is within 36 hours of the receiver's clock, or of the
 receiver's clock moved by a kept difference. That difference (kept when more than an hour, updated when it moves by more
 than 10 minutes) is learned only from a `pong` straight over the Wi-Fi or Bluetooth that answers the receiver's own
-`ping` within 30 seconds. The `ping` carries `"pn"`, 16 random hex digits, and a device that answers a `ping` SHOULD say
-the same `"pn"` back in its `pong`; a `pong` with a different `pn` teaches nothing (one without `pn`, from an app before
-round 17, is matched by time alone). Huginn and Muninn (`LinkWire.pong`, test `Round17Test`) both say it back. Never
-from a frame that came on its own. Every other frame more than 36 hours off
+`ping` within 30 seconds. The `ping` carries `"pn"`, 16 random hex digits, and a device that answers a `ping` MUST say
+the same `"pn"` back in its `pong`. Round 18: the difference is learned only from a `pong` whose `pn` matches. A `pong`
+with a different `pn`, or with none (Muninn before 1.41, or any `pong` copied before then and handed over on the LAN),
+never sets, moves or clears it; such a device is held to the plain 36 hours until it is updated. Huginn and Muninn 1.41
+(`LinkWire.pong`, tests `Round17Test` and Huginn's link self-test) both say it back. Never from a frame that came on its
+own. Every other frame more than 36 hours off
 both is dropped. Either way, the first time in a run that a device's `lts` is more than 36 hours off, the
 receiver says so once: "<device>'s clock and this computer's are about N days apart. Set the right date and time on
 whichever is wrong." A receiver without this drops every frame more than 36 hours off, as above.

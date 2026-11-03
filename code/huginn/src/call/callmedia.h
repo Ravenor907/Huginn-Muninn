@@ -99,6 +99,8 @@ public:
     // A free path (Wi-Fi or Direct) answered a ping within the last 750 ms (so it works both ways,
     // not only towards us past a one-way firewall): the relay rests.
     bool freeFresh() const;
+    // Round 18 (relay.md "On demand"): the relay carried media (not pings or pongs) within the last ms milliseconds.
+    bool relayUsedWithin(qint64 ms) const { return m_relayUsedAt >= 0 && now() - m_relayUsedAt < ms; }
     bool gotMedia() const { return m_gotMedia; }
     bool speaking() const { return m_speaking.on(); }
     int rttMs() const { return m_rtt; }
@@ -196,6 +198,7 @@ private:
     QElapsedTimer m_clock;
     QTimer m_tick;
     qint64 m_started = 0, m_lastAudioSent = -100000;
+    qint64 m_relayUsedAt = -1;   // media clock; -1: the relay never carried media
     quint32 m_frames = 0;
     bool m_muted = false, m_gotMedia = false, m_running = false;
     bool m_c2 = false, m_room = false;

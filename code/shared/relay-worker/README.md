@@ -98,15 +98,19 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
 ## Good to know
 
 - Limits (details in `code/shared/docs/relay.md`, "Limits"): every budget counts minutes of relay login handed out.
-  New app builds get 10 minute logins and renew them during long calls; older builds get 30 minute logins, which
-  count 3 times as much. Each day: 480 minutes per app install, 1440 per address group (an IPv4 /24 or an IPv6 /48,
-  so renting addresses one by one gains little), and 24,000 for everyone, at most a sixth of that in any one hour.
+  New app builds get 10 minute logins, ask for one only when a call needs the relay (not on Wi-Fi, Bluetooth or a
+  direct path), and renew only while the relay carries the call, so the minutes are time spent relaying; older builds
+  get 30 minute logins, which count 3 times as much. Each day: 900 minutes per app install (counted by its install
+  token, never by its address, so a carrier's shared addresses or a school never block anyone), 1440 per address group
+  (an IPv4 /24 or an IPv6 /48) shared only by installs registered in the last 2 days, and 50,000 for everyone, at most
+  a quarter of that in any one hour (about 208 people relaying at once). 50,000 minutes of sound is about 30 GB a day,
+  under the free 1,000 GB a month of TURN; video over the relay costs about 20 times as much a minute.
   Logins without an install token (very old apps, or anyone who pulled `APP_SECRET` out of an app) get far less: 60
   minutes per install, 120 per address group and 900 for all of them together, so they can never use up the others.
   Past 60% of the day's or hour's budget the relay is "busy": only installs registered at least 2 days earlier still
   get logins. When the relay says no, calls go on over Wi-Fi, Bluetooth and direct paths. The day resets at midnight UTC.
 - Optional Worker variables (Type: Text, not Secret): `DAILY_MINUTES` sets the day's budget for everyone (pick it from
-  what you are willing to pay for TURN; 24,000 minutes is 400 hours of login). `LEGACY_UNTIL`, a Unix time in seconds:
+  what you are willing to pay for TURN; 50,000 minutes is about 833 hours of relaying). `LEGACY_UNTIL`, a Unix time in seconds:
   from then on logins without a token are refused. Every app since 1.36 has a token, so this can be set now.
 - Junk requests: everything that reaches the Worker counts against the free plan's 100,000 requests a day. The Worker
   turns junk away before it costs anything else (no storage request, no TURN login), but only a rule in front of it can
@@ -119,7 +123,7 @@ TURN data is billed per GB relayed. This alert is how you hear about unexpected 
   into an address by trying them all. All counts from earlier days are deleted when a new day starts.
 - If the storage object is missing or not working, the Worker refuses every request (answers 503).
   That is on purpose: the limits are what protect the TURN account.
-- Free plan budget: with every limit used up, about 13,800 storage rows written a day (and as many deleted the next
+- Free plan budget: with every limit used up, about 24,200 storage rows written a day (and as many deleted the next
   day), against the free 100,000. No new secret is needed: tokens are signed with a key made from `TURN_KEY_API_TOKEN`
   (or a `TOKEN_KEY` secret, if you add one).
 - A request body over 1 KB is refused (413) before it is read.

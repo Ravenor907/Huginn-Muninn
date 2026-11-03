@@ -37,8 +37,10 @@ struct TurnLogin {
 };
 
 // Asks the relay Worker for a TURN login (HTTPS) when a call needs one; keeps it in
-// memory until 5 minutes before it expires. Follows the Worker's rules: after 429 nothing until the
-// next UTC day, after a 5xx at least 60 s. The credential is never logged.
+// memory until 5 minutes before it expires. Follows the Worker's rules: after 429 nothing for as long as
+// its "retry" says (until the next UTC day without one), after a 5xx at least 60 s. The credential is never
+// logged. Round 18 (relay.md "On demand"): only a call that needs the relay asks (CallSession::relayAtStart and
+// relayOnDemand), and it renews only while the relay carries the call; nothing is fetched ahead of a call.
 class RelayCredentials : public QObject
 {
     Q_OBJECT

@@ -5,8 +5,10 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 /**
- * TURN logins from the relay Worker (shared/docs/relay.md), fetched over HTTPS. Cached in memory until 5 minutes before they expire; after a 429 nothing is asked until
- * the next UTC day, after a 5xx not for 60 s. The credential is never logged.
+ * TURN logins from the relay Worker (shared/docs/relay.md), fetched over HTTPS. Cached in memory until 5 minutes before they expire; after a 429 nothing is asked for
+ * as long as its "retry" says (until the next UTC day without one), after a 5xx not for 60 s. The credential is never logged.
+ * Round 18 (relay.md "On demand"): only a call that needs the relay asks ([CallSession] relayAtStart and relayOnDemand), and
+ * a call renews only while the relay carries it; nothing is fetched ahead of a call.
  */
 object TurnCreds {
     data class Login(val urls: List<String>, val username: String, val credential: String, val expiresMs: Long) {

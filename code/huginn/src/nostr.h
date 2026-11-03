@@ -67,6 +67,11 @@ public:
     std::function<bool(const QByteArray &stored)> keepSeen;
     // Set: the list is made and written on the saving thread instead (keepSeen is not used).
     std::function<void(std::function<QByteArray()> make)> keepSeenLater;
+    // Round 18 (m2): true while the vault holds its saves in memory (sealing for a new lock). The relay cursors
+    // ("nostr/since", "nostr/eose") are not moved on meanwhile, so a crash then fetches again what the held saves lost.
+    std::function<bool()> holdCursors;
+    // The cursors held back while holdCursors() said so are written now (the vault wrote its held saves).
+    void releaseCursors();
     void restoreSeen(const QByteArray &stored);
     // Stops the relay thread: its sockets close and it is waited for (a few seconds at most, never forever). Also
     // when Huginn closes and when this goes. Nothing is sent or received after it.
@@ -185,6 +190,7 @@ private:
     void flushSeen();
     void noteSeen(const QByteArray &id);
     bool m_seenDirty = false;
+    bool m_cursorsHeld = false;   // round 18: cursors not written while holdCursors() said so
     qint64 m_takenAt = 0;
     QList<QByteArray> m_seen;           // what is kept in the vault (the relay thread has its own copy to skip by)
     QSet<QByteArray> m_seenSet;

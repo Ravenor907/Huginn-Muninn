@@ -281,6 +281,40 @@ object CallLogic {
         fun targets(): List<InetSocketAddress> = listOfNotNull(advertised, seen?.takeIf { it != advertised })
     }
 
+    /**
+     * Round 18 (R1): the allocations that must let the peer's relayed address in. During a renewal's handover that is
+     * the allocation in use and the one taking over, so when both sides renew at about the same time the new
+     * allocation already lets the peer's new address in before it carries media.
+     */
+    fun <T : Any> permitOn(live: T?, renewing: T?): List<T> = listOfNotNull(live, renewing).distinct()
+
+    /** Round 18 (R1): what the allocation taking over at the end of a handover lets in first: every relayed address of the peer. */
+    fun handoverPermits(peer: RelayPeer): List<InetSocketAddress> = peer.targets()
+
+    // ---- The relay on demand (round 18, relay.md "On demand"): a login is asked for only when the call needs the relay,
+    // and renewed only while the relay carries the call, so the Worker's budgets count time spent relaying.
+
+    /** No free path (Wi-Fi or Direct) answered a ping for this long since the media began, or since one last did: ask now. */
+    const val RELAY_NEED_MS = 2_500L
+    /** At renewal time the relay is renewed only when it carried media within this long. */
+    const val RELAY_IN_USE_MS = 60_000L
+    /** A login that isn't renewed is let go this long before it ends. */
+    const val RELAY_LAPSE_MS = 30_000L
+    /** On-demand asks at most this often (a refusal also waits as TurnCreds says). */
+    const val RELAY_ASK_GAP_MS = 10_000L
+
+    /** At the start of a call: ask for the relay at once only when no free path could carry it (Wi-Fi close by, Bluetooth, Direct). */
+    fun relayAtStart(lanClose: Boolean, bluetooth: Boolean, directMaybe: Boolean) = !lanClose && !bluetooth && !directMaybe
+
+    /** During the call: the media began at [mediaAt], a free path was last fresh at [freeAt] (0: never). */
+    fun relayNeeded(mediaAt: Long, freeAt: Long, now: Long) = mediaAt > 0 && now - maxOf(mediaAt, freeAt) >= RELAY_NEED_MS
+
+    /** At renewal time: renew only when the relay carried media (not just pings) since [usedAt] within [RELAY_IN_USE_MS]. */
+    fun renewRelayNow(usedAt: Long, now: Long) = usedAt > 0 && now - usedAt < RELAY_IN_USE_MS
+
+    /** How long the old allocation still carries media after a renewal: [HANDOVER_MS][TurnCreds.HANDOVER_MS], less when its login ends sooner. */
+    fun handoverMs(oldExpiresMs: Long, now: Long) = minOf(TurnCreds.HANDOVER_MS, maxOf(5_000L, oldExpiresMs - now - 15_000L))
+
     enum class Kind { RELAY, WIFI, BLUETOOTH, DIRECT }
 
     /** A free path (Wi-Fi or Direct) that answered a ping this recently rests the relay (5.8.3). */

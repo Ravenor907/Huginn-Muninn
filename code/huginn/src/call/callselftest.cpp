@@ -1020,6 +1020,65 @@ void relayCall()
     delete b.sig;
 }
 
+// Round 18 (relay.md "On demand"): a call on the Wi-Fi asks the relay Worker for nothing, at the start or later.
+void lanCallNoLogin()
+{
+    std::printf("a call on the Wi-Fi asks for no relay login\n");
+    int fetches = 0;
+    auto fetch = [&fetches](std::function<void(const TurnLogin &, const QString &)> done) {
+        ++fetches;
+        QTimer::singleShot(10, [done] { done(TurnLogin(), QStringLiteral("test: no relay")); });
+    };
+    Side a, b;
+    a.id = CallCrypto::newEphemeral();
+    b.id = CallCrypto::newEphemeral();
+    const QString keyA = QString::fromLatin1(a.id.publicDer.toBase64()), keyB = QString::fromLatin1(b.id.publicDer.toBase64());
+    a.sig = new CallSignalHooks();
+    b.sig = new CallSignalHooks();
+    for (Side *s : {&a, &b}) {
+        Side *other = s == &a ? &b : &a;
+        const QString mine = s == &a ? keyA : keyB;
+        s->sig->onMyKey = [mine] { return mine; };
+        s->sig->onSign = [s](const QByteArray &bytes) { return CallCrypto::signDer(s->id.privateDer, bytes); };
+        s->sig->onNameOf = [](const QString &) { return QStringLiteral("Test"); };
+        s->sig->onCanCall = [](const QString &) { return true; };
+        s->sig->onLanHost = [](const QString &) { return QStringLiteral("127.0.0.1"); };
+        QPointer<CallSignalHooks> to = other->sig;
+        s->sig->onSend = [to, mine](const QString &, const QJsonObject &m) {
+            QTimer::singleShot(5, to, [to, mine, m] { if (to) to->deliver(mine, m); });
+        };
+    }
+    QObject::connect(b.sig, &CallSignal::received, b.sig, [&b, fetch](const QString &from, const QJsonObject &m) {
+        if (b.session) {
+            b.session->handle(m);
+            return;
+        }
+        if (m.value(QStringLiteral("t")).toString() != QLatin1String("offer") || !CallSession::checkOffer(m, from, QDateTime::currentMSecsSinceEpoch()).isEmpty())
+            return;
+        b.session = new CallSession(b.sig, from, fetch, b.sig);
+        b.session->useDevices = false;
+        b.session->takeOffer(m);
+        QTimer::singleShot(300, b.session, [&b] { b.session->answer(); });
+    });
+    QObject::connect(a.sig, &CallSignal::received, a.sig, [&a](const QString &, const QJsonObject &m) {
+        if (a.session)
+            a.session->handle(m);
+    });
+    a.session = new CallSession(a.sig, keyB, fetch, a.sig);
+    a.session->useDevices = false;
+    a.session->start();
+    check(waitFor([&] { return a.session && b.session && a.session->state() == CallSession::Active && b.session->state() == CallSession::Active; }, 6000),
+          "on demand: both sides connected over the Wi-Fi");
+    // Longer than the 2.5 s a call waits for a free path before it asks.
+    waitFor([] { return false; }, 3500);
+    check(fetches == 0 && a.session && !a.session->relayUp() && b.session && !b.session->relayUp(), "on demand: no relay login asked for while the Wi-Fi carries the call");
+    if (a.session)
+        a.session->hangup();
+    waitFor([&] { return !b.session || b.session->state() == CallSession::Ended; }, 3000);
+    delete a.sig;
+    delete b.sig;
+}
+
 // Echo cancellation (AudioIO, HUGINN_HAVE_VOICE): a made-up room at the call's 16 kHz where the microphone hears the
 // speaker 150 ms later, quieter and with a little reverb. The speaker must get the call unchanged, and once the
 // canceller has settled most of the echo must be gone from what the microphone sends.
@@ -1090,6 +1149,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     directCall();
     directReplay();
     relayCall();
+    lanCallNoLogin();
     voiceChecks();
     const bool ok = vectors && rooms && stun && jitter && dsp && video && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");

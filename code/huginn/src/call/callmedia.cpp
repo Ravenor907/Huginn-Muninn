@@ -222,6 +222,8 @@ void CallMedia::sendMedia(const QByteArray &pkt, bool video)
         if (!live(p) || (p == Relay && rest) || (p == Ble && video))
             continue;
         sendOn(p, pkt);
+        if (p == Relay)
+            m_relayUsedAt = now();
         if (p == Relay && !video)
             ++m_stats.relayAudio;
     }

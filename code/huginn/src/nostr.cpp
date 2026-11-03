@@ -1191,12 +1191,21 @@ void Nostr::noteSeenSoon()
     QTimer::singleShot(kSeenSaveMs, this, &Nostr::flushSeen);
 }
 
+void Nostr::releaseCursors()
+{
+    if (m_cursorsHeld)
+        flushSeen();
+}
+
 void Nostr::flushSeen()
 {
-    if (!m_seenDirty)
+    if (!m_seenDirty && !m_cursorsHeld)
         return;
+    const bool seenDirty = m_seenDirty;
     m_seenDirty = false;
-    if (keepSeenLater) {
+    if (!seenDirty) {
+        // Only the held cursors are due.
+    } else if (keepSeenLater) {
         // Made into JSON and written on the saving thread, from a copy of the list taken now.
         const QList<QByteArray> seen = m_seen;
         keepSeenLater([seen] {
@@ -1211,6 +1220,13 @@ void Nostr::flushSeen()
             ids.append(QString::fromLatin1(id.toHex()));
         keepSeen(QJsonDocument(QJsonObject{{QStringLiteral("seen"), ids}}).toJson(QJsonDocument::Compact));
     }
+    // Round 18 (m2): while the vault holds its saves (sealing for a new lock), the cursors stay where they were, so a
+    // crash or power loss then fetches again everything the held saves would have lost.
+    if (holdCursors && holdCursors()) {
+        m_cursorsHeld = true;
+        return;
+    }
+    m_cursorsHeld = false;
     QSettings s = Settings::store();
     if (m_takenAt > 0)
         s.setValue(QStringLiteral("nostr/since"), m_takenAt);

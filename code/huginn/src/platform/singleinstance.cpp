@@ -469,11 +469,26 @@ void SingleInstance::watchShared()
         return;
     m_watch = new QTimer(this);
     m_watch->setInterval(30000);
-    connect(m_watch, &QTimer::timeout, this, [this] {
+    // Round 18 (m5): this copy's own lock as it wrote it (its host name then, and its process id). The computer's name
+    // can change while it runs (a rename, or Linux's name once the network is up), and its own lock must never read as
+    // another computer's.
+    qint64 ownPid = 0;
+    QString ownHost, ownApp;
+    {
+        QLockFile probe(m_dir + QStringLiteral("/instance.lock"));
+        if (!probe.getLockInfo(&ownPid, &ownHost, &ownApp))
+            ownPid = 0;
+    }
+    connect(m_watch, &QTimer::timeout, this, [this, ownPid, ownHost] {
         QString other;
         // This copy's own lock, replaced by a synced copy of another computer's.
-        const QString mine = lockHost(m_dir + QStringLiteral("/instance.lock"));
-        if (!sameHost(mine))
+        qint64 pid = 0;
+        QString mine, app;
+        QLockFile probe(m_dir + QStringLiteral("/instance.lock"));
+        if (!probe.getLockInfo(&pid, &mine, &app))
+            mine.clear();
+        const bool ours = (pid == QCoreApplication::applicationPid() || (ownPid > 0 && pid == ownPid)) && mine == ownHost;
+        if (!ours && !sameHost(mine))
             other = mine;
         // A sync app's conflict copy beside it ("instance-PC2.lock", "instance (1).lock", "instance.lock.conflict").
         const QStringList beside = QDir(m_dir).entryList({QStringLiteral("instance*.lock*")}, QDir::Files | QDir::Hidden);

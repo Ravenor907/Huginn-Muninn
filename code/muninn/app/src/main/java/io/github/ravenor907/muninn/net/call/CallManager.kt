@@ -232,20 +232,8 @@ object CallManager {
         return true
     }
 
-    @Volatile private var preparedAt = 0L
-
-    /**
-     * A conversation with [peerKey] is open: fetch the relay login now (it is cached for two hours), so
-     * pressing Call doesn't wait for the relay Worker. At most one try a minute; nothing is fetched when
-     * internet calls are off or the contact can't take calls.
-     */
-    fun prepare(peerKey: String) {
-        val a = app ?: return
-        val now = System.currentTimeMillis()
-        if (now - preparedAt < 60_000 || !internetCalls(a) || !RelayConfig.configured || !canCall(peerKey)) return
-        preparedAt = now
-        work.execute { try { host.relayLogin() } catch (_: Exception) {} }
-    }
+    // Round 18 (relay.md "On demand"): no relay login is fetched ahead of a call any more (opening a chat used to fetch
+    // one); a call asks only when it needs the relay.
 
     /** Answers the ring; [video]: with the camera on (only when they started a video call and the camera may be used). */
     fun answer(video: Boolean = false) { exec.execute { lockedRing?.takeIf { session == null }?.let { answerLocked(it); return@execute }

@@ -15,7 +15,7 @@ tag = "v1"
 new_sqlite_classes = ["RelayLimits"]
 
 # Optional Worker variables (dashboard, Variables and Secrets, Type: Text), never needed for a working Worker:
-#   DAILY_MINUTES   the day's TURN budget for everyone, in minutes of login handed out (default 24000; see relay.md "Limits")
+#   DAILY_MINUTES   the day's TURN budget for everyone, in minutes of login handed out (default 50000; see relay.md "Limits")
 #   LEGACY_UNTIL    a Unix time (seconds) after which logins without an install token are refused
 #
 # Optional: the Workers rate limiting binding, a per-location counter in front of everything else (relay.md "Junk

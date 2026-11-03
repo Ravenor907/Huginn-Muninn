@@ -475,7 +475,7 @@ object LockGate {
     var open by mutableStateOf<Gate?>(null)
         private set
 
-    /** Runs [then] after the current lock is given; at once when no lock is set. One at a time: a second ask waits its turn. */
+    /** Runs [then] after the current lock is given; at once when no lock is set. One at a time: a second ask while one is open is dropped (the person asks again). */
     fun ask(app: Muninn, what: String, then: () -> Unit) {
         if (!app.vault.hasPassword) { then(); return }
         if (open == null) open = Gate(what, then)
