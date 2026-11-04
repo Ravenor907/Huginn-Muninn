@@ -175,7 +175,9 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      val access: KidAccess? = null, val child: String? = null, val gok: List<Pair<String, String>>? = null,
                      val wait: List<String>? = null, val pics: Boolean? = null,
                      /** k15: the read-aloud voice, "f" or "m", only for a device whose app said "k15" (null: left out). */
-                     val voice: String? = null)
+                     val voice: String? = null,
+                     /** k15 (1.42): the read-aloud speed, a whole percent 50 to 150, sent like [voice] (null: left out, 80%). */
+                     val speed: Int? = null)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -359,7 +361,9 @@ object TvRules {
             // k14: accessibility, the child's name, approved group members and other families' devices still waiting.
             KidK14.putInto(o, it)
             // k15: the read-aloud voice a parent picked.
-            it.voice?.takeIf { v -> v in io.github.ravenor907.muninn.net.ReadAloudText.VOICES }?.let { v -> o.put(KidVoice.FIELD, v) } }
+            it.voice?.takeIf { v -> v in io.github.ravenor907.muninn.net.ReadAloudText.VOICES }?.let { v -> o.put(KidVoice.FIELD, v) }
+            // k15 (1.42): the read-aloud speed beside it.
+            it.speed?.takeIf { p -> p in KidVoice.SPEED_MIN..KidVoice.SPEED_MAX }?.let { p -> o.put(KidVoice.SPEED, p) } }
         return Canon.sign(priv, CONFIG, o)
     }
 

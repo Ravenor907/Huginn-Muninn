@@ -58,7 +58,7 @@ object ReadAloud {
     val status: StateFlow<String> = _status.asStateFlow()
     private val _speaking = MutableStateFlow(false)
     val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
-    /** Bumped when a voice is downloaded or deleted, so Settings reads [ready] and [hasFiles] again. */
+    /** Bumped when a voice is downloaded or deleted (or the switch or speed changes), so Settings reads them again. */
     private val _files = MutableStateFlow(0)
     val files: StateFlow<Int> = _files.asStateFlow()
 
@@ -108,8 +108,93 @@ object ReadAloud {
         return engineThere && !broken && (ready(app) || hashes(app).containsKey(ReadAloudText.fileFor(voice(app))))
     }
 
-    /** Something can read: the natural voice (in, or on its way), or the phone's own voice unless it failed to start. */
-    val available: Boolean get() = (appContext?.let { natural(it) } ?: false) || !deviceBad
+    /**
+     * Something can read: Read aloud is on (Settings; always on a Kids' Device), and the natural voice (in, or on its
+     * way) or the phone's own voice unless it failed to start.
+     */
+    val available: Boolean get() {
+        val app = appContext
+        if (app != null && !isOn(app)) return false
+        return (app?.let { natural(it) && !useDevice(it) } ?: false) || !deviceBad
+    }
+
+    /** Settings' on/off switch (on until turned off). Always on for a Kids' Device (it has a parent's voice or speed). */
+    fun isOn(context: Context): Boolean = prefs(context).let { it.getBoolean("on", true) || it.contains("kidSpeed") || it.contains("kid") }
+
+    fun setOn(context: Context, on: Boolean) {
+        val app = context.applicationContext
+        appContext = app
+        prefs(app).edit().putBoolean("on", on).apply()
+        if (!on) stop()
+        _files.value++
+    }
+
+    /**
+     * The phone's own voice was picked in Settings (Device): the natural voice never reads or downloads. Not on a Kids'
+     * Device whose parent picked a voice.
+     */
+    fun useDevice(context: Context): Boolean = prefs(context).let { it.getString("kid", null) == null && it.getString("voice", null) == ReadAloudText.DEVICE }
+
+    // ---- the speed (todo 1.42): a percent of the usual pace, 50 to 150, 80 until it's moved.
+
+    /** The speed the slider shows and sets, live while it moves ([setSpeed] saves it when the drag ends). */
+    @Volatile private var liveSpeed: Float? = null
+
+    /** The speed in use: a parent's on a Kids' Device (80 when the parent sent none), else this device's. */
+    fun speed(context: Context): Float {
+        val p = prefs(context)
+        if (p.contains("kidSpeed")) return ReadAloudText.speedOf(p.getFloat("kidSpeed", ReadAloudText.SPEED_DEFAULT))
+        return liveSpeed ?: ownSpeed(context)
+    }
+
+    /** This device's own speed (Settings). Saved as a float; nothing saved reads 80. */
+    fun ownSpeed(context: Context): Float {
+        val p = prefs(context)
+        // An int saved by a test build reads the same.
+        val v: Number? = try { if (p.contains("speed")) p.getFloat("speed", ReadAloudText.SPEED_DEFAULT) else null }
+            catch (_: ClassCastException) { p.getInt("speed", ReadAloudText.SPEED_DEFAULT.toInt()) }
+        return ReadAloudText.speedOf(v)
+    }
+
+    /** While the slider moves: the next piece read (and Hear a sample) uses [pct] at once, nothing is saved. */
+    fun previewSpeed(context: Context, pct: Float) {
+        appContext = context.applicationContext
+        liveSpeed = ReadAloudText.speedOf(pct)
+        applyDeviceRate(context.applicationContext)
+    }
+
+    /** The drag ended (or a key was let go): [pct] is saved on this device. */
+    fun setSpeed(context: Context, pct: Float) {
+        val app = context.applicationContext
+        appContext = app
+        val v = ReadAloudText.speedOf(pct)
+        prefs(app).edit().putFloat("speed", v).apply()
+        liveSpeed = null
+        applyDeviceRate(app)
+        _files.value++   // the Read aloud row's line shows the new speed
+    }
+
+    /** A parent's speed on this Kids' Device (cap k15, field "speed"); null when the config has none: 80. */
+    fun parentSpeed(context: Context, pct: Int?) {
+        val v = if (pct == null) ReadAloudText.SPEED_DEFAULT else ReadAloudText.speedOf(pct)
+        val p = prefs(context)
+        if (p.contains("kidSpeed") && p.getFloat("kidSpeed", -1f) == v) return
+        p.edit().putFloat("kidSpeed", v).apply()
+        applyDeviceRate(context.applicationContext)
+    }
+
+    private fun applyDeviceRate(app: Context) {
+        val t = device ?: return
+        if (deviceOk) try { t.setSpeechRate(ReadAloudText.deviceRate(speed(app))) } catch (_: Exception) {}
+    }
+
+    /** Settings' "Hear a sample": a short line at the speed and with the voice picked now. */
+    fun sample(context: Context) {
+        val app = context.applicationContext
+        appContext = app
+        lastText = null
+        speak(app, ReadAloudText.SAMPLE)
+    }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -119,11 +204,11 @@ object ReadAloud {
         return ReadAloudText.voiceOf(p.getString("kid", null) ?: p.getString("voice", ReadAloudText.FEMALE))
     }
 
-    /** The voice picked in Settings (not a parent's). */
-    fun ownVoice(context: Context): String = ReadAloudText.voiceOf(prefs(context).getString("voice", ReadAloudText.FEMALE))
+    /** The voice picked in Settings (not a parent's): "f", "m" or "d" (the device's own). */
+    fun ownVoice(context: Context): String = ReadAloudText.choiceOf(prefs(context).getString("voice", ReadAloudText.FEMALE))
 
     fun setVoice(context: Context, v: String) {
-        val pick = ReadAloudText.voiceOf(v)
+        val pick = ReadAloudText.choiceOf(v)
         if (pick == ownVoice(context)) return
         prefs(context).edit().putString("voice", pick).apply()
         switched(context)
@@ -144,8 +229,8 @@ object ReadAloud {
      */
     fun parentForgot(context: Context) {
         val app = context.applicationContext
-        if (!prefs(app).contains("kid")) return
-        prefs(app).edit().remove("kid").apply()
+        if (!prefs(app).contains("kid") && !prefs(app).contains("kidSpeed")) return
+        prefs(app).edit().remove("kid").remove("kidSpeed").apply()
         stop()
         synth.execute { unload() }
         try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
@@ -161,7 +246,7 @@ object ReadAloud {
         prefs(app).edit().putBoolean("mobile", on).apply()
         // A download waiting for Wi-Fi goes now (or waits again). WorkManager's own record says whether one waits, so
         // this works after a restart too.
-        if (ready(app) || !natural(app)) return
+        if (ready(app) || !natural(app) || useDevice(app)) return
         Thread {
             val waiting = try {
                 WorkManager.getInstance(app).getWorkInfosForUniqueWork(WORK).get().any { !it.state.isFinished }
@@ -175,6 +260,9 @@ object ReadAloud {
 
     /** The voice in use is downloaded and checked. */
     fun ready(context: Context): Boolean = ReadAloudText.complete(voiceDir(context, voice(context)))
+
+    /** Natural voice [v] ("f" or "m") is downloaded and checked (Settings asks before a switch that downloads). */
+    fun hasVoice(context: Context, v: String): Boolean = v in ReadAloudText.VOICES && ReadAloudText.complete(voiceDir(context, v))
 
     /** Any voice files are kept ("Delete voices" shows). */
     fun hasFiles(context: Context): Boolean = voicesDir(context).list()?.isNotEmpty() == true
@@ -199,7 +287,8 @@ object ReadAloud {
         val app = context.applicationContext
         appContext = app
         deviceBad = false
-        if (!natural(app)) _status.value = if (broken) BROKEN else NOT_YET
+        if (useDevice(app)) _status.value = DEVICE_READS
+        else if (!natural(app)) _status.value = if (broken) BROKEN else NOT_YET
         else if (ready(app)) _status.value = "Ready"
         else if (_status.value.isEmpty() || _status.value == "Ready" || _status.value == NOT_YET)
             _status.value = "Downloads the first time something is read aloud"
@@ -238,7 +327,7 @@ object ReadAloud {
         heard = false
         val my = token.get()
         // Text with nothing the engine reads (another script only) goes to the phone's own voice.
-        if (natural(app) && ready(app) && parts.any { ReadAloudText.forEngine(it).isNotEmpty() }) {
+        if (!useDevice(app) && natural(app) && ready(app) && parts.any { ReadAloudText.forEngine(it).isNotEmpty() }) {
             _speaking.value = true
             takeFocus(app)
             val dir = voiceDir(app, voice(app))
@@ -246,7 +335,7 @@ object ReadAloud {
             return
         }
         // Not ready yet: the download starts (on the network rules) and the phone's own voice reads meanwhile.
-        prepare(app)
+        if (!useDevice(app)) prepare(app)
         speakDevice(app, parts)
     }
 
@@ -276,7 +365,8 @@ object ReadAloud {
                     // Only plain letters, digits and simple punctuation reach the engine (ReadAloudText.forEngine).
                     val clean = ReadAloudText.forEngine(p)
                     if (clean.isEmpty()) continue
-                    val a = tts.generate(clean, 0, 1.0f)
+                    // The speed picked (read for each piece, so a move of the slider is heard in the next one).
+                    val a = tts.generate(clean, 0, ReadAloudText.engineSpeed(speed(app)))
                     if (a.samples.isNotEmpty()) queue.put(a.samples to a.sampleRate)
                 }
                 mark.delete()
@@ -417,7 +507,7 @@ object ReadAloud {
     }
 
     /** Nothing reads right now: the natural voice is on its way only when it can download (its line is there). */
-    private fun cantYet(app: Context): String = if (natural(app)) WAIT else NONE
+    private fun cantYet(app: Context): String = if (natural(app) && !useDevice(app)) WAIT else NONE
 
     private fun deviceStarted(app: Context, st: Int) {
         val t = device ?: return
@@ -450,6 +540,7 @@ object ReadAloud {
         val my = token.get()
         _speaking.value = true
         takeDeviceFocus(app)
+        try { t.setSpeechRate(ReadAloudText.deviceRate(speed(app))) } catch (_: Exception) {}
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(id: String?) { heard = true }
             override fun onDone(id: String?) { if (id == "end-$my" && token.get() == my) { _speaking.value = false; dropFocus() } }
@@ -471,6 +562,8 @@ object ReadAloud {
     }
 
     const val NONE = "This device can't read out loud yet"
+    /** Settings' line with Device picked. */
+    const val DEVICE_READS = "The phone's own voice reads"
     const val WAIT = "The natural voice is on its way. Read aloud works once it's in"
 
     // ---- the download
@@ -482,6 +575,7 @@ object ReadAloud {
     fun prepare(context: Context, asked: Boolean = false) {
         val app = context.applicationContext
         appContext = app
+        if (useDevice(app)) { _status.value = DEVICE_READS; return }
         if (ready(app)) { _status.value = "Ready"; return }
         if (!natural(app)) { _status.value = if (broken) BROKEN else NOT_YET; return }
         if (asked) prefs(app).edit().putBoolean("asked", true).apply()
@@ -518,7 +612,14 @@ object ReadAloud {
         val app = context.applicationContext
         stop()
         synth.execute { unload() }
-        if (ready(app)) { cleanOther(app); _status.value = "Ready"; _files.value++ }
+        if (useDevice(app)) {
+            // The device's own voice: nothing downloads (the voice kept stays until Delete voices).
+            try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
+            WorkState.waiting = false
+            _status.value = DEVICE_READS
+            _files.value++
+        }
+        else if (ready(app)) { cleanOther(app); _status.value = "Ready"; _files.value++ }
         else if (!natural(app)) {
             try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
             _status.value = if (broken) BROKEN else NOT_YET
@@ -546,7 +647,7 @@ object ReadAloud {
         try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
         WorkState.waiting = false
         synth.execute { unload(); synchronized(filesLock) { voicesDir(app).deleteRecursively() }; freshStart(app); _files.value++ }
-        _status.value = if (engineThere && hashes(app).containsKey(ReadAloudText.fileFor(voice(app)))) "Deleted. Downloads again the next time something is read aloud" else NOT_YET
+        _status.value = if (useDevice(app)) DEVICE_READS else if (engineThere && hashes(app).containsKey(ReadAloudText.fileFor(voice(app)))) "Deleted. Downloads again the next time something is read aloud" else NOT_YET
     }
 
     private object WorkState { @Volatile var waiting = false }
@@ -561,7 +662,7 @@ object ReadAloud {
             val app = applicationContext
             appContext = app
             val v = ReadAloudText.voiceOf(inputData.getString("voice"))
-            if (v != voice(app)) return@withContext Result.success()   // switched meanwhile; that one has its own run
+            if (v != voice(app) || useDevice(app)) return@withContext Result.success()   // switched meanwhile; that one has its own run
             if (ready(app)) { WorkState.waiting = false; cleanOther(app); _status.value = "Ready"; _files.value++; return@withContext Result.success() }
             val file = ReadAloudText.fileFor(v)
             val want = hashes(app)[file] ?: return@withContext Result.success()

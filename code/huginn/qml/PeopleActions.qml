@@ -6,13 +6,14 @@ import Huginn
 // over the internet (cap f1) and linked devices, the same as Muninn's. Shared by the chat, group,
 // contacts and settings pages so each only calls in here.
 QtObject {
-    // ------------------------------------------------------------- a contact's one menu
-    // The same everywhere: a chat row, a chat's header, Contacts and a profile card, with the mouse
-    // (the three dots or a right click) or a controller (LT or X). ctx: { section, keys (that
-    // section's order as shown, for the chat list's Move up and down), removed (called before Remove), tour, inChat
-    // (from the open chat, whose header has Call and Video), listRow (from a row of the chat list) }.
-    // Short, like Muninn's: Find, Media and files, Mute and Details first; then Notifications, Mark unread
-    // and Add to group; everything else under More (contactMore).
+    // ------------------------------------------------------------- a person's one menu
+    // The same everywhere and the same layout as Muninn's: a chat row (LT, X or a right click), a chat's header,
+    // Contacts and a profile card. ctx: { section, keys (that section's order as shown, for Move up and down), removed
+    // (called before Hide, Block or a Delete), moved, open, tour, inChat (from the open chat, whose header has Call),
+    // listRow (from a row of the chat list), near (someone nearby who isn't a contact; then hasChat and alt) }.
+    // Buttons: Call (list only), Search, Media, Mute, Details. Rows: Notifications, Mark unread (or Mark read), Start a
+    // group. More: Pin to top, Archive, Folders, Move up and down (list only), Pinned messages, Copy name. Red: Block,
+    // Delete chat, Delete contact. What they can do, Compare emoji, Introduce and How messages travel are in Details.
     function has(fn) { return typeof Chat[fn] === "function" }
     // Locked (Main.lockedOut): no one's menu opens and nothing is sent.
     function locked() { return !!Ui.main && Ui.main.lockedOut === true }
@@ -20,47 +21,70 @@ QtObject {
     function lockFirst(title, why, what, then) {
         if (Ui.main) Ui.main.askLock(title, why, what, then)
     }
-    function contactMenu(k, n, ctx) {
+    // One menu: contactMenu and personMenu are the same menu (kept as two names for their callers).
+    function contactMenu(k, n, ctx) { personMenu(k, n, ctx) }
+    // Unread now (new messages or Mark unread): the row then says Mark read.
+    function isUnread(k) {
+        if (Chat.isMarkedUnread(k)) return true
+        const row = (Chat.chats || []).find(x => x && x.key === k)
+        return !!row && !!row.unread
+    }
+    function personMenu(k, n, ctx) {
         const c = ctx || {}
         if (!k || locked()) return
+        // Someone nearby who isn't a contact: their own short menu (Message, Mute, Hide, Block, Delete chat).
+        if (c.near && !c.tour) { nearbyMenu(k, n, c); return }
         const name = c.tour ? n : (Chat.nameOf(k) || n)
         const contact = !!c.tour || Chat.isContact(k)
+        const blocked = !c.tour && Chat.isBlocked(k)
         const top = []
-        if (!c.inChat) {
-            top.push({ name: "Message", icon: "thread", url: "message" })
-            if (contact) top.push({ name: "Call", icon: "call", url: "call" })
-            if (contact && (c.tour || Calls.canVideo(k))) top.push({ name: "Video", icon: "video", url: "video" })
-        }
-        top.push({ name: "Find in chat", icon: "search", url: "find" },
-                 { name: "Media and files", icon: "image", url: "media", sub: () => mediaMenu(k, name, c) })
-        if (!c.tour) top.push(Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
-                                              : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) })
+        // Contacts and a profile card have no row to click: Message opens the chat.
+        if (!c.inChat && !c.listRow) top.push({ name: "Message", icon: "thread", url: "message" })
+        if (c.listRow && contact) top.push({ name: "Call", icon: "call", url: "call" })
+        top.push({ name: "Search", icon: "search", url: "find" },
+                 { name: "Media", icon: "image", url: "media", sub: () => mediaMenu(k, name, c) })
+        top.push(!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
+                                            : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) })
         top.push({ name: "Details", icon: "edit", url: "edit" })
         const mid = []
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
-        if (has("markUnread")) mid.push({ name: "Mark unread", icon: "check", url: "unread", check: !c.tour && Chat.isMarkedUnread(k) })
-        if (contact) mid.push({ name: "Add to group", icon: "people", url: "group", sub: () => addToGroupMenu(k, name) })
+        const unread = !c.tour && isUnread(k)
+        mid.push(unread ? { name: "Mark read", icon: "check", url: "read" } : { name: "Mark unread", icon: "check", url: "unread" })
+        if (contact) mid.push({ name: "Start a group", icon: "people", url: "group", sub: () => addToGroupMenu(k, name) })
         mid.push({ name: "More", icon: "more", url: "more", sub: () => contactMore(k, n, c) })
-        const back = () => contactMenu(k, n, c)
-        Ui.pickFrom(name, [{ header: "", items: top }, { header: "", items: mid }], a => {
+        const end = [{ name: blocked ? "Unblock" : "Block", url: "block", danger: !blocked }]
+        if (!c.tour) end.push({ name: "Delete chat", url: "deletechat", danger: true })
+        if (contact) end.push({ name: "Delete contact", url: "remove", danger: true })
+        const back = () => personMenu(k, n, c)
+        Ui.pickFrom(name, [{ header: "", items: top }, { header: "", items: mid }, { header: "", items: end }], a => {
             if (c.tour) return
-            if (a === "message") Ui.openPage("dms", { open: k })
+            if (a === "message") { if (c.open) c.open(); else Ui.openPage("dms", { open: k }) }
             else if (a === "call") { const w = Calls.call(k); if (w !== "") Ui.say(w, true) }
-            else if (a === "video") { const w = Calls.callVideo(k); if (w !== "") Ui.say(w, true) }
             else if (a === "find") Ui.openPage("dms", { open: k, show: "find" })
             else if (a === "media") mediaMenu(k, name, c, back)
             else if (a === "mute") muteMenu(k, name)
-            else if (a === "edit") Ui.showPerson(k, name, { page: "edit", back: back })
+            else if (a === "edit") Ui.showPerson(k, name, { back: back })
             else if (a === "notify") notifyMenu(k, back)
-            else if (a === "unread") Chat.markUnread(k, !Chat.isMarkedUnread(k))
+            else if (a === "unread") Chat.markUnread(k, true)
+            else if (a === "read") { if (Chat.isMarkedUnread(k)) Chat.markUnread(k, false); Chat.markRead(k) }
             else if (a === "group") addToGroupMenu(k, name)
             else if (a === "more") contactMore(k, n, c, back)
+            else redAction(a, k, name, c, contact, blocked)
         })
     }
-    // Media and files: what was shared in the chat (photos, links, voice), or its Files.
+    // Block, Delete chat and Delete contact: the red rows, the same in the menu and its More.
+    function redAction(a, k, name, c, contact, blocked) {
+        if (a === "deletechat") deleteChat(k, name, c.removed)
+        else if (a === "block") {
+            if (blocked) { Chat.block(k, false); Ui.say(name + " unblocked.") }
+            else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { Chat.block(k, true); Ui.say(name + " blocked.") }, true, true)
+        } else if (a === "remove" && contact)
+            Ui.sure("Delete contact " + name + "?", "Restore within 30 days.", "Delete contact", () => { if (c.removed) c.removed(); Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, true, true)
+    }
+    // Media: what was shared in the chat (photos, links, voice), or its Files.
     function mediaMenu(k, name, c, back) {
-        Ui.pickFrom("Media and files", [{ header: "", items: [{ name: "Media", detail: "Photos, links and voice", icon: "image", url: "shared" },
-                                                             { name: "Files", icon: "file", url: "files" }] }], a => {
+        Ui.pickFrom("Media", [{ header: "", items: [{ name: "Media", detail: "Photos, links and voice", icon: "image", url: "shared" },
+                                                   { name: "Files", icon: "file", url: "files" }] }], a => {
             if (c && c.tour) return
             if (a === "files") openFiles(k, name)
             else Ui.openPage("dms", { open: k, show: "shared" })
@@ -68,21 +92,20 @@ QtObject {
     }
     // How messages reach someone right now, in a word (Chat.route).
     function routeWord(r) { return r === "bluetooth" ? "Bluetooth" : r === "wifi" ? "Wi-Fi" : r === "internet" ? "Internet" : "Not reachable" }
-    // The rest of a contact's menu: where the chat sits and how it behaves, then safety, then the red ones last.
+    // A person's More: where the chat sits, then Copy name (and Hide for someone nearby), then the red ones last.
     function contactMore(k, n, ctx, back) {
         const c = ctx || {}
         const name = c.tour ? n : (Chat.nameOf(k) || n)
         const contact = !!c.tour || Chat.isContact(k)
         const blocked = !c.tour && Chat.isBlocked(k)
         const items = []
-        if (contact) items.push({ name: "Folders and role", icon: "folder", url: "folders" }, { name: "What they can do", icon: "shield", url: "can" })
-        if (has("pinChat")) items.push({ name: "Pin to the top", icon: "pin", url: "pin", check: !c.tour && Chat.isPinnedChat(k) })
+        if (has("pinChat")) items.push({ name: "Pin to top", icon: "pin", url: "pin", check: !c.tour && Chat.isPinnedChat(k) })
         if (has("archiveChat")) items.push({ name: "Archive", url: "archive", check: !c.tour && Chat.isArchived(k) })
-        items.push({ name: "Pinned messages", icon: "pin", url: "pins" })
-        if (contact) items.push({ name: "Compare emoji", icon: "check", detail: c.tour ? "" : Chat.isVerified(k) ? "Verified" : "Not verified", url: "check" },
-                                { name: "Introduce", icon: "people", url: "introduce" })
-        // How messages reach them right now (never an address): out of the chat's header, as on Muninn.
-        if (!c.tour) items.push({ name: "How messages travel", detail: routeWord(Chat.route(k)), url: "route" })
+        if (contact) items.push({ name: "Folders", icon: "folder", url: "folders" })
+        const keys = c.listRow ? (c.keys || []) : [], at = keys.indexOf(k)
+        if (at > 0) items.push({ name: "Move up", icon: "up", url: "up" })
+        if (at >= 0 && at < keys.length - 1) items.push({ name: "Move down", icon: "down", url: "down" })
+        items.push({ name: "Pinned messages", icon: "pin", url: "pins" }, { name: "Copy name", url: "copy" })
         // Someone nearby who isn't a contact: Hide takes them off the Nearby list for good.
         if (!contact && !c.tour) items.push({ name: "Hide", icon: "close", url: "hide" })
         const end = [{ name: blocked ? "Unblock" : "Block", url: "block", danger: !blocked }]
@@ -91,27 +114,28 @@ QtObject {
         const again = () => contactMore(k, n, c, back)
         Ui.pickFrom("More for " + name, [{ header: "", items: items }, { header: "", items: end }], a => {
             if (c.tour) return
-            if (a === "can") Ui.showPerson(k, name, { page: "can", back: again })
-            else if (a === "folders") folderMenu(k, again)
+            if (a === "folders") folderMenu(k, again)
             else if (a === "pin") { Chat.pinChat(k, !Chat.isPinnedChat(k)); Qt.callLater(again) }
             else if (a === "archive") { Chat.archiveChat(k, !Chat.isArchived(k)); Qt.callLater(again) }
             else if (a === "pins") Ui.openPage("dms", { open: k, show: "pins" })
-            else if (a === "check") checkCode(k)
-            else if (a === "route") {
-                const w = routeWord(Chat.route(k))
-                Ui.say(w === "Not reachable" ? name + " can't be reached right now." : "Messages to " + name + " go by " + w + " right now, end-to-end encrypted.")
+            else if (a === "copy") { Chat.copyText(name); Ui.say("Name copied.") }
+            else if (a === "up" || a === "down") {
+                const order = keys.slice()
+                order.splice(at, 1)
+                order.splice(a === "up" ? at - 1 : at + 1, 0, k)
+                Chat.placeIn(k, c.section || "", c.section || "", order)
+                if (c.moved) c.moved()
             }
-            else if (a === "introduce") introduce(k)
             else if (a === "hide") { if (c.removed) c.removed(); Chat.hideNearby(k); Ui.say(name + " is hidden.") }
-            else if (a === "deletechat") deleteChat(k, name, c.removed)
-            else if (a === "block") {
-                if (blocked) { Chat.block(k, false); Ui.say(name + " unblocked.") }
-                else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { Chat.block(k, true); Ui.say(name + " blocked.") }, true, true)
-            } else if (a === "remove")
-                Ui.sure("Delete contact " + name + "?", "Restore within 30 days.", "Delete contact", () => { if (c.removed) c.removed(); Chat.removeContact(k); Ui.say(name + " is in the Trash.") }, true, true)
+            else redAction(a, k, name, c, contact, blocked)
         }, back)
     }
-    // Folders and role: Family, Work and Folk are the roles (one at a time); the rest are folders.
+    // How messages reach them right now (never an address), said in a toast (Details › Reaching them by).
+    function sayRoute(k) {
+        const name = Chat.nameOf(k), w = routeWord(Chat.route(k))
+        Ui.say(w === "Not reachable" ? name + " can't be reached right now." : "Messages to " + name + " go by " + w + " right now, end-to-end encrypted.")
+    }
+    // Folders: Family, Work and Folk are the roles (one at a time); the rest are folders.
     function folderMenu(k, back) {
         const roles = ["Family", "Work", "Folk"]
         const named = r => Chat.folders.find(f => String(f.name).toLowerCase() === r.toLowerCase())
@@ -121,7 +145,7 @@ QtObject {
             .forEach(f => items.push({ name: f.name, icon: "folder", url: f.id, check: mine.indexOf(f.id) >= 0 }))
         items.push({ name: "New folder", icon: "plus", url: "+" })
         const again = () => folderMenu(k, back)
-        Ui.pickFrom("Folders and role", [{ header: "", items: items }], a => {
+        Ui.pickFrom("Folders", [{ header: "", items: items }], a => {
             if (a === "+") {
                 Ui.ask("New folder", "Only you see it", "", "Make it", t => {
                     const f = Chat.addFolder(t)
@@ -168,7 +192,11 @@ QtObject {
         const items = [{ name: "Every message", url: "every", check: mode === "every" },
                        { name: "One until I open it", url: "one", check: mode === "one" }]
         if (group) items.push({ name: "Only mentions and replies to me", url: "mentions", check: mode === "mentions" })
-        Ui.pickFrom("Notifications", [{ header: "", items: items }], a => {
+        // Always right away lives here, in each chat's Notifications (Settings › Notifications lists them).
+        const always = !group && has("isRightAway") && has("setRightAway") && Chat.isContact(k)
+        const rest = always ? [{ name: "Always right away", detail: "Even when muted", url: "always", check: Chat.isRightAway(k) }] : []
+        Ui.pickFrom("Notifications", [{ header: "", items: items }, { header: "", items: rest }], a => {
+            if (a === "always") { Chat.setRightAway(k, !Chat.isRightAway(k)); if (back) Qt.callLater(back); return }
             Chat.setNotifyMode(k, a)
             if (back) Qt.callLater(back)
         }, back)
@@ -200,7 +228,7 @@ QtObject {
     // How long messages stay with them: only for someone in Family or Work (the shorter side counts).
     function daysMenu(k, back) {
         const l = Chat.limitInfo(k)
-        if (!l.close) { Ui.note("How long messages stay", "Messages with them delete after " + l.days + " days, so old chats can't leak. To keep them longer, put them in Family or Work (Folders and role), then pick 14 or 30 days. Only people in those two get longer. They pick too, and the shorter time wins."); return }
+        if (!l.close) { Ui.note("How long messages stay", "Messages with them delete after " + l.days + " days, so old chats can't leak. To keep them longer, put them in Family or Work (Details › Folders), then pick 14 or 30 days. Only people in those two get longer. They pick too, and the shorter time wins."); return }
         const note = l.older ? "Their app keeps all until updated" : l.d1 ? "They keep " + l.theirs + ". Shorter counts" : ""
         Ui.pickFrom("How long messages stay", [{ header: note, items: l.choices.map(d => ({ name: d + " days", url: String(d), check: d === l.mine })) }],
                     d => { Chat.setKeep(k, Number(d)); if (back) Qt.callLater(back) }, back)
@@ -208,130 +236,59 @@ QtObject {
 
     // ------------------------------------------------------------- right-click menus (Ui.menuAt, RightClickMenu.qml)
     // Each opens with Ui.pickFrom, so it shows as the small menu at the pointer (a row's sub opens its side menu) or as
-    // the big list; the big list answers a sub row's url, so every row works there too.
+    // the big list; the big list answers a sub row's url, so every row works there too. A person's right-click menu is
+    // their one menu (personMenu above).
 
-    // A person's right-click menu, like Discord's: Open, Profile, Call, Mute, Notifications, Add to folder, Add to group,
-    // Mark as read, Copy name, Hide, Block, Delete chat, and More (their whole menu). ctx: as contactMenu's, plus
-    // near (someone nearby who isn't a contact; then also hasChat and alt) and open (opens their chat, else Chats does).
-    // From a row of the chat list (listRow) it also has Move up and Move down in that section: the one place a chat is
-    // moved besides dragging it.
-    function personMenu(k, n, ctx) {
-        const c = ctx || {}
-        if (!k || locked()) return
-        const name = c.tour ? n : (Chat.nameOf(k) || n)
-        const contact = !!c.tour || (!c.near && Chat.isContact(k))
-        const blocked = !c.tour && Chat.isBlocked(k)
-        const top = [{ name: "Open", icon: "thread", url: "open" }]
-        if (contact) top.push({ name: "Profile", icon: "person", url: "profile" }, { name: "Call", icon: "call", url: "call" })
-        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
-                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
-        if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
-        if (contact) mid.push({ name: "Add to folder", icon: "folder", url: "folder", sub: () => addToFolderMenu(k, name) },
-                              { name: "Add to group", icon: "people", url: "group", sub: () => addToGroupMenu(k, name) })
-        const keys = c.listRow ? (c.keys || []) : [], at = keys.indexOf(k)
-        if (at > 0) mid.push({ name: "Move up", icon: "up", url: "up" })
-        if (at >= 0 && at < keys.length - 1) mid.push({ name: "Move down", icon: "down", url: "down" })
-        mid.push({ name: "Mark read", icon: "check", url: "read" }, { name: "Copy name", url: "copy" },
-                 { name: "Hide", icon: "close", url: "hide" },
-                 { name: "More", icon: "more", url: "more", sub: () => c.near ? nearbyMenu(k, n, c) : contactMenu(k, n, c) })
-        const end = [{ name: blocked ? "Unblock" : "Block", url: "block", danger: !blocked }]
-        if (!c.tour && (!c.near || c.hasChat)) end.push({ name: "Delete chat", url: "deletechat", danger: true })
-        Ui.pickFrom(name, [{ header: "", items: top }, { header: "", items: mid }, { header: "", items: end }], a => {
-            if (c.tour) return
-            if (a === "open") { if (c.open) c.open(); else Ui.openPage("dms", { open: k }) }
-            else if (a === "profile") Ui.showProfile(k, name)
-            else if (a === "call") { const w = Calls.call(k); if (w !== "") Ui.say(w, true) }
-            else if (a === "mute") muteMenu(k, name)
-            else if (a === "notify") notifyMenu(k)
-            else if (a === "folder") addToFolderMenu(k, name)
-            else if (a === "group") addToGroupMenu(k, name)
-            else if (a === "read") Chat.markRead(k)
-            else if (a === "up" || a === "down") {
-                const order = keys.slice()
-                order.splice(at, 1)
-                order.splice(a === "up" ? at - 1 : at + 1, 0, k)
-                Chat.placeIn(k, c.section || "", c.section || "", order)
-                if (c.moved) c.moved()
-            }
-            else if (a === "copy") { Chat.copyText(name); Ui.say("Name copied.") }
-            else if (a === "hide") {
-                // A contact's chat goes to Archived (a new message brings it back); someone nearby leaves the list for good.
-                if (c.removed) c.removed()
-                if (contact) { if (has("archiveChat")) Chat.archiveChat(k, true); Ui.say(name + " is hidden. A new message brings the chat back.") }
-                else { Chat.hideNearby(k); Ui.say(name + " is hidden.") }
-            } else if (a === "block") {
-                if (blocked) { Chat.block(k, false); Ui.say(name + " unblocked.") }
-                else Ui.sure("Block " + name + "?", "They aren't told.", "Block", () => { if (c.near && c.removed) c.removed(); Chat.block(k, true); Ui.say(name + " blocked.") }, true, true)
-            }
-            else if (a === "deletechat") deleteChat(k, name, c.removed)
-            else if (a === "more") { if (c.near) nearbyMenu(k, n, c); else contactMenu(k, n, c) }
-        })
-    }
-    // Add to folder: the folders (ticked where they are) and New folder. The roles (Family, Work, Folk) stay in Folders and role.
-    function addToFolderMenu(k, name) {
-        const roles = ["family", "work", "folk"], mine = Chat.foldersOf(k)
-        const items = Chat.folders.filter(f => roles.indexOf(String(f.name).toLowerCase()) < 0)
-            .map(f => ({ name: f.name, icon: "folder", url: f.id, check: mine.indexOf(f.id) >= 0 }))
-        items.push({ name: "New folder", icon: "plus", url: "+" })
-        Ui.pickFrom("Add to folder", [{ header: "", items: items }], a => {
-            if (a === "+") {
-                Ui.ask("New folder", "Only you see it", "", "Make it", t => {
-                    const f = Chat.addFolder(t)
-                    if (f !== "") { Chat.setInFolder(f, k, true); Ui.say(name + " is in " + t + ".") }
-                    else Ui.say(Chat.saveFailed() ? "Couldn't save. Try again." : "Give the folder a name.", true)
-                }, false, true)
-                return
-            }
-            const on = Chat.foldersOf(k).indexOf(a) < 0, f = Chat.folders.find(x => x.id === a)
-            Chat.setInFolder(a, k, on)
-            Ui.say(name + (on ? " is in " : " left ") + (f ? f.name : "the folder") + ".")
-        })
-    }
-    // Add to group: an invite to one of my groups (they're asked first), or a new group.
+    // Start a group: an invite to one of my groups (they're asked first), or a new group.
     function addToGroupMenu(k, name) {
         const items = Chat.groups.filter(g => !g.readOnly).map(g => ({ name: g.name, icon: "hash", url: g.id }))
         items.push({ name: "New group", icon: "plus", url: "+" })
-        Ui.pickFrom("Add to group", [{ header: "They're asked first", items: items }], g => {
+        Ui.pickFrom("Start a group", [{ header: "They're asked first", items: items }], g => {
             if (g === "+") { if (Ui.main) Ui.main.newGroup(); return }
             const r = Chat.inviteToGroup(g, k)
             Ui.say(r === "" ? "Invite sent to " + name + "." : r, r !== "")
         })
     }
-    // A group's right-click menu (its rail button): Open, Invite people and Copy invite link, Mute notifications,
-    // Notifications, Mark as read, Channels, Group settings, More (the group's own menu), Leave. ctx: { tour }.
+    // A group's right-click menu (its rail button): the group's one menu, laid out as GroupPage.groupMenu (and Muninn's).
+    // Buttons: Search, Media, Mute, Settings. Rows: Notifications, Invite people, People, Mark read, Channels. More: Copy
+    // invite link. Red: Leave. The rows that need the group's page open it first. ctx: { tour }.
     function groupRowMenu(g, n, ctx) {
         const c = ctx || {}
         if (!g || locked()) return
         const k = "g:" + g
-        const info = c.tour ? { amAdmin: true } : Chat.groupInfo(g)
+        const info = (c.tour ? { amAdmin: true } : Chat.groupInfo(g)) || {}
         const row = c.tour ? {} : (Chat.groups.find(x => x.id === g) || {})
         const name = n || info.name || "Group"
-        const lim = c.tour ? { links: true } : Chat.groupLimit(g)
-        const top = [{ name: "Open", icon: "hash", url: "open" }]
+        const lim = (c.tour ? { links: true } : Chat.groupLimit(g)) || {}
         // Only for someone who can invite: an admin, or anyone in a group where members can invite.
-        const canInvite = !row.readOnly && (c.tour || !!info.amAdmin || (lim.links && typeof Chat.membersInvite === "function" && !!Chat.membersInvite(g)))
-        if (canInvite) top.push({ name: "Invite people", icon: "plus", url: "people" })
-        if (canInvite && lim.links) top.push({ name: "Copy invite link", icon: "attach", url: "invite" })
-        const mid = [!c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
-                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) }]
+        const canInvite = !row.readOnly && (c.tour || !!info.amAdmin || (!!lim.links && typeof Chat.membersInvite === "function" && !!Chat.membersInvite(g)))
+        const top = [{ name: "Search", icon: "search", url: "find" }, { name: "Media", icon: "image", url: "media" },
+                     !c.tour && Chat.isMuted(k) ? { name: "Unmute", icon: "bell", url: "mute" }
+                                                : { name: "Mute", icon: "belloff", url: "mute", sub: () => muteMenu(k, name) },
+                     { name: "Settings", icon: "gear", url: "settings" }]
+        const mid = []
         if (has("notifyMode")) mid.push({ name: "Notifications", icon: "bell", url: "notify", sub: () => notifyMenu(k) })
-        mid.push({ name: "Mark read", icon: "check", url: "read" })
+        if (canInvite) mid.push({ name: "Invite people", icon: "plus", url: "people" })
+        mid.push({ name: "People", icon: "people", detail: row.count ? String(row.count) : "", url: "members" },
+                 { name: "Mark read", icon: "check", url: "read" })
         if (!row.readOnly) mid.push({ name: "Channels", icon: "hash", url: "channels" })
-        mid.push({ name: "Group settings", icon: "gear", url: "settings" },
-                 { name: "More", icon: "more", url: "more" })
+        const more = canInvite && lim.links ? [{ name: "Copy invite link", icon: "attach", url: "invite" }] : []
+        if (more.length) mid.push({ name: "More", icon: "more", url: "more", sub: () => Ui.pickFrom("More for " + name, [{ header: "", items: more }], a => { if (!c.tour && a === "invite") copyInvite(g) }) })
         const end = [row.readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true }]
         const onPage = f => { Ui.openPage(k, {}); Qt.callLater(() => { const p = Ui.main ? Ui.main.page() : null; if (p && typeof p[f] === "function") p[f]() }) }
         Ui.pickFrom(name, [{ header: "", items: top }, { header: "", items: mid }, { header: "", items: end }], a => {
             if (c.tour) return
-            if (a === "open") Ui.openPage(k, {})
+            if (a === "find") onPage("openFind")
+            else if (a === "media") onPage("mediaMenu")
+            else if (a === "settings") onPage("settingsMenu")
             else if (a === "mute") muteMenu(k, name)
             else if (a === "notify") notifyMenu(k)
             else if (a === "read") (info.channels || []).forEach(ch => Chat.markGroupRead(g, ch.id))
             else if (a === "invite") copyInvite(g)
+            else if (a === "more") { if (more.length) Ui.pickFrom("More for " + name, [{ header: "", items: more }], b => { if (b === "invite") copyInvite(g) }) }
             else if (a === "people") onPage("inviteMenu")
+            else if (a === "members") onPage("peopleMenu")
             else if (a === "channels") onPage("channelsMenu")
-            else if (a === "settings") onPage("settingsMenu")
-            else if (a === "more") onPage("groupMenu")
             else if (a === "leave") {
                 if (info.amOwner && (row.count || 0) > 1) { Ui.say("Make someone else owner first.", true); return }
                 Ui.sure("Leave " + name + "?", "Only an invite brings you back.", "Leave", () => { const r = Chat.leaveGroup(g); Ui.say(r === "" ? "You left the group." : r, r !== "") }, true, true)
@@ -412,6 +369,23 @@ QtObject {
         pickChat("Forward the " + (word || "photo") + " to", (to, name) => {
             const r = Chat.forwardMedia(it.photo, to, it.voice || 0)
             Ui.say(r !== "" ? r : "Sent to " + name + ".", r !== "" && r.indexOf("need") < 0)
+        })
+    }
+    // A message's one Forward row: its text, its photo, video or voice message, or both (a captioned photo: the
+    // picture, then its words).
+    function forwardMessage(m) {
+        if (!m) return
+        const media = !!m.photo && !m.file
+        const word = m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo"
+        const text = m.text || ""
+        if (!media) { if (text !== "") forwardMenu(text); return }
+        if (text === "") { forwardMedia(m, word); return }
+        pickChat("Forward to", (to, name) => {
+            const r = Chat.forwardMedia(m.photo, to, m.voice || 0)
+            if (r !== "" && r.indexOf("need") < 0) { Ui.say(r, true); return }
+            if (to.indexOf("g:") === 0) Chat.sendGroup(to.substring(2), "main", text)
+            else Chat.sendPrivate(to, text)
+            Ui.say(r !== "" ? r : "Sent to " + name + ".")
         })
     }
     // Forward: a person or a group, then cb(a contact's key or "g:" and a group's id for its first channel, its name).
@@ -522,27 +496,27 @@ QtObject {
         if (r !== "") Ui.say(r, true)
         else Ui.say(urls.length === 1 ? "Sending the file. Transfers shows how it goes." : "Sending " + urls.length + " files. Transfers shows how they go.")
     }
-    // A file too big to go without Direct (Transfers, a chat's file card): Direct calls and files with them on here (it
+    // A file too big to go without Direct (Transfers, a chat's file card): Trusted direct with them on here (it
     // shares this device's internet address with them), and a message asks them to turn it on too, once per person this
     // run (the button then says Asked). Retry once they have.
     property var askedDirect: ({})
-    function directLabel(k) { return !Calls.trusted(k) ? "Allow direct" : askedDirect[k] ? "Asked" : "Ask " + Chat.nameOf(k) }
+    function directLabel(k) { return !Calls.trusted(k) ? "Turn on Trusted direct" : askedDirect[k] ? "Asked" : "Ask " + Chat.nameOf(k) }
     function allowDirect(k) {
         // Ultra privacy: nothing goes straight over the internet while it's on (the same Wi-Fi still does).
-        if (UltraPrivacy.active) { Ui.say("Direct files: " + UltraPrivacy.offNote + ". On the same Wi-Fi they still go straight.", true); return }
+        if (UltraPrivacy.active) { Ui.say("Trusted direct: " + UltraPrivacy.offNote + ". On the same Wi-Fi files still go straight.", true); return }
         const name = Chat.nameOf(k)
-        if (Calls.trusted(k) && askedDirect[k]) { Ui.say(name + " was already asked. Retry once they turn on Direct calls and files."); return }
+        if (Calls.trusted(k) && askedDirect[k]) { Ui.say(name + " was already asked. Retry once they turn on Trusted direct."); return }
         const ask = () => {
             if (!Calls.trusted(k)) Calls.setTrusted(k, true)
-            Chat.sendPrivate(k, "Can you turn on Direct calls and files for me? It's in the menu for my name. Then big files go straight between us.")
+            Chat.sendPrivate(k, "Can you turn on Trusted direct for me? It's in Details for my name. Then big files go straight between us.")
             const a = Object.assign({}, askedDirect)
             a[k] = true
             askedDirect = a
             Ui.say("Direct is on here, and " + name + " was asked to turn it on too. Retry once they have.")
         }
         if (Calls.trusted(k)) { ask(); return }
-        Ui.sure("Allow direct with " + name + "?", "Big files go straight between your devices. Both of you turn this on. It shares your internet address with " + name + ".",
-                "Allow and ask", ask)
+        Ui.sure("Turn on Trusted direct with " + name + "?", "Faster: files go straight between your devices. Both of you turn this on. It shares your address with " + name + ".",
+                "Turn on and ask", ask)
     }
     // Send to someone: files picked first (Files), then who gets them: people, groups, and LocalSend devices nearby.
     function sendPicker(urls) {
@@ -616,6 +590,27 @@ QtObject {
                t => { Chat.username = t; Linked.nameGiven(); Ui.say(done || "Saved.") })
     }
 
+    // Settings › Devices and backup › Move to a new device (cap x1): everything moves here instead, or from here to a new
+    // device, and the old device is locked out. Its own page, as on Muninn.
+    function moveDevice() {
+        if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
+        const move = [{ name: "Move here", detail: "The old device is locked out", url: "movehere" },
+                      { name: "Move from this device", detail: "Paste the new device's code", url: "moveaway" }]
+        Ui.pickFrom("Move to a new device", [{ header: "Both on the same Wi-Fi", items: move }], a => {
+            // Round 17 (B1, security m6): moving either way replaces an account, so the current lock is asked first.
+            if (a === "movehere") {
+                lockFirst("Move here", "This replaces the account on this device. A copy of what's here is kept", "movehere", () => {
+                    const code = Mover.showCode()
+                    if (code === "") { Ui.say("Join your home Wi-Fi first.", true); return }
+                    Chat.copyText(code, true)
+                    Ui.note("Move code copied", "This replaces the account on this device (a copy of what's here is kept). Paste the code on the old device, on the same Wi-Fi. It's cleared from the clipboard in a minute.\n\n" + code)
+                })
+            } else if (a === "moveaway") {
+                lockFirst("Move from this device", "Everything moves to the new device, and this one is locked out", "moveaway",
+                          () => Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t)))
+            }
+        })
+    }
     function linkedDevices() {
         if (!Chat.ready) { Ui.say("Unlock Huginn first.", true); return }
         const ph = Linked.phone
@@ -637,24 +632,9 @@ QtObject {
         const others = [{ name: "Show this PC's chats on another device", detail: "Paste the code that device shows", url: "link" }]
         Linked.older.filter(o => !o.phone).forEach(o => others.push({ name: "Link " + o.name + " again", detail: o.text, url: "r:" + o.key }))
         Linked.companions.forEach(c => others.push({ name: "Unlink " + c.name, url: "u:" + c.key, danger: true }))
-        // Cap x1: everything moves here instead, and the old device is locked out.
-        const move = [{ name: "Move here", detail: "The old device is locked out", url: "movehere" },
-                      { name: "Move from this device", detail: "Paste the new device's code", url: "moveaway" }]
         Ui.pickFrom("Linked devices", [{ header: "Your phone", items: phone },
-                                       { header: "Other ways", items: others },
-                                       { header: "Move to another device", items: move }], a => {
-            // Round 17 (B1, security m6): moving either way replaces an account, so the current lock is asked first.
-            if (a === "movehere") {
-                lockFirst("Move here", "This replaces the account on this device. A copy of what's here is kept", "movehere", () => {
-                    const code = Mover.showCode()
-                    if (code === "") { Ui.say("Join your home Wi-Fi first.", true); return }
-                    Chat.copyText(code, true)
-                    Ui.note("Move code copied", "This replaces the account on this device (a copy of what's here is kept). Paste the code on the old device, on the same Wi-Fi. It's cleared from the clipboard in a minute.\n\n" + code)
-                })
-            } else if (a === "moveaway") {
-                lockFirst("Move from this device", "Everything moves to the new device, and this one is locked out", "moveaway",
-                          () => Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t)))
-            } else if (a === "code" || a === "check") {
+                                       { header: "Other ways", items: others }], a => {
+            if (a === "code" || a === "check") {
                 if (Ui.main) Ui.main.showLinkPhone(false)
             } else if (a === "link") {
                 lockFirst("Show this PC's chats on another device", "That device will see all of them", "link", () => {

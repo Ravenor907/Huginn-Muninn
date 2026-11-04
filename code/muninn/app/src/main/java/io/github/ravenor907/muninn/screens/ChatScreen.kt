@@ -167,7 +167,7 @@ private data class Dragged(val item: String, val section: String, val key: Strin
 
 /**
  * Where a conversation is open: "" none, "nearby" the room, "trash", "archived", "requests", "code", "add", "newgroup",
- * a contact's key, "details/<key>" a person's details, "tvset/<section>/<key>" a Kids' TV section,
+ * a contact's key, "details/<key>" a person's details, "tvset/<section>/<key>" a Kids' Device section,
  * "g:<group id>" a group, or "g:<group id>/settings", "/people" or "/add" its pages.
  */
 /** Groups whose about box is folded to one line (for this run). */
@@ -189,7 +189,7 @@ object ChatNav {
     var holdFromList = false
     /** What an opened conversation does first: "search", "media" or "files" (from its menu), "" nothing. */
     var action by mutableStateOf("")
-    /** Where Back goes from a person's details or a Kids' TV section. */
+    /** Where Back goes from a person's details or a Kids' Device section. */
     var back by mutableStateOf("")
     /** A group whose "Pick people" call list is open, "" for none. */
     var callSome by mutableStateOf("")
@@ -197,7 +197,7 @@ object ChatNav {
     var callPick by mutableStateOf(false)
     /** Who New group starts with picked (Start a group, from a person's menu). */
     var groupWith by mutableStateOf(setOf<String>())
-    /** How Add someone starts (from the + menu): "pick" a contact to message, "tv" to pair a Kids' TV, "" the camera. */
+    /** How Add someone starts (from the + menu): "pick" a contact to message, "tv" to pair a Kids' Device, "" the camera. */
     var addMode by mutableStateOf("")
     /** The chat list's "New from" bar: when its X was pressed, or a notification opened a chat (0: never). For this run only. */
     var newFromClosed by mutableStateOf(0L)
@@ -230,7 +230,7 @@ private fun routeText(r: String) = when (r) {
 }
 /**
  * Once, after the first contact is added: a backup keeps them on a new phone (without one, everyone has to add you
- * again). Back up opens Settings › Backup; either button puts it away for good. Never on a Kids' TV.
+ * again). Back up opens Settings › Backup; either button puts it away for good. Never on a Kids' Device.
  */
 @Composable
 private fun BackupNudge(first: String?, modifier: Modifier) {
@@ -631,7 +631,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
     // Something new in it (the same test as the row's count), or marked unread.
     fun isUnread(r: ChatRow): Boolean = (if (r.group != null) r.group in gunread else r.key in unread) || r.key in flagState.unread
     val unreadKeys = chatRows.filter { isUnread(it) }.map { it.key }.toSet()
-    // Filter chips under search: All, Unread, Groups, Kids' TV (only with one paired). Not kept between runs.
+    // Filter chips under search: All, Unread, Groups, Kids' Device (only with one paired). Not kept between runs.
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
     val tvKeys = tvs.filter { !it.value.disconnecting }.keys
     val chip = ChatNav.filter.takeIf { it != "tv" || tvKeys.isNotEmpty() } ?: "all"
@@ -818,7 +818,7 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                         if (ChatNav.asks > 0) Box(Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(10.dp).clip(CircleShape).background(Palette.accent))
                     }
                 }
-                // Filter chips: All, Unread, Groups, and Kids' TV once one is paired.
+                // Filter chips: All, Unread, Groups, and Kids' Device once one is paired.
                 if (chatRows.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("all" to "All", "unread" to "Unread", "groups" to "Groups", "tv" to "Kids' Devices").filter { it.first != "tv" || tvKeys.isNotEmpty() }
@@ -928,16 +928,16 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
             ChatNav.archived = archivedRows.size
             ChatNav.trashed = trashed.size
         }
-        // The + button, bottom left above the tabs: New chat, New group, Add contact, Pair a Kids' TV.
+        // The + button, bottom left above the tabs: New chat, New group, Add someone, Pair a Kids' Device.
         var plusOpen by remember { mutableStateOf(false) }
         Box(Modifier.align(Alignment.BottomStart).padding(PLUS_MARGIN)) {
             Box(Modifier.size(PLUS_SIZE).tourSpot("plus").clip(CircleShape).background(Palette.gold)
-                .clickable(role = Role.Button) { plusOpen = true }.semantics { contentDescription = "New chat, new group, add contact or pair a Kids' Device" },
+                .clickable(role = Role.Button) { plusOpen = true }.semantics { contentDescription = "New chat, new group, add someone or pair a Kids' Device" },
                 contentAlignment = Alignment.Center) { MIcon("plus", Palette.onGold, 26.dp) }
             DropdownMenu(expanded = plusOpen, onDismissRequest = { plusOpen = false }) {
                 val anyone = contacts.any { !it.groupOnly }
                 listOf(Triple("chat", "New chat", if (anyone) "pick" else ""), Triple("people", "New group", "group"),
-                    Triple("qr", "Add contact", ""), Triple("tv", "Pair a Kids' Device", "tv")).forEach { (icon, label, how) ->
+                    Triple("qr", "Add someone", ""), Triple("tv", "Pair a Kids' Device", "tv")).forEach { (icon, label, how) ->
                     DropdownMenuItem(text = { Text(label, style = Type.normal.copy(color = Palette.text), maxLines = 1) },
                         leadingIcon = { MIcon(icon, Palette.accent, 20.dp) },
                         onClick = {
@@ -1170,7 +1170,10 @@ private fun Conversation(app: Muninn, key: String) {
     val activeNow = key in activeMap
     val me = app.identity.publicKey
     // Cap v3: a video picked from the phone, full size if they're close by, else a smaller copy.
-    val pickVideo = rememberVideoPicker(app, io.github.ravenor907.muninn.net.VideoSend.Target("", "", key))
+    // The video send sheet (V) that Saved media and the camera open; Saved media itself (A).
+    val vt = io.github.ravenor907.muninn.net.VideoSend.Target("", "", key)
+    rememberVideoPicker(app, vt)
+    val savedMedia = rememberSavedMedia(app, vt) { gif -> gifs = gifs + PendingGif(gif) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
         // GIFs go on their own, animated; the rest as a photo or an album.
         if (uris.isNotEmpty()) scope.launch {
@@ -1273,8 +1276,10 @@ private fun Conversation(app: Muninn, key: String) {
         return
     }
     if (camera.isNotEmpty()) {
-        CameraScreen(camera == "video", keep = key, onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) } },
-            onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendVideo(key, mp4, ms)?.let { Ui.say(it, true) } } }) { camera = "" }
+        // One camera: tap for a photo, hold for a video (A); the video goes the video path (V).
+        CameraScreen(keep = key, target = vt, onSaved = savedMedia,
+            onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendPhoto(key, jpeg) } },
+            onVideo = { _, _ -> }) { camera = "" }
         return
     }
     if (shared) {
@@ -1324,7 +1329,7 @@ private fun Conversation(app: Muninn, key: String) {
             // One Call button; Mute is in the menu. Someone met close by can be called too while on the same Wi-Fi.
             if (c != null || io.github.ravenor907.muninn.net.call.CallManager.canCall(key)) {
                 val callable = io.github.ravenor907.muninn.net.call.CallManager.canCall(key)
-                // Video calls: both apps must speak c2 (shared/docs/protocol.md 5.8.5). A Kids' TV has no video, so only Voice call.
+                // Video calls: both apps must speak c2 (shared/docs/protocol.md 5.8.5). A Kids' Device has no video, so only Voice call.
                 val video = callable && io.github.ravenor907.muninn.net.call.CallManager.canVideo(key)
                 val choices = if (!callable) emptyList() else listOfNotNull(
                     CallChoice("call", "Voice call") { io.github.ravenor907.muninn.screens.CallActivity.call(context, key) },
@@ -1421,10 +1426,10 @@ private fun Conversation(app: Muninn, key: String) {
                 sendPhoto(p.uri, false)   // a shared copy stays until the next share clears it
             }, onFile = { gifs = gifs - p; sendAsFile(p.uri, "animation.gif") { p.done() } }) { gifs = gifs - p; p.done() }
         }
-        if (attaching) AttachDialog(onPhotos = { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) } },
-            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
+        // The Send sheet (A): Camera, Saved media, Encrypted file sharing, Poll.
+        if (attaching) AttachDialog(onCamera = { camera = "photo" }, onSaved = savedMedia, onPoll = { polling = true },
             onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } },
-            onPickVideo = pickVideo) { attaching = false }
+            filePeer = key) { attaching = false }
         DirectFiles(key, name) { p, file, n -> scope.launch(Dispatchers.IO) { app.chat.sendFile(p, file, n)?.let { Ui.say(it, true) } } }
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -1462,6 +1467,8 @@ private fun Conversation(app: Muninn, key: String) {
     }
     }
     val readingNow by io.github.ravenor907.muninn.net.ReadAloud.speaking.collectAsState()
+    var forwarding by remember { mutableStateOf<Chat.Msg?>(null) }
+    forwarding?.let { f -> ForwardMessage(app, f.text, f.takeIf { it.photo.isNotEmpty() }) { forwarding = null } }
     sheetFor?.let { s ->
         val actions = buildList {
             if (s.unsent.isEmpty() && !s.failed) add(SheetAction("Reply", "reply") { editing = null; replyTo = s })
@@ -1469,6 +1476,8 @@ private fun Conversation(app: Muninn, key: String) {
                 io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", s.text)
                 Ui.say("Copied.")
             })
+            // Consolidation 2.2: one Forward row, for the text, the media or both.
+            if (s.unsent.isEmpty() && !s.failed && (s.text.isNotEmpty() || s.photo.isNotEmpty())) add(SheetAction("Forward", "send") { forwarding = s })
             // Read aloud (net/ReadAloud): the plain text, in the voice picked in Settings › Look.
             // Round 19: the label follows reading as it starts and ends ([readingNow]); nothing to read (emoji only): not offered.
             if (s.unsent.isEmpty() && s.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available &&
@@ -1774,7 +1783,7 @@ private fun AddSomeone(app: Muninn) {
     }
     // Tap phones together needs NFC (and isn't offered on a TV).
     val hasNfc = remember { !io.github.ravenor907.muninn.tv.KidMode.isTv(context) && android.nfc.NfcAdapter.getDefaultAdapter(context) != null }
-    // From the + menu: "pick" (New chat) starts on the contacts, "tv" (Pair a Kids' TV) on the camera for the TV's code.
+    // From the + menu: "pick" (New chat) starts on the contacts, "tv" (Pair a Kids' Device) on the camera for the TV's code.
     val start = remember { ChatNav.addMode.also { ChatNav.addMode = "" } }
     // "": the camera; "paste": typing or pasting a code or invite link.
     var mode by remember { mutableStateOf(if (start == "pick") "pick" else "") }
@@ -1839,7 +1848,7 @@ private fun AddSomeone(app: Muninn) {
                             // A one-time invite link: say hi at once, which adds me on their phone too (the link is used up then).
                             // So is every code Muninn and Huginn show now ("1", 13.6): no request to accept on their side.
                             if (Contacts.once(text)) app.chat.sendPrivate(found.chatKey, "Hi, it's ${app.identity.username}. I added you.")
-                            // A Kids' TV's code: offer to set it up (no lock on the TV, so ask first).
+                            // A Kids' Device's code: offer to set it up (no lock on the TV, so ask first).
                             io.github.ravenor907.muninn.tv.TvParent.adoptIfTv(app, text)
                             // A key change has its own warning (from Chat): don't cover it.
                             if (replaces == null) Ui.say("${found.name} added.")
@@ -1852,7 +1861,7 @@ private fun AddSomeone(app: Muninn) {
                 io.github.ravenor907.muninn.ui.NavRow("My code", icon = "qr") { ChatNav.open = "code" }
                 if (mode.isEmpty() && text.isBlank()) io.github.ravenor907.muninn.ui.NavRow("Paste a code or link", icon = "copy") { mode = "paste" }
                 if (mode == "paste" && text.isBlank()) io.github.ravenor907.muninn.ui.NavRow("Join a group", icon = "people") { mode = "join" }
-                io.github.ravenor907.muninn.ui.NavRow("New group", icon = "people") { ChatNav.open = "newgroup" }
+                // New group is on the + menu (consolidation 2.3), not here as well.
                 if (hasNfc) io.github.ravenor907.muninn.ui.NavRow("Tap phones together", icon = "phone") { ChatNav.open = "tap" }
             }
             Spacer(Modifier.height(24.dp))
@@ -2194,7 +2203,7 @@ private class CallChoice(val icon: String, val text: String, val go: () -> Unit)
 
 /**
  * A chat header's one Call button. A tap shows [choices] in a small popup under it (Voice call and Video call,
- * or a group's Call everyone and Drop-in call). No choices: [unavailable] is said instead, and the button is dimmed.
+ * or a group's Call everyone and Join voice room). No choices: [unavailable] is said instead, and the button is dimmed.
  */
 @Composable
 private fun CallButton(label: String, choices: List<CallChoice>, unavailable: String = "") {
@@ -2553,15 +2562,15 @@ private fun GroupDaysDialog(name: String, now: Int, onPick: (Int) -> Unit, onDis
     )
 }
 
-/** A small group's "In the drop-in call: Sam, Jo · Join" line, in place of the channel chips. */
+/** A small group's "In the voice room: Sam, Jo · Join" line, in place of the channel chips. */
 @Composable
 private fun InVoiceLine(names: List<String>, onJoin: () -> Unit) {
     val shown = if (names.size <= 3) names.joinToString(", ") else names.take(2).joinToString(", ") + " and ${names.size - 2} more"
-    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Join the drop-in call") { onJoin() }
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "Join the voice room") { onJoin() }
         .padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         MIcon("audio", Palette.online, 14.dp)
         Spacer(Modifier.width(6.dp))
-        Text("In the drop-in call: $shown", style = tinyStyle.copy(color = Palette.online), maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Text("In the voice room: $shown", style = tinyStyle.copy(color = Palette.online), maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false))
         Text(" · Join", style = tinyStyle.copy(color = Palette.accent, fontWeight = FontWeight.SemiBold), maxLines = 1)
     }
@@ -2708,7 +2717,10 @@ private fun GroupConversation(app: Muninn, g: String) {
         if (action.isNotEmpty()) ChatNav.action = ""
     }
     // Cap v3: a video picked from the phone, full size to those close by, a smaller copy to the rest.
-    val pickVideo = rememberVideoPicker(app, io.github.ravenor907.muninn.net.VideoSend.Target(g, ch, ""))
+    // The video send sheet (V) that Saved media and the camera open; Saved media itself (A).
+    val vt = io.github.ravenor907.muninn.net.VideoSend.Target(g, ch, "")
+    rememberVideoPicker(app, vt)
+    val savedMedia = rememberSavedMedia(app, vt) { gif -> gifs = gifs + PendingGif(gif) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
         // GIFs go on their own, animated; the rest as a photo or an album.
         if (uris.isNotEmpty()) scope.launch {
@@ -2772,8 +2784,9 @@ private fun GroupConversation(app: Muninn, g: String) {
         return
     }
     if (camera.isNotEmpty()) {
-        CameraScreen(camera == "video", keep = draftKey, onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendGroupPhoto(g, ch, jpeg) } },
-            onVideo = { mp4, ms -> scope.launch(Dispatchers.IO) { app.chat.sendGroupVideo(g, ch, mp4, ms)?.let { Ui.say(it) } } }) { camera = "" }
+        CameraScreen(keep = draftKey, target = vt, onSaved = savedMedia,
+            onPhoto = { jpeg -> scope.launch(Dispatchers.IO) { app.chat.sendGroupPhoto(g, ch, jpeg) } },
+            onVideo = { _, _ -> }) { camera = "" }
         return
     }
     if (shared) {
@@ -2815,18 +2828,18 @@ private fun GroupConversation(app: Muninn, g: String) {
                         // Rings every member, so it asks first. To just talk, there are voice rooms.
                         if (s.members.size > 1) add(CallChoice("call", "Call everyone") {
                             val n = s.members.size - 1
-                            Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To talk without ringing anyone, use Drop-in call.", "Ring everyone",
+                            Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To talk without ringing anyone, use Join voice room.", "Ring everyone",
                                 extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
                                 onConfirm = { RoomActivity.call(context, g, emptyList()) }))
                         })
                         rooms.forEach { (id, n) ->
                             // How many are in it already, so a hangout shows it's going.
                             val inIt = RoomManager.whoIn(g, id).size
-                            val base = if (rooms.size == 1) "Drop-in call" else "Drop-in call · $n"
+                            val base = if (rooms.size == 1) "Join voice room" else "Join voice room · $n"
                             val label = if (inIt > 0) "$base · $inIt in it" else if (rooms.size == 1) "$base (no ringing)" else base
                             add(CallChoice("audio", label) { RoomActivity.join(context, g, id) })
                         }
-                        // Someone rang everyone: that's a group call, not a drop-in call.
+                        // Someone rang everyone: that's a group call, not a voice room.
                         calls.forEach { id ->
                             val inIt = RoomManager.whoIn(g, id).size
                             add(CallChoice("audio", if (inIt > 0) "Join group call · $inIt in it" else "Join group call") { RoomActivity.join(context, g, id) })
@@ -2843,10 +2856,10 @@ private fun GroupConversation(app: Muninn, g: String) {
         val calls = RoomManager.groupCalls(g)
         val admin = !grp.readOnly && s.isAdmin(me)
         // Only #general and one voice room (every new group): no chips, so it reads like one chat. They show once a
-        // second channel is added (Group settings › Channels); the voice room stays in the Call button as Drop-in call.
+        // second channel is added (Group settings › Channels); the voice room stays in the Call button as Join voice room.
         val manyChannels = s.channels.count { it.t == "text" } > 1 || s.channels.count { it.t == "voice" } > 1 || calls.isNotEmpty()
         if (!ChatNav.wide && manyChannels && !tight) ChannelChips(s, ch, { ChatNav.channel[g] = it }, if (admin) ({ c: Proto06.Channel? -> editChannel = c ?: NEW_VOICE }) else null) { RoomActivity.join(context, g, it) }
-        // No chips (a small group): who is in the drop-in call still shows, on one line with Join.
+        // No chips (a small group): who is in the voice room still shows, on one line with Join.
         if (!ChatNav.wide && !manyChannels && inRoom?.g != g && !tight) s.channels.firstOrNull { it.t == "voice" }?.let { v ->
             val who = RoomManager.whoIn(g, v.id).filter { !it.me }
             if (who.isNotEmpty()) InVoiceLine(who.map { it.name }) { RoomActivity.join(context, g, v.id) }
@@ -2942,10 +2955,9 @@ private fun GroupConversation(app: Muninn, g: String) {
         }
         // Cap f2: a file to everyone in the group, by the best route to each; its cards show here and in Transfers.
         val pickGroupFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendFileFrom(app, context, scope, key, uri) }
-        if (attaching) AttachDialog(onPhotos = { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) } },
-            onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
+        if (attaching) AttachDialog(onCamera = { camera = "photo" }, onSaved = savedMedia, onPoll = { polling = true },
             onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickGroupFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } },
-            onPickVideo = pickVideo) { attaching = false }
+            ) { attaching = false }
         DirectFiles(key, s.name)
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -2995,6 +3007,8 @@ private fun GroupConversation(app: Muninn, g: String) {
     }
     editChannel?.let { c -> ChannelDialog(app, g, c.takeIf { it !== NEW_VOICE }, startVoice = true) { editChannel = null } }
     val readingNow by io.github.ravenor907.muninn.net.ReadAloud.speaking.collectAsState()
+    var forwardText by remember { mutableStateOf<String?>(null) }
+    forwardText?.let { t -> ForwardMessage(app, t, null) { forwardText = null } }
     sheetFor?.let { gm ->
         val actions = buildList {
             if (!grp.readOnly && gm.unsent.isEmpty()) add(SheetAction("Reply", "reply") { editing = null; replyTo = gm })
@@ -3002,6 +3016,8 @@ private fun GroupConversation(app: Muninn, g: String) {
                 io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", gm.text)
                 Ui.say("Copied.")
             })
+            // Consolidation 2.2: Forward, after Copy (a group message's text).
+            if (gm.unsent.isEmpty() && gm.text.isNotEmpty()) add(SheetAction("Forward", "send") { forwardText = gm.text })
             // Read aloud (net/ReadAloud): the plain text, in the voice picked in Settings › Look.
             // Round 19: the label follows reading as it starts and ends ([readingNow]); nothing to read (emoji only): not offered.
             if (gm.unsent.isEmpty() && gm.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available &&
@@ -3171,11 +3187,26 @@ private fun GroupSettings(app: Muninn, g: String) {
                     }
                 } else Text(Groups.aboutShown(s.about), style = Type.normal, modifier = Modifier.padding(vertical = 10.dp))
             }
+            // Consolidation 2.5: Name, About and rules, People, Type (how long messages stay), Who can invite, Files,
+            // Channels, then this phone's Folders and, for admins, Reports, Banned and Timeouts.
+            io.github.ravenor907.muninn.ui.Framed { io.github.ravenor907.muninn.ui.NavRow("People", "${s.members.size}", icon = "people") { ChatNav.open = "$key/people" } }
             io.github.ravenor907.muninn.ui.Framed("Type") { GroupLimitPanel(app, g, s, admin) }
             // Family: only admins add people, so there's no switch.
             if (admin && io.github.ravenor907.muninn.net.Limits.linksAllowed(s)) io.github.ravenor907.muninn.ui.Framed("Who can invite") { MembersInviteToggle(app, g) }
-            // Cap g2: who is banned and who is timed out, for admins.
-            if (admin) GroupModPanels(app, g)
+            // Who can send files and how big: the same rule the group's Files page shows, with its Change.
+            var fileRules by remember { mutableStateOf(false) }
+            io.github.ravenor907.muninn.ui.Framed("Files") {
+                Text(io.github.ravenor907.muninn.net.Sharing.rulesLine(s.fs, s.fm), style = Type.normal, modifier = Modifier.padding(top = 8.dp))
+                Text("Who can send files. Every member's app follows this.", style = Type.small, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+                if (admin) MButton("Change", Modifier.padding(bottom = 8.dp), icon = "edit") { fileRules = true }
+            }
+            if (fileRules) FileRulesDialog(app, g, s.fs, s.fm) { fileRules = false }
+            if (admin || s.channels.size > 1) io.github.ravenor907.muninn.ui.Framed("Channels") {
+                s.channels.forEach { c ->
+                    Line(if (c.t == "voice") c.n else "# ${c.n}", if (c.t == "voice") "Voice room" else if (c.ao) "Only admins post" else "", icon = if (c.t == "voice") "audio" else "chat", enabled = admin) { channel = c }
+                }
+                if (admin && s.channels.size < Proto06.MAX_CHANNELS) MButton("Add a channel", Modifier.fillMaxWidth().padding(vertical = 8.dp), icon = "plus") { addingChannel = true }
+            }
             // Folders are only on this phone.
             if (folders.isNotEmpty()) io.github.ravenor907.muninn.ui.Framed("Folders") {
                 androidx.compose.foundation.layout.FlowRow(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3183,12 +3214,8 @@ private fun GroupSettings(app: Muninn, g: String) {
                     folders.forEach { f -> val on = key in f.keys; DetailChip(f.name, on) { app.chat.folders.put(f.id, key, !on) } }
                 }
             }
-            if (admin || s.channels.size > 1) io.github.ravenor907.muninn.ui.Framed("Channels") {
-                s.channels.forEach { c ->
-                    Line(if (c.t == "voice") c.n else "# ${c.n}", if (c.t == "voice") "Voice room" else if (c.ao) "Only admins post" else "", icon = if (c.t == "voice") "audio" else "chat", enabled = admin) { channel = c }
-                }
-                if (admin && s.channels.size < Proto06.MAX_CHANNELS) MButton("Add a channel", Modifier.fillMaxWidth().padding(vertical = 8.dp), icon = "plus") { addingChannel = true }
-            }
+            // Cap g2 and g3: reports, who is banned and who is timed out, for admins.
+            if (admin) GroupModPanels(app, g)
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -3526,4 +3553,28 @@ private fun keepOpen(k: String, searching: Boolean, query: String, camera: Strin
     if (searching) Drafts.search[k] = query else Drafts.search.remove(k)
     if (camera.isEmpty()) Drafts.camera.remove(k)
     else if (Drafts.camera[k]?.mode != camera) Drafts.camera[k] = Drafts.Taken(camera)
+}
+
+/**
+ * Forward (consolidation 2.2): one row for the text, the media or both. Pick a person or a group; [media] (a photo,
+ * GIF, voice or video message on this phone) goes first, then [text] as a new message.
+ */
+@Composable
+private fun ForwardMessage(app: Muninn, text: String, media: Chat.Msg?, done: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    ChatPicker(app, if (media != null) "Forward the ${mediaWord(media)} to" else "Forward to", onPick = { to, who ->
+        done()
+        scope.launch {
+            // The media on its own thread (it's read from the vault), then the text, the way the chat sends it.
+            val err = (if (media == null) null else withContext(Dispatchers.IO) {
+                val bytes = app.chat.photo(media.photo)
+                if (bytes == null) "It isn't on this phone, so it can't be forwarded." else forwardMedia(app, media, bytes, to)
+            }) ?: when {
+                text.isBlank() -> null
+                to.startsWith("g:") -> if (app.chat.sendGroupText(to.removePrefix("g:"), Proto06.MAIN, text)) null else "That didn't send."
+                else -> { app.chat.sendPrivate(to, text); null }
+            }
+            if (err != null) Ui.say(err, true) else Ui.say("Sent to $who.")
+        }
+    }, onCancel = done)
 }

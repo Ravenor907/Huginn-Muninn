@@ -25,6 +25,11 @@ import java.util.concurrent.Executors
  * A watcher asks Tor every second for its SOCKS port and whether it has a circuit, and tells [UltraPrivacy]: ready,
  * starting, slow or blocked. It is also the watchdog: a Tor that went away, or that lost its circuits and doesn't get
  * them back (after the phone slept), is woken, then started again in a fresh process.
+ *
+ * 1.42 (cap f4, protocol.md section 30): Tor also starts on demand for Encrypted file sharing ([need]), with Ultra
+ * privacy off too, and stops again once nothing needs it ([release]) unless Ultra privacy is on. While it runs on demand
+ * only, nothing else goes through it (UltraPrivacy ignores its ports while off). [filesPort] is its SOCKS port with a
+ * circuit, and [addOnion] opens a one-time onion service (TorFiles).
  */
 object TorRunner {
     /** The process Tor runs in (the manifest's android:process for TorService). */
@@ -56,6 +61,54 @@ object TorRunner {
     /** Ultra privacy's listeners (closing sockets, the relays dialling again): never on the main thread. */
     private val listeners = Executors.newSingleThreadExecutor { r -> Thread(r, "muninn-ultra").apply { isDaemon = true } }
     @Volatile private var hooked = false
+    /** Muninn's own context, kept at [init] for starts on demand. */
+    @Volatile private var appCtx: Context? = null
+    /** What needs Tor on demand now (TorFiles: one tag per file). Tor runs while this isn't empty or Ultra privacy is on. */
+    private val demand: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    /** Tor's SOCKS port while it has a circuit (also with Ultra privacy off), else 0. */
+    @Volatile var filesPort = 0
+        private set
+    /** Tor couldn't start at all this time (MISSING): what waits for it gives up at once. */
+    @Volatile var failedNow = false
+        private set
+
+    /** Tor is wanted: Ultra privacy is on, or something needs it on demand. */
+    private fun wanted() = UltraPrivacy.on || demand.isNotEmpty()
+
+    /** Starts Tor for [tag] if it isn't running (on demand, with Ultra privacy off too). Any thread. */
+    fun need(tag: String) {
+        val app = appCtx ?: return
+        val first = demand.isEmpty()
+        if (!demand.add(tag)) return
+        if (first) { failedNow = false; failedStarts = 0; lastRestart = 0L }
+        bg.execute { start(app) }
+    }
+
+    /** [tag] no longer needs Tor: it stops once nothing does, unless Ultra privacy is on. Any thread. */
+    fun release(tag: String) {
+        if (!demand.remove(tag)) return
+        val app = appCtx ?: return
+        bg.execute { synchronized(lock) { if (!wanted()) stop(app) } }
+    }
+
+    /**
+     * A one-time onion service (ADD_ONION NEW:ED25519-V3, Flags=DiscardPK: its key is never kept) that sends what comes
+     * to [virtualPort] on to 127.0.0.1:[localPort]. It lives on its own control connection: closing that (the returned
+     * closer) removes it, and so does Tor ending. Returns the 56-letter service id (no ".onion") and the closer, or null.
+     * Blocking: Tor publishes the service before it answers.
+     */
+    fun addOnion(virtualPort: Int, localPort: Int): Pair<String, () -> Unit>? {
+        val app = appCtx ?: return null
+        if (filesPort == 0) return null
+        val c = try { Control.open(controlSocket(app)) } catch (_: Exception) { return null }
+        return try {
+            c.timeout(60_000)
+            val lines = c.command("ADD_ONION NEW:ED25519-V3 Flags=DiscardPK Port=$virtualPort,127.0.0.1:$localPort")
+            val id = lines.firstOrNull { it.startsWith("ServiceID=") }?.substringAfter('=')?.trim().orEmpty()
+            if (!TorFiles.onionOk(id)) { c.close(); null }
+            else id to { try { c.command("DEL_ONION $id") } catch (_: Exception) {}; c.close() }
+        } catch (_: Exception) { c.close(); null }
+    }
 
     /** True in Tor's own process: Muninn's Application must do nothing else there (Muninn.onCreate returns early). */
     fun isTorProcess(context: Context): Boolean {
@@ -72,6 +125,7 @@ object TorRunner {
         // anyway, it is closed: every internet connection made in this process fails instead of leaving directly.
         if (isTorProcess(context)) { UltraPrivacy.use(true); return }
         val app = context.applicationContext
+        appCtx = app
         val prefs = app.getSharedPreferences("muninn", Context.MODE_PRIVATE)
         // A Kids' Device never runs Ultra privacy (it has no Settings to turn it off again): a switch left on from
         // before the device became one is turned off here.
@@ -101,7 +155,8 @@ object TorRunner {
         app.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putBoolean(UltraPrivacy.PREF, on).commit()
         UltraPrivacy.use(on)
         if (on) { failedStarts = 0; lastRestart = 0L }   // turned on again: Tor gets its full chances again
-        bg.execute { if (on) start(app) else stop(app) }
+        // Off: Tor stops, unless a file still needs it (it stops when that one is done).
+        bg.execute { if (on) start(app) else synchronized(lock) { if (!wanted()) stop(app) } }
     }
 
     /** The banner's Wait: the slow or blocked clock starts over. */
@@ -123,7 +178,7 @@ object TorRunner {
 
     private fun start(app: Context, again: Boolean = false) {
         synchronized(lock) {
-            if (!UltraPrivacy.on) return
+            if (!wanted()) return
             if (conn != null && !again) return
             conn?.let { c -> conn = null; watching = null; try { app.unbindService(c) } catch (_: Exception) {} }
             // A Tor left from before (turned off, a restart, a stop that didn't finish): gone first, so this start gets
@@ -141,7 +196,7 @@ object TorRunner {
             val bound = try {
                 app.bindService(Intent().setComponent(ComponentName(app.packageName, SERVICE)), c, Context.BIND_AUTO_CREATE)
             } catch (_: Throwable) { false }
-            if (!bound) { UltraPrivacy.missing(); return }
+            if (!bound) { UltraPrivacy.missing(); failedNow = true; return }
             conn = c
             watch(app)
         }
@@ -152,6 +207,7 @@ object TorRunner {
             val c = conn
             conn = null
             watching = null
+            filesPort = 0
             if (c != null) try { app.unbindService(c) } catch (_: Exception) {}
             // Unbound, Tor's service ends; its process stays cached by Android, so it's ended here: the next start
             // can't be a second Tor in the same process.
@@ -214,8 +270,10 @@ object TorRunner {
                     if (port > 0) { hadPort = true; failedStarts = 0 }
                     if (port > 0 && circuit) {
                         hadCircuit = true; lostAt = 0L; nudged = false
+                        filesPort = port
                         UltraPrivacy.ready(port)
                     } else {
+                        filesPort = 0
                         if (hadCircuit && lostAt == 0L) { lostAt = now; since = now }
                         val phase = c.info("status/bootstrap-phase")
                         val ms = now - since
@@ -230,6 +288,7 @@ object TorRunner {
                     }
                 } catch (_: Exception) {
                     ctl?.close(); ctl = null
+                    filesPort = 0
                     UltraPrivacy.starting(0, now - since)
                     // Tor isn't answering at all (its process died, or Tor stopped inside it): a fresh start.
                     if (now - lastAnswer >= DEAD_MS && restartAllowed(now)) {
@@ -237,6 +296,7 @@ object TorRunner {
                         if (failedStarts >= MAX_FAILED_STARTS) {
                             // m13: Tor can't run here (a crash, a missing library). Fail closed and say so; nothing more is tried.
                             UltraPrivacy.missing()
+                            failedNow = true
                             if (watching === me) bg.execute { synchronized(lock) { if (watching === me) stop(app) } }
                             return@Thread
                         }
@@ -307,6 +367,11 @@ object TorRunner {
         }
 
         fun signal(name: String) { ask("SIGNAL $name") }
+
+        /** Any command: its "250" lines (ADD_ONION, DEL_ONION). */
+        fun command(line: String): List<String> = ask(line)
+
+        fun timeout(ms: Int) { try { s.soTimeout = ms } catch (_: Exception) {} }
 
         companion object {
             fun open(path: File): Control {

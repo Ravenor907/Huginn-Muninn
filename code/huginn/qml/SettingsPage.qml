@@ -4,9 +4,10 @@ import Huginn
 // Settings: one flat list on the left. Profile at the top (your picture, name and status), then Notifications,
 // Privacy and lock, Calls, Look, Battery and data, Devices and backup, and Updates and about, the one place to update
 // Huginn. A choice opens its rows on the right, related ones together in framed sections; what's used less waits
-// behind the page's More row. Changes save as you go. Updates and about starts with the raven: ten presses (a click or
-// A) turn Labs mode on or off, which adds Labs at the bottom (bug reports, Performance check, practice setup) and the
-// update channel.
+// behind the page's More row. Changes save as you go. A few rows open a page of their own (Calls › Voice rooms, Look ›
+// Accessibility › Read aloud, Devices and backup › Linked devices and Move to a new device). Updates and about starts
+// with the raven: ten presses (a click or A) turn Labs mode on or off, which adds Labs at the bottom, everything Labs in
+// one place (bug reports, Labs reports, the update channel, Performance check, practice setup, Things to test).
 Rectangle {
     id: page
     // Seasonal: a frosted pane, so what falls shows while Look's settings change.
@@ -19,17 +20,33 @@ Rectangle {
     property bool inSection: false
     // The open page's More row: shows the rest of its rows under it. Closed again on another page.
     property bool moreOpen: false
-    // Another page opens one by name ({ section: "privacy" }); more: true opens its More too.
+    // Another page opens one by name ({ section: "privacy" }); more: true opens its More too. "aloud" opens Look and
+    // then the Read aloud page; "linked" and "move" open Devices and backup and then that page.
     function setArgs(a) {
         if (a.section === undefined) return
         const named = { "you": "profile", "picture": "profile", "lock": "privacy", "keep": "privacy", "nearby": "privacy", "access": "look",
-                        "panels": "look", "linked": "devices", "backup": "devices", "erase": "devices", "storage": "devices", "controller": "about" }
+                        "panels": "look", "linked": "devices", "move": "devices", "backup": "devices", "erase": "devices",
+                        "storage": "devices", "controller": "about", "voice": "voicerooms", "tests": "labs" }
         const id = named[a.section] || a.section
-        const i = items.findIndex(m => m.id === id)
+        const sub = subs.find(m => m.id === id)
+        const i = items.findIndex(m => m.id === (sub ? sub.parent : id))
         if (i < 0) return
         section = id
         moreOpen = !!a.more || ["panels", "erase", "storage", "controller"].indexOf(a.section) >= 0
         row = a.row || 0; inSection = true; pick = i
+        if (a.section === "linked") Qt.callLater(() => page.press("linked"))
+        else if (a.section === "move") Qt.callLater(() => page.press("move"))
+    }
+    // Pages one level down, opened by a row of their parent (B goes back to that row): Calls › Voice rooms.
+    // Look › Accessibility › Read aloud: its own page (ReadAloudPage.qml), shown here with the controller passed on.
+    readonly property var subs: [{ id: "voicerooms", title: "Voice rooms", parent: "calls", from: "voiceRooms" },
+                                 { id: "aloud", title: "Read aloud", parent: "look", from: "readAloud" }]
+    readonly property var subNow: subs.find(m => m.id === section) || null
+    // The left list marks the parent of a page one level down.
+    readonly property string navSection: subNow ? subNow.parent : section
+    function openSub(id) {
+        if (!subs.some(m => m.id === id)) return
+        section = id; row = 0; inSection = true
     }
     // The desktop's list column edge, so Main.qml can put the resize handle on it.
     readonly property int listEdge: middle.visible ? middle.width : 0
@@ -47,12 +64,17 @@ Rectangle {
     ].concat(Settings.labs ? [{ id: "labs", title: "Labs", icon: "gear" }] : [])
     // Labs turned off while it was open: back to Updates and about, where the raven is.
     onItemsChanged: {
-        if (!items.some(m => m.id === section)) section = "about"
+        if (!items.some(m => m.id === section) && !subs.some(m => m.id === section)) section = "about"
         if (pick >= items.length) pick = items.length - 1
     }
-    readonly property var current: items.find(m => m.id === section) || items[0]
-    readonly property var prompts: inSection ? [{ key: "a", label: "Change" }, { key: "b", label: "Back" }]
-                                             : [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
+    readonly property var current: items.find(m => m.id === section) || subNow || items[0]
+    // The top prompt lists only the buttons that work on the row the focus is on (Y reports a Things to test group).
+    readonly property var focusRow: inSection ? rows[row] : null
+    readonly property var prompts: !inSection ? [{ key: "a", label: "Open" }, { key: "b", label: "Back" }]
+                                   : focusRow && focusRow.beta ? [{ key: "a", label: focusRow.kind === "check" ? "Tick" : focusRow.label || "Open" },
+                                                                  { key: "y", label: "Report" }, { key: "b", label: "Back" }]
+                                   : focusRow && (focusRow.kind === "info" || focusRow.kind === "preview" || focusRow.enabled === false) ? [{ key: "b", label: "Back" }]
+                                   : [{ key: "a", label: "Change" }, { key: "b", label: "Back" }]
     readonly property string status: ""
     // Look › Amount: how many fall in this window now (the Amount picked, or the window's own).
     // The Seasonal leaves or snow are held still only because of the battery (Battery saver, or idle on battery).
@@ -63,30 +85,59 @@ Rectangle {
     // Gradient: 0 (flat) to 200%, the slider's 0 to 100.
     // Calls › Input sensitivity: -60 to -20 dBFS on the slider's 0 to 100.
     function fallPos(key) { return key === "gateThreshold" ? (Rooms.gateThreshold + 60) * 2.5 : key === "seasonGradient" ? Settings.seasonGradient / 2 : key === "fallCount" ? Theme.fallCountPos(fallShown) : Theme.fallSizePos(Settings.fallSize) }
-    function setFall(key, v) {
-        if (key === "gateThreshold") { Rooms.gateThreshold = Math.round(v / 2.5) - 60; return }
-        if (key === "seasonGradient") Settings.seasonGradient = Math.round(v) * 2
-        else if (key === "fallCount") Settings.fallCount = Theme.fallCountAt(v)
-        else Settings.fallSize = Theme.fallSizeAt(v)
+    // What a slider position (0 to 100, any fraction: no notches) sets, and what is set now.
+    function fallValue(key, v) {
+        return key === "gateThreshold" ? Math.round(v / 2.5) - 60 : key === "seasonGradient" ? Math.round(v * 2)
+             : key === "fallCount" ? Theme.fallCountAt(v) : Theme.fallSizeAt(v)
     }
-    // One notch left or right: on to the next number the slider gives (near 1 several positions give
-    // the same one). A puts it back: Amount and Size go back to their defaults (121, 57%), Gradient to 80%.
-    function stepFall(key, dir) {
+    function fallNow(key) { return key === "gateThreshold" ? Rooms.gateThreshold : key === "seasonGradient" ? Settings.seasonGradient : key === "fallCount" ? fallShown : Settings.fallSize }
+    // Where each slider was left: its knob stays there (no snapping to the saved whole number) while that number holds.
+    property var heldPos: ({})
+    function sliderPos(key) {
+        const h = heldPos[key]
+        return h !== undefined && fallValue(key, h) === fallNow(key) ? h : fallPos(key)
+    }
+    // Shown as the slider moves (LookSlider sends it a few times a second while dragging) without saving: Settings'
+    // previewLook. Saved once it's let go (how "done"), or 400 ms after the last key press or D-pad step.
+    function setFall(key, v, how) {
+        const p = Math.max(0, Math.min(100, v))
+        const h = Object.assign({}, heldPos)
+        h[key] = p
+        heldPos = h
+        const n = fallValue(key, p)
+        if (key === "gateThreshold") { if (n !== fallNow(key)) Rooms.gateThreshold = n; return }
+        if (n !== fallNow(key)) Settings.previewLook(key, n)
+        if (how === "done") { lookSave.stop(); Settings.commitLook() }
+        else if (how !== "drag") lookSave.restart()
+    }
+    Timer { id: lookSave; interval: 400; onTriggered: Settings.commitLook() }
+    // Keys, the D-pad and the controller: 1% a press, about 5% a repeat once held for half a second. A step that
+    // gives the same number (near the ends of Amount and Size) goes on to the next one that differs. A puts it back:
+    // Amount and Size go back to their defaults (121, 57%), Gradient to 80%.
+    property real nudgeStart: 0
+    property real nudgeLast: 0
+    property int nudgeDir: 0
+    function nudgeStep(dir) {
+        const now = Date.now()
+        if (dir !== nudgeDir || now - nudgeLast > 250) nudgeStart = now
+        nudgeDir = dir; nudgeLast = now
+        return now - nudgeStart > 500 ? 5 : 1
+    }
+    function stepFall(key, dir, step) {
         // A on Input sensitivity never turns Automatic off: from Manual it goes back to Automatic, else it does nothing.
-        if (key === "gateThreshold") { if (dir !== 0) Rooms.gateThreshold = Rooms.gateThreshold + dir; else if (Rooms.gateMode === "manual") Rooms.gateMode = "auto"; return }
-        if (key === "seasonGradient") { Settings.seasonGradient = dir === 0 ? 80 : Math.max(0, Math.min(200, Settings.seasonGradient + dir * 10)); return }
         if (dir === 0) {
-            if (key === "fallCount") Settings.fallCount = 0
+            const h = Object.assign({}, heldPos)
+            delete h[key]
+            heldPos = h
+            if (key === "gateThreshold") { if (Rooms.gateMode === "manual") Rooms.gateMode = "auto" }
+            else if (key === "seasonGradient") Settings.seasonGradient = 80
+            else if (key === "fallCount") Settings.fallCount = 0
             else Settings.fallSize = 57
             return
         }
-        const now = key === "fallCount" ? fallShown : Settings.fallSize
-        let v = fallPos(key)
-        for (let i = 0; i < 100; ++i) {
-            v = Math.max(0, Math.min(100, v + dir))
-            const got = key === "fallCount" ? Theme.fallCountAt(v) : Theme.fallSizeAt(v)
-            if (got !== now || v <= 0 || v >= 100) break
-        }
+        const now = fallNow(key)
+        let v = Math.max(0, Math.min(100, sliderPos(key) + dir * (step || 1)))
+        for (let i = 0; i < 100 && fallValue(key, v) === now && v > 0 && v < 100; ++i) v = Math.max(0, Math.min(100, v + dir))
         setFall(key, v)
     }
     // Ultra privacy and Read aloud say "changed" every second while Tor connects or a voice downloads (the percentage).
@@ -101,6 +152,13 @@ Rectangle {
     readonly property bool aloudReady: ReadAloud.ready
     readonly property bool aloudCan: ReadAloud.available
     readonly property bool aloudNatural: ReadAloud.natural
+    // Look › Accessibility › Read aloud: its row's line (ReadAloud.summary: on or off, the voice, the speed). Read by
+    // the row itself (noteText), so the download's progress doesn't rebuild every row.
+    function aloudSummary() {
+        if (typeof ReadAloud.summary !== "function") return ""
+        ReadAloud.on; ReadAloud.voice; ReadAloud.speed; ReadAloud.status
+        return String(ReadAloud.summary() || "")
+    }
     // Color vision: only the ones that look different (Theme.distinctSwatches).
     readonly property var swatches: Theme.distinctSwatches(["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"])
 
@@ -112,37 +170,37 @@ Rectangle {
     readonly property var rows: {
         switch (section) {
         case "profile": return page.withMore([
-            { kind: "button", key: "chatName", title: "Name", note: Ui.myName, label: "Change" },
             { kind: "button", key: "picture", title: "Picture", label: Profile.hasMyPicture ? "Change" : "Choose" },
+            { kind: "button", key: "chatName", title: "Name", note: Ui.myName, label: "Change" },
             // Your status card (a click on your name at the bottom left) is where status is set.
             { kind: "button", key: "status", title: "Status", note: page.statusLine, label: "Change" },
             { kind: "button", key: "myCode", title: "My code", label: "Show" }
         ], [
-            { kind: "swatches", key: "myColour", title: "Avatar color" }
-        ], "Avatar color")
+            { kind: "swatches", key: "myColour", title: "Color of your initial" }
+        ], "Color of your initial")
         case "notify": return page.withMore([
             // What a notification shows: who it's from and a short preview, who it's from, or only "New message".
             { kind: "segmented", key: "previewMode", chat: true, title: "What notifications show",
               options: [{ value: "2", label: "Name and message" }, { value: "1", label: "Name only" }, { value: "0", label: "Nothing" }] },
             { kind: "toggle", key: "reduceNotifications", chat: true, title: "Reduce notifications", note: "One per chat until you open it" },
-            // The people set to Always right away, to see and remove. Adding is in a person's details.
-            { kind: "button", key: "rightAway", title: "Always right away", note: page.rightAwayNote, label: "See", enabled: page.rightAwayKeys.length > 0 },
             { group: "Quiet hours", kind: "toggle", key: "quietHours", title: "Quiet hours",
               note: Settings.quietHours ? page.hourName(Settings.quietFrom) + " to " + page.hourName(Settings.quietTo) + ", no sounds" : "No sounds overnight" },
             { group: "Quiet hours", kind: "button", key: "quietFrom", hide: !Settings.quietHours, title: "From: " + page.hourName(Settings.quietFrom), label: "Change" },
-            { group: "Quiet hours", kind: "button", key: "quietTo", hide: !Settings.quietHours, title: "To: " + page.hourName(Settings.quietTo), label: "Change" }
+            { group: "Quiet hours", kind: "button", key: "quietTo", hide: !Settings.quietHours, title: "To: " + page.hourName(Settings.quietTo), label: "Change" },
+            // The people set to Always right away, to see and remove. Adding is in each chat's Notifications.
+            { group: "Always right away", kind: "button", key: "rightAway", title: "Always right away" + (page.rightAwayKeys.length ? " (" + page.rightAwayKeys.length + ")" : ""),
+              note: page.rightAwayNote, label: "See", enabled: page.rightAwayKeys.length > 0 }
         ], [
             { kind: "toggle", key: "messageSound", title: "Message sound" }
         ], "Message sound")
         case "privacy": return page.withMore([
             { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
-              note: "Locks only when you choose. Can't be recovered", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
+              note: "Pattern or password", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
             { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
-            // 1.42: a pattern's unlock password, and the erase after too many wrong tries (off unless turned on).
-            { group: "Lock", kind: "button", key: "unlockPassword", hide: !Vault.hasLock || !Vault.usesPattern, title: "Unlock password",
-              note: "Opens Huginn too, if you forget the pattern", label: "Change" },
+            // 1.42: the erase after too many wrong tries (off unless turned on). A pattern's unlock password is changed
+            // on the Change the lock page (LockPanel), where the pattern is.
             { group: "Lock", kind: "toggle", key: "eraseAfterTries", vault: true, hide: !Vault.hasLock, title: "Erase after too many tries",
-              note: Vault.eraseAfterTries ? "On: 5 wrong tries after the 24-hour wait erase everything" : "Off: the waits go on, nothing is erased" },
+              note: Vault.eraseAfterTries ? "On: erases after the last wait" : "Off: waits only" },
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
             { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
             { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews",
@@ -153,14 +211,14 @@ Rectangle {
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "1 day" }] },
             // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
             { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby",
-              note: page.ultraOn ? UltraPrivacy.nearbyNote : "Off: contacts only, nothing announced" },
+              note: page.ultraOn ? UltraPrivacy.nearbyNote : "Off: contacts only" },
             { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
             { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" },
             // Ultra privacy (1.42, src/ultraprivacy.h): Tor, off by default. Turning it on shows what it does, then every
             // downside, then asks; while Tor is slow or blocked, Wait or Turn off.
             { group: "Ultra privacy", kind: "toggle", key: "active", ultra: true, title: "Ultra privacy", live: "ultra" },
             { group: "Ultra privacy", kind: "info", hide: !page.ultraOn, title: UltraPrivacy.offNote,
-              note: "Calls, direct files, sending videos, link previews and GIF search" },
+              note: "Videos send over Tor. Calls are off." },
             { group: "Ultra privacy", kind: "button", key: "ultraWait", hide: !page.ultraBanner || page.ultraMissing,
               title: page.ultraBannerText, label: "Wait" },
             // Tor couldn't start (or was removed): start it again, next to Turn off.
@@ -174,13 +232,18 @@ Rectangle {
             { kind: "toggle", key: "patternTrail", invert: true, title: "Hide the pattern as I draw" },
             { group: "  ", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" }
         ], Vault.hasLock ? "Pattern position, Turn off the lock" : "Pattern position")
-        case "calls": return page.withMore([
+        case "calls": return [
             // Owner decision (round 19): no calls at all while Ultra privacy is on, said where calls are set.
             { kind: "info", hide: !page.ultraOn, title: "Calls are off while Ultra privacy is on" },
-            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: page.ultraOn ? "Off while Ultra privacy is on" : "Call people anywhere" },
+            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: page.ultraOn ? "Off while Ultra privacy is on" : "Off: close by only" },
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
             { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
             { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" },
+            // Push to talk, the keys, voice activity and the mic test: one row, their own page.
+            { group: "Voice rooms", kind: "button", key: "voiceRooms", title: "Voice rooms", note: "Push to talk, keys, mic test", label: "Open" }
+        ].filter(r => !r.hide)
+        // Calls › Voice rooms: how the mic sends in a voice room, the keys, and the mic test.
+        case "voicerooms": return [
             // Voice rooms send while you talk (voice activity, the default), while a key is held, or all the time.
             // With push to talk on and no key or controller button yet, the mic uses voice activity (never dead), and says so.
             { group: "Talking", kind: "toggle", key: "pushToTalk", title: "Push to talk",
@@ -192,32 +255,31 @@ Rectangle {
                     : !TalkKey.hasKey ? "Pick the key you'll hold to talk, or a controller button. A key that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
                     : TalkKey.key === 0 ? "A keyboard key too, if you like. One that doesn't type, like Insert, Pause or Scroll Lock, talks while you type too"
                     : TalkKey.keyTypes ? "In a text box it types. Keys that don't type, like Insert, Pause or Scroll Lock, always talk"
-                    : "Talks even while you type", label: TalkKey.capturing ? "Cancel" : TalkKey.hasKey ? "Change" : "Pick a key" }
-        ], [
-            { kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
-              title: "Voice activity", note: "Voice rooms only. Sends only while you talk, so game sound stays out",
+                    : "Talks even while you type", label: TalkKey.capturing ? "Cancel" : TalkKey.hasKey ? "Change" : "Pick a key" },
+            { group: "Talking", kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
+              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: page.padNote(TalkKey.padButton), label: "Remove" },
+            { group: "Voice activity", kind: "segmented", key: "gateMode", rooms: true, value: Rooms.gateMode, hide: Rooms.pushToTalk,
+              title: "Voice activity", note: "Sends only while you talk, so game sound stays out",
               options: [{ value: "auto", label: "Automatic" }, { value: "manual", label: "Manual" }, { value: "off", label: "Always on" }] },
             // The bar under the slider is your microphone's level: lit while it goes out.
-            { kind: "slider", key: "gateThreshold", hide: Rooms.pushToTalk || Rooms.gateMode === "off",
+            { group: "Voice activity", kind: "slider", key: "gateThreshold", hide: Rooms.pushToTalk || Rooms.gateMode === "off",
               title: "Input sensitivity", note: Rooms.gateMode === "auto" ? "Set for you. Move it to set it yourself"
                                                 : Ui.main && Ui.main.padInUse ? "A: back to Automatic" : "",
               low: "Picks up more", high: "Picks up less" },
-            { kind: "button", key: "micTest", hide: Rooms.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
+            { group: "Voice activity", kind: "button", key: "micTest", hide: Rooms.pushToTalk || Rooms.gateMode === "off" || (Rooms.micLive && !Rooms.micTest), title: "Test your mic",
               note: Rooms.micTest ? "Talk: the bar lights while you'd be heard" : "Shows your level on the bar", label: Rooms.micTest ? "Stop" : "Test" },
             // The two keys and where they work. Windows: they can be moved off keys a game or another app uses
             // (still RegisterHotKey only); elsewhere they show what they are.
-            { kind: GlobalKeys.changeable ? "button" : "info", key: "muteKey", title: "Mute key: " + GlobalKeys.muteName,
+            { group: "Keys", kind: GlobalKeys.changeable ? "button" : "info", key: "muteKey", title: "Mute key: " + GlobalKeys.muteName,
               note: GlobalKeys.capturing === 1 ? GlobalKeys.captureNote : GlobalKeys.keysNote, label: GlobalKeys.capturing === 1 ? "Press keys" : "Change" },
-            { kind: GlobalKeys.changeable ? "button" : "info", key: "deafenKey", title: "Deafen key: " + GlobalKeys.deafenName,
+            { group: "Keys", kind: GlobalKeys.changeable ? "button" : "info", key: "deafenKey", title: "Deafen key: " + GlobalKeys.deafenName,
               note: GlobalKeys.capturing === 2 ? GlobalKeys.captureNote : "", label: GlobalKeys.capturing === 2 ? "Press keys" : "Change" },
-            { kind: "button", key: "resetKeys", hide: !GlobalKeys.changeable || (GlobalKeys.muteSequence === "Ctrl+Shift+M" && GlobalKeys.deafenSequence === "Ctrl+Shift+D"),
+            { group: "Keys", kind: "button", key: "resetKeys", hide: !GlobalKeys.changeable || (GlobalKeys.muteSequence === "Ctrl+Shift+M" && GlobalKeys.deafenSequence === "Ctrl+Shift+D"),
               title: "Mute and deafen keys", note: "Back to Ctrl+Shift+M and Ctrl+Shift+D", label: "Reset" },
-            { kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds",
+            { group: "Keys", kind: "toggle", key: "muteSounds", title: "Mute and deafen sounds",
               note: GlobalKeys.everywhere ? "A short sound when the keys turn them on or off, heard over a game"
-                  : "A short sound when the keys (or LB with Up or Down) turn them on or off" },
-            { kind: "button", key: "talkPad", hide: !Settings.pushToTalk || TalkKey.padButton === "",
-              title: "Controller talk button: " + Gamepad.glyph(TalkKey.padButton), note: page.padNote(TalkKey.padButton), label: "Remove" }
-        ], Rooms.pushToTalk ? "Mute key, Deafen key, Controller talk button" : "Voice activity, Mute key, Deafen key")
+                  : "A short sound when the keys (or LB with Up or Down) turn them on or off" }
+        ].filter(r => !r.hide)
         case "look": return page.withMore([
             { group: "Theme", kind: "segmented", key: "theme", title: "Theme", value: Theme.choice,
               options: [{ value: "dark", label: "Dark" }, { value: "black", label: "True black" }, { value: "light", label: "Light" }] },
@@ -228,8 +290,11 @@ Rectangle {
               note: System.screenScale > 1.001 ? "Already made bigger for this small screen. Ctrl+= and Ctrl+- too" : "Ctrl+= and Ctrl+- too" },
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
             { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Reduce motion" },
-            // Color vision: every color that means something, remapped for it; its preview is under More.
+            // Color vision: every color that means something, remapped for it, and its preview while one is picked.
             { group: "Accessibility", kind: "segmented", key: "colorVision", title: "Color vision", options: Theme.visionChoices },
+            { group: "Accessibility", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
+            // Read aloud: one row, opening its own page (ReadAloudPage.qml: the voice, its speed, download, delete).
+            { group: "Accessibility", kind: "button", key: "readAloud", title: "Read aloud", live: "aloudRow", label: "Open" },
             // Daily Hávamál: a verse a day at the top of the chat list, off until it's turned on (src/dailyverse.h).
             { group: "Daily Hávamál", kind: "toggle", key: "verseOn", verse: true, title: "Daily Hávamál", note: "A verse a day at the top of your chats" },
             { group: "Daily Hávamál", kind: "segmented", key: "verseWording", verse: true, hide: !DailyVerse.verseOn || !DailyVerse.hasMine,
@@ -238,22 +303,7 @@ Rectangle {
               note: DailyVerse.hasMine ? DailyVerse.mineLine : "A .txt file with stanza numbers. It stays on this computer and is never sent",
               label: DailyVerse.hasMine ? "Import another" : "Import" },
             { group: "Daily Hávamál", kind: "button", key: "verseRemove", hide: !DailyVerse.verseOn || !DailyVerse.hasMine, title: "Remove your translation", label: "Remove" },
-            // Read aloud (src/readaloud.h): the natural voice is downloaded once (only the one picked) and kept; the
-            // computer's own voice reads until it's in.
-            // Until this build's voices are published (no line in voices.sha256) the natural voice isn't offered: one
-            // line says what reads instead.
-            { group: "Read aloud", kind: "info", hide: page.aloudNatural, title: "Natural voices", live: "aloud" },
-            { group: "Read aloud", kind: "segmented", key: "voice", aloud: true, hide: !page.aloudNatural, title: "Voice", live: "aloud", value: page.aloudVoice,
-              options: [{ value: "f", label: "Female" }, { value: "m", label: "Male" }] },
-            // Fetch the voice now (on home Wi-Fi before a trip), instead of the first time something is read.
-            { group: "Read aloud", kind: "button", key: "voiceGet", hide: !page.aloudNatural || !page.aloudCan || page.aloudReady, title: "Download the voice now",
-              note: "About 65 MB", label: "Download" },
-            { group: "Read aloud", kind: "toggle", key: "mobileData", aloud: true, hide: !page.aloudNatural, title: "Allow on mobile data",
-              note: "Downloads the voice (about 65 MB) on a metered connection too" },
-            { group: "Read aloud", kind: "button", key: "voiceDelete", hide: !page.aloudFiles, title: "Delete voices",
-              note: "Frees the space. It downloads again the next time something is read aloud", label: "Delete" }
         ], [
-            { group: "Color vision", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
             // Seasonal, over any theme: the season, its background (on Dark), what falls and how much.
             { group: "Seasonal", kind: "segmented", key: "season", title: "Seasonal", note: "Over any theme",
               value: Theme.seasonPick, options: Theme.seasonChoices },
@@ -272,7 +322,7 @@ Rectangle {
               low: "1", high: "400" },
             { group: "Seasonal", kind: "slider", key: "fallSize", hide: !Theme.seasonal || Settings.seasonAnimation === "off",
               title: "Size: " + Settings.fallSize + "%", low: "Tiny", high: "Huge" },
-            { group: "Messages", kind: "segmented", key: "density", title: "Messages density",
+            { group: "Messages", kind: "segmented", key: "density", title: "Message spacing",
               options: [{ value: "compact", label: "Compact" }, { value: "cozy", label: "Default" }, { value: "spacious", label: "Spacious" }] },
             { group: "Window", kind: "toggle", key: "fullScreen", title: "Open full screen", note: "F11 too", hide: System.windowed || System.gameMode || System.handheld },
             // The window's X: Leave Huginn? (with Don't ask again), or what was picked there.
@@ -285,7 +335,7 @@ Rectangle {
             { group: "Panels", kind: "toggle", key: "showList", title: "Show the chat list", note: "Ctrl+Shift+L" },
             { group: "Panels", kind: "toggle", key: "showMembers", title: "Show group members", note: "Ctrl+Shift+U" },
             { group: "Panels", kind: "button", key: "resetPanels", title: "Panel sizes", label: "Reset" }
-        ], "Seasonal, Messages density, Window, Panels")
+        ], "Seasonal, Message spacing, Window, Panels")
         case "battery": return [
             // No animations, fewer background checks and 30 fps timers. Automatic: on while on battery.
             { kind: "segmented", key: "batterySaver", title: "Battery saver",
@@ -294,13 +344,15 @@ Rectangle {
             { kind: "toggle", key: "dataSaver", title: "Data saver", note: "Files ask first. No link previews" }
         ]
         case "devices": return page.withMore([
+            // Linked devices and Move each open their own page (PeopleActions.linkedDevices, moveDevice).
             { group: "Devices", kind: "button", key: "linked", title: "Linked devices", note: !Linked.phone.key ? "" : (Linked.phone.gone ? "Copy kept from " + Linked.phone.name : "Linked to " + Linked.phone.name), label: "Open" },
+            { group: "Devices", kind: "button", key: "move", title: "Move to a new device", note: "Move here, or from here", label: "Open" },
             { group: "Devices", kind: "button", key: "deviceName", title: "This device's name", note: Settings.deviceName, label: "Change" },
-            { group: "Devices", kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" },
-            { group: "Backup", kind: "button", key: "backup", title: "Back up", note: "One encrypted file, saved where you choose", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
+            { group: "Backup", kind: "button", key: "backup", title: "Back up", note: "One encrypted file", label: Vault.busy ? "Working" : "Back up", enabled: Vault.exists && !Vault.busy },
             { group: "Backup", kind: "button", key: "restore", title: "Restore from a backup", note: "Any backup file from Huginn or Muninn", label: "Restore", enabled: Vault.exists && !Vault.busy },
             { group: "Files", kind: "button", key: "saveFolder", title: "Save files to", note: Transfer.saveName + "/Huginn", label: "Change" },
-            { group: "Files", kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Use Downloads again", label: "Reset" }
+            { group: "Files", kind: "button", key: "saveFolderReset", hide: !Transfer.customSave, title: "Use Downloads again", label: "Reset" },
+            { group: "Files", kind: "toggle", key: "nearbySharing", title: "Share files nearby", note: "Works with LocalSend" }
         ], [
             { kind: "button", key: "storage", title: "App storage", note: "Files Huginn keeps", label: "Open" },
             { group: "  ", kind: "button", key: "deleteMessages", title: "Delete all messages", note: "Contacts stay", label: "Delete" },
@@ -311,11 +363,7 @@ Rectangle {
             { kind: "button", key: "check", title: Updater.status,
               label: Updater.ready ? "Restart now" : Updater.available ? "Install " + Updater.latest : "Check now", enabled: !Updater.busy },
             { kind: "toggle", key: "autoUpdate", title: "Update automatically" },
-            // Labs mode only. Go back to stable only while on Pre-release (or running a pre-release).
-            { kind: "segmented", key: "updateChannel", hide: !Settings.labs, title: "Update channel",
-              options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
-            { kind: "button", key: "goStable", hide: !Settings.labs || (Settings.updateChannel !== "beta" && System.version.indexOf("beta") < 0),
-              title: "Go back to stable", note: "Installs the latest stable", label: "Go back", enabled: !Updater.busy },
+            // Labs mode: the update channel is on the Labs page.
             // Drawn by the processor (no working graphics driver), everything is slow: said here, not under More.
             { kind: "info", hide: !System.softwareGraphics || System.graphics === "", title: "Graphics: slow",
               note: "No graphics card in use, so Huginn is slow. " + System.graphics }
@@ -343,18 +391,68 @@ Rectangle {
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Scroll", note: "Left stick" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Pointer", note: "Right stick moves, RB or R3 clicks, RT right-clicks" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Search and Transfers", note: "Up from the top of a list or the rail" },
-            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "In voice", note: "While Huginn is in front: hold LB, then Up mutes and Down deafens" },
+            { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "In a voice room", note: "While Huginn is in front: hold LB, then Up mutes and Down deafens" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
             { group: "Controls and shortcuts", kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
         ], "Your data, Credits and licenses, Controls and shortcuts")
+        // Labs, all in one place: Report a bug, Labs reports, the update channel, Performance check, practice setup,
+        // and on Pre-release the beta's Things to test.
         case "labs": return [
             { kind: "button", key: "report", title: "Report a bug", note: "Screenshot optional", label: "Report" },
+            { kind: "button", key: "labsReports", hide: !Labs.inbox, title: "Labs reports", note: Labs.reports.length ? String(Labs.reports.length) : "", label: "Open" },
+            // Go back to stable only while on Pre-release (or running a pre-release).
+            { kind: "segmented", key: "updateChannel", title: "Update channel",
+              options: [{ value: "stable", label: "Stable" }, { value: "beta", label: "Pre-release" }] },
+            { kind: "button", key: "goStable", hide: Settings.updateChannel !== "beta" && System.version.indexOf("beta") < 0,
+              title: "Go back to stable", note: "Installs the latest stable", label: "Go back", enabled: !Updater.busy },
             { kind: "button", key: "perf", title: "Performance check", note: "Lag and size", label: "Open" },
-            { kind: "button", key: "practice", title: "Replay first setup (practice)", note: "Nothing is saved", label: "Start" }
-        ]
+            { kind: "button", key: "practice", title: "Replay first setup", note: "Practice. Nothing is saved", label: "Start" }
+        ].filter(r => !r.hide).concat(page.betaRows)
         }
         return []
     }
+    // ------------------------------------------------------------- Labs › Things to test
+    // The beta's checklist (code/shared/beta-tests.json, through Chat.betaTests), shown only on Pre-release. Each group
+    // folds open; A ticks a check (kept on this device, cleared when the beta changes), Y or Report a problem opens Report
+    // a bug with "Beta test <id> <title>: " filled in.
+    readonly property bool betaShown: section === "labs" && Settings.updateChannel === "beta" && typeof Chat.betaTests === "function"
+    readonly property var betaData: betaShown ? (Chat.betaTests() || ({})) : ({})
+    property int betaRev: 0
+    readonly property var betaTicked: (betaRev, betaShown && typeof Chat.betaTicks === "function") ? (Chat.betaTicks() || []) : []
+    property var betaOpen: ({})
+    readonly property var betaGroups: betaData && Array.isArray(betaData.groups)
+        ? betaData.groups.filter(g => !!g && !!g.id && Array.isArray(g.checks)) : []
+    function betaCount(g) { return g.checks.filter(c => !!c && betaTicked.indexOf(c.id) >= 0).length }
+    readonly property int betaTotal: betaGroups.reduce((n, g) => n + g.checks.length, 0)
+    readonly property int betaDone: betaGroups.reduce((n, g) => n + betaCount(g), 0)
+    readonly property var betaRows: {
+        if (!betaShown || !betaGroups.length) return []
+        const out = [{ group: "Things to test", kind: "info", key: "betaAbout", title: betaDone + " of " + betaTotal + " done", note: String(betaData.about || "") }]
+        betaGroups.forEach(g => {
+            const title = String(g.title || g.id), open = !!betaOpen[g.id]
+            out.push({ group: title, kind: "button", key: "beta:" + g.id, beta: g, title: betaCount(g) + " of " + g.checks.length + " done", label: open ? "Hide" : "Show" })
+            if (!open) return
+            g.checks.forEach(c => { if (c && c.id) out.push({ group: title, kind: "check", key: "tick:" + c.id, beta: g, check: String(c.id), title: String(c.text || "") }) })
+            out.push({ group: title, kind: "button", key: "betaReport:" + g.id, beta: g, title: "Report a problem", label: "Report" })
+        })
+        return out
+    }
+    function isTicked(id) { return betaTicked.indexOf(id) >= 0 }
+    function tickBeta(r, on) {
+        if (!r || !r.check || typeof Chat.setBetaTick !== "function") return
+        Chat.setBetaTick(r.check, on === undefined ? !isTicked(r.check) : on)
+        betaRev++
+    }
+    function foldBeta(id) {
+        const o = Object.assign({}, betaOpen)
+        o[id] = !o[id]
+        betaOpen = o
+    }
+    function reportBeta(g) {
+        if (!g || !Ui.main) return
+        Ui.main.openReportText("Beta test " + g.id + " " + (g.title || "") + ": ")
+    }
+
     // A page's rows: the common ones, then a More row and (once it's opened) the rest under it. Rows of the rest
     // with no group share the More row's frame; "  " (blank, apart) keeps red rows in their own frame, last.
     function withMore(base, extra, note) {
@@ -450,7 +548,7 @@ Rectangle {
                         model: page.items
                         Rectangle {
                             id: navRow
-                            readonly property bool here: page.section === modelData.id && !Theme.portrait
+                            readonly property bool here: page.navSection === modelData.id && !Theme.portrait
                             readonly property bool on: page.active && !page.inSection && page.pick === index && !!Ui.main && Ui.main.padInUse
                             // Profile: your picture, name and status, as a card above the sections.
                             readonly property bool card: !!modelData.card
@@ -547,6 +645,13 @@ Rectangle {
             id: rowsCol
             width: Math.min(rowsView.width, Theme.px(760))
             spacing: Theme.px(16)
+            // Look › Accessibility › Read aloud.
+            ReadAloudPage {
+                id: aloudPage
+                visible: page.section === "aloud"
+                width: rowsCol.width
+                active: page.active && page.inSection && page.section === "aloud"
+            }
             Repeater {
                 id: groupRepeater
                 model: page.groups
@@ -599,7 +704,8 @@ Rectangle {
         readonly property bool focused: page.active && page.inSection && page.row === at && !!Ui.main && Ui.main.padInUse
         readonly property bool danger: page.dangerKeys.indexOf(r.key) >= 0
         // A live status line (Tor's progress, the voice download) is read here, not in the rows (see page.ultraOn).
-        readonly property string noteText: r.live === "ultra" ? UltraPrivacy.statusLine : r.live === "aloud" ? ReadAloud.status : (r.note || "")
+        readonly property string noteText: r.live === "ultra" ? UltraPrivacy.statusLine : r.live === "aloud" ? ReadAloud.status
+                                         : r.live === "aloudRow" ? page.aloudSummary() : (r.note || "")
         // Wide choices go under the words when there isn't room beside them; a picker then takes the full width
         // (and becomes a dropdown only if even that is too narrow, see Segmented).
         readonly property bool stacked: r.kind === "segmented" ? segCtl.naturalWidth > width * 0.5 : control.width > width * 0.5
@@ -630,6 +736,7 @@ Rectangle {
             width: Math.min(rowItem.width - Theme.px(32),
                    rowItem.r.kind === "segmented" ? (rowItem.stacked ? rowItem.width : segCtl.implicitWidth)
                  : rowItem.r.kind === "toggle" ? toggleCtl.implicitWidth
+                 : rowItem.r.kind === "check" ? checkCtl.width
                  : rowItem.r.kind === "accent" ? accentCtl.naturalWidth
                  : rowItem.r.kind === "preview" ? rowItem.width
                  : rowItem.r.kind === "swatches" ? swatchCtl.implicitWidth
@@ -663,7 +770,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: rowItem.r.kind === "slider"
                 width: parent.width
-                value: rowItem.r.kind === "slider" ? page.fallPos(rowItem.r.key) : 0
+                value: rowItem.r.kind === "slider" ? page.sliderPos(rowItem.r.key) : 0
                 label: rowItem.r.title || ""
                 low: rowItem.r.low || ""
                 high: rowItem.r.high || ""
@@ -671,8 +778,9 @@ Rectangle {
                 // Calls › Input sensitivity: the microphone's level behind the track, in a room or while testing.
                 meter: rowItem.r.key === "gateThreshold" && Rooms.micLive ? Math.max(0, Math.min(1, (Rooms.micLevel + 60) / 40)) : -1
                 meterLit: Rooms.gateOpen
-                onMoved: v => page.setFall(rowItem.r.key, v)
-                onNudged: dir => page.stepFall(rowItem.r.key, dir)
+                onMoved: v => page.setFall(rowItem.r.key, v, "drag")
+                onLetGo: v => page.setFall(rowItem.r.key, v, "done")
+                onNudged: dir => page.stepFall(rowItem.r.key, dir, page.nudgeStep(dir))
             }
             Segmented {
                 id: segCtl
@@ -684,6 +792,24 @@ Rectangle {
                 value: rowItem.r.kind !== "segmented" ? "" : rowItem.r.value !== undefined ? rowItem.r.value
                      : rowItem.r.chat ? String(Chat[rowItem.r.key]) : Settings[rowItem.r.key]
                 onPicked: v => page.pickSegment(rowItem.r, v)
+            }
+            // Labs › Things to test: a check, ticked or not.
+            Rectangle {
+                id: checkCtl
+                readonly property bool on: rowItem.r.kind === "check" && page.isTicked(rowItem.r.check)
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                visible: rowItem.r.kind === "check"
+                width: Theme.px(22); height: width
+                radius: Theme.radiusSmall
+                color: on ? Theme.accentFill : "transparent"
+                border.width: on ? Theme.px(2) : 1
+                border.color: on ? Theme.accent : Theme.lineMuted
+                Accessible.role: Accessible.CheckBox
+                Accessible.name: rowItem.r.title || ""
+                Accessible.checked: on
+                Accessible.onPressAction: page.tickBeta(rowItem.r)
+                Icon { visible: checkCtl.on; anchors.centerIn: parent; name: "check"; size: Theme.px(14); color: Theme.accent }
             }
             ToggleSwitch {
                 id: toggleCtl
@@ -828,7 +954,7 @@ Rectangle {
                 width: parent.width
                 spacing: Theme.px(12)
                 Repeater {
-                    model: previewCtl.visible ? [{ id: "online", label: "Online" }, { id: "away", label: "Away" }, { id: "dnd", label: "Busy" }] : []
+                    model: previewCtl.visible ? [{ id: "online", label: "Online" }, { id: "away", label: "Away" }, { id: "dnd", label: "Do not disturb" }] : []
                     Row {
                         spacing: Theme.px(6)
                         height: Theme.px(28)
@@ -871,7 +997,7 @@ Rectangle {
                 onClicked: page.press(rowItem.r.key)
             }
         }
-        TapHandler { onTapped: { page.inSection = true; page.row = rowItem.at } }
+        TapHandler { onTapped: { page.inSection = true; page.row = rowItem.at; if (rowItem.r.kind === "check") page.tickBeta(rowItem.r) } }
     }
 
     function showRow(item) {
@@ -928,7 +1054,7 @@ Rectangle {
     // Leaving Settings (or this part of it) stops "Pick a key", so the next key pressed elsewhere never becomes the talk key.
     onSectionChanged: { rowsView.contentY = 0; moreOpen = false; Rooms.micTest = false; TalkKey.stopCapture() }
     onVisibleChanged: if (!visible) TalkKey.stopCapture()
-    Component.onDestruction: { Rooms.micTest = false; TalkKey.stopCapture() }
+    Component.onDestruction: { Rooms.micTest = false; TalkKey.stopCapture(); Settings.commitLook() }
 
     function openMain() {
         const m = items[pick]
@@ -936,7 +1062,16 @@ Rectangle {
         section = m.id; row = 0
         inSection = true
     }
-    function back() { inSection = false }
+    // B: from a page one level down, back to its row on the parent page; else to the list.
+    function back() {
+        const sub = subNow
+        if (sub) {
+            section = sub.parent
+            Qt.callLater(() => { const i = page.rows.findIndex(r => r.key === sub.from); page.row = Math.max(0, i) })
+            return
+        }
+        inSection = false
+    }
 
     // Anything that closes or restarts Huginn checks first that it won't cut off a job.
     function running() {
@@ -1076,6 +1211,12 @@ Rectangle {
         else if (key === "sizeUp") Ui.main.stepSize(1)
         else if (key === "sizeReset") Ui.main.stepSize(0)
         else if (key === "linked") PeopleActions.linkedDevices()
+        else if (key === "move") PeopleActions.moveDevice()
+        else if (key === "voiceRooms") openSub("voicerooms")
+        else if (key === "readAloud") openSub("aloud")
+        else if (key === "labsReports") Ui.main.openLabsReports()
+        else if (key.indexOf("betaReport:") === 0) { const r = rows.find(x => x.key === key); if (r) reportBeta(r.beta) }
+        else if (key.indexOf("beta:") === 0) foldBeta(key.substring(5))
         else if (key === "quietFrom" || key === "quietTo") pickHour(key)
         else if (key === "micDevice" || key === "speakerDevice") pickDevice(key)
         else if (key === "saveFolder") { if (Transfer.pickSaveFolder()) Ui.say("Received files now go in " + Transfer.saveName + "/Huginn.") }
@@ -1166,13 +1307,19 @@ Rectangle {
             const i = dir === 0 ? (at + 1) % swatches.length : Math.max(0, Math.min(swatches.length - 1, at + dir))
             Profile.setMyColour(swatches[i])
         } else if (r.kind === "size") { if (dir === 0) press("sizeReset"); else Ui.main.stepSize(dir) }
-        else if (r.kind === "slider") stepFall(r.key, dir)
+        else if (r.kind === "slider") stepFall(r.key, dir, dir === 0 ? 0 : nudgeStep(dir))
+        else if (r.kind === "check") tickBeta(r, dir === 0 ? undefined : dir > 0)
         else if (r.kind === "button" && dir === 0 && r.enabled !== false) press(r.key)
         else if (r.kind === "raven" && dir === 0) tapRaven()
     }
 
     // Returns false for what this page doesn't use, so Main.qml can take it (Left or B to the rail).
     function handleButton(b) {
+        // The Read aloud page takes the controller; what it doesn't use (B, Left at its edge) goes back to Look.
+        if (inSection && section === "aloud") {
+            if (b === "b" || !aloudPage.handleButton(b)) { if (b === "b" || b === "left") { back(); return true } return false }
+            return true
+        }
         if (!inSection) {
             switch (b) {
             case "up": pick = Math.max(0, pick - 1); return true
@@ -1200,19 +1347,20 @@ Rectangle {
             if (toggle) { if (!Gamepad.repeating() && !switchOn(r)) flip(r) }
             else change(1)
             return true
+        case "y": if (r && r.beta) { reportBeta(r.beta); return true } return false
         case "b": back(); return true
         }
         return false
     }
 
-    // Look › Seasonal: a plain slider in house style. A line, a knob, Left and Right or a drag to move it.
-    // A slider from 0 to 100 (stepSize a notch), with the names of its two ends under the track.
-    // moved: a press or drag at a position; nudged: one notch left (-1) or right (1).
+    // Look › Seasonal and Calls › Voice rooms: a plain slider in house style. A line, a knob, Left and Right or a drag
+    // to move it. From 0 to 100 with no notches: the knob follows the pointer, the setting is applied a few times a
+    // second while dragging and once more on release, with the names of its two ends under the track.
+    // moved: a position (any fraction) to apply; nudged: one step left (-1) or right (1).
     component LookSlider: Item {
         id: sl
         property real from: 0
         property real to: 100
-        property real stepSize: 1
         property real value: 0
         property string label: ""
         property string low: ""
@@ -1222,21 +1370,26 @@ Rectangle {
         property real meter: -1
         property bool meterLit: false
         signal moved(real value)
+        // A click, or a drag let go: the place to save.
+        signal letGo(real value)
         signal nudged(int dir)
+        // While a drag is on: where the knob is (-1: none), so it follows the pointer between the applies.
+        property real live: -1
+        readonly property real shown: live >= 0 ? live : value
         readonly property bool ends: low.length > 0 || high.length > 0
         readonly property real trackY: Theme.px(14)
         implicitHeight: Theme.px(28) + (ends ? lowText.implicitHeight : 0)
-        readonly property real frac: to > from ? Math.max(0, Math.min(1, (value - from) / (to - from))) : 0
+        readonly property real frac: to > from ? Math.max(0, Math.min(1, (shown - from) / (to - from))) : 0
         Accessible.role: Accessible.Slider
         Accessible.name: label
         Accessible.onIncreaseAction: sl.nudged(1)
         Accessible.onDecreaseAction: sl.nudged(-1)
-        function at(px) {
-            const f = Math.max(0, Math.min(1, (px - knob.width / 2) / (width - knob.width)))
-            let v = from + f * (to - from)
-            v = Math.round(v / stepSize) * stepSize
-            moved(Math.max(from, Math.min(to, v)))
+        function posAt(px) {
+            const f = Math.max(0, Math.min(1, (px - knob.width / 2) / Math.max(1, width - knob.width)))
+            return from + f * (to - from)
         }
+        // Applies the live position while dragging, a few times a second, not on every pixel.
+        Timer { id: applyTimer; interval: 120; onTriggered: if (sl.live >= 0) sl.moved(sl.live) }
         Rectangle {
             visible: sl.meter >= 0
             y: sl.trackY - height / 2; x: knob.width / 2
@@ -1272,10 +1425,12 @@ Rectangle {
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         HoverHandler { id: slHover; cursorShape: Qt.PointingHandCursor }
-        TapHandler { onTapped: point => sl.at(point.position.x) }
+        TapHandler { onTapped: point => sl.letGo(sl.posAt(point.position.x)) }
         DragHandler {
             target: null
-            onCentroidChanged: if (active) sl.at(centroid.position.x)
+            onCentroidChanged: if (active) { sl.live = sl.posAt(centroid.position.x); if (!applyTimer.running) applyTimer.start() }
+            // Released: applied once more where it was let go.
+            onActiveChanged: if (!active && sl.live >= 0) { applyTimer.stop(); const v = sl.live; sl.letGo(v); sl.live = -1 }
         }
     }
 }

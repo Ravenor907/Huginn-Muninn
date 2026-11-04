@@ -6,6 +6,10 @@ Male (northern English), picked in Settings, or by a parent on a Kids' Device's 
 **voices-1** release, and kept across updates. Until it's ready, the device's own voice reads (only a voice that works
 offline; never one that sends the text away).
 
+Settings › Look › Accessibility › Read aloud (1.42) has its own page: a switch to turn Read aloud off (it hides from
+every menu), the voice (Female, Male, or **Device**: the device's own voice, and nothing is downloaded), and the
+**speed**, 50% to 150% on a smooth slider (80% until changed), with "Hear a sample".
+
 ## What the owner does (once)
 
 1. On GitHub: **Actions › Publish voices › Run workflow** (branch beta).
@@ -59,6 +63,7 @@ with the device's own voice where there is one (Read aloud is hidden where nothi
   (`--filesystem=xdg-run/speech-dispatcher:ro`); where that isn't running (and the runtime has no offline engine),
   nothing can speak until the natural voice is in, and Read aloud isn't offered.
 - **Kids' Devices** (cap `k15`, protocol.md 7.18): the parent picks the voice on the device's page; the device downloads
-  only that one.
+  only that one. The speed (cap `k16`) sits right under it; it's sent only when the device and every co-parent's app say
+  k16, and a device with none set reads at 80%. Device isn't offered there.
 - **Licenses.** `code/shared/licenses/natural-voices.txt`, `sherpa-onnx-Apache-2.0.txt`, `onnxruntime-MIT.txt`; shown
   in About in both apps.

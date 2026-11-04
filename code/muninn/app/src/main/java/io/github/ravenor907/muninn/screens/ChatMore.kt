@@ -44,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -93,34 +94,47 @@ internal fun gifHelp(onPhotos: () -> Unit) {
         "or pick a GIF saved in your photos.", "Pick from photos", onConfirm = { onPhotos() }))
 }
 
-/** The "+" in the message box: photos, a GIF, the camera, a video message, a poll. */
+/**
+ * The "+" in the message box, the Send sheet (owner, 2026-11-04), in this order: Camera (tap for a photo, hold for
+ * video), Saved media (photos, videos and GIFs together, up to 10), Encrypted file sharing and Poll. Online GIFs come
+ * from the keyboard's own GIF key (the composer still takes keyboard content); the old GIF, Photos, Video message and
+ * "Video from your phone" rows are gone.
+ *  - [onSaved]: opens Saved media (rememberSavedMedia). Null only until a chat passes it: then the old photo picker
+ *    ([onPhotos]) stands in.
+ *  - [filePeer]: the person a file would go to in a 1:1 chat. With no way to reach them now (nearby, trusted direct or
+ *    Tor, FileLink.canReach), the file row is greyed out and says so; D-pad focus skips it. Empty in a group.
+ *  - [onVideo], [onPickVideo]: no longer shown (the camera and Saved media do both); kept so older callers still build.
+ */
 @Composable
-internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: () -> Unit, onPoll: () -> Unit, onFile: (() -> Unit)? = null,
-                          /** Cap v3: a video picked from the phone (VideoSendDialog). */
+internal fun AttachDialog(onCamera: () -> Unit, onPoll: () -> Unit, onFile: (() -> Unit)? = null, onSaved: (() -> Unit)? = null,
+                          filePeer: String = "", onPhotos: () -> Unit = {}, onVideo: () -> Unit = {},
                           onPickVideo: (() -> Unit)? = null, done: () -> Unit) {
+    // "" when a file can reach them (or in a group); else FileLink.UPDATE ("Ask them to update") or NO_PATH.
+    val fileNote = remember(filePeer) { if (filePeer.isEmpty()) "" else io.github.ravenor907.muninn.net.FileLink.reachNote(filePeer) }
+    val canFile = fileNote.isEmpty()
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
         title = { Text("Send", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Line("Photos", "Up to 10 at once", icon = "image") { done(); onPhotos() }
-                Line("GIF", "From your keyboard or photos", icon = "image") { done(); gifHelp(onPhotos) }
-                Line("Camera", "Take a photo now", icon = "image") { done(); onCamera() }
-                // Ultra privacy: sending videos is off (receiving still works), said here rather than hidden.
-                val videoOff = !io.github.ravenor907.muninn.net.UltraPrivacy.videoSendAllowed
-                Line("Video message", if (videoOff) io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE else "Up to a minute", icon = "video",
-                    enabled = !videoOff) { done(); onVideo() }
-                // Cap v3: off (shown, with why) while Ultra privacy is on.
-                if (onPickVideo != null) Line("Video from your phone", pickedVideoDetail(), icon = "video",
-                    enabled = !io.github.ravenor907.muninn.net.UltraPrivacy.on) { done(); onPickVideo() }
+                Line("Camera", SEND_CAMERA, icon = "video") { done(); onCamera() }
+                Line("Saved media", SEND_SAVED, icon = "image") { done(); (onSaved ?: onPhotos)() }
+                if (onFile != null) Box(Modifier.alpha(if (canFile) 1f else 0.45f)) {
+                    Line("Encrypted file sharing", if (canFile) SEND_FILE else if (fileNote == io.github.ravenor907.muninn.net.FileLink.UPDATE) fileNote else SEND_FILE_OFF, icon = "file", enabled = canFile) { done(); onFile() }
+                }
                 Line("Poll", "Ask a question", icon = "check") { done(); onPoll() }
-                if (onFile != null) Line("File", "Any file", icon = "file") { done(); onFile() }
             }
         },
         confirmButton = { MButton("Cancel") { done() } },
     )
 }
+
+/** The Send sheet's words (mockup, 2026-11-04). Each fits a phone's line (32 characters at most). */
+internal const val SEND_CAMERA = "Tap for a photo, hold for video"
+internal const val SEND_SAVED = "Photos, videos and GIFs, up to 10"
+internal const val SEND_FILE = "Nearby, trusted or Tor"
+internal const val SEND_FILE_OFF = "Can't reach them right now"
 
 /** A new poll: a question, 2 to 10 answers, and whether several may be picked. [send] gets null for Cancel. */
 @Composable

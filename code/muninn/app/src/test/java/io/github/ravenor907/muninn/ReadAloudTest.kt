@@ -149,4 +149,72 @@ class ReadAloudTest {
         val bad = JSONObject(withVoice.toString()).put("voice", "x")
         assertEquals("malformed: voice", TvRules.accept(kTV, listOf(kA), null, bad).second)
     }
+
+    @Test fun speedRules() {
+        // 50% to 150%, 80% until moved; older saved ints and odd values read safely.
+        assertEquals(80f, ReadAloudText.speedOf(null), 0f)
+        assertEquals(80f, ReadAloudText.speedOf(Float.NaN), 0f)
+        assertEquals(50f, ReadAloudText.speedOf(10), 0f)
+        assertEquals(150f, ReadAloudText.speedOf(400f), 0f)
+        assertEquals(83.4f, ReadAloudText.speedOf(83.4f), 0f)
+        assertEquals(120f, ReadAloudText.speedOf(120), 0f)
+        assertEquals("83%", ReadAloudText.speedText(83.4f))
+        assertEquals("84%", ReadAloudText.speedText(83.6f))
+        assertEquals("80%", ReadAloudText.speedText(ReadAloudText.SPEED_DEFAULT))
+        assertEquals(0.8f, ReadAloudText.engineSpeed(80f), 1e-6f)
+        assertEquals(1.5f, ReadAloudText.deviceRate(150f), 1e-6f)
+        // Qt's rate: 50% is -1, 100% is 0, 150% is 1, 80% is -0.4.
+        assertEquals(-1f, ReadAloudText.qtRate(50f), 1e-6f)
+        assertEquals(0f, ReadAloudText.qtRate(100f), 1e-6f)
+        assertEquals(1f, ReadAloudText.qtRate(150f), 1e-6f)
+        assertEquals(-0.4f, ReadAloudText.qtRate(80f), 1e-6f)
+        // Settings' picks: Female, Male or Device; the device's own never reaches a Kids' Device.
+        assertEquals("d", ReadAloudText.choiceOf("d"))
+        assertEquals("f", ReadAloudText.choiceOf("x"))
+        assertEquals("f", ReadAloudText.voiceOf("d"))
+        assertFalse("d" in ReadAloudText.VOICES)
+        assertEquals(listOf("f", "m", "d"), ReadAloudText.CHOICES.map { it.first })
+    }
+
+    @Test fun kidSpeedField() {
+        // "speed" is a whole percent from 50 to 150; anything else is malformed.
+        KidVoice.check(JSONObject().put("speed", 50))
+        KidVoice.check(JSONObject().put("speed", 150))
+        KidVoice.check(JSONObject().put("speed", 80L))
+        for (bad in listOf<Any>(49, 151, 80.5, "80", true, -1))
+            assertEquals("speed", runCatching { KidVoice.check(JSONObject().put("speed", bad)) }.exceptionOrNull()?.message)
+        assertEquals(120, KidVoice.speedOf(JSONObject().put("speed", 120)))
+        assertNull(KidVoice.speedOf(JSONObject()))
+        assertNull(KidVoice.speedOf(JSONObject().put("speed", 200)))
+        assertEquals(84, KidVoice.speedOut(83.6f))
+        assertEquals(150, KidVoice.speedOut(170f))
+        // Cap k16: sent only when the device says k16 and every co-parent's app does too.
+        assertEquals(90, KidVoice.speedToSend(90f, true, listOf(setOf("k15", "k16"))))
+        assertNull(KidVoice.speedToSend(90f, false, emptyList()))
+        assertNull(KidVoice.speedToSend(90f, true, listOf(setOf("k15"))))
+        assertNull(KidVoice.speedToSend(90f, true, listOf(setOf("k14"))))
+        assertNull(KidVoice.speedToSend(90f, true, listOf(null)))
+        assertNull(KidVoice.speedToSend(null, true, emptyList()))
+    }
+
+    @Test fun kidSpeedInSignedConfig() {
+        val all = JSONObject(javaClass.classLoader!!.getResource("proto06-vectors.json")!!.readText(Charsets.UTF_8))
+        val chat = JSONObject(javaClass.classLoader!!.getResource("chat-vectors.json")!!.readText(Charsets.UTF_8))
+        val kA = all.getJSONObject("keys").getString("A")
+        val kTV = all.getJSONObject("keys").getString("TV")
+        val privA = io.github.ravenor907.muninn.net.ChatCrypto.privateFrom(chat.getString("privA"))
+        val people = listOf(io.github.ravenor907.muninn.tv.TvPerson(kA, "Dad", "a".repeat(64)))
+        fun cfg(extras: io.github.ravenor907.muninn.tv.TvExtras) =
+            TvRules.config(privA, kTV, 2, kA, listOf(kA), emptyList(), people, false, 1761500000002, extras)
+        val with = cfg(io.github.ravenor907.muninn.tv.TvExtras(voice = "f", speed = 120))
+        assertEquals(120, with.getInt("speed"))
+        TvRules.check(with)
+        assertEquals(true to "newer", TvRules.accept(kTV, listOf(kA), null, with))
+        assertEquals(120, KidVoice.speedOf(with))
+        // None set, or out of range: left out (the device reads at 80%).
+        assertFalse(cfg(io.github.ravenor907.muninn.tv.TvExtras(voice = "f")).has("speed"))
+        assertFalse(cfg(io.github.ravenor907.muninn.tv.TvExtras(speed = 300)).has("speed"))
+        val bad = JSONObject(with.toString()).put("speed", 10)
+        assertEquals("malformed: speed", TvRules.accept(kTV, listOf(kA), null, bad).second)
+    }
 }

@@ -55,7 +55,7 @@ object KidReset {
     }
 
     /** The names a Kids' Device gives itself ([KidTv.pairingCode]). */
-    val KID_NAMES = setOf("Kids' TV", "Kids' Tablet", "Kids' Phone")
+    val KID_NAMES = setOf("Kids' TV", "Kids' Tablet", "Kids' Phone", "Kids' Device")
 
     // ---- on the device
 

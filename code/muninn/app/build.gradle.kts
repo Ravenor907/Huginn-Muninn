@@ -194,6 +194,31 @@ androidComponents {
     }
 }
 
+// Labs › Things to test: the beta's test list, one file for both apps (code/shared/beta-tests.json), copied into the
+// APK's assets as beta-tests.json the same way as the verses above.
+abstract class SharedBetaTests : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val tests: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copyIn() {
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        tests.get().asFile.copyTo(File(out, "beta-tests.json"), overwrite = true)
+    }
+}
+val sharedBetaTestsFile = rootProject.file("../shared/beta-tests.json")
+androidComponents {
+    onVariants { variant ->
+        val copy = tasks.register<SharedBetaTests>("${variant.name}SharedBetaTests") { tests.set(sharedBetaTestsFile) }
+        variant.sources.assets?.addGeneratedSourceDirectory(copy, SharedBetaTests::outputDir)
+    }
+}
+
 // Read aloud's natural voices (code/shared/docs/voices.md): the hashes of the voice files (code/shared/voices.sha256),
 // copied into the APK's assets as voices.sha256, so a voice is only ever used when it matches its line there.
 abstract class SharedVoices : DefaultTask() {

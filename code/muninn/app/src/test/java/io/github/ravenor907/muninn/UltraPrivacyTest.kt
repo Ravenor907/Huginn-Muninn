@@ -42,13 +42,15 @@ class UltraPrivacyTest {
         UltraPrivacy.use(true)
         assertTrue(UltraPrivacy.on)
         assertFalse("direct calls, files and photos", UltraPrivacy.directAllowed)
-        assertFalse("sending videos", UltraPrivacy.videoSendAllowed)
+        assertFalse("calls", UltraPrivacy.callsAllowed)
+        // 1.42: sending videos is allowed again (over Tor or the same Wi-Fi: never straight, see directAllowed).
+        assertTrue("sending videos", UltraPrivacy.videoSendAllowed)
         assertFalse("link previews", UltraPrivacy.previewsAllowed)
         assertFalse("GIF search", UltraPrivacy.gifSearchAllowed)
-        // Videos as files too, by name or type; other files still go.
-        listOf("a.mp4", "B.MOV", "clip.webm", "x.mkv", "y.3gp").forEach { assertTrue(it, UltraPrivacy.blocksFile(it)) }
-        assertTrue(UltraPrivacy.blocksFile("noext", "video/mp4"))
-        listOf("photo.jpg", "notes.txt", "song.mp3", "mp4").forEach { assertFalse(it, UltraPrivacy.blocksFile(it)) }
+        // Videos as files go too; they're still known by name.
+        listOf("a.mp4", "B.MOV", "clip.webm", "x.mkv", "y.3gp").forEach { assertFalse(it, UltraPrivacy.blocksFile(it)); assertTrue(it, UltraPrivacy.isVideoName(it)) }
+        assertFalse(UltraPrivacy.blocksFile("noext", "video/mp4"))
+        listOf("photo.jpg", "notes.txt", "song.mp3", "mp4").forEach { assertFalse(it, UltraPrivacy.isVideoName(it)) }
         // A link preview isn't even tried (no network here: it would fail differently).
         assertNull(LinkPreview.fetch("https://example.com/"))
         assertEquals("Off while Ultra privacy is on", UltraPrivacy.OFF_NOTE)
@@ -102,9 +104,15 @@ class UltraPrivacyTest {
         val all = UltraPrivacy.WHAT_IT_DOES + UltraPrivacy.DOWNSIDES + UltraPrivacy.SETUP_LINES + UltraPrivacy.SETUP_ULTRA + UltraPrivacy.SETUP_TITLE
         all.forEach { assertFalse(it, it.contains('\u2014') || it.contains('\u2013')) }
         val d = UltraPrivacy.DOWNSIDES.joinToString(" ").lowercase()
-        listOf("slower", "relay sees your address", "direct", "sending videos", "link previews", "gif search", "update", "battery",
+        listOf("slower", "relay sees your address", "direct", "videos send over tor. calls are off.", "link previews", "gif search", "update", "battery",
             "bigger", "blocked", "volunteers", "no encryption").forEach { assertTrue(it, d.contains(it)) }
         assertTrue(UltraPrivacy.SETUP_ULTRA.contains("a few trade-offs, explained before you turn it on"))
+        // Owner wording (1.42) on the explain, warning and first-setup texts.
+        assertEquals("Videos send over Tor. Calls are off.", UltraPrivacy.VIDEOS_AND_CALLS)
+        assertTrue(UltraPrivacy.VIDEOS_AND_CALLS in UltraPrivacy.WHAT_IT_DOES)
+        assertTrue(UltraPrivacy.VIDEOS_AND_CALLS in UltraPrivacy.DOWNSIDES)
+        assertTrue(UltraPrivacy.SETUP_ULTRA.contains(UltraPrivacy.VIDEOS_AND_CALLS))
+        assertFalse(d.contains("sending videos is off"))
         assertEquals("Your privacy, built in", UltraPrivacy.SETUP_TITLE)
     }
 
@@ -161,16 +169,15 @@ class UltraPrivacyTest {
         assertFalse(UltraPrivacy.looksLikeVideo(b("hello there, nothing here")))
         assertFalse(UltraPrivacy.looksLikeVideo(b(0, 0, 0, 0x18, "ftypheic", 0, 0, 0, 0)))
         assertFalse(UltraPrivacy.looksLikeVideo(b(0, 0, 0, 0x18, "ftypM4A ", 0, 0, 0, 0)))
-        // A video renamed: blocked by what it is, only while Ultra privacy is on.
+        // A video renamed is still known by what it is; since 1.42 it isn't blocked under Ultra privacy.
         val f = java.io.File.createTempFile("ultra", ".bin")
         try {
             f.writeBytes(b(0, 0, 0, 0x18, "ftypisom", 0, 0, 0, 0) + ByteArray(100))
-            UltraPrivacy.use(false)
-            assertFalse(UltraPrivacy.blocksFile(f, "clip.bin"))
             UltraPrivacy.use(true)
-            assertTrue(UltraPrivacy.blocksFile(f, "clip.bin"))
+            assertTrue(UltraPrivacy.isVideo(f, "clip.bin"))
+            assertFalse(UltraPrivacy.blocksFile(f, "clip.bin"))
             f.writeBytes(b("plain text, not a video at all"))
-            assertFalse(UltraPrivacy.blocksFile(f, "notes.txt"))
+            assertFalse(UltraPrivacy.isVideo(f, "notes.txt"))
         } finally { f.delete() }
     }
 }

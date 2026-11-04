@@ -174,17 +174,18 @@ Window {
         if (e.id === "newgroup") { plusMenu(); return }
         openPage(e.id, {})
     }
-    // The rail's +: New group, Join a group (an invite link or code), or Add someone.
-    function plusMenu() {
+    // The rail's +: the same three rows as the chat list's + (and Muninn's): New chat, New group, Add someone (its page
+    // has My code, One-time link, Paste a code and Join a group).
+    readonly property var plusItems: [{ name: "New chat", icon: "thread", url: "newchat" },
+                                      { name: "New group", icon: "people", url: "group" },
+                                      { name: "Add someone", icon: "plus", url: "addpage" }]
+    function plusMenu() { Ui.pickFrom("Add", [{ header: "", items: plusItems }], a => plusAction(a)) }
+    function plusAction(a) {
+        if (app.touring) return
         const later = f => Qt.callLater(() => { const p = page(); if (p && typeof p[f] === "function") p[f]() })
-        Ui.pickFrom("Groups", [{ header: "", items: [{ name: "New group", icon: "people", url: "group" },
-                                               { name: "Join a group", icon: "qr", url: "join" },
-                                               { name: "Add someone", icon: "plus", url: "add" }] }], a => {
-            if (app.touring) return
-            if (a === "group") newGroup()
-            else if (a === "join") { openPage("dms", {}); later("joinGroup") }
-            else if (a === "add") { openPage("dms", {}); later("addSomeone") }
-        })
+        if (a === "group") newGroup()
+        else if (a === "newchat") { openPage("dms", {}); later("newChat") }
+        else if (a === "addpage") { openPage("dms", {}); later("addPage") }
     }
     function newGroup() {
         if (!Vault.exists) { Ui.say("Set a lock first.", true); openPage("dms", {}); return }
@@ -736,8 +737,7 @@ Window {
             let items = []
             if (e.id === "dms") items = [{ name: "Open", icon: "thread", url: "open" }, { name: "New chat", icon: "plus", url: "chat" },
                                          { name: "New group", icon: "people", url: "group" }, { name: "New folder", icon: "folder", url: "folder" }]
-            else if (e.id === "newgroup") items = [{ name: "New group", icon: "people", url: "group" }, { name: "Join a group", icon: "qr", url: "join" },
-                                                   { name: "Add someone", icon: "plus", url: "chat" }]
+            else if (e.id === "newgroup") items = plusItems
             else if (e.id === "contacts") items = [{ name: "Open", icon: "person", url: "open" }, { name: "Add someone", icon: "plus", url: "chat" },
                                                    { name: "One-time link", icon: "attach", url: "once" }]
             else if (e.id === "files") items = [{ name: "Open", icon: "folder", url: "open" }, { name: "Transfers", icon: "down", url: "transfers" },
@@ -750,7 +750,8 @@ Window {
                 if (app.touring) return
                 if (a === "open") openPage(e.id, {})
                 else if (a === "group") newGroup()
-                else if (a === "chat") { openPage("dms", {}); later("addSomeone") }
+                else if (a === "chat") { openPage("dms", {}); later(e.id === "contacts" ? "addPage" : "newChat") }
+                else if (a === "newchat" || a === "addpage") plusAction(a)
                 else if (a === "join") { openPage("dms", {}); later("joinGroup") }
                 else if (a === "folder") { openPage("dms", {}); later("newFolder") }
                 else if (a === "once") PeopleActions.inviteLink()
@@ -835,6 +836,13 @@ Window {
     function openReportWith(perfText) {
         Labs.capture(app)
         labsReport.openWith(perfText)
+    }
+    // Labs › Things to test › Report a problem: Report a bug with the test named at the start.
+    function openReportText(t) {
+        if (lockedOut) return
+        Labs.capture(app)
+        labsReport.open(false)
+        labsReport.text = t
     }
     function openPerf() { if (!lockedOut) perfPanel.open(app.touring) }
     function openLabsReports() { if (!lockedOut) labsInbox.open(app.touring) }
@@ -1477,7 +1485,7 @@ Window {
         app.talkWentBehind = false
         app.talkToldOnce = true
         if (!TalkKey.hasKey) return
-        Ui.say("Push to talk only hears " + (TalkKey.key !== 0 ? TalkKey.keyName : Gamepad.glyph(TalkKey.padButton)) + " while Huginn is in front. In a game, use voice activity (Settings › Calls).")
+        Ui.say("Push to talk only hears " + (TalkKey.key !== 0 ? TalkKey.keyName : Gamepad.glyph(TalkKey.padButton)) + " while Huginn is in front. In a game, use voice activity (Settings › Calls › Voice rooms).")
     }
     // Push to talk on with no key or controller button picked, or only a controller button and no controller connected:
     // the mic uses voice activity, so joining a room says so (once per room a run).
@@ -1498,7 +1506,7 @@ Window {
             if (TalkKey.padAway)
                 Ui.say("Your talk button is " + Gamepad.glyph(TalkKey.padButton) + ", but no controller is connected: using voice activity.")
             else
-                Ui.say("No talk key yet: using voice activity. Pick a key in Settings › Calls.")
+                Ui.say("No talk key yet: using voice activity. Pick a key in Settings › Calls › Voice rooms.")
         }
     }
     // The controller with the talk button went away (or slept) mid-room: push to talk stays on and the mic is muted,
@@ -1522,7 +1530,7 @@ Window {
             Ui.say("Controller back: hold " + Gamepad.glyph(TalkKey.padButton) + " to talk.")
         }
         function onTypedInstead() {
-            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like Insert, Pause or Scroll Lock (Settings › Calls).")
+            Ui.say(TalkKey.keyName + " typed into the text box. To talk while typing, pick a key that doesn't type, like Insert, Pause or Scroll Lock (Settings › Calls › Voice rooms).")
         }
     }
     // Panic lock (hold L3 and R3): close anything open over the screen. Report a bug stays, behind its own lock
@@ -1986,6 +1994,9 @@ Window {
             { page: "dms", zone: "list", verse: "open", file: "12c-daily-verse-open" },
             { page: "dms", zone: "list", verse: "earlier", file: "12d-daily-verse-earlier" },
             { page: "settings", section: "look", verse: "card", file: "12e-look-daily-verse" },
+            // Pages one level down: Look › Accessibility › Read aloud, and Calls › Voice rooms.
+            { page: "settings", section: "aloud", file: "12r-read-aloud" },
+            { page: "settings", section: "voicerooms", file: "12v-voice-rooms" },
             { page: "dms", zone: "list", verse: "open", handheld: true, file: "12f-handheld-daily-verse" },
             { page: "g:tour-crew", file: "13-group" },
             { page: "g:tour-crew", zone: "messages", file: "14-group-messages" },
@@ -2009,8 +2020,8 @@ Window {
             // A contact's menu › Details, the other sub-page.
             { page: "dms", zone: "messages", person: true, personPage: "edit", file: "31-edit" },
             { page: "files", filesMenu: true, file: "32-files-menu" },
-            // Labs mode: Updates and about with the update channel, Report a bug, and Labs reports.
-            { page: "settings", section: "about", labs: true, file: "33-labs" },
+            // Labs mode: the one Labs page (Report a bug, Labs reports, the update channel), Report a bug, and Labs reports.
+            { page: "settings", section: "labs", labs: true, file: "33-labs" },
             { page: "settings", section: "labs", labs: true, report: true, file: "34-labs-report" },
             { page: "dms", labsInbox: true, file: "35-labs-reports" },
             // Seasonal in Snow: the Look page with the season's settings (under More), then a conversation.
@@ -2058,7 +2069,7 @@ Window {
             { page: "dms", ctx: "settings", file: "75-menu-settings" },
             { page: "dms", ctx: "field", file: "76-menu-text" },
             { page: "dms", ctx: "space", small: true, file: "77-menu-empty-list" },
-            // A group's one Call button, its popup open: Call everyone, Pick people and Drop-in call for each room.
+            // A group's one Call button, its popup open: Call everyone, Pick people and Join voice room for each room.
             { page: "g:tour-crew", zone: "messages", ctx: "call", file: "78-menu-call" },
             // Settings › Devices and backup › Back up: what's inside, the password, saved; then Restore: choose a file, a wrong password, what's in it.
             { page: "settings", section: "devices", backup: "what", file: "80-backup" },

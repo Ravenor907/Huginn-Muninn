@@ -38,7 +38,7 @@ Item {
         { spot: "chats", text: linkedTour ? (setup.pad ? "LT on a phone chat mutes it, on your phone too." : "Right-click a phone chat to mute it, on your phone too.")
                                           : setup.pad ? "LT opens the options for what's picked." : "Right-click a chat or a message for its options." },
         { spot: "attach", text: linkedTour ? "Calls and files stay on your phone. Write and reply to your phone's chats here." : "In a chat, the clip beside the message box sends a file." },
-        { spot: "card", text: setup.pad ? "Your card and profile. In voice, while Huginn is in front: hold LB, then Up mutes and Down deafens." : "Your card: mute, deafen and your profile. " + GlobalKeys.muteName + " mutes." },
+        { spot: "card", text: setup.pad ? "Your card and profile. In a voice room, while Huginn is in front: hold LB, then Up mutes and Down deafens." : "Your card: mute, deafen and your profile. " + GlobalKeys.muteName + " mutes." },
         { spot: "newgroup", text: linkedTour ? "The + under the groups makes one for this PC's own account. Make groups on your phone." : "The + under your groups makes a group, or joins one with an invite." },
         { spot: setup.pad ? "" : "search", text: setup.pad ? "Lost? Press View to show the buttons." : "Ctrl+K jumps to any chat. Transfers shows files on their way." },
         { spot: "settings", text: setup.pad ? "The knot icon at the bottom opens Settings. Menu does too." : "The knot icon at the bottom opens Settings." }
@@ -356,7 +356,7 @@ Item {
                 width: body.width
                 spacing: Theme.px(12)
                 topPadding: Theme.px(12)
-                Title { text: "WHAT'S YOUR NAME?" }
+                Title { text: "WHAT SHOULD PEOPLE CALL YOU?" }
                 Line { text: "Any name your friends will recognize. A nickname is fine. Change it any time in Settings › Profile." }
                 Field { id: nameInput; focusId: "nameField"; placeholder: "A name"; onEnter: setup.saveName() }
                 Row {
@@ -376,7 +376,7 @@ Item {
                 topPadding: Theme.px(12)
                 Title { text: "LINK YOUR PHONE" }
                 Line { text: Linked.phone.key && !setup.practice ? "Your phone is linked." : "Your phone's Muninn chats, here too. Optional." }
-                Line { text: "In Muninn: Settings › Devices and backup › Scan to link." }
+                Line { text: "In Muninn: Settings › Devices and backup › Linked devices › Scan to link." }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Show the code"; kind: "primary"; focused: setup.lit("linkNow"); onClicked: setup.run("linkNow") }
             }
 

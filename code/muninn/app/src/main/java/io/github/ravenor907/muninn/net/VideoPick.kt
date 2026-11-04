@@ -34,7 +34,7 @@ import kotlin.coroutines.resume
 
 /**
  * Cap v3 (protocol.md 29): a video picked from the phone, read ([probe]) and, when it's over the limits, converted with
- * Media3 Transformer ([fullCopy], [relayCopy]), which keeps the picture upright and uses the phone's own H.264 encoder.
+ * Media3 Transformer ([fullCopy], [smallCopy], [relayCopy]), which keeps the picture upright and uses the phone's own H.264 encoder.
  * Only plain H.264 and AAC in an MP4 goes as it is; anything else (HEVC, AV1, 10-bit, HDR) is converted. Every copy has
  * its location and camera details taken out (Mp4Scrub) before it goes, as photos do.
  * Low-end phones: no 1080p encoder or little memory makes the full copy 720p; a copy that fails is tried once smaller
@@ -43,7 +43,7 @@ import kotlin.coroutines.resume
 @OptIn(UnstableApi::class)
 object VideoPick {
     /**
-     * Where copies are made: a relay copy is read and deleted at once, a full copy once Chat.sendVideoFull has given each
+     * Where copies are made: a relay copy is read and deleted at once; a full or 720p copy once VideoSend has given each
      * member their own name for it in noBackupFilesDir/videos-out (kept there until FileLink is done with it, up to a day).
      */
     fun dir(context: Context): File = File(context.cacheDir, "videos").also { it.mkdirs() }
@@ -164,40 +164,61 @@ object VideoPick {
 
     // The sizes copies are tried at (long side, short side): 1080p, 720p, and the old 480p video message size.
     private val P1080 = GroupVideo.FULL_LONG to GroupVideo.FULL_SHORT
-    private val P720 = GroupVideo.RELAY_LONG to GroupVideo.RELAY_SHORT
+    private val P720 = GroupVideo.SMALL_LONG to GroupVideo.SMALL_SHORT
     private val P480 = 854 to Videos.SIDE
 
     /**
-     * The full copy (1080p30 at most) of [uri] into [out]: as it is (without its location and camera details) when it's
-     * plain H.264 within the limits, else converted. [clip]: start and end in ms, or null for all of it. Null when made,
-     * else what to say.
+     * The full copy (1080p30 at most, any length) of [uri] into [out]: as it is (without its location and camera details)
+     * when it's plain H.264 within the limits, else converted. Never cut. Null when made, else what to say.
      */
-    suspend fun fullCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, clip: Pair<Int, Int>?, progress: (Float) -> Unit): String? {
-        if (clip == null && GroupVideo.fitsFull(info)) {
+    suspend fun fullCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, progress: (Float) -> Unit): String? {
+        if (GroupVideo.fitsFull(info)) {
             if (!copy(context, uri, out)) return "That video can't be read."
             if (ready(out) && out.length() in 1..GroupVideo.FULL_MAX_BYTES) return null
             out.delete()   // its details couldn't be taken out as it is: converted below instead
         }
-        val ms = clip?.let { it.second - it.first } ?: info.ms
         val sizes = if (lowEnd(context) || !canEncode(GroupVideo.FULL_LONG, GroupVideo.FULL_SHORT, GroupVideo.FULL_FPS))
             listOf(P720) else listOf(P1080, P720)
         for ((long, short) in sizes) {
-            if (convert(context, uri, info, out, long, short, GroupVideo.fullBitrate(ms), clip, progress) && ready(out) &&
+            if (convert(context, uri, info, out, long, short, GroupVideo.fullBitrate(info.ms), progress) && ready(out) &&
                 out.length() in 1..GroupVideo.FULL_MAX_BYTES) return null
             out.delete()
         }
-        return "This phone couldn't convert that video. Try a shorter one."
+        return "This phone couldn't convert that video."
     }
 
-    /** The relay copy (720p, at most 20 s, fits the relays) into [out]. Null when made, else what to say. */
-    suspend fun relayCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, clip: Pair<Int, Int>?, progress: (Float) -> Unit): String? {
-        if (clip == null && GroupVideo.fitsRelay(info)) {
+    /**
+     * The 720p copy (up to 5 minutes, for those not direct: FileLink over Tor) into [out]: as it is when it's plain H.264
+     * at 720p30 at most, else converted with Media3 (the sheet asked first when it's bigger than 720p). Never cut: a video
+     * over 5 minutes isn't made at all. Null when made, else what to say.
+     */
+    suspend fun smallCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, progress: (Float) -> Unit): String? {
+        if (info.ms > GroupVideo.SMALL_MAX_MS + GroupVideo.SLACK_MS) return GroupVideo.TOO_LONG_TEXT
+        if (GroupVideo.fitsSmall(info)) {
+            if (!copy(context, uri, out)) return "That video can't be read."
+            if (ready(out)) return null
+            out.delete()
+        }
+        // 720p, then 480p if the phone couldn't.
+        for ((long, short) in listOf(P720, P480)) {
+            if (convert(context, uri, info, out, long, short, GroupVideo.SMALL_VIDEO_BITRATE, progress) && ready(out)) return null
+            out.delete()
+        }
+        return "This phone couldn't convert that video."
+    }
+
+    /**
+     * The relay copy for older apps (720p, at most 20 s, fits the relays) into [out]. Never cut: a longer video gets no
+     * relay copy. Null when made, else what to say.
+     */
+    suspend fun relayCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, progress: (Float) -> Unit): String? {
+        if (GroupVideo.fitsRelay(info)) {
             if (!copy(context, uri, out)) return "That video can't be read."
             if (ready(out) && GroupVideo.relayFits(out.length())) return null
             out.delete()
         }
-        val ms = clip?.let { it.second - it.first } ?: info.ms
-        if (ms > GroupVideo.RELAY_MAX_MS + GroupVideo.SLACK_MS) return "Over the internet, videos can be up to 20 seconds. Trim it first."
+        val ms = info.ms
+        if (ms > GroupVideo.RELAY_MAX_MS + GroupVideo.SLACK_MS) return "Older apps get videos up to 20 seconds."
         var bitrate = GroupVideo.relayBitrate(ms, audioBps = info.audioBps)
         // 720p, once more at a lower bitrate if it ran over, then 480p. A 720p try that failed outright goes straight to
         // 480p: the same try again would only fail the same way.
@@ -205,7 +226,7 @@ object VideoPick {
         var i = 0
         while (i < sizes.size) {
             val (long, short) = sizes[i]
-            if (convert(context, uri, info, out, long, short, bitrate, clip, progress) && ready(out)) {
+            if (convert(context, uri, info, out, long, short, bitrate, progress) && ready(out)) {
                 val got = out.length()
                 if (GroupVideo.relayFits(got)) return null
                 bitrate = GroupVideo.retryBitrate(bitrate, got, ms)
@@ -213,7 +234,7 @@ object VideoPick {
             } else i = if (i < sizes.size - 1) sizes.size - 1 else sizes.size
             out.delete()
         }
-        return "This phone couldn't make a small enough copy of that video. Try a shorter one."
+        return "This phone couldn't make a small enough copy for older apps."
     }
 
     /**
@@ -221,16 +242,14 @@ object VideoPick {
      * bigger, its shape kept), at most 30 frames a second, video at [bitrate], HDR mapped to SDR (Android 10 and up).
      * False if the phone couldn't (the reason isn't shown: the caller tries smaller).
      */
-    private suspend fun convert(context: Context, uri: Uri, info: GroupVideo.Info, out: File, long: Int, short: Int, bitrate: Int, clip: Pair<Int, Int>?,
+    private suspend fun convert(context: Context, uri: Uri, info: GroupVideo.Info, out: File, long: Int, short: Int, bitrate: Int,
                                 progress: (Float) -> Unit): Boolean = suspendCancellableCoroutine { cont ->
         val main = Handler(Looper.getMainLooper())
         out.delete()
         main.post {
             try {
-                val item = MediaItem.Builder().setUri(uri).apply {
-                    if (clip != null) setClippingConfiguration(MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(clip.first.toLong()).setEndPositionMs(clip.second.toLong()).build())
-                }.build()
+                // The whole video, never clipped (1.42: videos are never cut).
+                val item = MediaItem.Builder().setUri(uri).build()
                 val effects = ArrayList<Effect>()
                 if (!GroupVideo.withinFps(info.fps, GroupVideo.FULL_FPS)) effects.add(FrameDropEffect.createDefaultFrameDropEffect(GroupVideo.FULL_FPS.toFloat()))
                 // The frames reach the effects upright, so the target is worked out on the upright size.

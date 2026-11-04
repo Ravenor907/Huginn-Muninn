@@ -3,8 +3,10 @@ import Huginn
 
 // Transfers (the top bar's button): every file coming or going, newest first. Each row says what it is (name, size,
 // kind), who it's from or to and which chat, how it's going with a bar, speed and time left, its route ("Same Wi-Fi",
-// "Straight to them" or "Over the internet"), and why when it didn't work. Buttons: Accept, Always from this person and
-// Decline when a file asks first, Pause or Resume and Cancel while it runs, Retry after a failure, Open and Folder once
+// Nearby, Trusted direct or Tor slower), and why when it didn't work. A file that asks first (every one, 1.42) is the
+// receiving card: who with their trust badge, "wants to send you a ZIP file", name, size and how it comes, "Only open
+// this if you were expecting it." for programs and archives, then Decline, Accept and (only for someone trusted or
+// Family) Always accept from them; Pause or Resume and Cancel while it runs, Retry after a failure, Open and Folder once
 // saved. LocalSend devices nearby show here too. Esc, B or a click outside closes it; Up and Down pick a row, Left and
 // Right a button, A presses it.
 Item {
@@ -23,7 +25,8 @@ Item {
         { id: "s1", name: "Raid plan.pdf", size: 2400000, done: 1100000, mine: true, state: "sending", kind: "PDF document", chat: "Gaming Crew",
           peer: "", route: "Same Wi-Fi", pace: "4.2 MB/s · 1 s left", where: "g:tour", folder: "", note: "", path: "", paused: false, held: false },
         { id: "s2", name: "Holiday photos.zip", size: 380000000, done: 0, mine: false, state: "asking", kind: "Archive", chat: "Mira", peer: "tour",
-          route: "", pace: "", where: "tour", folder: "Downloads/Huginn/Mira", note: "", path: "", paused: false, held: false },
+          route: "", pace: "", where: "tour", folder: "Downloads/Huginn/Mira", note: "", path: "", paused: false, held: false,
+          badge: "Trusted", method: "Nearby", typeWord: "a ZIP file", risky: true, canAlways: true },
         { id: "s3", name: "Map pack.7z", size: 52000000, done: 31000000, mine: true, state: "sending", kind: "Archive", chat: "Jake", peer: "",
           route: "Straight to them", pace: "", where: "j", folder: "", note: "", path: "", paused: true, held: false },
         { id: "s4", name: "Recipe.docx", size: 48000, done: 48000, mine: false, state: "done", kind: "Document", chat: "Family", peer: "tour",
@@ -61,7 +64,7 @@ Item {
         if (!t) return []
         const out = []
         if (tour) {
-            if (t.state === "asking") out.push({ label: "Accept", act: "", kind: "primary" }, { label: "Always from this person", act: "", kind: "normal" }, { label: "Decline", act: "", kind: "normal" })
+            if (t.state === "asking") out.push({ label: "Decline", act: "", kind: "normal" }, { label: "Accept", act: "", kind: "primary" }, { label: "Always accept from " + t.chat, act: "", kind: "normal" })
             else if (t.paused) out.push({ label: "Resume", act: "", kind: "accent" }, { label: "Cancel", act: "", kind: "danger" })
             else if (t.state === "sending") out.push({ label: "Pause", act: "", kind: "normal" }, { label: "Cancel", act: "", kind: "danger" })
             else if (t.state === "done") out.push({ label: "Open", act: "", kind: "accent" }, { label: "Folder", act: "", kind: "normal" })
@@ -74,9 +77,9 @@ Item {
             return out
         }
         if (t.state === "asking" && !t.mine) {
-            out.push({ label: "Accept", act: "accept", kind: "primary" })
-            if (Chat.isContact(t.peer)) out.push({ label: "Always from this person", act: "always", kind: "normal" })
-            out.push({ label: "Decline", act: "decline", kind: "normal" })
+            // The receiving card: Decline, Accept, and Always only for someone trusted or Family.
+            out.push({ label: "Decline", act: "decline", kind: "normal" }, { label: "Accept", act: "accept", kind: "primary" })
+            if (t.canAlways === true) out.push({ label: "Always accept from " + Chat.nameOf(t.peer), act: "always", kind: "normal" })
         } else if (FileLink.canResume(t.id)) {
             out.push({ label: "Resume", act: "resume", kind: "accent" }, { label: "Cancel", act: "cancel", kind: "danger" })
         } else if (FileLink.canPause(t.id)) {
@@ -125,12 +128,17 @@ Item {
     }
     // Size, kind, what it's doing, route and pace.
     function line(t) {
+        // The receiving card: size and how it comes ("Nearby", "Tor, slower (about 20 min)").
+        if (panel.incoming(t)) return [FileLink.size(t.size), t.method || ""].filter(p => p !== "").join(" · ")
         const parts = [FileLink.size(t.size), t.kind]
         parts.push(t.local ? (t.note || "") : tour && t.paused ? "Paused" : tour ? statusOf(t) : FileLink.text(t))
         if (t.route !== "" && t.state !== "failed") parts.push(t.route)
         if (t.pace !== "") parts.push(t.pace)
         return parts.filter(p => p !== "").join(" · ")
     }
+    function incoming(t) { return !!t && !t.local && !t.mine && t.state === "asking" }
+    // The badge's fill (the mockup's): Trusted green, Family blue, Contact gold, Not trusted red.
+    function badgeFill(b) { return b === "Trusted" ? "#9FC7A6" : b === "Family" ? "#A9C4DE" : b === "Contact" ? "#D8C39A" : "#E3A99E" }
     function statusOf(t) {
         if (t.state === "asking") return "Wants to send you this"
         if (t.state === "sending") return (t.mine ? "Sending " : "Receiving ") + Math.floor(100 * t.done / Math.max(1, t.size)) + "%"
@@ -288,6 +296,37 @@ Item {
                             anchors.right: buttonRow.left; anchors.rightMargin: Theme.px(10)
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: Theme.px(2)
+                            // The receiving card's head: who, their trust badge, and what they want to send.
+                            Row {
+                                visible: panel.incoming(row.t)
+                                spacing: Theme.px(8)
+                                Text {
+                                    textFormat: Text.PlainText
+                                    text: panel.incoming(row.t) ? (panel.tour ? row.t.chat : Chat.nameOf(row.t.peer)) : ""
+                                    color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(16); font.weight: Font.Bold
+                                }
+                                Rectangle {
+                                    visible: (row.t.badge || "") !== ""
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: chip.implicitWidth + Theme.px(18); height: chip.implicitHeight + Theme.px(6)
+                                    radius: height / 2
+                                    color: panel.badgeFill(row.t.badge || "")
+                                    Text {
+                                        id: chip
+                                        textFormat: Text.PlainText
+                                        anchors.centerIn: parent
+                                        text: row.t.badge || ""
+                                        color: "#0D1411"; font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.Bold
+                                    }
+                                }
+                            }
+                            Text {
+                                textFormat: Text.PlainText
+                                visible: panel.incoming(row.t)
+                                width: parent.width; elide: Text.ElideRight
+                                text: "wants to send you " + (row.t.typeWord || "a file")
+                                color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+                            }
                             Text {
                                 textFormat: Text.PlainText
                                 width: parent.width; elide: Text.ElideMiddle
@@ -303,9 +342,17 @@ Item {
                             }
                             Text {
                                 textFormat: Text.PlainText
+                                visible: panel.incoming(row.t) && row.t.risky === true
+                                width: parent.width; wrapMode: Text.Wrap
+                                text: "Only open this if you were expecting it."
+                                color: "#E3B27A"
+                                font.family: Theme.body; font.pixelSize: Theme.fs(13)
+                            }
+                            Text {
+                                textFormat: Text.PlainText
                                 visible: row.failed && !panel.tour && !row.t.local && FileLink.needsDirect(row.t.id)
                                 width: parent.width; wrapMode: Text.Wrap
-                                text: "Big files go straight between your devices when you both turn on Direct calls and files."
+                                text: "Big files go straight between your devices when you both turn on Trusted direct."
                                 color: Theme.textMuted
                                 font.family: Theme.body; font.pixelSize: Theme.fs(12)
                             }

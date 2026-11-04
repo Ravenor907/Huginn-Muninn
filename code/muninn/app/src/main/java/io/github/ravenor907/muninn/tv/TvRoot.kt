@@ -779,6 +779,8 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
             }
         }
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically)) {
+            // 1.42: a file someone on the list sends asks first here too (Decline / Accept); the D-pad reaches its buttons.
+            io.github.ravenor907.muninn.screens.DirectFiles(p.k, p.n)
             if (buttons.isNotEmpty()) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 for (id in buttons) when (id) {
                     "call" -> ActionTile("Call", "call", req(id), Modifier.weight(1f)) { call() }

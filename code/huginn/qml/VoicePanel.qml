@@ -46,7 +46,7 @@ Rectangle {
                                       : TalkKey.padAway ? "No controller"
                                       : TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + keyShort + " goes to the box"
                                       : "Hold " + keyShort
-    readonly property string holdTip: !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls"
+    readonly property string holdTip: !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls › Voice rooms"
                                     : TalkKey.padGone ? "Controller gone: mic muted. Connect it again to talk"
                                     : TalkKey.padAway ? "No controller connected: voice activity until one is" : holdWords
     height: (voice.visible ? voice.implicitHeight : 0) + me.height
@@ -284,7 +284,7 @@ Rectangle {
                 // so with another app in front it says so.
                 text: !panel.tour && Rooms.talking ? "Talking"
                     : !panel.tour && (Qt.platform.os === "windows" || !GlobalKeys.everywhere) && Qt.application.state !== Qt.ApplicationActive ? "Push to talk pauses while another app is in front"
-                    : !panel.tour && !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls"
+                    : !panel.tour && !TalkKey.hasKey ? "No talk key yet: voice activity. Pick one in Settings › Calls › Voice rooms"
                     : !panel.tour && TalkKey.padGone ? "Controller gone: mic muted. Connect it again to talk"
                     : !panel.tour && TalkKey.padAway ? "No controller connected: voice activity until one is"
                     : !panel.tour && TalkKey.keyTypes && TalkKey.inBox ? "Typing: " + TalkKey.keyName + " goes to the box"

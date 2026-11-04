@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit
  * all, so a group video (a sealed copy per member) never floods the public relays and gets the account blocked. A relay
  * that answers "rate-limited" stops everything for [GroupVideo.BACKOFF_MS]. One job per member and message ([go]'s key):
  * a retry while its pieces are still queued adds nothing. [sent] says how far each one got, for the message's Info.
+ * 1.42: only older apps (without GroupVideo.NEW_PATH_CAP) still get a picked video's relay copy; new apps get the 720p
+ * copy through FileLink (Tor when there's no direct path) and never relay video.
  */
 object VideoPace {
     private val pacer = GroupVideo.Pacer()

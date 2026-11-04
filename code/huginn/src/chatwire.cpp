@@ -10,7 +10,7 @@
 #include <set>
 
 const char ChatWire::kCap[] = "r1";
-const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2 g3 f3 c3 g4 n1 n2 p2 v3 h1 r2";
+const char ChatWire::kCaps[] = "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2 g3 f3 c3 g4 n1 n2 p2 v3 h1 r2 f4";
 
 namespace
 {
@@ -355,6 +355,12 @@ bool ChatWire::selfTest()
         check(present && t.size() == 3 && t.contains(QStringLiteral("zz9")), "caps: any order, extra spaces, unknown tokens kept apart, duplicates once");
         odd.insert(QStringLiteral("caps"), QStringLiteral("r1 g1 c1 c2 k1 k2 k3 k4 k5 k6 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1"));
         check(ChatWire::capsOf(odd, &present).contains(QStringLiteral("s1")), "caps: all of Muninn's tokens are kept");
+        // 1.42: f4 (Encrypted file sharing over Tor) is appended at the end of mine; Muninn's whole list (48, with f4 and
+        // k16 last) is kept, f4 included.
+        check(QString::fromLatin1(kCaps).split(QLatin1Char(' ')).last() == QLatin1String("f4"), "caps: f4 is said, last");
+        odd.insert(QStringLiteral("caps"), QStringLiteral("r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3 g4 n1 n2 u1 k11 k12 k13 k14 p2 h1 r2 v3 k15 f4 k16"));
+        check(ChatWire::capsOf(odd, &present).contains(QStringLiteral("f4")) && ChatWire::capsOf(odd, &present).contains(QStringLiteral("k16")),
+              "caps: Muninn's f4 and k16 are kept");
         check(ChatWire::capsOf(QJsonObject(), &present).isEmpty() && !present, "no caps field: an app without caps");
         check(capsDropped(QStringLiteral("r1 g1 n2 zz9"), QStringLiteral("r1 g1 n2")) && !capsDropped(QStringLiteral("r1 g1"), QStringLiteral("g1 r1 n2"))
                   && !capsDropped(QString(), QLatin1String(kCaps)),

@@ -96,12 +96,17 @@ private val PAGES = listOf(
     Page("profile", "Profile"), Page("notify", "Notifications"), Page("lock", "Privacy and lock"), Page("calls", "Calls"),
     Page("look", "Look"), Page("battery", "Battery and data"), Page("devices", "Devices and backup"),
     Page("about", "Updates and about"), Page("lockset", "Change lock", "lock"), Page("unlockpw", "Unlock password", "lock"),
+    // One level down (consolidation 2.13, 2.11, 2.15): each its own page, opened from a row.
+    Page("linked", "Linked devices", "devices"), Page("move", "Move to a new device", "devices"),
+    Page("aloud", "Read aloud", "look"), Page("labs", "Labs"),
 )
 
 /** Older page names (the chat list's Back up and Linked devices, CI) open the page that holds them now. */
 internal fun settingsPage(id: String): String = when (id) {
-    "backup", "link", "files", "erase" -> "devices"
+    "backup", "files", "erase" -> "devices"
+    "link" -> "linked"
     "access" -> "look"
+    "voices", "readaloud" -> "aloud"
     "nearby" -> "lock"
     "more", "tv" -> ""
     else -> id
@@ -112,7 +117,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
     val folder = settingsPage(SettingsNav.folder)
     val page = PAGES.firstOrNull { it.id == folder }
     androidx.activity.compose.BackHandler(enabled = folder.isNotEmpty()) { SettingsNav.folder = page?.parent ?: "" }
-    // A Kids' TV's settings are a whole screen of their own: its menu, then each section.
+    // A Kids' Device's settings are a whole screen of their own: its menu, then each section.
     if (folder.startsWith("tv:")) {
         io.github.ravenor907.muninn.tv.ParentTvScreen(app, folder.removePrefix("tv:"), section = null, onBack = { SettingsNav.folder = "" })
         return
@@ -134,13 +139,17 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             "battery" -> BatteryPage(app)
             "devices" -> DevicesPage(app)
             "about" -> AboutPage(app)
+            "linked" -> LinkedDevicesPanel(app)
+            "move" -> MoveSection(app)
+            "aloud" -> ReadAloudPage()
+            "labs" -> LabsPage(app)
         }
         Spacer(Modifier.height(24.dp))
     }
     }
 }
 
-/** The short list: your profile, one row per Kids' TV, then the seven sections (and Labs when it's on). */
+/** The short list: your profile, one row per Kids' Device, then the seven sections (and Labs when it's on). */
 @Composable
 private fun ShortList(app: Muninn) {
     val tvs by io.github.ravenor907.muninn.tv.TvParent.tvs.collectAsState()
@@ -159,12 +168,13 @@ private fun ShortList(app: Muninn) {
         NavRow("Devices and backup", icon = "phone") { SettingsNav.folder = "devices" }
         NavRow("Updates and about", if (up.ready) "Muninn ${up.latest} is ready" else "", icon = "download") { SettingsNav.folder = "about" }
     }
-    if (Labs.on(app)) LabsSection(app)
+    // Labs (consolidation 2.15): a row to its own page, like the other sections.
+    if (Labs.on(app)) Framed { NavRow("Labs", icon = "info") { SettingsNav.folder = "labs" } }
 }
 
 /** The one "More" row at the bottom of a page: the rest of its settings, folded away until it's tapped. */
 @Composable
-private fun MoreFold(content: @Composable ColumnScope.() -> Unit) {
+internal fun MoreFold(content: @Composable ColumnScope.() -> Unit) {
     var open by remember { mutableStateOf(false) }
     Framed {
         Row(Modifier.fillMaxWidth().heightIn(min = 52.dp)
@@ -209,6 +219,11 @@ private fun MeRow(app: Muninn) {
 /** A row that opens a page: its name, what it's set to, and an arrow. */
 @Composable
 private fun PageRow(title: String, value: String, onClick: () -> Unit) = NavRow(title, value, onClick = onClick)
+
+/** "Run in the background", off: one name and one row on Notifications and Battery and data (consolidation 2.12). */
+@Composable
+private fun RunInBackgroundRow(ctx: android.content.Context) =
+    WarnRow("Run in the background", "Off: messages may come late") { io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx) }
 
 /** A row for something that's off and should be on: in red, with what it costs, and a tap to fix it. */
 @Composable
@@ -350,6 +365,12 @@ private fun NotifyPage(app: Muninn) {
     var batteryOff by remember { mutableStateOf(isBatteryOff()) }
     io.github.ravenor907.muninn.ui.EveryWhileShown(1500) { fullOff = fullScreenOff(ctx); batteryOff = isBatteryOff() }
     Framed {
+        // Consolidation 2.8: what's off and should be on comes first, each only while it's off.
+        if (batteryOff) RunInBackgroundRow(ctx)
+        if (fullOff) WarnRow("Full-screen calls", "Off: calls won't fill the screen") { openFullScreenSetting(ctx) }
+        // What the last update did to full-screen calls (kept on this phone only, never sent).
+        val fsiLast = remember { io.github.ravenor907.muninn.update.FullScreenKeep.last(ctx) }
+        if (fsiLast != null) Help(fsiLast)
         val on = androidx.core.app.NotificationManagerCompat.from(ctx).areNotificationsEnabled()
         PageRow("Notifications", if (on) "On" else "Off") {
             try {
@@ -357,22 +378,22 @@ private fun NotifyPage(app: Muninn) {
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
             } catch (_: Exception) {}
         }
-        if (batteryOff) WarnRow("Run in the background", "Off: messages and calls can come late. Tap to allow") {
-            io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx)
-        }
-        if (fullOff) WarnRow("Full-screen calls", "Off: calls won't show on the lock screen. Tap to allow") { openFullScreenSetting(ctx) }
-        // What the last update did to full-screen calls (kept on this phone only, never sent).
-        val fsiLast = remember { io.github.ravenor907.muninn.update.FullScreenKeep.last(ctx) }
-        if (fsiLast != null) Help(fsiLast)
         NotifyShowsChoice(shows) { shows = it; id.notifyShows = it }
         var reduce by remember { mutableStateOf(id.reduceNotifications) }
         ToggleRow("Reduce notifications", "One per chat until you open it", reduce) { reduce = it; id.reduceNotifications = it }
     }
-    // Shared by Quiet hours (on, from, to) and More (its mode, and Do Not Disturb).
+    // Quiet hours: on, from and to, then (consolidation 2.8, moved up from More) Do Not Disturb and the mode.
     var quietOn by remember { mutableStateOf(app.power.quietOn) }
     var dnd by remember { mutableStateOf(app.power.followDnd) }
     var mode by remember { mutableStateOf(app.power.quietMode) }
-    Framed("Quiet hours") { QuietHours(app, quietOn) { quietOn = it; app.power.quietOn = it } }
+    Framed("Quiet hours") {
+        QuietHours(app, quietOn) { quietOn = it; app.power.quietOn = it }
+        ToggleRow("Also during Do Not Disturb", "Checks as in quiet hours", dnd) { dnd = it; app.power.followDnd = it }
+        if (quietOn || dnd) {
+            RowLabel("Quiet hours mode")
+            QuietMode(mode) { mode = it; app.power.quietMode = it }
+        }
+    }
     Framed("Always right away") { RightAwayRow(app) }
     MoreFold {
         // Mentions: "@" and my name, or one of these nicknames, in a group.
@@ -386,11 +407,6 @@ private fun NotifyPage(app: Muninn) {
                 ctx.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
                     .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, Muninn.MESSAGES))
             } catch (_: Exception) {}
-        }
-        ToggleRow("Also during Do Not Disturb", "Checks as in quiet hours", dnd) { dnd = it; app.power.followDnd = it }
-        if (quietOn || dnd) {
-            RowLabel("Quiet hours mode")
-            QuietMode(mode) { mode = it; app.power.quietMode = it }
         }
         if (Build.VERSION.SDK_INT >= 26) PageRow("Hide the waiting notification", "Messages still arrive") {
             try {
@@ -450,17 +466,18 @@ private fun LookPage(app: Muninn) {
             val (k, n) = looks[i]
             MButton(n, m, if (Access.look == k) Kind.Accent else Kind.Normal) { Access.look = k; id.look = k }
         }
+        // Consolidation 2.11: Theme and Accent in one frame.
+        RowLabel("Accent")
+        AccentChoices(app)
     }
-    Framed("Accent") { AccentChoices(app) }
-    Framed("Text size") {
+    Framed("Size") {
+        RowLabel("Text size")
         val texts = listOf(1f, 1.15f, 1.3f, 1.5f)
         ChoiceRow(texts.size, Modifier.padding(top = 8.dp)) { i, m ->
             val v = texts[i]; MButton(pct(v), m, if (Access.text == v) Kind.Accent else Kind.Normal) { Access.text = v; id.textSize = v }
         }
         Help("Adds to your phone's font size.")
-        Spacer(Modifier.height(8.dp))
-    }
-    Framed("Size of everything") {
+        RowLabel("Size of everything")
         val sizes = listOf(0.85f, 1f, 1.15f, 1.3f)
         ChoiceRow(sizes.size, Modifier.padding(vertical = 8.dp)) { i, m ->
             val v = sizes[i]; MButton(pct(v), m, if (Access.size == v) Kind.Accent else Kind.Normal) { Access.size = v; id.uiSize = v }
@@ -471,17 +488,21 @@ private fun LookPage(app: Muninn) {
         ToggleRow("Reduce motion", "No sliding or fading", Access.reduceMotion) { Access.reduceMotion = it; id.reduceMotion = it }
         RowLabel("Color vision")
         io.github.ravenor907.muninn.ui.ColorVisionControls { id.colorVision = Access.colorVision }
+        // Read aloud (consolidation 2.11): one name, one place; the row opens its own page.
+        PageRow("Read aloud", readAloudRowValue()) { SettingsNav.folder = "aloud" }
     }
     // Daily Hávamál: off until it's turned on here (screens/DailyHavamal.kt).
     Framed("Daily Hávamál") { DailyHavSettings(app) }
-    // Read aloud: Female or Male natural voice, downloaded once (screens/ReadAloudSettings.kt).
-    Framed("Read aloud") { ReadAloudSettings() }
     MoreFold {
         // Seasonal, over any look: the season, and what falls.
         io.github.ravenor907.muninn.ui.SeasonControls { id.season = Access.season; id.seasonGround = Access.seasonGround; id.seasonAnim = Access.seasonAnim }
         Spacer(Modifier.height(8.dp))
     }
 }
+
+/** Settings › Look › Read aloud: the page itself (screens/ReadAloudSettings.kt). */
+@Composable
+private fun ReadAloudPage() = Framed { ReadAloudSettings() }
 
 @Composable
 private fun LockPage(app: Muninn, onSecure: () -> Unit) {
@@ -499,7 +520,6 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     var nearbyOn by remember { mutableStateOf(id.visibleNearby) }
     var nearbyRoom by remember { mutableStateOf(id.nearbyChat) }
     var keepNearby by remember { mutableStateOf(id.keepNearbyHistory) }
-    var closeBy by remember { mutableStateOf(app.power.closeBy) }
     var oneDay by remember { mutableStateOf(id.deleteAfter in 1 until 7 * DAY) }
     var hasLock by remember { mutableStateOf(app.vault.hasPassword) }
     var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
@@ -525,9 +545,8 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
                 if (it) { panic = true; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, true) }
                 else LockGate.ask(app, "Turn off panic lock") { panic = false; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, false) }
             }
-            // 1.42: a pattern's unlock password (either one opens Muninn), and the erase after too many wrong tries.
-            if (app.vault.usesPattern) PageRow("Unlock password", if (app.vault.hasSpare) "Change" else "Not set") { SettingsNav.folder = "unlockpw" }
-            ToggleRow("Erase after too many tries", if (eraseOn) "On: 5 wrong tries after the 24-hour wait erase everything" else "Off: the waits go on, nothing is erased", eraseOn) {
+            // 1.42: the erase after too many wrong tries. A pattern's unlock password is on the Change lock page.
+            ToggleRow("Erase after too many tries", if (eraseOn) "On: erases after the last wait" else "Off: waits only", eraseOn) {
                 if (!it) { app.vault.tries.erase = false; eraseOn = false; return@ToggleRow }
                 Ui.sure(Ask("Erase after too many tries?", "Wrong tries already make people wait: 5 minutes, then 1 hour, 12 hours and 24 hours. " +
                     "With this on, 5 more wrong tries after the 24-hour wait erase everything on this phone at once, for good: chats, contacts and keys. " +
@@ -548,10 +567,8 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
             if (ultraOn) Ui.say(io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE + ".") else { previews = it; id.linkPreviews = it }
         }
         ToggleRow("Block screenshots", "Also hides it in recents", secure) { secure = it; id.secureScreen = it; onSecure() }
-    }
-    // Ultra privacy (1.42): Tor, off by default; two screens before it turns on.
-    UltraPrivacySection(app)
-    Framed("Keep messages") {
+        // Consolidation 2.9: Keep messages joins Privacy.
+        RowLabel("Keep messages")
         ChoiceRow(2, Modifier.padding(top = 8.dp), minWidth = 120.dp) { i, m ->
             val day = i == 1
             MButton(if (day) "1 day" else "Each chat's limit", m, if (oneDay == day) Kind.Accent else Kind.Normal) {
@@ -564,7 +581,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     Framed("Nearby") {
         // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
         if (io.github.ravenor907.muninn.net.UltraPrivacy.on) Text(io.github.ravenor907.muninn.net.UltraPrivacy.NEARBY_NOTE, style = Type.small, modifier = Modifier.padding(top = 6.dp))
-        ToggleRow("Nearby", "Off: contacts only, nothing announced", nearbyOn) {
+        ToggleRow("Nearby", "Off: contacts only", nearbyOn) {
             nearbyOn = it; id.visibleNearby = it; app.net.nearbyChanged(); app.ble.hiddenChanged()
         }
         if (nearbyOn) {
@@ -574,6 +591,8 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
             }
         }
     }
+    // Ultra privacy (1.42): Tor, off by default; two screens before it turns on. Rare and advanced: last before More.
+    UltraPrivacySection(app)
     MoreFold {
         if (app.vault.usesPattern) {
             RowLabel("Pattern position")
@@ -585,10 +604,9 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
         }
         if (app.vault.hasPassword && panic && !onTv && io.github.ravenor907.muninn.ui.Panic.canShake(ctx))
             ToggleRow("Shake to lock", "Shake hard 3 times", shake) { shake = it; io.github.ravenor907.muninn.ui.Panic.setShake(ctx, it) }
-        ToggleRow("Private keyboard", "Keyboard doesn't learn your typing", privateKeys) {
+        ToggleRow("Private keyboard", "Keyboard won't learn typing", privateKeys) {
             privateKeys = it; id.privateKeyboard = it; io.github.ravenor907.muninn.ui.PrivateKeyboard.on = it
         }
-        ToggleRow("Look for Nearby in the background", "Uses more battery", closeBy) { closeBy = it; app.power.closeBy = it }
         PageRow("Blocked people", if (blocked.isEmpty()) "Nobody" else "${blocked.size}") { SettingsNav.goTab = "contacts" }
         // Destructive, so last, red, and asked first.
         // Held, like Delete chat, and then the current lock: nobody else with the phone can take the lock off.
@@ -630,7 +648,13 @@ private fun ChangeLock(app: Muninn) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         FolderHeader(if (app.vault.hasPassword) "Change lock" else "Set a lock") { ProvenLock.clear(); SettingsNav.folder = "lock" }
         if (!proven) ConfirmLock(app, "Change lock", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true; ProvenLock.mark("changeLock") }
-        else LockSetup(app, onCancel = { ProvenLock.clear(); SettingsNav.folder = "lock" }, fill = true) { ProvenLock.clear(); SettingsNav.folder = "lock" }
+        else LockSetup(app, onCancel = { ProvenLock.clear(); SettingsNav.folder = "lock" }, fill = true, header = {
+            // Consolidation 2.9: a pattern's unlock password lives with the pattern, here. The lock was just proven,
+            // so the Unlock password page doesn't ask for it again.
+            if (app.vault.hasPassword && app.vault.usesPattern) PageRow("Unlock password", if (app.vault.hasSpare) "Change" else "Not set") {
+                ProvenLock.mark("unlockPassword"); SettingsNav.folder = "unlockpw"
+            }
+        }) { ProvenLock.clear(); SettingsNav.folder = "lock" }
     }
 }
 
@@ -659,9 +683,7 @@ private fun BatteryPage(app: Muninn) {
         }
         Help(choice?.help ?: "Your own mix, under More.")
         Spacer(Modifier.height(8.dp))
-        if (stay && !free) WarnRow("Allow background use", "Off: Android may pause Muninn. Tap to allow") {
-            io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx)
-        }
+        if (stay && !free) RunInBackgroundRow(ctx)
     }
     Framed("Data") {
         ToggleRow("Data saver", "Big files wait for Wi-Fi", data) { data = it; app.power.dataSaver = it; byHand() }
@@ -683,11 +705,14 @@ private fun BatteryPage(app: Muninn) {
         val linked by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
         linked.firstOrNull { it.ok }?.takeIf { check != Check.LIVE || choice == BatteryChoice.EXTREME || adaptive }?.let { c ->
             Help("${c.name} sends and gets messages through this phone. Choose ${Check.LIVE.title}" +
-                (if (adaptive) " and turn off Check less when quiet" else "") + " so it doesn't wait.")
+                (if (adaptive) " and turn off Check less when it's quiet" else "") + " so it doesn't wait.")
         }
         if (stay) ToggleRow("Save when the screen is off", "Saves battery", saver) { saver = it; app.power.saver = it; byHand() }
         ToggleRow("Save more on low battery", "Below 30%", low) { low = it; app.power.lowBatterySave = it; byHand() }
-        ToggleRow("Check less when quiet", "After 3 quiet hours", adaptive) { adaptive = it; app.power.adaptive = it; byHand() }
+        ToggleRow("Check less when it's quiet", "After 3 hours without messages", adaptive) { adaptive = it; app.power.adaptive = it; byHand() }
+        // Moved here from Privacy and lock (consolidation 2.9): it's a battery choice.
+        var closeBy by remember { mutableStateOf(app.power.closeBy) }
+        ToggleRow("Look for Nearby in the background", "Uses more battery", closeBy) { closeBy = it; app.power.closeBy = it }
         RowLabel("Today")
         BatteryReport(app)
     }
@@ -705,27 +730,42 @@ private fun CallsPage(app: Muninn) {
         val ultraTor by io.github.ravenor907.muninn.net.UltraPrivacy.state.collectAsState()
         if (ultraTor != io.github.ravenor907.muninn.net.UltraPrivacy.Tor.OFF)
             Text(io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF, style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
-        ToggleRow("Internet calls", "Off: only close by and on the same Wi-Fi", internet) {
+        ToggleRow("Internet calls", "Off: close by only", internet) {
             internet = it; io.github.ravenor907.muninn.net.call.CallManager.setInternetCalls(ctx, it)
         }
         ToggleRow("Noise removal", "Takes out background noise", noise) {
             noise = it; io.github.ravenor907.muninn.net.call.CallManager.setNoiseRemoval(ctx, it)
         }
-        ToggleRow("Ask before joining a voice room", "Mic on or off, and where the sound goes", ask) { ask = it; app.identity.roomAsk = it }
+        ToggleRow("Ask before joining a voice room", "Pick mic and sound first", ask) { ask = it; app.identity.roomAsk = it }
         Help("Voice rooms use more battery than chat. With the screen off, Muninn keeps only what the sound needs.")
         Spacer(Modifier.height(8.dp))
     }
 }
 
-/** Devices and backup: linked devices and moving, Backup, where files go and this device's name; App storage and erasing under More. */
+/**
+ * Devices and backup (consolidation 2.13): Linked devices and Move to a new device (each a row to its own page) and
+ * this device's name, then Backup, where files go, and App storage and erasing under More.
+ */
 @Composable
 private fun DevicesPage(app: Muninn) {
     val id = app.identity
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    // Linked devices, companion style: a tablet or computer shows this phone's chats and sends through it while this
-    // phone is online. Contacts see nothing new. The tablet shows a QR, the phone scans it. Then moving to another device.
-    LinkedDevicesPanel(app)
-    MoveSection(app)
+    val companions by io.github.ravenor907.muninn.net.Link.companions.collectAsState()
+    val phone by io.github.ravenor907.muninn.net.Link.phone.collectAsState()
+    var device by remember { mutableStateOf(id.deviceName) }
+    Framed("Devices") {
+        // Linked devices, companion style: a tablet or computer shows this phone's chats and sends through it while
+        // this phone is online. Contacts see nothing new.
+        PageRow("Linked devices", phone?.name ?: when (companions.size) { 0 -> "None yet"; 1 -> companions[0].name; else -> "${companions.size} devices" }) {
+            SettingsNav.folder = "linked"
+        }
+        PageRow("Move to a new device", "Move here, or move from here") { SettingsNav.folder = "move" }
+        RowLabel("This device's name")
+        Row(Modifier.padding(vertical = 8.dp)) {
+            Field(device, { device = it.take(40) }, "Muninn on my phone", Modifier.weight(1f))
+            MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = device.isNotBlank() && device != id.deviceName) { id.deviceName = device; app.net.announce(); Ui.say("Saved.") }
+        }
+    }
     Section("Backup")
     BackupPanel(app)
     // chosenTree first: a picked folder that went away resets the name shownRoot gives.
@@ -745,13 +785,6 @@ private fun DevicesPage(app: Muninn) {
         }
         Help("Each chat gets its own folder inside it.")
         Spacer(Modifier.height(8.dp))
-    }
-    var device by remember { mutableStateOf(id.deviceName) }
-    Framed("This device's name") {
-        Row(Modifier.padding(vertical = 8.dp)) {
-            Field(device, { device = it.take(40) }, "Muninn on my phone", Modifier.weight(1f))
-            MButton("Save", Modifier.padding(start = 8.dp), Kind.Accent, enabled = device.isNotBlank() && device != id.deviceName) { id.deviceName = device; app.net.announce(); Ui.say("Saved.") }
-        }
     }
     MoreFold {
         PageRow("App storage", "What Muninn keeps that can go") { SettingsNav.goChat = "appstorage" }
@@ -773,22 +806,23 @@ private fun AboutPage(app: Muninn) {
             if (up.ready) app.updater.download() else app.updater.check()
         }
         ToggleRow("Update automatically", "When Muninn opens", auto) { auto = it; app.identity.autoUpdate = it }
-        // Each Kids' TV's version, with a tap to its own updates (filled in on the Kids' TV side).
+        // Each Kids' Device's version, with a tap to its own updates (filled in on the Kids' Device side).
         io.github.ravenor907.muninn.tv.TvUpdateStatusRow(app)
     }
-    if (Labs.on(app)) UpdateChannel(app)
+    // The update channel is on the Labs page now (consolidation 2.14, 2.15).
     MoreFold {
         // Hands Muninn itself to a phone close by (Quick Share or Bluetooth), no internet needed.
         PageRow("Share the app", "") { io.github.ravenor907.muninn.ui.ShareApp.share(ctx) }
         Text("Private chat and file sharing. Made by Ravenor907. GPL-3.0.", style = Type.small, modifier = Modifier.padding(vertical = 10.dp))
-        // Read aloud's voices and speech engine, and their licenses.
+        // Read aloud's voices and speech engine, and their licenses, under the same heading as Huginn's.
+        RowLabel("Credits and licenses")
         VoiceCredits()
     }
 }
 
-/** Labs only: Stable or Pre-release, and Go back to stable while on Pre-release. */
+/** Labs only: Stable or Pre-release, and Go back to stable while on Pre-release (on the Labs page). */
 @Composable
-private fun UpdateChannel(app: Muninn) {
+internal fun UpdateChannel(app: Muninn) {
     Labs.changed
     val pre = app.identity.preRelease
     Framed("Update channel") {
@@ -898,7 +932,7 @@ private fun BatteryReport(app: Muninn) {
 
 private fun hour(h: Int) = when (h) { 0 -> "12 AM"; 12 -> "12 PM"; in 1..11 -> "$h AM"; else -> "${h - 12} PM" }
 
-/** Quiet hours: on, and from and to on the hour (Muninn saves the most then). Its mode is under More. */
+/** Quiet hours: on, and from and to on the hour (Muninn saves the most then). Do Not Disturb and its mode follow in the same frame. */
 @Composable
 private fun QuietHours(app: Muninn, on: Boolean, setOn: (Boolean) -> Unit) {
     var from by remember { mutableStateOf(app.power.quietFrom) }

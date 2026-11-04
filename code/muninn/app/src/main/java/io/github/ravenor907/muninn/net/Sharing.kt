@@ -106,6 +106,6 @@ object Sharing {
         "rules" -> "Refused by the group's file rules."
         "space" -> "Not enough space on their device."
         "no" -> "They declined."
-        else -> "They declined, or direct files are off on their side (Direct calls and files, or Ultra privacy)."
+        else -> "They declined, or direct files are off on their side (Trusted direct, or Ultra privacy)."
     }
 }

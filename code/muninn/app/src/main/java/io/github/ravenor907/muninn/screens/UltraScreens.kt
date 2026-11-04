@@ -51,7 +51,7 @@ internal fun UltraPrivacySection(app: Muninn) {
             else { TorRunner.set(ctx, false); Ui.say("Ultra privacy is off.") }
         }
         if (on) {
-            Text("${UltraPrivacy.OFF_NOTE}: calls (in and out), direct files, sending videos, link previews and GIF search.",
+            Text("${UltraPrivacy.VIDEOS_AND_CALLS} ${UltraPrivacy.OFF_NOTE}: calls (in and out), direct transfers over the internet, link previews and GIF search.",
                 style = Type.small, modifier = Modifier.padding(top = 2.dp))
             Text(UltraPrivacy.NEARBY_NOTE, style = Type.small, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
         }

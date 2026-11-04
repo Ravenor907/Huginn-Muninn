@@ -2489,6 +2489,26 @@ QList<QJsonObject> Chat::pieces(const QVariantMap &m)
     return out;
 }
 
+void Chat::oldRelayFile(const QString &fromKey, const QString &id, const QString &fn, bool contact)
+{
+    if (m_oldFilesSeen.size() > 500)
+        m_oldFilesSeen.clear();
+    const QString seen = fromKey + QLatin1Char('|') + id;
+    if (m_oldFilesSeen.contains(seen))
+        return;
+    m_oldFilesSeen.insert(seen);
+    const QString shown = fn.isEmpty() ? QStringLiteral("a file") : fn;
+    if (m_files)
+        m_files->oldRelayIn(id, fromKey, shown);
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (!contact || now - m_oldFilesTold.value(fromKey, 0) < 6LL * 3600 * 1000)
+        return;
+    m_oldFilesTold.insert(fromKey, now);
+    const QString reply = QStringLiteral("I couldn't take \"%1\": files now go only with Encrypted file sharing. "
+                                         "Please update your app and send it again.").arg(shown);
+    QMetaObject::invokeMethod(this, [this, fromKey, reply] { sendPrivate(fromKey, reply, QString()); }, Qt::QueuedConnection);
+}
+
 int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &via)
 {
     const bool contact = isContact(fromKey);
@@ -2502,6 +2522,13 @@ int Chat::receivePiece(const QJsonObject &o, const QString &fromKey, const QStri
     // Files turned off for them: a file's pieces are dropped quietly.
     if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file") && !filesAllowed(fromKey))
         return 200;
+    // 1.42: files never come through the relays now (Encrypted file sharing, cap f4). An older app's relay file is
+    // turned down politely: a card here says why, and they get one short message saying why. Photos, GIFs, voice and
+    // video messages still come in pieces as before.
+    if (o.value(QStringLiteral("kind")).toString() == QLatin1String("file")) {
+        oldRelayFile(fromKey, id, FileLink::nameOk(o.value(QStringLiteral("fn"))) ? o.value(QStringLiteral("fn")).toString() : QString(), contact);
+        return 200;
+    }
     QString mailbox = o.value(QStringLiteral("mailbox")).toString();
     if (mailbox.size() != 64)
         mailbox.clear();

@@ -601,6 +601,8 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
     fun pickPhoto() {
         try { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say(TvWords.ASK_PARENT, true) }
     }
+    /** Consolidation 2.19: the in-app camera, for a photo (no video on a kids' device), when the parent allows photos. */
+    var camera by remember(p.k) { mutableStateOf(false) }
     /** The smile: opening the tray puts the keyboard away. */
     fun toggleTray() {
         if (!tray) { focusManager.clearFocus(); keyboard?.hide() }
@@ -650,8 +652,8 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
         val trayMax = KidK14.trayMax(paneH).dp
         val fontScale = LocalDensity.current.fontScale
         val callIcon = KidK14.callIconOnly(paneW, fontScale, back = !wide)
-        // The smile and the photo, beside the box; folded into More when the box would get too narrow to type in.
-        val icons = (if (cfg.quick.isNotEmpty()) 1 else 0) + (if (compose.photo) 1 else 0)
+        // The smile, the camera and the photo, beside the box; folded into More when the box would get too narrow to type in.
+        val icons = (if (cfg.quick.isNotEmpty()) 1 else 0) + (if (compose.photo) 2 else 0)
         // At the largest sizes the box gets a row of its own above the buttons (then nothing needs folding), and the name
         // a line of its own under the bar.
         val boxRow = compose.text && KidK14.boxOwnRow(paneW, icons, fontScale)
@@ -700,6 +702,8 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
             }
             if (waiting) TalkNote(KidK14.WAIT_LINE)
             if (held > 0) TalkNote(KidK14.HELD_LINE)
+            // 1.42: a file someone on the list sends asks first here too (Decline / Accept), and shows how it's going.
+            io.github.ravenor907.muninn.screens.DirectFiles(p.k, p.n)
             // Quick messages: one tap sends, reads it out loud, and the chip says how it's doing. The composer at "Quick messages only".
             if (KidK14.trayShown(!compose.text, tray, ime || focused)) QuickTray(cfg.quick, compose.bigChips, sent, chipState, trayMax, oneRow) { q ->
                 val now = System.currentTimeMillis()
@@ -713,10 +717,17 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
             }
             if (!compose.text && cfg.quick.isEmpty()) Text("Ask a parent to add quick messages", style = Type.normal.copy(fontSize = 17.sp),
                 textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(16.dp))
-            // The folded buttons, open: big and labelled, above the box.
-            if (fold && more) Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (cfg.quick.isNotEmpty()) MoreChoice("smile", "Quick messages", Modifier.weight(1f)) { more = false; toggleTray() }
-                if (compose.photo) MoreChoice("image", "Photo", Modifier.weight(1f)) { more = false; pickPhoto() }
+            // The folded buttons, open: big and labelled, above the box (consolidation 2.19: the same four as a phone's
+            // Send menu shape). What the parent's rules don't allow stays, greyed, and says "Ask a parent".
+            if (fold && more) Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MoreChoice("smile", "Quick messages", Modifier.weight(1f), enabled = cfg.quick.isNotEmpty()) { more = false; toggleTray() }
+                    MoreChoice("image", "Camera", Modifier.weight(1f), enabled = compose.photo) { more = false; camera = true }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MoreChoice("folder", "Saved media", Modifier.weight(1f), enabled = compose.photo) { more = false; pickPhoto() }
+                    MoreChoice("mic", "Voice message", Modifier.weight(1f), enabled = compose.voice) { more = false; record() }
+                }
             }
             // The typing box: beside the buttons, or (at the largest sizes) on a row of its own above them.
             val field: @Composable (Modifier) -> Unit = { m ->
@@ -739,7 +750,8 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
                 if (fold) RoundIcon("more", "More", on = more, toggle = true) { more = !more }
                 else {
                     if (cfg.quick.isNotEmpty()) RoundIcon("smile", "Quick messages", on = tray, toggle = true) { toggleTray() }
-                    if (compose.photo) RoundIcon("image", "Send a photo") { pickPhoto() }
+                    if (compose.photo) RoundIcon("image", "Camera") { camera = true }
+                    if (compose.photo) RoundIcon("folder", "Saved media") { pickPhoto() }
                 }
                 if (compose.text && !boxRow) field(Modifier.weight(1f).padding(horizontal = 6.dp))
                 else Spacer(Modifier.weight(1f))
@@ -752,6 +764,13 @@ private fun KidTalk(app: Muninn, cfg: TvConfig, p: TvPerson, wide: Boolean, onBa
         }
     }
 
+    if (camera) androidx.compose.ui.window.Dialog({ camera = false },
+        androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        io.github.ravenor907.muninn.screens.CameraScreen(photoOnly = true, onPhoto = { jpeg ->
+            // Not tied to this screen: a photo taken as a quiet time starts is held, not lost.
+            CoroutineScope(SupervisorJob() + Dispatchers.Main).launch { Ui.say(withContext(Dispatchers.IO) { KidChats.sendOrHold(app, p.k, "photo", jpeg, 0) }) }
+        }, onVideo = { _, _ -> }) { camera = false }
+    }
     viewing?.let { id ->
         val list = msgs.filter { KidChats.isPhoto(it) }
         TvPhoto(app, list, id, onMove = { viewing = it }) { viewing = null }
@@ -783,14 +802,22 @@ private fun TalkNote(text: String) {
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
 }
 
-/** One of the folded buttons, open: its icon and its name. */
+/**
+ * One of the folded buttons, open: its icon and its name. Not [enabled] (the parent's rules): greyed, still focusable
+ * and tappable, and it says "Ask a parent" instead of vanishing.
+ */
 @Composable
-private fun MoreChoice(icon: String, label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun MoreChoice(icon: String, label: String, modifier: Modifier, enabled: Boolean = true, onClick: () -> Unit) {
     val shape = RoundedCornerShape(BUBBLE)
-    Row(modifier.heightIn(min = TOUCH).clip(shape).background(Palette.field).hcBorder(shape).clickable(role = Role.Button, onClick = onClick)
+    Row(modifier.heightIn(min = TOUCH).clip(shape).background(if (enabled) Palette.field else Palette.panelLow).hcBorder(shape)
+        .clickable(role = Role.Button) { if (enabled) onClick() else Ui.say(TvWords.ASK_PARENT, true) }
+        .semantics(mergeDescendants = true) { if (!enabled) stateDescription = TvWords.ASK_PARENT }
         .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        MIcon(icon, Palette.accent, 24.dp)
-        Text(label, style = Type.big.copy(fontSize = 16.sp), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp))
+        MIcon(icon, if (enabled) Palette.accent else Palette.textFaint, 24.dp)
+        Column(Modifier.padding(start = 8.dp)) {
+            Text(label, style = Type.big.copy(fontSize = 16.sp, color = if (enabled) Palette.text else Palette.textFaint), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (!enabled) Text(TvWords.ASK_PARENT, style = Type.small, maxLines = 1)
+        }
     }
 }
 

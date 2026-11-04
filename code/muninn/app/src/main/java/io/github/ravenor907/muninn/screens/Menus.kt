@@ -196,10 +196,10 @@ internal fun checkEmoji(app: Muninn, key: String, name: String) {
         "They match", onConfirm = { app.chat.verify(key, name) }))
 }
 
-/** The Kids' TV page itself (not one of its parts): `openTvSection(key, TV_PAGE)`. */
+/** The Kids' Device page itself (not one of its parts): `openTvSection(key, TV_PAGE)`. */
 internal const val TV_PAGE = "page"
 
-/** Opens a Kids' TV section from anywhere: the chat column shows it, and Back returns to where it was opened. */
+/** Opens a Kids' Device section from anywhere: the chat column shows it, and Back returns to where it was opened. */
 internal fun openTvSection(key: String, section: String) {
     ChatNav.back = ChatNav.open.takeUnless { it.startsWith("tvset/") || it.startsWith("details/") } ?: ""
     ChatNav.open = "tvset/$section/$key"
@@ -213,7 +213,7 @@ internal fun openDetails(key: String) {
 
 /**
  * Every item's three-dot menu, in one sheet that looks the same everywhere: a person (a contact, someone met close
- * by, a Kids' TV), a group, a group member (with the group's admin actions), and "list" for the chat list itself.
+ * by, a Kids' Device), a group, a group member (with the group's admin actions), and "list" for the chat list itself.
  * [key]: a chat key, "g:" and a group id, or "list". [onChats]: shows the Chats tab (menus opened from Contacts),
  * [onLock]: locks Muninn now.
  */
@@ -260,7 +260,11 @@ private fun MenuTitle(text: String, avatar: @Composable () -> Unit = {}) {
     Box(Modifier.fillMaxWidth().padding(bottom = 4.dp).height(1.dp).background(Palette.hairline))
 }
 
-/** The chat list's own menu: mark all read, refresh, a new folder, whether Muninn is online, locking now, and Settings. */
+/**
+ * The chat list's own menu (consolidation 2.3): Mark all read, Requests, Archived, Transfers, Trash, New folder, Lock
+ * now, Settings, then whether Muninn is online (tap to check now: the old Refresh) and, in Labs mode, Report a bug.
+ * Labs reports moved to Settings › Labs.
+ */
 @Composable
 private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -> Unit, done: () -> Unit) {
     val up by app.nostr.connected.collectAsState()
@@ -273,43 +277,42 @@ private fun ColumnScope.ListMenu(app: Muninn, onLock: () -> Unit, onFolder: () -
         ch.groups.unreadGroups.value.forEach { ch.groupRead(it) }
         ch.flags.all.value.unread.forEach { k -> if (k.startsWith("g:")) ch.groupRead(k.removePrefix("g:")) else ch.markRead(k) }
     }
-    MenuRow("refresh", "Refresh") { done(); app.refreshChats(); app.refreshNearby(); Ui.say("Checking for new messages…") }
-    MenuRow("folder", "New folder") { onFolder() }
     MenuRow("people", "Requests", value = if (ChatNav.asks > 0) "${ChatNav.asks}" else "") { done(); ChatNav.open = "requests" }
     MenuRow("archive", "Archived", value = if (ChatNav.archived > 0) "${ChatNav.archived}" else "") { done(); ChatNav.open = "archived" }
-    MenuRow("delete", "Trash", value = if (ChatNav.trashed > 0) "${ChatNav.trashed}" else "") { done(); ChatNav.open = "trash" }
     // Cap f2: every file coming or going, with how many are running.
     val files by io.github.ravenor907.muninn.net.FileLink.all.collectAsState()
     val nearby by app.net.transfer.collectAsState()
     val running = transfersRunning(files, nearby.active)
     MenuRow("download", "Transfers", value = if (running > 0) "$running" else "") { done(); ChatNav.open = "transfers" }
-    // Bug reports that came in: only on the Labs contact's own phone, and only while Labs mode is on.
-    if (app.chat.isLabs() && Labs.on(app)) {
-        val reports by app.chat.labs.reports.collectAsState()
-        MenuRow("info", "Labs reports", value = if (reports.isNotEmpty()) "${reports.size}" else "") { done(); ChatNav.open = io.github.ravenor907.muninn.net.Chat.LABS_PAGE }
-    }
-    // Said in words too, never by the dot's color alone.
-    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 20.dp).semantics(mergeDescendants = true) {},
+    MenuRow("delete", "Trash", value = if (ChatNav.trashed > 0) "${ChatNav.trashed}" else "") { done(); ChatNav.open = "trash" }
+    MenuRow("folder", "New folder") { onFolder() }
+    if (app.vault.hasPassword) MenuRow("lock", "Lock now") { done(); onLock() }
+    // The same as the valknut, for anyone looking for Settings in this menu.
+    MenuRow("gear", "Settings") { done(); SettingsNav.goTab = "settings" }
+    // Online or Offline, said in words too (never by the dot's color alone); a tap checks for new messages now.
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable(role = Role.Button, onClickLabel = "Check now") {
+            done(); app.refreshChats(); app.refreshNearby(); Ui.say("Checking for new messages…")
+        }.padding(horizontal = 20.dp).semantics(mergeDescendants = true) {},
         verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.padding(horizontal = 6.dp).size(8.dp).clip(CircleShape).background(if (up > 0) Palette.online else Palette.textFaint))
         Spacer(Modifier.width(18.dp))
-        Text(if (up > 0) "Online" else "Offline", style = Type.normal.copy(color = Palette.textSoft))
+        Column(Modifier.weight(1f)) {
+            Text(if (up > 0) "Online" else "Offline", style = Type.normal.copy(color = Palette.textSoft))
+            Text("Tap to check now", style = Type.small)
+        }
     }
-    if (app.vault.hasPassword) MenuRow("lock", "Lock now") { done(); onLock() }
     // Labs mode: report a bug (a screenshot of the list as it is, then the report screen).
     val context = androidx.compose.ui.platform.LocalContext.current
     if (Labs.on(app)) MenuRow("info", "Report a bug") { done(); Labs.report(context) }
-    // The same as the valknut, for anyone looking for Settings in this menu.
-    MenuRow("gear", "Settings") { done(); SettingsNav.goTab = "settings" }
 }
 
 /**
- * A person's menu, short enough for one screen: a row of round buttons (Search, Media, Mute, Details), then
- * Notifications, Mark unread and Start a group, then More. More ([more]) has the rest: Move up and down (only when
- * held on the main chat list, [fromList]), Hide (someone
- * nearby who isn't a contact), then the red ones, Block, Delete chat and Delete contact. A Kids' TV has the same shape,
- * with "Kids' TV settings" (its one page) first and only Move and Delete chat under More. From a group's People page,
- * the group's actions too.
+ * A person's menu, short enough for one screen (consolidation 2.4): a row of round buttons (Search, Media, Mute,
+ * Details), then Notifications, Mark unread and Start a group, then More. More ([more]) has the rest: Pin to top,
+ * Archive, Folders, Move up and down (only when held on the main chat list, [fromList]), Copy name, Hide (someone
+ * nearby who isn't a contact), then the red ones, Block, Delete chat and Delete contact. A Kids' Device has the same
+ * shape: its Details button reads Settings and opens its one page; only Move and Delete chat under More. From a
+ * group's People page, the group's actions too.
  */
 @Composable
 private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit, more: Boolean, fromList: Boolean, go: (String) -> Unit, done: () -> Unit) {
@@ -324,7 +327,7 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
     if (more) MenuTitle("More for $name") else MenuTitle(name) { io.github.ravenor907.muninn.ui.Avatar(key, name, 40.dp, showDot = true) }
     fun open(action: String) { done(); ChatNav.space = ""; ChatNav.action = action; ChatNav.open = key; onChats() }
     val muted = (flags.muted[key] ?: 0L) > System.currentTimeMillis()
-    // Delete chat: the messages go from this phone; the person stays (a Kids' TV's settings too).
+    // Delete chat: the messages go from this phone; the person stays (a Kids' Device's settings too).
     val deleteChat: @Composable () -> Unit = {
         MenuRow("delete", "Delete chat", danger = true) {
             done()
@@ -341,14 +344,13 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         QuickButton(if (muted) "sound" else "mute", if (muted) "Unmute" else "Mute", on = muted) {
             if (muted) { done(); app.chat.flags.mute(key, 0); Ui.say("$name isn't muted.") } else go("mute")
         }
-        // A Kids' TV this phone looks after: Details is its Kids' TV page (a person's details don't fit a TV).
-        QuickButton("user", "Details") { done(); ChatNav.space = ""; if (tv) openTvSection(key, TV_PAGE) else openDetails(key); onChats() }
+        // A Kids' Device this phone looks after: the button reads Settings and opens its page (a person's details don't fit it).
+        QuickButton(if (tv) "gear" else "user", if (tv) "Settings" else "Details") { done(); ChatNav.space = ""; if (tv) openTvSection(key, TV_PAGE) else openDetails(key); onChats() }
     }
     if (tv) {
-        // A Kids' TV this phone looks after: a chat menu, with its one Kids' TV page first. Everything about the TV
-        // (Disconnect TV too) is on that page.
+        // A Kids' Device this phone looks after: a chat menu; its one page is the Settings button above. Everything
+        // about the device (Disconnect too) is on that page.
         if (!more) {
-            MenuRow("tv", "Kids' Device settings") { done(); openTvSection(key, TV_PAGE); onChats() }
             MenuRow("bell", "Notifications") { go("notify") }
             MoreRow { go("more") }
             return
@@ -374,8 +376,21 @@ private fun ColumnScope.PersonMenu(app: Muninn, key: String, onChats: () -> Unit
         MoreRow { go("more") }
         return
     }
+    if (inGroup == null && hasChat) {
+        val pinned = key in flags.pinned
+        MenuRow("pin", if (pinned) "Unpin" else "Pin to top") { done(); People.pin(key, !pinned); Ui.say(if (pinned) "$name is unpinned." else "$name is pinned to the top.") }
+        val archived = key in flags.archived
+        MenuRow("archive", if (archived) "Unarchive" else "Archive") {
+            done(); app.chat.flags.archive(key, !archived); if (!archived && ChatNav.open == key) ChatNav.open = ""
+            Ui.say(if (archived) "$name is back in Chats." else "$name is archived.")
+        }
+        // Folders are chosen on their Details page, with the rest of "This chat".
+        if (contact != null) MenuRow("folder", "Folders") { done(); ChatNav.space = ""; openDetails(key); onChats() }
+    }
     if (inGroup == null && fromList) MoveRows(app, key)
     if (inGroup != null && contact != null && !contact.groupOnly) StartGroupRow(key, onChats, done)
+    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+    if (inGroup == null) MenuRow("copy", "Copy name") { done(); clip.setText(androidx.compose.ui.text.AnnotatedString(name)); Ui.say("Name copied.") }
     // From a group's People page: what its admins can do.
     if (member) {
         val s = inGroup!!.state
@@ -517,16 +532,15 @@ private fun ColumnScope.NotifyMenu(app: Muninn, key: String, back: () -> Unit) {
 }
 
 /**
- * A group's menu, like a person's: round buttons (Search, Media, Mute, Details for Group settings), then
- * Notifications, Invite people and People, then More. More ([more]) has Move up and down (only when held on the main
- * chat list, [fromList]), Call everyone (it asks) and,
- * last in red, Leave (or Delete, once left).
+ * A group's menu, like a person's (consolidation 2.5): round buttons (Search, Media, Mute, Settings), then Reports
+ * (admins, when new ones came), Notifications, Invite people, People and Mark read, then More. More ([more]) has
+ * Move up and down (only when held on the main chat list, [fromList]) and, last in red, Leave (or Delete, once
+ * left). Call everyone and Pick people are only on the chat's Call button.
  */
 @Composable
 private fun ColumnScope.GroupMenu(app: Muninn, g: String, more: Boolean, fromList: Boolean, go: (String) -> Unit, done: () -> Unit) {
     val all by app.chat.groups.all.collectAsState()
     val flags by app.chat.flags.all.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
     // Gone meanwhile: the sheet closes, after this frame (never during composition).
     val grp = all[g] ?: run { LaunchedEffect(g) { done() }; return }
     val s = grp.state
@@ -544,22 +558,20 @@ private fun ColumnScope.GroupMenu(app: Muninn, g: String, more: Boolean, fromLis
             }
             QuickButton("gear", "Settings") { page("settings") }
         }
+        // Cap g3: reports from members this admin hasn't seen yet (the list is in Group settings).
+        val reports by app.chat.groups.reportsByGroup.collectAsState()
+        val newReports = reports[g].orEmpty().count { !it.read }
+        if (!grp.readOnly && s.isAdmin(me) && newReports > 0) MenuRow("shield", "Reports", value = "$newReports new") { page("settings") }
         MenuRow("bell", "Notifications") { go("notify") }
         if (!grp.readOnly && (s.isAdmin(me) || GroupLinks.canInvite(app, g))) MenuRow("plus", "Invite people") { page("add") }
         MenuRow("people", "People", value = "${s.members.size}") { page("people") }
+        val unreadGroups by app.chat.groups.unreadGroups.collectAsState()
+        if (g in unreadGroups || key in flags.unread) MenuRow("chat", "Mark read") { done(); app.chat.groupRead(g); Ui.say("Marked read.") }
         MoreRow { go("more") }
         return
     }
     MenuTitle("More for ${s.name}")
     if (fromList) MoveRows(app, key)
-    // Rings every member, so it sits under More and asks first. To just talk, there are voice rooms.
-    if (!grp.readOnly && s.members.size > 1) MenuRow("call", "Call everyone") {
-        done()
-        val n = s.members.size - 1
-        Ui.sure(Ask("Ring all $n ${if (n == 1) "person" else "people"}?", "Their phones and computers ring now. To talk without ringing anyone, use Drop-in call.", "Ring everyone",
-            extra = if (s.members.size > 2) "Pick people" else null, onExtra = { ChatNav.callSome = g },
-            onConfirm = { RoomActivity.call(context, g, emptyList()) }))
-    }
     MenuGap()
     if (!grp.readOnly) MenuRow("leave", "Leave", danger = true) {
         done()
@@ -629,12 +641,18 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 }
             }
 
-            // Who they are to you (Family, Work, Folk) decides how long messages stay, so it's said that way.
-            Framed("How long messages stay") {
+            // Consolidation 2.6: This chat, They can, Safety. Who they are to you (Family, Work, Folk) decides how long
+            // messages stay, so it's said that way.
+            Framed("This chat") {
+                Text("How long messages stay", style = Type.big.copy(fontSize = 16.sp), modifier = Modifier.padding(top = 10.dp))
                 KeepChoices(app, key, name, folders)
+                ToggleRow("Pin to top", "", key in people.pinned) { People.pin(key, it) }
+                ToggleRow("Archive", "", key in flags.archived) { app.chat.flags.archive(key, it) }
+                Text("Chat color", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
+                ColorChoices(app, key)
                 val others = folders.filter { f -> ROLES.none { it.equals(f.name, true) } }
                 if (others.isNotEmpty()) {
-                    Text("Your other folders", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 4.dp))
+                    Text("Folders", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 4.dp))
                     FlowRow(Modifier.padding(top = 6.dp, bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         others.forEach { f -> val on = key in f.keys; DetailChip(f.name, on) { app.chat.folders.put(f.id, key, !on) } }
@@ -642,39 +660,67 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 }
             }
 
-            Framed("This chat") {
-                ToggleRow("Pin to top", "", key in people.pinned) { People.pin(key, it) }
-                ToggleRow("Archive", "", key in flags.archived) { app.chat.flags.archive(key, it) }
-                Text("Chat color", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 6.dp))
-                ColorChoices(app, key)
-            }
-
             if (contact != null) Framed("They can") {
                 val can = people.can[key] ?: People.can(key)
                 ToggleRow("Call me", "", can.calls) { People.setCan(key, can.copy(calls = it)) }
-                ToggleRow("Send me files", "Photos always arrive", can.files) { People.setCan(key, can.copy(files = it)) }
+                SendMeFiles(app, key, can)
                 ToggleRow("See when I'm active", "", can.active) { People.setCan(key, can.copy(active = it)) }
             }
 
             Framed("Safety") {
                 NavRow("Compare emoji", if (app.chat.isVerified(key)) "Checked" else "Not checked yet", icon = "shield") { checkEmoji(app, key, name) }
-                // How messages reach them right now (moved here from the chat's top bar).
-                Text("Reaching $name by: ${routeShort(app.chat.route(key))}", style = Type.small, modifier = Modifier.padding(vertical = 6.dp))
                 if (contact != null) {
                     var fast by remember(key) { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.trusted(key)) }
                     // Ultra privacy: the saved choice stays, but nothing goes straight while it's on (said on the switch).
                     val ultra = io.github.ravenor907.muninn.net.UltraPrivacy.on
-                    ToggleRow("Direct calls and files", if (ultra) io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE
-                        else "Faster, and big files go straight. They see your address", fast && !ultra) {
+                    ToggleRow(TRUSTED_DIRECT, if (ultra) io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE else TRUSTED_DIRECT_SUB, fast && !ultra) {
                         if (ultra) io.github.ravenor907.muninn.ui.Ui.say(io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE + ".")
                         else { io.github.ravenor907.muninn.net.call.CallManager.setTrusted(key, it); fast = it }
                     }
-                    NavRow("Introduce", "To another contact", icon = "people") { introducing = true }
                 }
+                // How messages reach them right now (moved here from the chat's top bar).
+                Text("Reaching $name by: ${routeShort(app.chat.route(key))}", style = Type.small, modifier = Modifier.padding(vertical = 6.dp))
+                if (contact != null) NavRow("Introduce", "To another contact", icon = "people") { introducing = true }
             }
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/** The direct path's one name (consolidation 2.6, the same in both apps), and its line. */
+internal const val TRUSTED_DIRECT = "Trusted direct"
+internal const val TRUSTED_DIRECT_SUB = "Faster. Shares your address"
+
+/**
+ * May [key]'s files skip the Accept card? Offered only for trusted contacts and family (todo 1.42): the same trust
+ * badge the incoming-file card shows (FileLink: Trusted or Family).
+ */
+internal fun filesAlwaysOffered(app: Muninn, key: String): Boolean =
+    io.github.ravenor907.muninn.net.FileLink.host?.let { io.github.ravenor907.muninn.net.FileLink.mayAlways(it.badge(key)) }
+        ?: (io.github.ravenor907.muninn.net.call.CallManager.trusted(key) || app.chat.inFamilyGroup(key))
+
+/**
+ * Person details › They can › Send me files: Ask (every file shows the Accept card), Always (theirs arrive without
+ * asking; only for trusted and family) or Off. The one place to undo an "Always accept from <name>" tapped on a card.
+ */
+@Composable
+private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
+    @Suppress("UNUSED_VARIABLE") val trust by io.github.ravenor907.muninn.net.call.CallManager.trustChanged.collectAsState()
+    val offered = filesAlwaysOffered(app, key)
+    var always by remember(key) { mutableStateOf(app.chat.filesAlways(key)) }
+    val now = when { !can.files -> "off"; always && offered -> "always"; else -> "ask" }
+    val choices = if (offered) listOf("ask" to "Ask", "always" to "Always", "off" to "Off") else listOf("ask" to "Ask", "off" to "Off")
+    Text("Send me files", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+    ChoiceRow(choices.size, Modifier.padding(top = 6.dp), minWidth = 72.dp, gap = 8.dp) { i, m ->
+        val (id, label) = choices[i]
+        DetailChip(label, now == id, m) {
+            People.setCan(key, can.copy(files = id != "off"))
+            val a = id == "always"
+            if (a != always) { app.chat.setFilesAlways(key, a); always = a }
+        }
+    }
+    Text(when (now) { "always" -> "Theirs arrive without asking"; "off" -> "They can't send you files"; else -> "Each file asks you first" },
+        style = Type.small, modifier = Modifier.padding(top = 4.dp, bottom = 6.dp))
 }
 
 /** [key]'s chat color: the accent (none picked) or one of the accent colors, as round swatches. Only I see it. */
@@ -711,7 +757,7 @@ internal fun DetailChip(text: String, on: Boolean, modifier: Modifier = Modifier
     }
 }
 
-/** A Kids' TV section, from the TV contact's menu. */
+/** A Kids' Device section, from the TV contact's menu. */
 @Composable
 internal fun TvSectionPage(app: Muninn, key: String, section: String, back: () -> Unit) {
     io.github.ravenor907.muninn.tv.ParentTvScreen(app, key, section = section, onBack = back)

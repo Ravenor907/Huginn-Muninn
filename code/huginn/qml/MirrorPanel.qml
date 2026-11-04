@@ -7,7 +7,7 @@ import Huginn
 // B goes back. The message box is the usual one (Enter sends, a reply shows above it); files go from the phone.
 // Opening never asks the phone for history. History, photos, voice, video and files come over the home Wi-Fi; until then
 // media shows as words with "On home Wi-Fi". A message sent from here shows at once as Sending, and as "Phone didn't
-// answer · Retry" (or why) when the phone doesn't take it. Cap l1: group chats too (who wrote each message), with my role,
+// answer · Try again" (or why) when the phone doesn't take it. Cap l1: group chats too (who wrote each message), with my role,
 // and the phone's folders as sections; the call button says calls ring on the phone. Cap l2 (15.2): unread counts and
 // read state both ways, mute (on the phone too), and the phone's status. A copy kept after unlinking is read only.
 // A group with more than one text channel shows them as tabs over its messages (LB and RB on a controller); a message
@@ -66,7 +66,7 @@ Rectangle {
     readonly property var picked: zone === "talk" ? msgs[msgSel] || null : null
     readonly property var replyMsg: replyId !== "" ? allMsgs.find(m => m.id === replyId) || null : null
     readonly property var prompts: (zone === "talk"
-        ? [{ key: "a", label: picked && picked.failed ? "Retry" : picked && picked.media ? actionWord(picked) : "Reply" }, { key: "x", label: "Refresh" }, { key: "b", label: "Back" }]
+        ? [{ key: "a", label: picked && picked.failed ? "Try again" : picked && picked.media ? actionWord(picked) : "Reply" }, { key: "x", label: "Refresh" }, { key: "b", label: "Back" }]
         : [{ key: "a", label: "Write" }, { key: "x", label: "Refresh" }, { key: "b", label: "Close" }])
         .concat(chans.length > 1 ? [{ key: "lb", label: "Next channel" }] : [])
 
@@ -221,7 +221,7 @@ Rectangle {
     }
     function replyTo(m) { if (!m || kept) return; replyId = m.id; compose.writeHere() }
     function refresh() { Ui.say(Linked.refresh()) }
-    function stateWord(m) { return m.failed ? (m.err || "Didn't send") + " · Retry" : "Sending" }
+    function stateWord(m) { return m.failed ? (m.err || "Didn't send") + " · Try again" : "Sending" }
     function actionWord(m) { return m.kind === "voice" ? (Voice.playing === m.media ? "Stop" : "Play") : "Save" }
     // A photo, voice, video or file that's here: voice plays, the rest is saved in Downloads.
     function act(m) {
@@ -252,10 +252,10 @@ Rectangle {
         if (!m) return
         const items = []
         if (!kept && !m.pending) items.push({ name: "Reply", icon: "reply", url: "reply" })
-        if (m.text) items.push({ name: "Copy text", icon: "file", url: "copy" })
+        if (m.text) items.push({ name: "Copy", icon: "file", url: "copy" })
         if (m.text && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
         linksIn(m.text).forEach((u, i) => items.push({ name: linkLabel(u), icon: "attach", url: "l" + i }))
-        if (m.failed) items.push({ name: "Retry", icon: "send", url: "retry" })
+        if (m.failed) items.push({ name: "Try again", icon: "send", url: "retry" })
         if (!items.length) return
         Ui.pickFrom("Message", [{ header: "", items: items }], a => {
             if (a === "reply") replyTo(m)
@@ -274,20 +274,22 @@ Rectangle {
                        { name: "For 8 hours", url: "28800000" }, { name: "Until I turn it back on", url: "on" }]
         // A group's menu is about its notifications: muting is one part of it (J4-5).
         const sections = [{ header: c.muted ? "" : c.group ? (Linked.phone.l1 ? "Mute, on your phone too" : "Mute on this computer") : Linked.phone.l1 ? "On your phone too." : "On this computer.", items: items }]
-        // A group: every message, or only @mentions and replies to me (on this computer).
+        // Every message, one until I open it, or for a group only @mentions and replies to me (on this computer): the
+        // same three as a chat's own Notifications.
         const key = "mirror:" + c.peer, mode = Chat.notifyMode(key)
-        if (c.group) sections.push({ header: "Notifications on this computer", items: [
-            { name: "Every message", url: "n:every", check: mode !== "mentions" },
-            { name: "Only mentions and replies to me", url: "n:mentions", check: mode === "mentions" }] })
-        Ui.pickFrom((c.group ? "Notifications for " : c.muted ? "" : "Mute ") + c.name, sections, a => {
+        const notes = [{ name: "Every message", url: "n:every", check: mode === "every" },
+                       { name: "One until I open it", url: "n:one", check: mode === "one" }]
+        if (c.group) notes.push({ name: "Only mentions and replies to me", url: "n:mentions", check: mode === "mentions" })
+        sections.push({ header: "Notifications on this computer", items: notes })
+        Ui.pickFrom("Notifications for " + c.name, sections, a => {
             if (a === "unmute") {
                 const u = Linked.setMute(c.peer, 0)
                 Ui.say(u === "" ? c.name + " isn't muted." : u, u !== "")
                 return
             }
             if (a.indexOf("n:") === 0) {
-                Chat.setNotifyMode(key, a === "n:mentions" ? "mentions" : "")
-                Ui.say(a === "n:mentions" ? c.name + ": only mentions and replies to you." : c.name + ": every message.")
+                Chat.setNotifyMode(key, a.substring(2))
+                Ui.say(a === "n:mentions" ? c.name + ": only mentions and replies to you." : a === "n:one" ? c.name + ": one notification until you open it." : c.name + ": every message.")
                 return
             }
             const r = Linked.setMute(c.peer, a === "on" ? 8640000000000000 : Date.now() + Number(a))   // the huge one: until unmuted
@@ -662,7 +664,7 @@ Rectangle {
                 color: msgItem.sel ? Theme.tile : "transparent"
                 border.width: msgItem.sel && panel.pad ? Theme.focusWidth : 0
                 border.color: Theme.accent
-                // Right click (or a long press): Reply, Copy text, Open a link.
+                // Right click (or a long press): Reply, Copy, Open a link.
                 TapHandler {
                     acceptedButtons: Qt.RightButton
                     onTapped: panel.messageMenu(modelData)

@@ -65,12 +65,66 @@ import java.io.File
 
 /** A file on its way, in a few words: size, kind, what it's doing, its route and pace. */
 internal fun transferLine(f: FileLink.Progress, who: String): String {
+    val tor = f.route.startsWith(io.github.ravenor907.muninn.net.TorFiles.TOR)
     val status = when {
         f.state == "sending" && f.paused -> "Paused"
         f.state == "sending" && f.held -> "Paused on their side"
+        // Cap f4: queued ("Sends when Jo's phone is online"), "Connecting privately…" while Tor starts, and the path.
+        (f.state == "offered" || f.state == "connecting") && f.note.isNotEmpty() -> f.note
+        f.state == "sending" && tor && f.note.isEmpty() -> (if (f.mine) "Sending" else "Receiving") + " over Tor (slower) · " + FileText.percent(f.done, f.size) + "%"
         else -> FileText.line(f.state, f.mine, f.done, f.size, f.note, who, f.folder)
     }
-    return listOf(FileText.size(f.size), f.kind, status, if (f.state != "failed") f.route else "", f.pace).filter { it.isNotEmpty() }.joinToString(" · ")
+    val route = if (f.state == "failed" || (tor && f.state == "sending")) "" else f.route
+    return listOf(FileText.size(f.size), f.kind, status, route, f.pace).filter { it.isNotEmpty() }.joinToString(" · ")
+}
+
+/** The trust badge's colors (the mockup's): ink on a soft fill. */
+private fun badgeFill(badge: String): androidx.compose.ui.graphics.Color = androidx.compose.ui.graphics.Color(when (badge) {
+    FileLink.BADGE_TRUSTED -> 0xFF9FC7A6
+    FileLink.BADGE_FAMILY -> 0xFFA9C4DE
+    FileLink.BADGE_CONTACT -> 0xFFD8C39A
+    else -> 0xFFE3A99E
+})
+
+/**
+ * The receiving card (1.42, both apps): who (with their trust badge), "wants to send you a ZIP file", the file's name,
+ * size and how it comes (Nearby, Trusted direct, Tor slower), the risky note for programs and archives, Decline and
+ * Accept, and "Always accept from <name>" only for someone trusted or Family. Every file asks first.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun IncomingFileCard(f: FileLink.Progress, who: String, showChat: Boolean) {
+    val link = FileLink
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(Corner).background(Palette.panel).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(who, style = Type.normal.copy(color = Palette.textBright, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (f.badge.isNotEmpty()) Text(f.badge, style = Type.small.copy(color = androidx.compose.ui.graphics.Color(0xFF0D1411),
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                modifier = Modifier.clip(Corner).background(badgeFill(f.badge)).padding(horizontal = 9.dp, vertical = 3.dp))
+        }
+        Text("wants to send you ${f.typeWord}" + (if (showChat && f.group.isNotEmpty()) " in ${link.chatOf(f)}" else ""),
+            style = Type.normal.copy(color = Palette.textSoft))
+        Row(Modifier.fillMaxWidth().clip(Corner).background(Palette.panelLow).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            MIcon(FileText.icon(f.name), Palette.gold, 30.dp)
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                Text(f.name, style = Type.normal.copy(color = Palette.text), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(listOf(FileText.size(f.size), f.method).filter { it.isNotEmpty() }.joinToString(" · "), style = Type.small, maxLines = 2)
+            }
+        }
+        if (f.risky) Row(verticalAlignment = Alignment.Top) {
+            MIcon("warning", androidx.compose.ui.graphics.Color(0xFFE3B27A), 16.dp)
+            Text(FileLink.RISKY_NOTE, style = Type.small.copy(color = androidx.compose.ui.graphics.Color(0xFFE3B27A)), modifier = Modifier.padding(start = 8.dp))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            MButton("Decline", Modifier.weight(1f)) { link.decline(f.id) }
+            MButton("Accept", Modifier.weight(1f), kind = Kind.Accent) { link.accept(f.id) }
+        }
+        if (f.canAlways) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            MButton("Always accept from $who") { link.acceptAlways(f.id) }
+        }
+    }
 }
 
 /**
@@ -87,6 +141,8 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
     val failed = f.state == "failed"
     val who = link.host?.nameOf(f.peer) ?: "Someone"
     val chat = link.chatOf(f)
+    // 1.42 (owner): every file or video of theirs that asks first is the receiving card.
+    if (f.state == "asking" && !f.mine) { IncomingFileCard(f, who, showChat); return }
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(Corner).background(Palette.panel).padding(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(Corner).background(Palette.coolTint), contentAlignment = Alignment.Center) {
@@ -106,8 +162,8 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
         FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             when {
                 f.state == "waiting" || f.state == "asking" -> {
-                    MButton(if (f.state == "asking") "Accept" else "Download", kind = Kind.Accent) { link.accept(f.id) }
-                    if (link.host?.isContact(f.peer) == true) MButton("Always from this person") { link.acceptAlways(f.id) }
+                    MButton(if (f.state == "asking" && f.vid == 0) "Accept" else "Download", kind = Kind.Accent) { link.accept(f.id) }
+                    if (f.canAlways && f.vid == 0) MButton("Always accept from $who") { link.acceptAlways(f.id) }
                     MButton("Decline") { link.decline(f.id) }
                 }
                 link.canResume(f.id) -> {
@@ -134,7 +190,7 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                     // Too big to go without Direct: one tap turns it on here and asks them to do the same.
                     if (link.needsDirect(f.id) && link.host?.isContact(f.peer) == true) {
                         val on = io.github.ravenor907.muninn.net.call.CallManager.trusted(f.peer)
-                        MButton(if (on) "Ask $who" else "Allow direct", kind = Kind.Accent) { allowDirect(context, f.peer, who) }
+                        MButton(if (on) "Ask $who" else "Turn on Trusted direct", kind = Kind.Accent) { allowDirect(context, f.peer, who) }
                     }
                     MButton("Retry", kind = Kind.Accent, icon = "refresh") {
                         val g = link.retryGroup(f.id)
@@ -159,7 +215,7 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
 }
 
 /**
- * A file too big to go without Direct: Direct calls and files with them on here (it shares this phone's internet address
+ * A file too big to go without Direct: Trusted direct with them on here (it shares this phone's internet address
  * with them), and a message asks them to turn it on too. Retry once they have.
  */
 internal fun allowDirect(context: Context, peer: String, who: String) {
@@ -171,12 +227,12 @@ internal fun allowDirect(context: Context, peer: String, who: String) {
     }
     val ask = {
         if (!io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)) io.github.ravenor907.muninn.net.call.CallManager.setTrusted(peer, true)
-        app.chat.sendPrivate(peer, "Can you turn on Direct calls and files for me? It's in the menu for my name. Then big files go straight between us.")
+        app.chat.sendPrivate(peer, "Can you turn on Trusted direct for me? It's in Details for my name, under Safety. Then big files go straight between us.")
         Ui.say("Direct is on here, and $who was asked to turn it on too. Retry once they have.")
     }
     if (io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)) { ask(); return }
-    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Allow direct with $who?",
-        "Big files go straight between your devices. Both of you turn this on. It shares your internet address with $who.", "Allow and ask") { ask() })
+    Ui.sure(io.github.ravenor907.muninn.ui.Ask("Turn on Trusted direct with $who?",
+        "Big files go straight between your devices. Both of you turn this on. It shares your internet address with $who.", "Turn on and ask") { ask() })
 }
 
 /** Retry for a card: a person's file again, or one member's copy of a group's file. */
@@ -201,6 +257,21 @@ internal fun sendFileFrom(app: Muninn, context: Context, scope: CoroutineScope, 
             }
         } catch (_: Exception) {}
         val clean = app.chat.cleanFileName(chosen ?: "file")
+        // Cap f4: a file over 1 GB that will most likely go over Tor asks first.
+        val slow = if (!where.startsWith("g:") && size > 0) FileLink.torWarning(where, size) else null
+        if (slow != null) {
+            Ui.sure(io.github.ravenor907.muninn.ui.Ask("Send over Tor?", slow, "Send") { Thread { copyAndSend(app, context, where, uri, clean, size) }.start() })
+            then()
+            return@launch
+        }
+        copyAndSend(app, context, where, uri, clean, size)
+        then()
+    }
+}
+
+/** sendFileFrom's second half: the file copied in, then sent. */
+private fun copyAndSend(app: Muninn, context: Context, where: String, uri: Uri, clean: String, size: Long) {
+    run {
         val tmp = File(File(context.cacheDir, "files").also { it.mkdirs() }, "out-" + System.nanoTime())
         val ok = try { context.contentResolver.openInputStream(uri)?.use { ins -> tmp.outputStream().use { ins.copyTo(it) } } != null } catch (e: Exception) { false }
         if (!ok) { tmp.delete(); Ui.say("That file couldn't be opened.", true) }
@@ -209,7 +280,6 @@ internal fun sendFileFrom(app: Muninn, context: Context, scope: CoroutineScope, 
             val card = FileLink.preparing(where, clean, size)
             app.chat.sendFile(where, tmp, clean, card)?.let { Ui.say(it, true) }
         }
-        then()
     }
 }
 

@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <QNetworkProxy>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -24,9 +25,14 @@ class QWebSocket;
 // hash). Tor ends with Huginn (TAKEOWNERSHIP, __OwningControllerProcess).
 //
 // Anything that would still show the address is off, each with offNote(): calls, both ways (owner decision, round 19:
-// Tor can't carry a call's sound and the call relay would see the address; a call to this computer is declined quietly
-// and shows as missed), direct files and photos, sending videos (receiving still works), link previews and GIF search.
-// Nearby and the same Wi-Fi stay available. Fails closed: on, with Tor not ready, the proxy points at a port where
+// Tor adds too much delay for a call and the call relay would see the address; a call to this computer is declined
+// quietly and shows as missed), anything straight over the internet, link previews and GIF search. Files and videos go
+// on the same Wi-Fi or over Tor (1.42). Nearby and the same Wi-Fi stay available.
+//
+// 1.42 (cap f4, protocol.md section 30): Tor also starts on demand for Encrypted file sharing (needTor), with Ultra
+// privacy off too, and stops once nothing needs it (releaseTor) unless Ultra privacy is on. While it runs on demand
+// only, nothing else goes through it (proxy() stays the default); filesPort() is its SOCKS port with a circuit, and
+// TorOnion asks it for one-time onion services over the control port. Fails closed: on, with Tor not ready, the proxy points at a port where
 // nothing listens, so nothing leaves directly meanwhile. Tor picks its own ports (no race with other programs), is
 // checked to be the one Huginn started, and is started again by itself up to 3 times if it ends.
 class UltraPrivacy : public QObject
@@ -68,17 +74,18 @@ public:
     static bool directAllowed() { return !on(); }
     // Calls and voice rooms, in and out (owner decision, round 19).
     static bool callsAllowed() { return !on(); }
-    static bool videoSendAllowed() { return !on(); }
+    // 1.42: videos go over Tor or on the same Wi-Fi under Ultra privacy too.
+    static bool videoSendAllowed() { return true; }
     static bool previewsAllowed() { return !on(); }
     static bool gifSearchAllowed() { return !on(); }
     static bool isVideoName(const QString &name);
-    // A file that may not go now: a video while it's on.
-    static bool blocksFile(const QString &name) { return on() && isVideoName(name); }
+    // 1.42: nothing is held back any more (videos go over Tor or on the same Wi-Fi); kept for older callers.
+    static bool blocksFile(const QString &) { return false; }
     // The same, also by what the file starts with (a video renamed to .bin): MP4/MOV, Matroska/WebM, AVI, ASF, FLV, MPEG.
     static bool looksLikeVideo(const QByteArray &head);
     static bool blocksPath(const QString &path);
     static QString offNoteText() { return QStringLiteral("Off while Ultra privacy is on"); }
-    static QString videoOffText() { return QStringLiteral("Sending videos: Off while Ultra privacy is on. You can still receive them."); }
+    static QString videoOffText() { return QStringLiteral("Videos send over Tor. Calls are off."); }
     static QString callsOffText() { return QStringLiteral("Calls are off while Ultra privacy is on."); }
     // A call that came while it's on: the missed-call line in that chat.
     static QString callsMissedText() { return QStringLiteral("Missed call · Calls are off while Ultra privacy is on"); }
@@ -106,6 +113,16 @@ public:
     Q_INVOKABLE void tryAgain();
     // At start: the saved switch, and Tor if it's on (before the relays connect).
     void start();
+    // ---- Tor on demand (cap f4): for a file, with Ultra privacy off too. Any number of tags; Tor runs while one is held.
+    static void needTor(const QString &tag);
+    static void releaseTor(const QString &tag);
+    // Tor's SOCKS port while it has a circuit (also with Ultra privacy off), else 0; failed: it couldn't start this time.
+    static int filesPort();
+    static bool filesFailed();
+    // For TorOnion: Tor's control port and this start's password (empty while Tor isn't ours or isn't up).
+    int controlPort() const { return m_authed && m_pidOk ? m_ctlPort : 0; }
+    QByteArray controlPassword() const { return m_authed && m_pidOk ? m_password : QByteArray(); }
+
     // Erase everything (Vault::aboutToErase): Tor ends now, and this waits for it, so its folder can go. Nothing goes out
     // meanwhile (the closed port); Huginn restarts after an erase.
     void stopNow();
@@ -134,6 +151,8 @@ Q_SIGNALS:
     // Turned on (off before): whatever already goes straight to someone stops now (main.cpp: calls end, direct file
     // offers go by relay or are cancelled).
     void turnedOn();
+    // Tor for files became ready (filesPort() > 0) or couldn't start (filesFailed()).
+    void filesTorChanged();
 
 private:
     void setTor(Tor t);
@@ -165,4 +184,9 @@ private:
     int m_shownProgress = -1;    // changed() only when the percentage moved, not every second
     int m_ticks = 0;
     QString m_dir;
+    QSet<QString> m_demand;      // what needs Tor on demand now (one tag per file)
+    int m_filesPort = 0;
+    bool m_filesFailed = false;
+    bool wanted() const { return on() || !m_demand.isEmpty(); }
+    void setFilesPort(int p);
 };

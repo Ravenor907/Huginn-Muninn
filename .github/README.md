@@ -44,7 +44,7 @@ Up to 50 people with channels. Folk keeps 7 days and allows invite links; Family
 <td width="33%" valign="top">
 
 ### 📞 Calls and voice rooms
-Voice and video calls, group video for up to 4, and drop-in voice rooms for up to 8.
+Voice and video calls, group video for up to 4, and voice rooms for up to 8.
 
 </td>
 </tr>

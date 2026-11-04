@@ -7,7 +7,8 @@ import Huginn
 Item {
     id: picker
     property string title
-    property var entries: []          // flat list: { header } or { name, detail, url, icon, check, danger }
+    property var entries: []          // flat list: { header } or { name, detail, url, icon, check, danger, disabled }
+    // A disabled row is dimmed and skipped by the D-pad; its detail says why, and picking it with the mouse says that too.
     // A slider row: { name, slider: true, value, from, to, step, unit, moved: v => {} }. It stays open while it moves;
     // left and right (or the mouse) change it, and moved is called with each new value.
     property int current: 0
@@ -36,13 +37,15 @@ Item {
             sec.items.forEach(e => out.push(e))
         })
         entries = out
-        current = out.findIndex(e => !e.header)
+        const firstOn = out.findIndex(e => !e.header && !e.disabled)
+        current = firstOn >= 0 ? firstOn : out.findIndex(e => !e.header)
         visible = true
         list.positionViewAtIndex(Math.max(0, current), ListView.Beginning)
     }
     function pick() {
         const e = entries[current]
         if (!e || e.header || e.slider) return
+        if (e.disabled) { Ui.say(e.detail || "Not available right now.", true); return }
         visible = false
         backFn = null
         markFn = null
@@ -70,7 +73,7 @@ Item {
     }
     function step(dir) {
         let i = current
-        do { i += dir } while (i >= 0 && i < entries.length && entries[i].header)
+        do { i += dir } while (i >= 0 && i < entries.length && (entries[i].header || entries[i].disabled))
         if (i >= 0 && i < entries.length) current = i
     }
     function jumpSection(dir, wrap) {
@@ -81,7 +84,9 @@ Item {
         let here = 0
         headers.forEach((h, k) => { if (h < current) here = k })
         const target = wrap ? (here + dir + headers.length) % headers.length : Math.max(0, Math.min(headers.length - 1, here + dir))
-        current = headers[target] + 1
+        let at = headers[target] + 1
+        while (at < entries.length && entries[at] && entries[at].disabled && !entries[at].header) at++
+        if (at < entries.length && entries[at] && !entries[at].header) current = at
     }
 
     Rectangle { anchors.fill: parent; color: Qt.rgba(0.03, 0.035, 0.04, 0.85) }
@@ -177,12 +182,13 @@ Item {
                     anchors.fill: parent
                     anchors.topMargin: rowItem.gap
                     radius: Theme.radius
+                    opacity: modelData.disabled ? 0.45 : 1
                     readonly property bool on: index === picker.current
                     color: on ? (Ui.main && Ui.main.padInUse ? Theme.focusFill : Theme.tile) : rowHover.hovered ? Theme.raised : "transparent"
                     border.width: on && Ui.main && Ui.main.padInUse ? Theme.focusWidth : 0
                     border.color: Theme.accent
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: (modelData.name || "") + (modelData.detail ? ", " + modelData.detail : "") + (modelData.check ? ", on" : "")
+                    Accessible.name: (modelData.name || "") + (modelData.detail ? ", " + modelData.detail : "") + (modelData.check ? ", on" : "") + (modelData.disabled ? ", unavailable" : "")
                     Icon {
                         id: rowIcon
                         visible: !!modelData.icon
@@ -267,8 +273,8 @@ Item {
                             }
                         }
                     }
-                    HoverHandler { id: rowHover; onHoveredChanged: if (hovered && !(Ui.main && Ui.main.padInUse)) picker.current = index }
-                    TapHandler { onTapped: { picker.current = index; picker.pick() } }
+                    HoverHandler { id: rowHover; onHoveredChanged: if (hovered && !modelData.disabled && !(Ui.main && Ui.main.padInUse)) picker.current = index }
+                    TapHandler { onTapped: { if (modelData.disabled) { Ui.say(modelData.detail || "Not available right now.", true); return } picker.current = index; picker.pick() } }
                 }
             }
         }

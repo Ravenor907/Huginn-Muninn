@@ -124,7 +124,7 @@ Rectangle {
         add("voice", voice.length ? "VOICE" : "Voice rooms: talk here", voice)
         return out
     }
-    // The header's Call button: Call everyone (and Pick people) when there's anyone to ring, then Drop-in call for each
+    // The header's Call button: Call everyone (and Pick people) when there's anyone to ring, then Join voice room for each
     // voice room and Join group call for each group call going on. Nothing applies: no button.
     readonly property var callChoices: {
         if (locked || !exists || readOnly) return []
@@ -135,13 +135,13 @@ Rectangle {
         }
         const rooms = channels.filter(c => c.type === "voice").map(c => ({ id: c.id, name: c.name }))
         const calls = isTour ? [] : (Rooms.presence, Rooms.inRoom, Rooms.groupCalls(gid))
-        // How many are in each, as Muninn's popup says it ("Drop-in call · 2 in it").
+        // How many are in each, as Muninn's popup says it ("Join voice room · 2 in it").
         rooms.forEach(r => {
             const n = isTour ? 0 : (Rooms.presence, Rooms.whoIn(gid, r.id)).length
-            const base = rooms.length === 1 ? "Drop-in call" : "Drop-in call · " + r.name
+            const base = rooms.length === 1 ? "Join voice room" : "Join voice room · " + r.name
             out.push({ name: n > 0 ? base + " · " + n + " in it" : rooms.length === 1 ? base + " (no ringing)" : base, icon: "speaker", url: "join:" + r.id, room: r })
         })
-        // Someone rang everyone: that's a group call, not a drop-in call.
+        // Someone rang everyone: that's a group call, not a voice room.
         calls.forEach(c => {
             const n = (Rooms.presence, Rooms.whoIn(gid, c.ch)).length
             out.push({ name: n > 0 ? "Join group call · " + n + " in it" : "Join group call", icon: "speaker", url: "join:" + c.ch, room: { id: c.ch, name: "Group call" } })
@@ -167,7 +167,7 @@ Rectangle {
             return channelId !== "main" ? [] : [
                 { id: "1", name: "Jake", from: "j", text: "Who's on tonight? I can host at 8.", mine: false, time: Date.now() - 600000 },
                 { id: "2", name: "Sam", from: "s", text: "In. Grabbing food first.", mine: false, time: Date.now() - 480000 },
-                { id: "3", name: Ui.myName, from: "me", text: "Jumping in Voice now.", mine: true, time: Date.now() - 60000, state: "delivered", receipt: "Delivered to 4 of 5" }]
+                { id: "3", name: Ui.myName, from: "me", text: "Jumping in the voice room now.", mine: true, time: Date.now() - 60000, state: "delivered", receipt: "Delivered to 4 of 5" }]
         return (Chat.groups, Chat.groupMessages(gid, channelId))
     }
     readonly property string chatKey: "g:" + gid + ":" + channelId
@@ -510,7 +510,7 @@ Rectangle {
             title: page.locked || !page.exists ? "" : page.channel.name
             subtitle: page.locked || !page.exists ? "" : page.readOnly ? "Read only"
                     : (!page.isTour && (Chat.chats, Chat.groups, Chat.isMuted("g:" + page.gid)) ? "Muted · " : "") + (page.info.name || "")
-            // One Call button, like a person's: Call everyone and Drop-in call (whichever apply) in its popup.
+            // One Call button, like a person's: Call everyone and Join voice room (whichever apply) in its popup.
             // A plain phone, like a person's chat.
             Rectangle {
                 id: groupCallBtn
@@ -1034,46 +1034,53 @@ Rectangle {
     }
 
     // ============================================================= the group's one menu
-    // Short, like Muninn's: Search, Media, Mute and Group settings first; then Notifications, Invite people and
-    // People; the rest (Channels, the calls, Leave) under More (groupMore). A sub-page's B comes back here.
+    // The same layout as Muninn's (and the rail's right-click menu, PeopleActions.groupRowMenu). Buttons: Search, Media,
+    // Mute, Settings. Rows: Reports (admins, when new), Notifications, Invite people, People, Mark read, Channels.
+    // More: Copy invite link, Show or Fold rules, Compare emoji. Red: Leave. Call everyone and Pick people are only on
+    // the header's Call button. A sub-page's B comes back here.
     function groupMenu() {
         if (!exists) return
-        const top = []
         const admin = !readOnly && !!info.amAdmin
-        // Cap g3: new reports from members come first, for admins (they're also under Group settings).
-        if (admin && !isTour && (info.reportsUnread || 0) > 0) top.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
-        top.push({ name: "Search", icon: "search", detail: "In #" + channel.name, url: "find" },
-                 { name: "Media and files", icon: "image", url: "media" },
-                 !isTour && Chat.isMuted("g:" + gid) ? { name: "Unmute", icon: "bell", url: "mute" } : { name: "Mute", icon: "belloff", url: "mute" },
-                 { name: "Group settings", icon: "gear", url: "settings" })
-        // The about box at the top of the first channel: fold it to one line, or show it all.
-        if (aboutBox.visible) top.push({ name: aboutBox.folded ? "Show rules" : "Fold rules", icon: "info", detail: "About and rules at the top", url: "foldabout" })
-        const items = [{ name: "Notifications", icon: "bell", url: "notify" }]
+        const top = [{ name: "Search", icon: "search", detail: "In #" + channel.name, url: "find" },
+                     { name: "Media", icon: "image", url: "media" },
+                     !isTour && Chat.isMuted("g:" + gid) ? { name: "Unmute", icon: "bell", url: "mute" } : { name: "Mute", icon: "belloff", url: "mute" },
+                     { name: "Settings", icon: "gear", url: "settings" }]
+        const items = []
+        // Cap g3: new reports from members come first, for admins (they're also under Settings).
+        if (admin && !isTour && (info.reportsUnread || 0) > 0) items.push({ name: "Reports", icon: "shield", detail: info.reportsUnread + " new", url: "reports" })
+        items.push({ name: "Notifications", icon: "bell", url: "notify" })
         // One Invite people: the link panel (with From contacts and Active links in it for admins); a Family group's admins
         // get From contacts or a code. Hidden for whoever can't invite.
-        if (isTour || (!family && (canInvite || admin)) || (family && admin))
+        const inviting = isTour || (!family && (canInvite || admin)) || (family && admin)
+        if (inviting)
             items.push({ name: "Invite people", icon: "plus", detail: family ? "From contacts or a code" : admin ? "A link, a code or contacts" : "A link or code", url: "invite" })
-        items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers, url: "people" })
+        items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers, url: "people" },
+                   { name: "Mark read", icon: "check", url: "read" })
+        if (!readOnly) items.push({ name: "Channels", icon: "hash", url: "channels" })
+        if (groupExtras().length) items.push({ name: "More", icon: "more", url: "more" })
+        const end = [readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true }]
+        Ui.pickFrom(info.name || "Group", [{ header: "", items: top }, { header: "", items: items }, { header: "", items: end }], a => groupAction(a))
+    }
+    // The rare rows of the group's menu: Copy invite link, Show or Fold rules, and in a Family group Compare emoji.
+    function groupExtras() {
+        const out = []
+        const admin = !readOnly && !!info.amAdmin
+        const lim = isTour ? { links: true } : (Chat.groupLimit(gid) || {})
+        if (!family && !readOnly && (isTour || canInvite || admin) && lim.links) out.push({ name: "Copy invite link", icon: "attach", url: "copyinvite" })
+        // The about box at the top of the first channel: fold it to one line, or show it all.
+        if (aboutBox.visible) out.push({ name: aboutBox.folded ? "Show rules" : "Fold rules", icon: "info", detail: "About and rules at the top", url: "foldabout" })
         // Family: each member's safety code is checked once.
         const unchecked = family && !readOnly && !isTour ? members.filter(m => !m.me && !m.checked).length : 0
-        if (unchecked) items.push({ name: "Compare emoji", icon: "check", detail: unchecked + " to check", url: "check" })
-        items.push({ name: "More", icon: "more", url: "more" })
-        Ui.pickFrom(info.name || "Group", [{ header: "", items: top }, { header: "", items: items }], a => groupAction(a))
+        if (unchecked) out.push({ name: "Compare emoji", icon: "check", detail: unchecked + " to check", url: "check" })
+        return out
     }
-    // The rest of the group's menu: Channels, the calls (Call everyone asks first), then Leave in red.
     function groupMore() {
         if (!exists) return
-        const items = [{ name: "Channels", icon: "hash", url: "channels" }]
-        if (!readOnly && (isTour || info.count > 1)) {
-            if (isTour || info.count > 2) items.push({ name: "Pick people", icon: "call", detail: "Ring only some", url: "callsome" })
-            items.push({ name: "Call everyone", icon: "call", detail: "Rings every member", url: "callall" })
-        }
-        const end = [readOnly ? { name: "Delete from this device", url: "forget", danger: true } : { name: "Leave", url: "leave", danger: true }]
-        Ui.pickFrom("More for " + (info.name || "Group"), [{ header: "", items: items }, { header: "", items: end }], a => groupAction(a), () => page.groupMenu())
+        Ui.pickFrom("More for " + (info.name || "Group"), [{ header: "", items: groupExtras() }], a => groupAction(a), () => page.groupMenu())
     }
-    // Media and files: what was shared in this channel, or the group's Files.
+    // Media: what was shared in this channel, or the group's Files.
     function mediaMenu() {
-        Ui.pickFrom("Media and files", [{ header: "", items: [{ name: "Media", detail: "Shared in #" + channel.name, icon: "image", url: "shared" },
+        Ui.pickFrom("Media", [{ header: "", items: [{ name: "Media", detail: "Shared in #" + channel.name, icon: "image", url: "shared" },
                                                              { name: "Files", icon: "file", url: "files" }] }], a => {
             if (a === "shared") more.openShared()
             else if (!isTour) PeopleActions.openFiles("g:" + gid, info.name)
@@ -1089,11 +1096,13 @@ Rectangle {
         if (a === "media") { mediaMenu(); return }
         if (isTour) return
         if (a === "reports") { reportsMenu(() => page.groupMenu()); return }
+        if (a === "read") { (info.channels || []).forEach(ch => Chat.markGroupRead(g, ch.id)); return }
+        if (a === "copyinvite") { PeopleActions.copyInvite(g); return }
         if (a === "mute") PeopleActions.muteMenu("g:" + g, info.name || "Group", () => page.groupMenu())
         else if (a === "notify") PeopleActions.notifyMenu("g:" + g, () => page.groupMenu())
         else if (a === "callall") {
             const n = Math.max(1, (info.count || 1) - 1)
-            Ui.sure("Ring all " + n + (n === 1 ? " person?" : " people?"), "Their phones and computers ring now. To talk without ringing anyone, use Drop-in call.",
+            Ui.sure("Ring all " + n + (n === 1 ? " person?" : " people?"), "Their phones and computers ring now. To talk without ringing anyone, join the voice room.",
                     "Ring everyone", () => tell(Rooms.callGroup(g, []), "Ringing everyone."), false, false)
         }
         else if (a === "invite") inviteMenu()
@@ -1295,21 +1304,26 @@ Rectangle {
         items.push({ name: "People", icon: "people", detail: members.length + " of " + maxMembers + " people", url: "people" })
         items.push({ name: "Type", icon: "people", detail: l.typeName, url: "type" })
         items.push({ name: "How long messages stay", icon: "moon", detail: l.days + " days", url: "days" })
-        if (admin && l.links && invitePanel.has("setMembersInvite")) items.push({ name: "Members can invite", icon: "people", url: "invite", check: invitePanel.membersCanInvite })
+        // Who can invite: a switch (ticked: members too, else admins only).
+        if (admin && l.links && invitePanel.has("setMembersInvite"))
+            items.push({ name: "Who can invite", icon: "people", detail: invitePanel.membersCanInvite ? "Members too" : "Admins only", url: "invite", check: invitePanel.membersCanInvite })
         // Cap f2: who can send files and the size limit (admins change them).
         items.push({ name: "Files", icon: "file", detail: isTour ? "Everyone can send files" : (Chat.groupFiles(gid).line || ""), url: "files" })
-        // Cap g2: who is banned (Unban) and who is timed out (time left, Cancel). Admins only.
+        if (!readOnly) items.push({ name: "Channels", icon: "hash", url: "channels" })
+        // Cap g2: who is banned (Unban) and who is timed out (time left, Cancel). Admins only, in their own section.
+        const adminRows = []
         if (admin || (isTour && !locked)) {
             const banned = isTour ? [] : Mod.bannedList(gid), outs = isTour ? [] : Mod.timeoutList(gid)
             // Cap g3: reports from members, only on admins' devices; unread ones count on the group like an @mention.
             const nr = isTour ? 0 : (info.reports || 0), nu = isTour ? 0 : (info.reportsUnread || 0)
-            items.push({ name: "Reports", icon: "shield", detail: nr ? (nu ? nu + " new · " : "") + nr + (nr === 1 ? " report" : " reports") : "None", url: "reports" })
-            items.push({ name: "Banned", icon: "shield", detail: banned.length ? banned.length + (banned.length === 1 ? " person" : " people") : "Nobody", url: "banned" },
+            adminRows.push({ name: "Reports", icon: "shield", detail: nr ? (nu ? nu + " new · " : "") + nr + (nr === 1 ? " report" : " reports") : "None", url: "reports" })
+            adminRows.push({ name: "Banned", icon: "shield", detail: banned.length ? banned.length + (banned.length === 1 ? " person" : " people") : "Nobody", url: "banned" },
                        { name: "Timeouts", icon: "moon", detail: outs.length ? outs.length + (outs.length === 1 ? " person" : " people") : "Nobody", url: "timeouts" })
         }
         const g = gid, back = () => page.settingsMenu()
-        Ui.pickFrom("Group settings", [{ header: "", items: items }], a => {
+        Ui.pickFrom("Group settings", [{ header: "", items: items }, { header: "Admin", items: adminRows }], a => {
             if (a === "people") { peopleMenu(); return }
+            if (a === "channels") { channelsMenu(); return }
             if (a === "reports") { if (!isTour) reportsMenu(back); return }
             if (a === "banned") { if (!isTour) bannedMenu(back); return }
             if (a === "timeouts") { if (!isTour) timeoutsMenu(back); return }
@@ -1522,6 +1536,9 @@ Rectangle {
     function messageOptions() {
         const m = messages[sel]
         if (!m || m.system) { groupMenu(); return }
+        // The same shape as Muninn's sheet: Join (an invite), React, Reply, Copy, Forward (one row: text, media or
+        // both), Read aloud, Edit, Pin, Try again, Report to admins; the rare ones in More; the person's controls;
+        // Unsend, Delete for everyone and Delete for me last, in red.
         const items = []
         // A group invite in the message: Join, first (its name and size, then Join or Not now).
         const invite = m.text && !m.unsent && !m.mine && !isTour ? Chat.parseGroupCode(m.text) : ({})
@@ -1529,26 +1546,26 @@ Rectangle {
         if (!m.unsent && !readOnly) {
             items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react", sub: () => pickReaction(m) })
             items.push({ name: "Reply", icon: "reply", url: "reply" })
-            items.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
         }
+        if (m.text && !m.unsent) items.push({ name: "Copy", url: "copy" })
+        if ((m.text || (m.photo && !m.file)) && !m.unsent && !m.failed && !isTour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMessage(m) })
+        // Read aloud (src/readaloud.h): the plain text, in the voice picked in Settings › Look › Read aloud.
+        if (m.text && !m.unsent && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
         if (m.mine && !m.unsent && !m.photo && !readOnly) items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (!m.unsent) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
-        if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
-        // Read aloud (src/readaloud.h): the plain text, in the voice picked in Settings › Look.
-        if (m.text && !m.unsent && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
-        // Right-click extras: the link, Forward (its text) and Report to admins (in a private message to each).
-        const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
-        if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
-        if (m.text && !m.unsent && !isTour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMenu(m.text) })
+        if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
         // Only when there's another admin to tell (not for the only admin, nor about that admin's own message).
         if (!m.mine && !m.unsent && !isTour && members.some(x => !x.me && (x.admin || x.owner) && x.key !== m.from))
             items.push({ name: "Report to admins", icon: "shield", url: "report" })
-        if (m.photo && !m.voice && !m.video && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", icon: "save", url: "save" })
-        else if (m.photo && (m.voice || m.video) && !m.file && !m.unsent) items.push({ name: "Save", icon: "save", detail: "To " + (Transfer.saveName || "Downloads") + " › Huginn", url: "savemedia" })
-        // A photo, video or voice message: sent again as a new message.
-        if (m.photo && !m.file && !m.unsent && !m.failed && !isTour) items.push({ name: "Forward", icon: "forward", url: "forwardmedia", sub: () => PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo") })
-        if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
-        if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
+        // More: the thread, the link, saving and viewing, playing a voice message.
+        const extra = []
+        if (!m.unsent && !readOnly)
+            extra.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
+        const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
+        if (link !== "") extra.push({ name: "Copy link", icon: "attach", url: "link" })
+        if (m.photo && !m.voice && !m.video && !m.file && !m.unsent) extra.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", icon: "save", url: "save" })
+        else if (m.photo && (m.voice || m.video) && !m.file && !m.unsent) extra.push({ name: "Save", icon: "save", detail: "To " + (Transfer.saveName || "Downloads") + " › Huginn", url: "savemedia" })
+        if (m.voice && !m.unsent) extra.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         // Cap g2: the person who wrote it: Mute for me and Volume, and for admins Timeout and Ban in a section with their name.
         const who = !m.mine && !m.system && m.from ? ModActions.items(gid, m.from, isTour, m.name || "Someone") : []
         who.filter(x => !x.person).forEach(x => items.push(x))
@@ -1560,36 +1577,41 @@ Rectangle {
         gone.push({ name: "Delete for me", url: "delete", danger: true })
         const them = who.filter(x => !!x.person)
         const g = gid
+        const act = a => page.messageAction(a, m, g, link)
+        if (extra.length) items.push({ name: "More", icon: "more", url: "more", sub: () => Ui.pickFrom("More", [{ header: "", items: extra }], act) })
         Ui.pickFrom("Message", [{ header: "", items: items }, { header: "", items: gone }, { header: them.length ? (m.name || "Someone") : "", items: them }], a => {
-            if (!isTour && ModActions.handle(a, g, m.from, m.name, null)) return
-            if (a === "react") pickReaction(m)
-            else if (a === "reply") startReply(m.id)
-            else if (a === "thread") openThread(m.id)
-            else if (a === "edit") startEdit(m)
-            else if (a === "pin") togglePin(m.id)
-            else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
-            else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
-            else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
-            else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
-            else if (a === "forward") PeopleActions.forwardMenu(m.text)
-            else if (a === "report") reportToAdmins(m)
-            else if (a === "view") viewing = m.photo
-            else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
-            else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
-            else if (a === "forwardmedia") PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo")
-            else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
-            else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for everyone.", "Unsend", () => Chat.unsendGroup(g, m.id), true, true)
-            else if (a === "remove")
-                Ui.sure("Delete for everyone?", "It shows as Removed by an admin for every member.", "Delete",
-                        () => page.removedToast(Mod.removeForEveryone(g, m.id, m.from)), true, true)
-            else if (a === "retry") Chat.retryGroup(g, m.id)
-            else if (a === "delete") {
-                // A photo, video or voice message is held 5 seconds, as from Media and files.
-                if (m.photo) Ui.sure("Delete this " + (m.voice ? "voice message" : m.video ? "video" : "photo") + "?", "It's deleted on this computer only.", "Delete",
-                                     () => Chat.deleteGroupMessage(g, m.id), true, true)
-                else Chat.deleteGroupMessage(g, m.id)
-            }
+            if (a === "more") { Ui.pickFrom("More", [{ header: "", items: extra }], act, () => page.messageOptions()); return }
+            act(a)
         })
+    }
+    function messageAction(a, m, g, link) {
+        if (!isTour && ModActions.handle(a, g, m.from, m.name, null)) return
+        if (a === "react") pickReaction(m)
+        else if (a === "reply") startReply(m.id)
+        else if (a === "thread") openThread(m.id)
+        else if (a === "edit") startEdit(m)
+        else if (a === "pin") togglePin(m.id)
+        else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
+        else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
+        else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
+        else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
+        else if (a === "forward") PeopleActions.forwardMessage(m)
+        else if (a === "report") reportToAdmins(m)
+        else if (a === "view") viewing = m.photo
+        else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
+        else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
+        else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
+        else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for everyone.", "Unsend", () => Chat.unsendGroup(g, m.id), true, true)
+        else if (a === "remove")
+            Ui.sure("Delete for everyone?", "It shows as Removed by an admin for every member.", "Delete",
+                    () => page.removedToast(Mod.removeForEveryone(g, m.id, m.from)), true, true)
+        else if (a === "retry") Chat.retryGroup(g, m.id)
+        else if (a === "delete") {
+            // A photo, video or voice message is held 5 seconds, as from Media.
+            if (m.photo) Ui.sure("Delete this " + (m.voice ? "voice message" : m.video ? "video" : "photo") + "?", "It's deleted on this computer only.", "Delete",
+                                 () => Chat.deleteGroupMessage(g, m.id), true, true)
+            else Chat.deleteGroupMessage(g, m.id)
+        }
     }
     // ------------------------------------------------------------- cap m1: replies, reactions, edits, threads, pins
     function jumpTo(id) {
@@ -1724,7 +1746,7 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", icon: "send", url: "send" }, { name: "Emoji", icon: "smile", url: "emoji" },
-                       { name: "Pictures, video or poll", icon: "image", url: "picture" }]
+                       { name: "Camera, media, file or poll", icon: "attach", url: "picture" }]
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
@@ -1810,7 +1832,7 @@ Rectangle {
             else groupMenu()
             return true
         case "y":
-            // The channel list: the header's Call button (Call everyone, Drop-in call), which the D-pad never lands on.
+            // The channel list: the header's Call button (Call everyone, Join voice room), which the D-pad never lands on.
             if (zone === "channels") { if (callChoices.length) callMenu(); return true }
             if (zone === "messages" && !readOnly && !isTour && !Voice.recording) {
                 if (!Voice.start(chatKey)) Ui.say("The microphone isn't available right now.", true)
@@ -1824,6 +1846,7 @@ Rectangle {
         return false
     }
     function handleRelease(b) {
+        if (more.busy && more.handleRelease(b)) return true
         // Only to the channel it was started in: Voice throws it away (and says so) if this isn't that channel.
         if (b === "y" && Voice.recording) Voice.finish(chatKey)
         return true

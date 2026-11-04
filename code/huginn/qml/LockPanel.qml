@@ -448,6 +448,14 @@ Item {
             kind: "plain"; text: panel.cancelText
             onClicked: panel.cancelled()
         }
+        // Change the lock › Unlock password: a pattern's unlock password lives here (it belongs to the pattern), not in
+        // Settings. The current lock is asked first, then the unlock password page.
+        HButton {
+            visible: panel.spareHere
+            anchors.horizontalCenter: parent.horizontalCenter
+            kind: "plain"; text: "Change unlock password"
+            onClicked: panel.changeSpare()
+        }
         // Settings › Unlock password › Change: Cancel keeps the one there is. Round 19: the required screen has Lock,
         // a new one after a wrong one from memory has Back (leaveSpare).
         HButton {
@@ -503,6 +511,15 @@ Item {
         else if (!second) Ui.ask(pendingPattern !== "" || mode === "spare" ? "Unlock password (6 or more)" : "New password (6 or more)", "", "", "Next", t => { pw.text = t; panel.typeIn(true) }, true, true)
         else Ui.ask("Type it again", "", "", go, t => { pw2.text = t; panel.submitPassword() }, true, true)
     }
+    // Change the lock, with a pattern lock now: its unlock password can be changed from here (Y on a controller).
+    readonly property bool spareHere: mode === "change" && Vault.hasLock && Vault.usesPattern && pendingPattern === "" && !drawing && !sealAsked
+    function changeSpare() {
+        cancelled()
+        Qt.callLater(() => {
+            if (!Ui.main || !Vault.hasLock || Vault.screenLocked) return
+            Ui.main.askLock("Unlock password", "Confirm it's you first", "spare", () => { if (Vault.startUnlockPasswordChange()) Ui.openPage("chat", {}) })
+        })
+    }
     // What B does on the unlock password screen (leaveSpare), in words.
     readonly property string spareLeaveText: respare && Vault.spareStep === "recall" ? "Back"
         : Vault.spareStep === "set" && Vault.hasUnlockPassword ? "Cancel" : "Lock"
@@ -517,6 +534,7 @@ Item {
         if (canSpare) p.push({ key: "x", label: usePattern ? "Unlock password" : "Draw pattern" })
         if (canForget) p.push({ key: "y", label: "Forgot it?" })
         else if (spareRecall && bad) p.push({ key: "y", label: "Set a new one" })
+        else if (spareHere) p.push({ key: "y", label: "Unlock password" })
         if (drawing) p.push({ key: "b", label: "Clear" })
         else if (pendingPattern !== "") p.push({ key: "b", label: "Draw again" })
         else if (mode === "spare") p.push({ key: "b", label: Vault.spareStep !== "" ? spareLeaveText : "Cancel" })
@@ -535,6 +553,7 @@ Item {
         if ((b === "lb" || b === "next" || b === "prev") && !asks && mode !== "spare" && pendingPattern === "") { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "y" && canForget) { forgot(); return true }
         if (b === "y" && spareRecall && bad) { newSpare(); return true }
+        if (b === "y" && spareHere) { changeSpare(); return true }
         // A new lock after "Forgot it?" can't be skipped.
         // The unlock password after a new pattern: B goes back to drawing. "spare": B leaves (leaveSpare).
         if (b === "b" && pendingPattern !== "") { redraw(); return true }

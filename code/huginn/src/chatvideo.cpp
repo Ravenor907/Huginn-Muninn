@@ -1,8 +1,11 @@
 // Cap v3 (shared/docs/protocol.md section 29): a video picked from this computer, to a group or one person. The same
-// choices as Muninn's VideoSend.kt, except that Huginn converts nothing (29.6): a video goes full size only if it's
-// already plain H.264 at 1080p30 at most, and as the relay copy only if it already fits that.
-// Round 19: the plan reads only the file's boxes (no whole-file read on the window's thread); the copies that go are
-// made off it, with their location and camera details taken out (GroupVideo::scrub), as Huginn does for pictures.
+// choices as Muninn's VideoSend.kt (1.42 rules: never cut), except that Huginn converts nothing (29.6): it sends full
+// size direct only a plain H.264/AAC video at 1080p30 at most, the 720p copy (through FileLink, Tor when there's no
+// direct path) only a plain one at 720p30 at most and up to 5 minutes, and the relay copy (older apps only) only one
+// that already fits that. Anything else can go as a file. Over 5 minutes with no direct path: "Video too long".
+// Round 19: the plan reads only the file's boxes (no whole-file read on the window's thread); the copy that goes is
+// made off it, with its location and camera details taken out (GroupVideo::scrub), as Huginn does for pictures. One
+// cleaned copy serves everyone getting it by FileLink.
 #include "chat.h"
 #include "filelink.h"
 #include "groupvideo.h"
@@ -15,12 +18,15 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QNetworkInformation>
 #include <QPointer>
 #include <QThread>
 #include <QUuid>
+#include <QSet>
+#include <algorithm>
 #include <memory>
 
 
@@ -40,9 +46,6 @@ bool groupOf(const QString &where, QString *g, QString *ch)
     return true;
 }
 
-// Ultra privacy: sending videos is off entirely (receiving still works).
-bool ultraOn() { return UltraPrivacy::on(); }
-
 // This computer's network isn't charged by the byte (or the system doesn't say): full copies may go to trusted people.
 bool unmetered()
 {
@@ -54,24 +57,28 @@ bool unmetered()
 
 // What a picked video can do here, worked out for planVideo and again for sendPickedVideo (from its boxes only).
 struct Picked {
-    bool ok = false, asFile = false, fullOk = false, relayOk = false, inFull = false;
-    bool clipOk = false;   // the video itself goes as the relay copy
+    bool ok = false, asFile = false, tooLong = false, fullOk = false, smallOk = false, relayOk = false;
     QString why, length;
     GroupVideo::Info info;
     QHash<QString, QString> plan;
 };
 
-// Cleaned full copies waiting to go straight (FileLink sends from here, for up to a day): in the cache folder, which
-// the erase removes; one older than two days is no longer needed.
+// Cleaned copies waiting to go (FileLink sends from here, for up to a day), each in its own folder so it keeps a plain
+// name: in the cache folder, which the erase removes; one older than two days is no longer needed.
 QString videosOut() { return System::cacheDir() + QStringLiteral("/videos-out"); }
 
 void clearOldVideos()
 {
     const QDateTime old = QDateTime::currentDateTimeUtc().addDays(-2);
-    const QFileInfoList list = QDir(videosOut()).entryInfoList(QDir::Files);
-    for (const QFileInfo &f : list)
+    QDirIterator it(videosOut(), QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QFileInfo f(it.next());
         if (f.lastModified().toUTC() < old)
             QFile::remove(f.absoluteFilePath());
+    }
+    const QFileInfoList dirs = QDir(videosOut()).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QFileInfo &d : dirs)
+        QDir().rmdir(d.absoluteFilePath());   // only when empty
 }
 }
 
@@ -81,8 +88,10 @@ GroupVideo::Member Chat::videoMember(const QString &key, bool group) const
     m.k = key;
     m.files = hasCap(key, QString::fromLatin1(FileLink::kCap)) && (!group || hasCap(key, QStringLiteral("f2")));
     m.sameWifi = m_files && m_files->lanHost && !m_files->lanHost(key).isEmpty() && hasCap(key, QStringLiteral("f2"));
-    m.trusted = m_files && m_files->trusted && m_files->trusted(key);
+    // Ultra privacy: never straight over the internet (the same Wi-Fi or Tor only).
+    m.trusted = m_files && m_files->trusted && m_files->trusted(key) && UltraPrivacy::directAllowed();
     m.v3 = hasCap(key, QString::fromLatin1(GroupVideo::kCap));
+    m.newPath = hasCap(key, QString::fromLatin1(GroupVideo::kNewPathCap));
     return m;
 }
 
@@ -132,7 +141,7 @@ bool Chat::addGroupBlobMember(const QString &g, const QString &gid, const QStrin
 
 namespace
 {
-Picked pick(const QString &path, bool inFull, const QList<GroupVideo::Member> &members)
+Picked pick(const QString &path, const QList<GroupVideo::Member> &members)
 {
     Picked p;
     const QFileInfo fi(path);
@@ -140,10 +149,8 @@ Picked pick(const QString &path, bool inFull, const QList<GroupVideo::Member> &m
         p.why = QStringLiteral("That video can't be read.");
         return p;
     }
-    // Huginn can't make smaller copies: anything over the full-size limit can only go as a file.
     if (fi.size() > GroupVideo::kFullMaxBytes) {
-        p.asFile = true;
-        p.why = QStringLiteral("That video is too big to send as a video from Huginn (it can't make smaller copies). It can go as a file.");
+        p.why = QStringLiteral("Videos and files can be up to 4 GB.");
         return p;
     }
     // Only the boxes are read here (the window waits for this): never the whole file.
@@ -164,9 +171,12 @@ Picked pick(const QString &path, bool inFull, const QList<GroupVideo::Member> &m
         return p;
     }
     p.length = GroupVideo::length(p.info.ms);
-    if (p.length == QLatin1String("too long")) {
+    p.plan = GroupVideo::plan(members, unmetered(), p.info.ms);
+    // Never cut: over 5 minutes and someone isn't direct.
+    if (GroupVideo::tooLong(p.info.ms, p.plan)) {
         p.asFile = true;
-        p.why = QStringLiteral("Videos can be up to a minute (and 20 seconds over the internet). A longer one can go as a file.");
+        p.tooLong = true;
+        p.why = QString::fromLatin1(GroupVideo::kTooLongText);
         return p;
     }
     // Only H.264 and AAC in MP4 (29.1): anything else may not play on a TV, an older phone or a computer without the codec.
@@ -186,17 +196,23 @@ Picked pick(const QString &path, bool inFull, const QList<GroupVideo::Member> &m
         }
     }
     p.fullOk = GroupVideo::fitsFull(p.info);
+    p.smallOk = GroupVideo::fitsSmall(p.info);
     p.relayOk = GroupVideo::fitsRelay(p.info);
-    // A longer video: only in full, when direct (Huginn can't trim).
-    p.inFull = inFull || p.length == QLatin1String("long");
-    p.clipOk = p.relayOk && !p.inFull;
-    p.plan = GroupVideo::plan(members, unmetered(), p.inFull);
-    // What Huginn can't make: no full copy of a 4K or 60 fps video, no relay copy of a video that doesn't already fit it.
+    // What Huginn can't make (it converts nothing): no full copy of a 4K or 60 fps video, no 720p copy of a bigger one,
+    // no relay copy of one that doesn't already fit it.
+    bool any = false;
     for (auto it = p.plan.begin(); it != p.plan.end(); ++it) {
-        if (it.value() == QLatin1String("full") && !p.fullOk)
-            it.value() = p.relayOk && !p.inFull ? QStringLiteral("relay") : QStringLiteral("none");
-        if (it.value() == QLatin1String("relay") && !p.relayOk)
+        if ((it.value() == QLatin1String("full") && !p.fullOk) || (it.value() == QLatin1String("small") && !p.smallOk)
+            || (it.value() == QLatin1String("relay") && !p.relayOk))
             it.value() = QStringLiteral("none");
+        any = any || it.value() != QLatin1String("none");
+    }
+    if (!any && !p.plan.isEmpty()) {
+        p.asFile = true;
+        p.why = GroupVideo::biggerThan720(p.info) || !GroupVideo::withinFps(p.info.fps, GroupVideo::kFullFps)
+            ? QStringLiteral("Over the internet, videos go at 720p and 30 frames a second at most, and Huginn can't shrink videos. It can go as a file.")
+            : QStringLiteral("Their app is older and gets videos up to 20 seconds. It can go as a file.");
+        return p;
     }
     p.ok = true;
     return p;
@@ -211,145 +227,174 @@ int count(const QHash<QString, QString> &plan, const char *how)
 }
 }
 
-bool Chat::videoSendingOff() const { return ultraOn(); }
+// 1.42: sending videos is allowed under Ultra privacy (over Tor or the same Wi-Fi only), so it's never off.
+bool Chat::videoSendingOff() const { return false; }
 
 QVariantMap Chat::planVideo(const QString &where, const QString &path, bool inFull)
 {
-    if (ultraOn())
-        return {{QStringLiteral("ok"), false}, {QStringLiteral("why"), QStringLiteral("Off while Ultra privacy is on.")}};
-    const Picked p = pick(path, inFull, videoMembers(where));
-    QVariantMap out{{QStringLiteral("ok"), p.ok}, {QStringLiteral("why"), p.why}, {QStringLiteral("asFile"), p.asFile}};
+    Q_UNUSED(inFull)   // 1.42: no "in full later": a video is never cut, and full copies wait as any file does
+    const Picked p = pick(path, videoMembers(where));
+    QVariantMap out{{QStringLiteral("ok"), p.ok}, {QStringLiteral("why"), p.why}, {QStringLiteral("asFile"), p.asFile},
+                    {QStringLiteral("tooLong"), p.tooLong}, {QStringLiteral("ms"), p.info.ms},
+                    {QStringLiteral("title"), p.tooLong ? QString::fromLatin1(GroupVideo::kTooLongTitle) : QString()}};
     if (!p.ok)
         return out;
     QString said = GroupVideo::summary(p.plan, [this](const QString &k) { return nameOf(k); });
-    if (!p.fullOk)
-        said += QStringLiteral(" It's over 1080p or 30 frames a second, and Huginn can't convert videos: send it from your phone for full size.");
-    else if (!p.relayOk && count(p.plan, "none") > 0)
-        said += p.length == QLatin1String("long") ? QStringLiteral(" Over the internet, videos can be up to 20 seconds, and Huginn can't trim them.")
-                                                  : QStringLiteral(" Huginn can't make a smaller copy for the internet: send it from your phone.");
-    out.insert(QStringLiteral("ms"), p.info.ms);
+    const int none = count(p.plan, "none");
+    if (none > 0 && !p.fullOk)
+        said += QStringLiteral(" It's over 1080p or 30 frames a second, and Huginn can't convert videos: as a file it reaches everyone.");
+    else if (none > 0 && count(p.plan, "small") == 0 && !p.smallOk && GroupVideo::biggerThan720(p.info))
+        said += QStringLiteral(" Over the internet videos go at 720p, and Huginn can't shrink them: as a file it reaches everyone.");
     out.insert(QStringLiteral("length"), p.length);
     out.insert(QStringLiteral("summary"), said);
     out.insert(QStringLiteral("full"), count(p.plan, "full"));
-    out.insert(QStringLiteral("relay"), count(p.plan, "relay"));
-    out.insert(QStringLiteral("none"), count(p.plan, "none"));
+    out.insert(QStringLiteral("small"), count(p.plan, "small"));
+    // "relay" counts every copy that isn't full size (the 720p copy and the old relay copy), so a sheet that adds full
+    // and relay knows something goes.
+    out.insert(QStringLiteral("relay"), count(p.plan, "relay") + count(p.plan, "small"));
+    out.insert(QStringLiteral("none"), none);
     out.insert(QStringLiteral("relayOk"), p.relayOk);
-    out.insert(QStringLiteral("inFull"), p.inFull);
+    out.insert(QStringLiteral("inFull"), false);
     return out;
 }
 
 QVariantMap Chat::sendPickedVideo(const QString &where, const QString &path, bool inFull)
 {
+    Q_UNUSED(inFull)
     auto result = [](bool ok, const QString &said) { return QVariantMap{{QStringLiteral("ok"), ok}, {QStringLiteral("said"), said}}; };
-    if (ultraOn())
-        return result(false, QStringLiteral("Off while Ultra privacy is on."));
     if (!m_files)
         return result(false, QStringLiteral("Not ready yet."));
-    const Picked p = pick(path, inFull, videoMembers(where));
+    const QList<GroupVideo::Member> members = videoMembers(where);
+    const Picked p = pick(path, members);
     if (!p.ok)
         return result(false, p.why);
-    QStringList full, relay;
+    QSet<QString> newApps;
+    for (const GroupVideo::Member &m : members)
+        if (m.newPath)
+            newApps.insert(m.k);
+    QStringList full, small, relay;
     for (auto it = p.plan.cbegin(); it != p.plan.cend(); ++it) {
         if (it.value() == QLatin1String("full"))
             full << it.key();
+        else if (it.value() == QLatin1String("small"))
+            small << it.key();
         else if (it.value() == QLatin1String("relay"))
             relay << it.key();
     }
-    if (full.isEmpty() && relay.isEmpty())
-        return result(false, QStringLiteral("Nobody here can get this video from Huginn now: they need the same Wi-Fi or Direct calls and files with you."));
+    if (full.isEmpty() && small.isEmpty() && relay.isEmpty())
+        return result(false, QStringLiteral("Nobody here can get this video now. Their app is older: ask them to update."));
     QString g, ch;
     const bool group = groupOf(where, &g, &ch);
-    if (!group && full.isEmpty() && !hasM2(where)) {
+    if (!group && !relay.isEmpty() && !hasM2(where)) {
         probeCaps(where);
         return result(false, nameOf(where) + QStringLiteral(" needs a newer Huginn or Muninn to get videos."));
     }
-    // The copies that go, cleaned, made off the window's thread: the relay copy in memory (3 MB at most), the full copy
-    // in videos-out. Then they're sent from here (finished), as before.
+    // The copies that go, cleaned, made off the window's thread: the relay copy in memory (3 MB at most, older apps), and
+    // one cleaned copy in videos-out for everyone getting it through FileLink (full size or the 720p copy: Huginn
+    // converts nothing, so it's the same file). Then they're sent from here (finished).
     clearOldVideos();
-    const bool wantClip = p.clipOk, wantFull = !full.isEmpty();
-    const QString out = videosOut() + QLatin1Char('/') + QUuid::createUuid().toString(QUuid::WithoutBraces) + QStringLiteral(".mp4");
+    const bool oldFull = std::any_of(full.cbegin(), full.cend(), [&newApps](const QString &k) { return !newApps.contains(k); });
+    const bool wantClip = p.relayOk && (!relay.isEmpty() || oldFull), wantCopy = !full.isEmpty() || !small.isEmpty();
+    const QString out = videosOut() + QLatin1Char('/') + QUuid::createUuid().toString(QUuid::WithoutBraces) + QLatin1Char('/')
+        + QStringLiteral("Video ") + QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH.mm.ss")) + QStringLiteral(".mp4");
     auto clip = std::make_shared<QByteArray>();
-    auto fullPath = std::make_shared<QString>();
-    QThread *t = QThread::create([path, out, wantClip, wantFull, clip, fullPath] {
+    auto copyPath = std::make_shared<QString>();
+    QThread *t = QThread::create([path, out, wantClip, wantCopy, clip, copyPath] {
         if (wantClip) {
             QFile f(path);
             if (f.open(QIODevice::ReadOnly) && f.size() <= GroupVideo::kRelayBytes)
                 *clip = GroupVideo::scrubbed(f.read(GroupVideo::kRelayBytes));
         }
-        if (wantFull) {
+        if (wantCopy) {
             QDir().mkpath(QFileInfo(out).absolutePath());
             QFile::remove(out);
             if (QFile::copy(path, out) && QFile::setPermissions(out, QFile::ReadOwner | QFile::WriteOwner) && GroupVideo::scrubFile(out))
-                *fullPath = out;
+                *copyPath = out;
             else
                 QFile::remove(out);
         }
     });
     t->setObjectName(QStringLiteral("huginn-video-copy"));
-    const int ms = qBound(1, p.info.ms, MoreWire::kVideoMaxMs);
+    const int ms = qMax(1, p.info.ms);
+    const int relayMs = qBound(1, p.info.ms, MoreWire::kVideoMaxMs);
+    const bool smallOk = p.smallOk;
     QPointer<Chat> self(this);
-    connect(t, &QThread::finished, this, [self, t, where, group, g, ch, full, relay, ms, clip, fullPath] {
+    connect(t, &QThread::finished, this, [self, t, where, group, g, ch, full, small, relay, newApps, ms, relayMs, smallOk, clip, copyPath] {
         t->deleteLater();
         if (!self)
             return;
-        const QByteArray clipBytes = *clip;
-        const QString big = *fullPath;
-        // Ultra privacy turned on meanwhile, or nothing could be cleaned: nothing goes.
-        if (ultraOn() || !self->m_files) {
-            if (!big.isEmpty())
-                QFile::remove(big);
-            Q_EMIT self->notice(ultraOn() ? QStringLiteral("The video didn't go: sending videos is off while Ultra privacy is on.")
-                                          : QStringLiteral("The video didn't go. Try again."));
+        if (!self->m_files) {
+            if (!copyPath->isEmpty())
+                QFile::remove(*copyPath);
+            Q_EMIT self->notice(QStringLiteral("The video didn't go. Try again."));
             return;
         }
-        // No full copy: those it was for get the relay copy when there is one.
-        const QStringList fullNow = big.isEmpty() ? QStringList() : full;
+        const QByteArray clipBytes = *clip;
+        const QString copy = *copyPath;
+        const QString to = group ? g : QString();
+        // No cleaned copy: older apps among those it was for get the relay copy when there is one; new apps get nothing.
+        const QStringList fullNow = copy.isEmpty() ? QStringList() : full;
+        const QStringList smallNow = copy.isEmpty() ? QStringList() : small;
         QStringList relayNow = clipBytes.isEmpty() ? QStringList() : relay;
-        if (big.isEmpty() && !clipBytes.isEmpty())
-            relayNow += full;
-        if (fullNow.isEmpty() && relayNow.isEmpty()) {
+        if (copy.isEmpty() && !clipBytes.isEmpty())
+            for (const QString &k : full)
+                if (!newApps.contains(k))
+                    relayNow << k;
+        if (fullNow.isEmpty() && smallNow.isEmpty() && relayNow.isEmpty()) {
             Q_EMIT self->notice(QStringLiteral("The video didn't go: Huginn couldn't take its location and camera details out. It can go as a file."));
             return;
         }
-        const QVariantMap extra{{QStringLiteral("video"), ms}};
+        const QVariantMap extra{{QStringLiteral("video"), relayMs}};
         QPointer<Chat> me = self;
-        if (group) {
-            auto gid = std::make_shared<QString>();
-            if (!relayNow.isEmpty())
-                *gid = self->sendGroupBlob(g, ch, clipBytes, 0, extra, relayNow);
-            for (const QString &k : fullNow) {
-                std::function<void()> back;
-                if (!clipBytes.isEmpty())
-                    back = [me, g, ch, clipBytes, extra, k, gid] {
-                        if (!me)
-                            return;
-                        if (gid->isEmpty())
-                            *gid = me->sendGroupBlob(g, ch, clipBytes, 0, extra, {k});
-                        else
-                            me->addGroupBlobMember(g, *gid, k);
-                    };
-                self->m_files->sendVideo(k, big, g, ms, back);
-            }
-        } else if (!fullNow.isEmpty()) {
-            std::function<void()> back;
-            if (!clipBytes.isEmpty())
-                back = [me, where, clipBytes, extra] {
-                    if (me && me->hasM2(where))
-                        me->sendBlob(where, clipBytes, 0, extra);
-                };
-            self->m_files->sendVideo(where, big, QString(), ms, back);
-        } else if (self->hasM2(where)) {
+        auto gid = std::make_shared<QString>();
+        if (group && !relayNow.isEmpty())
+            *gid = self->sendGroupBlob(g, ch, clipBytes, 0, extra, relayNow);
+        else if (!group && !relayNow.isEmpty())
             self->sendBlob(where, clipBytes, 0, extra);
-        } else {
-            Q_EMIT self->notice(self->nameOf(where) + QStringLiteral(" needs a newer Huginn or Muninn to get videos."));
-            return;
+        for (const QString &k : fullNow) {
+            std::function<void()> back;
+            if (newApps.contains(k)) {
+                // A new app it can't reach directly after all (or that declines a full-size offer, a kids' device): the
+                // same file, when it's 720p or smaller, as the 720p copy through FileLink (Tor).
+                if (smallOk)
+                    back = [me, k, copy, to] {
+                        if (me && me->m_files)
+                            me->m_files->send(k, copy, to);
+                    };
+            } else if (!clipBytes.isEmpty()) {
+                back = [me, group, g, ch, where, clipBytes, extra, k, gid] {
+                    if (!me)
+                        return;
+                    if (!group) {
+                        if (me->hasM2(where))
+                            me->sendBlob(where, clipBytes, 0, extra);
+                    } else if (gid->isEmpty()) {
+                        *gid = me->sendGroupBlob(g, ch, clipBytes, 0, extra, {k});
+                    } else {
+                        me->addGroupBlobMember(g, *gid, k);
+                    }
+                };
+            }
+            self->m_files->sendVideo(k, copy, to, ms, back);
         }
-        if (fullNow.isEmpty())
+        // The 720p copy: through FileLink by its best path (Tor when there's no direct one), never the relays.
+        for (const QString &k : smallNow)
+            self->m_files->send(k, copy, to);
+        QStringList parts;
+        if (!fullNow.isEmpty())
+            parts << QStringLiteral("full size to %1").arg(fullNow.size());
+        if (!smallNow.isEmpty())
+            parts << QStringLiteral("a 720p copy over Tor to %1").arg(smallNow.size());
+        if (!relayNow.isEmpty())
+            parts << QStringLiteral("a smaller copy to %1 with older apps").arg(relayNow.size());
+        if (!group && !fullNow.isEmpty())
+            Q_EMIT self->notice(QStringLiteral("Sending the video full size."));
+        else if (!group && !smallNow.isEmpty())
+            Q_EMIT self->notice(QStringLiteral("Sending a 720p copy of the video over Tor. It can take a while."));
+        else if (!group)
             Q_EMIT self->notice(QStringLiteral("Sending the video. Its pieces go a few a second, so it can take a few minutes."));
-        else if (relayNow.isEmpty())
-            Q_EMIT self->notice(QStringLiteral("Sending the video full size straight."));
         else
-            Q_EMIT self->notice(QStringLiteral("Sending the video: full size straight to %1, a smaller copy to %2.").arg(fullNow.size()).arg(relayNow.size()));
+            Q_EMIT self->notice(QStringLiteral("Sending the video: ") + parts.join(QStringLiteral(", ")) + QLatin1Char('.'));
     });
     t->start();
     return result(true, QStringLiteral("Getting the video ready."));

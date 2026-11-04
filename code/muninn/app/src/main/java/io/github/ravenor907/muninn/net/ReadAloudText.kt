@@ -25,8 +25,42 @@ object ReadAloudText {
     /** The voices-1 release (a pre-release: the update checks never look at it). */
     const val DOWNLOAD = "https://github.com/Ravenor907/Huginn-Muninn/releases/download/voices-1/"
 
+    /** The device's own voice, picked in Settings (never a natural voice, nothing downloads). Never sent to a Kids' Device. */
+    const val DEVICE = "d"
+    /** Settings' three choices, in order. */
+    val CHOICES = listOf(FEMALE to "Female", MALE to "Male", DEVICE to "Device")
+
     /** "f" or "m"; anything else is Female. */
     fun voiceOf(v: String?): String = if (v == MALE) MALE else FEMALE
+
+    /** Settings' pick: "f", "m" or "d"; anything else is Female. */
+    fun choiceOf(v: String?): String = if (v == DEVICE) DEVICE else voiceOf(v)
+
+    // ---- Read aloud speed (todo 1.42): a percent of the usual pace, 50% to 150%, 80% until it's moved.
+    const val SPEED_MIN = 50f
+    const val SPEED_MAX = 150f
+    const val SPEED_DEFAULT = 80f
+
+    /** [pct] held to 50 to 150; anything not a number (or none saved) is 80. Older saved ints read the same. */
+    fun speedOf(pct: Number?): Float {
+        val f = pct?.toFloat() ?: return SPEED_DEFAULT
+        return if (f.isNaN() || f.isInfinite()) SPEED_DEFAULT else f.coerceIn(SPEED_MIN, SPEED_MAX)
+    }
+
+    /** What the slider shows: "83%" (rounded only for display). */
+    fun speedText(pct: Float): String = "${Math.round(speedOf(pct))}%"
+
+    /** The speech engine's speed for [pct] (1.0 the voice's usual pace; it divides the length scale by it). */
+    fun engineSpeed(pct: Float): Float = speedOf(pct) / 100f
+
+    /** Android TextToSpeech.setSpeechRate for [pct] (1.0 the usual rate). */
+    fun deviceRate(pct: Float): Float = speedOf(pct) / 100f
+
+    /** Qt QTextToSpeech's rate (-1 to 1, 0 the usual) for [pct]: 50% is -1, 100% is 0, 150% is 1 (Huginn does the same). */
+    fun qtRate(pct: Float): Float = (speedOf(pct) - 100f) / 50f
+
+    /** The line "Hear a sample" reads. */
+    const val SAMPLE = "This is how your messages sound when they're read aloud."
 
     /** The release file for [voice]. */
     fun fileFor(voice: String): String = if (voice == MALE) "voice-male-1.tar" else "voice-female-1.tar"

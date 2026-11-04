@@ -10,22 +10,34 @@
 #include <functional>
 
 // Picked videos (cap v3, shared/docs/protocol.md section 29), the same rules as Muninn's GroupVideo.kt (GroupVideoTest
-// checks those, selfTest() these):
-//  - Full size: at most 1080p either way up, 30 frames a second, a minute and kFullMaxBytes. It goes straight (FileLink,
-//    a file offer with "vid") to members on the same Wi-Fi, or with Direct calls and files on for each other.
-//  - Everyone else: a relay copy of at most 720p, kRelayMaxMs and kRelayPieces pieces, its pieces paced.
-//  - Huginn converts nothing (Qt 6.6 can't turn a file into another file): a video goes full size only if it's already
-//    plain H.264 within the limits, and as the relay copy only if it already fits that (29.6). It does take out the
-//    location and camera details (scrub), which needs no converting.
+// checks those, selfTest() these). 1.42 (owner, 2026-11-04): a video is never cut or trimmed.
+//  - Direct (the same Wi-Fi, or Trusted direct on for each other): full size, at most 1080p either way up and
+//    30 frames a second, with no length or size cap beyond FileLink's 4 GB. A file offer with "vid".
+//  - Everyone else whose app has the new file paths (kNewPathCap): a 720p copy of up to 5 minutes through FileLink,
+//    which uses Tor when there's no direct path. Never through the relays.
+//  - Older apps only: the relay copy (at most 720p, kRelayMaxMs and kRelayPieces pieces, paced), or a full copy of at
+//    most kOldFullMaxMs straight.
+//  - Over 5 minutes with no direct path for someone: "Video too long" (it can go as a file).
+//  - Huginn converts nothing (Qt 6.6 can't turn a file into another file): it sends a 720p-or-smaller plain H.264/AAC
+//    MP4 of up to 5 minutes as it is, and full size only a plain 1080p30 one (29.6); anything else can go as a file. It
+//    does take out the location and camera details (scrub), which needs no converting.
 namespace GroupVideo
 {
 inline const char kCap[] = "v3";
+// The cap of apps with FileLink's new paths (Nearby, trusted direct, then Tor): f4, as Muninn's TorFiles.CAP. Without
+// it a member counts as an older app (relay copy).
+inline const char kNewPathCap[] = "f4";
 
 constexpr int kFullLong = 1920;
 constexpr int kFullShort = 1080;
 constexpr int kFullFps = 30;
-constexpr int kFullMaxMs = 60000;
-constexpr qint64 kFullMaxBytes = 48LL * 1024 * 1024;   // under FileLink::kAutoBytes: arrives by itself
+constexpr qint64 kFullMaxBytes = 4LL * 1024 * 1024 * 1024;   // FileLink::kMaxBytes: the only ceiling when direct
+constexpr int kOldFullMaxMs = 60000;                    // an older app takes a "vid" of at most a minute
+constexpr int kVidMaxMs = 24 * 3600 * 1000;             // what a new app takes as a "vid"
+constexpr int kFullMaxMs = kVidMaxMs;                   // FileLink's "vid" bound (an older app only gets a minute: plan)
+constexpr int kSmallLong = 1280;
+constexpr int kSmallShort = 720;
+constexpr int kSmallMaxMs = 5 * 60000;                  // the 720p copy for those not direct
 constexpr int kFullVideoBitrate = 4500000;
 constexpr int kFullAudioBitrate = 128000;
 
@@ -79,26 +91,33 @@ bool withinSize(int w, int h, int longSide, int shortSide);
 bool withinFps(double fps, int most);
 bool fitsFull(const Info &i);
 bool needsConvert(const Info &i);
+bool fitsSmall(const Info &i);
+bool biggerThan720(const Info &i);
 bool fitsRelay(const Info &i);
 bool relayFits(qint64 bytes);
 int relayBitrate(int ms, int pieces = kRelayPieces, int audioBps = 0);
 int retryBitrate(int was, qint64 gotBytes, int ms);
 int fullBitrate(int ms);
 
-// "short" (everyone), "long" (trim, or in full later when direct), "too long" (trim only).
+// "short" (everyone, older apps' relay copy too), "long" (up to 5 minutes), "too long" (direct only, or as a file).
 QString length(int ms);
 QString clock(int ms);
 
 // One member as this computer sees them now (see GroupVideo.kt's Member).
 struct Member {
     QString k;
-    bool sameWifi = false, trusted = false, files = false, v3 = false, kid = false, relayOnly = false;
+    bool sameWifi = false, trusted = false, files = false, v3 = false, kid = false, relayOnly = false, newPath = false;
 };
 bool fullOk(const Member &m);
-// "full" or "relay" now; later: "full" or "none" for a long video sent in full.
-QString delivery(const Member &m, bool unmetered);
-QString later(const Member &m);
-QHash<QString, QString> plan(const QList<Member> &members, bool unmetered, bool inFull);
+bool direct(const Member &m, bool unmetered);
+// "full", "small" (720p copy through FileLink), "relay" (older apps) or "none" for a video [ms] long.
+QString delivery(const Member &m, bool unmetered, int ms);
+QHash<QString, QString> plan(const QList<Member> &members, bool unmetered, int ms);
+// Over 5 minutes and someone isn't direct: "Video too long".
+bool tooLong(int ms, const QHash<QString, QString> &plan);
+inline const char kTooLongTitle[] = "Video too long";
+inline const char kTooLongText[] = "Videos over the internet can be up to 5 minutes.";
+inline const char kNote[] = "Full size close by. Others get up to 5 minutes.";
 QString names(const QStringList &n);
 QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf);
 
@@ -122,7 +141,7 @@ bool isRateLimit(const QString &message);
 void noteRateLimited(qint64 now);
 qint64 rateLimitedAt();
 
-// A file offer's "vid": absent, or a whole number 1 to kFullMaxMs.
+// A file offer's "vid": absent, or a whole number 1 to kVidMaxMs (apps before 1.42 took up to a minute).
 bool vidOk(const QJsonValue &v);
 
 // --chat-selftest (with the m2 checks): the rules above, an MP4's boxes, and the cap in ChatWire::kCaps.

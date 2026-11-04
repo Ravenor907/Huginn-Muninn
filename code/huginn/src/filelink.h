@@ -22,14 +22,17 @@ class QTimer;
 class QUdpSocket;
 class StunProbe;
 
-// Files over the internet, straight from one device to the other (cap f1, shared/docs/protocol.md
-// section 14), the same as Muninn's FileLink.kt. Never through Cloudflare's call relay: both sides
+// Encrypted file sharing (caps f1, f2, f3 and f4; shared/docs/protocol.md sections 14, 27 and 30), the same as
+// Muninn's FileLink.kt. Never through the relays (1.42). In this order: Nearby (the same Wi-Fi), Trusted direct (below),
+// then Tor (cap f4, torfiles.h: a one-time onion service for one file); a transfer switches to Tor part way and goes on
+// from the last piece. Every file asks Accept or Decline first (the receiving card), unless the person is set to Always
+// (only someone trusted or Family). Files straight over the internet (cap f1, section 14): Never through Cloudflare's call relay: both sides
 // learn their own internet address from a STUN server (DirectPath::stunServers(), the address lookup only),
 // swap it in a sealed `file` message, and punch through their routers by sending to each other at
 // once, as the Direct path of calls does (5.8.2). Only between two people who trust each other with
 // their addresses ("Direct calls" on, as for Family). The file then goes in numbered 1100-byte pieces,
 // each sealed with AES-256-GCM under a key only the two ends know; the receiver says which pieces it
-// has and lost ones go again. Files of 2 MB or less that can't go direct use the relays as pieces.
+// has and lost ones go again.
 class FileLink : public QObject
 {
     Q_OBJECT
@@ -64,8 +67,23 @@ public:
     static constexpr int kLongIdleMs = 120000;
     static constexpr int kQuietMs = 2000;
     static constexpr qint64 kMaxBytes = 4LL * 1024 * 1024 * 1024;
-    // From someone trusted, a file smaller than this arrives by itself; a bigger one asks Accept or Decline first.
+    // 1.42: no file arrives by itself any more (every one asks first, unless Always). Kept for the group type rule's
+    // callers (chatfiles.cpp) only.
     static constexpr qint64 kAutoBytes = 50LL * 1024 * 1024;
+    // Cap f4: quiet this long on Nearby or Trusted direct, it goes on over Tor; a queued offer goes again this often.
+    static constexpr int kSwitchMs = 10000;
+    static constexpr int kReofferMs = 2 * 3600000;
+    // The receiving card's words (the same as Muninn's FileLink): "a ZIP file", the risky types and their note, the trust
+    // badges (only Trusted and Family may be set to Always), the queued sender's note, and each path's label.
+    static QString typeWord(const QString &name);
+    static bool riskyName(const QString &name);
+    static QString riskyNote() { return QStringLiteral("Only open this if you were expecting it."); }
+    static bool mayAlways(const QString &badge) { return badge == QLatin1String("Trusted") || badge == QLatin1String("Family"); }
+    static QString queuedNote(const QString &who, const QString &device);
+    static QString methodLabel(const QString &path, qint64 size = 0);
+    static QString notSentText() { return QStringLiteral("Didn't send. Try again."); }
+    static QString updateText() { return QStringLiteral("Ask them to update"); }
+    static QString noPathText() { return QStringLiteral("Can't reach them right now"); }
     // How long an offer waits for an answer: longer for a file the other side asks about first.
     static constexpr int kAnswerMs = 120000;
     static constexpr int kAskAnswerMs = 10 * 60000;
@@ -107,6 +125,7 @@ public:
         void ack(int below, quint64 bits);
         bool done() const { return m_acked == m_n; }
         int confirmedBelow() const { return m_below; }
+        bool has(int i) const { return i >= 0 && i < m_n && m_got.testBit(i); }   // cap f4: a Tor stream skips it
     private:
         void mark(int i);
         int m_n, m_next = 0, m_acked = 0, m_below = 0;
@@ -157,6 +176,15 @@ public:
     // The one way to send (Send file, drag and drop): files to a chat, their key or "g:<group>[:<channel>]". In a group,
     // once to each member, after the group's own file rules said yes. "" when on their way, else why not.
     Q_INVOKABLE QString sendTo(const QString &where, const QVariantList &urls);
+    // Cap f4: whether a file can reach them now (the Send menu's "Encrypted file sharing" row): false only when no path
+    // can (no internet and not on the same Wi-Fi, or their app is too old). reachNote: "" or what the greyed row says
+    // ("Ask them to update", "Can't reach them right now"). torWarning: the question before a file over 1 GB that will
+    // most likely go over Tor ("" when it needn't ask).
+    Q_INVOKABLE bool canReach(const QString &peer) const { return reachNote(peer).isEmpty(); }
+    Q_INVOKABLE QString reachNote(const QString &peer) const;
+    Q_INVOKABLE QString torWarning(const QString &peer, double size) const;
+    // Whether "Always accept from" may be set for them: their badge is Trusted or Family (Details › Send me files).
+    Q_INVOKABLE bool mayAlwaysFrom(const QString &peer) const { return mayAlways(badge(peer)); }
     // Pause and go on (cap f2): either side, while it moves.
     Q_INVOKABLE void pause(const QString &id);
     Q_INVOKABLE void resume(const QString &id);
@@ -164,7 +192,8 @@ public:
     Q_INVOKABLE bool canResume(const QString &id) const;
     // Every transfer paused here goes on (Resume and wait, when closing).
     Q_INVOKABLE void resumeAll();
-    // Accept, and from now on their files arrive without asking ("Always from this person").
+    // "Always accept from <name>": accept, and from now on their files arrive without asking (only someone trusted or
+    // Family; for anyone else it just accepts).
     Q_INVOKABLE void acceptAlways(const QString &id);
     // A chat's Files: everything sent and received there, newest first: [{name, size, path, mine, time, there, folder}].
     Q_INVOKABLE QVariantList filesIn(const QString &where);
@@ -224,13 +253,18 @@ public:
     Q_INVOKABLE bool showInFolder(const QString &path) const;
 
     // A file of mine that can't go at all: its card says why (wifi: only the same Wi-Fi can take it).
-    // direct: it would go with Direct calls and files on for each other (its card offers that).
+    // direct: it would go with Trusted direct on for each other (its card offers that).
     void addFailed(const QString &peer, const QString &name, qint64 size, const QString &why, const QString &path = {}, bool wifi = false,
                    const QString &id = {}, const QString &group = {}, bool direct = false);
     // A file of theirs coming over the internet route: have of n pieces. Done: its message is in (or half of it was
     // let go); a card for the same file that couldn't come straight goes too.
     void relayIn(const QString &msgId, const QString &peer, const QString &name, int have, int n);
     void relayInDone(const QString &msgId, const QString &peer = {}, const QString &name = {});
+    // 1.42: an older app's file over the relays, turned down: a failed card says why (nothing is kept).
+    void oldRelayIn(const QString &msgId, const QString &peer, const QString &name)
+    {
+        addRefused(peer, QString(), msgId, name, 0, QStringLiteral("Sent from an older app. Ask them to update."));
+    }
     // A file that came as a message: saved in its chat's folder in Downloads at once. Its full path, or empty when it
     // couldn't be.
     QString saveBytes(const QByteArray &bytes, const QString &name, const QString &peer = QString());
@@ -266,6 +300,13 @@ public:
     std::function<bool(const QString &peer)> alwaysFrom;
     std::function<void(const QString &peer)> setAlways;
     std::function<bool(const QString &peer)> isContact;
+    // Cap f4 (section 30): their app says f4; Tor may start here for a file; their trust badge (Trusted, Family, Contact,
+    // Not trusted); "phone" or "computer" when known; whether this computer is online.
+    std::function<bool(const QString &peer)> hasF4;
+    std::function<bool()> torAllowed;
+    std::function<QString(const QString &peer)> badgeOf;
+    std::function<QString(const QString &peer)> deviceWord;
+    std::function<bool()> online;
     // Set by Chat::sendFileBlob: the message a file of mine went as (its card follows the message).
     QString lastRelayId;
     QString saveDir;
@@ -300,6 +341,12 @@ private:
     // Cap v3: a full-size video of mine that can't go straight: its card goes and its relay copy is sent instead. True
     // when it was one (x is gone then).
     bool videoFellBack(Xfer *x, const QString &why);
+    // Cap f4: the rest of a file over Tor (mine: a one-time onion service; theirs: connect once its `tor` message came).
+    void startTor(Xfer *x);
+    void torConnect(Xfer *x);
+    void torEnded(Xfer *x, int end);
+    bool prepareData(Xfer *x);
+    QString badge(const QString &peer) const;
     int m_nextVid = 0;
     std::function<void()> m_nextBack;
     void drop(const QString &id);
@@ -351,6 +398,8 @@ private:
 
     Chat *m_chat;
     QHash<QString, Xfer *> m_x;
+    // Cap f4: offers of theirs already answered here (declined, taken, gone): a queued offer sent again doesn't ask twice.
+    QSet<QString> m_answered;
     QList<QVariantMap> m_list;                  // what transfers() shows, newest last
     qint64 m_lastShown = 0;
 };

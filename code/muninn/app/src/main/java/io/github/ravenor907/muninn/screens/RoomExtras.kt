@@ -210,7 +210,7 @@ private fun Choice(title: String, detail: String, on: Boolean, onClick: () -> Un
 }
 
 /**
- * In a voice room: "In voice" with the room's name, on every Muninn screen (under the app bar on phones, in the chat
+ * In a voice room: "Voice room" with the room's name (owner decision: one name, Voice room), on every Muninn screen (under the app bar on phones, in the chat
  * column's header on tablets). Tap to go back to the room; the mic button mutes from here.
  */
 @Composable
@@ -220,11 +220,12 @@ fun InVoiceChip(modifier: Modifier = Modifier, hideIn: String = "") {
     if (hideIn.isNotEmpty() && hideIn == io.github.ravenor907.muninn.net.Folders.groupKey(room.g)) return
     val ctx = LocalContext.current
     val app = ctx.applicationContext as? Muninn
-    val name = if (app?.identity?.showPreview == true && !io.github.ravenor907.muninn.ui.Panic.locked.value) room.title else "voice room"
+    val name = if (app?.identity?.showPreview == true && !io.github.ravenor907.muninn.ui.Panic.locked.value) room.title else ""
     Row(modifier.clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field).clickable(onClickLabel = "Open the voice room") { RoomActivity.show(ctx) }
         .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         io.github.ravenor907.muninn.ui.MIcon("sound", Palette.online, 16.dp)
-        Text("In voice · $name", style = Type.small.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis,
+        Text(when { name.isEmpty() -> if (io.github.ravenor907.muninn.net.call.RoomLogic.isGroupCall(room.ch)) "Group call" else "Voice room"
+            io.github.ravenor907.muninn.net.call.RoomLogic.isGroupCall(room.ch) -> name; else -> "Voice room · $name" }, style = Type.small.copy(color = Palette.text), maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 6.dp).weight(1f, fill = false))
         if (!room.listenOnly) io.github.ravenor907.muninn.ui.IconAction(if (room.muted) "mute" else "mic", if (room.muted) "Unmute mic" else "Mute mic",
             if (room.muted) Palette.danger else Palette.text, size = 18.dp) { RoomManager.setMuted(!room.muted) }

@@ -117,22 +117,6 @@ fun ProfileScreen(app: Muninn) {
     }
     if (picking) PicturePickerSheet(app) { picking = false }
 
-    Text("Color of your initial", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 14.dp))
-    // Wraps onto a second line when six don't fit (a small phone at a large size); each is a full 48dp touch target.
-    FlowRow(Modifier.padding(top = 8.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Palette.MY_COLORS.forEach { hex ->
-            val on = colour.equals(hex, true)
-            Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(Palette.parse(hex) ?: Palette.goldTint)
-                .border(if (on) 3.dp else 0.dp, if (on) Palette.text else Color.Transparent, CircleShape)
-                .selectable(selected = on, role = Role.RadioButton) { profile.setMyColour(hex) }
-                .semantics { contentDescription = Palette.myColorName(hex) + if (on) ", chosen" else "" },
-                contentAlignment = Alignment.Center) {
-                if (on) MIcon("check", Palette.text, 20.dp)
-            }
-        }
-    }
-    Text("Shows when there's no picture.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
-
     Section("Name")
     Row(verticalAlignment = Alignment.CenterVertically) {
         Field(name, { name = it.take(24) }, "A name", Modifier.weight(1f))
@@ -172,7 +156,25 @@ fun ProfileScreen(app: Muninn) {
 
     Spacer(Modifier.height(12.dp))
     ProfileRow("My code", "For someone to scan") { SettingsNav.goChat = "code" }
-    Spacer(Modifier.height(8.dp))
+    // Consolidation 2.7: Picture, Name, Status, My code, then More with the color of your initial.
+    MoreFold {
+        Text("Color of your initial", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+        // Wraps onto a second line when six don't fit (a small phone at a large size); each is a full 48dp touch target.
+        FlowRow(Modifier.padding(top = 8.dp).selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Palette.MY_COLORS.forEach { hex ->
+                val on = colour.equals(hex, true)
+                Box(Modifier.minimumInteractiveComponentSize().size(40.dp).clip(CircleShape).background(Palette.parse(hex) ?: Palette.goldTint)
+                    .border(if (on) 3.dp else 0.dp, if (on) Palette.text else Color.Transparent, CircleShape)
+                    .selectable(selected = on, role = Role.RadioButton) { profile.setMyColour(hex) }
+                    .semantics { contentDescription = Palette.myColorName(hex) + if (on) ", chosen" else "" },
+                    contentAlignment = Alignment.Center) {
+                    if (on) MIcon("check", Palette.text, 20.dp)
+                }
+            }
+        }
+        Text("Shows when there's no picture.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        Spacer(Modifier.height(8.dp))
+    }
 }
 
 /** The picture picker, over the page while open. */

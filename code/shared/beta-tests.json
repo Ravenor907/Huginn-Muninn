@@ -1,0 +1,315 @@
+{
+ "beta": "1.42",
+ "about": "Things to test on this beta. Tick each one off. If something is wrong, tap Report a problem on it.",
+ "groups": [
+  {
+   "id": "t1",
+   "title": "Natural voices",
+   "checks": [
+    {
+     "id": "t1.1",
+     "text": "Settings › Read aloud: pick Female. It downloads once on Wi-Fi."
+    },
+    {
+     "id": "t1.2",
+     "text": "Long-press a message, then Read aloud. It speaks in the new voice."
+    },
+    {
+     "id": "t1.3",
+     "text": "Switch to Male. It downloads and speaks."
+    }
+   ]
+  },
+  {
+   "id": "t2",
+   "title": "Daily Hávamál",
+   "checks": [
+    {
+     "id": "t2.1",
+     "text": "Turn it on in Settings › Look. A card appears at the top of the chat list."
+    },
+    {
+     "id": "t2.2",
+     "text": "Open it: \"What it means\", Read aloud and Earlier verses all work. X hides it for today."
+    }
+   ]
+  },
+  {
+   "id": "t3",
+   "title": "Lock: unlock password",
+   "checks": [
+    {
+     "id": "t3.1",
+     "text": "With a pattern lock, it asks you to set an unlock password (typed twice, then once from memory)."
+    },
+    {
+     "id": "t3.2",
+     "text": "Both the pattern and the unlock password unlock."
+    }
+   ]
+  },
+  {
+   "id": "t4",
+   "title": "Lock: wrong tries",
+   "checks": [
+    {
+     "id": "t4.1",
+     "text": "5 wrong tries: a 5 minute wait. The message clears when the wait ends."
+    },
+    {
+     "id": "t4.2",
+     "text": "A correct unlock right after a wrong one resets the count."
+    },
+    {
+     "id": "t4.3",
+     "text": "A pattern of under 4 dots says \"Connect at least 4 dots\" and doesn't count."
+    },
+    {
+     "id": "t4.4",
+     "text": "Restart the phone during a wait. The wait continues and doesn't start over."
+    }
+   ]
+  },
+  {
+   "id": "t5",
+   "title": "Ultra privacy",
+   "note": "(Settings › Privacy and lock)",
+   "checks": [
+    {
+     "id": "t5.1",
+     "text": "Turn it on: the explanation, then the warnings, then Confirm."
+    },
+    {
+     "id": "t5.2",
+     "text": "Calls show \"Calls are off while Ultra privacy is on.\""
+    },
+    {
+     "id": "t5.3",
+     "text": "Messages still send and arrive (slower)."
+    },
+    {
+     "id": "t5.4",
+     "text": "Turn it off and on again 3 times. Messages still work."
+    }
+   ]
+  },
+  {
+   "id": "t6",
+   "title": "Full-screen alerts",
+   "checks": [
+    {
+     "id": "t6.1",
+     "text": "After updating, turn full-screen alerts back on once. The next update should keep them on."
+    }
+   ]
+  },
+  {
+   "id": "t7",
+   "title": "Kids' devices",
+   "checks": [
+    {
+     "id": "t7.1",
+     "text": "Parent: pick a voice for the kid device."
+    },
+    {
+     "id": "t7.2",
+     "text": "Kids' TV: open a message with OK, then Read aloud with the remote."
+    },
+    {
+     "id": "t7.3",
+     "text": "Restart the kid device during quiet hours. Messages from non-parents wait."
+    }
+   ]
+  },
+  {
+   "id": "t8",
+   "title": "Handheld",
+   "checks": [
+    {
+     "id": "t8.1",
+     "text": "The unlock password screen works with only the controller (B always leaves)."
+    },
+    {
+     "id": "t8.2",
+     "text": "The button hints at the top only show buttons that work."
+    }
+   ]
+  },
+  {
+   "id": "t9",
+   "title": "Group video",
+   "checks": [
+    {
+     "id": "t9.1",
+     "text": "Send a short video to a group. It arrives, and the receiver can't see where it was filmed."
+    }
+   ]
+  },
+  {
+   "id": "t10",
+   "title": "Send menu",
+   "checks": [
+    {
+     "id": "t10.1",
+     "text": "It has 4 rows: Camera, Saved media, Encrypted file sharing, Poll."
+    }
+   ]
+  },
+  {
+   "id": "t11",
+   "title": "Camera",
+   "checks": [
+    {
+     "id": "t11.1",
+     "text": "Tap the shutter for a photo."
+    },
+    {
+     "id": "t11.2",
+     "text": "Hold for a video (the ring fills, up to 1:00). Let go to stop."
+    }
+   ]
+  },
+  {
+   "id": "t12",
+   "title": "Saved media",
+   "checks": [
+    {
+     "id": "t12.1",
+     "text": "Pick photos, a video and a GIF together (up to 10). They all send."
+    }
+   ]
+  },
+  {
+   "id": "t13",
+   "title": "Encrypted file sharing",
+   "checks": [
+    {
+     "id": "t13.1",
+     "text": "On the same Wi-Fi: the transfer shows \"Nearby\"."
+    },
+    {
+     "id": "t13.2",
+     "text": "With a trusted contact away from home: it shows \"Trusted direct\"."
+    },
+    {
+     "id": "t13.3",
+     "text": "With someone not trusted, or Ultra on: it shows \"Tor, slower\"."
+    },
+    {
+     "id": "t13.4",
+     "text": "Other person offline: it says \"Sends when they're online\", then sends when they come back."
+    },
+    {
+     "id": "t13.5",
+     "text": "Turn Wi-Fi off mid-transfer: it carries on over another path."
+    }
+   ]
+  },
+  {
+   "id": "t14",
+   "title": "Receiving a file",
+   "checks": [
+    {
+     "id": "t14.1",
+     "text": "The card shows the name, trust badge, type, size and method, with Accept and Decline."
+    },
+    {
+     "id": "t14.2",
+     "text": "A ZIP shows \"Only open this if you were expecting it.\""
+    },
+    {
+     "id": "t14.3",
+     "text": "\"Always accept\" shows only for trusted contacts and family."
+    },
+    {
+     "id": "t14.4",
+     "text": "Decline: the sender sees \"Declined\"."
+    }
+   ]
+  },
+  {
+   "id": "t15",
+   "title": "Videos",
+   "checks": [
+    {
+     "id": "t15.1",
+     "text": "Nearby: a long video goes full size."
+    },
+    {
+     "id": "t15.2",
+     "text": "Away from home: a 1080p video asks \"Shrink to 720p to send?\""
+    },
+    {
+     "id": "t15.3",
+     "text": "A video over 5 minutes says \"Video too long\" and offers \"Send as a file\". Nothing is ever cut."
+    },
+    {
+     "id": "t15.4",
+     "text": "Ultra privacy on: a saved video sends over Tor, and calls stay off."
+    }
+   ]
+  },
+  {
+   "id": "t16",
+   "title": "Read aloud speed",
+   "checks": [
+    {
+     "id": "t16.1",
+     "text": "The slider starts at 80%. \"Hear a sample\" plays at the chosen speed."
+    },
+    {
+     "id": "t16.2",
+     "text": "Parent: set a speed for the kid device."
+    }
+   ]
+  },
+  {
+   "id": "t17",
+   "title": "Sliders",
+   "checks": [
+    {
+     "id": "t17.1",
+     "text": "Every slider moves smoothly, with no notches (falling leaves, volume, kid mic, PC zoom, PC Look)."
+    },
+    {
+     "id": "t17.2",
+     "text": "On the handheld, holding the d-pad speeds the slider up."
+    }
+   ]
+  },
+  {
+   "id": "t18",
+   "title": "Menus (consolidation)",
+   "checks": [
+    {
+     "id": "t18.1",
+     "text": "Group voice chat is called \"Voice room\" everywhere."
+    },
+    {
+     "id": "t18.2",
+     "text": "Privacy and lock goes Lock, Privacy, Nearby, Ultra privacy, More."
+    },
+    {
+     "id": "t18.3",
+     "text": "Read aloud has one page, under Look › Accessibility."
+    },
+    {
+     "id": "t18.4",
+     "text": "Linked devices and Move each open their own page."
+    },
+    {
+     "id": "t18.5",
+     "text": "Labs is one page."
+    },
+    {
+     "id": "t18.6",
+     "text": "Person details: \"Trusted direct\" and \"Send me files\" (Ask / Always / Off)."
+    },
+    {
+     "id": "t18.7",
+     "text": "PC: one person menu, and Forward shows once."
+    }
+   ]
+  }
+ ]
+}

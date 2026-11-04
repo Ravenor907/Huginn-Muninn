@@ -3,8 +3,8 @@ import Huginn
 
 // Files on their way in one chat or group (caps f1 and f2), each as a card at the bottom of the chat: type icon,
 // name, size and kind, what it's doing ("Waiting for Ana to accept", "Sending 42%") with its route ("Direct" or
-// "Over the internet") and speed, and a bar while it moves. The same cards as Transfers. Buttons: Accept, Always from
-// this person and Decline when a file asks first, Pause or Resume and Cancel while it runs, Open, Folder and Close once
+// "Over the internet") and speed, and a bar while it moves. The same cards as Transfers. Buttons: Decline, Accept and
+// (Trusted or Family only) Always accept from them when a file asks first, Pause or Resume and Cancel while it runs, Open, Folder and Close once
 // saved, Retry and Close after a failure. A file of mine going as a message shows on the message itself. Empty (and no
 // height) when there are none. The D-pad reaches the buttons: Down past the last message, Left and Right between them,
 // Up and Down between cards, A to choose, B to leave.
@@ -25,9 +25,10 @@ Column {
         if (!t) return []
         const out = []
         if (t.state === "asking" && !t.mine) {
-            out.push({ label: "Accept", act: "accept", kind: "primary" })
-            if (Chat.isContact(t.peer)) out.push({ label: "Always from this person", act: "always", kind: "normal" })
-            out.push({ label: "Decline", act: "decline", kind: "normal" })
+            // The same as Transfers: Decline, Accept, and Always accept from them only for someone Trusted or Family
+            // (undone in their Details › Send me files).
+            out.push({ label: "Decline", act: "decline", kind: "normal" }, { label: "Accept", act: "accept", kind: "primary" })
+            if (t.canAlways === true) out.push({ label: "Always accept from " + Chat.nameOf(t.peer), act: "always", kind: "normal" })
         } else if (FileLink.canResume(t.id)) {
             out.push({ label: "Resume", act: "resume", kind: "accent" }, { label: "Cancel", act: "cancel", kind: "danger" })
         } else if (FileLink.canPause(t.id)) {

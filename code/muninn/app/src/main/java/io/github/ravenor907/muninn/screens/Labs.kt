@@ -58,8 +58,8 @@ import java.util.Date
 
 /**
  * Labs mode: tap the raven in Settings 10 times (within 5 seconds) to turn it on, 10 more to turn it off. It shows
- * the Labs section in Settings (reporting a bug, replaying first setup), the update channel on Updates and about,
- * and Report a bug in the chat list's menu.
+ * the Labs page in Settings (consolidation 2.15: Report a bug, Labs reports, Update channel, Replay first setup and,
+ * on Pre-release, Things to test) and Report a bug in the chat list's menu.
  */
 object Labs {
     private val taps = ArrayDeque<Long>()
@@ -68,6 +68,8 @@ object Labs {
         private set
     /** The screenshot taken for the report screen, if any (the screen as it was just before). */
     @Volatile var shot: Bitmap? = null
+    /** What the report screen starts with (Things to test's "Beta test t1 Natural voices: "), taken once. */
+    @Volatile var prefill: String = ""
 
     fun on(app: Muninn): Boolean { changed; return app.identity.labs }
 
@@ -99,9 +101,10 @@ object Labs {
     }
 
     /** Report a bug: takes a picture of this app's own window as it is now, then opens the report screen. */
-    fun report(context: Context) {
+    fun report(context: Context, start: String = "") {
         val activity = activityOf(context)
         shot = null
+        prefill = start
         val open: () -> Unit = { SettingsNav.goChat = "labsreport" }
         if (activity == null) { open(); return }
         capture(activity) { b -> shot = b; open() }
@@ -129,16 +132,27 @@ object Labs {
         listOf(Build.MANUFACTURER, Build.MODEL).filter { !it.isNullOrBlank() }.joinToString(" "))
 }
 
-/** Settings' Labs section: reporting a bug and replaying first setup. The update channel is on Updates and about. */
+/**
+ * Settings › Labs, one page (consolidation 2.15): Report a bug, Labs reports (the Labs contact's own phone), the
+ * update channel, Replay first setup, and Things to test while on Pre-release. The chat list's menu keeps Report a bug
+ * (it takes a picture of the screen you're on).
+ */
 @Composable
-internal fun LabsSection(app: Muninn) {
+internal fun LabsPage(app: Muninn) {
     val context = LocalContext.current
     Labs.changed
-    Framed("Labs") {
+    Framed {
         MenuRow("info", "Report a bug") { Labs.report(context) }
+        if (app.chat.isLabs()) {
+            val reports by app.chat.labs.reports.collectAsState()
+            MenuRow("info", "Labs reports", value = if (reports.isNotEmpty()) "${reports.size}" else "") { SettingsNav.goChat = Chat.LABS_PAGE }
+        }
         // First setup again, as practice: nothing it does is saved.
         MenuRow("refresh", "Replay first setup (practice)") { Setup.practice(app) }
     }
+    UpdateChannel(app)
+    // The beta's checklist: only on the Pre-release channel.
+    if (app.identity.preRelease) ThingsToTest()
 }
 
 /** Report a bug: the screenshot (on by default), what happened, then Send. */
@@ -147,7 +161,7 @@ internal fun LabsReportScreen(app: Muninn) {
     val shot = remember { Labs.shot }
     val image = remember(shot) { shot?.asImageBitmap() }
     var include by remember { mutableStateOf(shot != null) }
-    var text by remember { mutableStateOf("") }
+    var text by remember { mutableStateOf(Labs.prefill.take(LabsWire.MAX_TEXT).also { Labs.prefill = "" }) }
     var sending by remember { mutableStateOf(false) }
     fun close() { Labs.shot = null; ChatNav.open = "" }
     Column(Modifier.fillMaxSize().imePadding()) {

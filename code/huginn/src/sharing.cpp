@@ -68,7 +68,7 @@ QString Sharing::route(bool sameWifi, bool trusted, qint64 size, qint64 relayMax
 
 QString Sharing::routeLabel(const QString &route)
 {
-    // "Direct" alone read like Direct calls and files (straight over the internet), so each route says where it goes.
+    // "Direct" alone read like Trusted direct (straight over the internet), so each route says where it goes.
     if (route == QLatin1String("direct"))
         return QStringLiteral("Same Wi-Fi");
     return route == QLatin1String("internet") ? QStringLiteral("Straight to them") : QStringLiteral("Over the internet");
@@ -274,7 +274,7 @@ QString Sharing::declineText(const QString &why)
         return QStringLiteral("Not enough space on their device.");
     if (why == QLatin1String("no"))
         return QStringLiteral("They declined.");
-    return QStringLiteral("They declined, or direct files are off on their side (Direct calls and files, or Ultra privacy).");
+    return QStringLiteral("They declined, or direct files are off on their side (Trusted direct, or Ultra privacy).");
 }
 
 bool Sharing::selfTest()

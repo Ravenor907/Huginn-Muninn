@@ -57,6 +57,19 @@ Item {
         else if (id === "save") save()
         else if (id === "back") { step = "choose"; focusIndex = 0 }
     }
+    // The zoom from the D-pad or the keyboard: 1% a press, about 5% a repeat once held for half a second (the slider
+    // itself is smooth, with no steps).
+    property string nudgeKey: ""
+    property double nudgeStart: 0
+    property double nudgeLast: 0
+    function nudge(b, dir) {
+        const now = Date.now()
+        // A held D-pad says it's repeating; a held key repeats faster than anyone taps.
+        const held = b === nudgeKey && (Gamepad.repeating() || now - nudgeLast < 120)
+        if (!held) { nudgeKey = b; nudgeStart = now }
+        nudgeLast = now
+        crop.zoomBy(dir * (now - nudgeStart >= 500 ? 0.05 : 0.01))
+    }
     function handleButton(b) {
         if (step === "crop") {
             const n = cropChoices.length
@@ -66,8 +79,8 @@ Item {
             // pick among Save and Back. LB still zooms out.
             else if (b === "left") focusIndex = Math.max(0, focusIndex - 1)
             else if (b === "right") focusIndex = Math.min(n - 1, focusIndex + 1)
-            else if (b === "up") crop.zoomBy(0.1)
-            else if (b === "down" || b === "lb") crop.zoomBy(-0.1)
+            else if (b === "up") nudge(b, 1)
+            else if (b === "down" || b === "lb") nudge(b, -1)
             return true
         }
         const n = choices.length
@@ -243,7 +256,8 @@ Item {
                     }
                     WheelHandler {
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                        onWheel: event => crop.zoomBy(event.angleDelta.y > 0 ? 0.1 : -0.1)
+                        // In proportion to the turn: a mouse notch is 10%, a touchpad glides.
+                        onWheel: event => crop.zoomBy(event.angleDelta.y / 1200)
                     }
                     Text {
                         textFormat: Text.PlainText
@@ -283,7 +297,7 @@ Item {
                 HSlider {
                     anchors.verticalCenter: parent.verticalCenter
                     width: parent.width - zoomCaption.width - zoomText.width - Theme.px(20)
-                    from: 1; to: 4; stepSize: 0.05
+                    from: 1; to: 4; stepSize: 0
                     value: crop.zoom
                     label: "Zoom"
                     onMoved: v => crop.zoomTo(v)
@@ -352,7 +366,8 @@ Item {
         TapHandler { onTapped: { pp.focusIndex = cr.at; pp.swatch = -1; pp.run(cr.choice.id) } }
     }
 
-    // A plain slider in house style: a line, a knob, Left and Right or a drag to move it.
+    // A plain slider in house style: a line, a knob, Left and Right or a drag to move it. stepSize 0: smooth, the value
+    // follows the pointer with no snapping (assistive tech's increase and decrease then move 1% of the range).
     component HSlider: Item {
         id: sl
         property real from: 0
@@ -366,12 +381,13 @@ Item {
         readonly property real frac: to > from ? Math.max(0, Math.min(1, (value - from) / (to - from))) : 0
         Accessible.role: Accessible.Slider
         Accessible.name: label
-        Accessible.onIncreaseAction: sl.moved(Math.min(sl.to, sl.value + sl.stepSize))
-        Accessible.onDecreaseAction: sl.moved(Math.max(sl.from, sl.value - sl.stepSize))
+        readonly property real nudgeBy: stepSize > 0 ? stepSize : (to - from) / 100
+        Accessible.onIncreaseAction: sl.moved(Math.min(sl.to, sl.value + sl.nudgeBy))
+        Accessible.onDecreaseAction: sl.moved(Math.max(sl.from, sl.value - sl.nudgeBy))
         function at(px) {
             const f = Math.max(0, Math.min(1, (px - knob.width / 2) / (width - knob.width)))
             let v = from + f * (to - from)
-            v = Math.round(v / stepSize) * stepSize
+            if (stepSize > 0) v = Math.round(v / stepSize) * stepSize
             moved(Math.max(from, Math.min(to, v)))
         }
         Rectangle { anchors.verticalCenter: parent.verticalCenter; x: knob.width / 2; width: parent.width - knob.width; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.line }

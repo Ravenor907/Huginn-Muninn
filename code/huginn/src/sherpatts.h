@@ -118,6 +118,8 @@ typedef struct SherpaOnnxOfflineTts SherpaOnnxOfflineTts;
 
 typedef const SherpaOnnxOfflineTts *(*SherpaOnnxCreateOfflineTtsFn)(const SherpaOnnxOfflineTtsConfig *config);
 typedef void (*SherpaOnnxDestroyOfflineTtsFn)(const SherpaOnnxOfflineTts *tts);
+// [speed]: 1.0 the voice's usual pace, larger faster (the engine divides the VITS length scale by it). Read aloud passes
+// its speed setting, 0.5 to 1.5 (ReadAloud::engineSpeed).
 typedef const SherpaOnnxGeneratedAudio *(*SherpaOnnxOfflineTtsGenerateFn)(const SherpaOnnxOfflineTts *tts, const char *text,
                                                                          int32_t sid, float speed);
 typedef void (*SherpaOnnxDestroyOfflineTtsGeneratedAudioFn)(const SherpaOnnxGeneratedAudio *audio);

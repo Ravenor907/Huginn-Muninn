@@ -12,12 +12,46 @@ import org.json.JSONObject
 object KidVoice {
     const val CAP = "k15"
     const val FIELD = "voice"
-    val FIELDS = setOf(FIELD)
+    /**
+     * 1.42: the read-aloud speed, a whole percent from 50 to 150, sent beside "voice" only when the device and every
+     * co-parent's app say [SPEED_CAP] (k16). A config without one: the device reads at 80%.
+     */
+    const val SPEED = "speed"
+    /** Cap k16: the app reads the config field [SPEED]. */
+    const val SPEED_CAP = "k16"
+    val FIELDS = setOf(FIELD, SPEED)
 
-    /** Throws IllegalArgumentException("voice") if config [c] has a "voice" that isn't "f" or "m". */
+    /**
+     * Throws IllegalArgumentException("voice") if config [c] has a "voice" that isn't "f" or "m", and ("speed") if it
+     * has a "speed" that isn't a whole number from 50 to 150.
+     */
     fun check(c: JSONObject) {
         if (c.has(FIELD)) require((c.get(FIELD) as? String) in ReadAloudText.VOICES) { FIELD }
+        if (c.has(SPEED)) {
+            val v = c.get(SPEED)
+            require(Canon.isInt(v) && (v as Number).toLong() in SPEED_MIN.toLong()..SPEED_MAX.toLong()) { SPEED }
+        }
     }
+
+    const val SPEED_MIN = 50
+    const val SPEED_MAX = 150
+
+    /** The speed config [c] carries (50 to 150), or null when it has none: the device reads at 80%. */
+    fun speedOf(c: JSONObject): Int? {
+        val v = c.opt(SPEED) ?: return null
+        if (!Canon.isInt(v)) return null
+        return (v as Number).toLong().takeIf { it in SPEED_MIN.toLong()..SPEED_MAX.toLong() }?.toInt()
+    }
+
+    /** A parent's slider value (a float percent) as the whole percent a config carries. */
+    fun speedOut(pct: Float): Int = Math.round(ReadAloudText.speedOf(pct)).coerceIn(SPEED_MIN, SPEED_MAX)
+
+    /**
+     * What a parent's phone sends for the speed: [pct] (null: none set yet) only when the device says k16 ([k16]) and
+     * every co-parent's app does too ([others]). Left out, the device reads at 80%.
+     */
+    fun speedToSend(pct: Float?, k16: Boolean, others: List<Set<String>?>): Int? =
+        if (pct == null || !k16 || !allReadSpeed(others)) null else speedOut(pct)
 
     /** The voice config [c] carries, or null when it has none (an older parent app, or none picked yet). */
     fun of(c: JSONObject): String? = (c.opt(FIELD) as? String)?.takeIf { it in ReadAloudText.VOICES }
@@ -35,6 +69,9 @@ object KidVoice {
 
     /** Whether every co-parent ([others]' caps) says [CAP]. */
     fun allRead(others: List<Set<String>?>): Boolean = others.all { it != null && CAP in it }
+
+    /** Whether every co-parent ([others]' caps) says [SPEED_CAP] (k16), so their app reads "speed". */
+    fun allReadSpeed(others: List<Set<String>?>): Boolean = others.all { it != null && SPEED_CAP in it }
 
     /** The device page's two choices. */
     val CHOICES = listOf(ReadAloudText.FEMALE to "Female", ReadAloudText.MALE to "Male")

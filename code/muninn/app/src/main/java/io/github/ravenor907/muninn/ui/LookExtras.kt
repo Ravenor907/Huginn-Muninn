@@ -14,11 +14,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -82,13 +84,12 @@ fun SeasonControls(onChange: () -> Unit) {
                 val config = LocalConfiguration.current
                 val n = LeafPrefs.countFor(config.screenWidthDp, config.screenHeightDp)
                 val unit = if (snow) (if (n == 1) "flake" else "flakes") else (if (n == 1) "leaf" else "leaves")
-                FallSlider("Amount", "$n $unit", FallScale.countPos(n), "1", "${FallScale.MAX_COUNT}") {
-                    LeafPrefs.setCount(context, FallScale.countAt(it))
-                }
+                // Smooth (todo 1.42): what falls follows the slider at once; saved when the finger lifts.
+                FallSlider("Amount", "$n $unit", FallScale.countPos(n), "1", "${FallScale.MAX_COUNT}",
+                    { LeafPrefs.count = FallScale.countAt(it) }) { LeafPrefs.setCount(context, LeafPrefs.count) }
                 val size = LeafPrefs.size
-                FallSlider("Size", "$size%", FallScale.sizePos(size), "Tiny", "Huge") {
-                    LeafPrefs.setSize(context, FallScale.sizeAt(it))
-                }
+                FallSlider("Size", "$size%", FallScale.sizePos(size), "Tiny", "Huge",
+                    { LeafPrefs.size = FallScale.sizeAt(it) }) { LeafPrefs.setSize(context, LeafPrefs.size) }
                 Text("Fewer, smaller ones save battery.", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             }
         }
@@ -100,21 +101,21 @@ private fun Label(text: String) =
     Text(text, style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 12.dp))
 
 /**
- * A slider from 0 to 100 (where [pos] sits; [onChange] gets the new position), with [label] and its [value] above
- * and the two ends named below.
+ * A smooth slider from 0 to 100 (where [pos] sits), with [label] and its [value] above and the two ends named below.
+ * [onChange] gets every move (apply it, don't save) and [onDone] runs when the finger lifts or the key is let go. The
+ * thumb follows the finger, never the whole number it gives (Amount 1 to 2 is a long way at the low end); keys move it
+ * one point a press, faster when held.
  */
 @Composable
-private fun FallSlider(label: String, value: String, pos: Float, low: String, high: String, onChange: (Float) -> Unit) {
+private fun FallSlider(label: String, value: String, pos: Float, low: String, high: String, onChange: (Float) -> Unit, onDone: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
         Text(value, style = Type.small.copy(color = Palette.textSoft), maxLines = 1, modifier = Modifier.padding(start = 8.dp))
     }
-    Slider(
-        value = pos.coerceIn(0f, 100f), onValueChange = onChange, valueRange = 0f..100f,
-        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$label, $value" },
-        // The empty part of the track uses the track shade, which stands out from the ground in every look.
-        colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.track),
-    )
+    // Where the thumb is while it moves; null when still (then it sits on the saved value).
+    var moving by remember { mutableStateOf<Float?>(null) }
+    SmoothSlider(moving ?: pos.coerceIn(0f, 100f), { moving = it; onChange(it) }, { onDone(); moving = null },
+        0f..100f, 1f, "$label, $value", Modifier.fillMaxWidth())
     Row(Modifier.fillMaxWidth()) {
         Text(low, style = Type.small, modifier = Modifier.weight(1f))
         Text(high, style = Type.small)

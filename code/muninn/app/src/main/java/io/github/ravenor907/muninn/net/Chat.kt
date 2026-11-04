@@ -359,11 +359,39 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 net.deviceFor(peer, true)?.ip?.let { ip -> try { java.net.InetAddress.getByName(ip.substringBefore('%')) } catch (_: Exception) { null } }
             override fun hasF2(peer: String) = this@Chat.hasF2(peer)
             override fun groupRefusal(g: String, from: String, size: Long) = groups.fileRefusal(g, from, size)
-            override fun groupArrives(g: String, size: Long) =
-                groups.group(g)?.let { Limits.filesArrive(Limits.groupType(it.state), size, FileLink.AUTO_BYTES) } == true
             override fun groupName(g: String) = groups.group(g)?.state?.name ?: "Group"
-            override fun alwaysFrom(peer: String) = filesAlways(peer)
-            override fun setAlways(peer: String) = setFilesAlways(peer, true)
+            // 1.42: "Always accept from" counts only for someone trusted or Family; an older Always on anyone else is
+            // cleared the first time it's looked at.
+            override fun alwaysFrom(peer: String): Boolean {
+                if (!filesAlways(peer)) return false
+                if (FileLink.mayAlways(badge(peer))) return true
+                setFilesAlways(peer, false)
+                return false
+            }
+            override fun setAlways(peer: String) { if (FileLink.mayAlways(badge(peer))) setFilesAlways(peer, true) }
+            // Cap f4 (section 30): Encrypted file sharing over Tor too, and the receiving card.
+            override fun hasF4(peer: String) = TorFiles.CAP in capsOf(peer) || envCaps[peer]?.contains(TorFiles.CAP) == true
+            // Tor starts for a file here, except on a TV short of space (a Kids' Device takes files only from the people
+            // its parents listed, outside quiet times: KidMode's gate).
+            override fun torAllowed(): Boolean = try {
+                !io.github.ravenor907.muninn.tv.KidMode.isTv(context) || context.filesDir.usableSpace > 300L * 1024 * 1024
+            } catch (_: Exception) { true }
+            override fun badge(peer: String): String = when {
+                inFamilyGroup(peer) || (try { folders.of(peer).any { it.name.trim().equals("Family", ignoreCase = true) } } catch (_: Exception) { false }) -> FileLink.BADGE_FAMILY
+                io.github.ravenor907.muninn.net.call.CallManager.trusted(peer) -> FileLink.BADGE_TRUSTED
+                this@Chat.isContact(peer) -> FileLink.BADGE_CONTACT
+                else -> FileLink.BADGE_NOT
+            }
+            // Muninn says the kids' TV caps (k2), Huginn doesn't: what their app runs on, when their caps are known.
+            override fun deviceWord(peer: String): String = capsOf(peer).let { c -> if (c.isEmpty()) "" else if ("k2" in c) "phone" else "computer" }
+            override fun online(): Boolean = try {
+                val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+                cm?.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            } catch (_: Exception) { true }
+            override fun keepGoing(tag: String, on: Boolean, text: String) {
+                if (on) TransferHold.acquire(context, "file:$tag", text) else TransferHold.release(context, "file:$tag")
+            }
+            override fun progressNote(text: String, percent: Int) = TransferHold.note(context, text, percent)
             override fun isContact(peer: String) = this@Chat.isContact(peer)
             override fun freeBytes() = Received.freeBytes(context)
             override fun saveIn(name: String, file: File, folder: String): FileLink.Saved? = try {
@@ -1145,8 +1173,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // With no TV handler set, a Kids' TV takes nothing but configs (which it checks itself).
         val tv = tvHandler
         if (if (tv != null) !tv.allow(fromKey, room) else room != "tvconfig" && io.github.ravenor907.muninn.tv.KidMode.saved(context)) {
-            // Round 19 (interop 3, K19-4): a Kids' Device takes no files straight, but a full-size video offered to it is
-            // answered at once with a decline, so the sender's app sends the relay copy now instead of waiting.
+            // Round 19 (interop 3, K19-4): a file the gate turns away (not on the list, or a quiet time) waits on the
+            // sender's side, but a full-size video offered to it is answered at once with a decline, so the sender's app
+            // sends a smaller copy now instead of waiting. (1.42: files the parents' rules allow get through the gate.)
             if (room == "file" && io.github.ravenor907.muninn.tv.KidMode.saved(context) && (contacts.contact(fromKey) != null || groups.sharesGroup(fromKey)))
                 return opened(o, fromKey, { null }) { plain -> kidVideoOffer(fromKey, String(plain, Charsets.UTF_8)) }
             return 403 to "{}"
@@ -1672,9 +1701,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun hasF1(peerKey: String) = contacts.get(peerKey)?.caps?.contains(FileLink.CAP) == true
 
     /**
-     * Sends a file the person picked: straight to their phone when both trust each other, else (or when that can't
-     * connect) over the internet route when it's small enough. Its card or message shows in the chat at once and says
-     * how it goes; nothing fails out of sight. [id]: the card FileLink.preparing made while the file was copied in.
+     * Sends a file the person picked (Encrypted file sharing, cap f4): Nearby, Trusted direct or Tor, never through the
+     * relays. Its card shows in the chat at once and says how it goes; nothing fails out of sight. [id]: the card
+     * FileLink.preparing made while the file was copied in.
      */
     fun sendFile(peerKey: String, file: File, name: String, id: String? = null): String? {
         val clean = cleanFileName(name)
@@ -1682,20 +1711,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (id != null && FileLink.isStopped(id)) { file.delete(); return null }
         // Ultra privacy: sending videos is off, as a file too (receiving still works).
         if (UltraPrivacy.blocksFile(file, clean)) { FileLink.failed(peerKey, clean, file.length(), UltraPrivacy.VIDEO_OFF, cardId); file.delete(); return null }
-        if (!hasF1(peerKey)) {
+        val why = FileLink.send(peerKey, file, clean, cardId) ?: return null
+        // 1.42: never through the relays. Their app too old: ask them to update; no way through now: Retry later.
+        if (why == "update") {
             probeCaps(peerKey)
-            FileLink.failed(peerKey, clean, file.length(), "${nameOf(peerKey)} needs the latest Muninn or Huginn for files.", cardId)
+            FileLink.failed(peerKey, clean, file.length(), "${nameOf(peerKey)} needs the latest Muninn or Huginn. ${FileLink.UPDATE}.", cardId)
             file.delete(); return null
         }
-        if (FileLink.send(peerKey, file, clean, cardId) == null) return null
-        // No straight path (not trusted, say): the card made while it was copied in goes, and the message's own card
-        // ("Sending 42%") takes over. It was still "Getting ready", which dismiss() leaves alone, so it stayed there.
-        val size = file.length()
-        // Too big to go without Direct: its card offers to turn it on and ask them, and Retry sends it again.
-        relayFile(peerKey, file, clean)?.let {
-            FileLink.failed(peerKey, clean, size, it, cardId, direct = size > FileText.RELAY_MAX && !io.github.ravenor907.muninn.net.call.CallManager.trusted(peerKey),
-                retry = file.takeIf { f -> f.isFile })
-        } ?: FileLink.handedOff(cardId)
+        FileLink.failed(peerKey, clean, file.length(), "${FileLink.NO_PATH}. Try again when you're on the same Wi-Fi or online.", cardId,
+            retry = file.takeIf { f -> f.isFile })
         return null
     }
 
@@ -1727,20 +1751,15 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return null
     }
 
-    /** One member's copy of a group's file: straight, or over the relays only to a contact (into the chat with them). */
+    /** One member's copy of a group's file: Nearby, Trusted direct or Tor (1.42: never through the relays). */
     fun sendMemberFile(k: String, file: File, name: String, card: String, g: String) {
-        if (!hasF1(k) || !hasF2(k)) {
+        val why = FileLink.send(k, file, name, card, g) ?: return
+        if (why == "update") {
             probeCaps(k)
-            FileLink.failed(k, name, file.length(), "${nameOf(k)} needs the latest Muninn or Huginn for files in groups.", card, g)
+            FileLink.failed(k, name, file.length(), "${nameOf(k)} needs the latest Muninn or Huginn for files in groups. ${FileLink.UPDATE}.", card, g)
             file.delete(); return
         }
-        if (FileLink.send(k, file, name, card, g) == null) return
-        val size = file.length()
-        if (isContact(k)) relayFile(k, file, name)?.let { FileLink.failed(k, name, size, it, card, g) } ?: FileLink.handedOff(card)
-        else {
-            FileLink.failed(k, name, size, "Can't reach ${nameOf(k)} straight. Files in a group go when you're on the same Wi-Fi, or with Direct calls and files on for each other.", card, g)
-            file.delete()
-        }
+        FileLink.failed(k, name, file.length(), "${FileLink.NO_PATH}. Try again when you're on the same Wi-Fi or online.", card, g, retry = file.takeIf { it.isFile })
     }
 
     // "Always from this person" (cap f2, on this phone only): their files arrive without asking.
@@ -1872,6 +1891,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!More.ok("piece", o)) return 400 to "{}"
         // Files turned off for them: a file's pieces are dropped quietly.
         if (o.optString("kind") == "file" && !filesAllowed(fromKey)) return 200 to "{}"
+        // 1.42: files never come through the relays now (Encrypted file sharing, cap f4). An older app's relay file is
+        // turned down politely: a card here says why, and they get one short message saying why. Photos, GIFs, voice
+        // and video messages still come in pieces as before.
+        if (o.optString("kind") == "file") { oldRelayFile(fromKey, msgId, o.optString("fn"), contact != null); return 200 to "{}" }
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
         // Already have it (a copy from another route, or a resend): confirm again, or just drop a piece already here.
         val dup = {
@@ -1890,6 +1913,22 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (incoming.size > 20 && !incoming.containsKey(msgId)) return 429 to "{}"
         if (n > Photos.MAX_PIECES && !incoming.containsKey(msgId) && bigIncoming()) return 429 to "{}"
         return opened(o, fromKey, dup) { part -> takePiece(o, fromKey, name, via, msgId, n, i, mailbox, part) }
+    }
+
+    /** Relay files turned down (sender|message id), and when each sender was last told why. */
+    private val oldFilesSeen: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    private val oldFilesTold = ConcurrentHashMap<String, Long>()
+
+    /** An older app's relay file ([fn]) from [fromKey]: a card says why here, and a contact is told once in 6 hours. */
+    private fun oldRelayFile(fromKey: String, msgId: String, fn: String, contact: Boolean) {
+        if (oldFilesSeen.size > 500) oldFilesSeen.clear()
+        if (!oldFilesSeen.add("$fromKey|$msgId")) return
+        val shown = fn.ifEmpty { "a file" }
+        FileLink.oldRelayFile(msgId, fromKey, shown)
+        val now = System.currentTimeMillis()
+        if (!contact || now - (oldFilesTold[fromKey] ?: 0L) < 6 * 3_600_000L) return
+        oldFilesTold[fromKey] = now
+        bg { sendPrivate(fromKey, FileLink.oldRelayReply(shown)) }
     }
 
     private fun takePiece(o: JSONObject, fromKey: String, name: String, via: String, msgId: String, n: Int, i: Int, mailbox: String?,
@@ -2951,7 +2990,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (FileLink.send(k, mine, clean, card, g, vid = ms.coerceIn(1, GroupVideo.FULL_MAX_MS)) != null) {
             mine.delete()
             if (back != null) FileLink.videoFellBack(card)
-            else FileLink.failed(k, clean, size, "Can't reach ${nameOf(k)} straight. Full-size videos go on the same Wi-Fi, or with Direct calls and files on for each other.", card, g)
+            else FileLink.failed(k, clean, size, "Can't reach ${nameOf(k)} straight. Full-size videos go on the same Wi-Fi, or with Trusted direct on for each other.", card, g)
         }
     }
 

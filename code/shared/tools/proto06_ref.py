@@ -355,9 +355,16 @@ def check_quiet(q):
         names.append(w["n"])
     if len(set(names)) != len(names): raise ValueError("quiet")
 
+def check_file_tor(p):
+    """Cap f4 (section 30.2): the `tor` message, sealed in room `file`: a one-time v3 onion service id and its port."""
+    if set(p) != {"t", "id", "tor", "p"} or p["t"] != "tor": raise ValueError("fields")
+    h = p["tor"]
+    if not isinstance(h, str) or len(h) != 56 or not re.fullmatch(r"[a-z2-7]{55}d", h): raise ValueError("tor")
+    if not isinstance(p["p"], int) or isinstance(p["p"], bool) or not 1 <= p["p"] <= 65535: raise ValueError("p")
+
 def check_tvconfig(c):
     need = {"tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig"}
-    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz", "look", "season", "accent", "lookpick", "kname", "tsz", "dsz", "hc", "cv", "still", "child", "gok", "wait", "voice"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh; k13 (7.18) look, season, accent, lookpick, kname; k14 (7.18) tsz, dsz, hc, cv, still, child, gok, wait; k15 (7.18) voice: only sent to a device whose app said so
+    optional = {"calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz", "look", "season", "accent", "lookpick", "kname", "tsz", "dsz", "hc", "cv", "still", "child", "gok", "wait", "voice", "speed"}   # k2 (7.5) calls and mic; k5 (7.10) nr; k7 (7.12) upd; k8 (7.13) keep; k11 (7.18) chat, quiet, pin, tz; k12 (7.18) hav, havw, havh; k13 (7.18) look, season, accent, lookpick, kname; k14 (7.18) tsz, dsz, hc, cv, still, child, gok, wait; k15 (7.18) voice; k16 (7.18) speed: only sent to a device whose app said so
     if not need <= set(c) or not set(c) - need <= optional: raise ValueError("fields")
     if "calls" in c and not isinstance(c["calls"], bool): raise ValueError("calls")
     if "mic" in c and (not isinstance(c["mic"], int) or isinstance(c["mic"], bool) or not 0 <= c["mic"] <= MAX_MIC): raise ValueError("mic")
@@ -384,6 +391,8 @@ def check_tvconfig(c):
     if "kname" in c and (not isinstance(c["kname"], str) or not c["kname"].strip() or len(c["kname"]) > 40 or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in c["kname"])): raise ValueError("kname")
     # k15: the read-aloud voice a parent picked, "f" (Female) or "m" (Male).
     if "voice" in c and c["voice"] not in ("f", "m"): raise ValueError("voice")
+    # k16: the read-aloud speed a parent picked, a whole percent 50 to 150 (sent only when the device and every co-parent say k16).
+    if "speed" in c and (not isinstance(c["speed"], int) or isinstance(c["speed"], bool) or not 50 <= c["speed"] <= 150): raise ValueError("speed")
     # k14: accessibility, the child's name, group members a parent approved, other families' Kids' Devices still waiting.
     def key_ok(k): return isinstance(k, str) and 0 < len(k) <= 200 and all(ord(ch) > 0x20 and ord(ch) != 0x7F for ch in k)
     def int_in(v, allowed): return isinstance(v, int) and not isinstance(v, bool) and v in allowed

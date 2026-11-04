@@ -91,7 +91,7 @@ Rectangle {
         if (a.noticed) newFromClosed = Date.now()
         if (a.add) Qt.callLater(addSomeone)   // Contacts › +
         if (a.mirror) { const p = a.mirror; Qt.callLater(() => mirror.open(p)) }   // Contacts › a phone contact › Message
-        // A contact's menu › Find in chat, Media and files › Media, or More › Pinned messages.
+        // A person's menu › Search, Media › Media, or More › Pinned messages.
         if (a.open && a.show === "find") Qt.callLater(openFind)
         if (a.open && a.show === "pins") Qt.callLater(openPins)
         if (a.open && a.show === "shared") Qt.callLater(() => page.more.openShared())
@@ -305,7 +305,7 @@ Rectangle {
     function showLimitsNote() {
         if (tour || locked || !Chat.ready || !Chat.limitsNote()) return
         Chat.dismissLimitsNote()
-        Ui.sure("Messages delete after 7 days", "On every device, so old chats can't leak. To keep a chat longer, put the person in Family or Work (Folders and role) and pick up to 30 days. Family groups can keep up to 30 days too.", "Got it", () => {})
+        Ui.sure("Messages delete after 7 days", "On every device, so old chats can't leak. To keep a chat longer, put the person in Family or Work (Details › Folders) and pick up to 30 days. Family groups can keep up to 30 days too.", "Got it", () => {})
     }
     Connections { target: Chat; function onChanged() { page.showLimitsNote() } }
     Component.onDestruction: { Chat.openChat = ""; Voice.cancel(); Voice.stop() }
@@ -342,7 +342,7 @@ Rectangle {
                 radius: Theme.radius
                 color: addHover.hovered ? Theme.raised : "transparent"
                 Accessible.role: Accessible.Button
-                Accessible.name: "Add someone"
+                Accessible.name: "Add"
                 Accessible.onPressAction: page.addMenu()
                 Icon { anchors.centerIn: parent; name: "plus"; size: Theme.px(18); lineWidth: 2; color: addHover.hovered ? Theme.text : Theme.textMuted }
                 HoverHandler { id: addHover; cursorShape: Qt.PointingHandCursor }
@@ -1436,34 +1436,58 @@ Rectangle {
                    t => { Chat.sendPrivate(k, t, re); page.replyId = "" })
         }
     }
-    // The + beside the title: add someone, join a group, show my code, or copy a one-time link.
+    // The + beside the title (and the rail's): New chat, New group and Add someone, the same as Muninn's +.
     function addMenu() {
+        if (locked) return
+        Ui.pickFrom("Add", [{ header: "", items: [{ name: "New chat", icon: "thread", url: "chat" },
+                                                 { name: "New group", icon: "people", url: "group" },
+                                                 { name: "Add someone", icon: "plus", url: "add" }] }], a => {
+            if (tour) return
+            if (a === "chat") newChat()
+            else if (a === "group") { if (Ui.main) Ui.main.newGroup() }
+            else if (a === "add") addPage(() => page.addMenu())
+        })
+    }
+    // Add someone: My code, One-time link, Paste a code and Join a group (as Muninn's Add someone page).
+    function addPage(back) {
         if (locked) return
         // While a phone is linked these are this PC's own account (its own code and contacts), not the phone's.
         const own = !!Linked.phone.key && !Linked.phone.gone
-        Ui.pickFrom("Add", [{ header: own ? "This PC's own account: same name and picture as you, but separate from your phone, so people would see a second " + Ui.myName + ". Add people on your phone." : "", items: [{ name: "Add someone", icon: "plus", url: "add" },
-                                                   { name: "Join a group", icon: "people", url: "join" },
-                                                   { name: "My code", icon: "qr", url: "code" },
-                                                   { name: "One-time link", icon: "attach", url: "once" }] }], a => {
-            if (a === "add") addSomeone()
-            else if (a === "join") joinGroup()
-            else if (a === "code") { Chat.newLink(); showCode = true }
+        Ui.pickFrom("Add someone", [{ header: own ? "This PC's own account: same name and picture as you, but separate from your phone, so people would see a second " + Ui.myName + ". Add people on your phone." : "", items: [
+                { name: "My code", icon: "qr", url: "code" },
+                { name: "One-time link", icon: "attach", detail: "Works for one person", url: "once" },
+                { name: "Paste a code", icon: "plus", detail: "Or an invite link", url: "paste" },
+                { name: "Join a group", icon: "people", url: "join" }] }], a => {
+            if (tour) return
+            if (a === "code") { Chat.newLink(); showCode = true }
             else if (a === "once") PeopleActions.inviteLink()
+            else if (a === "paste") addSomeone()
+            else if (a === "join") joinGroup()
+        }, back)
+    }
+    // New chat: one of my contacts; with none yet, Add someone.
+    function newChat() {
+        if (locked) return
+        const people = (Chat.chats || []).filter(c => c && c.contact && !c.blocked).map(c => ({ name: c.name, icon: "person", url: c.key }))
+        if (!people.length) { addPage(null); return }
+        Ui.pickFrom("New chat", [{ header: "", items: people }, { header: "", items: [{ name: "Add someone", icon: "plus", url: "+" }] }], k => {
+            if (tour) return
+            if (k === "+") { addPage(() => page.newChat()); return }
+            openKey = k; picked = true; zone = "messages"
         })
     }
-    // The list's three dots: New folder and Trash; Report a bug in Labs mode; Labs reports on the Huginn with the Labs key.
+    // The list's three dots, in Muninn's order for the rows Huginn has: Trash, New folder, and Report a bug in Labs mode.
+    // Labs reports are on the Labs page (Settings › Labs).
     function listMenu() {
         if (locked) return
         const n = Chat.trash.length
-        const items = [{ name: "New folder", icon: "folder", url: "folder" },
-                       { name: "Trash", icon: "close", detail: n ? String(n) : "", url: "trash" }]
+        const items = [{ name: "Trash", icon: "close", detail: n ? String(n) : "", url: "trash" },
+                       { name: "New folder", icon: "folder", url: "folder" }]
         if (Settings.labs) items.push({ name: "Report a bug", icon: "info", url: "report" })
-        if (Labs.inbox) items.push({ name: "Labs reports", icon: "file", detail: Labs.reports.length ? String(Labs.reports.length) : "", url: "labs" })
         Ui.pickFrom("Chats", [{ header: "", items: items }], a => {
             if (a === "folder") newFolder("")
             else if (a === "trash") openTrash()
             else if (a === "report") Ui.main.openReport()
-            else if (a === "labs") Ui.main.openLabsReports()
         })
     }
     // Join a group: the same paste box, for a group's invite link or code (a person's code works here too).
@@ -1558,7 +1582,7 @@ Rectangle {
         Ui.pickFrom("Chats", [{ header: "", items: items }], a => {
             if (tour) return
             if (a === "open") choose()
-            else if (a === "chat") addSomeone()
+            else if (a === "chat") newChat()
             else if (a === "group") { if (Ui.main) Ui.main.newGroup() }
             else if (a === "folder") newFolder("")
         })
@@ -1566,16 +1590,10 @@ Rectangle {
     // The Menu key and Shift+F10 (Main.menuKey): the right-click menu for the focus, at menuAnchor().
     function contextMenu() { if (more.sharedOpen) more.contextMenu(); else if (zone === "list") rowContext(entries[row]); else handleButton("x") }
     function menuAnchor() { return more.sharedOpen ? more.anchorItem() : zone === "list" ? listPane.itemAtIndex(row) : zone === "messages" && sel >= 0 ? list.itemAtIndex(sel) : null }
-    // A person's one menu (PeopleActions.contactMenu), from their row (moving it is in the row's right-click menu).
+    // A person's one menu, from their row (LT or X): the same menu as a right click on it (PeopleActions.personMenu).
     function rowMenu(e) {
-        if (e && e.kind === "near") {
-            const n = e.key
-            PeopleActions.nearbyMenu(n, e.name, { hasChat: !!e.hasChat, alt: e.alt || "", removed: () => page.closeChatWith(n) })
-            return
-        }
-        if (!e || e.kind !== "chat") { listOptions(); return }
-        const k = e.key
-        PeopleActions.contactMenu(k, e.name, { section: e.section, removed: () => page.closeChatWith(k) })
+        if (!e || (e.kind !== "chat" && e.kind !== "near")) { listOptions(); return }
+        rowContext(e)
     }
     // The same menu for the open chat (its header's three dots, or LT with no message picked).
     function chatMenu() {
@@ -1835,6 +1853,8 @@ Rectangle {
             return
         }
         if (!m || m.unsent && !m.mine) { if (m && openKey !== "") Ui.sure("Delete this message?", "Only on this device.", "Delete", () => Chat.deleteMessage(openKey, m.id), false, true); return }
+        // The same shape as Muninn's sheet: Join (an invite), React, Reply, Copy, Forward (one row: text, media or
+        // both), Read aloud, Edit, Pin, Try again; the rare ones in More; Unsend and Delete for me last, in red.
         const items = []
         // A group invite in the message: Join, first (its name and size, then Join or Not now).
         const invite = m.text && !m.unsent && !m.mine && !tour ? Chat.parseGroupCode(m.text) : ({})
@@ -1842,58 +1862,66 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !m.failed) {
             items.push({ name: "React", icon: "smile", detail: m.myReaction ? "Yours: " + m.myReaction : "", url: "react", sub: () => pickReaction(m) })
             items.push({ name: "Reply", icon: "reply", url: "reply" })
-            items.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
         }
-        if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
-        if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", icon: "edit", url: "edit" })
-        if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
-        // Read aloud (src/readaloud.h): the plain text, in the voice picked in Settings › Look.
+        if (m.text && !m.unsent) items.push({ name: "Copy", url: "copy" })
+        if ((m.text || (m.photo && !m.file)) && !m.unsent && !m.failed && !tour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMessage(m) })
+        // Read aloud (src/readaloud.h): the plain text, in the voice picked in Settings › Look › Read aloud.
         if (m.text && !m.unsent && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
-        // Right-click extras: the link, Forward (its text) and the saved file's folder.
-        const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
-        if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
-        if (m.text && !m.unsent && !m.failed && !tour) items.push({ name: "Forward", icon: "forward", url: "forward", sub: () => PeopleActions.forwardMenu(m.text) })
-        if (m.saved && !m.unsent) items.push({ name: "Open in folder", icon: "folder", url: "folder" })
-        if (m.file && !m.unsent && !m.mine) items.push({ name: "Save to Downloads", icon: "file", url: "savefile" })
-        else if (m.photo && !m.voice && !m.video && !m.file && !m.unsent) items.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", icon: "save", url: "save" })
-        else if (m.photo && (m.voice || m.video) && !m.file && !m.unsent) items.push({ name: "Save", icon: "save", detail: "To " + (Transfer.saveName || "Downloads") + " › Huginn", url: "savemedia" })
-        // A photo, video or voice message: sent again as a new message.
-        if (m.photo && !m.file && !m.unsent && !m.failed && !tour) items.push({ name: "Forward", icon: "forward", url: "forwardmedia", sub: () => PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo") })
-        if (m.voice && !m.unsent) items.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
+        if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", icon: "edit", url: "edit" })
+        if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
         if (m.mine && m.failed) items.push({ name: "Try again", url: "retry" })
         if (openKey === "" && !m.mine) items.push({ name: "Mute " + m.name, url: "mute" })
-        if (openKey !== "" && m.mine && !m.unsent && !m.failed) items.push({ name: "Unsend", detail: "Removes it for both", url: "unsend", danger: true })
-        items.push({ name: openKey === "" ? "Delete" : "Delete for me", url: "delete", danger: true })
+        // More: the thread, the link, the saved file's folder, saving and viewing, playing a voice message.
+        const extra = []
+        if (openKey !== "" && !m.unsent && !m.failed)
+            extra.push({ name: "Open thread", icon: "thread", detail: (m.replies || 0) ? m.replies + (m.replies === 1 ? " reply" : " replies") : "", url: "thread" })
+        const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
+        if (link !== "") extra.push({ name: "Copy link", icon: "attach", url: "link" })
+        if (m.file && !m.unsent && !m.mine) extra.push({ name: "Save to Downloads", icon: "file", url: "savefile" })
+        else if (m.photo && !m.voice && !m.video && !m.file && !m.unsent) extra.push({ name: "View full size", icon: "image", url: "view" }, { name: "Save to Pictures", icon: "save", url: "save" })
+        else if (m.photo && (m.voice || m.video) && !m.file && !m.unsent) extra.push({ name: "Save", icon: "save", detail: "To " + (Transfer.saveName || "Downloads") + " › Huginn", url: "savemedia" })
+        if (m.saved && !m.unsent) extra.push({ name: "Open in folder", icon: "folder", url: "folder" })
+        if (m.voice && !m.unsent) extra.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
+        const gone = []
+        if (openKey !== "" && m.mine && !m.unsent && !m.failed) gone.push({ name: "Unsend", detail: "Removes it for both", url: "unsend", danger: true })
+        gone.push({ name: openKey === "" ? "Delete" : "Delete for me", url: "delete", danger: true })
         const k = openKey
-        Ui.pickFrom("Message", [{ header: "", items: items }], a => {
-            if (a === "react") pickReaction(m)
-            else if (a === "reply") startReply(m.id)
-            else if (a === "thread") openThread(m.id)
-            else if (a === "pin") togglePin(m.id)
-            else if (a === "edit") startEdit(m)
-            else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
-            else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
-            else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
-            else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
-            else if (a === "forward") PeopleActions.forwardMenu(m.text)
-            else if (a === "folder") { if (!FileLink.showInFolder(m.saved)) Ui.say("That file isn't there anymore.", true) }
-            else if (a === "view") viewing = m.photo
-            else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
-            else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
-            else if (a === "forwardmedia") PeopleActions.forwardMedia(m, m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo")
-            else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
-            else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for both of you.", "Unsend", () => Chat.unsend(k, m.id), true, true)
-            else if (a === "retry") Chat.retry(k, m.id)
-            else if (a === "mute") Chat.block(m.peer, true)
-            else if (a === "delete") {
-                // A photo, video or voice message is held 5 seconds, as from Media and files.
-                if (k !== "" && m.photo) Ui.sure("Delete this " + (m.voice ? "voice message" : m.video ? "video" : "photo") + "?", "It's deleted on this computer only.", "Delete",
-                                                 () => Chat.deleteMessage(k, m.id), true, true)
-                else if (k === "") Chat.deleteNearbyMessage(m.id)
-                else Chat.deleteMessage(k, m.id)
-            }
-            else if (a === "savefile") PeopleActions.saveFile(k, m)
+        // A rare row picked in More acts the same as from the menu itself.
+        const act = a => page.messageAction(a, m, k, link)
+        if (extra.length) items.push({ name: "More", icon: "more", url: "more",
+                                       sub: () => Ui.pickFrom("More", [{ header: "", items: extra }], act) })
+        Ui.pickFrom("Message", [{ header: "", items: items }, { header: "", items: gone }], a => {
+            if (a === "more") { Ui.pickFrom("More", [{ header: "", items: extra }], act, () => page.options()); return }
+            act(a)
         })
+    }
+    function messageAction(a, m, k, link) {
+        if (a === "react") pickReaction(m)
+        else if (a === "reply") startReply(m.id)
+        else if (a === "thread") openThread(m.id)
+        else if (a === "pin") togglePin(m.id)
+        else if (a === "edit") startEdit(m)
+        else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
+        else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
+        else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
+        else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
+        else if (a === "forward") PeopleActions.forwardMessage(m)
+        else if (a === "folder") { if (!FileLink.showInFolder(m.saved)) Ui.say("That file isn't there anymore.", true) }
+        else if (a === "view") viewing = m.photo
+        else if (a === "save") Ui.say(Chat.savePhoto(m.photo) ? "Saved in Pictures › Huginn." : "Couldn't save it.")
+        else if (a === "savemedia") { const p = Chat.saveMedia(m.photo); Ui.say(p !== "" ? "Saved in " + (Transfer.saveName || "Downloads") + " › Huginn." : "Couldn't save it.", p === "") }
+        else if (a === "play") { if (Voice.playing === m.id) Voice.stop(); else Voice.play(m.photo) }
+        else if (a === "unsend") Ui.sure("Unsend this message?", "It's removed for both of you.", "Unsend", () => Chat.unsend(k, m.id), true, true)
+        else if (a === "retry") Chat.retry(k, m.id)
+        else if (a === "mute") Chat.block(m.peer, true)
+        else if (a === "delete") {
+            // A photo, video or voice message is held 5 seconds, as from Media.
+            if (k !== "" && m.photo) Ui.sure("Delete this " + (m.voice ? "voice message" : m.video ? "video" : "photo") + "?", "It's deleted on this computer only.", "Delete",
+                                             () => Chat.deleteMessage(k, m.id), true, true)
+            else if (k === "") Chat.deleteNearbyMessage(m.id)
+            else Chat.deleteMessage(k, m.id)
+        }
+        else if (a === "savefile") PeopleActions.saveFile(k, m)
     }
 
     // ------------------------------------------------------------- cap m1: replies, reactions, edits
@@ -2027,7 +2055,7 @@ Rectangle {
     }
     function boxOptions(box) {
         const items = [{ name: "Send", icon: "send", url: "send" }, { name: "Emoji", icon: "smile", url: "emoji" }]
-        if (openKey !== "") items.push({ name: "Send file, pictures, video or poll", icon: "attach", url: "picture" })
+        if (openKey !== "") items.push({ name: "Camera, media, file or poll", icon: "attach", url: "picture" })
         if (box.bannerTitle !== "") items.push({ name: editId !== "" ? "Stop editing" : "Don't reply", url: "cancel" })
         items.push({ name: "Done typing", url: "leave" })
         Ui.pickFrom(box.placeholder, [{ header: "", items: items }], a => {
@@ -2138,6 +2166,7 @@ Rectangle {
         return false
     }
     function handleRelease(b) {
+        if (more.busy && more.handleRelease(b)) return true
         // Only to the chat it was started in: Voice throws it away (and says so) if this isn't that chat.
         if (b === "y" && Voice.recording) Voice.finish(openKey)
         return true

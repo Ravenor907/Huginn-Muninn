@@ -26,7 +26,7 @@ class SetupFlowTest {
     @Test
     fun tabletWithNothingLinkedGetsLinkPage() {
         val s = SetupFlow.steps(facts(tablet = true))
-        assertEquals(s.indexOf(Step.PEOPLE) + 1, s.indexOf(Step.LINK))
+        assertEquals(s.indexOf(Step.LOCK) + 1, s.indexOf(Step.LINK))
         assertFalse(Step.LINK in SetupFlow.steps(facts(tablet = false)))
     }
 

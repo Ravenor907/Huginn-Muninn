@@ -11,7 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Cap v3, picked videos (protocol.md 29): size, bitrate and length rules, who gets what, pacing. As Huginn's --video-selftest. */
+/** Cap v3, picked videos (protocol.md 29, 1.42 rules: never cut): size, bitrate and length rules, who gets what, pacing. As Huginn's --video-selftest. */
 class GroupVideoTest {
     private fun info(w: Int, h: Int, fps: Float = 30f, ms: Int = 10_000, bytes: Long = 5_000_000, rot: Int = 0) = Info(w, h, rot, fps, ms, bytes)
 
@@ -24,7 +24,20 @@ class GroupVideoTest {
         assertFalse(GroupVideo.fitsFull(info(1920, 1080, fps = 60f)))       // 60 fps is converted
         assertTrue(GroupVideo.fitsFull(info(1920, 1080, fps = 30.3f)))      // 29.97 or a little over still counts as 30
         assertFalse(GroupVideo.fitsFull(info(1920, 1080, bytes = GroupVideo.FULL_MAX_BYTES + 1)))
-        assertFalse(GroupVideo.fitsFull(info(1920, 1080, ms = 61_000)))
+        // 1.42: direct has no length or size cap beyond the 4 GB transfer limit.
+        assertTrue(GroupVideo.fitsFull(info(1920, 1080, ms = 30 * 60_000, bytes = 900_000_000)))
+        assertEquals(4L * 1024 * 1024 * 1024, GroupVideo.FULL_MAX_BYTES)
+        // The 720p copy: plain 720p30 up to 5 minutes goes as it is; bigger asks to shrink.
+        assertTrue(GroupVideo.fitsSmall(info(1280, 720, ms = 5 * 60_000)))
+        assertTrue(GroupVideo.fitsSmall(info(720, 1280, ms = 5 * 60_000 + 400)))
+        assertFalse(GroupVideo.fitsSmall(info(1280, 720, ms = 5 * 60_000 + 1_000)))
+        assertFalse(GroupVideo.fitsSmall(info(1920, 1080)))
+        assertFalse(GroupVideo.fitsSmall(info(1280, 720, fps = 60f)))
+        assertFalse(GroupVideo.fitsSmall(Info(1280, 720, 0, 30f, 10_000, 5_000_000, plain = false)))
+        assertTrue(GroupVideo.biggerThan720(info(1920, 1080)))
+        assertTrue(GroupVideo.biggerThan720(info(1080, 1920)))
+        assertFalse(GroupVideo.biggerThan720(info(1280, 720)))
+        assertFalse(GroupVideo.biggerThan720(info(720, 1280)))
         assertTrue(GroupVideo.needsConvert(info(3840, 2160)))
         assertTrue(GroupVideo.needsConvert(info(1280, 720, fps = 60f)))
         assertFalse(GroupVideo.needsConvert(info(1280, 720)))
@@ -66,11 +79,17 @@ class GroupVideoTest {
         val again = GroupVideo.retryBitrate(b20, GroupVideo.RELAY_BYTES + 400_000L, 20_000)
         assertTrue(again <= (b20 * GroupVideo.RETRY_SHARE).toInt())
         assertTrue(again >= GroupVideo.MIN_VIDEO_BITRATE)
-        // The full copy: 4.5 Mbps, lowered so a minute stays under the limit.
+        // The full copy: 4.5 Mbps whatever its length (an hour is about 2 GB); a minute still arrives by itself on an
+        // older app (under its 50 MB).
         assertEquals(GroupVideo.FULL_VIDEO_BITRATE, GroupVideo.fullBitrate(20_000))
+        assertEquals(GroupVideo.FULL_VIDEO_BITRATE, GroupVideo.fullBitrate(60 * 60_000))
         val full60 = (GroupVideo.fullBitrate(60_000) + GroupVideo.FULL_AUDIO_BITRATE).toLong() * 60 / 8
-        assertTrue(full60 <= GroupVideo.FULL_MAX_BYTES)
-        assertTrue(GroupVideo.FULL_MAX_BYTES < 50L * 1024 * 1024)   // under FileLink.AUTO_BYTES: arrives by itself
+        assertTrue(full60 < 48L * 1024 * 1024)
+        // Very long: lowered to stay inside 4 GB, never below the floor.
+        val tenHours = 10 * 3_600_000
+        assertTrue((GroupVideo.fullBitrate(tenHours) + GroupVideo.FULL_AUDIO_BITRATE).toLong() * (tenHours / 1000) / 8 <= GroupVideo.FULL_MAX_BYTES)
+        // The 720p copy: 5 minutes is well under 100 MB.
+        assertTrue((GroupVideo.SMALL_VIDEO_BITRATE + GroupVideo.FULL_AUDIO_BITRATE).toLong() * 300 / 8 < 100L * 1024 * 1024)
     }
 
     @Test
@@ -78,42 +97,62 @@ class GroupVideoTest {
         assertEquals(GroupVideo.SHORT, GroupVideo.length(20_000))
         assertEquals(GroupVideo.SHORT, GroupVideo.length(20_400))
         assertEquals(GroupVideo.LONG, GroupVideo.length(21_000))
-        assertEquals(GroupVideo.LONG, GroupVideo.length(60_000))
-        assertEquals(GroupVideo.TOO_LONG, GroupVideo.length(61_000))
-        assertEquals(40_000, GroupVideo.lastStart(60_000))
-        assertEquals(0, GroupVideo.lastStart(5_000))
-        assertEquals(10_000 to 30_000, GroupVideo.trim(60_000, 10_000))
-        assertEquals(40_000 to 60_000, GroupVideo.trim(60_000, 55_000))   // kept inside the video
-        assertEquals(0 to 20_000, GroupVideo.trim(60_000, -5))
+        assertEquals(GroupVideo.LONG, GroupVideo.length(61_000))
+        assertEquals(GroupVideo.LONG, GroupVideo.length(5 * 60_000))
+        assertEquals(GroupVideo.TOO_LONG, GroupVideo.length(5 * 60_000 + 1_000))
         assertEquals("1:05", GroupVideo.clock(65_000))
         assertEquals("0:20", GroupVideo.clock(19_600))
+        assertEquals("1:02:05", GroupVideo.clock(3_725_000))
+        assertEquals("Video too long", GroupVideo.TOO_LONG_TITLE)
+        assertEquals("Videos over the internet can be up to 5 minutes.", GroupVideo.TOO_LONG_TEXT)
+        assertEquals("Shrink to 720p to send?", GroupVideo.SHRINK_TITLE)
+        listOf(GroupVideo.SHRINK_TEXT, GroupVideo.TOO_LONG_TEXT, GroupVideo.NOTE).forEach { assertFalse(it, it.contains('\u2014') || it.contains('\u2013')) }
     }
 
     @Test
     fun deliveryChoice() {
-        val wifi = Member("a", sameWifi = true, trusted = false, files = true, v3 = true)
-        val trusted = Member("b", sameWifi = false, trusted = true, files = true, v3 = true)
-        val far = Member("c", sameWifi = false, trusted = false, files = true, v3 = true)
-        val old = Member("d", sameWifi = true, trusted = true, files = true, v3 = false)
-        val kid = Member("e", sameWifi = true, trusted = true, files = true, v3 = true, kid = true)
-        val ultra = Member("f", sameWifi = true, trusted = true, files = true, v3 = true, relayOnly = true)
-        val noFiles = Member("g", sameWifi = true, trusted = true, files = false, v3 = true)
-        assertEquals(GroupVideo.FULL, GroupVideo.delivery(wifi, unmetered = false))
-        assertEquals(GroupVideo.FULL, GroupVideo.delivery(trusted, unmetered = true))
-        assertEquals(GroupVideo.RELAY, GroupVideo.delivery(trusted, unmetered = false))   // not over mobile data
-        assertEquals(GroupVideo.RELAY, GroupVideo.delivery(far, unmetered = true))
-        for (m in listOf(old, kid, ultra, noFiles)) assertEquals(m.k, GroupVideo.RELAY, GroupVideo.delivery(m, unmetered = true))
-        // A long video in full: waits for those it can reach straight, nothing for the rest.
-        assertEquals(GroupVideo.FULL, GroupVideo.later(trusted))
-        assertEquals(GroupVideo.FULL, GroupVideo.later(wifi))
-        assertEquals(GroupVideo.NONE, GroupVideo.later(far))
-        assertEquals(GroupVideo.NONE, GroupVideo.later(kid))
-        val plan = GroupVideo.plan(listOf(wifi, trusted, far), unmetered = false, inFull = false)
-        assertEquals(mapOf("a" to GroupVideo.FULL, "b" to GroupVideo.RELAY, "c" to GroupVideo.RELAY), plan)
+        val min = 60_000
+        val wifi = Member("a", sameWifi = true, trusted = false, files = true, v3 = true, newPath = true)
+        val trusted = Member("b", sameWifi = false, trusted = true, files = true, v3 = true, newPath = true)
+        val far = Member("c", sameWifi = false, trusted = false, files = true, v3 = true, newPath = true)
+        val kid = Member("e", sameWifi = true, trusted = true, files = true, v3 = true, kid = true, newPath = true)
+        val oldNear = Member("d", sameWifi = true, trusted = true, files = true, v3 = true)
+        val oldFar = Member("h", sameWifi = false, trusted = false, files = true, v3 = true)
+        val noV3 = Member("g", sameWifi = true, trusted = true, files = true, v3 = false)
+        // Direct: full size, any length.
+        assertEquals(GroupVideo.FULL, GroupVideo.delivery(wifi, unmetered = false, ms = 10_000))
+        assertEquals(GroupVideo.FULL, GroupVideo.delivery(wifi, unmetered = false, ms = 45 * min))
+        assertEquals(GroupVideo.FULL, GroupVideo.delivery(trusted, unmetered = true, ms = 45 * min))
+        // Not direct (or trusted over mobile data): the 720p copy over Tor, up to 5 minutes, never the relays.
+        assertEquals(GroupVideo.SMALL, GroupVideo.delivery(trusted, unmetered = false, ms = 10_000))
+        assertEquals(GroupVideo.SMALL, GroupVideo.delivery(far, unmetered = true, ms = 5 * min))
+        assertEquals(GroupVideo.NONE, GroupVideo.delivery(far, unmetered = true, ms = 6 * min))
+        // A kids' device gets the 720p path, even close by.
+        assertEquals(GroupVideo.SMALL, GroupVideo.delivery(kid, unmetered = true, ms = 10_000))
+        // Older apps: full size up to a minute when direct, the relay copy up to 20 s, else nothing.
+        assertEquals(GroupVideo.FULL, GroupVideo.delivery(oldNear, unmetered = true, ms = min))
+        assertEquals(GroupVideo.FULL, GroupVideo.delivery(oldNear, unmetered = true, ms = 15_000))
+        assertEquals(GroupVideo.NONE, GroupVideo.delivery(oldNear, unmetered = true, ms = 2 * min))
+        assertEquals(GroupVideo.RELAY, GroupVideo.delivery(oldFar, unmetered = true, ms = 20_000))
+        assertEquals(GroupVideo.NONE, GroupVideo.delivery(oldFar, unmetered = true, ms = 30_000))
+        assertEquals(GroupVideo.RELAY, GroupVideo.delivery(noV3, unmetered = true, ms = 10_000))
+        // A group: each member their best path.
+        val plan = GroupVideo.plan(listOf(wifi, trusted, far, oldFar), unmetered = false, ms = 15_000)
+        assertEquals(mapOf("a" to GroupVideo.FULL, "b" to GroupVideo.SMALL, "c" to GroupVideo.SMALL, "h" to GroupVideo.RELAY), plan)
         val said = GroupVideo.summary(plan) { it.uppercase() }
-        assertTrue(said, said.contains("straight to A") && said.contains("internet to B and C"))
+        assertTrue(said, said.contains("Full size (1080p) to A") && said.contains("720p copy to B and C over Tor") && said.contains("to H, whose app is older"))
         assertEquals("Nobody else is here yet.", GroupVideo.summary(emptyMap()) { it })
         assertEquals("A, B and 3 more", GroupVideo.names(listOf("A", "B", "C", "D", "E")))
+        // Never cut: over 5 minutes asks only when someone isn't direct; bigger than 720p asks only when someone gets a copy.
+        val long = 6 * min
+        assertTrue(GroupVideo.tooLong(long, GroupVideo.plan(listOf(wifi, far), true, long)))
+        assertFalse(GroupVideo.tooLong(long, GroupVideo.plan(listOf(wifi, trusted), true, long)))
+        assertFalse(GroupVideo.tooLong(5 * min, GroupVideo.plan(listOf(far), true, 5 * min)))
+        val hd = info(1920, 1080)
+        assertTrue(GroupVideo.needsShrink(hd, GroupVideo.plan(listOf(wifi, far), true, 10_000)))
+        assertTrue(GroupVideo.needsShrink(hd, GroupVideo.plan(listOf(oldFar), true, 10_000)))
+        assertFalse(GroupVideo.needsShrink(hd, GroupVideo.plan(listOf(wifi), true, 10_000)))
+        assertFalse(GroupVideo.needsShrink(info(1280, 720), GroupVideo.plan(listOf(far), true, 10_000)))
         assertTrue(GroupVideo.progressLine("Anna", GroupVideo.RELAY, 48, 192, false).endsWith("25% sent"))
         assertTrue(GroupVideo.progressLine("Anna", GroupVideo.RELAY, 192, 192, false).endsWith("sent"))
     }
@@ -148,10 +187,17 @@ class GroupVideoTest {
         assertTrue(GroupVideo.vidOk(null))
         assertTrue(GroupVideo.vidOk(15_000))
         assertTrue(GroupVideo.vidOk(60_000L))
+        assertTrue(GroupVideo.vidOk(45 * 60_000))   // 1.42: longer direct videos
+        assertTrue(GroupVideo.vidOk(GroupVideo.VID_MAX_MS))
+        assertFalse(GroupVideo.vidOk(GroupVideo.VID_MAX_MS + 1))
         assertFalse(GroupVideo.vidOk(0))
-        assertFalse(GroupVideo.vidOk(60_001))
+        // An older app takes only up to a minute: its "vid" is kept within that.
+        assertEquals(60_000, GroupVideo.vidFor(45 * 60_000, newPath = false))
+        assertEquals(45 * 60_000, GroupVideo.vidFor(45 * 60_000, newPath = true))
         assertFalse(GroupVideo.vidOk(1.5))
         assertFalse(GroupVideo.vidOk("15000"))
         assertTrue(GroupVideo.CAP in Proto06.caps(Proto06.CAPS))
+        // The 720p copy's path is FileLink's Tor cap (f4).
+        assertEquals(io.github.ravenor907.muninn.net.TorFiles.CAP, GroupVideo.NEW_PATH_CAP)
     }
 }

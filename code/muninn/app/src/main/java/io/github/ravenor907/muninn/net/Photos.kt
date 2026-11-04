@@ -164,4 +164,99 @@ object Photos {
         val b = out.toByteArray()
         return if (b.size in 3..(MAX_PIECES * PIECE)) scrub(b) else null
     }
+
+    /** What a picked item is (Saved media): [Pick.PHOTO], [Pick.VIDEO] or [Pick.GIF]. A GIF is known by its bytes. */
+    fun kindOf(context: Context, uri: Uri): String {
+        val type = try { context.contentResolver.getType(uri).orEmpty() } catch (_: Exception) { "" }
+        return when {
+            type.startsWith("video/") -> Pick.VIDEO
+            type == "image/gif" || isGif(context, uri) -> Pick.GIF
+            else -> Pick.PHOTO
+        }
+    }
+
+    /** A video's length in ms, 0 if it can't be read. */
+    fun videoMs(context: Context, uri: Uri): Long {
+        val r = android.media.MediaMetadataRetriever()
+        return try {
+            r.setDataSource(context, uri)
+            r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+        } catch (_: Exception) { 0L } finally { try { r.release() } catch (_: Exception) {} }
+    }
+
+    /** A small square picture of a picked photo, GIF or video (its first frame) for the Saved media grid. Null if none. */
+    fun thumb(context: Context, uri: Uri, kind: String, side: Int = 240): Bitmap? = try {
+        if (android.os.Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, android.util.Size(side, side), null)
+        else if (kind == Pick.VIDEO) {
+            val r = android.media.MediaMetadataRetriever()
+            try { r.setDataSource(context, uri); r.getFrameAtTime(0)?.let { scale(it, side) } } finally { try { r.release() } catch (_: Exception) {} }
+        } else {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= side) sample *= 2
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+        }
+    } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
+
+    /**
+     * Saved media (the Send sheet's one picker for photos, videos and GIFs): the plain rules, kept free of Android so the
+     * JVM tests run them. Items are picked in an order (the numbers on the tiles), at most [MAX] at once.
+     */
+    object Pick {
+        const val PHOTO = "photo"
+        const val VIDEO = "video"
+        const val GIF = "gif"
+        /** Photos, videos and GIFs together, the same as an album. */
+        const val MAX = More.ALBUM_MAX
+        /** The filters over the grid, in order: (key, label). */
+        val FILTERS = listOf("all" to "All", PHOTO to "Photos", VIDEO to "Videos", GIF to "GIFs")
+        /** Under the grid, about what each video becomes (owner wording, 2026-11-04). */
+        const val NOTE = "Full size close by. Others get up to 5 minutes."
+
+        /** The pick order after tapping item [i]: taken out if picked (the rest move up), else added last while there's room. */
+        fun toggle(order: List<Int>, i: Int, max: Int = MAX): List<Int> = when {
+            i in order -> order - i
+            order.size >= max -> order
+            else -> order + i
+        }
+
+        /** Which items (indices into [kinds]) show under filter [f]. */
+        fun shown(kinds: List<String>, f: String): List<Int> = kinds.indices.filter { f == "all" || kinds[it] == f }
+
+        /** "3 selected". */
+        fun selected(n: Int): String = "$n selected"
+
+        /** "2 photos, 1 video" (a GIF part only when there are GIFs); empty for none. */
+        fun summary(photos: Int, videos: Int, gifs: Int): String = listOfNotNull(
+            count(photos, "photo"), count(videos, "video"), count(gifs, "GIF"),
+        ).joinToString(", ")
+
+        private fun count(n: Int, one: String): String? = if (n <= 0) null else "$n $one" + if (n == 1) "" else "s"
+
+        /** A video's length on its tile: "0:18", "2:14", "1:02:09". */
+        fun length(ms: Long): String {
+            val s = (ms.coerceAtLeast(0) + 500) / 1000
+            val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+            return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+        }
+    }
+
+    /**
+     * The in-app camera: tap the shutter for a photo, hold it for a video of up to [VIDEO_MAX_MS] (owner, 2026-11-04).
+     * Plain rules for the JVM tests.
+     */
+    object Shutter {
+        /** How long a press must last to become a video rather than a photo. */
+        const val HOLD_MS = 350L
+        const val VIDEO_MAX_MS = 60_000L
+        const val HINT = "Tap for a photo, hold for video"
+        const val RECORDING = "Recording. Let go to stop."
+
+        /** "0:12 / 1:00" over the preview while recording. */
+        fun clock(elapsedMs: Long): String = Pick.length(elapsedMs.coerceIn(0, VIDEO_MAX_MS).let { it - it % 1000 }) + " / " + Pick.length(VIDEO_MAX_MS)
+
+        /** How full the ring round the shutter is, 0 to 1. */
+        fun ring(elapsedMs: Long): Float = (elapsedMs.toFloat() / VIDEO_MAX_MS).coerceIn(0f, 1f)
+    }
 }

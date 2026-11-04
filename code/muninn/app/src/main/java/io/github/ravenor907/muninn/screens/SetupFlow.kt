@@ -24,10 +24,11 @@ object SetupFlow {
         // 1.42: "Your privacy, built in", what protects every chat and that Ultra privacy is there (off).
         add(Step.PRIVACY)
         if (f.practice || !f.lockChosen) add(Step.LOCK)
+        // 1.42 (consolidation 2.17): a tablet's "Link your phone" comes before the name, as in Huginn.
+        if (f.tabletUnlinked) add(Step.LINK)
         if (f.practice || !f.nameAsked) add(Step.NAME)
         if (f.practice || f.needsAllow) add(Step.ALLOW)
         add(Step.PEOPLE)
-        if (f.tabletUnlinked) add(Step.LINK)
         add(Step.TOUR)
         add(Step.DONE)
     }
@@ -64,7 +65,7 @@ object SetupFlow {
         Stop("menu", "The ⋮ next to search has more for your chat list."),
         Stop("row", "Press and hold a chat for its options.", "Once you have chats, press and hold one for its options."),
         Stop("settings", "This symbol, top right, opens Settings."),
-        Stop("files", "Share nearby sends files to phones close by. Chats have + for photos."),
+        Stop("files", "Share nearby sends files to phones close by. Chats have + for media."),
     )
 
     /** Everything first setup can change. */

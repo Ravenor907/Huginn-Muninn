@@ -331,6 +331,12 @@ public:
     Q_INVOKABLE void setRightAway(const QString &key, bool on);
     // Everyone set to Always right away, for the list in Settings › Notifications.
     Q_INVOKABLE QStringList rightAwayKeys() const { return QStringList(m_rightAway.cbegin(), m_rightAway.cend()); }
+    // Labs › Things to test (code/shared/beta-tests.json, served as :/huginn/beta-tests.json): { beta, about, groups:
+    // [{ id, title, checks: [{ id, text }] }] }, empty when it can't be read. The ticks are this device's only and start
+    // over when the file's "beta" changes (betaTicks() clears them then).
+    Q_INVOKABLE QVariantMap betaTests() const;
+    Q_INVOKABLE QStringList betaTicks();
+    Q_INVOKABLE void setBetaTick(const QString &id, bool on);
     // A color for this chat ("" for the usual, else "#RRGGBB"), only on this computer.
     Q_INVOKABLE QString chatColor(const QString &key) const { return m_chatColors.value(key); }
     Q_INVOKABLE void setChatColor(const QString &key, const QString &color);
@@ -452,8 +458,8 @@ public:
     Q_INVOKABLE QString setGroupLimit(const QString &g, const QString &kind, int days);
     // Group types, Folk and Family (16.2): [{type, name, line, rules}] for the new group screen and settings.
     Q_INVOKABLE QVariantList groupTypes() const;
-    // Someone in one of my Family groups: their files and photos arrive by themselves.
-    bool inFamilyGroup(const QString &key) const;
+    // Someone in one of my Family groups (their trust badge is Family: Person details › Send me files may be Always).
+    Q_INVOKABLE bool inFamilyGroup(const QString &key) const;
     // "Messages now disappear after 7 days", once on the chat list for someone who had chats already.
     Q_INVOKABLE bool limitsNote() const;
     Q_INVOKABLE void dismissLimitsNote();
@@ -570,6 +576,10 @@ private:
     int receive(const QByteArray &body, const QString &via, const QString &from = QString());
     int receiveEnvelope(const QJsonObject &o, const QString &via);
     int receivePiece(const QJsonObject &o, const QString &fromKey, const QString &name, const QString &via);
+    // 1.42: an older app's file over the relays, turned down: a card says why, and a contact is told once in 6 hours.
+    void oldRelayFile(const QString &fromKey, const QString &id, const QString &fn, bool contact);
+    QSet<QString> m_oldFilesSeen;                       // fromKey|id of relay files already turned down
+    QHash<QString, qint64> m_oldFilesTold;              // key -> when they were last told why
     QJsonObject envelope(const QString &room, const QString &theirKey, const QByteArray &plain, const QString &msgId);
     QJsonObject seal(const QJsonObject &fields, const QString &theirKey, const QByteArray &plain);
     QByteArray open(const QJsonObject &o, const QString &fromKey, bool *ok);

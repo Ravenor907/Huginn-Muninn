@@ -39,7 +39,7 @@ object FileText {
 
     /** A file over [RELAY_MAX] that can't go direct: the same words as Huginn's FileLink::tooBig. Retry stays on its card. */
     fun tooBig(): String = TOO_BIG
-    const val TOO_BIG = "Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Direct is on."
+    const val TOO_BIG = "Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Trusted direct is on."
 
     /** Why a file of mine of [size] didn't go: a big one whose straight path failed says so plainly ([tooBig]). */
     fun bigWhy(why: String, size: Long): String = if (size > RELAY_MAX && why in NO_DIRECT) tooBig() else why

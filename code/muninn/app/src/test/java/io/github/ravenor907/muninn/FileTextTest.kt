@@ -43,7 +43,7 @@ class FileTextTest {
         assertEquals("Sent · Arrives when they're online", FileText.relayLine("sent", false, 1f))
         assertEquals("Sent · Saved in their Downloads", FileText.relayLine("delivered", false, null))
         assertEquals("Sent · Saved in their Downloads", FileText.relayLine("read", false, null))
-        assertEquals("Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Direct is on.", FileText.tooBig())
+        assertEquals("Too big to send away from home Wi-Fi. It sends when you're both on the same Wi-Fi or Trusted direct is on.", FileText.tooBig())
     }
 
     @Test

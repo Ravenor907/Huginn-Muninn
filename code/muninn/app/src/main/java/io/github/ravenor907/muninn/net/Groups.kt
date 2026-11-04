@@ -487,7 +487,7 @@ class Groups(
         val grp = groups[g] ?: return@act null
         val s = grp.state
         if (grp.readOnly) return@act null
-        if (s.owner == me && s.members.size > 1) return@act "You own ${s.name}. Hand it over to someone first (Group settings › Members)."
+        if (s.owner == me && s.members.size > 1) return@act "You own ${s.name}. Hand it over to someone first (Group settings › People)."
         val id = Proto06.newLogicalId()
         val plain = JSONObject().put("t", "leave").put("g", g).put("id", id).toString()
         s.members.map { it.k }.filter { it != me }.forEach { out(it, "group", plain, id, g) }
@@ -503,7 +503,7 @@ class Groups(
     fun leaveAndDelete(g: String): String? = act {
         val grp = groups[g] ?: return@act null
         val s = grp.state
-        if (s.owner == me && s.members.size > 1 && !grp.readOnly) return@act "You own ${s.name}. Hand it over to someone first (Group settings › Members)."
+        if (s.owner == me && s.members.size > 1 && !grp.readOnly) return@act "You own ${s.name}. Hand it over to someone first (Group settings › People)."
         if (!grp.readOnly) {
             val id = Proto06.newLogicalId()
             val plain = JSONObject().put("t", "leave").put("g", g).put("id", id).toString()

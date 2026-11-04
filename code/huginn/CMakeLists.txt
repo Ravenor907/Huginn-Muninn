@@ -87,6 +87,7 @@ qt_add_executable(huginn
     src/chatfiles.cpp
     src/linkpreview.cpp src/linkpreview.h
     src/videomsg.cpp src/videomsg.h
+    src/savedmedia.cpp src/savedmedia.h
     src/groupvideo.cpp src/groupvideo.h src/chatvideo.cpp
     src/thumbs.cpp src/thumbs.h
     src/msglimits.cpp src/msglimits.h
@@ -95,6 +96,7 @@ qt_add_executable(huginn
     src/trust.cpp src/trust.h
     src/profile.cpp src/profile.h
     src/filelink.cpp src/filelink.h
+    src/torfiles.cpp src/torfiles.h
     src/sharing.cpp src/sharing.h
     src/link.cpp src/link.h
     src/ratchet.cpp src/ratchet.h
@@ -265,6 +267,7 @@ qt_add_qml_module(huginn
         qml/PicturePicker.qml
         qml/Leaves.qml
         qml/ShortcutsPanel.qml
+        qml/ReadAloudPage.qml
         qml/ChatPage.qml
         qml/GroupPage.qml
         qml/FilesPage.qml
@@ -287,6 +290,7 @@ qt_add_qml_module(huginn
         qml/StickPointer.qml
         qml/MoreParts.qml
         qml/MoreLayer.qml
+        qml/SavedMedia.qml
         qml/PhotoViewer.qml
         qml/PollDialog.qml
         qml/PeopleActions.qml
@@ -323,7 +327,7 @@ qt_add_qml_module(huginn
 foreach(f IN ITEMS Main Theme Ui Icon PageHeader PromptKey PromptBar HButton ToggleSwitch Segmented
                    TextPrompt ConfirmDialog HoldToConfirm Toast ListPicker Rail ChatPage GroupPage FilesPage SettingsPage
                    ContactsPage LockPanel PatternPad CallPage IncomingCall RoomBar Composer FindBar EmojiPicker Reactions QuoteLine
-                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer PhotoViewer PollDialog PeopleActions ModActions FileStrip MirrorPanel
+                   HoverBar MessageRow QuickSwitcher StickPointer MoreParts MoreLayer SavedMedia PhotoViewer PollDialog PeopleActions ModActions FileStrip MirrorPanel
                    Avatar PicturePicker Leaves MoreButton LabsReport LabsInbox AppStoragePanel LinkPhone FirstSetup
                    TransfersPanel ChatFiles)
     set_source_files_properties(qml/${f}.qml PROPERTIES QT_RESOURCE_ALIAS ${f}.qml)
@@ -346,7 +350,7 @@ endforeach()
 
 # Daily Havamal's verses: the one file both apps use (code/shared/havamal.json), served as :/huginn/havamal.json.
 qt_add_resources(huginn "huginn_havamal" PREFIX "/huginn" BASE ${CMAKE_CURRENT_SOURCE_DIR}/../shared
-    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/havamal.json)
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/havamal.json ${CMAKE_CURRENT_SOURCE_DIR}/../shared/beta-tests.json)
 
 # Read aloud: the voices' SHA-256 (code/shared/voices.sha256), served as :/huginn/voices.sha256.
 qt_add_resources(huginn "huginn_voices" PREFIX "/huginn" BASE ${CMAKE_CURRENT_SOURCE_DIR}/../shared

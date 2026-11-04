@@ -486,3 +486,40 @@ bool Chat::openLink(const QString &url) const
         return false;
     return QDesktopServices::openUrl(QUrl(url));
 }
+
+// Labs › Things to test: the list both apps ship (code/shared/beta-tests.json).
+QVariantMap Chat::betaTests() const
+{
+    QFile f(QStringLiteral(":/huginn/beta-tests.json"));
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    const QJsonDocument d = QJsonDocument::fromJson(f.readAll());
+    if (!d.isObject() || !d.object().value(QStringLiteral("groups")).isArray())
+        return {};
+    return d.object().toVariantMap();
+}
+
+// The ticked checks, kept in this device's settings with the beta they were for: another beta starts with none.
+QStringList Chat::betaTicks()
+{
+    const QString beta = betaTests().value(QStringLiteral("beta")).toString();
+    if (m_settings.value(QStringLiteral("labs/betaTestsFor")).toString() != beta) {
+        m_settings.setValue(QStringLiteral("labs/betaTestsFor"), beta);
+        m_settings.remove(QStringLiteral("labs/betaTicks"));
+    }
+    return m_settings.value(QStringLiteral("labs/betaTicks")).toStringList();
+}
+
+void Chat::setBetaTick(const QString &id, bool on)
+{
+    if (id.isEmpty() || id.size() > 32)
+        return;
+    QStringList ticks = betaTicks();
+    if (ticks.contains(id) == on)
+        return;
+    if (on)
+        ticks.append(id);
+    else
+        ticks.removeAll(id);
+    m_settings.setValue(QStringLiteral("labs/betaTicks"), ticks);
+}

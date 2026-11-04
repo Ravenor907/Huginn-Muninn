@@ -10,14 +10,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,8 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.ModLogic
@@ -41,6 +37,7 @@ import io.github.ravenor907.muninn.ui.MButton
 import io.github.ravenor907.muninn.ui.MIcon
 import io.github.ravenor907.muninn.ui.MenuRow
 import io.github.ravenor907.muninn.ui.Palette
+import io.github.ravenor907.muninn.ui.SmoothSlider
 import io.github.ravenor907.muninn.ui.Type
 import kotlinx.coroutines.delay
 
@@ -112,10 +109,16 @@ private fun tell(err: String?, done: String) {
     if (err != null) io.github.ravenor907.muninn.ui.Ui.say(err, true) else io.github.ravenor907.muninn.ui.Ui.say(done)
 }
 
-/** A slider from 0 to 200 %, saved as it moves; their sound changes at once. Only on this phone. */
+/**
+ * A smooth slider from 0 to 200 % (todo 1.42: no notches): their sound follows it while it moves (a few times a second)
+ * and the last value is kept when the finger lifts or the key is let go. Only on this phone.
+ */
 @Composable
 internal fun VolumeDialog(app: Muninn, key: String, name: String, done: () -> Unit) {
-    var v by remember(key) { mutableIntStateOf(app.chat.sound.volume(key)) }
+    var f by remember(key) { mutableFloatStateOf(app.chat.sound.volume(key).toFloat()) }
+    // When their sound last followed the slider (each change is written to the vault, so not on every pixel).
+    val last = remember(key) { LongArray(1) }
+    val v = ModLogic.clampVolume(Math.round(f))
     AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
@@ -127,14 +130,17 @@ internal fun VolumeDialog(app: Muninn, key: String, name: String, done: () -> Un
                     Text("Volume", style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
                     Text("$v%", style = Type.small.copy(color = Palette.textSoft))
                 }
-                Slider(value = v.toFloat(), onValueChange = { f ->
-                    val n = ModLogic.clampVolume(Math.round(f / 5f) * 5)
-                    if (n != v) { v = n; app.chat.sound.setVolume(key, n) }
-                }, valueRange = ModLogic.VOLUME_MIN.toFloat()..ModLogic.VOLUME_MAX.toFloat(), steps = 39,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Volume for $name, $v percent" },
-                    colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.track))
+                SmoothSlider(f, { x ->
+                    f = x
+                    val n = ModLogic.clampVolume(Math.round(x))
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (n != app.chat.sound.volume(key) && now - last[0] >= 150) { last[0] = now; app.chat.sound.setVolume(key, n) }
+                }, {
+                    val n = ModLogic.clampVolume(Math.round(f))
+                    if (n != app.chat.sound.volume(key)) app.chat.sound.setVolume(key, n)
+                }, ModLogic.VOLUME_MIN.toFloat()..ModLogic.VOLUME_MAX.toFloat(), 1f, "Volume for $name, $v percent", Modifier.fillMaxWidth())
                 MButton("Back to 100%", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = v != ModLogic.VOLUME_DEFAULT) {
-                    v = ModLogic.VOLUME_DEFAULT; app.chat.sound.setVolume(key, v)
+                    f = ModLogic.VOLUME_DEFAULT.toFloat(); app.chat.sound.setVolume(key, ModLogic.VOLUME_DEFAULT)
                 }
             }
         },

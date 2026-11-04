@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QCoreApplication>
+#include <QHash>
 #include <QObject>
 #include <QRect>
 #include <QSettings>
@@ -183,7 +184,8 @@ public:
     bool patternTrail() const { return value("patternTrail", true).toBool(); }
     int fallCount() const
     {
-        const int v = value("fallCount", 0).toInt();
+        const int v = m_preview.contains(QStringLiteral("fallCount")) ? m_preview.value(QStringLiteral("fallCount")).toInt()
+                                                                      : value("fallCount", 0).toInt();
         return v <= 0 ? 0 : qBound(1, v, 400);
     }
     double fallBase() const
@@ -196,13 +198,18 @@ public:
     }
     int fallSize() const
     {
+        if (m_preview.contains(QStringLiteral("fallSize"))) return qBound(15, m_preview.value(QStringLiteral("fallSize")).toInt(), 600);
         if (m_settings.contains(QStringLiteral("fallSize"))) return qBound(15, value("fallSize", 57).toInt(), 600);
         const int old = value("leafSize", 100).toInt();
         return old == 100 ? 57 : qBound(15, old, 600);
     }
     QString season() const { return value("seasonal", "off").toString(); }
     QString seasonGround() const { return value("seasonGround", "").toString(); }
-    int seasonGradient() const { return qBound(0, value("seasonGradient", 80).toInt(), 200); }
+    int seasonGradient() const
+    {
+        if (m_preview.contains(QStringLiteral("seasonGradient"))) return qBound(0, m_preview.value(QStringLiteral("seasonGradient")).toInt(), 200);
+        return qBound(0, value("seasonGradient", 80).toInt(), 200);
+    }
     QString seasonAnimation() const
     {
         const QString v = value("seasonAnimation", "full").toString();
@@ -237,6 +244,10 @@ public:
     // of the about text it was folded on: when an admin edits the rules, the box shows open again for everyone.
     Q_INVOKABLE bool aboutFolded(const QString &gid, const QString &about) const;
     Q_INVOKABLE void setAboutFolded(const QString &gid, bool v, const QString &about);
+    // 1.42: a Look slider (fallCount, fallSize, seasonGradient) shown live while it moves, but not saved; commitLook
+    // saves what was previewed (on release, or once keys stop). Setting the value itself drops its preview.
+    Q_INVOKABLE void previewLook(const QString &key, const QVariant &v);
+    Q_INVOKABLE void commitLook();
     bool blockScreenshots() const { return value("blockScreenshots", false).toBool(); }
     bool dataSaver() const { return value("dataSaver", false).toBool(); }
     static bool dataSaverOn() { return saved(QStringLiteral("dataSaver"), false).toBool(); }
@@ -293,11 +304,11 @@ public:
     void setMutedByDeaf(bool v) { set("mutedByDeaf", v); }
     void setPatternTrail(bool v) { set("patternTrail", v); }
     // 0 goes back to following the window.
-    void setFallCount(int v) { setLook("fallCount", v <= 0 ? 0 : qBound(1, v, 400)); }
-    void setFallSize(int v) { setLook("fallSize", qBound(15, v, 600)); }
+    void setFallCount(int v) { m_preview.remove(QStringLiteral("fallCount")); setLook("fallCount", v <= 0 ? 0 : qBound(1, v, 400)); }
+    void setFallSize(int v) { m_preview.remove(QStringLiteral("fallSize")); setLook("fallSize", qBound(15, v, 600)); }
     void setSeason(const QString &v) { setLook("seasonal", v.isEmpty() ? QStringLiteral("off") : v); }
     void setSeasonGround(const QString &v) { setLook("seasonGround", v); }
-    void setSeasonGradient(int v) { setLook("seasonGradient", qBound(0, v, 200)); }
+    void setSeasonGradient(int v) { m_preview.remove(QStringLiteral("seasonGradient")); setLook("seasonGradient", qBound(0, v, 200)); }
     void setSeasonAnimation(const QString &v)
     {
         // An older Light or "how many" percent lives on in fallBase once the choice is saved again.
@@ -329,5 +340,6 @@ private:
     void set(const QString &key, const QVariant &v);
     void setLook(const QString &key, const QVariant &v);
     QSettings m_settings;
+    QHash<QString, QVariant> m_preview;   // Look sliders shown but not saved yet (previewLook)
     static bool s_quiet;
 };

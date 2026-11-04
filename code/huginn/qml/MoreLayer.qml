@@ -3,9 +3,10 @@ import QtMultimedia
 import Huginn
 
 // Cap m2 over a chat or a group channel (shared/docs/protocol.md section 12), the same as Muninn's ChatMore.kt and
-// CameraScreen.kt: the attach menu (pictures, several at once as an album; a video message; a video file; a
-// poll), an album full size with arrows, a video message playing, the camera recording one (it waits for
-// Send or Discard, never sent by itself), a new poll, and the Shared page (photos, videos, links and voice).
+// CameraScreen.kt: the Send menu (Camera, Saved media, Encrypted file sharing, Poll), Saved media (SavedMedia.qml:
+// photos, videos and GIFs, up to 10 together), an album full size with arrows, a video message playing, the camera
+// (a click or A for a photo, held for a video message; either waits for Send or Discard, never sent by itself), a new
+// poll, and the Shared page (photos, videos, links and voice).
 // where: the contact's key or "g:<group>:<channel>"; title: who or what it goes to.
 // On the Shared page every photo, video and voice message is a square tile (one not on this device says so). A click
 // (or A) opens it; a right click, a long press, X, LT or Menu opens its menu: Open, Show in chat (the chat scrolls to
@@ -20,7 +21,10 @@ Item {
     property var photos: []          // an album open full size
     property int photoAt: 0
     property string videoId: ""      // a video message playing (its stored photo id)
-    property bool camera: false      // recording a video message
+    property bool camera: false      // the camera is open (a photo or a video message)
+    property string shot: ""         // a photo just taken, waiting for Send or Discard (its scratch file)
+    property bool shutterDown: false // the shutter (a click or A) is held
+    property bool heldVideo: false   // this hold started a video message: letting go stops it
     property bool sharedOpen: false
     property string sharedTab: "media"
     property int sharedSel: -1
@@ -41,99 +45,93 @@ Item {
     // The tabs in order, for Y on a controller.
     readonly property var sharedTabs: ["media", "links", "voice"]
     function sharedCount() { return sharedTab === "media" ? sharedData.media.length : sharedTab === "links" ? sharedData.links.length : sharedVoices.length }
-    readonly property bool busy: photos.length > 0 || videoId !== "" || camera || pollDlg.visible || sharedOpen
+    readonly property bool busy: photos.length > 0 || videoId !== "" || camera || pollDlg.visible || sharedOpen || savedMedia.shown
     // Media and files › Show in chat: the page scrolls to the message and lights it for a moment.
     signal showInChat(string msgId)
-    // The button legend while the Shared page is in front (the page shows it instead of its own).
-    readonly property var prompts: sharedOpen && photos.length === 0 && videoId === ""
+    // The button legend while the Shared page, Saved media or the camera is in front (the page shows it instead of its own).
+    readonly property var prompts: camera ? (shot !== "" || Videos.reviewing
+                                             ? [{ key: "a", label: "Send" }, { key: "b", label: "Discard" }]
+                                             : Videos.recording ? [{ key: "a", label: "Let go to stop" }]
+                                             : [{ key: "a", label: "Photo, hold for video" }, { key: "b", label: "Cancel" }])
+        : savedMedia.shown ? savedMedia.prompts
+        : sharedOpen && photos.length === 0 && videoId === ""
         ? [{ key: "dpad", label: "Choose" }, { key: "a", label: sharedTab === "voice" ? "Play" : "Open" }, { key: "lt", label: "Options" },
            { key: "y", label: "Next tab" }, { key: "b", label: "Close" }] : []
     anchors.fill: parent
     z: 40
 
     // ------------------------------------------------------------- what the page calls
+    // The Send menu, the same four rows as Muninn's: Camera, Saved media, Encrypted file sharing, Poll.
     function attach() {
         if (tour) return
         if (where === "") { Ui.say("Open a chat first.", true); return }
+        const cam = Videos.hasCamera()
+        // FileLink.reachNote: "" when Nearby, Trusted direct or Tor works right now, else "Ask them to update" (an
+        // older app) or "Can't reach them right now". A group keeps the row on: each member gets their own path.
+        const inGroup = String(where).indexOf("g:") === 0
+        const note = inGroup || typeof FileLink.reachNote !== "function" ? "" : String(FileLink.reachNote(where) || "")
+        const reach = note === ""
+        const pad = !!Ui.main && Ui.main.padInUse
         Ui.pickFrom("Send to " + title, [{ header: "", items: [
-            { name: "Send file", detail: "Any kind of file, up to 4 GB", url: "file", icon: "attach" },
-            { name: "Pictures from this device", detail: "Up to 10 as an album", url: "files", icon: "image" },
-            { name: "Recent pictures", url: "recent", icon: "image" },
-            { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },
-            // Cap v3: off (with why) while Ultra privacy is on.
-            { name: "Video from this device", detail: Chat.videoSendingOff() ? "Off while Ultra privacy is on" : "Full size close by, up to 20 seconds over the internet",
-              url: "videofile", icon: "play" },
-            { name: "Poll", url: "poll", icon: "check" }] }], a => {
-                if (a === "files") pickPictures()
-                else if (a === "recent") recentPicture()
-                else if (a === "record") recordVideo()
-                else if (a === "videofile") sendVideoFile()
+            { name: "Camera", detail: !cam ? "No camera found" : pad ? "A for a photo, hold A for video" : "Click for a photo, hold for video",
+              url: "camera", icon: "video", disabled: !cam },
+            { name: "Saved media", detail: "Photos, videos and GIFs, up to 10", url: "media", icon: "image" },
+            { name: "Encrypted file sharing", detail: reach ? "Nearby, trusted or Tor" : note, url: "file", icon: "attach", disabled: !reach },
+            { name: "Poll", detail: "Ask a question", url: "poll", icon: "check" }] }], a => {
+                if (a === "camera") { if (cam) openCamera(); else Ui.say("No camera found on this device.", true) }
+                else if (a === "media") savedMedia.openPicker()
+                else if (a === "file") { if (reach) PeopleActions.sendFile(where); else Ui.say(note, true) }
                 else if (a === "poll") newPoll()
-                else if (a === "file") PeopleActions.sendFile(where)
             })
     }
-    // In game mode the system's window can't be driven with the controller: Huginn's own list, pictures only.
-    function pickPictures() {
-        if (Ui.ownPicker()) {
-            Ui.pickFiles(paths => more.sendPictures(paths, false), "pictures")
-            return
+    // Saved media › Other folders: the system's file window, or Huginn's own list on a controller (game mode).
+    // Photos and GIFs go as an album, videos by the video rules; anything else belongs to Encrypted file sharing.
+    function browseMedia() {
+        Ui.pickFiles(paths => more.sendMedia(paths))
+    }
+    function sendMedia(paths) {
+        const pics = [], clips = []
+        let skipped = 0
+        for (let i = 0; i < paths.length; i++) {
+            const p = String(paths[i]).indexOf("file:") === 0 ? Chat.localPath(paths[i]) : String(paths[i])
+            const k = MediaFiles.kindOf(p)
+            if (k === "video") clips.push(p)
+            else if (k !== "") pics.push(p)
+            else skipped++
         }
-        const paths = Chat.pickPictures()
-        if (!paths.length) return
-        sendPictures(paths, false)
+        if (pics.length + clips.length > 10) { Ui.say("Up to 10 at once.", true); return }
+        if (skipped) Ui.say("Only photos, videos and GIFs here. Other files go with Encrypted file sharing.", !pics.length && !clips.length)
+        if (pics.length) sendPictures(pics, false)
+        if (clips.length) sendVideos(clips)
     }
     function sendPictures(paths, hd) {
         const r = Chat.sendPhotos(where, paths, hd)
         if (r !== "") Ui.say(r, true)
         else Ui.say(paths.length === 1 ? "Sending the picture." : "Sending " + paths.length + " pictures" + (paths.length > 1 ? " as an album." : "."))
     }
-    // The newest pictures load off screen; the list opens when they're in.
-    property bool wantPictures: false
-    function recentPicture() {
-        wantPictures = true
-        Chat.loadRecentPictures()
-    }
-    Connections {
-        target: Chat
-        function onRecentPicturesReady(pics) {
-            if (!more.wantPictures) return
-            more.wantPictures = false
-            if (!pics.length) { Ui.say("No pictures in your Pictures folder.", true); return }
-            Ui.pickFrom("Send a picture", [{ header: "Newest first", items: pics.map(p => Object.assign({ icon: "image" }, p)) }], path =>
-                Ui.pickFrom("Send this picture", [{ header: "", items: [
-                    { name: "Send", url: "normal" },
-                    { name: "High quality", detail: "Best on the same Wi-Fi", url: "hd" }] }],
-                    q => more.sendPictures([path], q === "hd")))
-        }
-    }
-    function sendVideoFile() {
+    // Videos from Saved media, one after another. Each follows the video rules (agent V's planVideo and
+    // sendPickedVideo): full size to anyone close by or direct, the 720p copy (up to 5 minutes) for the rest. Over the
+    // limit: "Video too long", with Send as a file (Encrypted file sharing) or Cancel. Never trimmed.
+    function sendVideos(paths) {
+        if (!paths || !paths.length) return
+        const path = paths[0], rest = paths.slice(1)
+        const w = where
+        const next = () => Qt.callLater(() => { if (more.where === w) more.sendVideos(rest) })
         if (Chat.videoSendingOff()) { Ui.say("Off while Ultra privacy is on.", true); return }
-        if (Ui.ownPicker()) { Ui.pickFiles(paths => more.sendVideoPath(paths[0]), "videos", true); return }
-        sendVideoPath(Videos.pickFile())
-    }
-    // Cap v3 (protocol.md 29): full size straight to those close by, the video itself over the internet when it already
-    // fits (720p, 20 seconds); Huginn converts nothing, so anything else can go as a file instead.
-    function sendVideoPath(path) {
-        if (!path) return
-        const plan = Chat.planVideo(where, path, false)
-        const asFile = { name: "As a file", detail: "Saved on their device, full quality", url: "file", icon: "attach" }
+        const plan = Chat.planVideo(w, path, false) || ({})
+        const asFile = { name: "Send as a file", detail: "Encrypted file sharing, full quality", url: "file", icon: "attach" }
+        const offerFile = (title, why) => Ui.pickFrom(title, [{ header: why || "", items: [asFile, { name: "Cancel", url: "cancel", icon: "close" }] }],
+                                                      a => { if (a === "file") PeopleActions.sendFiles(w, [path]); next() }, next)
+        if (plan.tooLong || plan.length === "too long") { offerFile("Video too long", plan.why || "Videos can be up to 5 minutes."); return }
         if (!plan.ok) {
-            if (!plan.asFile) { Ui.say(plan.why, true); return }
-            Ui.say(plan.why)
-            Ui.pickFrom("Send this video", [{ header: "", items: [asFile] }], a => PeopleActions.sendFiles(where, [path]))
+            if (plan.asFile) offerFile("Send this video", plan.why || "")
+            else { Ui.say(plan.why || "That video can't be sent.", true); next() }
             return
         }
-        const items = []
-        if (plan.full + plan.relay > 0)
-            items.push({ name: plan.inFull ? "Send in full later, when direct" : "Send", detail: plan.summary, url: "send", icon: "play" })
-        else
-            Ui.say(plan.summary)
-        items.push(asFile)
-        Ui.pickFrom("Send this video (" + Math.round(plan.ms / 1000) + " seconds)", [{ header: "", items: items }], a => {
-            if (a === "file") { PeopleActions.sendFiles(where, [path]); return }
-            const r = Chat.sendPickedVideo(where, path, plan.inFull)
-            Ui.say(r.said, !r.ok)
-        })
+        if ((plan.full || 0) + (plan.relay || 0) === 0) { offerFile("Send this video", plan.summary || ""); return }
+        const r = Chat.sendPickedVideo(w, path, !!plan.inFull) || ({})
+        Ui.say(r.said || "", !r.ok)
+        next()
     }
     function sendClips(paths) {
         let sent = 0
@@ -168,20 +166,76 @@ Item {
         Videos.play(id, playOut)
     }
     function closeVideo() { Videos.stop(); videoId = "" }
-    function recordVideo() {
+    // Camera: a click (or A) takes a photo; held past holdTimer it records a video message (up to a
+    // minute) until let go. Either waits for Send or Discard, never sent by itself.
+    function openCamera() {
         if (!Videos.hasCamera()) { Ui.say("No camera found on this device.", true); return }
+        shot = ""; shutterDown = false; heldVideo = false
         camera = true
         Qt.callLater(() => { if (!Videos.openCamera(camOut)) { Ui.say(Videos.error, true); camera = false } })
     }
     function closeCamera() {
+        holdTimer.stop()
+        discardShot()
         Videos.closeCamera()
         Videos.discard()
+        shutterDown = false; heldVideo = false
         camera = false
     }
+    function discardShot() { if (shot !== "") { const p = shot; shot = ""; MediaFiles.shred(p) } }
+    function shutterPress() {
+        if (shot !== "" || Videos.reviewing) return
+        // A press while one records (a hold whose let-go never came) stops it.
+        if (Videos.recording) { Videos.stopRecording(); heldVideo = false; return }
+        shutterDown = true; heldVideo = false
+        holdTimer.restart()
+    }
+    function shutterRelease() {
+        if (!shutterDown) return
+        shutterDown = false
+        if (holdTimer.running) { holdTimer.stop(); takePhoto(); return }
+        if (heldVideo && Videos.recording) Videos.stopRecording()
+        heldVideo = false
+    }
+    // The shutter's press taken away (the window lost the mouse): no photo; a video message being held stops.
+    function shutterCancel() {
+        holdTimer.stop()
+        if (shutterDown && heldVideo && Videos.recording) Videos.stopRecording()
+        shutterDown = false; heldVideo = false
+    }
+    function takePhoto() {
+        const p = MediaFiles.keepFrame(camOut)
+        if (p === "") { Ui.say("The camera isn't ready yet.", true); return }
+        shot = p
+    }
     function sendRecorded() {
+        if (shot !== "") {
+            const p = shot
+            shot = ""
+            sendPictures([p], false)
+            MediaFiles.shred(p)
+            closeCamera()
+            return
+        }
         const r = Videos.send(where)
         Ui.say(r !== "" ? r : "Sending the video message.", r !== "")
         if (!Videos.reviewing) camera = false
+    }
+    // Retake: back to the camera from a photo or a video message waiting for Send.
+    function retake() {
+        if (shot !== "") { discardShot(); return }
+        if (Videos.reviewing) { Videos.stop(); Videos.discard() }
+    }
+    Timer {
+        id: holdTimer
+        interval: 400
+        onTriggered: {
+            if (!more.shutterDown || !more.camera) return
+            // Ultra privacy with video sending off: a hold does nothing but say why.
+            if (Chat.videoSendingOff()) { Ui.say("Videos are off while Ultra privacy is on.", true); return }
+            more.heldVideo = true
+            Videos.record()
+        }
     }
     function askOpen(url) {
         if (url === "") return
@@ -279,15 +333,20 @@ Item {
             return true
         }
         if (camera) {
-            if (Videos.reviewing) {
+            if (shot !== "") {
+                if (b === "a" || b === "start") sendRecorded()
+                else if (b === "x") retake()
+                else if (b === "b") closeCamera()
+            } else if (Videos.reviewing) {
                 if (b === "a" || b === "start") sendRecorded()
                 else if (b === "x") Videos.play("review", reviewOut)
                 else if (b === "b") closeCamera()
-            } else if (b === "a") { if (Videos.recording) Videos.stopRecording(); else Videos.record() }
+            } else if (b === "a") shutterPress()
             else if (b === "b") closeCamera()
             return true
         }
         if (pollDlg.visible) return pollDlg.handleButton(b)
+        if (savedMedia.shown) return savedMedia.handleButton(b)
         if (sharedOpen) {
             const n = sharedCount()
             const cols = sharedTab === "links" ? 1 : tileGrid.columns
@@ -304,6 +363,11 @@ Item {
             return true
         }
         return false
+    }
+    // A button let go (the page passes it on while busy): A held on the camera.
+    function handleRelease(b) {
+        if (camera && b === "a") { shutterRelease(); return true }
+        return busy
     }
 
     // A recorded video plays as soon as it's ready, to be watched before Send or Discard.
@@ -515,7 +579,7 @@ Item {
         }
     }
 
-    // ------------------------------------------------------------- recording a video message
+    // ------------------------------------------------------------- the camera: a photo, or a video message
     Rectangle {
         anchors.fill: parent
         visible: more.camera
@@ -523,23 +587,34 @@ Item {
         MouseArea { anchors.fill: parent }
         VideoOutput {
             id: camOut
-            visible: !Videos.reviewing
-            anchors.fill: parent; anchors.margins: Theme.px(10); anchors.bottomMargin: Theme.px(90)
+            visible: !Videos.reviewing && more.shot === ""
+            anchors.fill: parent; anchors.margins: Theme.px(10); anchors.bottomMargin: Theme.px(110)
             fillMode: VideoOutput.PreserveAspectFit
         }
         VideoOutput {
             id: reviewOut
-            visible: Videos.reviewing
+            visible: Videos.reviewing && more.shot === ""
             anchors.fill: camOut
             fillMode: VideoOutput.PreserveAspectFit
+        }
+        // A photo just taken, waiting for Send (read from its scratch file, never cached).
+        Image {
+            anchors.fill: camOut
+            visible: more.shot !== ""
+            fillMode: Image.PreserveAspectFit
+            cache: false
+            asynchronous: true
+            source: more.shot === "" ? "" : (more.shot.charAt(0) === "/" ? "file://" : "file:///") + more.shot
         }
         Text {
             textFormat: Text.PlainText
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top; anchors.topMargin: Theme.px(16)
-            text: Videos.reviewing ? "Your video message · " + Voice.length(Videos.reviewMs) + " · it's only sent if you choose Send"
+            width: Math.min(implicitWidth, parent.width - Theme.px(80)); elide: Text.ElideRight
+            text: more.shot !== "" ? "Your photo for " + more.title + " · it's only sent if you choose Send"
+                : Videos.reviewing ? "Your video message · " + Voice.length(Videos.reviewMs) + " · it's only sent if you choose Send"
                 : Videos.recording ? "Recording " + Voice.length(Videos.elapsed) + " of 1:00"
-                : "Video message for " + more.title + " · up to a minute"
+                : "Camera for " + more.title
             color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(16)
             style: Text.Outline; styleColor: "black"
         }
@@ -548,23 +623,77 @@ Item {
             anchors.left: parent.left; anchors.top: parent.top; anchors.margins: Theme.px(20)
             width: Theme.px(14); height: width; radius: width / 2; color: Theme.danger
         }
+        // Taking: Cancel, the shutter (click for a photo, hold for video) and its hint.
         Row {
+            visible: !Videos.reviewing && more.shot === ""
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(16)
+            spacing: Theme.px(18)
+            HButton { anchors.verticalCenter: parent.verticalCenter; text: "Cancel"; onClicked: more.closeCamera() }
+            Rectangle {
+                id: shutter
+                anchors.verticalCenter: parent.verticalCenter
+                width: Theme.px(68); height: width; radius: width / 2
+                color: "transparent"
+                border.width: Theme.px(4); border.color: "white"
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: Videos.recording ? parent.width * 0.42 : parent.width - Theme.px(14); height: width
+                    radius: Videos.recording ? Theme.px(6) : width / 2
+                    color: Videos.recording ? Theme.danger : shutterArea.pressed ? Theme.textSoft : "white"
+                }
+                Accessible.role: Accessible.Button
+                Accessible.name: Videos.recording ? "Stop recording" : "Shutter: click for a photo, hold for video"
+                Accessible.onPressAction: { if (Videos.recording) Videos.stopRecording(); else more.takePhoto() }
+                MouseArea {
+                    id: shutterArea
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onPressed: more.shutterPress()
+                    onReleased: more.shutterRelease()
+                    onCanceled: more.shutterCancel()
+                }
+            }
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: Videos.recording ? "Let go to stop"
+                    : !!Ui.main && Ui.main.padInUse ? "A for a photo, hold A for video" : "Click for a photo, hold for video"
+                color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(14)
+            }
+        }
+        // Waiting: Discard, Retake (a photo) or Watch again (a video message), Send.
+        Row {
+            visible: Videos.reviewing || more.shot !== ""
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(18)
             spacing: Theme.px(14)
-            HButton { visible: !Videos.reviewing; text: "Cancel"; onClicked: more.closeCamera() }
-            HButton { visible: !Videos.reviewing; text: Videos.recording ? "Stop" : "Record"; kind: Videos.recording ? "danger" : "accent"; onClicked: Videos.recording ? Videos.stopRecording() : Videos.record() }
-            HButton { visible: Videos.reviewing; text: "Discard"; kind: "danger"; onClicked: more.closeCamera() }
-            HButton { visible: Videos.reviewing; text: Videos.playing === "review" && !Videos.paused ? "Pause" : "Watch again"; onClicked: Videos.playing === "review" && !Videos.paused ? Videos.togglePause() : Videos.play("review", reviewOut) }
-            HButton { visible: Videos.reviewing; text: "Send"; kind: "accent"; onClicked: more.sendRecorded() }
+            HButton { text: "Discard"; kind: "danger"; onClicked: more.closeCamera() }
+            HButton { visible: more.shot !== ""; text: "Retake"; onClicked: more.retake() }
+            HButton { visible: more.shot === ""; text: Videos.playing === "review" && !Videos.paused ? "Pause" : "Watch again"; onClicked: Videos.playing === "review" && !Videos.paused ? Videos.togglePause() : Videos.play("review", reviewOut) }
+            HButton { text: "Send"; kind: "accent"; onClicked: more.sendRecorded() }
         }
         Text {
             textFormat: Text.PlainText
             anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: Theme.px(22)
             visible: !!Ui.main && Ui.main.padInUse
-            text: Videos.reviewing ? "A: Send · X: watch again · B: Discard" : Videos.recording ? "A: Stop" : "A: Record · B: Cancel"
+            text: more.shot !== "" ? "A: Send · X: retake · B: Discard"
+                : Videos.reviewing ? "A: Send · X: watch again · B: Discard"
+                : Videos.recording ? "Let go of A to stop" : "B: Cancel"
             color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(14)
         }
+    }
+
+    // ------------------------------------------------------------- Saved media
+    SavedMedia {
+        id: savedMedia
+        z: 1
+        tour: more.tour
+        onSend: (photos, videos, hd) => {
+            if (photos.length) more.sendPictures(photos, hd)
+            if (videos.length) more.sendVideos(videos)
+        }
+        onBrowse: { savedMedia.close(); more.browseMedia() }
     }
 
     PollDialog {
@@ -575,11 +704,18 @@ Item {
         }
     }
 
+    // A let go of on the camera, straight from the controller (the page's handleRelease passes keys on too).
+    Connections {
+        target: Gamepad
+        enabled: more.camera
+        function onReleased(button) { if (button === "a") more.shutterRelease() }
+        function onLost(button) { if (button === "a") more.shutterCancel() }
+    }
     Connections {
         target: Videos
         function onChanged() { if (Videos.error !== "" && (more.camera || more.videoId !== "")) { Ui.say(Videos.error, true) } }
     }
     // A voice message from the Shared page stops when it closes.
     onSharedOpenChanged: if (!sharedOpen && Voice.playing !== "") Voice.stop()
-    Component.onDestruction: { Videos.stop(); if (camera) Videos.closeCamera() }
+    Component.onDestruction: { Videos.stop(); if (camera) Videos.closeCamera(); if (shot !== "") MediaFiles.shred(shot) }
 }

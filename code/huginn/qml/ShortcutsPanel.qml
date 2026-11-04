@@ -42,7 +42,7 @@ Item {
             [GlobalKeys.everywhere ? "Mute mic (also in a game)" : "Mute mic", GlobalKeys.muteName],
             [GlobalKeys.everywhere ? "Deafen (also in a game)" : "Deafen", GlobalKeys.deafenName],
             ["Leave (Huginn in front)", "Ctrl+Shift+H"],
-            [Settings.pushToTalk ? "Push to talk (Huginn in front)" : "Push to talk (Settings › Calls)", TalkKey.key !== 0 ? "hold " + TalkKey.keyName : TalkKey.hasKey ? "hold " + Gamepad.glyph(TalkKey.padButton) : "pick a key first"],
+            [Settings.pushToTalk ? "Push to talk (Huginn in front)" : "Push to talk (Settings › Calls › Voice rooms)", TalkKey.key !== 0 ? "hold " + TalkKey.keyName : TalkKey.hasKey ? "hold " + Gamepad.glyph(TalkKey.padButton) : "pick a key first"],
             ["In a call: mute", "Space"] ] },
          { title: "LOOK AND LOCK", keys: [
             ["Bigger", "Ctrl+="],

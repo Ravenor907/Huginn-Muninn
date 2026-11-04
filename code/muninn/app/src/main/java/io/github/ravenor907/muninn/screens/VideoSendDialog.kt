@@ -4,23 +4,19 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,14 +53,14 @@ internal fun pacedVideoLines(gm: Groups.GMsg, nameOf: (String) -> String): List<
     }
 }
 
-/** What the "Video from your phone" line says under its name (or why it's off). */
-internal fun pickedVideoDetail(): String =
-    if (UltraPrivacy.on) "Off while Ultra privacy is on" else "Full size close by, up to 20 seconds over the internet"
+/** What the "Video from your phone" line (or the Saved media note) says under its name. Ultra privacy: videos still go (Tor or the same Wi-Fi). */
+internal fun pickedVideoDetail(): String = GroupVideo.NOTE
 
 /**
  * Cap v3 (protocol.md 29): the "Video from your phone" picker for a chat. Returns what the Send sheet's line runs; the
- * picked video then opens [VideoSendDialog] here. Ultra privacy on: nothing opens, and it says why. The picked video and
- * its send live in VideoSend.jobs, so the sheet comes back as it was after a layout change, the lock or leaving the chat.
+ * picked video then opens [VideoSendDialog] here. Ultra privacy on: it still opens (1.42: videos go over Tor or the same
+ * Wi-Fi). The picked video and its send live in VideoSend.jobs, so the sheet comes back as it was after a layout change,
+ * the lock or leaving the chat.
  */
 @Composable
 internal fun rememberVideoPicker(app: Muninn, target: VideoSend.Target): () -> Unit {
@@ -76,7 +72,6 @@ internal fun rememberVideoPicker(app: Muninn, target: VideoSend.Target): () -> U
         when {
             // A send already on its way here: show it again rather than pick another.
             VideoSend.jobs.value[target]?.running == true -> VideoSend.hide(target, false)
-            UltraPrivacy.on -> Ui.say("Sending videos is off while Ultra privacy is on.", true)
             else -> try { Picking.launch(launcher, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
                 catch (_: Exception) { Ui.say("This phone has no video picker.", true) }
         }
@@ -84,44 +79,57 @@ internal fun rememberVideoPicker(app: Muninn, target: VideoSend.Target): () -> U
 }
 
 /**
- * A picked video, before it goes: what it is, who gets the full copy and who the smaller one, and for a video longer
- * than 20 seconds a choice: trim it (a slider picks which 20 seconds) or send it in full later, straight, to those who
- * can take it. Then the copies are made in Muninn's own scope (VideoSend.start) with their progress here; it can be
- * hidden meanwhile, and it closes once they're on their way. A send that failed shows why, with Try again.
+ * A picked video, before it goes (1.42: never cut). What it is and who gets which copy; then, when it's over 5 minutes
+ * and someone has no direct way, "Video too long" (Send as a file, or Cancel); when it's bigger than 720p and someone
+ * gets the 720p copy, "Shrink to 720p to send?" (Shrink, or Cancel). The copies are made in Muninn's own scope
+ * (VideoSend.start) with their progress here; it can be hidden meanwhile, and it closes once they're on their way. A
+ * send that failed shows why, with Try again.
  */
 @Composable
 internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, job: VideoSend.Job) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val me = app.identity.publicKey
     val uri = job.uri
     val key = uri.toString()
     var info by remember(key) { mutableStateOf<GroupVideo.Info?>(null) }
     var failed by remember(key) { mutableStateOf("") }
-    var start by rememberSaveable(key) { mutableIntStateOf(0) }
-    var inFull by rememberSaveable(key) { mutableStateOf(false) }
     var plan by remember(key) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var planned by remember(key) { mutableStateOf(false) }
     val working = job.working
     val progress = job.progress
     LaunchedEffect(key) {
         val i = withContext(Dispatchers.IO) { VideoPick.probe(context, uri) }
         if (i == null) failed = "That video can't be read." else info = i
     }
-    LaunchedEffect(info, inFull) {
-        if (info != null) plan = withContext(Dispatchers.IO) { VideoSend.plan(context, app.chat, target, me, inFull) }
+    LaunchedEffect(info) {
+        val i = info
+        if (i != null) { plan = withContext(Dispatchers.IO) { VideoSend.plan(context, app.chat, target, me, i.ms) }; planned = true }
     }
     val nameOf: (String) -> String = { k -> app.chat.nameOf(k) }
     val i = info
-    val length = i?.let { GroupVideo.length(it.ms) } ?: GroupVideo.SHORT
-    val clip = if (i != null && length != GroupVideo.SHORT && !inFull) GroupVideo.trim(i.ms, start) else null
     val close = { VideoSend.closed(target) }
+    val idle = !job.running && job.failed.isEmpty() && failed.isEmpty() && i != null && planned
+    val tooLong = idle && GroupVideo.tooLong(i!!.ms, plan)
+    val shrink = idle && !tooLong && GroupVideo.needsShrink(i!!, plan)
     val sendNow = {
         val v = info
-        if (v != null && !job.running) VideoSend.start(app, target, me, uri, v, clip, inFull)
+        if (v != null && !job.running) VideoSend.start(app, target, me, uri, v)
+    }
+    val asFile = {
+        VideoSend.closed(target, keepClip = true)
+        sendFileFrom(app, context, scope, if (target.group) "g:${target.g}" else target.peer, uri)
     }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { if (job.running) VideoSend.hide(target, true) else close() },
         containerColor = Palette.panel,
-        title = { Text("Send a video", style = Type.big) },
+        title = {
+            Text(when {
+                tooLong -> GroupVideo.TOO_LONG_TITLE
+                shrink -> GroupVideo.SHRINK_TITLE
+                else -> "Send a video"
+            }, style = Type.big)
+        },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 when {
@@ -132,29 +140,18 @@ internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, job: VideoSe
                         Text("You can hide this and keep using Muninn. It says when the video is on its way.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
                     }
                     job.failed.isNotEmpty() -> Text(job.failed, style = Type.normal.copy(color = Palette.danger))
-                    UltraPrivacy.on -> Text("Off while Ultra privacy is on. Videos you get still play.", style = Type.normal)
                     failed.isNotEmpty() -> Text(failed, style = Type.normal.copy(color = Palette.danger))
-                    i == null -> Text("Checking the video", style = Type.normal)
+                    i == null || !planned -> Text("Checking the video", style = Type.normal)
+                    tooLong -> {
+                        Text(GroupVideo.TOO_LONG_TEXT, style = Type.normal)
+                        Text("This one is ${GroupVideo.clock(i.ms)}. As a file it goes whole, close by, direct or over Tor.",
+                            style = Type.small.copy(color = Palette.textSoft), modifier = Modifier.padding(top = 8.dp))
+                    }
                     else -> {
+                        if (shrink) Text(GroupVideo.SHRINK_TEXT, style = Type.normal, modifier = Modifier.padding(bottom = 8.dp))
                         Text("${GroupVideo.clock(i.ms)} long", style = Type.normal)
-                        if (length != GroupVideo.SHORT) {
-                            Text(if (length == GroupVideo.LONG) "Over the internet, videos can be up to 20 seconds. Trim it, or send it in full later to those it can reach straight."
-                                else "Over the internet, videos can be up to 20 seconds. Trim it to send it here; longer videos can go as a File.",
-                                style = Type.small, modifier = Modifier.padding(top = 6.dp))
-                            if (!inFull) {
-                                val last = GroupVideo.lastStart(i.ms)
-                                val (s, e) = GroupVideo.trim(i.ms, start)
-                                val said = "From ${GroupVideo.clock(s)} to ${GroupVideo.clock(e)}"
-                                Text(said, style = Type.normal.copy(color = Palette.textSoft), modifier = Modifier.padding(top = 10.dp))
-                                Slider(value = start.toFloat(), onValueChange = { start = it.toInt().coerceIn(0, last) }, valueRange = 0f..last.toFloat().coerceAtLeast(1f),
-                                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Which 20 seconds, $said" },
-                                    colors = SliderDefaults.colors(thumbColor = Palette.accent, activeTrackColor = Palette.accent, inactiveTrackColor = Palette.track))
-                            }
-                            if (length == GroupVideo.LONG) Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-                                MButton(if (inFull) "Trim to 20 seconds instead" else "Send in full later, when direct", Modifier.fillMaxWidth()) { inFull = !inFull }
-                            }
-                        }
                         Text(GroupVideo.summary(plan, nameOf), style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                        if (UltraPrivacy.on) Text("Ultra privacy: videos send over Tor or on the same Wi-Fi.", style = Type.small, modifier = Modifier.padding(top = 6.dp))
                         Text("Sent without its location or camera details.", style = Type.small.copy(color = Palette.textSoft), modifier = Modifier.padding(top = 6.dp))
                     }
                 }
@@ -163,9 +160,11 @@ internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, job: VideoSe
         confirmButton = {
             when {
                 job.running -> MButton("Hide") { VideoSend.hide(target, true) }
-                job.failed.isNotEmpty() -> MButton("Try again", kind = Kind.Accent, enabled = !UltraPrivacy.on) { VideoSend.picked(target, uri) }
+                job.failed.isNotEmpty() -> MButton("Try again", kind = Kind.Accent) { VideoSend.picked(target, uri) }
+                tooLong -> MButton("Send as a file", kind = Kind.Accent) { asFile() }
+                shrink -> MButton("Shrink", kind = Kind.Accent) { sendNow() }
                 else -> {
-                    val ready = !UltraPrivacy.on && i != null && failed.isEmpty() && plan.values.any { it != GroupVideo.NONE }
+                    val ready = idle && plan.values.any { it != GroupVideo.NONE }
                     MButton("Send", kind = Kind.Accent, enabled = ready) { sendNow() }
                 }
             }

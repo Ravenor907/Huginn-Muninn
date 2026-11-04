@@ -204,13 +204,21 @@ bool withinFps(double fps, int most) { return fps <= most + 0.5; }
 bool fitsFull(const Info &i)
 {
     return i.plain && i.w > 0 && i.h > 0 && withinSize(i.w, i.h, kFullLong, kFullShort) && withinFps(i.fps, kFullFps) && i.bytes >= 1
-        && i.bytes <= kFullMaxBytes && i.ms >= 1 && i.ms <= kFullMaxMs + kSlackMs;
+        && i.bytes <= kFullMaxBytes && i.ms >= 1;
 }
 
 bool needsConvert(const Info &i)
 {
     return !(i.plain && withinSize(i.w, i.h, kFullLong, kFullShort) && withinFps(i.fps, kFullFps) && i.bytes >= 1 && i.bytes <= kFullMaxBytes);
 }
+
+bool fitsSmall(const Info &i)
+{
+    return i.plain && i.w > 0 && i.h > 0 && withinSize(i.w, i.h, kSmallLong, kSmallShort) && withinFps(i.fps, kFullFps) && i.bytes >= 1
+        && i.bytes <= kFullMaxBytes && i.ms >= 1 && i.ms <= kSmallMaxMs + kSlackMs;
+}
+
+bool biggerThan720(const Info &i) { return i.w > 0 && i.h > 0 && !withinSize(i.w, i.h, kSmallLong, kSmallShort); }
 
 bool fitsRelay(const Info &i)
 {
@@ -238,40 +246,56 @@ int retryBitrate(int was, qint64 gotBytes, int ms)
 int fullBitrate(int ms)
 {
     const double s = qMax(ms, 1000) / 1000.0;
-    const int most = int(double(kFullMaxBytes) * 8 * kRelayAim / s - kFullAudioBitrate);
-    return qMax(kMinVideoBitrate, qMin(kFullVideoBitrate, most));
+    const double most = double(kFullMaxBytes) * 8 * kRelayAim / s - kFullAudioBitrate;
+    return qMax(kMinVideoBitrate, most >= kFullVideoBitrate ? kFullVideoBitrate : int(most));
 }
 
 QString length(int ms)
 {
     if (ms <= kRelayMaxMs + kSlackMs)
         return QStringLiteral("short");
-    if (ms <= kFullMaxMs + kSlackMs)
+    if (ms <= kSmallMaxMs + kSlackMs)
         return QStringLiteral("long");
     return QStringLiteral("too long");
 }
 
 QString clock(int ms)
 {
-    const int s = (qMax(ms, 0) + 500) / 1000;
+    const int s = int((qint64(qMax(ms, 0)) + 500) / 1000);
+    if (s >= 3600)
+        return QStringLiteral("%1:%2:%3").arg(s / 3600).arg(s / 60 % 60, 2, 10, QLatin1Char('0')).arg(s % 60, 2, 10, QLatin1Char('0'));
     return QStringLiteral("%1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0'));
 }
 
 bool fullOk(const Member &m) { return m.files && m.v3 && !m.kid && !m.relayOnly; }
 
-QString delivery(const Member &m, bool unmetered)
+bool direct(const Member &m, bool unmetered) { return m.sameWifi || (m.trusted && unmetered); }
+
+QString delivery(const Member &m, bool unmetered, int ms)
 {
-    return fullOk(m) && (m.sameWifi || (m.trusted && unmetered)) ? QStringLiteral("full") : QStringLiteral("relay");
+    if (fullOk(m) && direct(m, unmetered) && (m.newPath || ms <= kOldFullMaxMs + kSlackMs))
+        return QStringLiteral("full");
+    if (m.newPath && m.v3)
+        return ms <= kSmallMaxMs + kSlackMs ? QStringLiteral("small") : QStringLiteral("none");
+    return ms <= kRelayMaxMs + kSlackMs ? QStringLiteral("relay") : QStringLiteral("none");
 }
 
-QString later(const Member &m) { return fullOk(m) && (m.sameWifi || m.trusted) ? QStringLiteral("full") : QStringLiteral("none"); }
-
-QHash<QString, QString> plan(const QList<Member> &members, bool unmetered, bool inFull)
+QHash<QString, QString> plan(const QList<Member> &members, bool unmetered, int ms)
 {
     QHash<QString, QString> out;
     for (const Member &m : members)
-        out.insert(m.k, inFull ? later(m) : delivery(m, unmetered));
+        out.insert(m.k, delivery(m, unmetered, ms));
     return out;
+}
+
+bool tooLong(int ms, const QHash<QString, QString> &plan)
+{
+    if (ms <= kSmallMaxMs + kSlackMs)
+        return false;
+    for (const QString &v : plan)
+        if (v != QLatin1String("full"))
+            return true;
+    return false;
 }
 
 QString names(const QStringList &n)
@@ -289,20 +313,22 @@ QString names(const QStringList &n)
 
 QString summary(const QHash<QString, QString> &plan, const std::function<QString(const QString &)> &nameOf)
 {
-    QStringList full, relay, none;
+    QStringList full, small, relay, none;
     QStringList keys = plan.keys();
     keys.sort();
     for (const QString &k : keys) {
         const QString how = plan.value(k);
-        (how == QLatin1String("full") ? full : how == QLatin1String("relay") ? relay : none) << nameOf(k);
+        (how == QLatin1String("full") ? full : how == QLatin1String("small") ? small : how == QLatin1String("relay") ? relay : none) << nameOf(k);
     }
     QStringList out;
     if (!full.isEmpty())
-        out << QStringLiteral("Full size (1080p) straight to %1.").arg(names(full));
+        out << QStringLiteral("Full size (1080p) to %1, close by or direct.").arg(names(full));
+    if (!small.isEmpty())
+        out << QStringLiteral("A 720p copy to %1 over Tor (slower).").arg(names(small));
     if (!relay.isEmpty())
-        out << QStringLiteral("A smaller copy (720p, up to 20 seconds) over the internet to %1.").arg(names(relay));
+        out << QStringLiteral("A smaller copy (720p, up to 20 seconds) to %1, whose app is older.").arg(names(relay));
     if (!none.isEmpty())
-        out << QStringLiteral("Not to %1: they need the same Wi-Fi or Direct calls and files with you, and the latest app.").arg(names(none));
+        out << QStringLiteral("Not to %1: their app is older. Ask them to update.").arg(names(none));
     return out.isEmpty() ? QStringLiteral("Nobody else is here yet.") : out.join(QLatin1Char(' '));
 }
 
@@ -329,7 +355,7 @@ bool vidOk(const QJsonValue &v)
     if (!v.isDouble())
         return false;
     const double d = v.toDouble();
-    return d == std::floor(d) && d >= 1 && d <= kFullMaxMs;
+    return d == std::floor(d) && d >= 1 && d <= kVidMaxMs;
 }
 
 // ------------------------------------------------------------------ location and camera details out (scrub)
@@ -675,7 +701,13 @@ bool selfTest()
     check(fitsFull(info(1920, 1080)) && fitsFull(info(1080, 1920)), "1080p either way up goes full size");
     check(!fitsFull(info(3840, 2160)) && needsConvert(info(3840, 2160)), "4K would need converting");
     check(!fitsFull(info(1920, 1080, 60)) && fitsFull(info(1920, 1080, 30.3)), "60 fps would need converting, 29.97 or 30.3 is fine");
-    check(!fitsFull(info(1920, 1080, 30, 10000, kFullMaxBytes + 1)) && !fitsFull(info(1920, 1080, 30, 61000)), "too big or too long for full size");
+    check(!fitsFull(info(1920, 1080, 30, 10000, kFullMaxBytes + 1)) && fitsFull(info(1920, 1080, 30, 30 * 60000, 900000000)),
+          "direct: no length cap, only the 4 GB transfer limit");
+    check(kFullMaxBytes == 4LL * 1024 * 1024 * 1024, "4 GB, as FileLink");
+    check(fitsSmall(info(1280, 720, 30, 5 * 60000)) && fitsSmall(info(720, 1280, 30, 5 * 60000 + 400)) && !fitsSmall(info(1280, 720, 30, 5 * 60000 + 1000))
+              && !fitsSmall(info(1920, 1080)) && !fitsSmall(info(1280, 720, 60)),
+          "the 720p copy: 720p30 up to 5 minutes as it is");
+    check(biggerThan720(info(1920, 1080)) && biggerThan720(info(1080, 1920)) && !biggerThan720(info(1280, 720)) && !biggerThan720(info(720, 1280)), "bigger than 720p");
     check(fitsRelay(info(1280, 720, 30, 10000, 2000000)) && !fitsRelay(info(1920, 1080, 30, 10000, 2000000)), "720p fits the relay copy, 1080p doesn't");
     check(!fitsRelay(info(1280, 720, 30, 25000, 2000000)) && !fitsRelay(info(1280, 720, 30, 10000, kRelayBytes + 1)), "the relay copy's length and size");
     check(kPiece == 16 * 1024 && kRelayPieces <= 200, "the relay copy fits every app since m2 (200 pieces)");
@@ -685,27 +717,47 @@ bool selfTest()
     check(relayBitrate(10000) > b20 && relayBitrate(2000) == kMaxRelayVideoBitrate && relayBitrate(600000) == kMinVideoBitrate, "bitrate bounds");
     check(relayBitrate(20000, 130) < b20 && relayBitrate(20000, kRelayPieces, 256000) < b20, "fewer pieces or more sound, less picture");
     check(retryBitrate(b20, kRelayBytes + 400000, 20000) <= int(b20 * kRetryShare), "a copy that ran over goes lower");
-    check(fullBitrate(20000) == kFullVideoBitrate && qint64(fullBitrate(60000) + kFullAudioBitrate) * 60 / 8 <= kFullMaxBytes, "full copy bitrate");
+    check(fullBitrate(20000) == kFullVideoBitrate && fullBitrate(3600000) == kFullVideoBitrate
+              && qint64(fullBitrate(60000) + kFullAudioBitrate) * 60 / 8 < 48LL * 1024 * 1024,
+          "full copy bitrate (a minute still arrives by itself on an older app)");
     // Lengths.
-    check(length(20400) == QLatin1String("short") && length(21000) == QLatin1String("long") && length(60000) == QLatin1String("long")
-              && length(61000) == QLatin1String("too long"), "lengths");
-    check(clock(65000) == QLatin1String("1:05") && clock(19600) == QLatin1String("0:20"), "clock");
-    // Who gets what.
-    Member wifi{QStringLiteral("a"), true, false, true, true};
-    Member trusted{QStringLiteral("b"), false, true, true, true};
-    Member away{QStringLiteral("c"), false, false, true, true};
-    Member old{QStringLiteral("d"), true, true, true, false};
-    Member kid{QStringLiteral("e"), true, true, true, true, true};
-    Member ultra{QStringLiteral("f"), true, true, true, true, false, true};
-    check(delivery(wifi, false) == QLatin1String("full") && delivery(trusted, true) == QLatin1String("full"), "full copy close by or trusted on Wi-Fi");
-    check(delivery(trusted, false) == QLatin1String("relay") && delivery(away, true) == QLatin1String("relay"), "relay copy over mobile data or far away");
-    check(delivery(old, true) == QLatin1String("relay") && delivery(kid, true) == QLatin1String("relay") && delivery(ultra, true) == QLatin1String("relay"),
-          "older apps, Kids' Devices and Ultra privacy get the relay copy");
-    check(later(trusted) == QLatin1String("full") && later(away) == QLatin1String("none") && later(kid) == QLatin1String("none"), "in full later");
-    const QHash<QString, QString> p = plan({wifi, trusted, away}, false, false);
-    check(p.value(QStringLiteral("a")) == QLatin1String("full") && p.value(QStringLiteral("b")) == QLatin1String("relay") && p.size() == 3, "plan");
+    check(length(20400) == QLatin1String("short") && length(61000) == QLatin1String("long") && length(5 * 60000) == QLatin1String("long")
+              && length(5 * 60000 + 1000) == QLatin1String("too long"), "lengths");
+    check(clock(65000) == QLatin1String("1:05") && clock(19600) == QLatin1String("0:20") && clock(3725000) == QLatin1String("1:02:05"), "clock");
+    check(QLatin1String(kTooLongText) == QLatin1String("Videos over the internet can be up to 5 minutes."), "the too long wording");
+    // Who gets what (the same cases as GroupVideoTest.deliveryChoice).
+    auto mem = [](const char *k, bool wifi, bool trusted, bool newPath, bool kid = false, bool v3 = true) {
+        Member m;
+        m.k = QString::fromLatin1(k);
+        m.sameWifi = wifi; m.trusted = trusted; m.files = true; m.v3 = v3; m.kid = kid; m.newPath = newPath;
+        return m;
+    };
+    const int min = 60000;
+    const Member wifi = mem("a", true, false, true), trusted = mem("b", false, true, true), far = mem("c", false, false, true);
+    const Member kid = mem("e", true, true, true, true), oldNear = mem("d", true, true, false), oldFar = mem("h", false, false, false);
+    const Member noV3 = mem("g", true, true, false, false, false);
+    check(delivery(wifi, false, 10000) == QLatin1String("full") && delivery(wifi, false, 45 * min) == QLatin1String("full")
+              && delivery(trusted, true, 45 * min) == QLatin1String("full"),
+          "direct: full size, any length");
+    check(delivery(trusted, false, 10000) == QLatin1String("small") && delivery(far, true, 5 * min) == QLatin1String("small")
+              && delivery(far, true, 6 * min) == QLatin1String("none"),
+          "not direct: the 720p copy up to 5 minutes");
+    check(delivery(kid, true, 10000) == QLatin1String("small"), "a kids' device gets the 720p path");
+    check(delivery(oldNear, true, min) == QLatin1String("full") && delivery(oldNear, true, 2 * min) == QLatin1String("none")
+              && delivery(oldFar, true, 20000) == QLatin1String("relay") && delivery(oldFar, true, 30000) == QLatin1String("none")
+              && delivery(noV3, true, 10000) == QLatin1String("relay"),
+          "older apps: a minute direct, 20 seconds by relay");
+    const QHash<QString, QString> p = plan({wifi, trusted, far, oldFar}, false, 15000);
+    check(p.value(QStringLiteral("a")) == QLatin1String("full") && p.value(QStringLiteral("b")) == QLatin1String("small")
+              && p.value(QStringLiteral("c")) == QLatin1String("small") && p.value(QStringLiteral("h")) == QLatin1String("relay") && p.size() == 4,
+          "plan: each member their best path");
     const QString said = summary(p, [](const QString &k) { return k.toUpper(); });
-    check(said.contains(QLatin1String("straight to A")) && said.contains(QLatin1String("internet to B and C")), "summary");
+    check(said.contains(QLatin1String("Full size (1080p) to A")) && said.contains(QLatin1String("720p copy to B and C over Tor"))
+              && said.contains(QLatin1String("to H, whose app is older")),
+          "summary");
+    check(tooLong(6 * min, plan({wifi, far}, true, 6 * min)) && !tooLong(6 * min, plan({wifi, trusted}, true, 6 * min))
+              && !tooLong(5 * min, plan({far}, true, 5 * min)),
+          "too long only when someone isn't direct");
     check(names({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D"), QStringLiteral("E")}) == QLatin1String("A, B and 3 more"), "names");
     // Pacing.
     Pacer pacer(3);
@@ -723,8 +775,10 @@ bool selfTest()
     check(paceMs(kRelayPieces * 6) < 15 * 60000, "six members inside the 15 minutes half a video is kept");
     check(isRateLimit(QStringLiteral("rate-limited: slow down")) && !isRateLimit(QStringLiteral("blocked: no")), "rate-limited answers");
     // The offer field.
-    check(vidOk(QJsonValue(QJsonValue::Undefined)) && vidOk(QJsonValue(15000)) && vidOk(QJsonValue(60000)), "vid ok");
-    check(!vidOk(QJsonValue(0)) && !vidOk(QJsonValue(60001)) && !vidOk(QJsonValue(1.5)) && !vidOk(QJsonValue(QStringLiteral("15000"))), "vid refused");
+    check(vidOk(QJsonValue(QJsonValue::Undefined)) && vidOk(QJsonValue(15000)) && vidOk(QJsonValue(60000)) && vidOk(QJsonValue(45 * 60000))
+              && vidOk(QJsonValue(kVidMaxMs)),
+          "vid ok");
+    check(!vidOk(QJsonValue(0)) && !vidOk(QJsonValue(double(kVidMaxMs) + 1)) && !vidOk(QJsonValue(1.5)) && !vidOk(QJsonValue(QStringLiteral("15000"))), "vid refused");
     // An MP4's own boxes: the video track (after a sound track), its size, frames a second and length.
     const Info probed = probe(sample(1920, 1080, 300, 10000));
     check(probed.w == 1920 && probed.h == 1080 && probed.ms == 10000 && std::abs(probed.fps - 30.0) < 0.01, "an MP4's size, rate and length");

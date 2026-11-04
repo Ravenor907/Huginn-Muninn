@@ -29,6 +29,8 @@
 #include <QPointer>
 #include <QUrl>
 #include <QtEndian>
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #ifdef HUGINN_HAVE_QTSPEECH
@@ -223,7 +225,8 @@ public:
             if (clean.isEmpty())
                 continue;
             const QByteArray utf8 = clean.toUtf8();
-            const SherpaOnnxGeneratedAudio *a = m_generate(m_tts, utf8.constData(), 0, 1.0f);
+            // The speed picked (read for each piece, so a move of the slider is heard in the next one).
+            const SherpaOnnxGeneratedAudio *a = m_generate(m_tts, utf8.constData(), 0, ReadAloud::engineSpeed(to->m_speedNow.load()));
             if (!a)
                 continue;
             const QByteArray wav = (a->n > 0 && a->sample_rate > 0) ? wavOf(a->samples, a->n, a->sample_rate) : QByteArray();
@@ -409,7 +412,10 @@ ReadAloud::ReadAloud(QObject *parent)
         Settings::store().setValue(QStringLiteral("readAloud/cutShort"), n);
     }
     m_engineBroken = Settings::store().value(QStringLiteral("readAloud/cutShort"), 0).toInt() >= 2;
-    if (m_engineBroken)
+    m_speedNow.store(speed());
+    if (useDevice())
+        m_status = QStringLiteral("The computer's own voice reads");
+    else if (m_engineBroken)
         m_status = QStringLiteral("The natural voice closed Huginn twice, so the computer's own voice reads. Delete voices to try it again");
     else if (ready())
         m_status = QStringLiteral("Ready");
@@ -436,12 +442,91 @@ ReadAloud::~ReadAloud()
 
 bool ReadAloud::natural() const
 {
-    return m_engineThere && !m_engineBroken && (ready() || m_hashes.contains(fileFor(voice())));
+    return m_engineThere && !m_engineBroken && (ready() || m_hashes.contains(fileFor(naturalVoice())));
 }
 
 bool ReadAloud::available() const
 {
-    return natural() || deviceCan();
+    if (!isOn())
+        return false;
+    return (natural() && !useDevice()) || deviceCan();
+}
+
+bool ReadAloud::isOn() const { return Settings::store().value(QStringLiteral("readAloud/on"), true).toBool(); }
+
+void ReadAloud::setOn(bool on)
+{
+    if (on == isOn())
+        return;
+    Settings::store().setValue(QStringLiteral("readAloud/on"), on);
+    if (!on)
+        stop();
+    Q_EMIT changed();
+}
+
+bool ReadAloud::useDevice() const
+{
+    return Settings::store().value(QStringLiteral("readAloud/voice"), QStringLiteral("f")).toString() == QLatin1String("d");
+}
+
+double ReadAloud::speedOf(double pct)
+{
+    if (std::isnan(pct) || std::isinf(pct))
+        return kSpeedDefault;
+    return std::clamp(pct, kSpeedMin, kSpeedMax);
+}
+
+QString ReadAloud::speedText(double pct) { return QString::number(qRound(speedOf(pct))) + QLatin1Char('%'); }
+float ReadAloud::engineSpeed(double pct) { return float(speedOf(pct) / 100.0); }
+double ReadAloud::qtRate(double pct) { return (speedOf(pct) - 100.0) / 50.0; }
+
+double ReadAloud::speed() const
+{
+    // A float, or an int saved by a test build; nothing saved (an existing user) reads 80.
+    bool ok = false;
+    const double v = Settings::store().value(QStringLiteral("readAloud/speed"), kSpeedDefault).toDouble(&ok);
+    return ok ? speedOf(v) : kSpeedDefault;
+}
+
+void ReadAloud::setSpeed(double pct)
+{
+    const double v = speedOf(pct);
+    Settings::store().setValue(QStringLiteral("readAloud/speed"), v);
+    m_speedNow.store(v);
+    applyDeviceRate();
+    Q_EMIT speedChanged();
+    Q_EMIT changed();
+}
+
+void ReadAloud::previewSpeed(double pct)
+{
+    m_speedNow.store(speedOf(pct));
+    applyDeviceRate();
+}
+
+void ReadAloud::applyDeviceRate()
+{
+#ifdef HUGINN_HAVE_QTSPEECH
+    if (m_device)
+        m_device->setRate(qtRate(m_speedNow.load()));
+#endif
+}
+
+void ReadAloud::sample()
+{
+    speak(QStringLiteral("This is how your messages sound when they're read aloud."));
+}
+
+QString ReadAloud::summary() const
+{
+    if (!isOn())
+        return QStringLiteral("Off");
+    const QString name = useDevice() || !natural() ? QStringLiteral("Device")
+        : naturalVoice() == QLatin1String("m") ? QStringLiteral("Male") : QStringLiteral("Female");
+    const QString pace = speedText(speed());
+    if (name != QLatin1String("Device") && ready() && pace == QLatin1String("80%"))
+        return name + QStringLiteral(" voice, ready");
+    return name + QStringLiteral(" voice, ") + pace;
 }
 
 bool ReadAloud::deviceCan() const
@@ -469,15 +554,20 @@ void ReadAloud::recoverUnpacked()
     }
 }
 
-QString ReadAloud::voice() const
+QString ReadAloud::naturalVoice() const
 {
     return Settings::store().value(QStringLiteral("readAloud/voice"), QStringLiteral("f")).toString() == QLatin1String("m")
         ? QStringLiteral("m") : QStringLiteral("f");
 }
 
+QString ReadAloud::voice() const
+{
+    return useDevice() ? QStringLiteral("d") : naturalVoice();
+}
+
 void ReadAloud::setVoice(const QString &v)
 {
-    const QString pick = v == QLatin1String("m") ? QStringLiteral("m") : QStringLiteral("f");
+    const QString pick = v == QLatin1String("m") ? QStringLiteral("m") : v == QLatin1String("d") ? QStringLiteral("d") : QStringLiteral("f");
     if (pick == voice())
         return;
     Settings::store().setValue(QStringLiteral("readAloud/voice"), pick);
@@ -486,7 +576,10 @@ void ReadAloud::setVoice(const QString &v)
     m_downloading.clear();
     if (m_reply)
         m_reply->abort();
-    if (ready()) {
+    if (useDevice()) {
+        // The computer's own voice: nothing downloads (the voice kept stays until Delete voices).
+        setStatus(QStringLiteral("The computer's own voice reads"));
+    } else if (ready()) {
         setStatus(QStringLiteral("Ready"));
         cleanOther();
     } else if (!natural()) {
@@ -517,7 +610,7 @@ QString ReadAloud::voiceDir(const QString &v) const { return voicesDir() + QLati
 
 bool ReadAloud::ready() const
 {
-    const QString d = voiceDir(voice());
+    const QString d = voiceDir(naturalVoice());
     return QFileInfo::exists(d + QStringLiteral("/model.onnx")) && QFileInfo::exists(d + QStringLiteral("/tokens.txt"))
         && QFileInfo::exists(d + QStringLiteral("/espeak-ng-data/phontab"));
 }
@@ -550,7 +643,7 @@ void ReadAloud::speak(const QString &text)
     bool engineReads = false;
     for (const QString &p : parts)
         engineReads = engineReads || !forEngine(p).isEmpty();
-    if (natural() && ready() && !m_deleting && engineReads) {
+    if (!useDevice() && natural() && ready() && !m_deleting && engineReads) {
         const quint64 token = m_token->load();
         if (!m_thread) {
             m_thread = new QThread(this);
@@ -563,13 +656,14 @@ void ReadAloud::speak(const QString &text)
         m_speaking = true;
         m_pending = 1;
         Q_EMIT changed();
-        const QString dir = voiceDir(voice());
+        const QString dir = voiceDir(naturalVoice());
         VoiceEngine *engine = m_engine;
         QMetaObject::invokeMethod(engine, [engine, token, dir, parts, this] { engine->say(token, dir, parts, this); }, Qt::QueuedConnection);
         return;
     }
     // Not ready yet: the download starts (on the network rules), and the computer's own voice reads meanwhile.
-    prepare();
+    if (!useDevice())
+        prepare();
     speakDevice(parts);
 }
 
@@ -581,6 +675,7 @@ void ReadAloud::speakDevice(const QStringList &parts)
     if (m_device && m_deviceOk) {
         m_speaking = true;
         Q_EMIT changed();
+        applyDeviceRate();
         m_device->say(parts.join(QLatin1Char(' ')));
         return;
     }
@@ -742,6 +837,10 @@ bool ReadAloud::meteredNow() const
 
 void ReadAloud::prepare()
 {
+    if (useDevice()) {
+        setStatus(QStringLiteral("The computer's own voice reads"));
+        return;
+    }
     if (ready() || m_reply)
         return;
     if (!natural()) {
@@ -749,7 +848,7 @@ void ReadAloud::prepare()
         setStatus(m_engineBroken ? m_status : notReadyYet(deviceCan()));
         return;
     }
-    m_downloading = voice();
+    m_downloading = naturalVoice();
     startDownload();
 }
 
@@ -958,7 +1057,7 @@ void ReadAloud::cleanOther()
     releaseEngine([this] {
         // Only the chosen voice is kept: the other one (and any leftovers) go once this one is in. A download under
         // way (its part and its unpack folder) stays.
-        const QString keep = folderFor(voice());
+        const QString keep = folderFor(naturalVoice());
         const QDir d(voicesDir());
         for (const QString &e : d.entryList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
             if (e == keep || (!m_downloading.isEmpty() && (e.startsWith(fileFor(m_downloading)) || e.startsWith(folderFor(m_downloading)))))
@@ -993,7 +1092,8 @@ void ReadAloud::deleteVoices()
         Settings::store().setValue(QStringLiteral("readAloud/cutShort"), 0);
         m_engineBroken = false;
         m_failures = 0;
-        setStatus(natural() ? QStringLiteral("Deleted. Downloads again the next time something is read aloud") : notReadyYet(deviceCan()));
+        setStatus(useDevice() ? QStringLiteral("The computer's own voice reads")
+                  : natural() ? QStringLiteral("Deleted. Downloads again the next time something is read aloud") : notReadyYet(deviceCan()));
         Q_EMIT changed();
     });
 }
@@ -1314,6 +1414,11 @@ bool ReadAloud::selfTest()
     for (const QString &x : pieces(QString(1000, QLatin1Char('x'))))
         short_ = short_ && x.size() <= kMaxPiece;
     check("no piece over the limit", short_);
+    // The speed, the same as Muninn's ReadAloudTest.speedRules: 50 to 150, 80 until moved, Qt's rate -1 to 1.
+    check("speed held to 50 to 150", speedOf(10) == 50.0 && speedOf(400) == 150.0 && speedOf(83.4) == 83.4 && speedOf(std::nan("")) == 80.0);
+    check("speed shown rounded", speedText(83.4) == QLatin1String("83%") && speedText(83.6) == QLatin1String("84%") && speedText(kSpeedDefault) == QLatin1String("80%"));
+    check("engine speed", std::abs(engineSpeed(80) - 0.8f) < 1e-6f && std::abs(engineSpeed(150) - 1.5f) < 1e-6f);
+    check("Qt rate", std::abs(qtRate(50) + 1.0) < 1e-9 && std::abs(qtRate(100)) < 1e-9 && std::abs(qtRate(150) - 1.0) < 1e-9 && std::abs(qtRate(80) + 0.4) < 1e-9);
     // code/shared/voices.sha256.
     const QString a64 = QString(64, QLatin1Char('a'));
     const QHash<QString, QString> h = hashes(QStringLiteral("# comment\n%1  voice-female-1.tar\nnothex  voice-male-1.tar\n%2 one-space.tar\n")

@@ -17,8 +17,9 @@ import java.net.URI
  * update checks and downloads, and the voices someone else may download) goes through Tor, built into Muninn
  * ([TorRunner]), as SOCKS5 with the names looked up by Tor, never here. Anything that would still show the address is
  * off, each with [OFF_NOTE]: calls (Tor can't carry a call's sound, and the call relay would see the address, see
- * [CALLS_OFF]), direct files and photos, sending videos (receiving still works), link previews and GIF search. Nearby and
- * the same Wi-Fi stay available: they stay on the Wi-Fi the phone is on.
+ * [CALLS_OFF]), direct files and photos straight over the internet, link previews and GIF search. Nearby and the same
+ * Wi-Fi stay available: they stay on the Wi-Fi the phone is on. 1.42 (owner, 2026-11-04): sending saved and recorded
+ * videos is allowed again, over Tor or the same Wi-Fi only ([VIDEOS_AND_CALLS]); calls stay off.
  *
  * Fails closed: on, with Tor not ready yet, every connection is sent to a port where nothing listens, so it fails
  * instead of going out the normal way. The rules here are pure, so they're tested off the phone (UltraPrivacyTest).
@@ -26,8 +27,13 @@ import java.net.URI
 object UltraPrivacy {
     /** What every feature that's off says. */
     const val OFF_NOTE = "Off while Ultra privacy is on"
-    /** What a video send says while it's on (videos are too big to send through Tor). */
+    /**
+     * What a video send said while it was on, before 1.42. Videos now go over Tor or the same Wi-Fi, so nothing says this
+     * any more; kept for the callers that still check [videoSendAllowed] (always true).
+     */
     const val VIDEO_OFF = "Sending videos: $OFF_NOTE. You can still receive them."
+    /** Owner wording (1.42): what every Ultra explain, warning and first-setup text says about videos and calls. */
+    const val VIDEOS_AND_CALLS = "Videos send over Tor. Calls are off."
     /** Said under Nearby and the same Wi-Fi, which stay on. */
     const val NEARBY_NOTE = "Still on with Ultra privacy: Nearby and the same Wi-Fi. They stay on this Wi-Fi, so on a public Wi-Fi others there can see Nearby."
     /** Owner decision (round 19): calls are off while it's on, both ways. What a call that can't start says. */
@@ -117,8 +123,11 @@ object UltraPrivacy {
     val directAllowed: Boolean get() = !enabled
     /** Calls and voice rooms, in and out (owner decision, round 19): off while it's on. */
     val callsAllowed: Boolean get() = !enabled
-    /** Sending videos (video messages, group videos, video files). Receiving still works. */
-    val videoSendAllowed: Boolean get() = !enabled
+    /**
+     * Sending videos (video messages, picked videos, video files). 1.42: allowed again while it's on, over Tor or the same
+     * Wi-Fi only: [directAllowed] keeps them off the straight internet path, and FileLink and the relays go through Tor.
+     */
+    val videoSendAllowed: Boolean get() = true
     /** Link previews (the site would see the address). */
     val previewsAllowed: Boolean get() = !enabled
     /** GIF search (the keyboard's search reaches the internet outside Muninn). */
@@ -129,11 +138,19 @@ object UltraPrivacy {
     /** [name] is a video file (by its ending). */
     fun isVideoName(name: String): Boolean = name.substringAfterLast('.', "").lowercase() in VIDEO_EXT
 
-    /** A file that may not be sent now: a video while Ultra privacy is on. */
-    fun blocksFile(name: String, mime: String = ""): Boolean = enabled && (isVideoName(name) || mime.lowercase().startsWith("video/"))
+    /**
+     * A file that may not be sent now. Before 1.42 a video was blocked while Ultra privacy was on; videos now go over Tor or
+     * the same Wi-Fi, so nothing is blocked here. Kept for its callers.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun blocksFile(name: String, mime: String = ""): Boolean = false
 
-    /** The same for a file on disk: by its name, or by its first bytes (a video renamed .bin still goes nowhere). */
-    fun blocksFile(file: java.io.File, name: String): Boolean = enabled && (isVideoName(name) || looksLikeVideo(head(file)))
+    /** The same for a file on disk (nothing is blocked since 1.42). [isVideo] still tells a video by its first bytes. */
+    @Suppress("UNUSED_PARAMETER")
+    fun blocksFile(file: java.io.File, name: String): Boolean = false
+
+    /** [file] is a video, by its name or its first bytes (a video renamed .bin too). */
+    fun isVideo(file: java.io.File, name: String): Boolean = isVideoName(name) || looksLikeVideo(head(file))
 
     private fun head(file: java.io.File): ByteArray = try {
         file.inputStream().use { s -> val b = ByteArray(64); var n = 0
@@ -251,7 +268,8 @@ object UltraPrivacy {
     val WHAT_IT_DOES = listOf(
         "Hides your internet address from the relays, from GitHub and from everyone you message.",
         "Messages, update checks and downloads go through Tor, a volunteer network that hides where they come from.",
-        "Calls are off while it's on: Tor can't carry a call, and the call relay would see your address.",
+        VIDEOS_AND_CALLS,
+        "Tor adds too much delay for a call, and the call relay would see your address.",
         "Anything that would still show your address is turned off while it's on.",
         "Nearby and the same Wi-Fi keep working: they stay on this Wi-Fi.",
     )
@@ -259,9 +277,9 @@ object UltraPrivacy {
     /** Every downside, the second screen, before Confirm. */
     val DOWNSIDES = listOf(
         "Messages are slower, and may arrive much later while your phone is idle.",
-        "Calls are off, both ways, because the call relay sees your address. Calls to you show as missed.",
-        "Direct file and photo transfers are off.",
-        "Sending videos is off. You can still receive them.",
+        VIDEOS_AND_CALLS,
+        "Calls are off, both ways, because Tor adds too much delay and the call relay sees your address. Calls to you show as missed.",
+        "Direct transfers straight over the internet are off: videos and files go over Tor (slower) or on the same Wi-Fi.",
         "Link previews and GIF search are off.",
         "Update checks and downloads are slower.",
         "Uses more battery.",
@@ -279,6 +297,6 @@ object UltraPrivacy {
         "Photos are sent without their location or camera details.",
         "No phone number, no account.",
     )
-    const val SETUP_ULTRA = "Want more? Ultra privacy hides your internet address too, using Tor. It's in Settings › Privacy and lock, " +
-        "off until you turn it on. It has a few trade-offs, explained before you turn it on."
+    const val SETUP_ULTRA = "Want more? Ultra privacy hides your internet address too, using Tor. $VIDEOS_AND_CALLS " +
+        "It's in Settings › Privacy and lock, off until you turn it on. It has a few trade-offs, explained before you turn it on."
 }

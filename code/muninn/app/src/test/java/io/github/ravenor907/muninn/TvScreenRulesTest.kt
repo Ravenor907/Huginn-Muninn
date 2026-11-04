@@ -55,9 +55,10 @@ class TvScreenRulesTest {
 
     @Test
     fun theParentMenuHasEveryPartOnceWithDisconnectLast() {
-        // One page per Kids' Device (settings plan 2.10): its parts, then More with the rarely used ones, Disconnect last.
+        // One page per Kids' Device (settings plan 2.10): its parts by how often a parent uses them (consolidation 2.18),
+        // then More with the rarely used ones, Disconnect last.
         val ids = ParentTvMenu.items.map { it.first }
-        assertEquals(listOf("people", "parents", "chatting", "sound", "quick", "quiet", "lock", "havamal", "look", "apps", "updates", "more"), ids)
+        assertEquals(listOf("people", "chatting", "sound", "quick", "quiet", "apps", "look", "havamal", "parents", "lock", "updates", "more"), ids)
         assertEquals(listOf("names", "keep", "permissions", "storage", "disconnect"), ParentTvMenu.more.map { it.first })
         val all = ids + ParentTvMenu.more.map { it.first }
         assertEquals(all.distinct(), all)
@@ -70,6 +71,9 @@ class TvScreenRulesTest {
         assertEquals("Messages stay for", ParentTvMenu.label("keep"))
         assertEquals("Disconnect", ParentTvMenu.label("disconnect"))
         assertEquals("Device permissions", ParentTvMenu.label("permissions"))
+        // Read aloud opens from inside Look, with the same name as on a phone (consolidation 2.11).
+        assertEquals("Read aloud", ParentTvMenu.label("aloud"))
+        assertFalse("aloud" in all)
         // The TV's chat menu opens the page itself with an id the page doesn't know.
         assertNull(ParentTvMenu.label("page"))
         assertNull(ParentTvMenu.label("nope"))

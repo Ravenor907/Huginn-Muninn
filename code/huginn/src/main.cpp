@@ -63,6 +63,7 @@
 #include "trust.h"
 #include "profile.h"
 #include "ring.h"
+#include "savedmedia.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -360,7 +361,9 @@ int main(int argc, char *argv[])
         const bool i = DailyVerse::selfTest();
         // Ultra privacy (1.42): the switch gates each feature, Tor's proxy goes on the sockets, names go to Tor.
         const bool ultra = UltraPrivacy::selfTest();
-        return selfTested(a && b && c && d && e && f && g && h && i && ultra);
+        // Saved media (1.42): the picker's list and its limits.
+        const bool sm = SavedMedia::selfTest();
+        return selfTested(a && b && c && d && e && f && g && h && i && ultra && sm);
     }
 
     // Said on screen when Huginn can't keep its data where it is (Windows: a folder it can't write, like Program

@@ -773,7 +773,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         _finished.value = null
         _transfer.value = Transfer(true, false, "Receiving from $alias…", 0, total, System.currentTimeMillis(),
             files = map.values.map { it.toItem() }, id = UUID.randomUUID().toString(), peer = alias)
-        NearbyService.hold(context, true)
+        TransferHold.acquire(context, "nearby-in", "Transferring files")
         val tokens = JSONObject().apply { map.forEach { (k, f) -> put(k, f.token) } }
         reply(out, 200, JSONObject().put("sessionId", sess.id).put("files", tokens).toString())
     }
@@ -880,7 +880,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         finishedId = _transfer.value.id
         _transfer.value = Transfer()
         _finished.value = ok to message
-        NearbyService.hold(context, false)
+        TransferHold.release(context, "nearby-in")
         messages.tryEmit(ok to message)
     }
 
@@ -931,7 +931,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                     files = list.map { Item(it.name, "Waiting", 0f, false, sent = true) }, id = newId, preparing = true, peer = dev.alias)
             }
         }
-        NearbyService.hold(context, true)
+        TransferHold.acquire(context, "nearby-out", "Transferring files")
         // Over HTTPS, every request checks the device's certificate against the fingerprint it announced.
         val expected = if (dev.protocol == "https") dev.id else null
         pool.execute {
@@ -1050,7 +1050,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         _transfer.value = Transfer()
         if (ok != null) _finished.value = ok to msg
         sendConn = null
-        NearbyService.hold(context, false)
+        TransferHold.release(context, "nearby-out")
         if (ok != null) messages.tryEmit(ok to msg)
     }
 

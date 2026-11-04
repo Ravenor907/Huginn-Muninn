@@ -130,14 +130,10 @@ bool UltraPrivacy::looksLikeVideo(const QByteArray &h)
     return false;
 }
 
-bool UltraPrivacy::blocksPath(const QString &path)
+bool UltraPrivacy::blocksPath(const QString &)
 {
-    if (!on())
-        return false;
-    if (isVideoName(path))
-        return true;
-    QFile f(path);
-    return f.open(QIODevice::ReadOnly) && looksLikeVideo(f.read(64));
+    // 1.42: videos go over Tor or on the same Wi-Fi under Ultra privacy too; nothing is held back.
+    return false;
 }
 
 bool UltraPrivacy::isVideoName(const QString &name)
@@ -206,7 +202,8 @@ QString UltraPrivacy::whatItDoes() const
 {
     return bullets({QStringLiteral("Hides your internet address from the relays, from GitHub and from everyone you message."),
                     QStringLiteral("Messages, update checks and downloads go through Tor, a volunteer network that hides where they come from."),
-                    QStringLiteral("Calls are off while it's on: Tor can't carry a call, and the call relay would see your address."),
+                    QStringLiteral("Videos send over Tor. Calls are off."),
+                    QStringLiteral("Tor adds too much delay for a call, and the call relay would see your address."),
                     QStringLiteral("Anything that would still show your address is turned off while it's on."),
                     QStringLiteral("Nearby and the same Wi-Fi keep working: they stay on this Wi-Fi.")});
 }
@@ -215,9 +212,9 @@ QString UltraPrivacy::downsides() const
 {
     return QStringLiteral("Ultra privacy has these downsides:\n")
         + bullets({QStringLiteral("Messages are slower, and may arrive much later while your computer sleeps."),
-                   QStringLiteral("Calls are off, both ways, because the call relay would see your address. Calls to you show as missed."),
-                   QStringLiteral("Direct file and photo transfers are off. Big files wait until you're on the same Wi-Fi."),
-                   QStringLiteral("Sending videos is off. You can still receive them."),
+                   QStringLiteral("Videos send over Tor. Calls are off."),
+                   QStringLiteral("Calls are off, both ways, because Tor adds too much delay and the call relay sees your address. Calls to you show as missed."),
+                   QStringLiteral("Direct transfers straight over the internet are off: videos and files go over Tor (slower) or on the same Wi-Fi."),
                    QStringLiteral("Link previews and GIF search are off."),
                    QStringLiteral("Update checks and downloads are slower."),
                    QStringLiteral("Uses more power."),
@@ -237,8 +234,8 @@ QString UltraPrivacy::setupText() const
 
 QString UltraPrivacy::setupUltra() const
 {
-    return QStringLiteral("Want more? Ultra privacy hides your internet address too, using Tor. It's in Settings › Privacy and lock, "
-                          "off until you turn it on. It has a few trade-offs, explained before you turn it on.");
+    return QStringLiteral("Want more? Ultra privacy hides your internet address too, using Tor. Videos send over Tor. Calls are off. It's in "
+                          "Settings › Privacy and lock, off until you turn it on. It has a few trade-offs, explained before you turn it on.");
 }
 
 // ------------------------------------------------------------------ the switch
@@ -272,8 +269,47 @@ void UltraPrivacy::turnOff()
         s.setValue(QLatin1String(kKey), false);
         s.sync();
     }
-    stopTor();
+    // A file still needs Tor (cap f4): it keeps running until that one is done, but nothing else goes through it.
+    if (m_demand.isEmpty())
+        stopTor();
     use(false);
+}
+
+void UltraPrivacy::needTor(const QString &tag)
+{
+    UltraPrivacy *u = s_instance;
+    if (!u || tag.isEmpty())
+        return;
+    if (u->m_demand.isEmpty())
+        u->m_filesFailed = false;
+    u->m_demand.insert(tag);
+    if (!u->m_proc) {
+        if (!u->on())
+            u->m_retries = 0;
+        u->startTor();
+    } else if (u->m_filesPort > 0) {
+        Q_EMIT u->filesTorChanged();
+    }
+}
+
+void UltraPrivacy::releaseTor(const QString &tag)
+{
+    UltraPrivacy *u = s_instance;
+    if (!u || !u->m_demand.remove(tag))
+        return;
+    if (!u->wanted())
+        u->stopTor();
+}
+
+int UltraPrivacy::filesPort() { return s_instance ? s_instance->m_filesPort : 0; }
+bool UltraPrivacy::filesFailed() { return s_instance && s_instance->m_filesFailed; }
+
+void UltraPrivacy::setFilesPort(int p)
+{
+    if (p == m_filesPort)
+        return;
+    m_filesPort = p;
+    Q_EMIT filesTorChanged();
 }
 
 void UltraPrivacy::stopNow()
@@ -492,7 +528,7 @@ void UltraPrivacy::startTor()
         proc->deleteLater();
         torLost();
     });
-    if (m_tor != Tor::Starting)
+    if (on() && m_tor != Tor::Starting)
         setTor(Tor::Starting);
     m_proc->start();
 
@@ -514,8 +550,15 @@ void UltraPrivacy::torLost()
     }
     m_authed = false;
     m_password.clear();
-    if (!on())
+    m_filesPort = 0;
+    if (!on()) {
+        // Started on demand for a file: it says so (the file's card), and isn't started again by itself.
+        if (!m_demand.isEmpty()) {
+            m_filesFailed = true;
+            Q_EMIT filesTorChanged();
+        }
         return;
+    }
     s_port.store(0);
     setTor(Tor::Missing);
     Q_EMIT redial();
@@ -537,6 +580,10 @@ void UltraPrivacy::notOurs()
     stopTor();
     m_retries = int(std::size(kRetryMs));   // never by itself: the banner's Try again
     s_port.store(0);
+    m_filesFailed = true;
+    Q_EMIT filesTorChanged();
+    if (!on())
+        return;
     setTor(Tor::Missing);
     Q_EMIT redial();
 }
@@ -556,6 +603,7 @@ void UltraPrivacy::stopTor()
     }
     m_authed = false;
     m_pidOk = false;
+    m_filesPort = 0;
     if (m_proc) {
         QProcess *proc = m_proc;
         m_proc = nullptr;
@@ -607,7 +655,7 @@ void UltraPrivacy::connectControl()
 
 void UltraPrivacy::poll()
 {
-    if (!on() || !m_proc)
+    if (!wanted() || !m_proc)
         return;
     if (m_ctlPort <= 0)
         readControlFile();
@@ -618,7 +666,7 @@ void UltraPrivacy::poll()
         if (m_tor != Tor::Ready || ++m_ticks % kReadyPollEvery == 0)
             m_ctl->write("GETINFO process/pid net/listeners/socks status/bootstrap-phase status/circuit-established\r\n");
     }
-    if (m_tor != Tor::Ready && m_tor != Tor::Missing) {
+    if (on() && m_tor != Tor::Ready && m_tor != Tor::Missing) {
         const Tor t = startState(m_since.elapsed(), m_warned);
         if (t != m_tor)
             setTor(t);
@@ -666,6 +714,10 @@ void UltraPrivacy::controlRead()
         } else if (line.startsWith(QLatin1String("250-status/circuit-established="))) {
             m_circuit = line.endsWith(QLatin1Char('1'));
         } else if (line == QLatin1String("250 OK") && m_authed) {
+            // Cap f4: files use the same Tor, on demand too.
+            setFilesPort(m_circuit && m_progress >= 100 && m_pidOk && m_socksPort > 0 ? m_socksPort : 0);
+            if (!on())
+                continue;
             if (m_circuit && m_progress >= 100 && m_pidOk && m_socksPort > 0)
                 ready(m_socksPort);
             else if (m_tor == Tor::Ready && !m_circuit) {
@@ -691,13 +743,13 @@ bool UltraPrivacy::selfTest()
     UltraPrivacy u;   // never started: no saved switch read, no Tor
     u.use(false);
     check(!on() && proxy().type() == QNetworkProxy::DefaultProxy, "off by default, connections go as before");
-    check(directAllowed() && videoSendAllowed() && previewsAllowed() && gifSearchAllowed() && !blocksFile(QStringLiteral("a.mp4")),
+    check(directAllowed() && videoSendAllowed() && previewsAllowed() && gifSearchAllowed() && !blocksFile(QStringLiteral("a.mp4")) && filesPort() == 0,
           "nothing is off while it's off");
 
     u.use(true);
     check(on() && u.active() && u.torState() == QLatin1String("starting"), "on: Tor starting");
     check(!directAllowed(), "direct calls, files and photos are off");
-    check(!videoSendAllowed(), "sending videos is off");
+    check(videoSendAllowed(), "sending videos is allowed (Tor or the same Wi-Fi)");
     check(!previewsAllowed(), "link previews are off");
     check(!gifSearchAllowed(), "GIF search is off");
     check(!callsAllowed(), "calls are off, both ways");
@@ -706,9 +758,8 @@ bool UltraPrivacy::selfTest()
               && !looksLikeVideo(QByteArray("hello there, nothing here")) && !looksLikeVideo(QByteArray("\x00\x00\x00\x18" "ftypheic" "\x00\x00\x00\x00", 16))
               && !looksLikeVideo(QByteArray("\x00\x00\x00\x18" "ftypM4A " "\x00\x00\x00\x00", 16)),
           "a video renamed to another name is still held back");
-    check(blocksFile(QStringLiteral("clip.MP4")) && blocksFile(QStringLiteral("a.webm")) && blocksFile(QStringLiteral("b.mov"))
-              && !blocksFile(QStringLiteral("photo.jpg")) && !blocksFile(QStringLiteral("mp4")) && !blocksFile(QStringLiteral("notes.txt")),
-          "video files are held back, other files go");
+    check(!blocksFile(QStringLiteral("clip.MP4")) && !blocksFile(QStringLiteral("photo.jpg")) && !blocksPath(QStringLiteral("a.webm")),
+          "nothing is held back: videos go over Tor or on the same Wi-Fi");
     const QNetworkProxy closed = proxy();
     check(closed.type() == QNetworkProxy::Socks5Proxy && closed.hostName() == QLatin1String("127.0.0.1") && closed.port() == kClosedPort,
           "fails closed until Tor is ready");
@@ -799,11 +850,13 @@ bool UltraPrivacy::selfTest()
     check(!all.contains(QChar(0x2014)) && !all.contains(QChar(0x2013)), "no long dashes in the wording");
     const QString d = u.downsides().toLower();
     bool every = true;
-    for (const char *w : {"slower", "calls are off", "calls to you show as missed", "direct", "sending videos", "link previews", "gif search", "update", "power",
+    for (const char *w : {"slower", "calls are off", "calls to you show as missed", "direct", "videos send over tor", "link previews", "gif search", "update", "power",
                           "bigger", "blocked", "volunteers", "no encryption"})
         every = every && d.contains(QLatin1String(w));
     check(every, "every downside is listed");
-    check(u.setupUltra().contains(QLatin1String("a few trade-offs, explained before you turn it on")), "first setup's line");
+    check(u.setupUltra().contains(QLatin1String("a few trade-offs, explained before you turn it on")) && u.setupUltra().contains(QLatin1String("Videos send over Tor. Calls are off.")),
+          "first setup's line");
+    check(u.whatItDoes().contains(QLatin1String("Videos send over Tor. Calls are off.")), "what it does says videos go over Tor");
 
     u.use(false);
     check(!on() && proxy().type() == QNetworkProxy::DefaultProxy, "off again: connections go as before");

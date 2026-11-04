@@ -72,24 +72,45 @@ class FileLinkTest {
         assertEquals(3, FileLink.pieces(2 * FileLink.CHUNK + 1L))
     }
 
+    /** 1.42: every file and video asks first. Only Always (trusted or Family) or the rest of an accepted file don't. */
     @Test
-    fun onlySmallFilesFromTrustedPeopleArriveByThemselves() {
+    fun everyFileAsksFirst() {
         val mb = 1024L * 1024
-        assertTrue(FileLink.arrivesByItself(10 * mb, true))
-        assertTrue(FileLink.arrivesByItself(50 * mb - 1, true))
-        // 50 MB and bigger asks Accept or Decline; Data saver on mobile data waits for a tap.
-        assertFalse(FileLink.arrivesByItself(50 * mb, true))
-        assertFalse(FileLink.arrivesByItself(2_000 * mb, true))
-        assertFalse(FileLink.arrivesByItself(1 * mb, false))
-        // A file small enough for the internet route goes that way when no answer comes soon; a bigger one waits as
-        // long as the other side may ask first (Data saver, or 50 MB and more).
+        assertFalse(FileLink.arrivesByItself(always = false, resuming = false, mayDownload = true))
+        assertTrue(FileLink.arrivesByItself(always = true, resuming = false, mayDownload = true))
+        assertTrue(FileLink.arrivesByItself(always = false, resuming = true, mayDownload = true))
+        // Data saver on mobile data still asks.
+        assertFalse(FileLink.arrivesByItself(always = true, resuming = false, mayDownload = false))
+        // Always only for someone trusted or Family.
+        assertTrue(FileLink.mayAlways(FileLink.BADGE_TRUSTED) && FileLink.mayAlways(FileLink.BADGE_FAMILY))
+        assertFalse(FileLink.mayAlways(FileLink.BADGE_CONTACT) || FileLink.mayAlways(FileLink.BADGE_NOT))
+        // Cap f4: queued a day. Older apps (full-size videos only) as before.
+        assertEquals(FileLink.LONG_ANSWER_MS, FileLink.answerMs(1 * mb, f4 = true))
         assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(1 * mb))
-        assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(io.github.ravenor907.muninn.net.FileText.RELAY_MAX))
-        assertEquals(FileLink.ASK_ANSWER_MS, FileLink.answerMs(io.github.ravenor907.muninn.net.FileText.RELAY_MAX + 1))
         assertEquals(FileLink.ASK_ANSWER_MS, FileLink.answerMs(60 * mb))
-        // Cap f3: a day between two apps that both say it.
         assertEquals(FileLink.LONG_ANSWER_MS, FileLink.answerMs(60 * mb, true))
-        assertEquals(FileLink.RELAY_AFTER_MS, FileLink.answerMs(1 * mb, true))
+    }
+
+    /** The receiving card's words (the same as Huginn's FileLink::typeWord and riskyName). */
+    @Test
+    fun receivingCardWords() {
+        assertEquals("a ZIP file", FileLink.typeWord("photos-trip.zip"))
+        assertEquals("an APK file", FileLink.typeWord("game.apk"))
+        assertEquals("an EXE file", FileLink.typeWord("setup.EXE"))
+        assertEquals("a PDF file", FileLink.typeWord("a.pdf"))
+        assertEquals("a file", FileLink.typeWord("README"))
+        for (n in listOf("a.zip", "a.apk", "a.exe", "a.bat", "a.msi", "a.js", "a.scr", "a.cmd", "a.ps1", "a.vbs", "a.jar", "a.sh", "a.AppImage", "a.deb", "a.rpm"))
+            assertTrue(n, FileLink.risky(n))
+        assertFalse(FileLink.risky("photo.jpg") || FileLink.risky("notes.txt"))
+        assertEquals("Only open this if you were expecting it.", FileLink.RISKY_NOTE)
+        assertEquals("Sends when Jo's phone is online", FileLink.queuedNote("Jo", "phone"))
+        assertEquals("Sends when Jo's computer is online", FileLink.queuedNote("Jo", "computer"))
+        assertEquals("Sends when Jo is online", FileLink.queuedNote("Jo", ""))
+        assertEquals("Didn't send. Try again.", FileLink.NOT_SENT)
+        assertEquals("Nearby", FileLink.methodLabel("lan"))
+        assertEquals("Trusted direct", FileLink.methodLabel("direct"))
+        assertEquals("Tor, slower", FileLink.methodLabel("tor", 10 * 1024 * 1024))
+        assertEquals("Tor, slower (about 21 min)", FileLink.methodLabel("tor", 1_200L * 1024 * 1024))
     }
 
     /** Cap f3: a receiver that kept 300 pieces says so in its first ack, and the sender goes on from 300. */
@@ -101,17 +122,5 @@ class FileLinkTest {
         val s = FileLink.Sender(500)
         s.ack(below, bits)
         assertEquals(300, s.due(0).first())
-    }
-
-    /** An older sender (no [FileLink.ASK_CAP]) gives up after 2 minutes: its big files arrive as before, without asking. */
-    @Test
-    fun bigFilesFromOlderSendersArriveAsBefore() {
-        val mb = 1024L * 1024
-        assertTrue(FileLink.asksFirst(60 * mb, true))
-        assertFalse(FileLink.asksFirst(60 * mb, false))
-        assertFalse(FileLink.asksFirst(10 * mb, true))
-        assertTrue(FileLink.arrivesByItself(60 * mb, true, senderWaits = false))
-        assertFalse(FileLink.arrivesByItself(60 * mb, false, senderWaits = false))
-        assertFalse(FileLink.arrivesByItself(60 * mb, true, senderWaits = true))
     }
 }

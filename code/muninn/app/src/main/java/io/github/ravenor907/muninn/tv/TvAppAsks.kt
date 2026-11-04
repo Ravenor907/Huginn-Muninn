@@ -88,14 +88,14 @@ object TvAppAsks {
         try { NotificationManagerCompat.from(app).cancel(("app" + item.ask.h).hashCode()) } catch (_: Exception) {}
     }
 
-    /** "Install app.apk on Kids' TV?": a tap opens Muninn, where Install and Not now are. No name without previews on. */
+    /** "Install app.apk on <device>?": a tap opens Muninn, where Install and Not now are. No name without previews on. */
     private fun notify(app: Muninn, tv: String, a: TvInstalls.Ask) {
         val preview = app.identity.showPreview
         val open = PendingIntent.getActivity(app, ("app" + a.h).hashCode(), Intent(app, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(app, Muninn.MESSAGES).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(if (preview) "Install ${a.name} on ${app.chat.nameOf(tv)}?" else "A Kids' Device asks to install an app")
-            .setContentText("Install or Not now: Kids' Device settings, Apps")
+            .setContentText("Install or Not now: Kids' Device page, Apps")
             .setPriority(NotificationCompat.PRIORITY_HIGH).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setAutoCancel(true).setContentIntent(open).build()
         try { NotificationManagerCompat.from(app).notify(("app" + a.h).hashCode(), n) } catch (_: SecurityException) {}

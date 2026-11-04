@@ -28,8 +28,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -80,26 +78,30 @@ import kotlinx.coroutines.withContext
 
 /**
  * The one Kids' Device page on a parent's phone, one per device (TV, tablet or phone), reached from Settings and from the
- * device's chat menu ("Kids' Device settings"). Its header has the device's Muninn version, how its update is going and Update now; then one row per part,
- * each opening its own screen. The rarely used parts are under More. The same ids open a part straight from elsewhere:
+ * device's chat menu (its Settings button). Its header says how an update is going only when one is ready or stuck
+ * (Update now is on Updates); then the child's name (owner decision: it stays on top) and one row per part, by how
+ * often a parent uses them (consolidation 2.18), each opening its own screen. The rarely used parts are under More. The same ids open a part straight from elsewhere:
  * `ParentTvScreen(app, tvKey, section = id)` (an id it doesn't know, such as "page", opens the page itself).
  */
 object ParentTvMenu {
     /** (id, label) on the page, in order. */
     val items: List<Pair<String, String>> = listOf(
         "people" to "Who it can talk to",
-        "parents" to "Parents",
         "chatting" to "Chatting",
         "sound" to "Calls and mic",
         "quick" to "Quick messages",
         "quiet" to "Quiet times",
-        "lock" to "Parent PIN",
-        "havamal" to "Daily Hávamál",
-        "look" to "Look",
         "apps" to "Apps",
+        "look" to "Look",
+        "havamal" to "Daily Hávamál",
+        "parents" to "Parents",
+        "lock" to "Parent PIN",
         "updates" to "Updates",
         "more" to "More",
     )
+
+    /** Parts opened from inside another part: Read aloud from Look (consolidation 2.11). */
+    val inner: List<Pair<String, String>> = listOf("aloud" to "Read aloud")
 
     /** (id, label) under More, in order. Disconnect is last. */
     val more: List<Pair<String, String>> = listOf(
@@ -111,7 +113,7 @@ object ParentTvMenu {
     )
 
     /** The label for [id], or null if it isn't one of [items] or [more]. */
-    fun label(id: String?): String? = (items + more).firstOrNull { it.first == id }?.second
+    fun label(id: String?): String? = (items + more + inner).firstOrNull { it.first == id }?.second
 }
 
 /** The TV's line: "Muninn 1.33 · Up to date" (cap u1), or what an older TV's status said. */
@@ -227,7 +229,7 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp)) {
             when (open) {
                 null -> {
-                    UnlockCard(app, t, tvName); HoldCards(app, t); KidAddCards(app, t); UpdateHeader(app, t); ChildNameRow(app, t)
+                    UnlockCard(app, t, tvName); HoldCards(app, t); KidAddCards(app, t); UpdateHeader(app, t) { stack = stack + "updates" }; ChildNameRow(app, t)
                     Menu(app, t) { stack = stack + it }; if (t.dev == KidRules.TABLET || t.dev == KidRules.PHONE) Note(FULL_LOCK)
                 }
                 "people" -> People(app, t)
@@ -236,7 +238,8 @@ fun ParentTvScreen(app: Muninn, tvKey: String, section: String? = null, onBack: 
                 "quiet" -> Quiet(app, t)
                 "lock" -> Lock(app, t)
                 "havamal" -> DailyHavamal(app, t)
-                "look" -> KidLookPart(app, t)
+                "look" -> KidLookPart(app, t) { stack = stack + it }
+                "aloud" -> KidVoicePart(app, t)
                 "quick" -> QuickMessages(app, t)
                 "sound" -> Sound(app, t)
                 "names" -> Names(app, t, tvName)
@@ -340,16 +343,26 @@ private fun KidAddCards(app: Muninn, t: ManagedTv) {
     }
 }
 
-/** The page's header: the TV's Muninn and how its update is going, and Update now (cap u1). */
+/**
+ * The page's header (consolidation 2.18): the device's update line, only while an update is ready, running or stuck;
+ * a tap opens Updates, where Update now is (one button, not two).
+ */
 @Composable
-private fun UpdateHeader(app: Muninn, t: ManagedTv) {
-    val can = TvParent.u1(app, t.key)
-    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun UpdateHeader(app: Muninn, t: ManagedTv, onUpdates: () -> Unit) {
+    if (!updateNews(app, t)) return
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(Corner).clickable(role = Role.Button, onClickLabel = "Updates") { onUpdates() }
+        .padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(tvUpdateLine(app, t), style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
-        MButton("Update now", Modifier.padding(start = 12.dp), Kind.Accent, enabled = canAskUpdate(app, t)) { askTvUpdate(app, t) }
+        MIcon("forward", Palette.textMuted, 18.dp)
     }
-    if (!can) Note(updateSteps(app, t))
     Box(Modifier.fillMaxWidth().padding(vertical = 6.dp).height(1.dp).background(Palette.hairline))
+}
+
+/** An update to tell a parent about: one is ready for the device (it's behind), running, or stuck. */
+private fun updateNews(app: Muninn, t: ManagedTv): Boolean {
+    val st = t.upd1?.s
+    return TvUpd.behind(t.app, app.updater.current, app.updater.state.value.latest) ||
+        st == TvUpd.DOWNLOADING || st == TvUpd.INSTALLING || st == TvUpd.TAP || st == TvUpd.FAILED
 }
 
 /** Updates: how the TV's update is going, Update now, the Install updates permission, and Auto-update. */
@@ -628,12 +641,13 @@ private fun Sound(app: Muninn, t: ManagedTv) {
     TvToggle("Calls", "", t.calls, enabled = k2) { on -> TvParent.change(tvKey) { it.copy(calls = on) } }
     Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Mic level", style = Type.big.copy(fontSize = 16.sp, color = if (k2) Palette.text else Palette.textFaint), modifier = Modifier.weight(1f))
-        Text("${micLevel.toInt()}", style = Type.normal.copy(color = Palette.textMuted))
+        Text("${Math.round(micLevel)}", style = Type.normal.copy(color = Palette.textMuted))
     }
-    Slider(micLevel, { micLevel = it }, enabled = k2, valueRange = 0f..TvRules.MAX_MIC.toFloat(), steps = 9,
-        onValueChangeFinished = { TvParent.setMic(tvKey, micLevel.toInt()) },
-        colors = SliderDefaults.colors(thumbColor = Palette.gold, activeTrackColor = Palette.gold, inactiveTrackColor = Palette.lineMuted),
-        modifier = Modifier.semantics { contentDescription = "Mic level ${micLevel.toInt()} of 100" })
+    // Smooth (todo 1.42): no steps; follows the finger, saved once it's let go. The d-pad moves it 1 a press, faster when held.
+    io.github.ravenor907.muninn.ui.SmoothSlider(micLevel, { micLevel = it }, {
+        val v = Math.round(micLevel).coerceIn(0, TvRules.MAX_MIC)
+        if (v != t.mic) TvParent.setMic(tvKey, v)
+    }, 0f..TvRules.MAX_MIC.toFloat(), 1f, "Mic level ${Math.round(micLevel)} of ${TvRules.MAX_MIC}", Modifier.fillMaxWidth(), enabled = k2)
     // Noise removal and the remote's mic are a TV's (an older device that says nothing is a TV).
     if (t.dev != KidRules.TV && t.dev.isNotEmpty()) return
     Text("Noise removal", style = Type.big.copy(fontSize = 16.sp, color = if (k5) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 12.dp))
@@ -983,7 +997,7 @@ private fun DailyHavamal(app: Muninn, t: ManagedTv) {
  */
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun KidLookPart(app: Muninn, t: ManagedTv) {
+private fun KidLookPart(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
     val k13 = TvParent.k13(app, t.key)
     if (!k13) Note(UPDATE_FIRST)
     fun saved() = Ui.say("Saved. It changes on the device once it's online.")
@@ -1019,12 +1033,21 @@ private fun KidLookPart(app: Muninn, t: ManagedTv) {
     TvToggle("Let the kid choose", "Shows My colors on the device, with the same choices and text size. Your pick here goes on again whenever you change it.",
         t.lookPick, enabled = k13) { on -> TvParent.setLookPick(t.key, on); saved() }
     KidAccessPart(app, t)
-    KidVoicePart(app, t)
+    // Read aloud (consolidation 2.11): the same row as on a phone, opening its own part (voice, then speed).
+    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Palette.hairline))
+    MenuRow("Read aloud", kidVoiceSummary(t)) { onOpen("aloud") }
+}
+
+/** The Read aloud row's value: the voice and, once picked, the speed ("Female, 90%"). */
+private fun kidVoiceSummary(t: ManagedTv): String {
+    val voice = KidVoice.CHOICES.firstOrNull { it.first == t.voice.ifEmpty { io.github.ravenor907.muninn.net.ReadAloudText.FEMALE } }?.second ?: ""
+    return listOfNotNull(voice.takeIf { it.isNotEmpty() }, t.speed?.let { "$it%" }).joinToString(", ")
 }
 
 /**
- * k15: the voice the device reads aloud with (messages, quick messages, Daily Hávamál): Female or Male. The device
- * downloads only that natural voice, once; until it's in, its own voice reads.
+ * Look › Read aloud on the Kids' Device page. k15: the voice the device reads aloud with (messages, quick messages,
+ * Daily Hávamál): Female or Male, then its speed (1.42, [KidSpeedPart]). The device downloads only that natural voice,
+ * once; until it's in, its own voice reads.
  */
 @Composable
 private fun KidVoicePart(app: Muninn, t: ManagedTv) {
@@ -1036,8 +1059,7 @@ private fun KidVoicePart(app: Muninn, t: ManagedTv) {
     // Round 19: no natural voice in this release yet (its download can't be checked): no promise of one.
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val natural = remember { naturalShipped(ctx) }
-    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Palette.hairline))
-    Text("Read-aloud voice", style = Type.big.copy(fontSize = 17.sp, color = if (k15) Palette.text else Palette.textFaint))
+    Text("Voice", style = Type.big.copy(fontSize = 16.sp, color = if (k15) Palette.text else Palette.textFaint), modifier = Modifier.padding(top = 10.dp))
     if (!deviceK15) Note(UPDATE_FIRST) else if (blocked != null) Note(blocked)
     ChoiceRow(KidVoice.CHOICES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
         val (v, name) = KidVoice.CHOICES[i]
@@ -1050,6 +1072,11 @@ private fun KidVoicePart(app: Muninn, t: ManagedTv) {
             }
         }
     }
+    // 1.42: the speed, right under the voice. Cap k16: sent only when the device and every co-parent's app read it.
+    val speedOk = k15 && TvParent.speedReady(app, t)
+    LaunchedEffect(t.key, speedOk) { if (k15 && !speedOk) TvParent.probeVoice(app, t) }
+    KidSpeedPart(t.speed, speedOk) { pct -> TvParent.setSpeed(t.key, pct); Ui.say("Saved. It changes on the device once it's online.") }
+    if (k15 && !speedOk) Note("The speed needs every app updated first.")
     Note(if (natural) "A natural voice, downloaded once on the device (about 65 MB). Until then it reads with its own voice."
         else "For now the device reads with its own voice. The natural voice comes with an update.")
 }

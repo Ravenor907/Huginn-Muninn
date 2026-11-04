@@ -44,8 +44,14 @@ class ReadAloud : public QObject
     // "Natural voices aren't ready yet".
     Q_PROPERTY(bool natural READ natural NOTIFY changed)
     Q_PROPERTY(bool speaking READ speaking NOTIFY changed)
-    // "f" (Female, Alba) or "m" (Male, northern English).
+    // The Read aloud page's pick: "f" (Female, Alba), "m" (Male, northern English) or "d" (Device: the computer's own
+    // voice; the natural voice never reads or downloads).
     Q_PROPERTY(QString voice READ voice WRITE setVoice NOTIFY changed)
+    // The Read aloud switch (on until turned off). Off: available is false, so no menu offers Read aloud.
+    Q_PROPERTY(bool on READ isOn WRITE setOn NOTIFY changed)
+    // The speed, a percent of the usual pace from 50 to 150 (80 until moved; a float, older saved ints read the same).
+    // Writing it saves it (when the drag ends); previewSpeed() applies a value while the slider moves.
+    Q_PROPERTY(double speed READ speed WRITE setSpeed NOTIFY speedChanged)
     // Download the voice on a metered connection (a phone's hotspot) too.
     Q_PROPERTY(bool mobileData READ mobileData WRITE setMobileData NOTIFY changed)
     // The chosen natural voice is downloaded and checked.
@@ -64,6 +70,10 @@ public:
     bool speaking() const { return m_speaking; }
     QString voice() const;
     void setVoice(const QString &v);
+    bool isOn() const;
+    void setOn(bool on);
+    double speed() const;
+    void setSpeed(double pct);
     bool mobileData() const;
     void setMobileData(bool on);
     bool ready() const;
@@ -77,6 +87,12 @@ public:
     Q_INVOKABLE void prepare();
     // Deletes every downloaded voice (the computer's own voice reads until it's downloaded again).
     Q_INVOKABLE void deleteVoices();
+    // The speed slider moves: [pct] is used at once (the next piece read, and Hear a sample), nothing is saved.
+    Q_INVOKABLE void previewSpeed(double pct);
+    // "Hear a sample": a short line with the voice and speed picked now.
+    Q_INVOKABLE void sample();
+    // The Read aloud row's line (Look › Accessibility): "Off", "Female voice, ready", "Device voice, 80%".
+    Q_INVOKABLE QString summary() const;
     // main.cpp: true while nothing may be read (the lock is up, the screen lock shows, a call is on). speak() checks it.
     void setBlocker(std::function<bool()> blocked) { m_blocked = std::move(blocked); }
 
@@ -94,6 +110,12 @@ public:
     static QHash<QString, QString> hashes(const QByteArray &text);
     // The release file for voice "f" or "m".
     static QString fileFor(const QString &voice);
+    // The speed rules (the same as Muninn's ReadAloudText): [pct] held to 50 to 150 (NaN: 80); "83%"; the speech
+    // engine's speed (1.0 the usual pace); QTextToSpeech's rate (-1 to 1): 50% is -1, 100% is 0, 150% is 1.
+    static double speedOf(double pct);
+    static QString speedText(double pct);
+    static float engineSpeed(double pct);
+    static double qtRate(double pct);
     // Unpacks a voice's tar (ustar) into [dir]: regular files and folders only, no "..", no absolute paths,
     // at most kMaxFile a file. False (and [why]) for anything else.
     static bool unpack(const QString &tarPath, const QString &dir, QString *why);
@@ -107,13 +129,22 @@ public:
     static constexpr int kMaxWord = 40;
     static constexpr qint64 kMaxDownload = 160 * 1024 * 1024;
     static constexpr qint64 kMaxFile = 120 * 1024 * 1024;
+    static constexpr double kSpeedMin = 50.0;
+    static constexpr double kSpeedMax = 150.0;
+    static constexpr double kSpeedDefault = 80.0;
 
 Q_SIGNALS:
     void changed();
     void statusChanged();
+    void speedChanged();
 
 private:
     friend class VoiceEngine;
+    // The natural voice to use or download: "f" or "m" (Female when Device is picked).
+    QString naturalVoice() const;
+    // Device was picked: the computer's own voice reads, nothing downloads.
+    bool useDevice() const;
+    void applyDeviceRate();
     QString voicesDir() const;
     QString voiceDir(const QString &voice) const;
     void setStatus(const QString &s);
@@ -137,6 +168,8 @@ private:
     QThread *m_thread = nullptr;
     VoiceEngine *m_engine = nullptr;
     std::shared_ptr<std::atomic<quint64>> m_token;
+    // The speed in use (percent), read by the engine's thread for each piece.
+    std::atomic<double> m_speedNow{kSpeedDefault};
     bool m_speaking = false;
     QString m_status;
     QList<QByteArray> m_queue;

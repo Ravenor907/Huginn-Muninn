@@ -374,7 +374,7 @@ Rectangle {
     // The three dots: Look again and Direct connect.
     function filesMenu() {
         const items = [{ name: "Look again", icon: "search", url: "look" },
-                       { name: "Direct connect", icon: "qr", url: "direct", check: Direct.on }]
+                       { name: "Direct connect", detail: "A private hotspot. No data used.", icon: "qr", url: "direct", check: Direct.on }]
         Ui.pickFrom("Files", [{ header: "", items: items }], a => {
             if (a === "look") LocalSend.refresh()
             else if (a === "direct") toggleDirect()

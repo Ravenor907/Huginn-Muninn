@@ -93,6 +93,8 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `p2` | profile pictures that always arrive (22.4): `pv` on every envelope, `profile?` and `profile-ok` in room `profile`, a picture marked sent only on its `profile-ok`, and `pask` in room `link`. Needs `p1`. Muninn and Huginn. |
 | `l4` | stamped link frames (section 15, "Replay"): the sender stamps every frame in room `link` with `lts` and `ln`. Like `l1`, only in room `link` (`caps` on `sync`, `ping` and `pong`). Muninn and Huginn. |
 | `k15` | a Kids' Device's read-aloud voice (7.18): config field `voice`, `f` (Female) or `m` (Male). Muninn only. |
+| `f4` | Encrypted file sharing (section 30): Nearby, Trusted direct or Tor (a one-time onion service), never through the relays; every file asks first; `file` messages `wait` and `tor`. Muninn and Huginn. |
+| `k16` | a Kids' Device's read-aloud speed (7.18): config field `speed`, a whole percent 50 to 150. Sent only when the device and every co-parent say `k16`. Muninn only. |
 | `v3` | picked videos (section 29): a file offer may carry `vid` (a full-size video's length in ms, 1 to 60000), sent straight only to an app that says `v3`; a video message's relay copy may be up to 1280 x 720 and 192 pieces, its pieces paced. Muninn and Huginn. |
 | `h1` | hidden certificates named over the ratchet (21.3, 1.42): `hf` in receipts to contacts, the certificates its Wi-Fi server may show (its lasting one, its hidden one now and the next), so a contact asks a saved address with Nearby off only with one of them pinned. Muninn and Huginn. |
 | `r2` | a ring tag per caller (23.2, 1.42): `rt` in receipts with `rk`, and in the ring plaintext of a caller that says `r2`. Locked rings are limited per caller, and a tag taken back stops ringing at once. Muninn and Huginn. |
@@ -1044,7 +1046,7 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 ```
 
 Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd`, the k8 field `keep`
-and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` and the k14 fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait` and the k15 field `voice` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
+and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` and the k14 fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait` and the k15 field `voice` and the k16 field `speed` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each exactly `id` and `text` (and, k14, `e`), each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1622,6 +1624,10 @@ device without `k15` would refuse the config as malformed. A device keeps the la
 an older parent app, changes nothing) and downloads only that voice (code/shared/docs/voices.md); until it is ready the
 device's own voice reads. Every parent's page shows the voice the latest config carries.
 
+**Read-aloud speed (`k16`).** A device whose app says `k16` takes one more optional field, `speed`: a whole number from 50
+to 150, the percent it reads aloud at (80 when a config has none). A parent's phone sends it only when the device and
+every co-parent say `k16` (a device with only `k15` would refuse the config as malformed); otherwise it reads at 80%.
+
 **Leaving and disconnecting.** A disconnect (7.3) and Leave kids' mode put back everything kids' mode changed on the device:
 its text size, size of everything, high contrast, color vision and less motion, its look, Seasonal and accent, how long
 messages stay, the parent's colors and accessibility it took, the kids' tabs, drafts and open chat, wrong PIN tries, apps and
@@ -1979,7 +1985,8 @@ is v1. Receivers take both (23.1).
 
 ### 14.2 Small files over the relays
 
-A file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
+1.42: no longer sent. A file never goes through the relays; between two `f4` apps it goes as section 30 says. An app
+still takes one that comes this way from an older app. As before: a file of at most 2 MB that can't go straight (no trust, or no direct path) goes as `photo` pieces with
 `"kind": "file"` and `"fn"` (its name, as above), never in an album. Only to `f1`. The receiver keeps it encrypted like
 a photo and also saves it to Downloads as soon as it is whole (Save when that couldn't be done). A received file is
 never opened or installed by itself.
@@ -3317,7 +3324,7 @@ so an app without `f2` keeps the line open too.
 
 ### 27.6 Asking, and where files go
 
-- From a contact: a file under 50 MB arrives by itself, a bigger one asks (14.1). "Always from this person" (on the
+- 1.42 (cap `f4`, 30.4): every file asks first; only Always (trusted or Family) skips it. Before 1.42: from a contact: a file under 50 MB arrives by itself, a bigger one asks (14.1). "Always from this person" (on the
   device only) lets every file from them arrive. In a group, the group's type decides (16.2: Folk small ones, Family
   all). Data saver still asks.
 - The ask shows who sent it, the name, size and kind, and where it goes, with Accept, Decline and Always from this
@@ -3440,7 +3447,7 @@ past 200 would need every receiver to change; going past about 3 MiB a member al
 
 A member gets the full copy when all of these hold, else the relay copy:
 - their app says `v3`, `f1` and (in a group) `f2`;
-- they are on the same Wi-Fi now (27.1), or Direct calls and files are on for each other (14) and this device is on
+- they are on the same Wi-Fi now (27.1), or Trusted direct is on for each other (14) and this device is on
   an unmetered network (no full copies over mobile data);
 - they aren't a Kids' Device, and their app hasn't asked for nothing straight (Ultra privacy on their side).
 
@@ -3479,3 +3486,74 @@ the LGPL FFmpeg builds have no software H.264 encoder). So Huginn converts nothi
 size, frame rate and length, sends the full copy only if the video is already within 29.1, and the relay copy only if
 the video itself already fits it (720p, 20 seconds, 3 MiB). Members it can't serve that way are told why ("Huginn
 can't make a smaller copy: send it from your phone, or send in full when direct").
+
+
+## 30. Encrypted file sharing (cap `f4`)
+
+Builds on sections 14 and 27. Huginn `FileLink` and `TorFiles` (filelink.cpp, torfiles.cpp), Muninn `FileLink.kt` and
+`TorFiles.kt`; checked in `--chat-selftest` (f1 and "tor files") and `FileLinkTest`, `TorFilesTest`, `NetTest`.
+A file is sent only to an app whose caps include `f4`; to anyone else the Send menu's row says "Ask them to update".
+Full-size videos (29) still go to older apps on the first two paths. Older apps never get a `tor` or `wait` message.
+
+### 30.1 The paths
+
+In this order, with a fast fallback: **Nearby** (27.1, the same Wi-Fi), **Trusted direct** (14.1, with trust), then
+**Tor**. Never the relays (14.2 is no longer sent). Under Ultra privacy only Nearby and Tor (no STUN, no address).
+The receiver of an offer from an `f4` app accepts even without trust or the same Wi-Fi; its `accept` then carries only
+what it may (`c` may be empty: Tor only). The sender:
+
+- has no target in the accept (no `lan`, no candidates): Tor at once;
+- has targets but not the same Wi-Fi: starts Tor now (on demand) while it probes, so the switch is quick;
+- probes 20 s with no answer, or a transfer that moves goes quiet for 10 s (not paused or held): Tor.
+
+A transfer switches part way and goes on from the last piece: the sender's confirmed pieces and the receiver's pieces
+and part file carry over. A receiver that hears the `tor` message and nothing on the way straight for 2 s goes to Tor too.
+
+### 30.2 Tor, a one-time onion service
+
+Both apps start their own Tor on demand for this (Muninn: tor-android in its own `:tor` process, talked to over its
+control socket; Huginn: the bundled tor with its control port and a password made at each start), with Ultra privacy
+off too, and stop it once nothing needs it unless Ultra privacy is on. While it runs only on demand, nothing else
+goes through it. A TV short of storage doesn't start it. The sender opens one service per file on its own control
+connection: `ADD_ONION NEW:ED25519-V3 Flags=DiscardPK Port=<random 1024..65023>,127.0.0.1:<local port>` (not
+detached: closing that connection removes it), and removes it when the file is done or after 10 minutes with nothing
+moving. Its address goes only in this message (room `file`, sealed end to end like every `file` message, never in
+plain view, never in a contact code):
+
+| t | fields | |
+|---|---|---|
+| `tor` | `id`, `tor` (the 56-letter v3 service id, lowercase base32, no `.onion`), `p` (its port, 1 to 65535) | the sender, once the service is up |
+| `wait` | `id` | the receiver, when its card asks the person (the sender's row: "Waiting for Ana to accept") |
+
+The receiver connects to `<tor>.onion:<p>` through its own Tor's SOCKS5 port on 127.0.0.1, by name (SOCKS5 address type
+3; nothing is looked up locally). A stream that breaks is opened again (every 2 s); the service waits for it.
+
+### 30.3 The stream
+
+Frames: `length (2 bytes, big endian, 1 to 2048) || packet`, where the packet is exactly as on UDP (14.1: type, seq,
+AES-256-GCM under the transfer's key from the one-off keys of `offer` and `accept`, nonce `dir || seq`, AAD `type ||
+id`). The key is per file and random (the two one-off keys) and only ever in the end to end encrypted offer exchange.
+Every chunk is encrypted and authenticated on every path. Packets on a stream count `seq` from 2^40, carried on across
+every stream of the transfer, so no nonce ever repeats one of the UDP path's. The receiver speaks first: an ack (what it
+already has; it also proves the key). A first frame that doesn't open ends the stream (a stranger). Then the sender sends
+every piece not yet confirmed, in order, at most 512 beyond the last ack, and from the first gap again when all went once
+and nothing new was confirmed for 10 s; a probe every 5 s when there's nothing to send. The receiver acks every 64 new
+pieces or every second, then ack and done when all are in. Hold (27.5) works as on UDP. 120 s with nothing heard drops a
+stream. The SHA-256 is checked over the whole file at the end.
+
+### 30.4 Asking first, and the queue
+
+- **Every file asks first**, with the receiving card: the sender's name and trust badge (Trusted, Family, Contact, Not
+  trusted), "wants to send you a ZIP file", the name, size and how it comes ("Nearby", "Trusted direct", "Tor, slower
+  (about 20 min)" from 100 MB, at about 1 MB/s), Decline and Accept. Programs and archives (`.zip .apk .exe .bat .msi .js
+  .scr .cmd .ps1 .vbs .jar .sh .appimage .deb .rpm`) add "Only open this if you were expecting it."
+- "Always accept from <name>" shows only for someone trusted or Family; only those people skip the card (Data saver
+  still asks). The older rules (under 50 MB from someone trusted, Family groups and group types) are gone, and an older
+  Always on anyone else is cleared. The rest of a file already accepted (27.7) doesn't ask again.
+- Decline sends `decline` with `"why": "no"`; the sender's row says "Declined", and nothing is left behind.
+- The sender's offer waits 24 hours. After 30 s with no `wait` or answer its row says "Sends when Ana's phone is online"
+  ("computer" for Huginn when its caps are known, else "when Ana is online"); the same offer goes again every 2 hours
+  (the receiver ignores an offer it already answered). Then "Didn't send. Try again." with Retry.
+- A Tor transfer over 1 GB asks the sender first. Rows show the path; Muninn keeps a foreground "Sending file"
+  notification while one moves, Huginn keeps going from the tray.
+

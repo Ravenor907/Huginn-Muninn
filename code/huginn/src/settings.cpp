@@ -76,6 +76,33 @@ void Settings::setLook(const QString &key, const QVariant &v)
     Q_EMIT appearanceChanged();
 }
 
+void Settings::previewLook(const QString &key, const QVariant &v)
+{
+    if (key != QLatin1String("fallCount") && key != QLatin1String("fallSize") && key != QLatin1String("seasonGradient"))
+        return;
+    if (m_preview.contains(key) && m_preview.value(key).toInt() == v.toInt())
+        return;
+    m_preview.insert(key, v.toInt());
+    Q_EMIT appearanceChanged();
+}
+
+void Settings::commitLook()
+{
+    if (m_preview.isEmpty())
+        return;
+    const QHash<QString, QVariant> p = m_preview;
+    for (auto it = p.cbegin(); it != p.cend(); ++it) {
+        if (it.key() == QLatin1String("fallCount"))
+            setFallCount(it.value().toInt());
+        else if (it.key() == QLatin1String("fallSize"))
+            setFallSize(it.value().toInt());
+        else if (it.key() == QLatin1String("seasonGradient"))
+            setSeasonGradient(it.value().toInt());
+    }
+    m_preview.clear();
+    Q_EMIT appearanceChanged();
+}
+
 bool Settings::hushed()
 {
     if (s_quiet)

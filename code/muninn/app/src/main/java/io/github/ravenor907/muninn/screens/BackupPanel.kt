@@ -67,7 +67,7 @@ fun BackupPanel(app: Muninn) {
                 "Restored. What was here is kept in $kept. Muninn is restarting."
             }
             else -> {
-                Text("One file with everything, locked with a password you choose.", style = Type.normal)
+                Text("One encrypted file with everything, locked with a password you choose.", style = Type.normal)
                 Text("Save it anywhere. It restores on a new phone or computer instead of this one. To use a computer as well, link it.",
                     style = Type.small, modifier = Modifier.padding(top = 4.dp))
                 Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -218,7 +218,7 @@ fun RestoreFlow(app: Muninn, practice: Boolean = false, erases: Boolean = false,
             val where = s.device.ifEmpty { if (s.app == "huginn") "that computer" else "that phone" }
             Ui.sure(Ask("This makes a copy of you",
                 "This phone becomes the same person as $where. If both are used, messages stop working on one or both, " +
-                    "and friends see errors." + (if (s.app == "huginn") " To use both, link instead: Settings › Devices and backup › Scan to link." else "") +
+                    "and friends see errors." + (if (s.app == "huginn") " To use both, link instead: Settings › Devices and backup › Linked devices." else "") +
                     " Restore only if $where won't chat again.",
                 "Restore anyway", danger = true) { replace(o, copyOk = true) })
             return

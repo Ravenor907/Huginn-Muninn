@@ -144,7 +144,9 @@ object KidTv {
     val wiping = MutableStateFlow(false)
     private val lock = Any()
     // "rich", "mx" and "live" (cap m1): replies, reactions, edits and typing from the same people.
-    private val PRIVATE_ROOMS = setOf("private", "photo", "receipt", "unsend", "rich", "mx", "live")
+    // 1.42: "file" too (Encrypted file sharing): files from people on the list, outside quiet times, the same rules as
+    // photos. Each one still asks first on the device (the card in the chat); a full-size video offer is still declined.
+    private val PRIVATE_ROOMS = setOf("private", "photo", "receipt", "unsend", "rich", "mx", "live", "file")
 
     private fun file(app: Muninn) = File(app.filesDir, FILE)
 
@@ -254,7 +256,8 @@ object KidTv {
         if (Regex("""Raven \d{4}""").matches(app.identity.username)) app.identity.username = when (KidMode.device(app)) {
             KidRules.TABLET -> "Kids' Tablet"
             KidRules.PHONE -> "Kids' Phone"
-            else -> "Kids' TV"
+            // Consolidation 2.19: "Kids' Device", the name used everywhere else.
+            else -> "Kids' Device"
         }
         val code = app.chat.myCode(once = false)
         val body = code.removePrefix(Contacts.PREFIX)
@@ -673,6 +676,8 @@ object KidTv {
                 if (pairing) { prefs(app).edit().putBoolean(SETUP_ASK, true).apply(); setupAsk.value = true }
                 // k15 (7.18): the read-aloud voice a parent picked (a config without one leaves it as it was).
                 KidVoice.of(new)?.let { v -> io.github.ravenor907.muninn.net.ReadAloud.parentPicked(app, v) }
+                // 1.42: the speed beside it (a config without one reads at 80%).
+                io.github.ravenor907.muninn.net.ReadAloud.parentSpeed(app, KidVoice.speedOf(new))
                 // k8 (7.13): how long messages stay on the TV, as the parent set it.
                 cfg.keep?.let { d ->
                     val ms = TvRules.keepMs(d)
@@ -697,7 +702,7 @@ object KidTv {
                 true
             }
             "update" -> {
-                // k2: a parent's "Update TV". Only from a parent; the answer says which Muninn the TV runs now.
+                // k2: a parent's "Update" (Update now on an older device). Only from a parent; the answer says which Muninn the TV runs now.
                 val cur = s.cfg ?: return false
                 if (fromKey !in s.parents) return false
                 SafeStart.parentHeard(app)

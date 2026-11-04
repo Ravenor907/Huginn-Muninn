@@ -562,7 +562,7 @@ private fun ended(scanned: String): Boolean {
 /** A code scanned on the Add people page: added (said back), or why not. */
 private fun added(app: Muninn, scanned: String): String {
     val text = Contacts.unlink(scanned)
-    if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) return "That's a link code. Use Settings › Devices and backup."
+    if (io.github.ravenor907.muninn.net.Link.isCode(scanned)) return "That's a link code. Use Settings › Devices and backup › Linked devices."
     val found = Contacts.parse(text) ?: return "That isn't a Muninn code."
     if (Contacts.expires(text) in 1 until System.currentTimeMillis()) return "That code from ${found.name.ifBlank { "them" }} has run out. Ask them for a new one."
     if (found.chatKey == app.identity.publicKey) return "That's your own code."
@@ -580,7 +580,7 @@ private fun LinkPage(app: Muninn) {
     Page(skip = "Skip") {
         Title("Link your phone")
         Box(Modifier.fillMaxWidth().padding(top = 14.dp), contentAlignment = Alignment.Center) { PracticeQr(240.dp) }
-        Line("In Muninn: Settings › Devices and backup › Scan to link")
+        Line("In Muninn: Settings › Devices and backup › Linked devices")
     }
 }
 
