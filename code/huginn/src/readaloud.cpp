@@ -664,7 +664,7 @@ void ReadAloud::startDownload()
         const qint64 total = m_reply->header(QNetworkRequest::ContentLengthHeader).toLongLong() + m_base;
         if (total > 0) {
             m_total = total;
-            setStatus(QStringLiteral("Downloading the natural voice, %1%").arg(qBound<qint64>(0, m_got * 100 / qMax<qint64>(1, total), 100)));
+            setStatus(QStringLiteral("Downloading the natural voice, %1%").arg(qBound(qint64(0), qint64(m_got * 100 / qMax(qint64(1), qint64(total))), qint64(100))));
         }
     });
     connect(m_reply, &QNetworkReply::finished, this, &ReadAloud::downloadDone);
