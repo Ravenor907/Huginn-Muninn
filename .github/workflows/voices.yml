@@ -10,6 +10,10 @@ name: Publish voices
 # already on record.
 on:
   workflow_dispatch:
+  # Also runs when this file changes on beta, so it works before it reaches main.
+  push:
+    branches: [beta]
+    paths: ['.github/workflows/voices.yml']
 
 permissions:
   contents: write
