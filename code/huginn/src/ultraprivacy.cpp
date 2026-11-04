@@ -765,7 +765,7 @@ bool UltraPrivacy::selfTest()
           "fails closed until Tor is ready");
     check(closed.capabilities().testFlag(QNetworkProxy::HostNameLookupCapability) && !closed.capabilities().testFlag(QNetworkProxy::UdpTunnelingCapability),
           "names are looked up by Tor, never here");
-    check(u.offNote() == QLatin1String("Off while Ultra privacy is on") && videoOffText().contains(offNoteText()), "the note every feature shows");
+    check(u.offNote() == QLatin1String("Off while Ultra privacy is on") && videoOffText() == QLatin1String("Videos send over Tor. Calls are off."), "the note every feature shows");
 
     // The proxy goes on the sockets and network managers that use prepare() (nostr.cpp, updater.cpp, turnclient.cpp).
     {
