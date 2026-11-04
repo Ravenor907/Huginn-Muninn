@@ -85,6 +85,8 @@ class CallService : Service() {
 
         /** Call from a visible screen (starting or answering a call): Android only allows the microphone then. */
         fun start(c: Context) {
+            // Read aloud never talks over a call.
+            try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
             starting = true
             try { ContextCompat.startForegroundService(c, Intent(c, CallService::class.java)) } catch (_: Exception) { starting = false }
         }
@@ -153,8 +155,19 @@ object Ringer {
         // A Kids' Device always shows who calls (it has no Settings, and the kids need to know).
         val preview = try { (c.applicationContext as Muninn).identity.showNames || io.github.ravenor907.muninn.tv.KidMode.saved(c) } catch (e: Exception) { false }
         // 1.42: never a name while a wait after wrong tries runs (the vault's lock-state file says so, screen or not).
-        val waiting = try { (c.applicationContext as Muninn).vault.tries.left() > 0 } catch (e: Exception) { false }
-        return if (preview && !Panic.locked.value && !waiting) name else null
+        return if (preview && !Panic.locked.value && !waiting(c)) name else null
+    }
+
+    /**
+     * A wait after wrong tries runs. Reading it can write the lock-state file, so on the main thread it's read on its own
+     * thread (no name if it doesn't answer within half a second).
+     */
+    private fun waiting(c: Context): Boolean {
+        val tries = try { (c.applicationContext as Muninn).vault.tries } catch (e: Exception) { return false }
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return try { tries.left() > 0 } catch (e: Exception) { false }
+        val task = java.util.concurrent.FutureTask { tries.left() > 0 }
+        Thread(task).start()
+        return try { task.get(500, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (e: Exception) { true }
     }
 
     /**
@@ -176,6 +189,8 @@ object Ringer {
      * [silent]: their chat is muted, so the call screen and notification show without sound or vibration.
      */
     fun ring(c: Context, callId: String, name: String, key: String, silent: Boolean = false) {
+        // A call rings: Read aloud stops (muninn-phone m14).
+        try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
         channels(c)
         val who = if (name.isEmpty()) null else shownOnCall(c, name, ringing = true)
         // "Incoming call", with the name when Settings › Notifications shows names (never while panic-locked).
@@ -239,6 +254,7 @@ object Ringer {
      * as a missed call with its notice.
      */
     fun ringInRoom(c: Context, name: String, room: String) {
+        try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
         channels(c)
         val who = shownOnCall(c, name, ringing = true)
         val n = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)

@@ -216,12 +216,13 @@ object KidRules {
      * that agree move it either way, by any amount. One source alone moves it forward at most [SOLO_STEP_MS] and never back,
      * so one relay's clock or one parent's fast phone can't shift quiet times. Between readings the uptime counts.
      */
-    fun clockFrom(cur: TimeAnchor?, readings: Map<String, TimeAnchor>, elapsed: Long, deviceWall: Long? = null): TimeAnchor? {
+    fun clockFrom(cur: TimeAnchor?, readings: Map<String, TimeAnchor>, elapsed: Long, deviceWall: Long? = null, heldMs: Long = 0L): TimeAnchor? {
         val live = readings.filter { (_, r) -> r.wall >= MIN_WALL && elapsed - r.at in 0L..READING_MS }.mapValues { (_, r) -> r.wall + (elapsed - r.at) }
         val est = live.values.sorted()
         if (est.isEmpty()) return cur
-        // 1.42: right after the device started (no trusted time yet) one reading alone never sets the time.
-        if (cur == null) return firstClock(live, deviceWall)?.let { TimeAnchor(it, elapsed) }
+        // 1.42: right after the device started (no trusted time yet) one reading alone sets the time only after
+        // [FIRST_GRACE_MS] ([heldMs]: how long readings have been coming in since the device started).
+        if (cur == null) return firstClock(live, deviceWall, heldMs)?.let { TimeAnchor(it, elapsed) }
         val now = trustedNow(cur, elapsed)
         var bestI = 0; var bestJ = 0
         var j = 0
@@ -251,9 +252,13 @@ object KidRules {
      *  - a parent's signed config ("parent:" sources; the newest) that no other source disagrees with;
      *  - a source the device's own clock ([deviceWall]) agrees with: two that agree, though the clock alone never counts
      *    (one relay is then enough on a network that reaches no other, but only when the device's clock is right).
-     * One relay alone, or a parent's config another source disagrees with, waits for more.
+     * One relay alone, or a parent's config another source disagrees with, waits for more, but only for [FIRST_GRACE_MS]
+     * ([heldMs]: since the first reading came). After that a relay's time is taken (a network that reaches one relay
+     * only, or a device clock set wrong): the median of the largest group of relays that agree (a tie: the later group), else the newest parent's
+     * config. A relay's Date, served over its secure connection, beats a clock the child can set (as in 1.41, where one
+     * relay set it at once).
      */
-    fun firstClock(live: Map<String, Long>, deviceWall: Long?): Long? {
+    fun firstClock(live: Map<String, Long>, deviceWall: Long?, heldMs: Long = 0L): Long? {
         val est = live.values.sorted()
         if (est.isEmpty()) return null
         var bestI = 0; var bestJ = 0
@@ -266,9 +271,23 @@ object KidRules {
         if (bestJ > bestI) return est[(bestI + bestJ) / 2]
         val parent = live.filterKeys { it.startsWith("parent:") }.values.maxOrNull()
         if (parent != null && est.all { kotlin.math.abs(it - parent) <= AGREE_MS }) return parent
-        if (deviceWall == null) return null
-        return est.filter { kotlin.math.abs(it - deviceWall) <= AGREE_MS }.minByOrNull { kotlin.math.abs(it - deviceWall) }
+        val byClock = deviceWall?.let { w -> est.filter { kotlin.math.abs(it - w) <= AGREE_MS }.minByOrNull { kotlin.math.abs(it - w) } }
+        if (byClock != null) return byClock
+        if (heldMs < FIRST_GRACE_MS) return null
+        // Round 19: waited long enough. The relays' time (the largest group that agrees; a tie: the later), else a parent's.
+        val relays = live.filterKeys { !it.startsWith("parent:") }.values.sorted()
+        if (relays.isEmpty()) return parent
+        var bi = 0; var bj = 0; var k = 0
+        for (i in relays.indices) {
+            if (k < i) k = i
+            while (k + 1 < relays.size && relays[k + 1] - relays[i] <= AGREE_MS) k++
+            if (k - i >= bj - bi) { bi = i; bj = k }
+        }
+        return relays[(bi + bj) / 2]
     }
+
+    /** Round 19: how long the first trusted time after a start waits for a second source before one relay's time is taken. */
+    const val FIRST_GRACE_MS = 2 * 60_000L
 
     /** The quiet time on at [epochMs] in zone [tz] (empty or unknown: [fallback], the device's own), or null. */
     fun quietAt(list: List<QuietTime>, epochMs: Long, tz: String, fallback: java.util.TimeZone): QuietTime? {

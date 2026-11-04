@@ -105,8 +105,8 @@ class CallSession(
     private fun lanPortIfClose(): Int? = if (host.lanAddressOf(peerKey) != null) media?.lanPort else null
 
     /** Put this phone's internet addresses in what it sends: only to someone trusted, and as the callee only when asked (5.8.1). */
-    // Ultra privacy: never the direct path (no STUN, no address swapped); the call goes through the call relay, or the
-    // same Wi-Fi.
+    // Ultra privacy: never the direct path (no STUN, no address swapped). Calls are off while it's on (round 19), so a
+    // call that got this far ends when it turns on.
     private fun shareDirect() = c2Local && trusted && host.internetAllowed() && (outgoing || peerP2p) && io.github.ravenor907.muninn.net.UltraPrivacy.directAllowed
     private fun extras() = if (!c2Local) null else CallLogic.Extras(host.videoCodec(), wantVideo, shareDirect())
     private fun directCands() = if (shareDirect()) myDirect else emptyList()
@@ -193,6 +193,16 @@ class CallSession(
 
     fun decline() { if (phase == Phase.INCOMING) end("declined", send = true, t = "decline") }
 
+    /**
+     * Ultra privacy turned on (owner decision: calls are off while it's on). A call under way ends now and the other
+     * side hears a hang-up; one still ringing here goes quiet, with no answer sent (it shows as missed, and says why).
+     */
+    fun endForUltra() {
+        if (phase == Phase.ENDED) return
+        note = io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF
+        if (phase == Phase.INCOMING) end("ultra", send = false) else end("ultra", send = true)
+    }
+
     // ------------------------------------------------------------------ both
 
     /** A checked message for this call from the peer. */
@@ -242,6 +252,10 @@ class CallSession(
         answeredAt = System.currentTimeMillis()
         set(Phase.CONNECTING)
         if (!m.startAudio(video = wantVideo || peerVideo)) note = "The microphone isn't available"
+        // Interop (round 19): this side offered the direct path, but the answer has none (Direct off on their side, or
+        // Ultra privacy there). With no Wi-Fi or Bluetooth path either, the relay is asked for now instead of after
+        // RELAY_NEED_MS, so the call doesn't wait 2.5 s for it.
+        if (!directOn && !relayStarted && CallLogic.relayAtStart(host.lanAddressOf(peerKey) != null, host.bluetoothFor(), false)) startRelay()
     }
 
     /** Tells media where the peer is: its relayed address, and its Wi-Fi address when close by. */

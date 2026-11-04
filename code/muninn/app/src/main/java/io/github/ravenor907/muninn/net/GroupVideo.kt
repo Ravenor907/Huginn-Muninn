@@ -51,9 +51,11 @@ object GroupVideo {
 
     /**
      * What a picked video is: its picture as stored ([rotation] 0, 90, 180 or 270), frames a second, length, size, and its
-     * sound's bitrate ([audioBps], 0 when the file doesn't say).
+     * sound's bitrate ([audioBps], 0 when the file doesn't say). [plain]: H.264 (8-bit, not HDR) with AAC sound or none,
+     * in an MP4, so every app can play it as it is (29.1); anything else is converted.
      */
-    data class Info(val w: Int, val h: Int, val rotation: Int, val fps: Float, val ms: Int, val bytes: Long, val audioBps: Int = 0)
+    data class Info(val w: Int, val h: Int, val rotation: Int, val fps: Float, val ms: Int, val bytes: Long, val audioBps: Int = 0,
+                    val plain: Boolean = true)
 
     /** Upright width and height (a phone video stored sideways with a turn of 90 or 270). */
     fun upright(i: Info): Pair<Int, Int> = if (i.rotation % 180 == 90) i.h to i.w else i.w to i.h
@@ -64,16 +66,45 @@ object GroupVideo {
     /** Frames a second within [max] (0 or unknown counts as fine: the converter is told the limit anyway). */
     fun withinFps(fps: Float, max: Int) = fps <= max + 0.5f
 
-    /** It can go full size as it is (no converting): 1080p30 at most, small enough, and a minute at most. */
-    fun fitsFull(i: Info) = i.w > 0 && i.h > 0 && withinSize(i.w, i.h, FULL_LONG, FULL_SHORT) && withinFps(i.fps, FULL_FPS) &&
+    /** It can go full size as it is (no converting): plain H.264, 1080p30 at most, small enough, and a minute at most. */
+    fun fitsFull(i: Info) = i.plain && i.w > 0 && i.h > 0 && withinSize(i.w, i.h, FULL_LONG, FULL_SHORT) && withinFps(i.fps, FULL_FPS) &&
         i.bytes in 1..FULL_MAX_BYTES && i.ms in 1..(FULL_MAX_MS + SLACK_MS)
 
-    /** It must be converted before it goes full size (bigger than 1080p, faster than 30 fps, or too many bytes). */
-    fun needsConvert(i: Info) = !(withinSize(i.w, i.h, FULL_LONG, FULL_SHORT) && withinFps(i.fps, FULL_FPS) && i.bytes in 1..FULL_MAX_BYTES)
+    /** It must be converted before it goes full size (not plain H.264, bigger than 1080p, faster than 30 fps, or too many bytes). */
+    fun needsConvert(i: Info) = !(i.plain && withinSize(i.w, i.h, FULL_LONG, FULL_SHORT) && withinFps(i.fps, FULL_FPS) && i.bytes in 1..FULL_MAX_BYTES)
 
-    /** It can go over the relays as it is: 720p at most, short enough, within [RELAY_PIECES] pieces. */
-    fun fitsRelay(i: Info) = i.w > 0 && i.h > 0 && withinSize(i.w, i.h, RELAY_LONG, RELAY_SHORT) && withinFps(i.fps, FULL_FPS) &&
+    /** It can go over the relays as it is: plain H.264, 720p at most, short enough, within [RELAY_PIECES] pieces. */
+    fun fitsRelay(i: Info) = i.plain && i.w > 0 && i.h > 0 && withinSize(i.w, i.h, RELAY_LONG, RELAY_SHORT) && withinFps(i.fps, FULL_FPS) &&
         i.bytes in 1..RELAY_BYTES.toLong() && i.ms in 1..(RELAY_MAX_MS + SLACK_MS)
+
+    // MediaFormat values (android.media), here so the rule is checked on the JVM.
+    private const val AVC_HIGH10 = 0x10
+    private const val AVC_HIGH422 = 0x20
+    private const val AVC_HIGH444 = 0x40
+    private const val TRANSFER_ST2084 = 6
+    private const val TRANSFER_HLG = 7
+    private const val STANDARD_BT2020 = 6
+
+    /**
+     * A video Muninn may send as it is (29.1: H.264 and AAC in MP4): [mp4] (the file starts with an "ftyp" box), video
+     * [video] "video/avc" in 8 bits ([profile] not High 10, 4:2:2 or 4:4:4; -1 unknown) and not HDR ([transfer], [standard];
+     * -1 unknown), and sound [audio] AAC or none (null).
+     */
+    fun plainCodecs(mp4: Boolean, video: String, profile: Int, transfer: Int, standard: Int, audio: String?): Boolean =
+        mp4 && video.equals("video/avc", ignoreCase = true) && profile !in setOf(AVC_HIGH10, AVC_HIGH422, AVC_HIGH444) &&
+            transfer != TRANSFER_ST2084 && transfer != TRANSFER_HLG && standard != STANDARD_BT2020 &&
+            (audio == null || audio.equals("audio/mp4a-latm", ignoreCase = true))
+
+    /** The first bytes of a file are an MP4's (or a QuickTime file's) "ftyp" box. */
+    fun isMp4Head(head: ByteArray): Boolean =
+        head.size >= 8 && head[4] == 'f'.code.toByte() && head[5] == 't'.code.toByte() && head[6] == 'y'.code.toByte() && head[7] == 'p'.code.toByte()
+
+    /**
+     * The size a copy of an upright [w] x [h] picture is made at to fit [long] x [short] (either way up), or null when it
+     * already fits. Both sides count: a 2560 x 1080 clip is 1920 x 810, not 2560 x 1080.
+     */
+    fun target(w: Int, h: Int, long: Int, short: Int): Pair<Int, Int>? =
+        if (w <= 0 || h <= 0 || withinSize(w, h, long, short)) null else scaled(w, h, long, short)
 
     /**
      * [w] x [h] shrunk (never grown) to fit [long] x [short] either way up, keeping its shape, both sides even (encoders
@@ -242,4 +273,232 @@ object GroupVideo {
         total <= 0 || sent >= total -> "$name: smaller copy, sent"
         else -> "$name: smaller copy, ${sent * 100 / total}% sent"
     }
+}
+
+/**
+ * Location and camera details out of a picked video before it goes (as Photos.scrub does for photos), changed in place so
+ * the picture and sound stay exactly as they are and every sample offset stays right:
+ *  - "udta", "meta" and "uuid" boxes (Android's ©xyz location, an iPhone's location keys, XMP, make and model), at the
+ *    top, in "moov" and in every track, become "free" with their contents zeroed. So do "free" and "skip" contents.
+ *  - Tracks other than picture and sound (timed metadata such as GPS tracks, timecode) become "free", and the samples
+ *    they point at in "mdat" are zeroed too.
+ *  - The creation and change times in mvhd, tkhd and mdhd are zeroed.
+ *  - Anything else at the top is zeroed; bytes after the last whole box (a maker's trailer) are cut off.
+ * A file it can't do that to safely (fragmented, malformed, a huge "moov") is refused (-1): it is then converted, or not
+ * sent as a video. Bounds are checked everywhere: the file is the person's own, but it may come from anywhere.
+ */
+object Mp4Scrub {
+    /** Where the bytes are: a file, or bytes in memory (tests, a relay copy). */
+    interface Io {
+        val size: Long
+        fun read(at: Long, n: Int): ByteArray
+        fun write(at: Long, b: ByteArray)
+    }
+
+    class Bytes(val b: ByteArray) : Io {
+        override val size: Long get() = b.size.toLong()
+        override fun read(at: Long, n: Int): ByteArray = b.copyOfRange(at.toInt(), (at + n).toInt())
+        override fun write(at: Long, b: ByteArray) { b.copyInto(this.b, at.toInt()) }
+    }
+
+    /** A "moov" bigger than this is refused (a minute of video has well under a megabyte of it). */
+    const val MAX_MOOV = 16 * 1024 * 1024
+    /** Samples zeroed in one track at most (a minute of timed metadata is a few thousand). */
+    private const val MAX_SAMPLES = 2_000_000
+
+    private val KEEP_TOP = setOf("ftyp", "moov", "mdat")
+    private val WIPE = setOf("udta", "meta", "uuid", "free", "skip", "wide")
+    private val FREE = "free".toByteArray(Charsets.US_ASCII)
+
+    private class Box(val at: Int, val head: Int, val end: Int, val type: String) { val body get() = at + head }
+
+    private fun u32(d: ByteArray, at: Int): Long =
+        ((d[at].toLong() and 0xff) shl 24) or ((d[at + 1].toLong() and 0xff) shl 16) or ((d[at + 2].toLong() and 0xff) shl 8) or (d[at + 3].toLong() and 0xff)
+
+    private fun u64(d: ByteArray, at: Int): Long = (u32(d, at) shl 32) or u32(d, at + 4)
+
+    /** The boxes directly inside [start, end) of [d], or null when one is malformed. */
+    private fun boxes(d: ByteArray, start: Int, end: Int): List<Box>? {
+        val out = ArrayList<Box>()
+        var at = start
+        while (at < end) {
+            if (at + 8 > end) return null
+            var len = u32(d, at)
+            var head = 8
+            if (len == 1L) {
+                if (at + 16 > end) return null
+                len = u64(d, at + 8)
+                head = 16
+            } else if (len == 0L) len = (end - at).toLong()
+            if (len < head || len > end - at) return null
+            out.add(Box(at, head, at + len.toInt(), String(d, at + 4, 4, Charsets.ISO_8859_1)))
+            at += len.toInt()
+        }
+        return out
+    }
+
+    private fun wipe(d: ByteArray, b: Box) {
+        FREE.copyInto(d, b.at + 4)
+        d.fill(0, b.body, b.end)
+    }
+
+    /** mvhd, tkhd and mdhd: their creation and change times zeroed (version 0: 4 bytes each, version 1: 8). */
+    private fun zeroTimes(d: ByteArray, b: Box) {
+        if (b.body >= b.end) return
+        val n = if (d[b.body].toInt() == 1) 16 else 8
+        if (b.body + 4 + n <= b.end) d.fill(0, b.body + 4, b.body + 4 + n)
+    }
+
+    /** One track's samples in the file, as (offset, length) runs, from its stbl; null when its tables don't add up. */
+    private fun samples(d: ByteArray, stbl: Box, fileSize: Long): List<Pair<Long, Long>>? {
+        val kids = boxes(d, stbl.body, stbl.end) ?: return null
+        val stsz = kids.firstOrNull { it.type == "stsz" } ?: return if (kids.any { it.type == "stz2" }) null else emptyList()
+        val stsc = kids.firstOrNull { it.type == "stsc" } ?: return null
+        val co = kids.firstOrNull { it.type == "stco" || it.type == "co64" } ?: return null
+        if (stsz.body + 12 > stsz.end || stsc.body + 8 > stsc.end || co.body + 8 > co.end) return null
+        val fixed = u32(d, stsz.body + 4)
+        val count = u32(d, stsz.body + 8)
+        if (count > MAX_SAMPLES || (fixed == 0L && stsz.body + 12 + count * 4 > stsz.end)) return null
+        val entries = u32(d, stsc.body + 4)
+        if (stsc.body + 8 + entries * 12 > stsc.end) return null
+        val wide = co.type == "co64"
+        val chunks = u32(d, co.body + 4)
+        if (co.body + 8 + chunks * (if (wide) 8 else 4) > co.end) return null
+        val out = ArrayList<Pair<Long, Long>>()
+        if (entries == 0L) return if (count == 0L) out else null
+        var sample = 0L
+        var e = 0
+        for (c in 0 until chunks.toInt()) {
+            if (sample >= count) break
+            while (e + 1 < entries && u32(d, stsc.body + 8 + (e + 1) * 12) <= c + 1L) e++
+            val per = minOf(u32(d, stsc.body + 8 + e * 12 + 4), count - sample)
+            val off = if (wide) u64(d, co.body + 8 + c * 8) else u32(d, co.body + 8 + c * 4)
+            var len = 0L
+            if (fixed != 0L) len = per * fixed
+            else for (s in 0 until per) len += u32(d, stsz.body + 12 + ((sample + s) * 4).toInt())
+            sample += per
+            if (off < 0 || len < 0 || off + len > fileSize) return null
+            if (len > 0) out.add(off to len)
+        }
+        return out
+    }
+
+    /**
+     * One track: kept and cleaned (picture or sound), or dropped with its samples added to [zero]. True for a picture
+     * track, false for any other, null when it's malformed.
+     */
+    private fun track(d: ByteArray, trak: Box, fileSize: Long, zero: MutableList<Pair<Long, Long>>): Boolean? {
+        val kids = boxes(d, trak.body, trak.end) ?: return null
+        val mdia = kids.firstOrNull { it.type == "mdia" } ?: return null
+        val inMdia = boxes(d, mdia.body, mdia.end) ?: return null
+        val hdlr = inMdia.firstOrNull { it.type == "hdlr" } ?: return null
+        if (hdlr.body + 12 > hdlr.end) return null
+        val handler = String(d, hdlr.body + 8, 4, Charsets.ISO_8859_1)
+        if (handler != "vide" && handler != "soun") {
+            val minf = inMdia.firstOrNull { it.type == "minf" }
+            val stbl = minf?.let { m -> boxes(d, m.body, m.end)?.firstOrNull { it.type == "stbl" } }
+            if (stbl != null) zero.addAll(samples(d, stbl, fileSize) ?: return null)
+            wipe(d, trak)
+            return false
+        }
+        for (k in kids) when (k.type) {
+            "tkhd" -> zeroTimes(d, k)
+            in WIPE -> wipe(d, k)
+        }
+        for (k in inMdia) when (k.type) {
+            "mdhd" -> zeroTimes(d, k)
+            in WIPE -> wipe(d, k)
+        }
+        return handler == "vide"
+    }
+
+    /**
+     * Cleans [io] in place. Returns the length the file should be cut to (bytes after it aren't a box), or -1 when it
+     * can't be done safely (then nothing should go as it is).
+     */
+    fun scrub(io: Io): Long {
+        val size = io.size
+        var at = 0L
+        var moovAt = -1L
+        var moovLen = 0
+        var sawMdat = false
+        val wipeTop = ArrayList<Pair<Long, Long>>()
+        while (at + 8 <= size) {
+            val h = io.read(at, minOf(16L, size - at).toInt())
+            var len = u32(h, 0)
+            var head = 8
+            if (len == 1L) {
+                if (h.size < 16) break
+                len = u64(h, 8)
+                head = 16
+            } else if (len == 0L) len = size - at
+            if (len < head || len > size - at) break
+            val type = String(h, 4, 4, Charsets.ISO_8859_1)
+            when {
+                type == "moov" -> {
+                    if (moovAt >= 0 || len > MAX_MOOV) return -1
+                    moovAt = at
+                    moovLen = len.toInt()
+                }
+                type == "mdat" -> sawMdat = true
+                type == "moof" || type == "mfra" || type == "sidx" || type == "styp" -> return -1   // fragmented: not handled
+                type in KEEP_TOP -> {}
+                else -> {
+                    io.write(at + 4, FREE)
+                    wipeTop.add(at + head to len - head)
+                }
+            }
+            at += len
+        }
+        val keep = at
+        if (moovAt < 0 || !sawMdat) return -1
+        val m = io.read(moovAt, moovLen)
+        val top = boxes(m, 0, moovLen)?.singleOrNull() ?: return -1
+        val kids = boxes(m, top.body, top.end) ?: return -1
+        if (kids.any { it.type == "mvex" }) return -1
+        val zero = ArrayList<Pair<Long, Long>>()
+        var video = false
+        for (k in kids) when (k.type) {
+            "mvhd" -> zeroTimes(m, k)
+            "trak" -> video = (track(m, k, size, zero) ?: return -1) || video
+            in WIPE -> wipe(m, k)
+        }
+        if (!video) return -1
+        // A dropped track's samples must lie in the file, outside "moov" (written back below), before the cut.
+        for ((off, len) in zero) if (off + len > keep || (off < moovAt + moovLen && off + len > moovAt)) return -1
+        io.write(moovAt, m)
+        for ((off, len) in wipeTop + zero) zeros(io, off, len)
+        return keep
+    }
+
+    private fun zeros(io: Io, at: Long, len: Long) {
+        val chunk = ByteArray(64 * 1024)
+        var done = 0L
+        while (done < len) {
+            val n = minOf(chunk.size.toLong(), len - done).toInt()
+            io.write(at + done, if (n == chunk.size) chunk else ByteArray(n))
+            done += n
+        }
+    }
+
+    /** [b] cleaned (a copy, cut to its last whole box), or null when it can't be done safely. */
+    fun scrubBytes(b: ByteArray): ByteArray? = try {
+        val c = b.copyOf()
+        val keep = scrub(Bytes(c))
+        if (keep <= 0) null else if (keep < c.size) c.copyOf(keep.toInt()) else c
+    } catch (_: Exception) { null }
+
+    /** [f] cleaned in place (and cut to its last whole box). False when it can't be done safely: don't send it as it is. */
+    fun scrubFile(f: java.io.File): Boolean = try {
+        java.io.RandomAccessFile(f, "rw").use { r ->
+            val io = object : Io {
+                override val size: Long = r.length()
+                override fun read(at: Long, n: Int): ByteArray { val b = ByteArray(n); r.seek(at); r.readFully(b); return b }
+                override fun write(at: Long, b: ByteArray) { r.seek(at); r.write(b) }
+            }
+            val keep = scrub(io)
+            if (keep > 0 && keep < io.size) r.setLength(keep)
+            keep > 0
+        }
+    } catch (_: Exception) { false } catch (_: OutOfMemoryError) { false }
 }

@@ -2,9 +2,11 @@
 
 #include <QHash>
 #include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QElapsedTimer>
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QUrl>
 #include <functional>
@@ -31,6 +33,8 @@ class Updater : public QObject
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
     // Installing now: Huginn restarts on the new version after.
     Q_PROPERTY(bool installing READ installing NOTIFY changed)
+    // Windows: the last update couldn't go in because something (antivirus, almost always) took Tor's tor.exe away.
+    Q_PROPERTY(bool torBlocked READ torBlocked NOTIFY changed)
 
 public:
     explicit Updater(Settings *settings, QObject *parent = nullptr);
@@ -44,6 +48,21 @@ public:
     // The checked update waiting for Restart now ("" when none): App storage leaves it alone.
     QString readyPath() const { return m_readyPath; }
     bool installing() const { return m_installing; }
+    bool torBlocked() const { return m_torBlocked; }
+    // The one-time choice after torBlocked (Main.qml asks once): the update goes in without Tor (Ultra privacy then
+    // can't start until Tor is back: allow tor.exe in the antivirus, then Check now puts it back).
+    Q_INVOKABLE void updateWithoutTor();
+    // A sentence for torBlocked's question.
+    Q_INVOKABLE QString torBlockedText() const;
+    // Ultra privacy turned on or off, or Tor's port changed (main.cpp): what is under way stops and a check comes again
+    // later through the new way, never on through the old one.
+    void redial();
+    // A request through Tor may stall for good: no bytes for this long ends it.
+    static constexpr int kStallMs = 60000;
+    // The update file is written to disk as it comes, never more than this.
+    static constexpr qint64 kMaxDownload = 128LL * 1024 * 1024;
+    // "update/failed"'s sentence names Tor's folder.
+    static bool namesTor(const QString &why);
 
     // At launch: if a newer release is out, download and check it; it installs only on Restart now. While Huginn runs
     // it checks again every 6 hours (12 with Battery saver on), give or take up to 30 minutes, and a minute after the
@@ -110,6 +129,8 @@ Q_SIGNALS:
     void remind();
     // Something to say on screen at once (the update went in but Huginn couldn't start again, or it failed).
     void notice(const QString &text);
+    // torBlocked became true: Main.qml asks once whether to update without Tor.
+    void torChoice();
 
 private:
     void installNow(const QString &path);
@@ -134,6 +155,12 @@ private:
     QString assetName() const;
     void chosen(const QString &ver, const QString &tag, const QString &asset, bool installAfter, bool autoMode);
     QNetworkRequest request(const QUrl &url) const;
+    // Every request: Ultra privacy's proxy as it is now, and kept so redial() can stop it.
+    QNetworkReply *get(const QNetworkRequest &req);
+    QList<QPointer<QNetworkReply>> m_replies;
+    bool m_redialed = false;   // the last stop was redial()'s: "tries again later", and it does
+    bool m_torBlocked = false;
+    void noteTorFailure(const QString &why);
     void download(const QString &url, const QString &tag);
     // Checks the download against the release's SHA-256 (its signatures block, and GitHub's digest when there is one),
     // the project's signature (.sig) and its signature of the version (.vsig), from the block or else the separate

@@ -89,6 +89,18 @@ Rectangle {
         }
         setFall(key, v)
     }
+    // Ultra privacy and Read aloud say "changed" every second while Tor connects or a voice downloads (the percentage).
+    // The rows read these copies, which only change when the value does, so the rows aren't rebuilt each time; the
+    // live status lines are read by the row itself (SettingRow.noteText).
+    readonly property bool ultraOn: UltraPrivacy.active
+    readonly property bool ultraBanner: UltraPrivacy.bannerShows
+    readonly property bool ultraMissing: UltraPrivacy.torState === "missing"
+    readonly property string ultraBannerText: UltraPrivacy.bannerText
+    readonly property string aloudVoice: ReadAloud.voice
+    readonly property bool aloudFiles: ReadAloud.hasFiles
+    readonly property bool aloudReady: ReadAloud.ready
+    readonly property bool aloudCan: ReadAloud.available
+    readonly property bool aloudNatural: ReadAloud.natural
     // Color vision: only the ones that look different (Theme.distinctSwatches).
     readonly property var swatches: Theme.distinctSwatches(["#C2A25E", "#6E9CC8", "#6FAE8C", "#CF6F54", "#A58BC6", "#B07A5A"])
 
@@ -134,24 +146,27 @@ Rectangle {
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
             { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
             { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews",
-              note: UltraPrivacy.active ? UltraPrivacy.offNote : Settings.dataSaver ? "Off while Data saver is on" : "" },
+              note: page.ultraOn ? UltraPrivacy.offNote : Settings.dataSaver ? "Off while Data saver is on" : "" },
             // Windows only: screenshots and screen recordings leave Huginn's window out.
             { group: "Privacy", kind: "toggle", key: "blockScreenshots", hide: Qt.platform.os !== "windows", title: "Block screenshots", note: "Hides Huginn from captures" },
             { group: "Privacy", kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages",
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "1 day" }] },
             // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
             { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby",
-              note: UltraPrivacy.active ? UltraPrivacy.nearbyNote : "Off: contacts only, nothing announced" },
+              note: page.ultraOn ? UltraPrivacy.nearbyNote : "Off: contacts only, nothing announced" },
             { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
             { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" },
             // Ultra privacy (1.42, src/ultraprivacy.h): Tor, off by default. Turning it on shows what it does, then every
             // downside, then asks; while Tor is slow or blocked, Wait or Turn off.
-            { group: "Ultra privacy", kind: "toggle", key: "active", ultra: true, title: "Ultra privacy", note: UltraPrivacy.statusLine },
-            { group: "Ultra privacy", kind: "info", hide: !UltraPrivacy.active, title: UltraPrivacy.offNote,
-              note: "Direct calls and files, sending videos, link previews and GIF search. Calls go through the call relay" },
-            { group: "Ultra privacy", kind: "button", key: "ultraWait", hide: !UltraPrivacy.bannerShows || UltraPrivacy.torState === "missing",
-              title: UltraPrivacy.bannerText, label: "Wait" },
-            { group: "Ultra privacy", kind: "button", key: "ultraFallBack", hide: !UltraPrivacy.bannerShows,
+            { group: "Ultra privacy", kind: "toggle", key: "active", ultra: true, title: "Ultra privacy", live: "ultra" },
+            { group: "Ultra privacy", kind: "info", hide: !page.ultraOn, title: UltraPrivacy.offNote,
+              note: "Calls, direct files, sending videos, link previews and GIF search" },
+            { group: "Ultra privacy", kind: "button", key: "ultraWait", hide: !page.ultraBanner || page.ultraMissing,
+              title: page.ultraBannerText, label: "Wait" },
+            // Tor couldn't start (or was removed): start it again, next to Turn off.
+            { group: "Ultra privacy", kind: "button", key: "ultraTryAgain", hide: !page.ultraMissing,
+              title: page.ultraBannerText, label: "Try again" },
+            { group: "Ultra privacy", kind: "button", key: "ultraFallBack", hide: !page.ultraBanner,
               title: "Turn off Ultra privacy", note: "Connects the normal way again", label: "Turn off" }
         ], [
             { kind: "segmented", key: "lockPosition", title: "Pattern position",
@@ -160,7 +175,9 @@ Rectangle {
             { group: "  ", kind: "button", key: "lockOff", hide: !Vault.hasLock, title: "Turn off the lock", label: "Turn off" }
         ], Vault.hasLock ? "Pattern position, Turn off the lock" : "Pattern position")
         case "calls": return page.withMore([
-            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: "Call people anywhere" },
+            // Owner decision (round 19): no calls at all while Ultra privacy is on, said where calls are set.
+            { kind: "info", hide: !page.ultraOn, title: "Calls are off while Ultra privacy is on" },
+            { kind: "toggle", key: "internetCalls", title: "Internet calls", note: page.ultraOn ? "Off while Ultra privacy is on" : "Call people anywhere" },
             { kind: "toggle", key: "noiseRemoval", title: "Noise removal" },
             { group: "Devices", kind: "button", key: "micDevice", title: "Microphone", note: Settings.audioDeviceName(true, Settings.micDevice), label: "Change" },
             { group: "Devices", kind: "button", key: "speakerDevice", title: "Speaker", note: Settings.audioDeviceName(false, Settings.speakerDevice), label: "Change" },
@@ -223,11 +240,17 @@ Rectangle {
             { group: "Daily Hávamál", kind: "button", key: "verseRemove", hide: !DailyVerse.verseOn || !DailyVerse.hasMine, title: "Remove your translation", label: "Remove" },
             // Read aloud (src/readaloud.h): the natural voice is downloaded once (only the one picked) and kept; the
             // computer's own voice reads until it's in.
-            { group: "Read aloud", kind: "segmented", key: "voice", aloud: true, title: "Voice", note: ReadAloud.status, value: ReadAloud.voice,
+            // Until this build's voices are published (no line in voices.sha256) the natural voice isn't offered: one
+            // line says what reads instead.
+            { group: "Read aloud", kind: "info", hide: page.aloudNatural, title: "Natural voices", live: "aloud" },
+            { group: "Read aloud", kind: "segmented", key: "voice", aloud: true, hide: !page.aloudNatural, title: "Voice", live: "aloud", value: page.aloudVoice,
               options: [{ value: "f", label: "Female" }, { value: "m", label: "Male" }] },
-            { group: "Read aloud", kind: "toggle", key: "mobileData", aloud: true, title: "Allow on mobile data",
+            // Fetch the voice now (on home Wi-Fi before a trip), instead of the first time something is read.
+            { group: "Read aloud", kind: "button", key: "voiceGet", hide: !page.aloudNatural || !page.aloudCan || page.aloudReady, title: "Download the voice now",
+              note: "About 65 MB", label: "Download" },
+            { group: "Read aloud", kind: "toggle", key: "mobileData", aloud: true, hide: !page.aloudNatural, title: "Allow on mobile data",
               note: "Downloads the voice (about 65 MB) on a metered connection too" },
-            { group: "Read aloud", kind: "button", key: "voiceDelete", hide: !ReadAloud.hasFiles, title: "Delete voices",
+            { group: "Read aloud", kind: "button", key: "voiceDelete", hide: !page.aloudFiles, title: "Delete voices",
               note: "Frees the space. It downloads again the next time something is read aloud", label: "Delete" }
         ], [
             { group: "Color vision", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
@@ -575,6 +598,8 @@ Rectangle {
         property var r: ({})
         readonly property bool focused: page.active && page.inSection && page.row === at && !!Ui.main && Ui.main.padInUse
         readonly property bool danger: page.dangerKeys.indexOf(r.key) >= 0
+        // A live status line (Tor's progress, the voice download) is read here, not in the rows (see page.ultraOn).
+        readonly property string noteText: r.live === "ultra" ? UltraPrivacy.statusLine : r.live === "aloud" ? ReadAloud.status : (r.note || "")
         // Wide choices go under the words when there isn't room beside them; a picker then takes the full width
         // (and becomes a dropdown only if even that is too narrow, see Segmented).
         readonly property bool stacked: r.kind === "segmented" ? segCtl.naturalWidth > width * 0.5 : control.width > width * 0.5
@@ -594,7 +619,7 @@ Rectangle {
             y: rowItem.stacked ? Theme.px(10) : (parent.height - implicitHeight) / 2
             spacing: Theme.px(2)
             Text { textFormat: Text.PlainText; width: parent.width; wrapMode: Text.Wrap; text: rowItem.r.title || ""; color: rowItem.danger ? Theme.danger : Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
-            Text { textFormat: Text.PlainText; visible: !!rowItem.r.note; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.r.note || ""; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+            Text { textFormat: Text.PlainText; visible: rowItem.noteText !== ""; width: parent.width; wrapMode: Text.WordWrap; text: rowItem.noteText; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
         }
         Item {
             id: control
@@ -946,7 +971,7 @@ Rectangle {
                 + "after the 24-hour wait erase everything Huginn keeps on this computer at once, for good: chats, contacts and keys. Children or anyone guessing can "
                 + "set it off. Huginn itself stays installed.\n\nMake a backup first (Settings › Devices and backup). Without one, an erase can't be undone. Your saved "
                 + "backup files are kept, and Forgot it? puts one back.\n\nThis guards against guessing at this screen. Someone who copies Huginn's files can still "
-                + "guess without it, so a long password is the stronger lock on a computer.",
+                + "guess without it, so a long password, or with a pattern a long unlock password, is the stronger lock on a computer.",
                 "Turn on", () => Ui.main.askLock("Erase after too many tries", "Confirm it's you first", "erase", () => {
                     Vault.eraseAfterTries = true
                     if (Vault.eraseAfterTries) Ui.say("Erase after too many tries is on. Keep a recent backup.")
@@ -965,6 +990,8 @@ Rectangle {
                 UltraPrivacy.turnOn()
                 Ui.say("Ultra privacy is on. Connecting to Tor…")
             })
+            // A second press meant for Next must not land on Turn on: the controller's half-second guard.
+            if (Ui.main && Ui.confirm) Ui.main.guardOverlay(Ui.confirm)
         })
     }
     // Quiet hours: an hour of the day, the way the clock shows it.
@@ -984,6 +1011,13 @@ Rectangle {
     function pickSegment(r, v) {
         if (r.rooms) { Rooms[r.key] = v; return }
         if (r.verse) { DailyVerse[r.key] = v; return }
+        if (r.aloud && r.key === "voice" && v !== ReadAloud.voice && ReadAloud.hasFiles) {
+            // A voice is already in: switching downloads the other one (about 65 MB) and deletes this one, so ask
+            // first (one stray Left or Right on the controller shouldn't start it).
+            Ui.sure("Switch to the " + (v === "m" ? "male" : "female") + " voice?",
+                    "Huginn downloads it (about 65 MB), then deletes the voice it has now.", "Switch", () => { ReadAloud.voice = v })
+            return
+        }
         if (r.aloud) { ReadAloud[r.key] = v; return }
         if (r.chat) Chat[r.key] = Number(v)
         else Settings[r.key] = v
@@ -1054,6 +1088,7 @@ Rectangle {
         else if (key === "status") { if (Ui.main) Ui.main.openStatusCard() }
         else if (key === "rightAway") seeRightAway()
         else if (key === "ultraWait") UltraPrivacy.waitLonger()
+        else if (key === "ultraTryAgain") UltraPrivacy.tryAgain()
         else if (key === "ultraFallBack") { UltraPrivacy.turnOff(); Ui.say("Ultra privacy is off.") }
         else if (key === "muteKey" || key === "deafenKey") {
             const which = key === "muteKey" ? 1 : 2
@@ -1064,6 +1099,7 @@ Rectangle {
         else if (key === "fallAnyway") { Settings.seasonAnimation = "battery"; Ui.say("Animation: On, even on battery. It moves slower on battery to save power.") }
         else if (key === "shortcuts") Ui.main.showShortcuts()
         else if (key === "verseImport") importVerses()
+        else if (key === "voiceGet") { ReadAloud.prepare(); Ui.say(ReadAloud.status || "Downloading the voice.") }
         else if (key === "voiceDelete") Ui.sure("Delete voices?", "The computer's own voice reads until the natural voice downloads again.", "Delete",
                                                 () => { ReadAloud.deleteVoices(); Ui.say("Voices deleted.") }, false, true)
         else if (key === "verseRemove") Ui.sure("Remove your translation?", "It's erased from this computer. Bellows shows again.", "Hold to remove",

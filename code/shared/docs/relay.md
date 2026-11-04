@@ -6,6 +6,9 @@ apps also try a direct path, which costs the relay nothing (5.8.2). The apps nev
 token. They ask the relay Worker (`code/shared/relay-worker/worker.js`) for a short-lived TURN login instead, and get
 TURN URLs from it, never STUN URLs.
 
+With Ultra privacy on, calls are off both ways: the relay would see the address Tor hides, and Tor can't carry a call.
+Nothing asks the Worker or the relay then, and a call to someone with it on shows as missed in their app.
+
 ## STUN (trusted contacts only)
 
 For the direct path each app asks `stun.cloudflare.com:3478` (Cloudflare's free STUN service, no login,

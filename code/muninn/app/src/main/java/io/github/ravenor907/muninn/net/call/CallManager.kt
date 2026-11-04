@@ -92,6 +92,8 @@ object CallManager {
             val now = System.currentTimeMillis()
             // Unlocked: the offer itself rings, with the name.
             if (!a.vault.locked.value) return@execute
+            // Ultra privacy: calls are off, so nothing rings. The offer, opened after unlocking, leaves a missed call.
+            if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) return@execute
             // Only a call id rings once; another call while locked rings too (the newest one shows).
             if (session != null || RoomManager.busy) return@execute
             if (!io.github.ravenor907.muninn.net.RingWire.ringFresh(ts, now)) return@execute
@@ -224,6 +226,8 @@ object CallManager {
     /** Starts a call to [peerKey] ([video]: with the camera on). False if a call is already going on or calling isn't set up yet. */
     fun start(peerKey: String, video: Boolean = false): Boolean {
         val a = app ?: return false
+        // Ultra privacy: calls are off while it's on (the call screen says so before it gets here).
+        if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) return false
         if (session != null || RoomManager.busy || Opus.loadError != null) return false
         val s = CallSession(CallCrypto.newCallId(), peerKey, true, host, exec, work)
         s.wantVideo = video && videoHere()
@@ -234,6 +238,21 @@ object CallManager {
         CallService.start(a)
         exec.execute { s.startOutgoing() }
         return true
+    }
+
+    /**
+     * Ultra privacy just turned on (TorRunner): calls are off while it's on. The call going on ends now (a ringing one
+     * goes quiet and shows as missed), and a ring on the locked screen stops.
+     */
+    fun ultraOn() {
+        exec.execute {
+            session?.endForUltra()
+            lockedRing?.let { r ->
+                lockedRing = null
+                Ringer.stop(r.app)
+                if (_call.value?.callId == r.callId && session == null) _call.value = null
+            }
+        }
     }
 
     // Round 18 (relay.md "On demand"): no relay login is fetched ahead of a call any more (opening a chat used to fetch
@@ -290,6 +309,17 @@ object CallManager {
             val cur = session
             if (cur != null && cur.callId == s.call) { if (cur.peerKey == fromKey) cur.onSignal(s); return@execute }
             if (s.t != "offer") return@execute
+            // Ultra privacy (owner decision): calls are off while it's on. Nothing rings and nothing is sent back (the
+            // caller sees no answer); here it's a missed call that says why, once per call.
+            if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) {
+                if (lockedRing?.callId == s.call) lockedRing = null
+                synchronized(lockedChoice) { lockedChoice.remove(s.call) }
+                if (!remember(s.call) || a.chat.blocked.value.contains(fromKey)) return@execute
+                addLog(Log(s.call, fromKey, nameOf(fromKey), false, s.ts.takeIf { it > 0 } ?: System.currentTimeMillis(), 0, "missed"))
+                val muted = try { a.chat.flags.muted(fromKey) } catch (e: Exception) { false }
+                if (!muted && !a.quietUntilOpen()) Ringer.missed(a, nameOf(fromKey), fromKey, io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF_MISSED)
+                return@execute
+            }
             if (s.codec != CallCrypto.CODEC) { send(fromKey, CallLogic.simple("decline", s.call)); return@execute }
             // Cap b1: this call already rang while Muninn was locked, and the person answered or declined it then.
             // Still ringing on the locked screen (unlocked meanwhile): the offer rings now, with the name.
@@ -453,6 +483,7 @@ object CallManager {
                 val quiet = silentRing == s.callId
                 if (quiet) silentRing = null
                 if (result == "missed" && !quiet) Ringer.missed(a, nameOf(s.peerKey), s.peerKey,
+                    if (s.endWhy == "ultra") io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF_MISSED else
                     if (inRoom == null) "" else if (inRoom.second.isEmpty()) "while you were in a voice room" else "while you were in ${inRoom.second}")
                 // Left a voice room to take this call: a way back to it (the end screen's button, and a notification).
                 _backTo.value?.takeIf { it.callId == s.callId }?.let { b -> Ringer.backToRoom(a, b.g, b.ch, b.title) }

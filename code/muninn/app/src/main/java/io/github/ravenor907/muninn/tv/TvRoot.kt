@@ -773,7 +773,8 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
                 Column(Modifier.verticalScroll(rememberScrollState(), reverseScrolling = true), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     // The kid's own messages say how they're doing (Sending, Sent, Waiting), as on a tablet or phone.
                     msgs.takeLast(3).forEach { TalkBubble(app, it, playing, onText = { reading = it.id }, onVideo = { video = it.id }, onPoll = { poll = it.id },
-                        who = if (KidChats.isGroup(p.k)) "" else p.n, status = KidK14.sendState(it.mine, it.state, it.failed, p.k in cfg.wait)) { viewing = it.id } }
+                        who = if (KidChats.isGroup(p.k)) "" else p.n, status = KidK14.sendState(it.mine, it.state, it.failed, p.k in cfg.wait),
+                        okOpens = true) { viewing = it.id } }
                 }
             }
         }
@@ -816,7 +817,8 @@ private fun TvTalk(app: Muninn, cfg: TvConfig, p: TvPerson, onBack: () -> Unit) 
     reading?.let { id ->
         val m = msgs.firstOrNull { it.id == id }
         if (m == null) LaunchedEffect(id) { reading = null }
-        else TvFullText(m.text) { reading = null }
+        // Round 19: Read aloud on a TV, by the remote (the device's own voice until the natural one is in).
+        else TvFullText(m.text, speak = if (io.github.ravenor907.muninn.net.ReadAloud.available) ({ KidSpeak.say(context, m.text) }) else null) { reading = null }
     }
 
     overlay?.let { o ->
@@ -919,7 +921,8 @@ private fun QuickTile(text: String, done: Boolean, requester: FocusRequester?, m
  */
 @Composable
 internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () -> Unit, onVideo: () -> Unit = {}, onPoll: () -> Unit = {},
-                        speak: (() -> Unit)? = null, corner: Dp = 14.dp, who: String = "", status: String = "", onPhoto: () -> Unit) {
+                        speak: (() -> Unit)? = null, corner: Dp = 14.dp, who: String = "", status: String = "", okOpens: Boolean = false,
+                        onPhoto: () -> Unit) {
     // [corner]: 14dp on a TV; rounder on a tablet or phone (the kids' style).
     val shape = if (m.mine) RoundedCornerShape(corner, corner, 4.dp, corner) else RoundedCornerShape(corner, corner, corner, 4.dp)
     val bg = if (m.mine) Palette.bubbleMine else TheirBubble
@@ -975,14 +978,17 @@ internal fun TalkBubble(app: Muninn, m: Chat.Msg, playing: String, onText: () ->
                 // screen ([speak]) a tap on their message also reads it out loud.
                 var cut by remember(m.id) { mutableStateOf(false) }
                 var focused by remember { mutableStateOf(false) }
-                val tap = cut || (speak != null && !m.mine)
+                // Round 19: on a TV ([okOpens]) every message from someone else takes the remote too: OK shows it with
+                // Read aloud.
+                val opens = okOpens && !m.mine
+                val tap = cut || opens || (speak != null && !m.mine)
                 Text(m.text, style = tvText(20.sp), maxLines = 3, overflow = TextOverflow.Ellipsis,
                     onTextLayout = { if (it.hasVisualOverflow) cut = true },
-                    modifier = Modifier.semantics { contentDescription = if (cut && !touch) "$label. Press OK to read it all." else label }
+                    modifier = Modifier.semantics { contentDescription = if (touch) label else if (opens) "$label. Press OK to hear it." else if (cut) "$label. Press OK to read it all." else label }
                         .then(if (tap) Modifier.onFocusChanged { focused = it.isFocused } else Modifier)
                         .clip(shape).background(bg)
                         .then(if (tap && focused) Modifier.border(4.dp, Palette.goldBright, shape) else Modifier)
-                        .then(if (tap) Modifier.clickable(role = Role.Button) { if (!m.mine) speak?.invoke(); if (cut) onText() } else Modifier)
+                        .then(if (tap) Modifier.clickable(role = Role.Button) { if (!m.mine) speak?.invoke(); if (cut || opens) onText() } else Modifier)
                         .padding(horizontal = 13.dp, vertical = 9.dp))
             }
         }
@@ -1065,13 +1071,19 @@ internal fun TvPhoto(app: Muninn, photos: List<Chat.Msg>, id: String, onMove: (S
 }
 
 /**
- * A long message, whole and big. Up and Down scroll it, OK or Back goes back to the conversation.
+ * A long message, whole and big. Up and Down scroll it, OK or Back goes back to the conversation. Round 19: with [speak]
+ * (a TV) it has a Read aloud button, focused first, and Close; Up and Down still scroll, and reading stops when it closes,
+ * a call comes or Muninn goes behind another screen.
  */
 @Composable
-internal fun TvFullText(text: String, onClose: () -> Unit) {
+internal fun TvFullText(text: String, speak: (() -> Unit)? = null, onClose: () -> Unit) {
     val focus = remember { FocusRequester() }
     val scroll = rememberScrollState()
     val scope = rememberCoroutineScope()
+    if (speak != null) {
+        TvFullTextSpoken(text, speak, scroll, onClose)
+        return
+    }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Box(Modifier.fillMaxSize().background(Palette.ground).focusRequester(focus)
             .onKeyEvent { e ->
@@ -1091,6 +1103,51 @@ internal fun TvFullText(text: String, onClose: () -> Unit) {
 
 /** How far Up or Down scrolls a long message, in pixels. */
 private const val TEXT_STEP = 300f
+
+/** [TvFullText] with Read aloud and Close, for the remote. */
+@Composable
+private fun TvFullTextSpoken(text: String, speak: () -> Unit, scroll: androidx.compose.foundation.ScrollState, onClose: () -> Unit) {
+    val first = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    val speaking by io.github.ravenor907.muninn.net.ReadAloud.speaking.collectAsState()
+    fun close() { io.github.ravenor907.muninn.net.ReadAloud.stop(); onClose() }
+    DisposableEffect(Unit) { onDispose { io.github.ravenor907.muninn.net.ReadAloud.stop() } }
+    // Reading stops when a call rings or starts, and when Muninn goes behind another screen (as Daily Hávamál does).
+    val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
+    LaunchedEffect(call != null) { if (call != null) io.github.ravenor907.muninn.net.ReadAloud.stop() }
+    val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) io.github.ravenor907.muninn.net.ReadAloud.stop() }
+        owner.lifecycle.addObserver(o)
+        onDispose { owner.lifecycle.removeObserver(o) }
+    }
+    Dialog(onDismissRequest = { close() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        Column(Modifier.fillMaxSize().background(Palette.ground)
+            // Up and Down scroll the message wherever the focus is; Left and Right move between the buttons.
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (e.key) {
+                    Key.DirectionUp -> { scope.launch { scroll.animateScrollBy(-TEXT_STEP) }; true }
+                    Key.DirectionDown -> { scope.launch { scroll.animateScrollBy(TEXT_STEP) }; true }
+                    else -> false
+                }
+            }.padding(horizontal = 48.dp, vertical = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Text(text, style = tvText(30.sp), modifier = Modifier.widthIn(max = 820.dp).verticalScroll(scroll).padding(vertical = 8.dp))
+            }
+            Row(Modifier.widthIn(max = 820.dp).fillMaxWidth().padding(top = 18.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                // A second press while it reads stops it, so presses never pile up behind a slow first sentence.
+                Box(Modifier.weight(1f)) {
+                    BigButton(if (speaking) "Stop reading" else "Read aloud", icon = "sound", requester = first) {
+                        if (speaking) io.github.ravenor907.muninn.net.ReadAloud.stop() else speak()
+                    }
+                }
+                Box(Modifier.weight(1f)) { BigButton("Close") { close() } }
+            }
+        }
+        LaunchedEffect(Unit) { delay(80); try { first.requestFocus() } catch (_: Exception) {} }
+    }
+}
 
 @Composable
 internal fun BigButton(text: String, icon: String? = null, sub: String? = null, enabled: Boolean = true, requester: FocusRequester? = null, onClick: () -> Unit) {

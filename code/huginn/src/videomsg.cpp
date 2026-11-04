@@ -1,5 +1,6 @@
 #include "videomsg.h"
 #include "chat.h"
+#include "groupvideo.h"
 #include "morewire.h"
 #include "photos.h"
 #include "platform/scratch.h"
@@ -319,5 +320,12 @@ QString VideoMsg::sendFile(const QString &where, const QString &path)
     const int ms = MoreWire::mp4Ms(mp4);
     if (ms > MoreWire::kVideoMaxMs + 500)
         return QStringLiteral("Video messages are up to a minute long.");
-    return m_chat->sendVideo(where, mp4, ms > 0 ? ms : 1000);
+    // Round 19 (FIX-LIST 24): a picked video goes without its location and camera details, as a group's does
+    // (GroupVideo::scrubbed), and only one every app plays as it is.
+    if (!GroupVideo::probe(mp4).plain)
+        return QStringLiteral("This video's format doesn't play everywhere. It can go as a file.");
+    const QByteArray clean = GroupVideo::scrubbed(mp4);
+    if (clean.isEmpty())
+        return QStringLiteral("Huginn can't take this video's location and camera details out. It can go as a file.");
+    return m_chat->sendVideo(where, clean, ms > 0 ? ms : 1000);
 }

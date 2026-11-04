@@ -25,25 +25,44 @@ object VideoPace {
     /** The key for a member's copy of a message (a group's envelope id, or the private message's id). */
     fun key(member: String, env: String) = "$member|$env"
 
+    /** One relay piece waiting its turn. */
+    private class Piece(val key: String, val i: Int, val n: Int, val publish: () -> Unit)
+
+    // Round 19: one queue, drained one piece at a time by the timer, so a "rate-limited" pause holds back everything
+    // after it. (Booking every piece's time up front let pieces booked after the pause fire on time next to the held
+    // ones, so for a while more than [GroupVideo.PACE_PER_SECOND] a second went out.)
+    private val queue = ArrayDeque<Piece>()
+    private var draining = false
+
     /** Queues [publish], one call a piece, under [key]. False when that key is already on its way (nothing added). */
     fun go(key: String, publish: List<() -> Unit>): Boolean {
         if (publish.isEmpty() || !queued.add(key)) return false
         progress(key, 0, publish.size)
-        val now = System.currentTimeMillis()
-        publish.forEachIndexed { i, p ->
-            val at = synchronized(pacer) { pacer.take(now) }
-            timer.schedule({ step(key, i, publish.size, p) }, (at - now).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+        synchronized(queue) {
+            publish.forEachIndexed { i, p -> queue.addLast(Piece(key, i, publish.size, p)) }
+            if (!draining) { draining = true; timer.execute { next() } }
         }
         return true
     }
 
-    private fun step(key: String, i: Int, n: Int, p: () -> Unit) {
-        // Paused by a relay's "rate-limited": this piece waits for the pause to end (in its turn).
-        val wait = synchronized(pacer) { if (pacer.pausedAt(System.currentTimeMillis())) pacer.take(System.currentTimeMillis()) - System.currentTimeMillis() else 0L }
-        if (wait > 0) { timer.schedule({ step(key, i, n, p) }, wait, TimeUnit.MILLISECONDS); return }
-        try { p() } catch (_: Exception) {}
-        progress(key, i + 1, n)
-        if (i + 1 >= n) queued.remove(key)
+    /** Takes the next piece and books its slot; only this one piece waits on the timer at a time. */
+    private fun next() {
+        val piece = synchronized(queue) { queue.removeFirstOrNull().also { if (it == null) draining = false } } ?: return
+        val now = System.currentTimeMillis()
+        val at = synchronized(pacer) { pacer.take(now) }
+        timer.schedule({ fire(piece) }, (at - now).coerceAtLeast(0), TimeUnit.MILLISECONDS)
+    }
+
+    private fun fire(piece: Piece) {
+        // Paused by a relay's "rate-limited" since its slot was booked: it waits for the pause to end.
+        val now = System.currentTimeMillis()
+        val wait = synchronized(pacer) { if (pacer.pausedAt(now)) pacer.take(now) - now else 0L }
+        if (wait > 0) { timer.schedule({ fire(piece) }, wait, TimeUnit.MILLISECONDS); return }
+        try { piece.publish() } catch (_: Exception) {} finally {
+            progress(piece.key, piece.i + 1, piece.n)
+            if (piece.i + 1 >= piece.n) queued.remove(piece.key)
+            next()
+        }
     }
 
     @Synchronized private fun progress(key: String, done: Int, n: Int) {

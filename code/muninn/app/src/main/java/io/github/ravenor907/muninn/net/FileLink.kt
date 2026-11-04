@@ -280,6 +280,10 @@ object FileLink {
         /** Cap f3: the kept parts' list (keptparts.json in the vault), so they last across a restart. Null: none. */
         fun readKept(): String? = null
         fun writeKept(text: String) {}
+        /** This is a Kids' Device: a full-size video (cap v3) is declined at once, so the sender sends the relay copy. */
+        fun isKidDevice(): Boolean = false
+        /** Full-size videos waiting to go (noBackupFilesDir/videos-out, Chat.sendVideoFull): they come back after a restart too. */
+        fun videosOutDir(): File? = null
     }
 
     @Volatile var host: Host? = null
@@ -343,8 +347,16 @@ object FileLink {
             val o = outs.optJSONObject(i) ?: continue
             val id = o.optString("id")
             val fileName = o.optString("file")
-            // Only a copy of ours, by its plain name in the cache (as sendFileFrom makes them).
-            val f = if (fileName.startsWith("out-") && !fileName.contains('/') && !fileName.contains("..")) File(h.cacheDir(), fileName) else null
+            // Only a copy of ours, by its plain name in the cache (as sendFileFrom makes them), or a full-size video's in
+            // videos-out (Round 19: "Send in full later" survives Muninn closing).
+            val plainName = fileName.isNotEmpty() && !fileName.contains('/') && !fileName.contains('\\') && !fileName.contains("..")
+            val vids = h.videosOutDir()
+            val f = when {
+                !plainName -> null
+                o.optString("dir") == "videos-out" -> vids?.let { File(it, fileName) }
+                fileName.startsWith("out-") -> File(h.cacheDir(), fileName)
+                else -> null
+            }
             if (id.isEmpty() || again.containsKey(id) || _all.value[id] != null) continue
             val peer = o.optString("peer")
             if (f == null || !f.isFile || peer.isEmpty() || o.optLong("time") < oldest) { f?.delete(); dropped = true; continue }
@@ -361,13 +373,17 @@ object FileLink {
     /** My own cards that can be sent again (Retry): their copy in the cache, who to and the group, for [saveKept]. */
     private fun againJson(h: Host): JSONArray {
         val dir = h.cacheDir().absolutePath
+        val vids = h.videosOutDir()?.absolutePath
         val a = JSONArray()
         for ((id, t) in again) {
             val f = t.second
-            if (f.parentFile?.absolutePath != dir || !f.name.startsWith("out-") || !f.isFile) continue
+            val parent = f.parentFile?.absolutePath
+            val inVids = vids != null && parent == vids
+            if (!f.isFile || !(inVids || (parent == dir && f.name.startsWith("out-")))) continue
             val p = _all.value[id]
             a.put(JSONObject().put("id", id).put("peer", t.first).put("file", f.name).put("name", t.third).put("group", againGroup[id].orEmpty())
-                .put("time", p?.time ?: f.lastModified()).put("note", if (p?.state == "failed") p.note else ""))
+                .put("time", p?.time ?: f.lastModified()).put("note", if (p?.state == "failed") p.note else "")
+                .apply { if (inVids) put("dir", "videos-out") })
         }
         return a
     }
@@ -556,6 +572,41 @@ object FileLink {
         fail(id, FileText.bigWhy(why, file.length()))
     }
 
+    /** What a file going straight over the internet says when Ultra privacy turns on (mine, then theirs). */
+    const val ULTRA_STOPPED = "Stopped: direct files are off while Ultra privacy is on. It can go on the same Wi-Fi."
+    const val ULTRA_STOPPED_IN = "Stopped: direct files are off while Ultra privacy is on. Ask them to send it on the same Wi-Fi."
+
+    /** Interop: the "tried to send you" notice under Ultra privacy, at most once an hour per person. */
+    private val ultraTold = ConcurrentHashMap<String, Long>()
+    private fun ultraToldNow(peer: String): Boolean {
+        val now = System.currentTimeMillis()
+        val last = ultraTold[peer] ?: 0L
+        if (last != 0L && now - last < 3_600_000L) return false
+        ultraTold[peer] = now
+        return true
+    }
+
+    /** A file of theirs that would have to come straight over the internet, refused under Ultra privacy: they hear so. */
+    private fun refuseForUltra(id: String, inc: In) {
+        if (ins.remove(id) == null) return
+        decline(inc.peer, id)   // no "why": a small one then comes over the relays instead
+        _all.value[id]?.let { put(it.copy(state = "failed", note = ULTRA_STOPPED_IN)) }
+    }
+
+    /**
+     * Ultra privacy just turned on (TorRunner): files of theirs waiting for an answer that could only come straight
+     * over the internet are refused now, so nothing is accepted that way later. Mine stop by themselves (in [send]
+     * and while they move), within a quarter of a second.
+     */
+    fun ultraOn() {
+        val h = host
+        for ((id, inc) in ins.entries.toList()) {
+            if (inc.lanOnly || inc.lan != null || h?.lanAddress(inc.peer) != null) continue
+            val st = _all.value[id]?.state
+            if (st == "asking" || st == "waiting") refuseForUltra(id, inc)
+        }
+    }
+
     /** The "lan" candidate (27.1): only the port, never an address. */
     private fun lanCand(port: Int) = JSONObject().put("t", "lan").put("p", port)
 
@@ -622,14 +673,23 @@ object FileLink {
                 // Cap f3: a big file may wait a day. A STUN ask a minute keeps this socket's way through the router
                 // open, so the address in the offer still works when they accept.
                 var lastStun = System.currentTimeMillis()
+                // Ultra privacy turned on while it waits: an offer that carried this phone's internet address stops now
+                // (no more STUN, no accept straight over the internet later); a small file goes over the relays instead.
+                var ultraCut = false
                 while (System.currentTimeMillis() < until && _all.value[id]?.state == "offered" && id !in stopped) {
                     Thread.sleep(250)
-                    if (long && !lanOnly && size > FileText.RELAY_MAX && System.currentTimeMillis() - lastStun >= 60_000L) {
+                    if (!lanOnly && !UltraPrivacy.directAllowed) { ultraCut = true; break }
+                    if (long && !lanOnly && size > FileText.RELAY_MAX && System.currentTimeMillis() - lastStun >= 60_000L && UltraPrivacy.directAllowed) {
                         lastStun = System.currentTimeMillis()
                         if (_all.value[id]?.state == "offered") stunKeep(sock)
                     }
                 }
                 if (id in stopped) { outs.remove(id)?.sock?.close(); return@execute }
+                if (ultraCut && _all.value[id]?.state == "offered") {
+                    outs.remove(id)?.sock?.close()
+                    fallBack(id, peer, file, name, ULTRA_STOPPED, group)
+                    return@execute
+                }
                 if (_all.value[id]?.state == "offered") {
                     outs.remove(id)?.sock?.close()
                     fallBack(id, peer, file, name, if (long && size > FileText.RELAY_MAX) "Not accepted within a day. Try again." else "They're offline. Try again when they're back.", group)
@@ -657,6 +717,9 @@ object FileLink {
         when (p.getString("t")) {
             "offer" -> {
                 if (ins.containsKey(id)) return
+                // Round 19 (interop 3, K19-4): a Kids' Device takes no full-size video. "rules" at once, so the sender's
+                // app sends the smaller relay copy now instead of waiting for an answer.
+                if (p.has("vid") && h.isKidDevice()) { decline(from, id, "rules"); return }
                 val name = p.getString("name")
                 val size = p.getLong("size")
                 val g = p.optString("g")
@@ -674,7 +737,14 @@ object FileLink {
                     }
                 }
                 // Addresses are only swapped with someone trusted; on the same Wi-Fi nothing new is learned.
-                if (!trust && lan == null) { decline(from, id); return }
+                if (!trust && lan == null) {
+                    // "why" stays empty: older senders then send a small file over the relays instead (it still comes).
+                    decline(from, id)
+                    // Ultra privacy: a bigger one can't come at all. Said here, once an hour per person, never silent.
+                    if (h.trusted(from) && !UltraPrivacy.directAllowed && size > FileText.RELAY_MAX && ultraToldNow(from))
+                        h.notice("${h.nameOf(from)} tried to send you $name (${FileText.size(size)}). Direct files are off while Ultra privacy is on: ask for it on the same Wi-Fi.")
+                    return
+                }
                 if (h.freeBytes() < size + 64L * 1024 * 1024) {
                     decline(from, id, "space")
                     refused(from, id, name, size, g, "Not enough space for it on this phone (${FileText.size(h.freeBytes())} free).")
@@ -716,7 +786,10 @@ object FileLink {
                 val key = key(ChatCrypto.sharedKey(o.keys.private, o.keys.public, theirs), id)
                 val c = p.getJSONArray("c")
                 val lan = lanTarget(h.lanAddress(from), c)
-                val targets = listOfNotNull(lan) + (if (o.lanOnly) emptyList() else CallLogic.directOf(c))
+                // Ultra privacy (on since the offer went): never straight over the internet, only the same Wi-Fi.
+                val direct = !o.lanOnly && UltraPrivacy.directAllowed
+                if (!direct && lan == null && !o.lanOnly) return   // the offer's own wait ends it and says so
+                val targets = listOfNotNull(lan) + (if (direct) CallLogic.directOf(c) else emptyList())
                 work.execute { runSender(id, o, key, targets, lan) }
             }
             "decline" -> outs[id]?.takeIf { it.peer == from }?.let {
@@ -769,11 +842,14 @@ object FileLink {
     fun accept(id: String) {
         val inc = ins[id] ?: return
         val h = host ?: return
+        // Ultra privacy, turned on since it was offered: only the same Wi-Fi, never straight over the internet.
+        val direct = !inc.lanOnly && UltraPrivacy.directAllowed
+        if (!direct && !inc.lanOnly && inc.lan == null && h.lanAddress(inc.peer) == null) { refuseForUltra(id, inc); return }
         put(Progress(id, inc.peer, inc.name, inc.size, false, "connecting", group = inc.group))
         work.execute {
             try {
                 val sock = DatagramSocket()
-                val cands = if (inc.lanOnly) emptyList() else candidates(sock)
+                val cands = if (!direct) emptyList() else candidates(sock)
                 val cs = JSONArray()
                 if (inc.lan != null || h.lanAddress(inc.peer) != null) cs.put(lanCand(sock.localPort))
                 candsJson(cands).let { c -> for (i in 0 until c.length()) cs.put(c.get(i)) }
@@ -830,11 +906,14 @@ object FileLink {
             val who = host?.nameOf(o.peer) ?: "They"
             movingIds.add(id)
             started[id] = System.currentTimeMillis()
+            val viaLan = lan != null && peer == lan
             RandomAccessFile(o.file, "r").use { raf ->
                 val chunk = ByteArray(CHUNK)
                 put(Progress(id, o.peer, o.name, o.size, true, "sending", route = route, group = o.group))
                 while (!s.done) {
                     if (id in stopped) return
+                    // Ultra privacy turned on: a file going straight over the internet stops now (Retry keeps it).
+                    if (!viaLan && !UltraPrivacy.directAllowed) { fail(id, ULTRA_STOPPED); return }
                     val now = System.currentTimeMillis()
                     if (now - lastHeard > (if (f3) LONG_IDLE_MS else IDLE_MS)) {
                         fail(id, if (f3) "Stopped at ${FileText.percent(sent, o.size)}% (no answer from $who). Retry goes on from there." else "Stopped (no answer from them). Try again.")
@@ -907,7 +986,8 @@ object FileLink {
         val who = h.nameOf(inc.peer)
         var keep = false
         try {
-            val peer = punch(sock, key, id, 1, inc.theirCands) ?: run {
+            val theirs = if (!inc.lanOnly && !UltraPrivacy.directAllowed) listOfNotNull(inc.lan) else inc.theirCands
+            val peer = punch(sock, key, id, 1, theirs) ?: run {
                 // The sender's fallback over the relays (fallBack) only takes a small file, and a group's only to a contact.
                 val another = inc.size <= FileText.RELAY_MAX && (inc.group.isEmpty() || h.isContact(inc.peer))
                 fail(id, when {
@@ -933,10 +1013,24 @@ object FileLink {
             movingIds.add(id)
             started[id] = System.currentTimeMillis()
             put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", from, route = route, group = inc.group))
+            val viaLan = inc.lan != null && peer == inc.lan
             RandomAccessFile(tmp, "rw").use { raf ->
                 raf.setLength(inc.size)
                 while (!r.done) {
                     if (id in stopped) return
+                    // Ultra privacy turned on: a file coming straight over the internet stops now. The sender hears so;
+                    // with cap f3 what came is kept, and it goes on from there when it's sent again on the same Wi-Fi.
+                    if (!viaLan && !UltraPrivacy.directAllowed) {
+                        decline(inc.peer, id)
+                        if (f3) {
+                            val part = Partial(inc.peer, inc.sha, inc.size, inc.group, tmp, r.ack().first, inc.name)
+                            partials[id] = part
+                            saveKept()
+                            keep = true
+                        }
+                        fail(id, ULTRA_STOPPED_IN)
+                        return
+                    }
                     val now = System.currentTimeMillis()
                     if (now - lastHeard > (if (f3) LONG_IDLE_MS else IDLE_MS)) {
                         if (f3) {
@@ -1040,6 +1134,7 @@ object FileLink {
 
     /** Cap f3: a STUN ask from [sock] that keeps its way through the router open. Only sent; the answer is ignored. */
     private fun stunKeep(sock: DatagramSocket) = try {
+        if (!UltraPrivacy.directAllowed) throw IllegalStateException("Ultra privacy")
         val (server, port) = Stun.SERVERS.first()
         val req = Stun.encode(Stun.type(Stun.BINDING, Stun.REQUEST), Stun.newTid(), emptyList(), fingerprint = true)
         sock.send(DatagramPacket(req, req.size, InetSocketAddress(InetAddress.getByName(server), port)))
@@ -1051,7 +1146,7 @@ object FileLink {
         return null
     }
 
-    private fun stunOne(sock: DatagramSocket, host: String, port: Int): InetSocketAddress? = try {
+    private fun stunOne(sock: DatagramSocket, host: String, port: Int): InetSocketAddress? = if (!UltraPrivacy.directAllowed) null else try {
         val server = InetSocketAddress(InetAddress.getByName(host), port)
         val tid = Stun.newTid()
         val req = Stun.encode(Stun.type(Stun.BINDING, Stun.REQUEST), tid, emptyList(), fingerprint = true)

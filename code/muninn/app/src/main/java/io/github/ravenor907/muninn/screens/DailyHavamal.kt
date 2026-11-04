@@ -85,6 +85,9 @@ object DailyHav {
     var rev by mutableIntStateOf(0)
         private set
 
+    /** The verse is open big (DailyHavDialog). Here, not in the card, so a layout change doesn't close it. */
+    var dialogOpen by mutableStateOf(false)
+
     /** CI screenshots only (never saved): 1 shows the card, 2 opens it too. */
     var ci by mutableIntStateOf(0)
 
@@ -113,10 +116,19 @@ object DailyHav {
     /** Reads the imported translation once the vault is open. Slow: off the main thread. */
     fun load(app: Muninn) {
         if (loaded) return
-        val o = try { app.vault.read(file(app))?.let { JSONObject(it) } } catch (e: Exception) { null }
+        // Round 19: a read that failed (the vault not open yet) is tried again next time, not taken as "none".
+        var failed = false
+        val o = try { app.vault.read(file(app))?.let { JSONObject(it) } } catch (e: Exception) { failed = file(app).exists(); null }
         val map = o?.optString("text")?.let { Havamal.textIn(it) }
         _own.value = if (o == null || map == null) null else Own(map, map.size, o.optInt("of", map.size))
-        loaded = true
+        loaded = !failed
+    }
+
+    /** Round 19: the lock went up (AppLock.raise): your own translation is vault data, so it isn't kept in memory. Read again after unlocking. */
+    fun forget() {
+        dialogOpen = false
+        _own.value = null
+        loaded = false
     }
 
     /** Reads a picked .txt, keeps the stanzas that match and saves them here. The line to show. Slow: off the main thread. */
@@ -167,9 +179,14 @@ internal fun DailyHavCard(app: Muninn, modifier: Modifier = Modifier) {
     val v = verses[Havamal.index(today, verses.size)]
     val wording = remember(DailyHav.rev) { own.wording }
     val text = Havamal.wordingOf(v, wording, mine?.stanzas)
-    var open by remember { mutableStateOf(ci == 2) }
+    // Kept in DailyHav, not here: a tablet or DeX window crossing the two-pane width builds the chat list again, and
+    // the verse stays open (and reading) through it.
+    val open = DailyHav.dialogOpen || ci == 2
+    // When "Earlier verses" begins is saved the first time (a prefs write): done here, not while drawing.
+    var startDay by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(today, open) { if (open) startDay = withContext(Dispatchers.IO) { own.start(today) } }
     Row(modifier.fillMaxWidth().heightIn(min = 56.dp).clip(Corner).background(Palette.goldTint)
-        .clickable(role = Role.Button, onClickLabel = "Open") { open = true }
+        .clickable(role = Role.Button, onClickLabel = "Open") { DailyHav.dialogOpen = true }
         .padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         MIcon("text", Palette.goldBright, 22.dp)
         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
@@ -183,8 +200,8 @@ internal fun DailyHavCard(app: Muninn, modifier: Modifier = Modifier) {
         }
     }
     if (open) {
-        val earlier = remember(today) { Havamal.at(verses, Havamal.earlier(today, own.start(today), verses.size)) }
-        DailyHavDialog(v, earlier, wording, mine?.stanzas) { open = false; if (DailyHav.ci == 2) DailyHav.ci = 1 }
+        val earlier = remember(today, startDay) { Havamal.at(verses, Havamal.earlier(today, startDay ?: today, verses.size)) }
+        DailyHavDialog(v, earlier, wording, mine?.stanzas) { DailyHav.dialogOpen = false; if (DailyHav.ci == 2) DailyHav.ci = 1 }
     }
 }
 

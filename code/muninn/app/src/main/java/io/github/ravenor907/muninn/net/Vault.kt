@@ -22,6 +22,11 @@ import javax.crypto.spec.SecretKeySpec
 class Vault(private val context: Context) {
     /** The lock file, the data key and the sealed files (see [VaultCore]: the rules that keep saved data safe). */
     val core = VaultCore(context.filesDir, File(context.noBackupFilesDir, "vault-open.key")) { android.util.Log.w("Muninn", "vault: $it") }
+
+    init {
+        // An erase that was cut short (Muninn stopped, a file held open) finishes first, before anything reads what's left.
+        if (File(context.noBackupFilesDir, ERASING).exists()) try { finishErase() } catch (_: Exception) {}
+    }
     val locked: StateFlow<Boolean> get() = core.locked
     /** Set when the vault can't open for a reason other than a password (see [VaultCore.Trouble]). */
     val trouble: StateFlow<VaultCore.Trouble?> get() = core.trouble
@@ -32,14 +37,19 @@ class Vault(private val context: Context) {
 
     /** Opens without a password when none is set. Returns false if a password is needed (or [trouble]). */
     fun openDefault(): Boolean = core.openDefault()
-    fun unlock(password: String): Boolean = core.unlock(password)
+    /** [onResult]: told right or wrong the moment the check ends, before anything else (the wrong-try count). */
+    fun unlock(password: String, onResult: ((Boolean) -> Unit)? = null): Boolean = core.unlock(password, onResult)
     /** [password] is the lock's (a password, or a pattern's secret), without changing anything. True when there's no lock. */
     fun check(password: String): Boolean = core.check(password)
     /** The lock just opened is shorter than new locks may be. Only known after an unlock. */
     val weak: Boolean get() = core.weak
     fun lock() = core.lock()
     /** Sets, changes or (with null) removes the password. Must be unlocked. [spare]: a pattern's unlock password. */
-    fun setPassword(password: String?, pattern: Boolean = false, spare: String? = null) = core.setPassword(password, pattern, spare)
+    fun setPassword(password: String?, pattern: Boolean = false, spare: String? = null) {
+        core.setPassword(password, pattern, spare)
+        // The lock removed: "Erase after too many tries" goes off with it (a lock set later starts with it off), and the count goes.
+        if (password.isNullOrEmpty()) try { tries.reset() } catch (_: Exception) {}
+    }
 
     // ------------------------------------------------------------------ 1.42: unlock password and wrong tries
 
@@ -65,11 +75,13 @@ class Vault(private val context: Context) {
         }, object : LockStore.Mirror {
             override fun read(): LockStore.Data? = if (!prefs.contains("lockFails") && !prefs.contains("lockErase")) null
                 else LockStore.Data(prefs.getInt("lockFails", 0), prefs.getLong("lockAt", 0L), prefs.getLong("lockWait", 0L), prefs.getInt("lockBoot", -1),
-                    prefs.getBoolean("lockErase", false))
+                    prefs.getBoolean("lockErase", false), prefs.getLong("lockSeq", 0L), prefs.getLong("lockLeft", -1L),
+                    prefs.getLong("lockWallEnd", 0L), prefs.getBoolean("lockChecking", false))
             override fun write(d: LockStore.Data) {
                 // commit(), not apply(): on disk before the check runs.
                 prefs.edit().putInt("lockFails", d.fails).putLong("lockAt", d.until).putLong("lockWait", d.wait).putInt("lockBoot", d.boot)
-                    .putBoolean("lockErase", d.erase).commit()
+                    .putBoolean("lockErase", d.erase).putLong("lockSeq", d.seq).putLong("lockLeft", d.left).putLong("lockWallEnd", d.wallEnd)
+                    .putBoolean("lockChecking", d.checking).commit()
             }
         })
     }
@@ -100,29 +112,83 @@ class Vault(private val context: Context) {
     /** Before a restore: a copy of everything here, in a "kept-" folder (see [VaultCore.keepCopy]). */
     fun keepCopy(): File = core.keepCopy()
 
-    /**
-     * Erases everything Muninn keeps: chats, contacts, keys, settings, files waiting in the cache (shared in,
-     * camera shots, parts of a move), every settings file (moving ones too) and the background work list.
-     */
     /** Erase everything and Move: keys kept in memory outside the vault (ring key, day keys, the locked store) go first. */
     @Volatile var onErase: (() -> Unit)? = null
 
+    /**
+     * Erases everything Muninn keeps: chats, contacts, keys, settings, files waiting in the cache (shared in, camera
+     * shots, parts of a move), Muninn's own storage folders (Tor's folder too), every settings file and the background
+     * work list. A mark is written first: an erase cut short (Muninn stopped) runs again in full at the next start, before
+     * anything reads what's left. At the end what's left is checked; anything still there (a file held open) is tried a
+     * few more times, then listed in the mark and removed at the next start (only those, never what came after).
+     */
     fun eraseAll() {
+        val mark = File(context.noBackupFilesDir, ERASING)
+        try { mark.parentFile?.mkdirs(); SafeFile.write(mark, ALL.toByteArray(), keepBak = false) } catch (_: Exception) {}
         try { onErase?.invoke() } catch (_: Exception) {}
+        core.forget()
+        // Tor first: its process ends, so nothing writes its folder again while it's erased (quick when it isn't running).
+        try { TorRunner.erase(context) } catch (_: Throwable) {}
+        var left = emptyList<File>()
+        for (pass in 0 until 3) {
+            if (pass > 0) try { Thread.sleep(200) } catch (_: InterruptedException) {}
+            wipe(mark)
+            left = leftovers(mark)
+            if (left.isEmpty()) break
+        }
+        if (left.isEmpty()) SafeFile.delete(mark)
+        else {
+            android.util.Log.w("Muninn", "erase: ${left.size} left, removed at the next start")
+            try { SafeFile.write(mark, left.joinToString("\n") { it.absolutePath }.toByteArray(), keepBak = false) } catch (_: Exception) {}
+        }
+        core.forget()
+    }
+
+    /** At start-up: the erase cut short runs again in full; what an erase couldn't remove goes now. The mark goes either way. */
+    private fun finishErase() {
+        val mark = File(context.noBackupFilesDir, ERASING)
+        val said = try { mark.readText() } catch (_: Exception) { ALL }
+        if (said.isEmpty() || said == ALL) { wipe(mark); core.forget() }
+        else {
+            val ours = listOf(context.applicationInfo.dataDir) + ownDirs().map { it.absolutePath }
+            said.lines().map { it.trim() }.filter { it.isNotEmpty() }.forEach { p ->
+                // Only inside Muninn's own folders.
+                if (ours.any { p.startsWith("$it/") }) try { File(p).deleteRecursively() } catch (_: Exception) {}
+            }
+        }
+        SafeFile.delete(mark)
+    }
+
+    /** Muninn's own folders outside filesDir: the storage it keeps beside the phone's (Android/data), Tor's ("app_TorService"), databases. */
+    private fun ownDirs(): List<File> {
+        val data = File(context.applicationInfo.dataDir)
+        val app = data.listFiles()?.filter { it.isDirectory && it.name.startsWith("app_") } ?: emptyList()
+        val external = (try { context.getExternalFilesDirs(null).toList() } catch (_: Exception) { emptyList() }) +
+            (try { context.externalCacheDirs.toList() } catch (_: Exception) { emptyList() })
+        return app + external.filterNotNull() + listOfNotNull(context.getDatabasePath("x").parentFile)
+    }
+
+    private fun wipe(mark: File) {
         context.filesDir.listFiles()?.forEach { it.deleteRecursively() }
         context.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
         val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
         prefsDir.listFiles()?.forEach { f ->
-            if (!f.name.endsWith(".xml")) return@forEach
+            if (!f.name.endsWith(".xml")) { f.delete(); return@forEach }
             try { context.getSharedPreferences(f.name.removeSuffix(".xml"), Context.MODE_PRIVATE).edit().clear().commit() } catch (_: Exception) {}
             try { context.deleteSharedPreferences(f.name.removeSuffix(".xml")) } catch (_: Exception) {}
             f.delete()
         }
-        // WorkManager's list of background jobs (the inbox check): it holds no messages, but it shows Muninn was used.
-        for (name in listOf("androidx.work.workdb", "androidx.work.workdb-wal", "androidx.work.workdb-shm")) context.getDatabasePath(name).delete()
-        context.getDatabasePath("androidx.work.workdb").parentFile?.listFiles()?.forEach { if (it.name.startsWith("androidx.work")) it.delete() }
-        context.noBackupFilesDir.listFiles()?.forEach { it.deleteRecursively() }
-        core.forget()
+        // WorkManager's list of background jobs (the inbox check) and any other database: no messages, but they show Muninn was used.
+        try { context.databaseList().forEach { context.deleteDatabase(it) } } catch (_: Exception) {}
+        // Tor's folder (guards and the cached directory show Tor was used), and Muninn's storage beside the phone's.
+        for (d in ownDirs()) d.listFiles()?.forEach { it.deleteRecursively() }
+        context.noBackupFilesDir.listFiles()?.forEach { if (!it.name.startsWith(mark.name)) it.deleteRecursively() }
+    }
+
+    /** What an erase left behind. Empty when it all went. */
+    private fun leftovers(mark: File): List<File> {
+        val dirs = listOf(context.filesDir, context.cacheDir, File(context.applicationInfo.dataDir, "shared_prefs"), context.noBackupFilesDir) + ownDirs()
+        return dirs.flatMap { d -> d.listFiles()?.filter { !it.name.startsWith(mark.name) } ?: emptyList() }
     }
 
     /** The math, separate so it can be tested off the phone. */
@@ -234,5 +300,8 @@ class Vault(private val context: Context) {
         const val SCRYPT_P = 1
         /** Where a restore waits for the next open. */
         const val STAGE = "restore-pending"
+        /** In the no-backup folder while an erase runs (see [eraseAll]). */
+        private const val ERASING = "erasing"
+        private const val ALL = "all"
     }
 }

@@ -101,7 +101,7 @@ class EverydayTest {
         assertEquals(Drafts.groupKey("g1", "main"), Drafts.replyKey("g:g1"))
         assertEquals("alice", Drafts.replyKey("alice"))
         assertEquals("see you", Drafts.withReply(Drafts.Draft(), "see you").text)
-        assertEquals("half\nsee you", Drafts.withReply(Drafts.Draft("half", re = "m1"), "see you").text)
+        assertEquals("half\nTyped while locked: see you", Drafts.withReply(Drafts.Draft("half", re = "m1"), "see you").text)
         assertEquals("m1", Drafts.withReply(Drafts.Draft("half", re = "m1"), "see you").re)
     }
 

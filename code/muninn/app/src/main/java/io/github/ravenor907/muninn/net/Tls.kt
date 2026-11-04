@@ -237,9 +237,25 @@ class HiddenTls(private val dir: File) {
     @Volatile private var next: Tls? = null
     private val atFile = File(dir, "at")
 
+    /**
+     * Round 19: a rotation stopped half way (Muninn killed) is finished here. [rotate] moves "now" aside to "old" first,
+     * then "next" to "now", then deletes "old", so "now" is never made fresh by mistake (no contact would have it pinned).
+     */
+    private fun recover() {
+        val nowDir = File(dir, "now")
+        val nextDir = File(dir, "next")
+        val oldDir = File(dir, "old")
+        try {
+            if (!oldDir.exists()) return
+            if (!nowDir.exists()) { if (nextDir.exists()) nextDir.renameTo(nowDir) else oldDir.renameTo(nowDir) }
+            if (nowDir.exists()) oldDir.deleteRecursively()
+        } catch (_: Exception) {}
+    }
+
     private fun load() {
         if (now != null && next != null) return
         synchronized(this) {
+            if (now == null) recover()
             if (now == null) now = Tls.load(File(dir, "now"))
             if (next == null) next = Tls.load(File(dir, "next"))
             if (!atFile.isFile) try { atFile.writeText(System.currentTimeMillis().toString()) } catch (_: Exception) {}
@@ -258,9 +274,13 @@ class HiddenTls(private val dir: File) {
         load()
         val nowDir = File(dir, "now")
         val nextDir = File(dir, "next")
+        val oldDir = File(dir, "old")
         try {
-            nowDir.deleteRecursively()
-            if (!nextDir.renameTo(nowDir)) return@synchronized false
+            if (!nextDir.isDirectory) return@synchronized false
+            oldDir.deleteRecursively()
+            if (nowDir.exists() && !nowDir.renameTo(oldDir)) return@synchronized false
+            if (!nextDir.renameTo(nowDir)) { oldDir.renameTo(nowDir); return@synchronized false }
+            oldDir.deleteRecursively()
         } catch (_: Exception) { return@synchronized false }
         now = next
         next = Tls.load(nextDir)

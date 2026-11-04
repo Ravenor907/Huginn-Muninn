@@ -25,6 +25,17 @@ object KidVoice {
     /** What a parent's phone sends: the pick ("" none yet) only to a device with [k15]. */
     fun toSend(pick: String, k15: Boolean): String? = pick.takeIf { k15 && it in ReadAloudText.VOICES }
 
+    /**
+     * Round 19: and only when every other parent's app reads it too ([others]: each co-parent's caps, null when not a
+     * contact here). Every parent checks the device's config with its own field list, and an older app (1.41) turns down
+     * one with "voice": it would stop seeing the device's settings and its next change would undo the others'. Left out,
+     * the device keeps the last voice it took.
+     */
+    fun toSend(pick: String, k15: Boolean, others: List<Set<String>?>): String? = toSend(pick, k15 && allRead(others))
+
+    /** Whether every co-parent ([others]' caps) says [CAP]. */
+    fun allRead(others: List<Set<String>?>): Boolean = others.all { it != null && CAP in it }
+
     /** The device page's two choices. */
     val CHOICES = listOf(ReadAloudText.FEMALE to "Female", ReadAloudText.MALE to "Male")
 }

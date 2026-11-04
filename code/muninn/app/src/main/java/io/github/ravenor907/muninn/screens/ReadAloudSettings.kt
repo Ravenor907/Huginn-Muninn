@@ -26,8 +26,9 @@ import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 
 /**
- * Settings › Look › Read aloud (net/ReadAloud): Female (Alba, the default) or Male (northern English), Allow on mobile
- * data, how the natural voice is coming along, and Delete voices.
+ * Settings › Look › Read aloud (net/ReadAloud): Female (Alba, the default) or Male (northern English), Download now,
+ * Allow on mobile data, how the natural voice is coming along, and Delete voices. Until the voices are published (no
+ * line in voices.sha256) only one line shows: "Natural voices aren't ready yet", never a download that can't start.
  */
 @Composable
 internal fun ReadAloudSettings() {
@@ -38,15 +39,30 @@ internal fun ReadAloudSettings() {
     var mobile by remember { mutableStateOf(ReadAloud.mobileData(ctx)) }
     LaunchedEffect(Unit) { ReadAloud.refresh(ctx) }
     val has = remember(files, status) { ReadAloud.hasFiles(ctx) }
-    ChoiceRow(2, Modifier.padding(top = 8.dp)) { i, m ->
-        val v = ReadAloudText.VOICES[i]
-        MButton(if (v == ReadAloudText.MALE) "Male" else "Female", m, if (voice == v) Kind.Accent else Kind.Normal) {
-            voice = v; ReadAloud.setVoice(ctx, v)
+    val natural = remember(files, status, voice) { ReadAloud.natural(ctx) }
+    val ready = remember(files, status, voice) { ReadAloud.ready(ctx) }
+    if (!natural) {
+        // Before the voices are published: one plain line, no voice choice and nothing to download.
+        Text(status.ifEmpty { "Natural voices aren't ready yet. The phone's own voice reads" }, style = Type.small, modifier = Modifier.padding(top = 8.dp))
+    } else {
+        ChoiceRow(2, Modifier.padding(top = 8.dp)) { i, m ->
+            val v = ReadAloudText.VOICES[i]
+            MButton(if (v == ReadAloudText.MALE) "Male" else "Female", m, if (voice == v) Kind.Accent else Kind.Normal) {
+                if (v == voice) return@MButton
+                // A voice is already in: switching downloads the other one (about 65 MB) and deletes this one, so ask.
+                if (has) Ui.sure(Ask("Switch to the ${if (v == ReadAloudText.MALE) "male" else "female"} voice?",
+                    "Muninn downloads it (about 65 MB), then deletes the voice it has now.", "Switch") { voice = v; ReadAloud.setVoice(ctx, v) })
+                else { voice = v; ReadAloud.setVoice(ctx, v) }
+            }
         }
-    }
-    if (status.isNotEmpty()) Text(status, style = Type.small, modifier = Modifier.padding(top = 4.dp))
-    ToggleRow("Allow on mobile data", "Downloads the voice (about 65 MB) on mobile data too", mobile) {
-        mobile = it; ReadAloud.setMobileData(ctx, it)
+        if (status.isNotEmpty()) Text(status, style = Type.small, modifier = Modifier.padding(top = 4.dp))
+        // Fetch the voice now (on home Wi-Fi before a trip, or through Tor with Ultra privacy on).
+        if (!ready && !status.startsWith("Downloading")) NavRow("Download the voice now", "About 65 MB") {
+            ReadAloud.prepare(ctx, asked = true)
+        }
+        ToggleRow("Allow on mobile data", "Downloads the voice (about 65 MB) on mobile data too", mobile) {
+            mobile = it; ReadAloud.setMobileData(ctx, it)
+        }
     }
     if (has) NavRow("Delete voices", "Frees the space. Downloads again when needed") {
         Ui.sure(Ask("Delete voices?", "The phone's own voice reads until the natural voice downloads again.", "Delete", danger = true) {

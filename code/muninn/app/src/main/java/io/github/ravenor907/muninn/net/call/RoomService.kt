@@ -108,6 +108,8 @@ object RoomRinger {
         Intent(c, RoomActions::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
     fun ring(c: Context, name: String, group: String) {
+        // A group call rings: Read aloud stops.
+        try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
         Ringer.channels(c)
         val who = shown(c, if (group.isNotEmpty()) "$name · $group" else name)
         val person = Person.Builder().setName(who ?: "Muninn group call").setImportant(true).build()

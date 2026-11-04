@@ -78,11 +78,14 @@ public:
     static Cands parseCands(const QJsonObject &msg);
     void takeOffer(const QJsonObject &offer);
     void answer();
-    void decline();
+    // endText: what the call ends with here (round 19: Ultra privacy's own, so it's logged as a missed call with why).
+    void decline(const QString &endText = QStringLiteral("Declined"));
     void hangup(const QString &why = QStringLiteral("hangup"));
     void setMuted(bool on);
     // The "Direct calls" switch changed during the call (5.8.1): off stops the direct path at once.
     void setTrusted(bool on);
+    // Ultra privacy turned on mid-call: the direct path stops at once (CallManager then ends the call).
+    void stopDirect();
     // Every room "call" message for this call id from the peer.
     void handle(const QJsonObject &msg);
 

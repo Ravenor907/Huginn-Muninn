@@ -85,6 +85,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -1455,6 +1461,7 @@ private fun Conversation(app: Muninn, key: String) {
     }
     }
     }
+    val readingNow by io.github.ravenor907.muninn.net.ReadAloud.speaking.collectAsState()
     sheetFor?.let { s ->
         val actions = buildList {
             if (s.unsent.isEmpty() && !s.failed) add(SheetAction("Reply", "reply") { editing = null; replyTo = s })
@@ -1463,8 +1470,10 @@ private fun Conversation(app: Muninn, key: String) {
                 Ui.say("Copied.")
             })
             // Read aloud (net/ReadAloud): the plain text, in the voice picked in Settings › Look.
-            if (s.unsent.isEmpty() && s.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available)
-                add(SheetAction(if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) "Stop reading" else "Read aloud", "sound") {
+            // Round 19: the label follows reading as it starts and ends ([readingNow]); nothing to read (emoji only): not offered.
+            if (s.unsent.isEmpty() && s.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available &&
+                (readingNow || io.github.ravenor907.muninn.net.ReadAloudText.plain(s.text).isNotBlank()))
+                add(SheetAction(if (readingNow) "Stop reading" else "Read aloud", "sound") {
                     if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) io.github.ravenor907.muninn.net.ReadAloud.stop()
                     else io.github.ravenor907.muninn.net.ReadAloud.speak(context, s.text)
                 })
@@ -1931,6 +1940,26 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
                 Column(
                     Modifier.clip(shape).background(if (highlight) Palette.goldTint else if (m.mine) LocalMineBubble.current.takeOrElse { Palette.bubbleMine } else Palette.field).hcBorder(shape)
                         .then(if (highlight) Modifier.border(1.dp, Palette.gold, shape) else Modifier)
+                        // Round 19 (DeX, a mouse, a keyboard cover): a right click opens the menu at once (it no longer acts as a
+                        // tap), and with a keyboard the bubble takes focus and the Menu key or Shift+F10 opens it.
+                        .pointerInput(m.id) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val e = awaitPointerEvent(PointerEventPass.Initial)
+                                    if (e.type == androidx.compose.ui.input.pointer.PointerEventType.Press && e.buttons.isSecondaryPressed) {
+                                        e.changes.forEach { it.consume() }
+                                        longNow()
+                                    }
+                                }
+                            }
+                        }
+                        .onKeyEvent { k ->
+                            val menu = k.key == androidx.compose.ui.input.key.Key.Menu ||
+                                (k.key == androidx.compose.ui.input.key.Key.F10 && k.isShiftPressed)
+                            if (menu && k.type == androidx.compose.ui.input.key.KeyEventType.KeyUp) longNow()
+                            menu
+                        }
+                        .focusable()
                         .pointerInput(m.id) { detectTapGestures(onTap = { if (photo != null && m.voice == 0) tapNow() }, onLongPress = { longNow() }) },
                 ) {
                     val name: @Composable () -> Unit = {
@@ -2965,6 +2994,7 @@ private fun GroupConversation(app: Muninn, g: String) {
     }
     }
     editChannel?.let { c -> ChannelDialog(app, g, c.takeIf { it !== NEW_VOICE }, startVoice = true) { editChannel = null } }
+    val readingNow by io.github.ravenor907.muninn.net.ReadAloud.speaking.collectAsState()
     sheetFor?.let { gm ->
         val actions = buildList {
             if (!grp.readOnly && gm.unsent.isEmpty()) add(SheetAction("Reply", "reply") { editing = null; replyTo = gm })
@@ -2973,8 +3003,10 @@ private fun GroupConversation(app: Muninn, g: String) {
                 Ui.say("Copied.")
             })
             // Read aloud (net/ReadAloud): the plain text, in the voice picked in Settings › Look.
-            if (gm.unsent.isEmpty() && gm.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available)
-                add(SheetAction(if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) "Stop reading" else "Read aloud", "sound") {
+            // Round 19: the label follows reading as it starts and ends ([readingNow]); nothing to read (emoji only): not offered.
+            if (gm.unsent.isEmpty() && gm.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available &&
+                (readingNow || io.github.ravenor907.muninn.net.ReadAloudText.plain(gm.text).isNotBlank()))
+                add(SheetAction(if (readingNow) "Stop reading" else "Read aloud", "sound") {
                     if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) io.github.ravenor907.muninn.net.ReadAloud.stop()
                     else io.github.ravenor907.muninn.net.ReadAloud.speak(context, gm.text)
                 })

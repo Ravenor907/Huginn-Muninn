@@ -18,7 +18,9 @@
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QRandomGenerator>
+#include <QSslCertificate>
 #include <QSslConfiguration>
+#include <QSslKey>
 #include <QSslSocket>
 #include <QStorageInfo>
 #include <QSysInfo>
@@ -241,8 +243,10 @@ QNetworkRequest LocalSend::makeRequest(const QUrl &url, const QString &expected,
     c.setSslOption(QSsl::SslOptionDisableServerNameIndication, true);
     // Show our certificate: some LocalSend apps require one, and use it to prove our fingerprint. Nearby off, the
     // throwaway one the server shows too (what the proof in our info is for). None at all when anonymous.
-    if (m_secure && !anonymous) {
-        const bool hidden = off() && !m_hiddenTls.localCertificate().isNull();
+    // Round 19 (security 25): Nearby off with no hidden certificate (it couldn't be made) shows none, never the lasting
+    // one people nearby already know.
+    if (m_secure && !anonymous && !(off() && m_hiddenTls.localCertificate().isNull())) {
+        const bool hidden = off();
         c.setLocalCertificate(hidden ? m_hiddenTls.localCertificate() : m_tls.cert);
         c.setPrivateKey(hidden ? m_hiddenTls.privateKey() : m_tls.key);
     }
@@ -316,8 +320,15 @@ QSslConfiguration LocalSend::serverTls()
     if (m_hiddenNow.isValid() && rotateDue(m_hiddenSince, QDateTime::currentMSecsSinceEpoch(), false))
         rotateHidden(false);
     const Tls::Identity id = m_hiddenNow.isValid() ? m_hiddenNow : Tls::throwaway();
-    if (!id.isValid())
-        return m_serverTls;   // couldn't make one: /register and /info still answer nothing
+    if (!id.isValid()) {
+        // Round 19 (security 25): couldn't make one. The lasting certificate would let people nearby follow this computer,
+        // so none is shown: every handshake fails until a hidden one can be made (tried again at the next change).
+        qWarning("Nearby sharing: no hidden certificate could be made, so nothing is served while Nearby is off");
+        QSslConfiguration none = m_serverTls;
+        none.setLocalCertificate(QSslCertificate());
+        none.setPrivateKey(QSslKey());
+        return none;
+    }
     if (m_hiddenFp != id.fingerprint || m_hiddenTls.localCertificate().isNull()) {
         if (!m_hiddenNow.isValid())
             m_hiddenNow = id;   // kept for this run at least
@@ -333,6 +344,26 @@ void LocalSend::loadHidden()
 {
     if (!m_secure || (m_hiddenNow.isValid() && m_hiddenNext.isValid()))
         return;
+    // Round 19: a rotation cut off part way (rotateHidden) is finished first, so "now" is still one contacts know.
+    {
+        const QString base = System::dataDir() + QStringLiteral("/tls/hidden");
+        const bool hasNow = QFileInfo::exists(base + QStringLiteral("/now/cert.pem"));
+        const bool hasOld = QFileInfo::exists(base + QStringLiteral("/old"));
+        if (!hasNow && hasOld && QFileInfo::exists(base + QStringLiteral("/next/cert.pem"))) {
+            QDir(base + QStringLiteral("/now")).removeRecursively();
+            if (QDir().rename(base + QStringLiteral("/next"), base + QStringLiteral("/now"))) {
+                QFile at(base + QStringLiteral("/at"));
+                if (at.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                    at.write(QByteArray::number(QDateTime::currentMSecsSinceEpoch()));
+                // The new "next" (made below) is named to contacts, as after any rotation.
+                QTimer::singleShot(0, this, &LocalSend::hiddenRotated);
+            }
+        } else if (!hasNow && hasOld) {
+            QDir().rename(base + QStringLiteral("/old"), base + QStringLiteral("/now"));   // cut off before "next" moved: as it was
+        }
+        if (QFileInfo::exists(base + QStringLiteral("/now/cert.pem")))
+            QDir(base + QStringLiteral("/old")).removeRecursively();
+    }
     m_hiddenNow = Tls::loadIn(QStringLiteral("tls/hidden/now"));
     m_hiddenNext = Tls::loadIn(QStringLiteral("tls/hidden/next"));
     QFile at(System::dataDir() + QStringLiteral("/tls/hidden/at"));
@@ -353,11 +384,18 @@ void LocalSend::rotateHidden(bool turningOff)
     const qint64 t = QDateTime::currentMSecsSinceEpoch();
     if (!m_hiddenNext.isValid() || !rotateDue(m_hiddenSince, t, turningOff))
         return;
-    // "next" (already named to contacts) becomes "now", and a new "next" is made and named.
+    // "next" (already named to contacts) becomes "now", and a new "next" is made and named. Round 19: "now" goes aside
+    // first and is deleted only once "next" took its place, so a cut-off rotation never leaves a "now" nobody knows
+    // (loadHidden finishes it at the next start).
     const QString base = System::dataDir() + QStringLiteral("/tls/hidden");
-    QDir(base + QStringLiteral("/now")).removeRecursively();
-    if (!QDir().rename(base + QStringLiteral("/next"), base + QStringLiteral("/now")))
+    QDir(base + QStringLiteral("/old")).removeRecursively();
+    if (QFileInfo::exists(base + QStringLiteral("/now")) && !QDir().rename(base + QStringLiteral("/now"), base + QStringLiteral("/old")))
         return;
+    if (!QDir().rename(base + QStringLiteral("/next"), base + QStringLiteral("/now"))) {
+        QDir().rename(base + QStringLiteral("/old"), base + QStringLiteral("/now"));   // as it was
+        return;
+    }
+    QDir(base + QStringLiteral("/old")).removeRecursively();
     m_hiddenNow = m_hiddenNext;
     m_hiddenNext = Tls::loadIn(QStringLiteral("tls/hidden/next"));
     m_hiddenSince = t;
@@ -496,6 +534,12 @@ void LocalSend::keepPeer(const QString &key, const Device &d)
         o.insert(it.key(), QJsonObject{{QStringLiteral("ip"), it->ip}, {QStringLiteral("port"), it->port}, {QStringLiteral("protocol"), it->protocol},
                                        {QStringLiteral("seen"), double(it->seen)}, {QStringLiteral("fp"), it->fp}});
     keepPeers(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+bool LocalSend::waitsForPin(const QString &key) const
+{
+    const auto it = m_peers.constFind(key);
+    return it != m_peers.constEnd() && off() && pins(it->fp, pinsFor ? pinsFor(key) : QStringList()).isEmpty();
 }
 
 void LocalSend::askContacts()

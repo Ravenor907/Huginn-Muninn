@@ -16,9 +16,9 @@ import java.net.URI
  * While it's on, everything Muninn does on the internet through [Net.client] (the Nostr relays, the call relay's Worker,
  * update checks and downloads, and the voices someone else may download) goes through Tor, built into Muninn
  * ([TorRunner]), as SOCKS5 with the names looked up by Tor, never here. Anything that would still show the address is
- * off, each with [OFF_NOTE]: the direct call path (calls always go through the call relay), direct files and photos,
- * sending videos (receiving still works), link previews and GIF search. Nearby and the same Wi-Fi stay available:
- * they never leave the home network.
+ * off, each with [OFF_NOTE]: calls (Tor can't carry a call's sound, and the call relay would see the address, see
+ * [CALLS_OFF]), direct files and photos, sending videos (receiving still works), link previews and GIF search. Nearby and
+ * the same Wi-Fi stay available: they stay on the Wi-Fi the phone is on.
  *
  * Fails closed: on, with Tor not ready yet, every connection is sent to a port where nothing listens, so it fails
  * instead of going out the normal way. The rules here are pure, so they're tested off the phone (UltraPrivacyTest).
@@ -29,7 +29,11 @@ object UltraPrivacy {
     /** What a video send says while it's on (videos are too big to send through Tor). */
     const val VIDEO_OFF = "Sending videos: $OFF_NOTE. You can still receive them."
     /** Said under Nearby and the same Wi-Fi, which stay on. */
-    const val NEARBY_NOTE = "Still on with Ultra privacy: Nearby and the same Wi-Fi never leave your home network."
+    const val NEARBY_NOTE = "Still on with Ultra privacy: Nearby and the same Wi-Fi. They stay on this Wi-Fi, so on a public Wi-Fi others there can see Nearby."
+    /** Owner decision (round 19): calls are off while it's on, both ways. What a call that can't start says. */
+    const val CALLS_OFF = "Calls are off while Ultra privacy is on."
+    /** The missed-call note for a call that came while it's on ("<name> called ..."). */
+    const val CALLS_OFF_MISSED = "while Ultra privacy was on. Calls are off until you turn it off."
     /** The saved switch, in Muninn's own settings (outside the vault: the relays connect before it's unlocked). */
     const val PREF = "ultraPrivacy"
     /** Where nothing listens: with Tor not ready, a connection fails here instead of leaving directly. */
@@ -55,10 +59,28 @@ object UltraPrivacy {
     /** Tor's start, 0 to 100. */
     val progress: StateFlow<Int> = _progress.asStateFlow()
 
-    /** Run when Ultra privacy turns on or off, or Tor becomes ready: sockets open now go, the next ones use the new way. */
+    /** Run when Ultra privacy turns on or off, or Tor's port changes: sockets open now go, the next ones use the new way. */
     private val listeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
     fun onChange(f: () -> Unit) { listeners += f }
-    private fun changed() { for (f in listeners) try { f() } catch (_: Exception) {} }
+    /** Run once each time it turns on: whatever already goes straight to someone (a call, a file offer) stops. */
+    private val onListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+    fun onTurnedOn(f: () -> Unit) { onListeners += f }
+    /** Run when Tor has a circuit again on the same port: what isn't connected tries again now (nothing is dropped). */
+    private val readyListeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+    fun onReadyAgain(f: () -> Unit) { readyListeners += f }
+    /**
+     * Where the listeners run. Null (the tests): right away, on the caller's thread. The app sets a background thread
+     * ([TorRunner.init]), so closing sockets never runs on the main thread when the switch is tapped.
+     */
+    @Volatile var listenerThread: java.util.concurrent.Executor? = null
+    private fun fire(list: List<() -> Unit>) {
+        val all = list.toList()
+        if (all.isEmpty()) return
+        val go = Runnable { for (f in all) try { f() } catch (_: Exception) {} }
+        val e = listenerThread
+        if (e == null) go.run() else try { e.execute(go) } catch (_: Exception) { go.run() }
+    }
+    private fun changed() = fire(listeners)
 
     private val loopback: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
 
@@ -93,6 +115,8 @@ object UltraPrivacy {
 
     /** Straight over the internet to someone (the direct call path, direct files and photos, STUN). */
     val directAllowed: Boolean get() = !enabled
+    /** Calls and voice rooms, in and out (owner decision, round 19): off while it's on. */
+    val callsAllowed: Boolean get() = !enabled
     /** Sending videos (video messages, group videos, video files). Receiving still works. */
     val videoSendAllowed: Boolean get() = !enabled
     /** Link previews (the site would see the address). */
@@ -108,6 +132,39 @@ object UltraPrivacy {
     /** A file that may not be sent now: a video while Ultra privacy is on. */
     fun blocksFile(name: String, mime: String = ""): Boolean = enabled && (isVideoName(name) || mime.lowercase().startsWith("video/"))
 
+    /** The same for a file on disk: by its name, or by its first bytes (a video renamed .bin still goes nowhere). */
+    fun blocksFile(file: java.io.File, name: String): Boolean = enabled && (isVideoName(name) || looksLikeVideo(head(file)))
+
+    private fun head(file: java.io.File): ByteArray = try {
+        file.inputStream().use { s -> val b = ByteArray(64); var n = 0
+            while (n < b.size) { val r = s.read(b, n, b.size - n); if (r <= 0) break; n += r }
+            b.copyOf(n) }
+    } catch (_: Exception) { ByteArray(0) }
+
+    /** Round 19 (Windows m11): the first bytes of a file look like a video. The same rule as Huginn's UltraPrivacy::looksLikeVideo. */
+    fun looksLikeVideo(h: ByteArray): Boolean {
+        if (h.size < 12) return false
+        fun at(i: Int, s: String) = i + s.length <= h.size && s.indices.all { h[i + it] == s[it].code.toByte() }
+        fun starts(vararg b: Int) = b.size <= h.size && b.indices.all { h[it] == b[it].toByte() }
+        val box = String(h, 4, 4, Charsets.ISO_8859_1)
+        if (box == "ftyp") {
+            // Photos (HEIC, AVIF) and sound (M4A) use the same box: only those aren't videos.
+            return String(h, 8, 4, Charsets.ISO_8859_1) !in NOT_VIDEO_BRANDS
+        }
+        if (box == "moov" || box == "mdat" || box == "wide") return true   // MP4, MOV, 3GP
+        if (box == "free" || box == "skip") {
+            val all = String(h, Charsets.ISO_8859_1)
+            if (all.contains("moov") || all.contains("mdat") || all.contains("ftyp")) return true   // an older QuickTime file
+        }
+        if (starts(0x1A, 0x45, 0xDF, 0xA3)) return true   // Matroska, WebM
+        if (at(0, "RIFF") && at(8, "AVI ")) return true
+        if (starts(0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11)) return true   // ASF, WMV
+        if (starts(0x46, 0x4C, 0x56, 0x01)) return true   // FLV
+        if (starts(0x00, 0x00, 0x01, 0xBA) || starts(0x00, 0x00, 0x01, 0xB3)) return true   // MPEG program or video stream
+        return false
+    }
+    private val NOT_VIDEO_BRANDS = setOf("heic", "heix", "heim", "heis", "mif1", "msf1", "avif", "M4A ", "M4B ", "M4P ", "F4A ", "F4B ")
+
     // ------------------------------------------------------------------ the switch and Tor
 
     /** Turns it on or off in memory (and starts or stops nothing): [TorRunner] and Settings call [set]. Tests use this. */
@@ -117,16 +174,34 @@ object UltraPrivacy {
         port = 0
         _progress.value = 0
         _state.value = if (on) Tor.STARTING else Tor.OFF
+        // Turned on: what goes straight to someone stops first, then the connections are made again the new way.
+        if (on) fire(onListeners)
         changed()
     }
 
     /** Tor is ready on [socksPort]: the next connections go through it, and the ones open now are made again. */
     fun ready(socksPort: Int) {
         if (!enabled || socksPort !in 1..65535) return
-        val again = port != socksPort || _state.value != Tor.READY
+        // Only a new port makes the open connections again (they already go through Tor on the same one).
+        val again = port != socksPort
+        val wasReady = _state.value == Tor.READY
         port = socksPort
         _progress.value = 100
         _state.value = Tor.READY
+        if (again) changed() else if (!wasReady) fire(readyListeners)
+    }
+
+    /**
+     * Tor is up on [socksPort] but has no circuit yet (starting, or after the phone slept). Connections go to its port
+     * anyway: it's Tor, so nothing leaves directly, and asking it is what makes Tor build a circuit again. The ones open
+     * now are only made again when the port itself changes, never on a ready, waiting, ready flap.
+     */
+    fun waiting(socksPort: Int, percent: Int, ms: Long, warned: Boolean = false) {
+        if (!enabled || socksPort !in 1..65535) return
+        val again = port != socksPort
+        port = socksPort
+        _progress.value = percent.coerceIn(0, 99)
+        _state.value = startState(ms, warned)
         if (again) changed()
     }
 
@@ -176,16 +251,16 @@ object UltraPrivacy {
     val WHAT_IT_DOES = listOf(
         "Hides your internet address from the relays, from GitHub and from everyone you message.",
         "Messages, update checks and downloads go through Tor, a volunteer network that hides where they come from.",
-        "Calls always go through the call relay, never straight to the other person.",
+        "Calls are off while it's on: Tor can't carry a call, and the call relay would see your address.",
         "Anything that would still show your address is turned off while it's on.",
-        "Nearby and the same Wi-Fi keep working: they never leave your home network.",
+        "Nearby and the same Wi-Fi keep working: they stay on this Wi-Fi.",
     )
 
     /** Every downside, the second screen, before Confirm. */
     val DOWNSIDES = listOf(
         "Messages are slower, and may arrive much later while your phone is idle.",
-        "The call relay sees your address for calls, and calls use up the relay's daily allowance faster.",
-        "Direct calls and direct file and photo transfers are off.",
+        "Calls are off, both ways, because the call relay sees your address. Calls to you show as missed.",
+        "Direct file and photo transfers are off.",
         "Sending videos is off. You can still receive them.",
         "Link previews and GIF search are off.",
         "Update checks and downloads are slower.",

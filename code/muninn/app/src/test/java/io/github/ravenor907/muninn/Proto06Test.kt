@@ -186,6 +186,10 @@ class Proto06Test {
     @Test
     fun caps() {
         assertEquals(setOf("r1", "g1", "c1", "c2", "k1", "k2", "k3", "k4", "k5", "t1", "v1", "v2", "m1", "m2", "i1", "f1", "d1", "k6", "k7", "k8", "k9", "k10", "j1", "x1", "s1", "b1", "e1", "a1", "g2", "p1", "f2", "f3", "g3", "g4", "n1", "n2", "u1", "k11", "k12", "k13", "k14", "p2", "h1", "r2", "v3", "k15"), Proto06.caps(Proto06.CAPS))
+        // Every Huginn keeps only the first 48 tokens: the ones it reads must sit inside them.
+        val list = Proto06.CAPS.split(' ').filter { it.isNotEmpty() }
+        assertTrue("Huginn keeps only 48 caps", list.size <= 48)
+        for (t in listOf("h1", "r2", "v3", "p2", "n2", "f3")) assertTrue(t, list.indexOf(t) in 0 until 48)
         assertEquals(setOf("r1", "zz"), Proto06.caps(" r1  zz "))
         assertTrue(Proto06.isLogicalId(Proto06.newLogicalId()))
         assertEquals(22, Proto06.newGroupId().length)

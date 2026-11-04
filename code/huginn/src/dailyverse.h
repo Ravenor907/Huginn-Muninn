@@ -99,6 +99,7 @@ private:
     QList<Verse> m_verses;
     QMap<int, QString> m_mine;
     int m_mineOf = 0;
+    bool m_mineDropped = false;   // cleared while locked: read again at the next unlock
     bool m_tour = false;
     qint64 m_day = 0;
     QTimer m_clock;

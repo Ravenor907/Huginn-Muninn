@@ -194,6 +194,19 @@ class Fix142DTest {
         } finally { dir.deleteRecursively() }
     }
 
+    @Test fun hiddenRotateStoppedHalfWayFinishes() {
+        val dir = java.nio.file.Files.createTempDirectory("tls-hidden").toFile()
+        try {
+            val h = HiddenTls(dir)
+            assumeNotNull(h.current())
+            val next = h.upcoming()!!
+            // Killed after "now" was moved aside and before "next" took its place: the next start finishes it.
+            assertTrue(java.io.File(dir, "now").renameTo(java.io.File(dir, "old")))
+            assertEquals(next.fingerprint, HiddenTls(dir).current()!!.fingerprint)
+            assertFalse(java.io.File(dir, "old").exists())
+        } finally { dir.deleteRecursively() }
+    }
+
     // ---- l5: clocks more than 36 hours apart
 
     private fun stamped(t: String, lts: Long, pn: String? = null): JSONObject =

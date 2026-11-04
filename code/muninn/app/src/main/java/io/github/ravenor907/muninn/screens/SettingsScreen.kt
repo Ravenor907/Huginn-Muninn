@@ -74,6 +74,20 @@ object SettingsNav {
     var goTab by mutableStateOf("")
 }
 
+/**
+ * Round 19: a lock just confirmed for Settings › Unlock password or Change lock. A tablet or DeX window that crosses the
+ * two-pane width builds the page again, which used to ask for the lock again. Kept in memory only, for a minute, for
+ * that one page; cleared when the page is left and when the lock goes up (AppLock.raise).
+ */
+object ProvenLock {
+    @Volatile private var page = ""
+    @Volatile private var at = 0L
+    private fun now(): Long = try { android.os.SystemClock.elapsedRealtime() } catch (_: Throwable) { System.nanoTime() / 1_000_000 }
+    fun mark(p: String) { page = p; at = now() }
+    fun still(p: String): Boolean = page == p && at > 0 && now() - at in 0..60_000L
+    fun clear() { page = ""; at = 0L }
+}
+
 /** One page of Settings: its title and the page Back goes to. */
 private class Page(val id: String, val title: String, val parent: String = "")
 
@@ -518,7 +532,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
                 Ui.sure(Ask("Erase after too many tries?", "Wrong tries already make people wait: 5 minutes, then 1 hour, 12 hours and 24 hours. " +
                     "With this on, 5 more wrong tries after the 24-hour wait erase everything on this phone at once, for good: chats, contacts and keys. " +
                     "Children or anyone guessing can set it off.\n\nMake a backup first (Settings › Devices and backup). Without one, an erase can't be undone. " +
-                    "Your saved backup files are kept, and Forgot it? puts one back.", "Turn on", danger = true) {
+                    "Your saved backup files are kept, and Forgot it? puts one back. Files you saved to Downloads stay.", "Turn on", danger = true) {
                     LockGate.ask(app, "Erase after too many tries") { app.vault.tries.erase = true; eraseOn = true; Ui.say("Erase after too many tries is on. Keep a recent backup.") }
                 })
             }
@@ -584,7 +598,13 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
                 LockGate.ask(app, "Turn off the lock") {
                     try { app.vault.setPassword(null) } catch (_: Exception) {}
                     hasLock = app.vault.hasPassword
-                    if (!hasLock) { io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off.") }
+                    if (!hasLock) {
+                        // Round 19: the erase switch and the count go with the lock, so a lock set later starts with
+                        // erase off (and its own warning) and no old wrong tries.
+                        try { app.vault.tries.erase = false; app.vault.tries.right() } catch (_: Exception) {}
+                        eraseOn = false
+                        io.github.ravenor907.muninn.screens.skipLock(app); Ui.say("The lock is off.")
+                    }
                 }
             })
         }
@@ -594,11 +614,11 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
 /** Settings › Privacy and lock › Unlock password: the current lock first, then the new one typed twice and asked once more from memory. */
 @Composable
 private fun ChangeUnlockPassword(app: Muninn) {
-    var proven by remember { mutableStateOf(false) }
+    var proven by remember { mutableStateOf(ProvenLock.still("unlockPassword")) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        FolderHeader("Unlock password") { SettingsNav.folder = "lock" }
-        if (!proven) ConfirmLock(app, "Unlock password", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true }
-        else UnlockPasswordSteps(app, recall = false) { SettingsNav.folder = "lock" }
+        FolderHeader("Unlock password") { ProvenLock.clear(); SettingsNav.folder = "lock" }
+        if (!proven) ConfirmLock(app, "Unlock password", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true; ProvenLock.mark("unlockPassword") }
+        else UnlockPasswordSteps(app, recall = false) { ProvenLock.clear(); SettingsNav.folder = "lock" }
     }
 }
 
@@ -606,11 +626,11 @@ private fun ChangeUnlockPassword(app: Muninn) {
 @Composable
 private fun ChangeLock(app: Muninn) {
     // A lock already set is asked for first: nobody else with the phone can put in a lock the owner doesn't know.
-    var proven by remember { mutableStateOf(!app.vault.hasPassword) }
+    var proven by remember { mutableStateOf(!app.vault.hasPassword || ProvenLock.still("changeLock")) }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        FolderHeader(if (app.vault.hasPassword) "Change lock" else "Set a lock") { SettingsNav.folder = "lock" }
-        if (!proven) ConfirmLock(app, "Change lock", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true }
-        else LockSetup(app, onCancel = { SettingsNav.folder = "lock" }, fill = true) { SettingsNav.folder = "lock" }
+        FolderHeader(if (app.vault.hasPassword) "Change lock" else "Set a lock") { ProvenLock.clear(); SettingsNav.folder = "lock" }
+        if (!proven) ConfirmLock(app, "Change lock", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true; ProvenLock.mark("changeLock") }
+        else LockSetup(app, onCancel = { ProvenLock.clear(); SettingsNav.folder = "lock" }, fill = true) { ProvenLock.clear(); SettingsNav.folder = "lock" }
     }
 }
 
@@ -681,6 +701,10 @@ private fun CallsPage(app: Muninn) {
     var noise by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.noiseRemoval(ctx)) }
     var internet by remember { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.internetCalls(ctx)) }
     Framed {
+        // Owner decision (round 19): no calls at all while Ultra privacy is on, said where calls are set.
+        val ultraTor by io.github.ravenor907.muninn.net.UltraPrivacy.state.collectAsState()
+        if (ultraTor != io.github.ravenor907.muninn.net.UltraPrivacy.Tor.OFF)
+            Text(io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF, style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
         ToggleRow("Internet calls", "Off: only close by and on the same Wi-Fi", internet) {
             internet = it; io.github.ravenor907.muninn.net.call.CallManager.setInternetCalls(ctx, it)
         }
@@ -799,7 +823,7 @@ private fun EraseRows(app: Muninn) {
         })
     }
     io.github.ravenor907.muninn.ui.MenuRow("warning", "Erase everything", danger = true) {
-        Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings. This can't be undone.",
+        Ui.sure(Ask("Erase everything?", "Messages, contacts, keys and settings. This can't be undone. Files you saved to Downloads stay.",
             "Hold to erase", danger = true, hold = true, spoken = "Hold for 5 seconds to erase everything") { erased = true; EraseRun.start(app) })
     }
 }

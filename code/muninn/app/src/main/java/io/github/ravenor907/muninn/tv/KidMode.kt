@@ -273,13 +273,16 @@ object KidTv {
         if (s.parents.isEmpty()) return false
         // Groups a parent put the device in: its parents and the people in those groups (the invite itself only from a
         // parent, which Groups checks with [groupInviteOk]).
-        if (room in KidRules.GROUP_ROOMS) return KidRules.groupRoomOk(fromKey, room, s.parents, inMyGroup(fromKey), quietNow())
+        // Round 19: while quiet times are set and the time isn't known yet (right after a start), only the parents get
+        // through, as in a quiet time; senders keep what they sent and try again ([KidK14.UNSURE] stands in).
+        val quiet = if (timeUnsure()) KidK14.UNSURE else quietNow()
+        if (room in KidRules.GROUP_ROOMS) return KidRules.groupRoomOk(fromKey, room, s.parents, inMyGroup(fromKey), quiet)
         if (room !in PRIVATE_ROOMS && !(room == "call" && s.cfg?.calls != false)) return false
         if (!approved(fromKey)) return false
         // k11 (7.18): during a quiet time only the parents get through (and a call already under way). Everyone else's
         // app keeps what they sent and tries again, so it arrives once the quiet time is over; nothing rings or shows here.
         if (room == "receipt" || io.github.ravenor907.muninn.net.call.CallManager.call.value?.peerKey == fromKey) return true
-        return KidRules.passes(fromKey, s.parents, quietNow())
+        return KidRules.passes(fromKey, s.parents, quiet)
     }
 
     /** A group invite, or being put straight into a group: only from one of this device's parents. */
@@ -355,23 +358,54 @@ object KidTv {
         val next = synchronized(timeLock) {
             // Round 17: each source's newest reading; the time follows what several agree on ([KidRules.clockFrom]).
             readings = KidRules.addReading(readings, source, TimeAnchor(wall, el))
-            // 1.42: after a restart the first reading alone sets nothing: two sources that agree, a parent's config, or a
-            // source the device's own clock agrees with ([KidRules.firstClock]). Until then quiet times stay as they were.
-            val n = KidRules.clockFrom(anchor, readings, el, System.currentTimeMillis()) ?: return
+            if (firstAt < 0L && wall >= KidRules.MIN_WALL) firstAt = el
+            // 1.42: after a restart the first reading alone sets nothing at once: two sources that agree, a parent's config,
+            // or a source the device's own clock agrees with ([KidRules.firstClock]). Round 19: after a short wait one
+            // relay's time is taken ([settle] checks again without a new reading). Until then quiet times stay as they were.
+            val n = KidRules.clockFrom(anchor, readings, el, System.currentTimeMillis(), heldSince(el)) ?: return
             if (n == anchor) return
             anchor = n
             n
         }
-        try { prefs(ctx).edit().putLong(ANCHOR_WALL, next.wall).putLong(ANCHOR_AT, next.at).putInt(ANCHOR_BOOT, bootCount(ctx)).apply() } catch (_: Exception) {}
+        saveAnchor(ctx, next)
+    }
+
+    private fun saveAnchor(ctx: Context, a: TimeAnchor) {
+        try { prefs(ctx).edit().putLong(ANCHOR_WALL, a.wall).putLong(ANCHOR_AT, a.at).putInt(ANCHOR_BOOT, bootCount(ctx)).apply() } catch (_: Exception) {}
+    }
+
+    private fun heldSince(el: Long): Long = if (firstAt < 0L) 0L else el - firstAt
+
+    /**
+     * Round 19: no trusted time yet and readings waiting: checked again (one relay alone is taken once the wait is over,
+     * even when no new reading comes). Cheap: at most [KidRules.MAX_SOURCES] readings.
+     */
+    private fun settle() {
+        if (anchor != null || readings.isEmpty()) return
+        val ctx = clockApp ?: return
+        val next = synchronized(timeLock) {
+            if (anchor != null) return
+            val el = elapsed()
+            val n = KidRules.clockFrom(null, readings, el, System.currentTimeMillis(), heldSince(el)) ?: return
+            anchor = n
+            n
+        }
+        saveAnchor(ctx, next)
     }
     private val timeLock = Any()
     @Volatile private var readings: Map<String, TimeAnchor> = emptyMap()
+    /** Round 19: when (uptime) the first reading since Muninn started came; -1: none yet. */
+    @Volatile private var firstAt = -1L
 
     /** Whether a trusted time has come since the device started (quiet times then never follow the device's own clock). */
     fun timeKnown(): Boolean = anchor != null
 
     /** Quiet times are set and no trusted time has come since the device started: what's sent to friends waits. */
-    fun timeUnsure(): Boolean = _state.value.cfg?.quiet?.isNotEmpty() == true && anchor == null
+    fun timeUnsure(): Boolean {
+        if (_state.value.cfg?.quiet?.isNotEmpty() != true) return false
+        settle()
+        return anchor == null
+    }
 
     /** The time now by the trusted time, or the device's own clock while none has come: for what the kids see (Daily Hávamál). */
     fun nowMs(): Long = KidRules.trustedNow(anchor, elapsed()) ?: System.currentTimeMillis()
@@ -383,6 +417,7 @@ object KidTv {
     fun quietNow(): QuietTime? {
         val c = _state.value.cfg ?: return null
         if (c.quiet.isEmpty()) return null
+        settle()
         return KidRules.quietOnDevice(c.quiet, c.tz, anchor, elapsed(), System.currentTimeMillis(), java.util.TimeZone.getDefault())
     }
 
@@ -974,6 +1009,13 @@ object Tv : TvHandler {
         // A kids' phone or tablet doesn't show itself to people nearby (a school's Wi-Fi): its parents' files still come over
         // the relays and the home Wi-Fi. Put back when it leaves kids' mode (KidReset).
         if (!KidMode.isTv(app) && app.identity.visibleNearby) app.identity.visibleNearby = false
+        // Round 19: Ultra privacy left on from before (kids' screens have no Settings to turn it off, and a blocked Tor
+        // would leave the device with no network): off.
+        try {
+            val ultra = io.github.ravenor907.muninn.net.UltraPrivacy.on ||
+                app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).getBoolean(io.github.ravenor907.muninn.net.UltraPrivacy.PREF, false)
+            if (ultra) io.github.ravenor907.muninn.net.TorRunner.set(app, false)
+        } catch (_: Exception) {}
         io.github.ravenor907.muninn.net.MessageService.start(app)
         TvRing.watch(app)
         TvUpdate.start(app)

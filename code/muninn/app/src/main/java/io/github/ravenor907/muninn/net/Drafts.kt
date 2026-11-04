@@ -74,9 +74,15 @@ object Drafts {
     /** The draft key a notification's chat key goes to: a chat's own, or a group's main channel ("g:" + id). */
     fun replyKey(key: String): String = if (key.startsWith("g:") && '/' !in key) groupKey(key.removePrefix("g:"), "main") else key
 
-    /** [old] with a refused reply [text] added on a new line (or [text] alone when the box was empty). */
+    /**
+     * [old] with a refused reply [text] added on a new line (or [text] alone when the box was empty). Round 19: added
+     * after something already in the box it says so ([HELD]), so nobody sends words they didn't type without seeing it.
+     */
     fun withReply(old: Draft, text: String): Draft =
-        old.copy(text = (if (old.text.isBlank()) text else old.text + "\n" + text).take(KEEP_MAX))
+        old.copy(text = (if (old.text.isBlank()) text else old.text + "\n" + HELD + text).take(KEEP_MAX))
+
+    /** Marks a notification reply typed while Muninn was locked, added after a draft already in the box. */
+    const val HELD = "Typed while locked: "
 
     /**
      * A notification reply that couldn't be sent (Muninn locked): it waits in its chat's box as a draft, never sent by

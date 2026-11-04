@@ -50,6 +50,8 @@ object KidMerge {
             child = pick(base.child, mine.child, theirs.child), access = pick(base.access, mine.access, theirs.access),
             gok = setMerge(base.gok, mine.gok, theirs.gok), gno = setMerge(base.gno, mine.gno, theirs.gno),
             waitKid = mapMerge(base.waitKid, mine.waitKid, theirs.waitKid),
+            // Round 19: k15, this phone's voice pick survives a merge.
+            voice = pick(base.voice, mine.voice, theirs.voice),
             myName = pick(base.myName, mine.myName, theirs.myName),
             goneC = (theirs.goneC + mine.goneC).distinct().takeLast(KidRules.MAX_GONE),
             goneP = (theirs.goneP + mine.goneP).distinct().takeLast(KidRules.MAX_GONE),

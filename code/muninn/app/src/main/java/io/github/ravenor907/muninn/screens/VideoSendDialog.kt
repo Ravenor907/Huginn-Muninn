@@ -1,6 +1,5 @@
 package io.github.ravenor907.muninn.screens
 
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,12 +15,12 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,7 +42,6 @@ import io.github.ravenor907.muninn.ui.Picking
 import io.github.ravenor907.muninn.ui.Type
 import io.github.ravenor907.muninn.ui.Ui
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -65,38 +63,46 @@ internal fun pickedVideoDetail(): String =
 
 /**
  * Cap v3 (protocol.md 29): the "Video from your phone" picker for a chat. Returns what the Send sheet's line runs; the
- * picked video then opens [VideoSendDialog] here. Ultra privacy on: nothing opens, and it says why.
+ * picked video then opens [VideoSendDialog] here. Ultra privacy on: nothing opens, and it says why. The picked video and
+ * its send live in VideoSend.jobs, so the sheet comes back as it was after a layout change, the lock or leaving the chat.
  */
 @Composable
 internal fun rememberVideoPicker(app: Muninn, target: VideoSend.Target): () -> Unit {
-    var picked by remember { mutableStateOf<Uri?>(null) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) picked = uri }
-    picked?.let { u -> VideoSendDialog(app, target, u) { picked = null } }
+    val jobs by VideoSend.jobs.collectAsState()
+    val job = jobs[target]
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> if (uri != null) VideoSend.picked(target, uri) }
+    if (job != null && !job.hidden) VideoSendDialog(app, target, job)
     return {
-        if (UltraPrivacy.on) Ui.say("Sending videos is off while Ultra privacy is on.", true)
-        else try { Picking.launch(launcher, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
-        catch (_: Exception) { Ui.say("This phone has no video picker.", true) }
+        when {
+            // A send already on its way here: show it again rather than pick another.
+            VideoSend.jobs.value[target]?.running == true -> VideoSend.hide(target, false)
+            UltraPrivacy.on -> Ui.say("Sending videos is off while Ultra privacy is on.", true)
+            else -> try { Picking.launch(launcher, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }
+                catch (_: Exception) { Ui.say("This phone has no video picker.", true) }
+        }
     }
 }
 
 /**
  * A picked video, before it goes: what it is, who gets the full copy and who the smaller one, and for a video longer
  * than 20 seconds a choice: trim it (a slider picks which 20 seconds) or send it in full later, straight, to those who
- * can take it. Then the copies are made here with their progress, and it closes once they're on their way.
+ * can take it. Then the copies are made in Muninn's own scope (VideoSend.start) with their progress here; it can be
+ * hidden meanwhile, and it closes once they're on their way. A send that failed shows why, with Try again.
  */
 @Composable
-internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, uri: Uri, done: () -> Unit) {
+internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, job: VideoSend.Job) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val me = app.identity.publicKey
-    var info by remember { mutableStateOf<GroupVideo.Info?>(null) }
-    var failed by remember { mutableStateOf("") }
-    var start by remember { mutableIntStateOf(0) }
-    var inFull by remember { mutableStateOf(false) }
-    var plan by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-    var working by remember { mutableStateOf("") }
-    var progress by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(uri) {
+    val uri = job.uri
+    val key = uri.toString()
+    var info by remember(key) { mutableStateOf<GroupVideo.Info?>(null) }
+    var failed by remember(key) { mutableStateOf("") }
+    var start by rememberSaveable(key) { mutableIntStateOf(0) }
+    var inFull by rememberSaveable(key) { mutableStateOf(false) }
+    var plan by remember(key) { mutableStateOf<Map<String, String>>(emptyMap()) }
+    val working = job.working
+    val progress = job.progress
+    LaunchedEffect(key) {
         val i = withContext(Dispatchers.IO) { VideoPick.probe(context, uri) }
         if (i == null) failed = "That video can't be read." else info = i
     }
@@ -107,32 +113,28 @@ internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, uri: Uri, do
     val i = info
     val length = i?.let { GroupVideo.length(it.ms) } ?: GroupVideo.SHORT
     val clip = if (i != null && length != GroupVideo.SHORT && !inFull) GroupVideo.trim(i.ms, start) else null
+    val close = { VideoSend.closed(target) }
     val sendNow = {
         val v = info
-        if (v != null && working.isEmpty()) {
-            working = "Getting ready"
-            scope.launch(Dispatchers.IO) {
-                val said = VideoSend.send(context, app.chat, target, me, uri, v, clip, inFull) { what, f -> working = what; progress = f }
-                withContext(Dispatchers.Main) { Ui.say(said); done() }
-            }
-        }
+        if (v != null && !job.running) VideoSend.start(app, target, me, uri, v, clip, inFull)
     }
     androidx.compose.material3.AlertDialog(
-        onDismissRequest = { if (working.isEmpty()) done() },
+        onDismissRequest = { if (job.running) VideoSend.hide(target, true) else close() },
         containerColor = Palette.panel,
         title = { Text("Send a video", style = Type.big) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 when {
-                    UltraPrivacy.on -> Text("Off while Ultra privacy is on. Videos you get still play.", style = Type.normal)
-                    failed.isNotEmpty() -> Text(failed, style = Type.normal.copy(color = Palette.danger))
-                    i == null -> Text("Checking the video", style = Type.normal)
                     working.isNotEmpty() -> {
                         Text(working, style = Type.normal)
                         LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, color = Palette.accent, trackColor = Palette.track,
                             modifier = Modifier.fillMaxWidth().padding(top = 10.dp).semantics { contentDescription = "$working, ${(progress * 100).toInt()}%" })
-                        Text("Keep Muninn open until it says it's sending.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
+                        Text("You can hide this and keep using Muninn. It says when the video is on its way.", style = Type.small, modifier = Modifier.padding(top = 8.dp))
                     }
+                    job.failed.isNotEmpty() -> Text(job.failed, style = Type.normal.copy(color = Palette.danger))
+                    UltraPrivacy.on -> Text("Off while Ultra privacy is on. Videos you get still play.", style = Type.normal)
+                    failed.isNotEmpty() -> Text(failed, style = Type.normal.copy(color = Palette.danger))
+                    i == null -> Text("Checking the video", style = Type.normal)
                     else -> {
                         Text("${GroupVideo.clock(i.ms)} long", style = Type.normal)
                         if (length != GroupVideo.SHORT) {
@@ -153,15 +155,21 @@ internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, uri: Uri, do
                             }
                         }
                         Text(GroupVideo.summary(plan, nameOf), style = Type.small, modifier = Modifier.padding(top = 10.dp))
+                        Text("Sent without its location or camera details.", style = Type.small.copy(color = Palette.textSoft), modifier = Modifier.padding(top = 6.dp))
                     }
                 }
             }
         },
         confirmButton = {
-            val ready = !UltraPrivacy.on && i != null && failed.isEmpty() && working.isEmpty() &&
-                plan.values.any { it != GroupVideo.NONE }
-            if (working.isEmpty()) MButton("Send", kind = Kind.Accent, enabled = ready) { sendNow() }
+            when {
+                job.running -> MButton("Hide") { VideoSend.hide(target, true) }
+                job.failed.isNotEmpty() -> MButton("Try again", kind = Kind.Accent, enabled = !UltraPrivacy.on) { VideoSend.picked(target, uri) }
+                else -> {
+                    val ready = !UltraPrivacy.on && i != null && failed.isEmpty() && plan.values.any { it != GroupVideo.NONE }
+                    MButton("Send", kind = Kind.Accent, enabled = ready) { sendNow() }
+                }
+            }
         },
-        dismissButton = { if (working.isEmpty()) MButton("Cancel") { done() } },
+        dismissButton = { if (!job.running) MButton(if (job.failed.isNotEmpty()) "Close" else "Cancel") { close() } },
     )
 }

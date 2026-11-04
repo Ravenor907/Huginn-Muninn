@@ -51,7 +51,7 @@ internal fun UltraPrivacySection(app: Muninn) {
             else { TorRunner.set(ctx, false); Ui.say("Ultra privacy is off.") }
         }
         if (on) {
-            Text("${UltraPrivacy.OFF_NOTE}: direct calls and files, sending videos, link previews and GIF search. Calls go through the call relay.",
+            Text("${UltraPrivacy.OFF_NOTE}: calls (in and out), direct files, sending videos, link previews and GIF search.",
                 style = Type.small, modifier = Modifier.padding(top = 2.dp))
             Text(UltraPrivacy.NEARBY_NOTE, style = Type.small, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
         }
@@ -59,8 +59,11 @@ internal fun UltraPrivacySection(app: Muninn) {
     }
     if (asking) UltraTurnOn(onCancel = { asking = false }) {
         asking = false
+        // Calls are off while it's on: a call or voice room going on ends now, and that's said.
+        val inCall = io.github.ravenor907.muninn.net.call.CallManager.call.value?.let { it.phase != io.github.ravenor907.muninn.net.call.CallSession.Phase.ENDED } == true ||
+            io.github.ravenor907.muninn.net.call.RoomManager.room.value != null
         TorRunner.set(ctx, true)
-        Ui.say("Ultra privacy is on. Connecting to Tor…")
+        Ui.say(if (inCall) "Ultra privacy is on. Your call ended: calls are off while it's on." else "Ultra privacy is on. Connecting to Tor…")
     }
 }
 
@@ -74,7 +77,8 @@ internal fun UltraTurnOn(onCancel: () -> Unit, onConfirm: () -> Unit) {
         containerColor = Palette.panel,
         title = { Text(if (page == 0) "What Ultra privacy does" else "Before you turn it on", style = Type.big, modifier = Modifier.semantics { heading() }) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
+            // Each page starts at its top (its own scroll position), even after scrolling the first one to the end.
+            androidx.compose.runtime.key(page) { Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (page == 1) Text("Ultra privacy has these downsides:", style = Type.normal, modifier = Modifier.padding(bottom = 4.dp))
                 (if (page == 0) UltraPrivacy.WHAT_IT_DOES else UltraPrivacy.DOWNSIDES).forEach { line ->
                     Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
@@ -82,7 +86,7 @@ internal fun UltraTurnOn(onCancel: () -> Unit, onConfirm: () -> Unit) {
                         Text(line, style = Type.normal)
                     }
                 }
-            }
+            } }
         },
         confirmButton = {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {

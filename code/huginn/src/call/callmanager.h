@@ -128,6 +128,8 @@ public:
     // who (1.42, cap r2): the hash of the ring's tag, empty for a ring without one; at most LockedRingLimit::kMax rings
     // in its window per caller, so one contact ringing again and again never silences everyone else's calls.
     void ringLocked(const QString &callId, qint64 ts, bool live = false, const QString &who = QString());
+    // Ultra privacy turned on (main.cpp): the call going on ends (its direct path at once), and one ringing is declined.
+    void ultraOn();
     // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
     void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
     QByteArray relayId();

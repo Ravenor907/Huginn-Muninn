@@ -553,6 +553,11 @@ int main(int argc, char *argv[])
     // off, or Tor ready or lost: every relay socket made the old way goes, and they connect again the new way.
     auto *ultra = new UltraPrivacy(&app);
     QObject::connect(ultra, &UltraPrivacy::redial, nostr, [nostr] { nostr->redial(); });
+    // Round 19 (FIX 5): an update check or download under way never goes on the old way: it stops, and comes again
+    // in a minute the new way.
+    QObject::connect(ultra, &UltraPrivacy::redial, updater, [updater] { updater->redial(); });
+    // Round 19: Erase everything stops Tor first and waits for it, so its folder can be deleted.
+    QObject::connect(vault, &Vault::aboutToErase, ultra, [ultra] { ultra->stopNow(); });
     if (!quiet)
         ultra->start();
     QObject::connect(vault, &Vault::erased, nostr, [nostr] { nostr->forgetSecret(); });
@@ -713,6 +718,19 @@ int main(int argc, char *argv[])
     files->trusted = [calls](const QString &k) { return calls->trusted(k); };
     auto *linked = new Link(chat, &app);
     chat->setExtras(trust, files, linked);
+    // Round 19 (FIX 4, owner decision on calls): Ultra privacy turned on stops whatever already goes straight to someone:
+    // the call going on ends (calls are off while it's on), a voice room is left and its ring declined, and direct file
+    // and video offers go by relay or are cancelled. Later accepts are checked again where they happen.
+    QObject::connect(ultra, &UltraPrivacy::turnedOn, calls, [calls, rooms, files] {
+        calls->ultraOn();
+        if (rooms->ringing())
+            rooms->declineRing();
+        if (rooms->inRoom()) {
+            rooms->leave();
+            Q_EMIT calls->finished(UltraPrivacy::callsOffText());
+        }
+        files->ultraOn();
+    });
     // Profile pictures and status (cap p1).
     auto *profile = new Profile(chat, vault, &app);
     chat->setProfile(profile);
@@ -920,10 +938,12 @@ int main(int argc, char *argv[])
             fallback();
     };
     QObject::connect(calls, &CallManager::logged, chat, [chat, calls, missedNote](const QString &key, bool out, const QString &result, int seconds) {
-        const bool missed = result == QLatin1String("missed") || result == QLatin1String("internetOff");
+        const bool missed = result == QLatin1String("missed") || result == QLatin1String("internetOff") || result == QLatin1String("ultraOff");
         QString text;
         if (result == QLatin1String("internetOff"))
             text = QStringLiteral("Missed call · Internet calls are off");
+        else if (result == QLatin1String("ultraOff"))
+            text = UltraPrivacy::callsMissedText();   // round 19: declined quietly while Ultra privacy is on
         else if (missed)
             text = QStringLiteral("Missed call");
         else if (result == QLatin1String("answered"))
@@ -934,7 +954,8 @@ int main(int argc, char *argv[])
             text = result == QLatin1String("Declined") ? QStringLiteral("You declined a call") : QStringLiteral("Incoming call");
         chat->noteCall(key, text, missed);
         if (missed && !(chat->isMuted(key) && !chat->isRightAway(key)))
-            missedNote(key, chat->nameOf(key), QStringLiteral("From %1").arg(chat->nameOf(key)));
+            missedNote(key, chat->nameOf(key), result == QLatin1String("ultraOff") ? QStringLiteral("From %1. Calls are off while Ultra privacy is on.").arg(chat->nameOf(key))
+                                                                                    : QStringLiteral("From %1").arg(chat->nameOf(key)));
     });
     QObject::connect(rooms, &RoomManager::logged, chat, [chat, missedNote](const QString &g, const QString &text, bool missed) {
         chat->noteCall(QStringLiteral("g:") + g, text, missed);
@@ -1094,6 +1115,9 @@ int main(int argc, char *argv[])
     QObject::connect(vault, &Vault::lockedNow, readAloud, &ReadAloud::stop);
     QObject::connect(vault, &Vault::panicked, readAloud, &ReadAloud::stop);
     QObject::connect(calls, &CallManager::changed, readAloud, [calls, readAloud] { if (calls->inCall()) readAloud->stop(); });
+    // Round 19 (security 19): nothing is read aloud behind the lock or during a call or voice room, whatever asks.
+    readAloud->setBlocker([vault, calls, rooms] { return vault->locked() || vault->screenLocked() || calls->inCall() || rooms->inRoom(); });
+    QObject::connect(vault, &Vault::aboutToErase, readAloud, &ReadAloud::stop);
     engine.rootContext()->setContextProperty(QStringLiteral("ReadAloud"), readAloud);
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
     // The image providers run on Qt's loading threads: they read copies kept for them, never waiting on the main

@@ -141,6 +141,13 @@ QStringList filesUnder(const QString &dir)
     return out;
 }
 
+// Round 19 (FIX 8): Tor's own files (lib/tor/...). Antivirus sometimes quarantines tor.exe; one that can't be written or
+// replaced is left out, so it never blocks an update (Ultra privacy then says Tor is missing).
+bool isTor(const QString &rel)
+{
+    return rel.startsWith(QLatin1String("lib/tor/"), Qt::CaseInsensitive);
+}
+
 // A file that was in use a moment ago (the copy that just closed) can take a moment to let go.
 bool retry(const std::function<bool()> &step)
 {
@@ -281,6 +288,12 @@ QStringList unpack(const QString &zipPath, const QString &staging, QString *why)
         QDir().mkpath(QFileInfo(out).absolutePath());
         QFile f(out);
         if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(data) != data.size() || !f.flush()) {
+            if (isTor(rel)) {
+                f.close();
+                f.remove();
+                CrashLog::note(QStringLiteral("update: couldn't write %1, left out").arg(rel));
+                continue;
+            }
             *why = QStringLiteral("Couldn't write the update (%1). Is the disk full?").arg(rel);
             return {};
         }
@@ -379,7 +392,12 @@ bool finishAtStart()
     if (QFileInfo(here).fileName().compare(kStaging, Qt::CaseInsensitive) == 0 && QFileInfo::exists(ready)) {
         const QString staging = here, root = QFileInfo(here).absolutePath();
         QFile::remove(ready);   // once only, whatever happens below
-        const QStringList files = filesUnder(staging);
+        QStringList files = filesUnder(staging);
+        // Round 19 (FIX 8): "Update without Tor" (Updater::updateWithoutTor) leaves Tor's folder as it is, once.
+        const bool skipTor = Settings::store().value(QStringLiteral("update/skipTor")).toBool();
+        if (skipTor)
+            files.removeIf([](const QString &rel) { return isTor(rel); });
+        bool torLeft = skipTor;
         QList<Moved> moved;
         QSet<QString> fresh;
         QString failed;
@@ -391,11 +409,20 @@ bool finishAtStart()
             QDir().mkpath(QFileInfo(target).absolutePath());
             QFile::remove(target + kNew);
             if (!QFile::copy(staging + QLatin1Char('/') + rel, target + kNew)) {
+                if (isTor(rel)) {
+                    QFile::remove(target + kNew);
+                    CrashLog::note(QStringLiteral("update: couldn't copy %1, left out").arg(rel));
+                    torLeft = true;
+                    continue;
+                }
                 failed = rel;
                 break;
             }
             copied << rel;
         }
+        // What's swapped in is what was copied (a Tor file left out above isn't).
+        if (failed.isEmpty())
+            files = copied;
         // Then the journal, and only quick renames: cut off now, the next start finishes them (finishJournal).
         if (failed.isEmpty()) {
             QSaveFile j(root + QLatin1Char('/') + kJournal);
@@ -411,6 +438,13 @@ bool finishAtStart()
             if (!retry([&] { return moveAside(target, &m.aside); }) || !QFile::rename(target + kNew, target)) {
                 if (!m.aside.isEmpty())
                     QFile::rename(m.aside, target);
+                if (isTor(rel)) {
+                    QFile::remove(target + kNew);
+                    fresh.remove(QDir::cleanPath(target).toLower());
+                    CrashLog::note(QStringLiteral("update: couldn't replace %1, left out").arg(rel));
+                    torLeft = true;
+                    continue;
+                }
                 failed = rel;
                 break;
             }
@@ -447,6 +481,9 @@ bool finishAtStart()
                 if (f.endsWith(kAside, Qt::CaseInsensitive) || fresh.contains(QDir::cleanPath(f).toLower()))
                     continue;
                 const QString rel = QDir(root).relativeFilePath(f);
+                // Tor's folder left as it was (Update without Tor, or a file antivirus held): kept.
+                if (torLeft && isTor(rel))
+                    continue;
                 const bool listed = before.contains(rel, Qt::CaseInsensitive);
                 if (listed || (before.isEmpty() && kKinds.contains(QFileInfo(f).suffix().toLower())))
                     QFile::remove(f);
@@ -455,12 +492,23 @@ bool finishAtStart()
             for (const QString &rel : files)
                 if (rel.startsWith(QLatin1String("lib/"), Qt::CaseInsensitive))
                     now << rel;
+            // Tor files kept from before stay on the list, so a later update can still replace or tidy them.
+            if (torLeft)
+                for (const QString &rel : std::as_const(before))
+                    if (isTor(rel) && !now.contains(rel, Qt::CaseInsensitive) && QFileInfo::exists(root + QLatin1Char('/') + rel))
+                        now << rel;
             QSaveFile list(listPath);
             if (!list.open(QIODevice::WriteOnly | QIODevice::Text) || list.write(now.join(QLatin1Char('\n')).toUtf8() + '\n') < 0 || !list.commit())
                 CrashLog::note(QStringLiteral("update: couldn't keep the list of lib files"));
             deleteAsides(root);
             QSettings st = Settings::store();
             st.remove(QStringLiteral("update/failed"));
+            st.sync();
+        }
+        // "Update without Tor" is for this one swap only, whatever happened.
+        if (skipTor) {
+            QSettings st = Settings::store();
+            st.remove(QStringLiteral("update/skipTor"));
             st.sync();
         }
         // Huginn from its own folder (updated, or as it was): it waits until this copy has ended, then removes

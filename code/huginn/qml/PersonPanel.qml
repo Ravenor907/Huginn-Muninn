@@ -24,6 +24,9 @@ Item {
     readonly property string shownName: tour ? name : (revision, Chat.chats, Chat.nameOf(key)) || name
     readonly property string nick: tour ? "" : (revision, Chat.chats, Chat.nicknameOf(key))
     readonly property string note: tour ? "" : (revision, Chat.people, Chat.noteOf(key))
+    // Interop 2: a contact saved by an older Huginn has no pinned certificate, so it isn't asked on this Wi-Fi until it
+    // updates or Nearby is on once (src/localsend.cpp waitsForPin).
+    readonly property bool pinWait: !tour && page === "can" && (revision, LocalSend.waitsForPin(key))
 
     function has(fn) { return typeof Chat[fn] === "function" }
     function hook(fn, args, fallback) { return has(fn) ? Chat[fn].apply(Chat, args || []) : fallback }
@@ -101,7 +104,7 @@ Item {
         id: box
         anchors.centerIn: parent
         width: Math.min(parent.width - Theme.px(32), Theme.px(480))
-        height: Math.min(parent.height - Theme.px(32), head.height + section.height + foot.height + Theme.px(56))
+        height: Math.min(parent.height - Theme.px(32), head.height + view.contentHeight + foot.height + Theme.px(56))
         radius: Theme.radius
         color: Theme.panel
         border.color: Theme.line
@@ -156,7 +159,7 @@ Item {
             anchors.bottom: foot.top; anchors.bottomMargin: Theme.px(12)
             x: Theme.px(16)
             width: parent.width - Theme.px(32)
-            contentHeight: section.height
+            contentHeight: section.height + (pinText.visible ? pinText.height + Theme.px(10) : 0)
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             interactive: contentHeight > height
@@ -257,6 +260,17 @@ Item {
                         }
                     }
                 }
+            }
+            Text {
+                id: pinText
+                textFormat: Text.PlainText
+                visible: panel.pinWait
+                y: section.height + Theme.px(10)
+                width: view.width
+                wrapMode: Text.WordWrap
+                text: panel.shownName + " will be reached on this Wi-Fi again once they update or Nearby is on."
+                color: Theme.textMuted
+                font.family: Theme.body; font.pixelSize: Theme.fs(13)
             }
         }
         Row {

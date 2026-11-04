@@ -43,8 +43,24 @@ const QString kMark = QStringLiteral(".huginn");
 // Where a move from AppData is put together before it goes into place (portable/moveStarted until it has).
 const QString kMoving = QStringLiteral(".moving");
 
+// Round 19 (FIX 16, m8 Windows): also Huginn's, erased with the rest, but too plain a name to tell a folder is Huginn's by
+// it: Tor's folder, the voices, the wrong-try count, an erase's note of what's left, and the temporary copies a save cut
+// off by a crash leaves beside a file ("ring-key.json.XXXXXX").
+bool erasedToo(const QString &name)
+{
+    static const QStringList kNames = {QStringLiteral("tor"), QStringLiteral("voices"), QStringLiteral("lock-state.json"), QStringLiteral("erase-pending")};
+    static const QStringList kSaving = {QStringLiteral("lock-state.json."), QStringLiteral("ring-key.json."), QStringLiteral("nudge-key.json."),
+                                        QStringLiteral("ring-allow.json."), QStringLiteral("erase-pending.")};
+    if (kNames.contains(name, Qt::CaseInsensitive))
+        return true;
+    for (const QString &p : kSaving)
+        if (name.startsWith(p, Qt::CaseInsensitive))
+            return true;
+    return false;
+}
+
 // Everything Huginn ever keeps at the top of its data folder. Erase everything removes only these, never anything
-// else someone keeps there.
+// else someone keeps there (and never the program: only names inside the data folder).
 bool huginnsOwn(const QString &name)
 {
     static const QStringList kNames = {
@@ -130,7 +146,7 @@ void eraseIn(const QString &root, const QString &settingsFile, bool top = true)
         const QString path = QDir::cleanPath(fi.absoluteFilePath());
         if (kInUse.contains(fi.fileName(), Qt::CaseInsensitive) || path == keep || fi.fileName() == kMark)
             continue;
-        if (top && !huginnsOwn(fi.fileName()))
+        if (top && !huginnsOwn(fi.fileName()) && !erasedToo(fi.fileName()))
             continue;   // not Huginn's: left as it is
         if (fi.isDir() && !fi.isSymLink()) {
             if (!keep.isEmpty() && keep.startsWith(path + QLatin1Char('/'))) {
@@ -1071,6 +1087,11 @@ bool selfTest()
     put(to + QStringLiteral("/Huginn/other.ini"), "x");
     put(to + QStringLiteral("/cache/Huginn-v2.zip"), "zip");
     put(to + QStringLiteral("/chat-kept-2026-01-01/chats.json"), "kept");
+    // Round 19: Tor's folder, the voices, the count of tries and a save's leftover copy go too.
+    put(to + QStringLiteral("/tor/data/state"), "tor");
+    put(to + QStringLiteral("/voices/f/model.onnx"), "voice");
+    put(to + QStringLiteral("/lock-state.json"), "{}");
+    put(to + QStringLiteral("/ring-key.json.Ab12Cd"), "key");
     // Something another program keeps in a folder named data: never Huginn's to erase.
     put(to + QStringLiteral("/savegame.dat"), "not Huginn's");
     put(to + QStringLiteral("/lib/other.dll"), "not Huginn's");

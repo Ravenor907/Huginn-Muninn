@@ -237,6 +237,10 @@ public:
 
     // An opened, checked (ok()) room "file" message from a contact.
     void onSignal(const QString &from, const QJsonObject &p);
+    // Ultra privacy turned on (main.cpp, round 19): nothing goes straight over the internet any more. A transfer on the
+    // same Wi-Fi goes on there; a waiting or running one that isn't goes by relay (a small file of mine) or stops and
+    // says why, and the STUN keepalive of a big file's offer stops.
+    void ultraOn();
 
     // Hooks: Chat's by default, the self-test's own in the test.
     std::function<void(const QString &peer, const QJsonObject &msg)> signal;
@@ -266,6 +270,8 @@ public:
     QString lastRelayId;
     QString saveDir;
     bool testLocal = false;                     // self-test: 127.0.0.1 only, no STUN
+    // Round 19 (interop 6): when someone was last told a file from them couldn't come because of Ultra privacy.
+    QHash<QString, qint64> m_ultraTold;
     int testDropEvery = 0;                      // self-test: lose every Nth data packet the first time
 
 Q_SIGNALS:

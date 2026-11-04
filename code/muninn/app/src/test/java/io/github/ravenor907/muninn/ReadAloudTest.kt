@@ -49,9 +49,19 @@ class ReadAloudTest {
         assertEquals("voice-female-1.tar", ReadAloudText.fileFor("x"))
         assertEquals("f", ReadAloudText.voiceOf(null))
         assertEquals("m", ReadAloudText.voiceOf("m"))
-        // The file both apps build in parses (comments only until the owner pastes the published lines).
+        // The file both apps build in parses.
         val shared = File("../../shared/voices.sha256").takeIf { it.isFile } ?: File("../shared/voices.sha256")
         if (shared.isFile) ReadAloudText.hashes(shared.readText()).values.forEach { assertTrue(Regex("[0-9a-f]{64}").matches(it)) }
+    }
+
+    /** Round 19 (security 7): the same filters as Huginn's --readaloud-selftest, before anything reaches the engine. */
+    @Test fun engineText() {
+        assertEquals("a b speak c /speak d", ReadAloudText.plain("a\u0007b<speak>c</speak>\u202Ed"))
+        assertEquals("x".repeat(40) + " " + "x".repeat(40) + " " + "x".repeat(20), ReadAloudText.plain("x".repeat(100)))
+        assertTrue(ReadAloudText.plain("ab ".repeat(5000)).length <= ReadAloudText.MAX_TEXT)
+        assertEquals("h 'loU speak Hi /speak \u00C5sa and co 's", ReadAloudText.forEngine("[[h@'loU]] <speak>Hi</speak> \u00C5sa & co \u2019s"))
+        assertEquals("123", ReadAloudText.forEngine("\u041F\u0440\u0438 \u65E5\u672C 123"))
+        assertEquals("a\u030A\u0301b", ReadAloudText.forEngine("a\u030A\u0301\u0300\u0302b"))
     }
 
     @Test fun names() {

@@ -77,14 +77,12 @@ Item {
     }
 
     readonly property var prompts: {
-        // 1.42: the new pattern's unlock password: A types it, B goes back to drawing.
-        if (step === "lock" && !(Vault.exists && !practice) && lockPanel.pendingPattern !== "")
-            return [{ key: "a", label: "Type" }, { key: "x", label: "Skip" }, { key: "b", label: "Back" }]
-        if (step === "lock" && !(Vault.exists && !practice))
-            // The pattern: the D-pad moves, A starts and ends, B clears while drawing.
-            return (lockPanel.usePattern ? [{ key: "dpad", label: "Move" }, { key: "a", label: lockPanel.drawing ? "Done" : "Draw" }] : [])
-                .concat([{ key: "lb", label: lockPanel.usePattern ? "Password" : "Pattern" }, { key: "x", label: "Skip" },
-                         { key: "b", label: lockPanel.drawing ? "Clear" : "Back" }])
+        // The lock: what its panel says each button does now (round 19: A types or draws, LB switches, B clears, goes
+        // back, or after a new pattern draws again), with X for Skip.
+        if (step === "lock" && !(Vault.exists && !practice)) {
+            const p = lockPanel.prompts.filter(e => e.key !== "b")
+            return p.concat([{ key: "x", label: "Skip" }], lockPanel.prompts.filter(e => e.key === "b"))
+        }
         const a = order.length ? order[focusAt].label : ""
         const b = index > 0 ? (touring && stop > 0 ? "Previous" : "Back") : ribbon ? "Leave" : ""
         const x = step === "people" && pasteInput.canPaste && focusId !== "pasteCode" ? [{ key: "x", label: "Paste" }] : []

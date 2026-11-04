@@ -75,14 +75,41 @@ object ReadAloud {
     @Volatile private var device: TextToSpeech? = null
     @Volatile private var deviceOk = false
     @Volatile private var deviceWaiting: List<String>? = null
+    // The phone's own voice failed to start (no offline voice): Read aloud isn't offered on it until Settings is opened
+    // again or Muninn restarts, and the next read tries it afresh.
+    @Volatile private var deviceBad = false
+    @Volatile private var focusDevice: AudioFocusRequest? = null
+
+    // A press of Read aloud on the same text while it's still being made (nothing heard yet) is ignored, so presses on
+    // a slow TV don't pile up behind a sentence that can't be cut.
+    @Volatile private var lastText: String? = null
+    @Volatile private var heard = false
+
+    // The natural voice stopped Muninn mid-sentence (a mark is left in the voices folder): twice and the phone's own
+    // voice reads, until the voices are deleted or downloaded again.
+    @Volatile private var markChecked = false
+    @Volatile private var broken = false
+    /** The voice files are changed (unpacked, put in place, deleted) one at a time. */
+    private val filesLock = Any()
 
     /** The speech engine is in this build (it is in every release; a missing one falls back to the phone's own voice). */
     private val engineThere: Boolean by lazy {
         try { Class.forName("com.k2fsa.sherpa.onnx.OfflineTts", false, ReadAloud::class.java.classLoader); true } catch (_: Throwable) { false }
     }
 
-    /** Something can read now, or will once the natural voice is in. */
-    val available: Boolean get() = engineThere || deviceOk
+    /**
+     * The natural voice is offered in this build: the engine is here and the voice in use has its line in
+     * voices.sha256 (or is already in). Until the voices are published Settings says "Natural voices aren't ready yet"
+     * and nothing downloads.
+     */
+    fun natural(context: Context): Boolean {
+        val app = context.applicationContext
+        checkMark(app)
+        return engineThere && !broken && (ready(app) || hashes(app).containsKey(ReadAloudText.fileFor(voice(app))))
+    }
+
+    /** Something can read: the natural voice (in, or on its way), or the phone's own voice unless it failed to start. */
+    val available: Boolean get() = (appContext?.let { natural(it) } ?: false) || !deviceBad
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -111,17 +138,36 @@ object ReadAloud {
         switched(context)
     }
 
-    /** Left kids' mode: the phone's own pick again. */
+    /**
+     * Left kids' mode: the phone's own pick again. Nothing downloads now and no voice is deleted: the next read decides
+     * (a device paired again to a family that picks the same voice keeps it).
+     */
     fun parentForgot(context: Context) {
-        if (prefs(context).contains("kid")) { prefs(context).edit().remove("kid").apply(); switched(context) }
+        val app = context.applicationContext
+        if (!prefs(app).contains("kid")) return
+        prefs(app).edit().remove("kid").apply()
+        stop()
+        synth.execute { unload() }
+        try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
+        WorkState.waiting = false
+        _status.value = ""
+        refresh(app)
     }
 
     fun mobileData(context: Context): Boolean = prefs(context).getBoolean("mobile", false)
 
     fun setMobileData(context: Context, on: Boolean) {
-        prefs(context).edit().putBoolean("mobile", on).apply()
-        // A download waiting for Wi-Fi goes now (or waits again).
-        if (!ready(context) && WorkState.waiting) enqueue(context, ExistingWorkPolicy.REPLACE)
+        val app = context.applicationContext
+        prefs(app).edit().putBoolean("mobile", on).apply()
+        // A download waiting for Wi-Fi goes now (or waits again). WorkManager's own record says whether one waits, so
+        // this works after a restart too.
+        if (ready(app) || !natural(app)) return
+        Thread {
+            val waiting = try {
+                WorkManager.getInstance(app).getWorkInfosForUniqueWork(WORK).get().any { !it.state.isFinished }
+            } catch (_: Exception) { WorkState.waiting }
+            if (waiting) enqueue(app, ExistingWorkPolicy.REPLACE, asked = prefs(app).getBoolean("asked", false))
+        }.apply { isDaemon = true }.start()
     }
 
     private fun voicesDir(context: Context) = File(context.applicationContext.noBackupFilesDir, "voices")
@@ -133,18 +179,45 @@ object ReadAloud {
     /** Any voice files are kept ("Delete voices" shows). */
     fun hasFiles(context: Context): Boolean = voicesDir(context).list()?.isNotEmpty() == true
 
-    /** The hashes built into this build (assets/voices.sha256). */
-    private fun hashes(context: Context): Map<String, String> = try {
-        context.assets.open("voices.sha256").bufferedReader(Charsets.UTF_8).use { ReadAloudText.hashes(it.readText()) }
-    } catch (_: Exception) { emptyMap() }
+    @Volatile private var hashCache: Map<String, String>? = null
 
-    /** Settings shows the status as it is now. */
+    /** The hashes built into this build (assets/voices.sha256), read once. */
+    private fun hashes(context: Context): Map<String, String> {
+        hashCache?.let { return it }
+        val read = try {
+            context.applicationContext.assets.open("voices.sha256").bufferedReader(Charsets.UTF_8).use { ReadAloudText.hashes(it.readText()) }
+        } catch (_: Exception) { emptyMap() }
+        hashCache = read
+        return read
+    }
+
+    private const val NOT_YET = "Natural voices aren't ready yet. The phone's own voice reads"
+    private const val BROKEN = "The natural voice closed Muninn twice, so the phone's own voice reads. Delete voices to try it again"
+
+    /** Settings shows the status as it is now (and the phone's own voice gets another chance). */
     fun refresh(context: Context) {
-        appContext = context.applicationContext
-        if (ready(context)) _status.value = "Ready"
-        else if (_status.value.isEmpty() || _status.value == "Ready")
-            _status.value = if (hashes(context).containsKey(ReadAloudText.fileFor(voice(context)))) "Downloads the first time something is read aloud"
-                else "Not available yet: the phone's own voice reads"
+        val app = context.applicationContext
+        appContext = app
+        deviceBad = false
+        if (!natural(app)) _status.value = if (broken) BROKEN else NOT_YET
+        else if (ready(app)) _status.value = "Ready"
+        else if (_status.value.isEmpty() || _status.value == "Ready" || _status.value == NOT_YET)
+            _status.value = "Downloads the first time something is read aloud"
+    }
+
+    /** A mark left in the voices folder means the engine stopped Muninn mid-sentence last time. Checked once a run. */
+    private fun checkMark(app: Context) {
+        if (markChecked) return
+        markChecked = true
+        val p = prefs(app)
+        val mark = File(voicesDir(app), "reading")
+        if (mark.exists()) { mark.delete(); p.edit().putInt("cutShort", p.getInt("cutShort", 0) + 1).apply() }
+        broken = p.getInt("cutShort", 0) >= 2
+    }
+
+    private fun freshStart(app: Context) {
+        prefs(app).edit().putInt("cutShort", 0).apply()
+        broken = false
     }
 
     // ---- reading
@@ -153,14 +226,19 @@ object ReadAloud {
     fun speak(context: Context, text: String) {
         val app = context.applicationContext
         appContext = app
+        // The same text pressed again while it's still being made (nothing heard yet): left to finish.
+        if (_speaking.value && !heard && text == lastText) return
         stop()
         // Never while a call has the sound, and never on a locked Muninn.
         if (io.github.ravenor907.muninn.net.call.CallManager.call.value != null) return
         if (io.github.ravenor907.muninn.ui.AppLock.isLocked) return
         val parts = ReadAloudText.pieces(ReadAloudText.plain(text))
-        if (parts.isEmpty()) return
+        if (parts.isEmpty()) { io.github.ravenor907.muninn.ui.Ui.say("Nothing to read in this message."); return }
+        lastText = text
+        heard = false
         val my = token.get()
-        if (engineThere && ready(app)) {
+        // Text with nothing the engine reads (another script only) goes to the phone's own voice.
+        if (natural(app) && ready(app) && parts.any { ReadAloudText.forEngine(it).isNotEmpty() }) {
             _speaking.value = true
             takeFocus(app)
             val dir = voiceDir(app, voice(app))
@@ -188,17 +266,29 @@ object ReadAloud {
         val failed = java.util.concurrent.atomic.AtomicBoolean(false)
         synth.execute {
             idle?.cancel(false)
+            // Marked while the engine works: a mark left at the next start means it stopped Muninn mid-sentence.
+            val mark = File(dir.parentFile, "reading")
             try {
                 val tts = open(dir)
+                try { mark.createNewFile() } catch (_: Exception) {}
                 for (p in parts) {
                     if (token.get() != my) break
-                    val a = tts.generate(p, 0, 1.0f)
+                    // Only plain letters, digits and simple punctuation reach the engine (ReadAloudText.forEngine).
+                    val clean = ReadAloudText.forEngine(p)
+                    if (clean.isEmpty()) continue
+                    val a = tts.generate(clean, 0, 1.0f)
                     if (a.samples.isNotEmpty()) queue.put(a.samples to a.sampleRate)
                 }
+                mark.delete()
+                // It finished, so it didn't stop Muninn.
+                if (prefs(app).getInt("cutShort", 0) != 0) prefs(app).edit().putInt("cutShort", 0).apply()
             } catch (e: Throwable) {
+                mark.delete()
                 // The engine or the voice wouldn't start: say so, and the phone's own voice reads this time.
                 android.util.Log.w("Muninn", "Read aloud: natural voice failed: ${e.javaClass.simpleName}")
                 _status.value = "The natural voice couldn't start: the phone's own voice reads"
+                // Not tried again this run (the phone's own voice reads).
+                broken = true
                 failed.set(true)
             } finally {
                 queue.put(end to 0)
@@ -210,10 +300,14 @@ object ReadAloud {
                 while (true) {
                     val (samples, rate) = queue.poll(120, TimeUnit.SECONDS) ?: break
                     if (samples === end || token.get() != my) break
+                    heard = true
                     play(samples, rate, my)
                 }
-                // What's still in the speaker plays out before the reading counts as done.
-                if (token.get() == my) Thread.sleep(500)
+                // What's still in the speaker plays out before the reading counts as done, then the speaker is let go.
+                if (token.get() == my) {
+                    Thread.sleep(500)
+                    if (token.get() == my) try { track?.stop() } catch (_: Exception) {}
+                }
             } catch (_: Exception) {
             } finally {
                 if (token.get() == my) {
@@ -242,12 +336,13 @@ object ReadAloud {
         return tts
     }
 
-    /** Lets go of the model (and its memory). Runs on [synth]. */
+    /** Lets go of the model (and its memory), and of the speaker. Runs on [synth]. */
     private fun unload() {
         val e = engine as? com.k2fsa.sherpa.onnx.OfflineTts
         engine = null
         engineDir = ""
         try { e?.release() } catch (_: Throwable) {}
+        player.execute { if (!_speaking.value) { try { track?.release() } catch (_: Exception) {}; track = null } }
     }
 
     /** Plays one piece, blocking until it's queued in the speaker. Runs on [player]. */
@@ -285,10 +380,20 @@ object ReadAloud {
     }
 
     private fun dropFocus() {
-        val req = focus ?: return
-        focus = null
-        val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-        try { am.abandonAudioFocusRequest(req) } catch (_: Exception) {}
+        val am = appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        focus?.let { req -> focus = null; try { am?.abandonAudioFocusRequest(req) } catch (_: Exception) {} }
+        focusDevice?.let { req -> focusDevice = null; try { am?.abandonAudioFocusRequest(req) } catch (_: Exception) {} }
+    }
+
+    /** The phone's own voice holds the sound too, so a call (Muninn's or the phone's) stops it as it does the natural one. */
+    private fun takeDeviceFocus(context: Context) {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setOnAudioFocusChangeListener { change -> if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) stop() }
+            .build()
+        focusDevice = req
+        try { am.requestAudioFocus(req) } catch (_: Exception) {}
     }
 
     // ---- the phone's own voice
@@ -299,28 +404,37 @@ object ReadAloud {
             deviceWaiting = parts
             _speaking.value = true
             device = try { TextToSpeech(app) { st -> deviceStarted(app, st) } } catch (_: Exception) { null }
-            if (device == null) { _speaking.value = false; io.github.ravenor907.muninn.ui.Ui.say(NONE, true) }
+            if (device == null) { _speaking.value = false; deviceBad = true; io.github.ravenor907.muninn.ui.Ui.say(cantYet(app), true) }
             return
         }
         if (!deviceOk) {
             if (deviceWaiting != null) { deviceWaiting = parts; return }
             _speaking.value = false
-            io.github.ravenor907.muninn.ui.Ui.say(if (engineThere) WAIT else NONE, true)
+            io.github.ravenor907.muninn.ui.Ui.say(cantYet(app), true)
             return
         }
-        sayDevice(t, parts)
+        sayDevice(app, t, parts)
     }
+
+    /** Nothing reads right now: the natural voice is on its way only when it can download (its line is there). */
+    private fun cantYet(app: Context): String = if (natural(app)) WAIT else NONE
 
     private fun deviceStarted(app: Context, st: Int) {
         val t = device ?: return
         deviceOk = st == TextToSpeech.SUCCESS && pickOffline(t)
         val waiting = deviceWaiting
         deviceWaiting = null
+        if (!deviceOk) {
+            // Let go of it: the next read tries again (after an offline voice is installed, say).
+            try { t.shutdown() } catch (_: Exception) {}
+            device = null
+            deviceBad = true
+        }
         if (waiting == null) return
-        if (deviceOk) sayDevice(t, waiting)
+        if (deviceOk) sayDevice(app, t, waiting)
         else {
             _speaking.value = false
-            io.github.ravenor907.muninn.ui.Ui.say(if (engineThere) WAIT else NONE, true)
+            io.github.ravenor907.muninn.ui.Ui.say(cantYet(app), true)
         }
     }
 
@@ -332,14 +446,15 @@ object ReadAloud {
         if (pick != null) { t.setVoice(pick); true } else false
     } catch (_: Exception) { false }
 
-    private fun sayDevice(t: TextToSpeech, parts: List<String>) {
+    private fun sayDevice(app: Context, t: TextToSpeech, parts: List<String>) {
         val my = token.get()
         _speaking.value = true
+        takeDeviceFocus(app)
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(id: String?) {}
-            override fun onDone(id: String?) { if (id == "end-$my" && token.get() == my) _speaking.value = false }
+            override fun onStart(id: String?) { heard = true }
+            override fun onDone(id: String?) { if (id == "end-$my" && token.get() == my) { _speaking.value = false; dropFocus() } }
             @Deprecated("Deprecated in Java")
-            override fun onError(id: String?) { if (token.get() == my) _speaking.value = false }
+            override fun onError(id: String?) { if (token.get() == my) { _speaking.value = false; dropFocus() } }
         })
         parts.forEachIndexed { i, p ->
             try { t.speak(p, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, if (i == parts.size - 1) "end-$my" else "p$i-$my") } catch (_: Exception) {}
@@ -360,20 +475,29 @@ object ReadAloud {
 
     // ---- the download
 
-    /** Starts the voice in use's download now, on the network rules (Settings and the first read). */
-    fun prepare(context: Context) {
+    /**
+     * Starts the voice in use's download now, on the network rules (Settings and the first read). Under Ultra privacy a
+     * read doesn't start it: 65 MB through Tor is slow, so it goes only when asked in Settings ([asked]).
+     */
+    fun prepare(context: Context, asked: Boolean = false) {
         val app = context.applicationContext
         appContext = app
         if (ready(app)) { _status.value = "Ready"; return }
-        if (!hashes(app).containsKey(ReadAloudText.fileFor(voice(app)))) { _status.value = "Not available yet: the phone's own voice reads"; return }
-        enqueue(app, ExistingWorkPolicy.KEEP)
+        if (!natural(app)) { _status.value = if (broken) BROKEN else NOT_YET; return }
+        if (asked) prefs(app).edit().putBoolean("asked", true).apply()
+        val go = asked || prefs(app).getBoolean("asked", false)
+        if (UltraPrivacy.on && !go) {
+            _status.value = "With Ultra privacy on, the voice (about 65 MB) downloads through Tor only when you tap Download now"
+            return
+        }
+        enqueue(app, if (asked) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP, go)
     }
 
-    private fun enqueue(app: Context, policy: ExistingWorkPolicy) {
+    private fun enqueue(app: Context, policy: ExistingWorkPolicy, asked: Boolean = false) {
         val net = if (mobileData(app)) NetworkType.CONNECTED else NetworkType.UNMETERED
         val req = OneTimeWorkRequestBuilder<VoiceWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(net).setRequiresStorageNotLow(true).build())
-            .setInputData(workDataOf("voice" to voice(app)))
+            .setInputData(workDataOf("voice" to voice(app), "asked" to asked))
             .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
             .build()
         try {
@@ -395,17 +519,24 @@ object ReadAloud {
         stop()
         synth.execute { unload() }
         if (ready(app)) { cleanOther(app); _status.value = "Ready"; _files.value++ }
-        else if (hasFiles(app)) enqueue(app, ExistingWorkPolicy.REPLACE)
+        else if (!natural(app)) {
+            try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
+            _status.value = if (broken) BROKEN else NOT_YET
+        }
+        else if (hasFiles(app)) enqueue(app, ExistingWorkPolicy.REPLACE, prefs(app).getBoolean("asked", false))
         else {
             try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
             _status.value = "Downloads the first time something is read aloud"
         }
     }
 
-    /** Only the voice in use is kept: the other one (and leftovers) go once this one is in. */
-    private fun cleanOther(app: Context) {
+    /** Only the voice in use is kept: the other one (and leftovers) go once this one is in. A download's part and its
+     *  unpack folder stay. */
+    private fun cleanOther(app: Context) = synchronized(filesLock) {
         val keep = ReadAloudText.folderFor(voice(app))
-        voicesDir(app).listFiles()?.forEach { f -> if (f.name != keep && !f.name.endsWith(".part")) f.deleteRecursively() }
+        voicesDir(app).listFiles()?.forEach { f ->
+            if (f.name != keep && f.name != "reading" && !f.name.endsWith(".part") && !f.name.endsWith(".new")) f.deleteRecursively()
+        }
     }
 
     /** Deletes every downloaded voice; the phone's own voice reads until one downloads again. */
@@ -414,8 +545,8 @@ object ReadAloud {
         stop()
         try { WorkManager.getInstance(app).cancelUniqueWork(WORK) } catch (_: Exception) {}
         WorkState.waiting = false
-        synth.execute { unload(); voicesDir(app).deleteRecursively(); _files.value++ }
-        _status.value = "Deleted. Downloads again the next time something is read aloud"
+        synth.execute { unload(); synchronized(filesLock) { voicesDir(app).deleteRecursively() }; freshStart(app); _files.value++ }
+        _status.value = if (engineThere && hashes(app).containsKey(ReadAloudText.fileFor(voice(app)))) "Deleted. Downloads again the next time something is read aloud" else NOT_YET
     }
 
     private object WorkState { @Volatile var waiting = false }
@@ -434,7 +565,13 @@ object ReadAloud {
             if (ready(app)) { WorkState.waiting = false; cleanOther(app); _status.value = "Ready"; _files.value++; return@withContext Result.success() }
             val file = ReadAloudText.fileFor(v)
             val want = hashes(app)[file] ?: return@withContext Result.success()
-            // Ultra privacy: only through Tor (Net.client goes through it while it's on); until Tor is ready, wait and say so.
+            // Ultra privacy: only when asked in Settings (65 MB through Tor is slow), and only through Tor (Net.client goes
+            // through it while it's on); until Tor is ready, wait and say so.
+            if (UltraPrivacy.on && !inputData.getBoolean("asked", false) && !prefs(app).getBoolean("asked", false)) {
+                WorkState.waiting = false
+                _status.value = "With Ultra privacy on, the voice (about 65 MB) downloads through Tor only when you tap Download now"
+                return@withContext Result.success()
+            }
             if (UltraPrivacy.on && UltraPrivacy.state.value != UltraPrivacy.Tor.READY) {
                 _status.value = "Waits for Ultra privacy's Tor connection. The phone's own voice reads meanwhile"
                 return@withContext Result.retry()
@@ -490,19 +627,38 @@ object ReadAloud {
                 _status.value = "The natural voice didn't match its check, so it wasn't used. It tries again later"
                 return@withContext Result.retry()
             }
-            val final = voiceDir(app, v)
-            val fresh = File(dir, final.name + ".new")
-            fresh.deleteRecursively()
-            val why = try { part.inputStream().buffered().use { ReadAloudText.unpack(it, fresh) } } catch (e: Exception) { "can't read it" }
-            if (why != null || !ReadAloudText.complete(fresh)) {
-                fresh.deleteRecursively(); part.delete()
-                _status.value = "The natural voice couldn't be unpacked (${why ?: "parts missing"}). It tries again later"
-                return@withContext Result.retry()
+            // Unpacked and put in place under the files lock (Delete voices and another voice's clean-up wait), and only
+            // while this is still the voice wanted: a quick switch never has two workers in the same folder.
+            val placed = synchronized(filesLock) {
+                if (isStopped || v != voice(app) || !part.isFile) return@synchronized null
+                val final = voiceDir(app, v)
+                val fresh = File(dir, final.name + ".new")
+                fresh.deleteRecursively()
+                val why = try { part.inputStream().buffered().use { ReadAloudText.unpack(it, fresh) } } catch (e: Exception) { "can't read it" }
+                if (why != null || !ReadAloudText.complete(fresh)) {
+                    fresh.deleteRecursively(); part.delete()
+                    return@synchronized "The natural voice couldn't be unpacked (${why ?: "parts missing"}). It tries again later"
+                }
+                if (isStopped || v != voice(app)) { fresh.deleteRecursively(); return@synchronized null }
+                // The old folder moves aside first, so a crash in between never leaves neither.
+                val old = File(dir, final.name + ".old")
+                old.deleteRecursively()
+                if (final.exists() && !final.renameTo(old)) final.deleteRecursively()
+                if (!fresh.renameTo(final)) {
+                    fresh.deleteRecursively()
+                    if (old.exists() && !final.exists()) old.renameTo(final)
+                    return@synchronized "Can't save the natural voice"
+                }
+                old.deleteRecursively()
+                part.delete()
+                ""
             }
-            final.deleteRecursively()
-            if (!fresh.renameTo(final)) { fresh.deleteRecursively(); _status.value = "Can't save the natural voice"; return@withContext Result.retry() }
-            part.delete()
+            when {
+                placed == null -> return@withContext Result.success()   // switched or deleted meanwhile; that has its own run
+                !placed.isNullOrEmpty() -> { _status.value = placed; return@withContext Result.retry() }
+            }
             WorkState.waiting = false
+            freshStart(app)
             cleanOther(app)
             _status.value = "Ready"
             _files.value++

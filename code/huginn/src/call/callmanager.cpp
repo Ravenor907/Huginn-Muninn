@@ -14,6 +14,7 @@
 #include "../vault.h"
 #include "../platform/singleinstance.h"
 #include "../ring.h"
+#include "../ultraprivacy.h"
 
 #include <QVideoSink>
 
@@ -319,6 +320,11 @@ bool CallManager::canCall(const QString &key) const { return available() && !key
 
 void CallManager::getLogin(std::function<void(const TurnLogin &, const QString &)> done)
 {
+    // Ultra privacy (round 19): calls are off, so the Worker is never asked (and the relay never sees the address).
+    if (!UltraPrivacy::callsAllowed()) {
+        QTimer::singleShot(0, this, [done = std::move(done)] { done(TurnLogin(), UltraPrivacy::callsOffText()); });
+        return;
+    }
     // Internet calls off: the relay Worker is never asked (and, like get(), never answers from inside).
     if (!Settings::internetCallsOn()) {
         QTimer::singleShot(0, this, [done = std::move(done)] { done(TurnLogin(), QStringLiteral("Internet calls are off")); });
@@ -353,6 +359,10 @@ QString CallManager::startCall(const QString &key, bool video)
     // Nobody is called from behind the lock.
     if (m_vault && m_vault->screenLocked())
         return QStringLiteral("Unlock Huginn first.");
+    // Owner decision (round 19): no calls while Ultra privacy is on (Tor can't carry one, the call relay would see the
+    // address).
+    if (!UltraPrivacy::callsAllowed())
+        return UltraPrivacy::callsOffText() + QStringLiteral(" Turn it off in Settings › Privacy and lock to call.");
     if (m_session && m_session->state() != CallSession::Ended)
         return QStringLiteral("You're already in a call.");
     if (busyElsewhere && busyElsewhere())
@@ -406,6 +416,11 @@ void CallManager::adopt(CallSession *s)
 
 void CallManager::answer()
 {
+    // One that rang before Ultra privacy went on is declined, never answered.
+    if (m_session && m_session->state() == CallSession::Incoming && !UltraPrivacy::callsAllowed()) {
+        m_session->decline(UltraPrivacy::callsOffText());
+        return;
+    }
     if (m_session && m_session->state() == CallSession::Incoming) {
         ring(false);
         notifyIncoming(false);
@@ -456,13 +471,32 @@ void CallManager::sessionEnded()
     m_ticker.stop();
     const QString text = s->endText();
     const bool missed = !s->outgoing() && !s->wasAnswered() && text != QLatin1String("Declined");
-    const QString result = s->wasAnswered() ? QStringLiteral("answered") : missed ? QStringLiteral("missed") : text;
+    // Round 19: a call ringing when Ultra privacy went on (or answered after) is a missed call that says why.
+    const bool ultraOff = missed && text == UltraPrivacy::callsOffText();
+    const QString result = s->wasAnswered() ? QStringLiteral("answered") : ultraOff ? QStringLiteral("ultraOff") : missed ? QStringLiteral("missed") : text;
     addHistory(s->peerKey(), s->outgoing(), result, m_started ? m_started : nowMs(), int(s->activeMs() / 1000));
     m_handled.insert(s->callId());
     m_endText = text;
     m_clear.start();
-    Q_EMIT finished(missed ? QStringLiteral("Missed call from %1").arg(peerName()) : text);
+    Q_EMIT finished(ultraOff ? QStringLiteral("Missed call from %1. %2").arg(peerName(), UltraPrivacy::callsOffText())
+                    : missed ? QStringLiteral("Missed call from %1").arg(peerName()) : text);
     Q_EMIT changed();
+}
+
+void CallManager::ultraOn()
+{
+    // Ultra privacy went on (round 19): a call already ringing or going ends now, so no direct path or call relay keeps
+    // showing the address. Nothing rings while it's on.
+    endLockedRing();
+    if (!m_session || m_session->state() == CallSession::Ended)
+        return;
+    if (m_session->state() == CallSession::Incoming) {
+        m_session->decline(UltraPrivacy::callsOffText());   // a missed call, with why (sessionEnded)
+        return;
+    }
+    m_session->stopDirect();
+    m_session->hangup();
+    Q_EMIT finished(UltraPrivacy::callsOffText());
 }
 
 // ------------------------------------------------------------------ signaling in
@@ -534,6 +568,14 @@ void CallManager::onSignal(const QString &from, const QJsonObject &msg)
         // An old offer that waited on a relay: a missed call, never a ringing one.
         m_handled.insert(id);
         addHistory(from, false, QStringLiteral("missed"), qint64(msg.value(QStringLiteral("ts")).toDouble()), 0);
+        return;
+    }
+    // Ultra privacy (owner decision, round 19): every call is declined quietly, never rung; a missed-call line in their
+    // chat says why.
+    if (!UltraPrivacy::callsAllowed()) {
+        m_handled.insert(id);
+        m_signal->send(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), id}});
+        addHistory(from, false, QStringLiteral("ultraOff"), nowMs(), 0);
         return;
     }
     // Internet calls off and they aren't on this Wi-Fi or Bluetooth: declined at once, never rung, and a missed-call
@@ -617,6 +659,9 @@ void CallManager::ringLocked(const QString &callId, qint64 ts, bool live, const 
     const qint64 t = nowMs();
     const bool skewedLive = live && ts >= t - CallSkewGate::kSkewMs && ts <= t + CallSkewGate::kSkewMs;
     if ((m_session && m_session->state() != CallSession::Ended) || !(RingWire::ringFresh(ts, t) || skewedLive))
+        return;
+    // Ultra privacy: calls are off, so nothing rings (the offer, read once unlocked, becomes a missed-call line).
+    if (!UltraPrivacy::callsAllowed())
         return;
     // 1.42 (cap r2, as Muninn): anyone holding the ring key could ring without end, so at most 3 in 10 minutes while
     // locked, counted per caller by its ring tag (rings without one share a count). The calls still show once unlocked.
@@ -744,7 +789,8 @@ void CallManager::addHistory(const QString &key, bool out, const QString &result
                   {QStringLiteral("result"), result},
                   {QStringLiteral("started"), started},
                   {QStringLiteral("seconds"), seconds},
-                  {QStringLiteral("missed"), result == QLatin1String("missed") || result == QLatin1String("internetOff")}};
+                  {QStringLiteral("missed"), result == QLatin1String("missed") || result == QLatin1String("internetOff")
+                                                 || result == QLatin1String("ultraOff")}};
     m_history.prepend(e);
     while (m_history.size() > kMaxHistory)
         m_history.removeLast();

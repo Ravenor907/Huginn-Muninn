@@ -21,9 +21,10 @@ class LockRulesTest {
     private val hour = 60 * min
 
     /** A clock the test moves: time since start-up and the start-up count. */
-    private class TestClock(var now: Long = 1_000L, var boot: Int = 1) : LockStore.Clock {
+    private class TestClock(var now: Long = 1_000L, var boot: Int = 1, var wall: Long = 1_700_000_000_000L) : LockStore.Clock {
         override fun now() = now
         override fun boot() = boot
+        override fun wall() = wall
     }
 
     /** Muninn's settings, as the second place the count is kept. */
@@ -42,8 +43,10 @@ class LockRulesTest {
     private fun wrong(s: LockStore, c: TestClock, n: Int, erase: Boolean = false): Int {
         var last = 0
         repeat(n) {
-            c.now += s.left()
+            val l = s.left()
+            c.now += l; c.wall += l
             last = s.begin()!!.fails
+            s.wrong()
             if (LockWait.erases(last, erase)) return last
         }
         return last
@@ -77,12 +80,19 @@ class LockRulesTest {
         assertEquals(0, LockWait.lastLeft(22, erase = false))
     }
 
-    @Test fun triesInsideTheAppNeverErase() {
-        // Erase on, 24 wrong: an in-app try stays one short and locks the app instead.
-        assertEquals(24 to true, LockWait.next(24, erase = true, inApp = true))
-        assertEquals(25 to false, LockWait.next(24, erase = true, inApp = false))
-        assertEquals(25 to false, LockWait.next(24, erase = false, inApp = true))
-        assertEquals(6 to false, LockWait.next(5, erase = true, inApp = true))
+    @Test fun triesInsideTheAppNeverCount() {
+        // Round 19 (owner rule): prompts inside the open app never count toward a wait or the erase.
+        val c = TestClock()
+        val s = store(c)
+        repeat(4) { val b = s.begin(inApp = true)!!; assertFalse(b.lockApp); assertTrue(b.inApp) }
+        assertEquals(0, s.fails())
+        assertEquals(0L, s.left())
+        // The fifth wrong in a row locks Muninn (the lock screen takes over); still nothing on disk.
+        assertTrue(s.begin(inApp = true)!!.lockApp)
+        assertEquals(0, s.fails())
+        // A right one starts the in-app count again.
+        s.begin(inApp = true); s.right()
+        repeat(4) { assertFalse(s.begin(inApp = true)!!.lockApp) }
     }
 
     @Test fun screensSpellOutEachStepInPlainWords() {
@@ -153,6 +163,9 @@ class LockRulesTest {
         val last = s.begin()!!
         assertEquals(25, last.fails)
         assertTrue(LockWait.erases(last.fails, last.erase))
+        // Not while its check runs; once it's known to be wrong.
+        assertFalse(s.eraseDue())
+        s.wrong()
         assertTrue(s.eraseDue())
         // The switch survives a right try; turning it off keeps the count.
         s.right()
@@ -167,9 +180,11 @@ class LockRulesTest {
         s.erase = true
         wrong(s, c, 24, erase = true)
         c.now += s.left()
-        val b = s.begin(inApp = true)!!
+        // Five wrong in-app tries at the last stage: none counted, no erase, and the fifth locks Muninn.
+        var b = s.begin(inApp = true)!!
+        repeat(4) { b = s.begin(inApp = true)!! }
         assertTrue(b.lockApp)
-        assertEquals(24, b.fails)
+        assertEquals(24, s.fails())
         assertFalse(s.eraseDue())
     }
 
@@ -182,7 +197,8 @@ class LockRulesTest {
         val again = store(c)
         assertEquals(5, again.fails())
         assertEquals(5 * min, again.left())
-        // With erase on, the last try counted before a kill erases on the next start.
+        // With erase on, the last try stopped before its check answered: nothing was learned from it, so it's given back
+        // at the next start instead of erasing on a try that may have been right.
         val c2 = TestClock()
         val dir2 = File(dir, "two").also { it.mkdirs() }
         val s2 = LockStore(File(dir2, "lock-state"), c2)
@@ -190,27 +206,76 @@ class LockRulesTest {
         wrong(s2, c2, 24, erase = true)
         c2.now += s2.left()
         s2.begin()
-        assertTrue(LockStore(File(dir2, "lock-state"), c2).eraseDue())
+        val restarted = LockStore(File(dir2, "lock-state"), c2)
+        assertFalse(restarted.eraseDue())
+        restarted.settle()
+        assertEquals(24, restarted.fails())
+        assertFalse(restarted.eraseDue())
+        // Its answer saved (wrong) before Muninn stopped: the next start erases.
+        restarted.begin()
+        restarted.wrong()
+        val again2 = LockStore(File(dir2, "lock-state"), c2)
+        again2.settle()
+        assertTrue(again2.eraseDue())
+        // A check running in this process is never given back.
+        val c3 = TestClock()
+        val s3 = LockStore(File(File(dir, "three").also { it.mkdirs() }, "lock-state"), c3)
+        s3.erase = true
+        wrong(s3, c3, 24, erase = true)
+        c3.now += s3.left()
+        s3.begin()
+        s3.settle()
+        assertEquals(25, s3.fails())
     }
 
-    @Test fun clockChangesCantSkipAWaitAndARestartStartsItAgain() {
+    @Test fun clockChangesCantSkipAWaitAndARestartOnlyPausesIt() {
         val c = TestClock(now = 500_000L, boot = 3)
         val s = store(c)
         wrong(s, c, 10)
         assertEquals(hour, s.left())
-        // The wall clock isn't used at all; time since start-up moves on as it does.
-        c.now += 10 * min
+        // Within one start-up the wall clock isn't used; time since start-up moves on as it does.
+        c.now += 10 * min; c.wall += 10 * min
         assertEquals(50 * min, s.left())
-        // A restart: time since start-up back near zero, another boot number. The whole wait again, not nothing.
-        c.now = 2_000L; c.boot = 4
-        assertEquals(hour, s.left())
-        c.now += 59 * min
-        assertEquals(min, s.left())
-        c.now += min
+        c.wall += 30 * hour   // the clock moved forward: no effect
+        assertEquals(50 * min, s.left())
+        c.wall -= 30 * hour
+        // A restart: time since start-up back near zero, another boot number. It goes on from what was left, not again
+        // in full (round 19: a phone that restarts every night still gets out of a 24-hour wait).
+        c.now = 2_000L; c.boot = 4; c.wall += 5 * min
+        assertEquals(50 * min - 2_000L, s.left())
+        c.now += 49 * min; c.wall += 49 * min
+        assertEquals(min - 2_000L, s.left())
+        c.now += min; c.wall += min
         assertEquals(0L, s.left())
         // Over and forgotten: a later restart doesn't bring it back.
         c.now = 10L; c.boot = 5
         assertEquals(0L, s.left())
+    }
+
+    @Test fun aRestartWithTheClockMovedOnNeverShortensAWait() {
+        val c = TestClock(now = 500_000L, boot = 3)
+        val s = store(c)
+        wrong(s, c, 20)
+        assertEquals(24 * hour, s.left())
+        c.now += 2 * hour; c.wall += 2 * hour
+        assertEquals(22 * hour, s.left())   // saved: 22 hours left
+        // Restarted with the wall clock set a day ahead: the time since start-up (1 minute) is all that surely passed.
+        c.now = min; c.boot = 4; c.wall += 24 * hour
+        assertEquals(22 * hour - min, s.left())
+        // Restarted with the clock honest and 3 hours gone: the wall clock says less is left, but what was saved says more:
+        // the longer reading wins (a restart pauses at worst).
+        val c2 = TestClock(now = 500_000L, boot = 3)
+        val s2 = LockStore(File(File(dir, "b").also { it.mkdirs() }, "lock-state"), c2)
+        wrong(s2, c2, 20)
+        c2.now += 2 * hour; c2.wall += 2 * hour
+        s2.left()
+        c2.now = min; c2.boot = 4; c2.wall += 3 * hour
+        assertEquals(22 * hour - min, s2.left())
+        // A file from before round 19 (no time left saved): the whole wait again, as before.
+        val f = File(dir, "old").also { it.mkdirs() }
+        File(f, "lock-state").writeText("{\"fails\":10,\"until\":3600000,\"wait\":3600000,\"boot\":1,\"erase\":false}")
+        val c3 = TestClock(now = 5_000L, boot = 2)
+        assertEquals(hour, LockStore(File(f, "lock-state"), c3).left())
     }
 
     @Test fun removingTheLockStateFileDoesntResetTheCount() {
@@ -229,6 +294,40 @@ class LockRulesTest {
         m.data = LockStore.Data()
         assertEquals(13, store(c, m).fails())
         assertTrue(store(c, m).erase)
+    }
+
+    @Test fun aRightTryCutShortBetweenTheTwoCopiesStaysRight() {
+        // Round 19: right() writes the file, then the mirror. Stopped in between, the mirror still has the old count; the
+        // newer save wins, so the count stays reset (before, the higher count won and a right last try could erase).
+        val c = TestClock()
+        val m = object : LockStore.Mirror {
+            var data: LockStore.Data? = null
+            var frozen = false
+            override fun read() = data
+            override fun write(d: LockStore.Data) { if (!frozen) data = d }
+        }
+        val s = store(c, m)
+        s.erase = true
+        wrong(s, c, 24, erase = true)
+        c.now += s.left()
+        s.begin()
+        m.frozen = true   // the mirror's write never lands
+        s.right()
+        val again = store(c, m)
+        assertEquals(0, again.fails())
+        again.settle()
+        assertFalse(again.eraseDue())
+        assertTrue(again.erase)
+    }
+
+    @Test fun turningTheLockOffTurnsEraseOff() {
+        val c = TestClock()
+        val s = store(c)
+        s.erase = true
+        wrong(s, c, 3)
+        s.reset()
+        assertFalse(s.erase)
+        assertEquals(0, s.fails())
     }
 
     // ------------------------------------------------------------------ the unlock password

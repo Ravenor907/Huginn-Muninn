@@ -58,6 +58,13 @@ public:
 
     // Opens with the pattern ("pattern:0,3,6,...") or password. False if wrong.
     Q_INVOKABLE bool unlock(const QString &secret);
+    // Round 19 (owner decision): the lock asked inside the open app (This device's own chats, Stop moving): checked
+    // against the open data key and never counted (no wait, no erase). Behind the lock screen it's unlock(): a try at
+    // the lock. No lock: true.
+    Q_INVOKABLE bool checkLock(const QString &secret);
+    // Round 19 (FIX 15): why the last try wasn't checked at all, when that wasn't a wait ("" otherwise): the count
+    // couldn't be saved, so the try was refused.
+    Q_INVOKABLE QString tryError() const { return m_tryError; }
     // The same, without holding up the window: the key is worked out (and, the first time, the saved files are read
     // and opened) on a thread of its own while the lock screen shows a ring; unlockFinished(ok) tells how it went.
     Q_INVOKABLE void unlockInBackground(const QString &secret);
@@ -82,7 +89,7 @@ public:
     // Sets or changes the pattern's unlock password (the pattern's own wrap stays). Must be open. Then "recall".
     Q_INVOKABLE bool setUnlockPassword(const QString &password);
     // The unlock password from memory: checked by opening its wrap, then forgotten. Not a try at the lock (Huginn is
-    // open). True clears "recall".
+    // open). True clears "recall". Round 19: only while "recall" is asked and Huginn is open on screen.
     Q_INVOKABLE bool recallUnlockPassword(const QString &password);
     // Settings › Unlock password › Change, after the lock was confirmed ("spare" grant): spareStep becomes "set".
     Q_INVOKABLE bool startUnlockPasswordChange();
@@ -107,7 +114,8 @@ public:
     static qint64 waitAfter(int fails, bool erase);
     static bool erasesAt(int fails, bool erase);
     static int lastLeft(int fails, bool erase);   // 1 to 5 in the last stage, 0 otherwise
-    // The count a wrong try makes; inApp (Confirm it's you, Turn off the lock, own chats): never the erase, *lockApp then.
+    // The count a wrong try makes; inApp (Confirm it's you, Turn off the lock): never the erase, *lockApp then. Own chats
+    // and Stop moving aren't counted at all (checkLock).
     static int nextFails(int fails, bool erase, bool inApp, bool *lockApp);
     static QString waitText(int fails, bool erase);
     static QString triesText(int fails, bool erase);
@@ -150,7 +158,10 @@ public:
     Q_PROPERTY(bool lockNeeded READ lockNeeded NOTIFY changed)
     bool lockNeeded() const { return m_lockNeeded; }
     // Erases every message, photo, voice message, contact and key, the cache and a move's state, and first setup runs
-    // again. Huginn's other settings stay, except on the Windows portable build, where the whole data folder is emptied.
+    // again. Huginn's other settings stay, except on the Windows portable build, where the whole data folder is emptied
+    // (Huginn's own things only, never the program). Round 19: vault.key (and each kept copy's) is written over before
+    // it's deleted; the certificates, Tor's folder and the voices go too; whatever couldn't be deleted is noted and goes
+    // at the next start (finishErase).
     Q_INVOKABLE void eraseAll();
     // Unlock › Forgot it? › "Erase and link my phone again": eraseAll, then a yes/no note (outside the vault) that the
     // next link's first "sync" says "relink", so the phone offers to replace this PC's old entry (protocol.md 15).
@@ -313,8 +324,18 @@ Q_SIGNALS:
     void lockedNow();
     // Round 17: the lock was set, changed or turned off (main.cpp renews the ring and nudge keys).
     void lockChanged();
+    // Round 19: Erase everything is about to delete the data folder's contents: stop what holds files there (Tor, the
+    // voice engine) and wait for it to end.
+    void aboutToErase();
 
 private:
+    // At start, before anything reads the data folder: what an erase couldn't delete last time goes now.
+    static void finishErase();
+    QString m_tryError;
+    // vault.key as read last (hasLock, usesPattern and spareStep ask often): read again when it changes.
+    struct KeyCache { QDateTime mod; qint64 size = -1; QJsonObject o; bool there = false; };
+    mutable KeyCache m_keyCache;
+    QJsonObject keyObject(bool *there = nullptr) const;
     // Starts Huginn again (it waits for this copy to close) and closes this one. When it can't start, this copy
     // stays open and says ifNot.
     void restartHuginn(const QString &ifNot);

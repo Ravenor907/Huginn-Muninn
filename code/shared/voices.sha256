@@ -1,4 +1,12 @@
-# SHA-256 of the natural voice files (code/shared/docs/voices.md). One line each: <sha256>  <file name>.
-# The "Publish voices" workflow prints these lines; paste them below, once. Never change a line: a fixed voice goes out
-# as a new release (voices-2) with new names. The apps download a voice only when its line is here; builds check the
-# speech engine they bundle against its line when there is one.
+# SHA-256 of the natural voice files and the speech engine the builds bundle (code/shared/docs/voices.md). One line
+# each: <sha256>  <file name>. Never change a line: a fixed voice goes out as a new release (voices-2) with new names.
+# The apps download a voice only when its line is here. Every build fails when an engine file doesn't match its line
+# here, or has none. The "Publish voices" workflow adds the voice lines once the voices are published.
+#
+# The speech engine, sherpa-onnx 1.13.8 from github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8 (trust on first use:
+# upstream publishes no signatures; the Linux line was also found independently by the round 19 Linux review).
+b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471  sherpa-onnx-static-link-onnxruntime-1.13.8.aar
+3892d184be41027e18165e67f549cd4e4cdd8dcd73ac5579e97afd55e14e30b6  sherpa-onnx-v1.13.8-linux-x64-shared-lib.tar.bz2
+3e971a04b2e0ba4dfa53d381a006367ce8c9f5f09b4ae00043e9845c2baded22  sherpa-onnx-v1.13.8-win-x64-shared-MD-Release.tar.bz2
+#
+# The voices (added by Publish voices):

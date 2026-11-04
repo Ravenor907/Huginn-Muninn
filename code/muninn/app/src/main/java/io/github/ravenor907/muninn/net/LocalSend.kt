@@ -60,8 +60,15 @@ class LocalSend(private val context: Context, val identity: Identity) {
     // Inside "tls", which the vault never touches (not sealed, not set aside, not restored), like the lasting one.
     private val hidden by lazy { HiddenTls(File(context.filesDir, "tls/hidden")) }
 
-    /** The certificate shown now: the hidden one with Nearby off, else the lasting one. Null: none (plain HTTP). */
-    private fun shown(): Tls? = if (off()) hidden.current() ?: tls else tls
+    /**
+     * The certificate shown now: the hidden one with Nearby off, else the lasting one. Null: none. Round 19: with Nearby
+     * off and no hidden one (it couldn't be made; it's tried again each time), never the lasting one, which people close
+     * by already know: this phone's server then shows nothing ([serverPick]) and it sends without one.
+     */
+    private fun shown(): Tls? = if (off()) hidden.current() else tls
+
+    /** The server's certificate at each handshake: [shown], or the handshake fails with Nearby off and none to hide behind. */
+    private fun serverPick(lasting: Tls): Tls = shown() ?: if (off()) throw IllegalStateException("Nearby can't hide right now") else lasting
 
     /** What other devices know us by: our certificate's hash, or (without one) the random id. */
     val fingerprint: String get() = shown()?.fingerprint ?: identity.fingerprint
@@ -314,7 +321,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val t = tls
         return if (t != null) {
             // 1.42 (cap h1): the certificate is picked at each handshake, so the hidden one is shown with Nearby off.
-            (Tls.picking({ shown() ?: t }, { listOfNotNull(t, hidden.current(), hidden.upcoming()) }).serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
+            (Tls.picking({ serverPick(t) }, { listOfNotNull(t, hidden.current(), hidden.upcoming()) }).serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
                 // Ask for the sender's certificate but don't require it (some Huginn and Muninn apps have
                 // none): when one is shown, the fingerprint the sender claims must match it.
                 wantClientAuth = true

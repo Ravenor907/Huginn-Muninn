@@ -14,6 +14,7 @@
 #include <QProcess>
 #include <QFileInfo>
 #include <QTimer>
+#include "platform/crashlog.h"
 #include "platform/singleinstance.h"
 #include "platform/winupdate.h"
 #include <QRegularExpression>
@@ -24,6 +25,7 @@
 #include <QDateTime>
 #include <QRandomGenerator>
 #include <limits>
+#include <memory>
 #include <openssl/evp.h>
 #include <cstdio>
 
@@ -96,6 +98,8 @@ Updater::Updater(Settings *settings, QObject *parent)
             m_failedVersion = version.isEmpty() ? QStringLiteral("?") : version;
             m_status = why;
             QTimer::singleShot(5000, this, [this, why] { Q_EMIT notice(why); });
+            if (namesTor(why))
+                noteTorFailure(why);
         }
     }
     m_wake.setInterval(60000);
@@ -231,7 +235,86 @@ QNetworkRequest Updater::request(const QUrl &url) const
     QNetworkRequest req(url);
     // A plain agent with no app name or version, so GitHub can't tell which app or version is asking.
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0"));
+    // Round 19: a circuit through Tor (or a network gone after sleep) can stall for good; no bytes for a minute ends it,
+    // so a check or download never holds the next one back until Huginn restarts.
+    req.setTransferTimeout(kStallMs);
     return req;
+}
+
+QNetworkReply *Updater::get(const QNetworkRequest &req)
+{
+    // Round 19: Ultra privacy's way as it is right now, for every request of a chain (not the one its start saw).
+    UltraPrivacy::prepare(&m_net);
+    QNetworkReply *r = m_net.get(req);
+    m_replies.removeIf([](const QPointer<QNetworkReply> &p) { return p.isNull(); });
+    m_replies << r;
+    return r;
+}
+
+void Updater::redial()
+{
+    // Ultra privacy turned on or off (or Tor's port changed): nothing under way goes on the old way. Connections kept
+    // open go too. A check comes again in a minute, the new way.
+    const QList<QPointer<QNetworkReply>> now = m_replies;
+    m_replies.clear();
+    bool stopped = false;
+    for (const QPointer<QNetworkReply> &r : now)
+        if (r && r->isRunning()) {
+            m_redialed = true;
+            stopped = true;
+            r->abort();
+        }
+    m_net.clearConnectionCache();
+    if (!stopped)
+        return;
+    QTimer::singleShot(60000, this, [this] {
+        m_redialed = false;
+        periodicCheck();
+    });
+}
+
+bool Updater::namesTor(const QString &why)
+{
+    return why.contains(QLatin1String("lib\\tor\\"), Qt::CaseInsensitive) || why.contains(QLatin1String("lib/tor/"), Qt::CaseInsensitive)
+        || why.contains(QLatin1String("tor.exe"), Qt::CaseInsensitive);
+}
+
+void Updater::noteTorFailure(const QString &why)
+{
+    CrashLog::note(QStringLiteral("update: Tor's file was in the way: ") + why);
+    // Asked once per failure: Update without Tor clears it, and a later failure asks again.
+    if (m_torBlocked)
+        return;
+    m_torBlocked = true;
+    Q_EMIT changed();
+    QTimer::singleShot(6000, this, [this] {
+        if (m_torBlocked)
+            Q_EMIT torChoice();
+    });
+}
+
+QString Updater::torBlockedText() const
+{
+    return QStringLiteral("Your antivirus removed or held tor.exe, the part of Huginn that Ultra privacy uses, so the update couldn't go "
+                          "in. Update without Tor: everything else updates now, and Ultra privacy can't start until Tor is back. "
+                          "To get it back, allow tor.exe (in Huginn's lib\\tor folder) in your antivirus, then use Check now in "
+                          "Settings › Updates and about.");
+}
+
+void Updater::updateWithoutTor()
+{
+    if (!m_torBlocked || m_busy || m_installing)
+        return;
+    m_torBlocked = false;
+    {
+        // One time: the next swap leaves Tor's folder out and clears this (platform/winupdate.cpp).
+        QSettings s = Settings::store();
+        s.setValue(QStringLiteral("update/skipTor"), true);
+        s.sync();
+    }
+    forgetFailure();
+    m_goingBack = false;
+    fetch(true);
 }
 
 void Updater::fetch(bool installAfter, bool autoMode)
@@ -247,7 +330,6 @@ void Updater::fetch(bool installAfter, bool autoMode)
     m_viaPage = false;
     // Ultra privacy: every check and download through Tor. GitHub's API allows few checks per address an hour and Tor's
     // exits are shared by many, so the "latest release" page is asked first instead.
-    UltraPrivacy::prepare(&m_net);
     if (UltraPrivacy::on()) {
         m_viaPage = true;
         fetchLatestPage(installAfter, autoMode);
@@ -255,7 +337,7 @@ void Updater::fetch(bool installAfter, bool autoMode)
     }
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kReleases)));
     req.setRawHeader("Accept", "application/vnd.github+json");
-    QNetworkReply *r = m_net.get(req);
+    QNetworkReply *r = get(req);
     connect(r, &QNetworkReply::finished, this, [this, r, installAfter, autoMode] {
         r->deleteLater();
         m_busy = false;
@@ -347,7 +429,7 @@ void Updater::fetchBetaLabel(const QString &ver, const QString &tag, const QStri
     m_busy = true;
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + QLatin1String(kBetaTag) + QStringLiteral("/version.txt")));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply *r = m_net.get(req);
+    QNetworkReply *r = get(req);
     connect(r, &QNetworkReply::finished, this, [this, r, ver, tag, asset, installAfter, autoMode] {
         r->deleteLater();
         m_busy = false;
@@ -377,7 +459,7 @@ void Updater::fetchPage(const QString &tag, const std::function<void(const Signa
     m_busy = true;
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kTagPage) + tag));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply *r = m_net.get(req);
+    QNetworkReply *r = get(req);
     // A page over the cap is never read whole.
     connect(r, &QNetworkReply::downloadProgress, r, [r](qint64 got, qint64) {
         if (got > kMaxNotes)
@@ -395,7 +477,7 @@ void Updater::fetchLatestPage(bool installAfter, bool autoMode)
     m_busy = true;
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kLatestPage)));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-    QNetworkReply *r = m_net.get(req);
+    QNetworkReply *r = get(req);
     connect(r, &QNetworkReply::finished, this, [this, r, installAfter, autoMode] {
         r->deleteLater();
         m_busy = false;
@@ -406,8 +488,9 @@ void Updater::fetchLatestPage(bool installAfter, bool autoMode)
         const QString ver = versionFromTag(tag);
         if (ver.isEmpty()) {
             m_goingBack = false;
-            m_status = UltraPrivacy::on() ? QStringLiteral("Couldn't check for updates through Tor. Huginn tries again later.")
-                                          : QStringLiteral("Couldn't reach GitHub. Check the connection.");
+            m_status = m_redialed ? QStringLiteral("Ultra privacy changed while checking. Huginn checks again in a minute.")
+                       : UltraPrivacy::on() ? QStringLiteral("Couldn't check for updates through Tor. Huginn tries again later.")
+                                            : QStringLiteral("Couldn't reach GitHub. Check the connection.");
             Q_EMIT changed();
             return;
         }
@@ -476,34 +559,54 @@ void Updater::download(const QString &url, const QString &tag)
     m_busy = true;
     m_status = QStringLiteral("Downloading Huginn %1…").arg(labelFor(tag));
     Q_EMIT changed();
-    UltraPrivacy::prepare(&m_net);   // Ultra privacy: through Tor
+    auto stop = [this](const QString &why) {
+        m_busy = false;
+        m_auto = false;
+        m_goingBack = false;
+        m_status = why;
+        Q_EMIT changed();
+    };
+    const QString dir = System::cacheDir();
+    QDir().mkpath(dir);
+    const QString path = dir + QStringLiteral("/Huginn-") + tag + (WinUpdate::supported() ? QStringLiteral(".zip") : QStringLiteral(".flatpak"));
+    // Round 19: written to disk as it comes (never the whole file in memory), and never past kMaxDownload.
+    auto file = std::make_shared<QFile>(path);
+    if (!file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        stop(QStringLiteral("Couldn't save the update."));
+        return;
+    }
     QNetworkRequest req = request(QUrl(url));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply *r = m_net.get(req);
-    connect(r, &QNetworkReply::finished, this, [this, r, tag] {
+    QNetworkReply *r = get(req);   // Ultra privacy: through Tor
+    // 0 going, 1 too big, 2 couldn't write
+    auto trouble = std::make_shared<int>(0);
+    auto take = [r, file, trouble] {
+        if (*trouble)
+            return;
+        const QByteArray b = r->readAll();
+        if (file->size() + b.size() > kMaxDownload)
+            *trouble = 1;
+        else if (file->write(b) != b.size())
+            *trouble = 2;
+    };
+    connect(r, &QNetworkReply::readyRead, this, [r, take, trouble] {
+        take();
+        if (*trouble)
+            r->abort();
+    });
+    connect(r, &QNetworkReply::finished, this, [this, r, tag, path, file, trouble, take, stop] {
         r->deleteLater();
-        if (r->error() != QNetworkReply::NoError) {
-            m_busy = false;
-            m_auto = false;
-            m_goingBack = false;
-            m_status = QStringLiteral("The download failed. Try again.");
-            Q_EMIT changed();
+        if (r->error() == QNetworkReply::NoError)
+            take();
+        file->close();
+        if (*trouble || r->error() != QNetworkReply::NoError) {
+            QFile::remove(path);
+            stop(*trouble == 1 ? QStringLiteral("The download was bigger than any Huginn update, so it was stopped.")
+                 : *trouble == 2 ? QStringLiteral("Couldn't save the update. Is the disk full?")
+                 : m_redialed ? QStringLiteral("Ultra privacy changed while downloading. Huginn tries again in a minute.")
+                              : QStringLiteral("The download failed. Try again."));
             return;
         }
-        const QString dir = System::cacheDir();
-        QDir().mkpath(dir);
-        const QString path = dir + QStringLiteral("/Huginn-") + tag + (WinUpdate::supported() ? QStringLiteral(".zip") : QStringLiteral(".flatpak"));
-        QFile f(path);
-        if (!f.open(QIODevice::WriteOnly)) {
-            m_busy = false;
-            m_auto = false;
-            m_goingBack = false;
-            m_status = QStringLiteral("Couldn't save the update.");
-            Q_EMIT changed();
-            return;
-        }
-        f.write(r->readAll());
-        f.close();
         // Only a file whose SHA-256 matches the release's is installed: the Windows zip and the Flatpak alike.
         verifyThenInstall(path, tag);
     });
@@ -516,19 +619,29 @@ void Updater::installFlatpak(const QString &path)
     auto *p = new QProcess(this);
     QStringList args{QStringLiteral("flatpak"), QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
                      QStringLiteral("--reinstall"), QStringLiteral("--bundle"), path};
+    // Ultra privacy (round 19, m11): flatpak on the host would fetch a runtime or extension from Flathub directly, not
+    // through Tor. Nothing extra is fetched; an update that needs a new runtime says so instead.
+    const bool ultra = UltraPrivacy::on();
+    if (ultra) {
+        const qsizetype at = args.indexOf(QStringLiteral("--bundle"));
+        args.insert(at, QStringLiteral("--no-deps"));
+        args.insert(at, QStringLiteral("--no-related"));
+    }
     QString program = QStringLiteral("flatpak-spawn");
     if (System::inFlatpak())
         args.prepend(QStringLiteral("--host"));
     else
         program = args.takeFirst();
-    connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus st) {
+    connect(p, &QProcess::finished, this, [this, p, ultra](int code, QProcess::ExitStatus st) {
         p->deleteLater();
         m_busy = false;
         if (st != QProcess::NormalExit || code != 0) {
             m_installing = false;
             m_auto = false;
             m_goingBack = false;
-            m_status = QStringLiteral("Installing the update failed.");
+            m_status = ultra ? QStringLiteral("Installing the update failed. It may need a download from Flathub, which Ultra privacy holds back: "
+                                              "turn Ultra privacy off for a moment, then Check now.")
+                             : QStringLiteral("Installing the update failed.");
             Q_EMIT changed();
             Q_EMIT notice(m_status);
             return;
@@ -581,7 +694,7 @@ void Updater::verifyThenInstall(const QString &path, const QString &tag)
     auto get = [this, tag](const QString &file) {
         QNetworkRequest req = request(QUrl(QString::fromLatin1(kDownload) + tag + QLatin1Char('/') + file));
         req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-        return m_net.get(req);
+        return this->get(req);
     };
     // Huginn-Windows.zip.sig or Huginn.flatpak.sig: the project's signature, published by the release job; and .vsig,
     // its signature of this release's version. Both always required.
@@ -708,6 +821,8 @@ void Updater::installNow(const QString &path)
         }
         m_status = msg;
         Q_EMIT changed();
+        if (!ok && namesTor(msg))
+            noteTorFailure(msg);
         if (ok && restarting)
             QTimer::singleShot(300, qApp, [] { QCoreApplication::exit(0); });   // past the window's close question
         else

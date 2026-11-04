@@ -312,6 +312,8 @@ object RoomManager {
         // Round 17: a Kids' Device takes no group calls.
         if (app?.let { try { io.github.ravenor907.muninn.tv.KidMode.on(it) } catch (e: Exception) { false } } == true) return "Group calls aren't on this device."
         if (Opus.loadError != null) return "Calling isn't working on this phone."
+        // Ultra privacy (owner decision): calls and voice rooms are off while it's on.
+        if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) return io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF
         if (CallManager.call.value?.let { it.phase != CallSession.Phase.ENDED } == true) return "Hang up the call first."
         if (!RoomLogic.isRoomId(room)) return "That isn't a voice room."
         val st = state(group) ?: return "You're not in this group anymore."
@@ -443,6 +445,7 @@ object RoomManager {
 
     /** Rings [keys] (every member who can join, when empty) into a new group call of [group], and joins it. */
     fun callGroup(group: String, keys: List<String>): String? {
+        if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) return io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF
         val room = RoomLogic.newGroupCallId()
         val all = members(group)
         val targets = (if (keys.isEmpty()) all else keys.filter { it in all }).distinct()
@@ -674,6 +677,12 @@ object RoomManager {
                 if (!fresh || g.isNotEmpty() || inCall || _ring.value != null) { missed(who, grp, group); return }
                 val a = app ?: return
                 if (try { a.chat.blocked.value.contains(from) } catch (e: Exception) { false }) return
+                // Ultra privacy: calls are off, so it doesn't ring; a missed call that says why (not in a muted group).
+                if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) {
+                    val muted = try { a.chat.flags.muted(io.github.ravenor907.muninn.net.Folders.groupKey(group)) } catch (e: Exception) { false }
+                    if (!muted && !a.quietUntilOpen()) missed(who, grp, group, io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF_MISSED)
+                    return
+                }
                 // Round 17: a Kids' Device takes no group calls (it has no way to answer one): never rung, only a missed call.
                 if (try { io.github.ravenor907.muninn.tv.KidMode.on(a) } catch (e: Exception) { false }) { missed(who, grp, group); return }
                 // Extreme battery saver: group calls ring only while Muninn is open.
@@ -693,9 +702,18 @@ object RoomManager {
     }
 
     /** A group call missed: the notification opens group [g]. */
-    private fun missed(who: String, group: String, g: String) {
+    private fun missed(who: String, group: String, g: String, note: String = "") {
         val a = app ?: return
-        Ringer.missed(a, if (group.isNotEmpty()) "$who · $group" else who, io.github.ravenor907.muninn.net.Folders.groupKey(g))
+        Ringer.missed(a, if (group.isNotEmpty()) "$who · $group" else who, io.github.ravenor907.muninn.net.Folders.groupKey(g), note)
+    }
+
+    /**
+     * Ultra privacy just turned on (TorRunner): calls and voice rooms are off while it's on. The room or group call
+     * going on is left now, and a group call ringing here stops.
+     */
+    fun ultraOn() {
+        if (_ring.value != null) stopRing()
+        exec.execute { if (g.isNotEmpty()) doLeave(io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF) }
     }
 
     private fun roomOffer(from: String, o: JSONObject) {
@@ -796,6 +814,8 @@ object RoomManager {
         @SuppressLint("MissingPermission")
         fun start(c: Context, mic: Boolean = true): Boolean {
             stop()
+            // In a voice room: Read aloud stops.
+            try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
             val am = c.getSystemService(AudioManager::class.java) ?: return false
             audio = am
             oldMode = am.mode

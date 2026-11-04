@@ -155,13 +155,16 @@ class Updater(private val context: Context, private val identity: Identity) {
                 val note = File(dir, "Muninn.apk.ok")
                 // This version, already downloaded and checked: straight to installing it.
                 if (want != null && out.exists() && reuse(try { note.readText() } catch (_: Exception) { null }, ver, want) && shaOfFile(out) == want) {
-                    ready(out, ver, tapped)
+                    ready(out, ver, tapped, want)
                     return@execute
                 }
                 note.delete()
                 val digest = java.security.MessageDigest.getInstance("SHA-256")
                 // GitHub's download links redirect to another host; OkHttp follows them.
-                val c = Net.client.newBuilder().readTimeout(2, java.util.concurrent.TimeUnit.MINUTES).build()
+                // Round 19: through Tor a connection takes longer to open (a circuit first), and no download can hang
+                // for good: 2 minutes without a byte ends it ("The download stopped"), and the next try starts over.
+                val c = Net.client.newBuilder().readTimeout(2, java.util.concurrent.TimeUnit.MINUTES)
+                    .connectTimeout(if (io.github.ravenor907.muninn.net.UltraPrivacy.on) 60L else 15L, java.util.concurrent.TimeUnit.SECONDS).build()
                 c.newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
                     if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
                     val body = r.body ?: throw IOException("No body")
@@ -193,7 +196,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                     return@execute
                 }
                 try { note.writeText(record(ver, got)) } catch (_: Exception) {}
-                ready(out, ver, tapped)
+                ready(out, ver, tapped, got)
             } catch (e: Exception) {
                 // A partial file would only take room (and the next try needs it): gone. A full disk is said as it is.
                 try { File(File(context.cacheDir, "updates"), "Muninn.apk").delete() } catch (_: Exception) {}
@@ -204,7 +207,7 @@ class Updater(private val context: Context, private val identity: Identity) {
     }
 
     /** A checked download of [ver] is ready: installed now when [tapped] (or by a Kids' TV's own installer), else it waits for a tap. */
-    private fun ready(out: File, ver: String, tapped: Boolean) {
+    private fun ready(out: File, ver: String, tapped: Boolean, want: String?) {
         val tv = installer
         if (!tapped && tv == null) {
             _state.value = _state.value.copy(busy = false, progress = 0f, status = "Muninn $ver is downloaded. Tap Update now to install it.")
@@ -212,9 +215,18 @@ class Updater(private val context: Context, private val identity: Identity) {
         }
         // A chat file on its way: installing closes Muninn and would stop it, so the update waits for it.
         val waitUntil = System.currentTimeMillis() + 6 * 3_600_000L
+        var waited = false
         while (io.github.ravenor907.muninn.net.FileLink.movingCount() > 0 && System.currentTimeMillis() < waitUntil) {
             _state.value = _state.value.copy(busy = true, status = "Installs when the file on its way is done")
             Thread.sleep(2000)
+            waited = true
+        }
+        // It waited (up to 6 hours) in the cache: checked again against the release's SHA-256 right before installing.
+        if (waited && (want == null || shaOfFile(out) != want)) {
+            out.delete()
+            try { File(out.parentFile, "Muninn.apk.ok").delete() } catch (_: Exception) {}
+            _state.value = _state.value.copy(busy = false, progress = 0f, status = "The download changed while it waited, so it wasn't installed. Try again.")
+            return
         }
         _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
         main.post { if (tv?.invoke(out) != true && tapped) install(out, ver) }
@@ -224,6 +236,15 @@ class Updater(private val context: Context, private val identity: Identity) {
     fun say(status: String) {
         _state.value = _state.value.copy(busy = false, status = status)
     }
+
+    /**
+     * Update checks (the API, the releases page, the signature files): each one ends within a set time, longer through
+     * Tor, so a stalled one never keeps Muninn from checking again. Built from [Net.client] each time, so it always
+     * follows Ultra privacy as it is now (its proxy is chosen for every connection).
+     */
+    private fun quick() = Net.client.newBuilder()
+        .connectTimeout(if (io.github.ravenor907.muninn.net.UltraPrivacy.on) 60L else 15L, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(if (io.github.ravenor907.muninn.net.UltraPrivacy.on) 120L else 60L, java.util.concurrent.TimeUnit.SECONDS).build()
 
     private fun shaOfFile(f: File): String? = try {
         val d = java.security.MessageDigest.getInstance("SHA-256")
@@ -242,7 +263,7 @@ class Updater(private val context: Context, private val identity: Identity) {
         // website's "latest release" link (fromWebsite) is asked instead, through Tor as everything else.
         if (io.github.ravenor907.muninn.net.UltraPrivacy.on) return Found(null, null, null)
         val req = Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").header("User-Agent", AGENT).build()
-        val text = Net.client.newCall(req).execute().use { r ->
+        val text = quick().newCall(req).execute().use { r ->
             if (r.code == 403 || r.code == 429) return Found(null, null, null)   // rate limited
             if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
             r.body?.string() ?: throw IOException("No body")
@@ -288,7 +309,7 @@ class Updater(private val context: Context, private val identity: Identity) {
     private fun fromBeta(viaPage: Boolean): Found? {
         val block = betaBlock ?: if (viaPage) page(BETA_TAG) else null
         val label = block?.label ?: try {
-            Net.client.newCall(Request.Builder().url("$DOWNLOAD/$BETA_TAG/version.txt").header("User-Agent", AGENT).build()).execute().use { r ->
+            quick().newCall(Request.Builder().url("$DOWNLOAD/$BETA_TAG/version.txt").header("User-Agent", AGENT).build()).execute().use { r ->
                 if (r.isSuccessful) r.body?.string()?.trim() else null
             }
         } catch (e: Exception) { null } ?: return null
@@ -299,7 +320,7 @@ class Updater(private val context: Context, private val identity: Identity) {
 
     /** The signatures block on a release's web page (github.com/.../releases/tag/<tag>), or null. Reads at most [MAX_NOTES]. */
     private fun page(tag: String): Signatures? = try {
-        Net.client.newCall(Request.Builder().url("$PAGE/$tag").header("User-Agent", AGENT).build()).execute().use { r ->
+        quick().newCall(Request.Builder().url("$PAGE/$tag").header("User-Agent", AGENT).build()).execute().use { r ->
             val src = if (r.isSuccessful) r.body?.source() else null
             if (src == null) null else {
                 val buf = okio.Buffer()
@@ -311,14 +332,14 @@ class Updater(private val context: Context, private val identity: Identity) {
 
     /** The hex SHA-256 in a release's ".sha256" file (as sha256sum writes it), or null. */
     private fun sidecar(u: String): String? = try {
-        Net.client.newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
+        quick().newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
             if (r.isSuccessful) shaOf(r.body?.string().orEmpty()) else null
         }
     } catch (e: Exception) { null }
 
     /** The 64 bytes of a release's ".sig" file, or null when there is none. */
     private fun signature(u: String): ByteArray? = try {
-        Net.client.newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
+        quick().newCall(Request.Builder().url(u).header("User-Agent", AGENT).build()).execute().use { r ->
             if (r.isSuccessful) r.body?.bytes()?.takeIf { it.size == 64 } else null
         }
     } catch (e: Exception) { null }
@@ -329,7 +350,7 @@ class Updater(private val context: Context, private val identity: Identity) {
      */
     private fun fromWebsite(): Found {
         val req = Request.Builder().url(LATEST).header("User-Agent", AGENT).head().build()
-        val finalUrl = Net.client.newCall(req).execute().use { r ->
+        val finalUrl = quick().newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw IOException("HTTP ${r.code}")
             r.request.url.toString()
         }

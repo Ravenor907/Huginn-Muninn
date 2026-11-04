@@ -242,7 +242,11 @@ Rectangle {
     function linkLabel(url) { return isInvite(url) ? "Group invite: open it on your phone" : "Open " + Chat.linkHost(url) }
     function openLink(url) {
         if (isInvite(url)) { Ui.say("Open the invite on your phone to join as you."); return }
-        Ui.sure("Open " + Chat.linkHost(url) + "?", url, "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) })
+        // Ultra privacy: the browser isn't behind Tor, so say so and offer Copy link instead.
+        const ultra = UltraPrivacy.active
+        Ui.sure("Open " + Chat.linkHost(url) + "?", ultra ? url + "\n\nIt opens in your browser, outside Tor. The site sees your internet address." : url,
+                "Open", () => { if (!Chat.openLink(url)) Ui.say("That link can't be opened here.", true) })
+        if (ultra && Ui.confirm) { Ui.confirm.otherText = "Copy link"; Ui.confirm.otherCallback = () => { Chat.copyText(url); Ui.say("Link copied.") } }
     }
     function messageMenu(m) {
         if (!m) return

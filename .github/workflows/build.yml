@@ -118,19 +118,39 @@ jobs:
             grep -q "HUGINN_VERSION_LABEL=$label" code/huginn/packaging/io.github.ravenor907.Huginn.json || { echo "::error::The beta label didn't go into the Flatpak manifest"; exit 1; }
             echo "::notice title=Beta::Huginn.flatpak is $label"
           fi
-      - name: Speech engine for Read aloud (sherpa-onnx, checked against code/shared/voices.sha256)
+      - name: Speech engine for Read aloud (sherpa-onnx, must match code/shared/voices.sha256)
         shell: bash
         run: |
-          # Bundled in the Flatpak (code/shared/docs/voices.md). Its SHA-256 goes into the manifest, so flatpak-builder checks it too.
+          # Bundled in the Flatpak (code/shared/docs/voices.md). The build stops unless the download matches its line in
+          # voices.sha256, and the manifest carries the same hash (flatpak-builder checks it again as it builds).
           f=sherpa-onnx-v1.13.8-linux-x64-shared-lib.tar.bz2
+          want=$(grep -E "^[0-9a-f]{64}  $f\$" code/shared/voices.sha256 | head -n1 | cut -d' ' -f1 || true)
+          [ -n "$want" ] || { echo "::error title=Speech engine not pinned::code/shared/voices.sha256 has no line for $f. Add its SHA-256 (code/shared/docs/voices.md, \"The speech engine\") before building."; exit 1; }
           curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/$f" "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$f" \
             || { echo "::error title=Speech engine::Couldn't download $f"; exit 1; }
           sum=$(sha256sum "$RUNNER_TEMP/$f" | cut -d' ' -f1)
-          want=$(grep -E "^[0-9a-f]{64}  $f\$" code/shared/voices.sha256 | cut -d' ' -f1 || true)
-          if [ -z "$want" ]; then echo "::notice title=Speech engine not pinned yet::$sum  $f (the Publish voices workflow prints this line for code/shared/voices.sha256)"
-          elif [ "$want" != "$sum" ]; then echo "::error title=Speech engine changed::$f is $sum, voices.sha256 says $want"; exit 1; fi
-          sed -i "s|@SHERPA_ONNX_LINUX_SHA256@|$sum|" code/huginn/packaging/io.github.ravenor907.Huginn.json
-          grep -q "\"$sum\"" code/huginn/packaging/io.github.ravenor907.Huginn.json || { echo "::error::The speech engine's hash didn't go into the Flatpak manifest"; exit 1; }
+          [ "$want" = "$sum" ] || { echo "::error title=Speech engine changed::$f is $sum, voices.sha256 says $want. It isn't used."; exit 1; }
+          m=code/huginn/packaging/io.github.ravenor907.Huginn.json
+          have=$(grep -A2 "/$f\"" "$m" | grep -oE '"sha256": "[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}' || true)
+          [ "$have" = "$want" ] || { echo "::error title=Speech engine::The Flatpak manifest pins ${have:-nothing} for $f, voices.sha256 says $want. Make them the same."; exit 1; }
+          echo "Speech engine $f: $sum (pinned)"
+      - name: Tor's pinned source matches torproject.org's own checksum file
+        shell: bash
+        run: |
+          # The manifest pins tor's SHA-256; this checks it against the .sha256sum the Tor Project publishes beside the
+          # tarball, so the pin's source is on record in every build. (libevent's pin is checked by flatpak-builder only.)
+          m=code/huginn/packaging/io.github.ravenor907.Huginn.json
+          url=$(grep -oE '"https://dist\.torproject\.org/tor-[0-9.]+\.tar\.gz"' "$m" | head -n1 | tr -d '"' || true)
+          pin=$(grep -A6 "\"$url\"" "$m" | grep -oE '"sha256": "[0-9a-f]{64}"' | grep -oE '[0-9a-f]{64}' | head -n1 || true)
+          [ -n "$url" ] && [ -n "$pin" ] || { echo "::error title=Tor checksum::Couldn't find tor's url and sha256 in $m"; exit 1; }
+          f=$(basename "$url")
+          got=""
+          for base in "https://dist.torproject.org" "https://archive.torproject.org/tor-package-archive"; do
+            got=$(curl -fsSL --retry 3 --retry-delay 5 "$base/$f.sha256sum" | awk '{print $1}' | head -n1) && [ -n "$got" ] && break
+          done
+          [ -n "$got" ] || { echo "::error title=Tor checksum::Couldn't fetch $f.sha256sum from torproject.org"; exit 1; }
+          [ "$got" = "$pin" ] || { echo "::error title=Tor checksum::The manifest pins $pin for $f, torproject.org says $got"; exit 1; }
+          echo "$f: $pin matches torproject.org's $f.sha256sum"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: .flatpak-builder
@@ -304,6 +324,22 @@ jobs:
           # The beta branch: versionName is "<BETA> beta <run number>", versionCode stays code/VERSION's (releases.md).
           echo "BETA_LABEL=$LABEL" >> "$GITHUB_ENV"
           echo "::notice title=Beta::Muninn.apk is $LABEL"
+      - name: Library checksums (gradle/verification-metadata.xml)
+        env:
+          MAIN: ${{ needs.rules.outputs.release }}
+        run: |
+          # Gradle checks every library and plugin against code/muninn/gradle/verification-metadata.xml (SHA-256) and
+          # stops the build on any that changed or isn't listed (code/shared/docs/voices.md, "Library checksums").
+          # The Publish voices workflow writes the file; until it has run once there is nothing to check against.
+          f=code/muninn/gradle/verification-metadata.xml
+          if [ -f "$f" ]; then
+            grep -q "<verify-metadata>true</verify-metadata>" "$f" || { echo "::error title=Library checksums::$f doesn't turn checking on"; exit 1; }
+            echo "Checking $(grep -c '<sha256 ' "$f") library checksums."
+          elif [ "$MAIN" = 1 ]; then
+            echo "::error title=Library checksums missing::Run Actions > Publish voices on this branch once (it writes $f), pull, and push again."; exit 1
+          else
+            echo "::warning title=Library checksums missing::$f isn't there yet, so Muninn's libraries aren't checked. Run Actions > Publish voices once (it writes it)."
+          fi
       - name: Unit tests and APKs
         working-directory: code/muninn
         env:
@@ -316,7 +352,12 @@ jobs:
           [ -n "${BETA_LABEL:-}" ] && label=("-PbetaLabel=$BETA_LABEL")
           ./gradlew --stacktrace --build-cache -PciAbi=x86_64 "${label[@]}" $tasks \
             2>&1 | tee build.log; status=${PIPESTATUS[0]}
-          if [ $status -ne 0 ]; then ci/annotate.sh build.log; exit $status; fi
+          if [ $status -ne 0 ]; then
+            if grep -q "Dependency verification failed" build.log; then
+              echo "::error title=Library checksums::A Muninn library or plugin isn't the one on record in gradle/verification-metadata.xml (changed upstream, or new and not listed). If a version was changed on purpose, run Actions > Publish voices again to record it; otherwise don't release."
+            fi
+            ci/annotate.sh build.log; exit $status
+          fi
       - name: Unit test failures
         if: failure()
         run: |
@@ -511,6 +552,46 @@ jobs:
             echo "::error title=vcpkg failed::$errs"
             exit $status
           fi
+      - name: Tor for Ultra privacy (the Tor Expert Bundle, signed by the Tor Browser developers)
+        run: |
+          # Ultra privacy (src/ultraprivacy.cpp) starts lib/tor/tor.exe with QProcess. Taken only with a good signature by
+          # the Tor Browser developers' key: its primary fingerprint is pinned here, and the key is in the repo
+          # (code/huginn/packaging/windows/tor-browser-devs.gpg; a newer signing subkey comes from torproject.org's WKD).
+          fp=EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+          t="$(cygpath -u "$RUNNER_TEMP")/tor"
+          rm -rf "$t"; mkdir -p "$t/gpg" "$t/x"; chmod 700 "$t/gpg"
+          gpg --batch --quiet --homedir "$t/gpg" --import code/huginn/packaging/windows/tor-browser-devs.gpg
+          gpg --batch --quiet --homedir "$t/gpg" --auto-key-locate clear,nodefault,wkd --locate-keys torbrowser@torproject.org > /dev/null 2>&1 || true
+          json=$(curl -fsSL --retry 5 --retry-delay 5 https://aus1.torproject.org/torbrowser/update_3/release/download-windows-x86_64.json) \
+            || { echo "::error title=Tor::Couldn't ask torproject.org which Tor Browser is current"; exit 1; }
+          ver=$(printf '%s' "$json" | python -c "import json, re, sys; print(re.search(r'/torbrowser/([0-9][0-9a-z.]*)/', json.load(sys.stdin)['binary']).group(1))") \
+            || { echo "::error title=Tor::No version in torproject.org's answer"; exit 1; }
+          # Never older than this (raise it on purpose): an old answer can't bring back an old Tor with known bugs.
+          floor=14.5
+          [ "$(printf '%s\n%s\n' "$floor" "$ver" | sort -V | head -n1)" = "$floor" ] || { echo "::error title=Tor::torproject.org offered Tor Browser $ver, older than the floor $floor"; exit 1; }
+          f="tor-expert-bundle-windows-x86_64-$ver.tar.gz"
+          got=""
+          for base in "https://dist.torproject.org/torbrowser/$ver" "https://archive.torproject.org/tor-package-archive/torbrowser/$ver"; do
+            curl -fsSL --retry 3 --retry-delay 5 -o "$t/$f" "$base/$f" && curl -fsSL --retry 3 --retry-delay 5 -o "$t/$f.asc" "$base/$f.asc" && { got=1; break; }
+          done
+          [ -n "$got" ] || { echo "::error title=Tor::Couldn't download $f"; exit 1; }
+          status=$(gpg --batch --homedir "$t/gpg" --status-fd 1 --verify "$t/$f.asc" "$t/$f" 2>/dev/null || true)
+          # A good signature only: GOODSIG, and nothing from an expired or revoked key or signature (gpg still says
+          # VALIDSIG for those).
+          if printf '%s\n' "$status" | awk '{print $2}' | grep -qE '^(BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)$' || ! printf '%s\n' "$status" | awk '{print $2}' | grep -qx GOODSIG; then
+            echo "::error title=Tor signature::$f has no good, current signature, so it isn't used"; printf '%s\n' "$status"; exit 1
+          fi
+          signer=$(printf '%s\n' "$status" | awk '$2 == "VALIDSIG" { print $NF }' | head -n 1)
+          [ "$signer" = "$fp" ] || { echo "::error title=Tor signature::$f isn't signed by the Tor Browser developers ($fp), so it isn't used"; exit 1; }
+          tar -xzf "$t/$f" -C "$t/x"
+          exe=$(find "$t/x" -iname tor.exe | head -n 1)
+          [ -n "$exe" ] || { echo "::error title=Tor::No tor.exe in $f"; exit 1; }
+          # Round 19 (security 15): its SHA-256 is built into Huginn.exe (HUGINN_TOR_SHA256), so a changed tor.exe is never run.
+          sum=$(sha256sum "$exe" | cut -d' ' -f1)
+          [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "::error title=Tor::Couldn't hash tor.exe"; exit 1; }
+          echo "TOR_EXE=$exe" >> "$GITHUB_ENV"
+          echo "HUGINN_TOR_SHA256=$sum" >> "$GITHUB_ENV"
+          echo "::notice title=Tor::Tor Expert Bundle $ver: tor.exe $(stat -c %s "$exe") bytes, SHA-256 $sum, signed by $fp"
       - name: Build Huginn.exe (CMake, MSVC)
         shell: pwsh
         run: |
@@ -518,7 +599,7 @@ jobs:
           $vcpkg = $env:VCPKG_INSTALLATION_ROOT -replace '\\','/'
           $qt = $env:QT_ROOT_DIR -replace '\\','/'
           cmake -S code/huginn -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded -DCMAKE_POLICY_DEFAULT_CMP0141=NEW "-DHUGINN_VERSION=$env:HUGINN_VERSION" "-DHUGINN_VERSION_LABEL=$env:HUGINN_VERSION_LABEL" -DHUGINN_WINDOWS_PORTABLE=ON `
-            "-DCMAKE_PREFIX_PATH=$qt" "-DCMAKE_TOOLCHAIN_FILE=$vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows 2>&1 | Tee-Object -FilePath configure.log
+            "-DCMAKE_PREFIX_PATH=$qt" "-DCMAKE_TOOLCHAIN_FILE=$vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows "-DHUGINN_TOR_SHA256=$env:HUGINN_TOR_SHA256" 2>&1 | Tee-Object -FilePath configure.log
           if ($LASTEXITCODE -ne 0) { $e = (Get-Content configure.log -Tail 40) -join '%0A'; Write-Output "::error title=CMake configure failed::$e"; exit 1 }
           cmake --build build --config Release 2>&1 | Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) {
@@ -543,20 +624,22 @@ jobs:
           Remove-Item -Force "$out/dxcompiler.dll", "$out/dxil.dll" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "$out/qmltooling" -ErrorAction SilentlyContinue
           Get-ChildItem $out -Filter "pkgconf*.dll" | Remove-Item -Force
-          # Read aloud's speech engine (sherpa-onnx with ONNX Runtime, code/shared/docs/voices.md): its DLLs, checked against
-          # code/shared/voices.sha256 when the line is there. Huginn loads them itself when something is read aloud.
+          # Read aloud's speech engine (sherpa-onnx with ONNX Runtime, code/shared/docs/voices.md): its DLLs, used only when
+          # the download matches its line in code/shared/voices.sha256. Huginn loads them itself when something is read aloud.
           $f = "sherpa-onnx-v1.13.8-win-x64-shared-MD-Release.tar.bz2"
+          $line = Select-String -Path code/shared/voices.sha256 -Pattern "^([0-9a-f]{64})  $([regex]::Escape($f))$" | Select-Object -First 1
+          if (-not $line) { Write-Output "::error title=Speech engine not pinned::code/shared/voices.sha256 has no line for $f. Add its SHA-256 (code/shared/docs/voices.md) before building."; exit 1 }
+          $want = $line.Matches[0].Groups[1].Value
           $tmp = Join-Path $env:RUNNER_TEMP "sherpa"
           New-Item -ItemType Directory -Force $tmp | Out-Null
           Invoke-WebRequest -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$f" -OutFile "$tmp/$f" -MaximumRetryCount 5 -RetryIntervalSec 5
           $sum = (Get-FileHash -Algorithm SHA256 "$tmp/$f").Hash.ToLower()
-          $line = Select-String -Path code/shared/voices.sha256 -Pattern "^([0-9a-f]{64})  $([regex]::Escape($f))$" | Select-Object -First 1
-          if (-not $line) { Write-Output "::notice title=Speech engine not pinned yet::$sum  $f (the Publish voices workflow prints this line for code/shared/voices.sha256)" }
-          elseif ($line.Matches[0].Groups[1].Value -ne $sum) { Write-Output "::error title=Speech engine changed::$f is $sum, voices.sha256 says $($line.Matches[0].Groups[1].Value)"; exit 1 }
+          if ($want -ne $sum) { Write-Output "::error title=Speech engine changed::$f is $sum, voices.sha256 says $want. It isn't used."; exit 1 }
           # Windows' own tar (bsdtar) unpacks .tar.bz2 by itself and takes drive letters in paths.
           & "$env:SystemRoot/System32/tar.exe" -xjf "$tmp/$f" -C $tmp
           if ($LASTEXITCODE -ne 0) { Write-Output "::error::Couldn't unpack $f"; exit 1 }
-          $dlls = Get-ChildItem $tmp -Recurse -Filter "*.dll"
+          # Only what Huginn loads: the C API and ONNX Runtime (with its provider bridge), from the archive's lib folder.
+          $dlls = Get-ChildItem $tmp -Recurse -Filter "*.dll" | Where-Object { $_.Directory.Name -eq "lib" -and @("sherpa-onnx-c-api.dll", "onnxruntime.dll", "onnxruntime_providers_shared.dll") -contains $_.Name }
           if (-not ($dlls | Where-Object Name -eq "sherpa-onnx-c-api.dll")) { Write-Output "::error title=Speech engine::sherpa-onnx-c-api.dll isn't in $f"; exit 1 }
           $dlls | ForEach-Object { Copy-Item $_.FullName $out -Force }
           Write-Output "Speech engine: $(($dlls | ForEach-Object Name) -join ', ')"
@@ -618,37 +701,16 @@ jobs:
           n=$(grep -c -a "^import QtQuick" "$d/Huginn.exe" || true)
           [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in Huginn.exe"; exit 1; }
           echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
-      - name: Tor for Ultra privacy (the Tor Expert Bundle, signed by the Tor Browser developers)
+      - name: Tor into lib/tor (the copy checked above, whose SHA-256 Huginn.exe carries)
         run: |
-          # Ultra privacy (src/ultraprivacy.cpp) starts lib/tor/tor.exe with QProcess. Taken only with a good signature by
-          # the Tor Browser developers' key: its primary fingerprint is pinned here, and the key is in the repo
-          # (code/huginn/packaging/windows/tor-browser-devs.gpg; a newer signing subkey comes from torproject.org's WKD).
-          fp=EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
-          t="$(cygpath -u "$RUNNER_TEMP")/tor"
-          rm -rf "$t"; mkdir -p "$t/gpg" "$t/x"; chmod 700 "$t/gpg"
-          gpg --batch --quiet --homedir "$t/gpg" --import code/huginn/packaging/windows/tor-browser-devs.gpg
-          gpg --batch --quiet --homedir "$t/gpg" --auto-key-locate clear,nodefault,wkd --locate-keys torbrowser@torproject.org > /dev/null 2>&1 || true
-          json=$(curl -fsSL --retry 5 --retry-delay 5 https://aus1.torproject.org/torbrowser/update_3/release/download-windows-x86_64.json) \
-            || { echo "::error title=Tor::Couldn't ask torproject.org which Tor Browser is current"; exit 1; }
-          ver=$(printf '%s' "$json" | python -c "import json, re, sys; print(re.search(r'/torbrowser/([0-9][0-9a-z.]*)/', json.load(sys.stdin)['binary']).group(1))") \
-            || { echo "::error title=Tor::No version in torproject.org's answer"; exit 1; }
-          f="tor-expert-bundle-windows-x86_64-$ver.tar.gz"
-          got=""
-          for base in "https://dist.torproject.org/torbrowser/$ver" "https://archive.torproject.org/tor-package-archive/torbrowser/$ver"; do
-            curl -fsSL --retry 3 --retry-delay 5 -o "$t/$f" "$base/$f" && curl -fsSL --retry 3 --retry-delay 5 -o "$t/$f.asc" "$base/$f.asc" && { got=1; break; }
-          done
-          [ -n "$got" ] || { echo "::error title=Tor::Couldn't download $f"; exit 1; }
-          signer=$(gpg --batch --homedir "$t/gpg" --status-fd 1 --verify "$t/$f.asc" "$t/$f" 2>/dev/null | awk '$2 == "VALIDSIG" { print $NF }' | head -n 1 || true)
-          [ "$signer" = "$fp" ] || { echo "::error title=Tor signature::$f isn't signed by the Tor Browser developers ($fp), so it isn't used"; exit 1; }
-          tar -xzf "$t/$f" -C "$t/x"
-          exe=$(find "$t/x" -iname tor.exe | head -n 1)
-          [ -n "$exe" ] || { echo "::error title=Tor::No tor.exe in $f"; exit 1; }
+          exe="$TOR_EXE"
+          [ -f "$exe" ] && [ "$(sha256sum "$exe" | cut -d' ' -f1)" = "$HUGINN_TOR_SHA256" ] || { echo "::error title=Tor::tor.exe changed since it was checked"; exit 1; }
           d=dist/Huginn/lib/tor
           mkdir -p "$d"
           cp "$exe" "$d/"
           for dll in "$(dirname "$exe")"/*.dll; do [ -f "$dll" ] && cp "$dll" "$d/"; done
           cp code/shared/licenses/Tor-BSD-3-Clause.txt dist/Huginn/lib/licenses/
-          echo "::notice title=Tor::Tor Expert Bundle $ver: tor.exe $(stat -c %s "$d/tor.exe") bytes, signed by $fp"
+          echo "lib/tor: tor.exe $(stat -c %s "$d/tor.exe") bytes"
       - name: Nothing in Huginn.exe that looks like malware (scripts, hidden windows, suspended processes)
         run: python code/shared/tools/check-windows-binary.py dist/Huginn
       - name: Zip it, then unpack the zip and test exactly what ships

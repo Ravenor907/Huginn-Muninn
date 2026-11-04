@@ -649,7 +649,7 @@ object Link {
         _phone.value?.takeIf { it.key == key && !it.ok }?.let { p ->
             _phone.value = p.copy(ok = true); _ownShown.value = false; save()
             // "f": the first one after the emoji, which the phone takes even inside the 10 minutes.
-            h.send(p, JSONObject().put("t", "sync").put("f", true).put("caps", LinkWire.L4).toString())
+            h.send(p, JSONObject().put("t", "sync").put("f", true).put("caps", LinkWire.L4 + " " + LinkWire.L5).toString())
         }
     }
 
@@ -1402,7 +1402,7 @@ object Link {
         val now = System.currentTimeMillis()
         if (!LinkWire.syncDue(askedAt, now)) return "Asked already. You can ask again in ${maxOf(1L, (LinkWire.REFRESH_EVERY_MS - (now - askedAt) + 59_999L) / 60_000L)} min."
         askedAt = now
-        h.send(ph, JSONObject().put("t", "sync").put("caps", LinkWire.L4).toString())
+        h.send(ph, JSONObject().put("t", "sync").put("caps", LinkWire.L4 + " " + LinkWire.L5).toString())
         fetchMissing()
         return if (h.onLan(ph.key)) "Asked ${ph.name} for its chats." else "Asked ${ph.name}. History comes over on home Wi-Fi."
     }

@@ -72,6 +72,13 @@ Item {
     readonly property var grow: Settings.lockPosition === "top" ? [0.15, 1] : Settings.lockPosition === "middle" ? [1, 1] : [1, 0.12]
 
     Timer { interval: 500; repeat: true; running: panel.wait > 0; onTriggered: panel.wait = Vault.waitSeconds }
+    // Round 19 (m3 handheld): wait loses its binding once set, so a wait begun elsewhere (Confirm it's you) is read again
+    // whenever the vault changes or the panel shows.
+    Connections { target: Vault; function onChanged() { panel.wait = Vault.waitSeconds } }
+    // Round 19 (M3 handheld): a wait that just ended leaves no "Wait 5 minutes" behind: the live line says what's next.
+    onWaitChanged: if (wait === 0 && bad && asks) { note = ""; bad = false }
+    // Both fields emptied, so A starts again from the first prompt (round 19, B1 handheld).
+    function clearFields() { pw.text = ""; pw2.text = "" }
 
     function saveSecret(secret, pattern, spare) {
         if (practice) {
@@ -90,8 +97,9 @@ Item {
             first = null; pendingPattern = ""; note = ""; bad = false
         } else { note = Vault.secretError() || "That didn't save. Try again."; bad = true }
     }
-    // A wrong pattern or password: said, with what the next wrong tries bring.
-    function wrongNote() { return ("That's not it. " + Vault.triesWords()).trim() }
+    // A wrong pattern or password: said, with what the next wrong tries bring. Round 19 (FIX 15): a try that couldn't
+    // be counted wasn't checked at all, and says why.
+    function wrongNote() { return Vault.tryError() || ("That's not it. " + Vault.triesWords()).trim() }
     // Unlocking works out the key (and reads the chats) off the window's thread: a ring turns until it's done.
     property bool unlockAsked: false
     function tryUnlock(secret) {
@@ -129,10 +137,10 @@ Item {
         if (Vault.turnOffLock(secret)) { note = ""; bad = false; Ui.say("The lock is off."); finished("off") }
         else { note = wrongNote(); bad = true; wait = Vault.waitSeconds; pad.shake() }
     }
+    // Round 19 (owner decision): inside the open app, never counted (no wait, no erase), so no tries are spoken of.
     function tryOwn(secret) {
-        if (Vault.waitSeconds > 0) { wait = Vault.waitSeconds; return }
         if (Linked.openOwn(secret)) { note = ""; bad = false; spareTyped = false; finished("own") }
-        else { note = wrongNote(); bad = true; wait = Vault.waitSeconds; pad.shake() }
+        else { note = "That's not it."; bad = true; pad.shake() }
     }
     function onPattern(dots) {
         const secret = "pattern:" + dots.join(",")
@@ -140,7 +148,7 @@ Item {
         if (mode === "off") { tryOff(secret); return }
         if (mode === "own") { tryOwn(secret); return }
         if (mode === "confirm") { tryConfirm(secret); return }
-        if (dots.length < 6) { note = "Connect at least 6 dots."; bad = true; pad.shake(); return }
+        if (dots.length < 6) { note = "Connect at least 6 dots."; bad = true; pad.shake(); return }   // the rule since 1.0, not a new one
         if (first === null) { first = dots; note = "Draw it again to confirm."; bad = false; return }
         if (first.join(",") !== dots.join(",")) { first = null; note = "That didn't match. Start over."; bad = true; pad.shake(); return }
         // 1.42: a pattern needs its unlock password, typed twice, before both are saved together.
@@ -152,30 +160,50 @@ Item {
     function submitPassword() {
         const t = pw.text
         if (mode === "spare") { submitSpare(t); return }
+        // Round 19 (m2 handheld): nothing typed is no try at all.
+        if (asks && t === "") return
         if (mode === "unlock") { tryUnlock(t); pw.text = ""; return }
         if (mode === "off") { tryOff(t); pw.text = ""; return }
         if (mode === "own") { tryOwn(t); pw.text = ""; return }
         if (mode === "confirm") { tryConfirm(t); pw.text = ""; return }
-        if (t.length < 6) { note = "At least 6 characters."; bad = true; return }
-        if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
-        if (pendingPattern !== "" && t.startsWith("pattern:")) { note = "Pick other words for your unlock password."; bad = true; return }
-        pw.text = ""; pw2.text = ""
+        // Round 19 (B1 handheld): every failure empties both fields, so the next A asks for the first one again.
+        if (t.length < 6) { note = "At least 6 characters."; bad = true; clearFields(); return }
+        if (pw2.text !== t) { note = "They didn't match. Type both again."; bad = true; clearFields(); return }
+        if (pendingPattern !== "" && t.startsWith("pattern:")) { note = "Pick other words for your unlock password."; bad = true; clearFields(); return }
+        clearFields()
         if (pendingPattern !== "") saveSecret(pendingPattern, true, t)
         else saveSecret(t, false)
     }
     // "spare": set it (typed twice; then it's asked from memory), or type it from memory.
     function submitSpare(t) {
         if (spareRecall) {
-            pw.text = ""
+            clearFields()
+            if (t === "") return
             if (Vault.recallUnlockPassword(t)) { note = ""; bad = false; Ui.say("That's it. Keep it somewhere safe."); finished("spare") }
             else { note = "That's not it. Try again, or set a new one."; bad = true }
             return
         }
-        if (t.length < 6) { note = "At least 6 characters."; bad = true; return }
-        if (pw2.text !== t) { note = "They didn't match. Try again."; bad = true; pw2.text = ""; return }
-        pw.text = ""; pw2.text = ""
+        if (t.length < 6) { note = "At least 6 characters."; bad = true; clearFields(); return }
+        if (pw2.text !== t) { note = "They didn't match. Type both again."; bad = true; clearFields(); return }
+        if (t.startsWith("pattern:")) { note = "Pick other words for your unlock password."; bad = true; clearFields(); return }
+        clearFields()
         if (Vault.setUnlockPassword(t)) { respare = false; note = "Saved. Now type it once more, from memory."; bad = false; Qt.callLater(focusField) }
         else { note = "That didn't save. Try again."; bad = true }
+    }
+    // From memory went wrong: set a new one (Huginn is open, so nothing is lost). Y with a controller.
+    function newSpare() { respare = true; note = ""; bad = false; clearFields(); Qt.callLater(focusField) }
+    // A new pattern waiting for its unlock password: draw another instead (B with a controller).
+    function redraw() { pendingPattern = ""; usePattern = true; note = ""; bad = false; clearFields() }
+    // Round 19 (B1 and M5 handheld): the required unlock password screen always has a way out with a controller.
+    // Settings › Change: Cancel keeps the one there is. A new one after a wrong one from memory: back to typing it.
+    // Otherwise Lock: the lock screen comes back, and the pattern brings this screen back.
+    function leaveSpare() {
+        clearFields(); note = ""; bad = false
+        if (Vault.spareStep === "") { cancelled(); return }   // the screenshot tour's sample
+        if (respare && Vault.spareStep === "recall") { respare = false; Qt.callLater(focusField); return }
+        if (Vault.spareStep === "set" && Vault.hasUnlockPassword) { Vault.cancelUnlockPasswordChange(); return }
+        respare = false
+        Vault.lockScreen()
     }
     function focusField() { if (!usePattern) pw.forceActiveFocus() }
     // The main button's words.
@@ -212,7 +240,7 @@ Item {
                 "Restore from a backup", restore)
     }
     onUsePatternChanged: if (visible) Qt.callLater(focusField)
-    onVisibleChanged: if (visible) Qt.callLater(focusField)
+    onVisibleChanged: if (visible) { wait = Vault.waitSeconds; Qt.callLater(focusField) }
 
     Column {
         id: intro
@@ -333,14 +361,14 @@ Item {
                     visible: panel.pendingPattern !== ""
                     anchors.horizontalCenter: parent.horizontalCenter
                     kind: "plain"; text: "Draw a different pattern"
-                    onClicked: { panel.pendingPattern = ""; panel.usePattern = true; panel.note = ""; panel.bad = false }
+                    onClicked: panel.redraw()
                 }
                 // From memory went wrong: set a new one (Huginn is open, so nothing is lost).
                 HButton {
                     visible: panel.spareRecall && panel.bad
                     anchors.horizontalCenter: parent.horizontalCenter
                     kind: "plain"; text: "Set a new unlock password"
-                    onClicked: { panel.respare = true; panel.note = ""; panel.bad = false; Qt.callLater(panel.focusField) }
+                    onClicked: panel.newSpare()
                 }
             }
             // The progress ring while Huginn unlocks: an arc drawn once, turned (still when motion is off).
@@ -389,8 +417,16 @@ Item {
             textFormat: Text.PlainText
             width: parent.width; wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
-            visible: Gamepad.connected && panel.usePattern && !!Ui.main && Ui.main.padInUse
-            text: "D-pad moves. A starts and ends. B clears." + (panel.canSpare ? " X: unlock password." : "") + (panel.canForget ? " Y: Forgot it?" : "")
+            // Round 19 (m1 handheld): the controller's own button names (a PlayStation pad's cross is its A), and a way
+            // back to the pattern once the unlock password is being typed.
+            visible: Gamepad.connected && !!Ui.main && Ui.main.padInUse && text !== ""
+            text: {
+                const g = k => (Gamepad.style, Gamepad.glyph(k))
+                if (panel.usePattern)
+                    return "D-pad moves. " + g("a") + " starts and ends. " + g("b") + " clears." + (panel.canSpare ? " " + g("x") + ": unlock password." : "")
+                        + (panel.canForget ? " " + g("y") + ": Forgot it?" : "")
+                return panel.canSpare ? g("x") + ": draw your pattern instead." : ""
+            }
             color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12)
         }
         Text {
@@ -412,12 +448,13 @@ Item {
             kind: "plain"; text: panel.cancelText
             onClicked: panel.cancelled()
         }
-        // Settings › Unlock password › Change: Cancel keeps the one there is.
+        // Settings › Unlock password › Change: Cancel keeps the one there is. Round 19: the required screen has Lock,
+        // a new one after a wrong one from memory has Back (leaveSpare).
         HButton {
-            visible: panel.mode === "spare" && Vault.spareStep === "set" && Vault.hasUnlockPassword
+            visible: panel.mode === "spare" && Vault.spareStep !== ""
             anchors.horizontalCenter: parent.horizontalCenter
-            kind: "plain"; text: "Cancel"
-            onClicked: { panel.note = ""; panel.bad = false; Vault.cancelUnlockPasswordChange() }
+            kind: "plain"; text: panel.spareLeaveText
+            onClicked: panel.leaveSpare()
         }
     }
 
@@ -466,7 +503,30 @@ Item {
         else if (!second) Ui.ask(pendingPattern !== "" || mode === "spare" ? "Unlock password (6 or more)" : "New password (6 or more)", "", "", "Next", t => { pw.text = t; panel.typeIn(true) }, true, true)
         else Ui.ask("Type it again", "", "", go, t => { pw2.text = t; panel.submitPassword() }, true, true)
     }
+    // What B does on the unlock password screen (leaveSpare), in words.
+    readonly property string spareLeaveText: respare && Vault.spareStep === "recall" ? "Back"
+        : Vault.spareStep === "set" && Vault.hasUnlockPassword ? "Cancel" : "Lock"
+    // Round 19 (M5 handheld): the buttons that do something on the current step, for the hint bar (ChatPage's lock
+    // screen and LockCheck use these, so no dead button is ever shown).
+    readonly property var prompts: {
+        const p = []
+        const held = asks && (wait > 0 || busy)
+        if (usePattern) { if (!held) p.push({ key: "dpad", label: "Move" }, { key: "a", label: drawing ? "Done" : "Draw" }) }
+        else if (!held) p.push({ key: "a", label: pw.text.length && (asks || spareRecall || pw2.text.length) ? goText : "Type" })
+        if (!asks && mode !== "spare" && pendingPattern === "" && !drawing) p.push({ key: "lb", label: usePattern ? "Password" : "Pattern" })
+        if (canSpare) p.push({ key: "x", label: usePattern ? "Unlock password" : "Draw pattern" })
+        if (canForget) p.push({ key: "y", label: "Forgot it?" })
+        else if (spareRecall && bad) p.push({ key: "y", label: "Set a new one" })
+        if (drawing) p.push({ key: "b", label: "Clear" })
+        else if (pendingPattern !== "") p.push({ key: "b", label: "Draw again" })
+        else if (mode === "spare") p.push({ key: "b", label: Vault.spareStep !== "" ? spareLeaveText : "Cancel" })
+        else if (cancelable || mode === "change" || mode === "off" || mode === "own") p.push({ key: "b", label: cancelText })
+        else if (mode === "setup") p.push({ key: "b", label: "Back" })
+        return p
+    }
     function handleButton(b) {
+        // Round 19 (m3 handheld): during a wait or while it works, A does nothing (the Unlock button is off too).
+        if (b === "a" && asks && (wait > 0 || busy)) return true
         if (usePattern && pad.handleButton(b)) return true
         // Setting one: A in the first field goes on to the second.
         if (b === "a" && !usePattern && !asks && !spareRecall && pw.text.length && pw2.text.length === 0) { typeIn(true); return true }
@@ -474,10 +534,11 @@ Item {
         if (b === "x" && canSpare) { toggleSpare(); return true }
         if ((b === "lb" || b === "next" || b === "prev") && !asks && mode !== "spare" && pendingPattern === "") { usePattern = !usePattern; first = null; note = ""; return true }
         if (b === "y" && canForget) { forgot(); return true }
+        if (b === "y" && spareRecall && bad) { newSpare(); return true }
         // A new lock after "Forgot it?" can't be skipped.
-        // The unlock password after a new pattern: B goes back to drawing. "spare": only a change can be left.
-        if (b === "b" && pendingPattern !== "") { pendingPattern = ""; usePattern = true; note = ""; bad = false; return true }
-        if (b === "b" && mode === "spare") { if (Vault.spareStep === "set" && Vault.hasUnlockPassword) Vault.cancelUnlockPasswordChange(); return true }
+        // The unlock password after a new pattern: B goes back to drawing. "spare": B leaves (leaveSpare).
+        if (b === "b" && pendingPattern !== "") { redraw(); return true }
+        if (b === "b" && mode === "spare") { leaveSpare(); return true }
         if (b === "b") { if (mode !== "renew") cancelled(); return true }
         return false
     }

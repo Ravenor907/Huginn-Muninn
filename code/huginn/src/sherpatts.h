@@ -3,7 +3,10 @@
 // Read aloud's speech engine (code/shared/docs/voices.md): the part of sherpa-onnx 1.13.8's C API (Apache-2.0,
 // code/shared/licenses/sherpa-onnx-Apache-2.0.txt) Huginn uses. The structs are exactly as in that version's
 // sherpa-onnx/c-api/c-api.h, field for field, so the library Huginn bundles reads them right; the functions are found
-// at run time (QLibrary, src/readaloud.cpp), never linked. Changing the bundled version means checking these again.
+// at run time (QLibrary, src/readaloud.cpp), never linked, and only from Huginn's own folder after
+// SherpaOnnxGetVersionStr() says 1.13.8. Changing the bundled version means checking these again. The Linux build was
+// checked against the binary (round 19: every offset matches); readaloud.cpp also hands the config over in a zeroed
+// buffer 4 KB larger than the struct, so a bigger struct in a library could never read past it.
 
 #include <cstdint>
 
@@ -118,5 +121,10 @@ typedef void (*SherpaOnnxDestroyOfflineTtsFn)(const SherpaOnnxOfflineTts *tts);
 typedef const SherpaOnnxGeneratedAudio *(*SherpaOnnxOfflineTtsGenerateFn)(const SherpaOnnxOfflineTts *tts, const char *text,
                                                                          int32_t sid, float speed);
 typedef void (*SherpaOnnxDestroyOfflineTtsGeneratedAudioFn)(const SherpaOnnxGeneratedAudio *audio);
+// "1.13.8": Huginn uses the library only when it is exactly the version these structs were copied from.
+typedef const char *(*SherpaOnnxGetVersionStrFn)(void);
 
 }
+
+// The version the structs above match.
+#define HUGINN_SHERPA_ONNX_VERSION "1.13.8"

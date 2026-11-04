@@ -96,7 +96,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `v3` | picked videos (section 29): a file offer may carry `vid` (a full-size video's length in ms, 1 to 60000), sent straight only to an app that says `v3`; a video message's relay copy may be up to 1280 x 720 and 192 pieces, its pieces paced. Muninn and Huginn. |
 | `h1` | hidden certificates named over the ratchet (21.3, 1.42): `hf` in receipts to contacts, the certificates its Wi-Fi server may show (its lasting one, its hidden one now and the next), so a contact asks a saved address with Nearby off only with one of them pinned. Muninn and Huginn. |
 | `r2` | a ring tag per caller (23.2, 1.42): `rt` in receipts with `rk`, and in the ring plaintext of a caller that says `r2`. Locked rings are limited per caller, and a tag taken back stops ringing at once. Muninn and Huginn. |
-| `l5` | the phone pings its companions too, and a ping more than 36 hours off is answered (section 15, "Clocks more than 36 hours apart", 1.42). Like `l1`, only in room `link` (`caps` on `sync` and `ping`). Muninn and Huginn. |
+| `l5` | the phone pings its companions too, and a ping more than 36 hours off is answered (section 15, "Clocks more than 36 hours apart", 1.42). Like `l1`, only in room `link` (`caps` on `ping`; Huginn says it on `sync` too, Muninn's `sync` says `l4`). Nothing reads it yet. Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -2061,7 +2061,7 @@ off, so neither side could learn the other's clock and a companion with a wrong 
   `ping` with a fresh `pn` (at most every 2 minutes). The phone does this to its companions too; a companion answers a
   `ping` from its phone with `{"t": "pong", "caps": "l4", "pn": ...}`.
 - Each side learns the other's difference only from the `pong` to its own `ping`, as above (Muninn now keeps it too,
-  in `link-replay.json` as `"o"`). Muninn `LinkReplay` (`answerDue`, `pingDue`, `skewed`), Huginn `LinkReplay`
+  in `link-replay.json` as `"off"`). Muninn `LinkReplay` (`answerDue`, `pingDue`, `skewed`), Huginn `LinkReplay`
   (`answerDue`, `pingDue`); tests `Fix142DTest` and Huginn's link self-test. A companion without `l5` ignores a phone's
   ping, so the phone can't learn its clock until it is updated; the companion still learns the phone's.
 
@@ -2662,6 +2662,13 @@ contact (with the keys of 23.2, in the vault).
 - Huginn before 1.42 made a new throwaway certificate each time Nearby went off (in memory only); now it keeps them as
   above. Muninn before 1.42 showed its lasting certificate with Nearby off. Muninn `HiddenTls`, `LocalSendRules.pins`
   and `rotateDue`; Huginn `LocalSend::pins` and `rotateDue`; tests `Fix142DTest` and Huginn's `--stability-selftest`.
+- Mixed versions, with Nearby off on both sides: an address Huginn saved before 1.42 has no certificate, and a contact
+  without `h1` never names one, so that address isn't asked until the contact updates or one side turns Nearby on once
+  (the contact is then reached over a proven route and its certificate is kept). Muninn 1.41 asking a 1.42 Muninn fails
+  once too, and heals within a minute when the 1.42 side asks it. Messages still go by the relays meanwhile. There is no
+  unpinned fallback.
+- A rotation stopped half way (the app killed) is finished at the next start: "now" is moved aside first, then "next"
+  takes its place, so "now" is never made fresh by mistake (Muninn `HiddenTls`).
 
 A hello or announce may still carry
 `"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]` in place of the name,
@@ -3439,6 +3446,9 @@ A member gets the full copy when all of these hold, else the relay copy:
 
 With Ultra privacy on, sending videos is off entirely (the button says "Off while Ultra privacy is on"); receiving
 still works.
+
+A Kids' Device answers a full copy's offer (`file` with `vid`) at once with a decline, `why:"rules"`, so the sender's app
+sends the relay copy straight away instead of waiting for an answer that never comes.
 
 ### 29.3 The full copy's offer
 

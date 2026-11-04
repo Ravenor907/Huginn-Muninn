@@ -187,6 +187,9 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
     }
 
     init {
+        // Ultra privacy: Tor has a circuit again (after the phone slept) on the same port. Only the relays that aren't
+        // connected try again now; the open ones stay (a new port still redials everything, from Muninn).
+        UltraPrivacy.onReadyAgain { try { reconnectNow() } catch (_: Exception) {} }
         try {
             if (stateFile.exists()) {
                 val o = (SafeFile.read(stateFile) { b -> JSONObject(String(b)) } as? SafeFile.Read.Ok)?.value ?: JSONObject()

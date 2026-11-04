@@ -19,6 +19,7 @@
         "--talk-name=org.freedesktop.Flatpak",
         "--talk-name=org.freedesktop.ScreenSaver",
         "--talk-name=org.freedesktop.Notifications",
+        "--filesystem=xdg-run/speech-dispatcher:ro",
         "--socket=pulseaudio",
         "--system-talk-name=org.bluez",
         "--system-talk-name=org.freedesktop.UPower",
@@ -39,13 +40,14 @@
             "buildsystem": "simple",
             "build-commands": [
                 "mkdir -p /app/lib",
-                "cp -a lib/lib*.so* /app/lib/"
+                "install -Dm755 lib/libsherpa-onnx-c-api.so /app/lib/libsherpa-onnx-c-api.so",
+                "install -Dm644 lib/libonnxruntime.so /app/lib/libonnxruntime.so"
             ],
             "sources": [
                 {
                     "type": "archive",
                     "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-shared-lib.tar.bz2",
-                    "sha256": "@SHERPA_ONNX_LINUX_SHA256@"
+                    "sha256": "3892d184be41027e18165e67f549cd4e4cdd8dcd73ac5579e97afd55e14e30b6"
                 }
             ]
         },

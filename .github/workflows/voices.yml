@@ -1,8 +1,13 @@
 name: Publish voices
 
-# Run by hand, once (code/shared/docs/voices.md): puts the natural voices on the "voices-1" pre-release and prints the
-# SHA-256 lines to paste into code/shared/voices.sha256 (the voices and the speech engine the builds bundle).
-# Never replaces a file that is already published: a fixed voice goes out as voices-2.
+# Run by hand, once (code/shared/docs/voices.md), on the branch the next build comes from (beta):
+# - puts the natural voices on the "voices-1" pre-release (never replacing a file already there: a fixed voice goes out
+#   as voices-2),
+# - records Muninn's library checksums (code/muninn/gradle/verification-metadata.xml, SHA-256 of every library and
+#   plugin its build uses),
+# - and commits both, with the voices' lines in code/shared/voices.sha256, to that branch as the owner.
+# Run it again after changing a Muninn library's version on purpose: it adds the new checksums and never changes one
+# already on record.
 on:
   workflow_dispatch:
 
@@ -73,19 +78,26 @@ jobs:
             (cd work && sha256sum "sherpa-onnx-static-link-onnxruntime-$ENGINE.aar" "sherpa-onnx-v$ENGINE-linux-x64-shared-lib.tar.bz2" "sherpa-onnx-v$ENGINE-win-x64-shared-MD-Release.tar.bz2")
           } > sums.txt
           cat sums.txt
+          # Lines already committed must match (a voice or engine file is never changed in place); the rest are new.
+          bad=0
+          : > new.txt
+          while read -r sum name; do
+            have=$(grep -E "^[0-9a-f]{64}  $name\$" code/shared/voices.sha256 | head -n1 | cut -d' ' -f1 || true)
+            if [ -z "$have" ]; then echo "$sum  $name" >> new.txt
+            elif [ "$have" != "$sum" ]; then echo "::error title=Hash changed::$name is $sum, voices.sha256 says $have"; bad=1; fi
+          done < sums.txt
           {
-            echo "### Paste these lines at the end of code/shared/voices.sha256"
+            echo "### New lines for code/shared/voices.sha256 (the last job commits them)"
             echo '```'
-            cat sums.txt
+            if [ -s new.txt ]; then cat new.txt; else echo "(none: every line is already there)"; fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # Lines already committed must match (a voice is never changed in place).
-          bad=0
-          while read -r sum name; do
-            have=$(grep -E "^[0-9a-f]{64}  $name\$" code/shared/voices.sha256 | cut -d' ' -f1 || true)
-            if [ -n "$have" ] && [ "$have" != "$sum" ]; then echo "::error title=Hash changed::$name is $sum, voices.sha256 says $have"; bad=1; fi
-          done < sums.txt
           exit $bad
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: voice-lines
+          path: new.txt
+          if-no-files-found: error
       - name: Publish the voices-1 pre-release (never replacing a file)
         shell: bash
         run: |
@@ -113,3 +125,96 @@ jobs:
           if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+$'; then
             echo "::error title=Latest release::GitHub's latest release is $tag, not a version: the update checks would break."; exit 1
           fi
+
+  checksums:
+    name: Muninn's library checksums
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961  # v5.7.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a  # v4.4.3
+      - name: Fonts (as the build does)
+        run: |
+          code/shared/tools/get-fonts.sh
+          d=code/muninn/app/src/main/res/font; mkdir -p $d
+          cp code/huginn/fonts/Cinzel.ttf $d/cinzel.ttf
+          cp code/huginn/fonts/Barlow-Regular.ttf $d/barlow_regular.ttf
+          cp code/huginn/fonts/Barlow-Medium.ttf $d/barlow_medium.ttf
+          cp code/huginn/fonts/Barlow-SemiBold.ttf $d/barlow_semibold.ttf
+          cp code/huginn/fonts/Barlow-Bold.ttf $d/barlow_bold.ttf
+          cp code/huginn/fonts/NotoSansRunic-Regular.ttf $d/noto_sans_runic.ttf
+      - name: Write gradle/verification-metadata.xml (SHA-256 of every library and plugin the build uses)
+        working-directory: code/muninn
+        run: |
+          set -uo pipefail
+          f=gradle/verification-metadata.xml
+          old="$RUNNER_TEMP/verification-before.xml"
+          if [ -f "$f" ]; then cp "$f" "$old"; else rm -f "$old"; fi
+          # The same tasks the build job runs, so every library it resolves is listed. Test results don't matter here
+          # (the build job runs the tests); --continue lets every task resolve its libraries.
+          env -u GITHUB_ACTIONS ./gradlew --stacktrace --continue -PciAbi=x86_64 --write-verification-metadata sha256 \
+            :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease 2>&1 | tee "$RUNNER_TEMP/gradle.log" || true
+          if [ ! -f "$f" ] || ! grep -q '<sha256 ' "$f"; then
+            echo "::error title=Library checksums::Gradle didn't write $f"; tail -n 60 "$RUNNER_TEMP/gradle.log"; exit 1
+          fi
+          grep -q "<verify-metadata>true</verify-metadata>" "$f" || { echo "::error title=Library checksums::$f doesn't turn checking on"; exit 1; }
+          # A checksum on record never changes: a library that changed upstream under the same version stops here.
+          if [ -f "$old" ]; then
+            gone=$(grep -oE '<sha256 value="[0-9a-f]{64}"' "$old" | sort -u | while read -r l; do grep -qF "$l" "$f" || echo "$l"; done)
+            [ -z "$gone" ] || { echo "::error title=Library changed::A checksum on record is gone from $f: $gone"; exit 1; }
+            if [ "$(grep -c 'also-trust' "$f")" != "$(grep -c 'also-trust' "$old")" ]; then
+              echo "::error title=Library changed::A library on record now has a different checksum (also-trust in $f). Nothing is committed."; diff "$old" "$f" | head -n 40; exit 1
+            fi
+          fi
+          echo "$(grep -c '<sha256 ' "$f") checksums."
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: verification-metadata
+          path: code/muninn/gradle/verification-metadata.xml
+          if-no-files-found: error
+
+  commit:
+    name: Commit the lines and checksums to this branch
+    needs: [voices, checksums]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: voice-lines
+          path: ${{ runner.temp }}/voice-lines
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: verification-metadata
+          path: ${{ runner.temp }}/verification
+      - name: Commit as the owner (pull before your next push)
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_REF_NAME}"
+          git config user.name "Ravenor907"
+          git config user.email "Ravenor907@users.noreply.github.com"
+          for try in 1 2 3; do
+            git fetch origin "$branch"
+            git reset --hard "origin/$branch"
+            while read -r sum name; do
+              [ -n "$name" ] || continue
+              grep -qE "^[0-9a-f]{64}  $name\$" code/shared/voices.sha256 || echo "$sum  $name" >> code/shared/voices.sha256
+            done < "$RUNNER_TEMP/voice-lines/new.txt"
+            cp "$RUNNER_TEMP/verification/verification-metadata.xml" code/muninn/gradle/verification-metadata.xml
+            git add code/shared/voices.sha256 code/muninn/gradle/verification-metadata.xml
+            if git diff --cached --quiet; then echo "Nothing new to commit."; exit 0; fi
+            git commit -q -m "Natural voices' lines and Muninn's library checksums"
+            if git push origin "HEAD:$branch"; then
+              echo "::notice title=Committed::The voices' lines and Muninn's library checksums are on $branch. Pull before your next push."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error title=Couldn't push::$branch kept moving or is protected. The lines are in this run's summary and the checksums in its artifacts."
+          exit 1

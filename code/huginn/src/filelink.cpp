@@ -822,8 +822,8 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
         return QStringLiteral("That file is empty.");
     if (fi.size() > kMaxBytes)
         return QStringLiteral("Files can be up to 4 GB.");
-    if (UltraPrivacy::blocksFile(fi.fileName()))
-        return UltraPrivacy::videoOffText();   // Ultra privacy: no videos out, as files either
+    if (UltraPrivacy::blocksPath(path))
+        return UltraPrivacy::videoOffText();   // Ultra privacy: no videos out, as files either (by name or by content)
     QString name;
     for (const QChar c : fi.fileName())
         name += c.unicode() < 0x20 || c == QLatin1Char('/') || c == QLatin1Char('\\') ? QLatin1Char('_') : c;
@@ -1054,7 +1054,8 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
         auto *keep = new QTimer(x->wait);
         connect(keep, &QTimer::timeout, this, [this, id] {
             Xfer *x = m_x.value(id);
-            if (!x || x->state != QLatin1String("offered") || x->probe || !x->sock)
+            // Ultra privacy went on: no more STUN asks (they'd go straight to the STUN server).
+            if (!x || x->state != QLatin1String("offered") || x->probe || !x->sock || x->lanOnly || !UltraPrivacy::directAllowed())
                 return;
             x->probe = new StunProbe(x->sock, this);
             connect(x->probe, &StunProbe::finished, this, [this, id] {
@@ -1068,6 +1069,68 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
         });
         keep->start(60000);
     }
+}
+
+void FileLink::ultraOn()
+{
+    // Round 19 (FIX 4): what was set up before Ultra privacy went on never goes straight over the internet after.
+    int stopped = 0;
+    const QStringList ids = m_x.keys();
+    for (const QString &id : ids) {
+        Xfer *x = m_x.value(id);
+        if (!x || x->ended || x->lanOnly || testLocal)
+            continue;
+        x->lanOnly = true;
+        // Still asking the STUN server for this side's address: the offer or answer goes with this Wi-Fi only (or, with
+        // nothing here, not at all).
+        if (x->afterStun) {
+            if (x->probe) {
+                x->probe->deleteLater();
+                x->probe = nullptr;
+            }
+            x->theirs.clear();
+            if (x->lan.valid())
+                x->theirs << x->lan;
+            x->route = QStringLiteral("direct");
+            const auto next = x->afterStun;
+            x->afterStun = nullptr;
+            next(QJsonArray());
+            continue;
+        }
+        if (x->probe) {   // a big file's keepalive ask
+            x->probe->deleteLater();
+            x->probe = nullptr;
+        }
+        // Already going over this Wi-Fi: it goes on.
+        if (x->found && x->lan.valid() && x->to == x->lan)
+            continue;
+        // Not connected yet, and they're on this Wi-Fi: only there from now on.
+        const bool here = x->lan.valid() || (!lanOf(x->peer).isEmpty() && hasF2 && hasF2(x->peer));
+        if (!x->found && here) {
+            x->route = QStringLiteral("direct");
+            x->theirs.clear();
+            if (x->lan.valid())
+                x->theirs << x->lan;
+            continue;
+        }
+        // Nothing on this Wi-Fi: a small file of mine goes by relay, anything else stops and says why.
+        ++stopped;
+        if (x->mine) {
+            if (x->vid > 0) {
+                x->back = nullptr;   // sending videos is off too: no relay copy
+                fail(x, UltraPrivacy::videoOffText(), false);
+            } else {
+                fallBack(x, QStringLiteral("Direct files are off while Ultra privacy is on. Try on the same Wi-Fi."));
+            }
+        } else {
+            // The sender hears no (without a reason, so a small file can still come by relay).
+            signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), x->id}});
+            fail(x, QStringLiteral("Stopped: direct files are off while Ultra privacy is on. Ask them to send it on the same Wi-Fi."), false);
+        }
+    }
+    if (stopped > 0)
+        Q_EMIT notice(stopped == 1 ? QStringLiteral("A direct file transfer stopped: Ultra privacy is on. Its card says what happens next.")
+                                   : QStringLiteral("%1 direct file transfers stopped: Ultra privacy is on. Their cards say what happens next.").arg(stopped));
 }
 
 void FileLink::onSignal(const QString &from, const QJsonObject &p)
@@ -1101,6 +1164,13 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         if (!trust && !lan.valid()) {
             // Addresses are only swapped with someone trusted: say no, and the sender knows why.
             signal(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}});
+            // Round 19 (interop 6): someone trusted, turned away only by Ultra privacy: said here too, at most once an hour
+            // per person (the decline itself stays without a reason, so an older sender still sends a small one by relay).
+            if (!UltraPrivacy::directAllowed() && trusted && trusted(from) && now() - m_ultraTold.value(from) > 3600000) {
+                m_ultraTold.insert(from, now());
+                Q_EMIT notice(QStringLiteral("%1 tried to send you %2 (%3). Direct files are off while Ultra privacy is on: ask for it on the same Wi-Fi.")
+                                  .arg(who(from), name, sizeText(size)));
+            }
             return;
         }
         // Not enough room for it (and a little to spare): said on both sides, never a half file.
@@ -1178,6 +1248,10 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
             return;
         x->key = key(shared, id);
         const QJsonArray cands = p.value(QStringLiteral("c")).toArray();
+        // Round 19 (FIX 4): offered before Ultra privacy went on, accepted after: only the same Wi-Fi, never their
+        // internet address.
+        if (!UltraPrivacy::directAllowed())
+            x->lanOnly = true;
         x->theirs = x->lanOnly ? QList<Stun::Address>() : directOf(cands);
         // Cap f2 (27.1): their "lan" candidate, where they are on this Wi-Fi, comes first.
         const Stun::Address lan = lanTarget(lanOf(from), cands);
@@ -1187,6 +1261,10 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         }
         if (x->wait)
             x->wait->stop();
+        if (x->theirs.isEmpty() && !UltraPrivacy::directAllowed()) {
+            fallBack(x, QStringLiteral("Direct files are off while Ultra privacy is on. Try on the same Wi-Fi."));
+            return;
+        }
         startPunch(x);
     } else if (t == QLatin1String("decline") && x->state == QLatin1String("offered")) {
         // Refused (the group's file rules, no space, they said no: 27.4) ends it. Otherwise they don't trust me with
@@ -1208,6 +1286,19 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
 void FileLink::acceptOffer(Xfer *x)
 {
     const QString id = x->id;
+    // Round 19 (FIX 4): an offer that came before Ultra privacy went on, taken after: only the same Wi-Fi, no STUN and
+    // none of their internet addresses. Not here: said no (without a reason, so the sender can send a small one by relay).
+    if (!UltraPrivacy::directAllowed() && !x->lanOnly) {
+        x->lanOnly = true;
+        x->route = QStringLiteral("direct");
+        x->theirs.clear();
+        if (!x->lan.valid()) {
+            signal(x->peer, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("id"), id}});
+            fail(x, QStringLiteral("Direct files are off while Ultra privacy is on. Ask them to send it on the same Wi-Fi."));
+            return;
+        }
+        x->theirs << x->lan;
+    }
     startSocket(x, [this, id](const QJsonArray &cands) {
         Xfer *x = m_x.value(id);
         if (!x)
@@ -1444,6 +1535,9 @@ void FileLink::onDatagram(Xfer *x)
             const quint32 a4 = h.toIPv4Address(&v4);
             if (v4)
                 h = QHostAddress(a4);   // ::ffff:a.b.c.d from a dual-stack socket
+            // Ultra privacy: only this Wi-Fi, so nothing goes back to an address that isn't theirs here.
+            if (x->lanOnly && !testLocal && !UltraPrivacy::directAllowed() && !(x->lan.valid() && CallNet::fromHost(h, port) == x->lan))
+                continue;
             x->to = CallNet::fromHost(h, port);
             x->found = true;
             // Cap f2: their address on this Wi-Fi answered, so it goes Direct; anything else is over the internet.

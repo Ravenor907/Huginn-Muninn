@@ -596,15 +596,17 @@ Window {
             if (linkPhone.visible && !prompt.visible && !confirm.visible) return linkPhone.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (backupPanel.visible && !prompt.visible && !confirm.visible) return backupPanel.prompts.concat([{ key: "back", label: "Hide buttons" }])
             // Round 17 (B1): the lock asked before Back up, Move or linking.
-            if (lockCheck.visible && !prompt.visible && !confirm.visible) return [{ key: "a", label: "Confirm" }, { key: "b", label: "Cancel" }, { key: "back", label: "Hide buttons" }]
+            // Round 19: only the buttons that work on its current step (LockCheck's own list, glyphs by the pad's style).
+            if (lockCheck.visible && !prompt.visible && !confirm.visible) return (lockCheck.prompts || []).concat([{ key: "back", label: "Hide buttons" }])
             if (setup.visible && !prompt.visible && !confirm.visible) return setup.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (prompt.visible && !confirm.visible) return prompt.prompts.concat([{ key: "back", label: "Hide buttons" }])
             if (app.overlay() === newsBanner) return newsBanner.prompts.concat([{ key: "back", label: "Hide buttons" }])
             // Round 17: no "Next section" while LB is the page's (its own LB chip says what it does) or while a voice
             // message is held on Y (LB is ignored then: Main.press).
-            const lb = app.pageOwnsLb() || Voice.recording ? [] : [{ key: "lb", label: "Next section" }]
+            // Round 19 (FIX 17): behind the lock there are no sections to move to and Settings stays shut, so neither shows.
+            const lb = app.pageOwnsLb() || Voice.recording || app.lockedOut ? [] : [{ key: "lb", label: "Next section" }]
             // Select only ever shows or hides this legend (Main.press), and Menu always opens Settings.
-            const hide = [{ key: "start", label: "Settings" }, { key: "back", label: "Hide buttons" }]
+            const hide = (app.lockedOut ? [] : [{ key: "start", label: "Settings" }]).concat([{ key: "back", label: "Hide buttons" }])
             // In voice: hold LB, then Up or Down.
             const voice = app.inVoice ? [{ key: "lb+up", label: Ui.micMuted ? "Unmute mic" : "Mute mic" },
                                          { key: "lb+down", label: Ui.deafened ? "Undeafen" : "Deafen" }] : []
@@ -999,22 +1001,56 @@ Window {
         target: Updater
         function onRemind() { app.updateLater = false }
     }
-    // Ultra privacy (src/ultraprivacy.h): Tor slow, blocked or not starting says so once each time, with Wait or Turn off
-    // Ultra privacy (back to the normal way). The same two stay in Settings › Privacy and lock while it lasts. Never over
-    // another question: it waits for that one to close.
+    // Ultra privacy (src/ultraprivacy.h): Tor slow, blocked or not starting says so once each time, with Wait (or Try
+    // again when it couldn't start) and Turn off Ultra privacy (back to the normal way). The same stay in Settings ›
+    // Privacy and lock while it lasts. Round 19: it opens by itself, so never over the lock, a ring, a call, a prompt or
+    // another question (it waits until they're gone), and it takes no press for its first half second. What its buttons
+    // do is fixed when it opens, so a "Wait" never turns into Turn off.
     property bool ultraWarned: false
+    function showUltraBanner() {
+        if (!UltraPrivacy.bannerShows) {
+            app.ultraWarned = false
+            if (confirm.visible && confirm.tag === "ultra") confirm.dismiss()
+            return
+        }
+        if (app.ultraWarned || app.touring || app.lockedOut || confirm.visible || incomingCall.visible || callPage.visible
+                || prompt.visible || lockCheck.visible || updating.visible || ctxMenu.visible) return
+        const missing = UltraPrivacy.torState === "missing"
+        app.ultraWarned = true
+        confirm.open("Ultra privacy", UltraPrivacy.bannerText, missing ? "Try again" : "Wait",
+                     () => { if (missing) UltraPrivacy.tryAgain(); else UltraPrivacy.waitLonger() }, false, false, null, "ultra")
+        confirm.otherText = "Turn off Ultra privacy"
+        confirm.otherCallback = () => {
+            if (app.lockedOut) return   // never from behind the lock
+            UltraPrivacy.turnOff()
+            Ui.say("Ultra privacy is off.")
+        }
+        app.guardOverlay(confirm)
+    }
     Connections {
         target: UltraPrivacy
-        function onChanged() {
-            if (!UltraPrivacy.bannerShows) { app.ultraWarned = false; return }
-            if (app.ultraWarned || (Ui.confirm && Ui.confirm.visible)) return
-            app.ultraWarned = true
-            Ui.sure("Ultra privacy", UltraPrivacy.bannerText, UltraPrivacy.torState === "missing" ? "Turn off Ultra privacy" : "Wait",
-                    () => { if (UltraPrivacy.torState === "missing") UltraPrivacy.turnOff(); else UltraPrivacy.waitLonger() })
-            const c = Ui.confirm
-            if (c && UltraPrivacy.torState !== "missing") {
-                c.otherText = "Turn off Ultra privacy"
-                c.otherCallback = () => { UltraPrivacy.turnOff(); Ui.say("Ultra privacy is off.") }
+        function onChanged() { app.showUltraBanner() }
+    }
+    // A ring or a call that comes while it shows takes its place (the notice comes back once they're gone).
+    Connections {
+        target: incomingCall
+        function onVisibleChanged() { if (incomingCall.visible) app.dropUltraBanner() }
+    }
+    Connections {
+        target: callPage
+        function onVisibleChanged() { if (callPage.visible) app.dropUltraBanner() }
+    }
+    function dropUltraBanner() {
+        if (confirm.visible && confirm.tag === "ultra") { confirm.dismiss(); app.ultraWarned = false }
+    }
+    // Held back by the lock, a call or another question: shown once they're gone (onTopOverlayChanged too).
+    Connections {
+        target: app
+        function onLockedOutChanged() {
+            if (app.lockedOut) app.ultraWarned = false   // the lock took it away: said again once unlocked
+            else {
+                Qt.callLater(app.showUltraBanner)
+                Qt.callLater(app.askTorChoice)
             }
         }
     }
@@ -1507,6 +1543,19 @@ Window {
     Connections {
         target: Updater
         function onNotice(text) { Ui.say(text, true) }
+        // Round 19 (FIX 8): antivirus took tor.exe away during the update. Asked once: update without Tor, or not now
+        // (allow tor.exe, then Check now). Never over the lock, a call or another question: it waits for them.
+        function onTorChoice() { app.torAskPending = true; app.askTorChoice() }
+    }
+    property bool torAskPending: false
+    function askTorChoice() {
+        if (!torAskPending || !Updater.torBlocked) { torAskPending = false; return }
+        if (touring || lockedOut || overlay() !== null) return   // onTopOverlayChanged and the unlock ask again
+        torAskPending = false
+        confirm.open("Update without Tor?", Updater.torBlockedText(), "Update without Tor", () => Updater.updateWithoutTor(),
+                     false, false, null, "updatetor")
+        confirm.cancelText = "Not now"
+        app.guardOverlay(confirm)
     }
     // Opening a received program (or a file whose name hides what it is) asks first, wherever Open was pressed.
     Connections {
@@ -1617,12 +1666,15 @@ Window {
         // that opens with nothing over it is guarded where it opens.)
         if (topBefore !== null && selfOpening(topOverlay)) guardOverlay(topOverlay)
         topBefore = topOverlay
+        // Round 19: the Ultra privacy notice held back by a question, ring or call shows once nothing is open.
+        if (topOverlay === null && UltraPrivacy.bannerShows && !ultraWarned) Qt.callLater(showUltraBanner)
+        if (topOverlay === null && torAskPending) Qt.callLater(askTorChoice)
     }
     property var topBefore: null
     function selfOpening(o) {
         if (o === null) return false
         if (o === incomingCall || o === newsBanner) return true
-        return o === confirm && (confirm.tag === "localsend" || confirm.tag === "older")
+        return o === confirm && (confirm.tag === "localsend" || confirm.tag === "older" || confirm.tag === "ultra" || confirm.tag === "updatetor")
     }
     // The lock (the panic lock too) throws away a voice message being held, never sends it.
     readonly property bool screenDown: Vault.screenLocked

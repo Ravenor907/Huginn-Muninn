@@ -161,6 +161,15 @@ class MainActivity : ComponentActivity() {
         else accept()
     }
 
+    /** After a restore or move from a device that had "Erase after too many tries" on: once, that it's off here. */
+    private suspend fun eraseNote() {
+        val prefs = getSharedPreferences("muninn", MODE_PRIVATE)
+        if (!prefs.getBoolean(io.github.ravenor907.muninn.net.Backup.ERASE_NOTE, false)) return
+        prefs.edit().remove(io.github.ravenor907.muninn.net.Backup.ERASE_NOTE).apply()
+        val on = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { try { app.vault.tries.erase } catch (_: Exception) { false } }
+        if (!on) Ui.say("Erase after too many tries doesn't come along in a backup or a move, so it's off here. Turn it on in Settings › Privacy and lock if you want it.")
+    }
+
     /** A lock shorter than the current minimum (vault.weak): suggest a stronger one, once. */
     private fun suggestStronger() {
         val prefs = getSharedPreferences("muninn", MODE_PRIVATE)
@@ -387,6 +396,8 @@ class MainActivity : ComponentActivity() {
         // either way (AppLock lives for the whole process). "Right away": the lock goes up now, so nothing else is ever
         // drawn on the way back. A picker Muninn opened itself (a photo, a file, Restore) doesn't count: its result must come back.
         val away = android.os.SystemClock.elapsedRealtime().coerceAtLeast(1L)
+        // A wait after wrong tries: what's left is saved now (off the main thread), so a restart while away loses little of it.
+        if (app.vault.hasPassword && !isChangingConfigurations) Thread { app.vault.tries.snapshot() }.start()
         io.github.ravenor907.muninn.ui.AppLock.onHide(app.vault.hasPassword && !ciSkip, away,
             io.github.ravenor907.muninn.ui.Picking.lockAfter(app.identity.lockAfter, io.github.ravenor907.muninn.ui.Picking.since, away),
             isChangingConfigurations)
@@ -519,7 +530,9 @@ class MainActivity : ComponentActivity() {
         if (!ready || appLocked || panic || vaultLocked) {
             // Locked again: a linked tablet's own chats are sealed away again too.
             LaunchedEffect(Unit) { io.github.ravenor907.muninn.net.Link.showOwn(false) }
-            LockScreen(app) { ok -> if (ok) { io.github.ravenor907.muninn.ui.AppLock.opened(); Ui.unpark(); app.startAsync { startNet(); suggestStronger() } } }
+            // Runs even when the lock screen has already gone (a cold start swaps it for "Opening" as the vault opens). A window
+            // closed meanwhile (dark mode, DeX) leaves the rest to the new one, which starts the net itself.
+            LockScreen(app) { ok -> if (ok) { io.github.ravenor907.muninn.ui.AppLock.opened(); Ui.unpark(); app.startAsync { if (!isDestroyed) { startNet(); suggestStronger() } } } }
             return
         }
         // Restored after "Forgot it?": a new lock first, with no Skip, before any chat shows (the old lock isn't in the backup).
@@ -568,6 +581,8 @@ class MainActivity : ComponentActivity() {
             io.github.ravenor907.muninn.screens.LinkYourPhone(app) { io.github.ravenor907.muninn.screens.LinkUi.companionOpen = false }
             return
         }
+        // Restored or moved here from a device with "Erase after too many tries" on: it never comes along, so say so once.
+        LaunchedEffect(Unit) { eraseNote() }
         val request by app.net.request.collectAsState()
         val ask by Ui.ask.collectAsState()
         val toast by Ui.toast.collectAsState()

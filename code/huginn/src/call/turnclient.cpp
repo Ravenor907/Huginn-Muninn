@@ -47,6 +47,12 @@ void CallNet::resolveBoth(const QString &host, QObject *ctx, std::function<void(
         QTimer::singleShot(0, ctx, [done, literal, v4] { done(v4 ? literal : QHostAddress(), v4 ? QHostAddress() : literal); });
         return;
     }
+    // Round 19 (interop 5): with Ultra privacy on, a name is never looked up here (the network's resolver would see
+    // it). Calls are off then anyway; this fails closed if anything still asks.
+    if (UltraPrivacy::on()) {
+        QTimer::singleShot(0, ctx, [done] { done(QHostAddress(), QHostAddress()); });
+        return;
+    }
     QPointer<QObject> guard(ctx);
     QHostInfo::lookupHost(host, ctx, [host, ctx, guard, done, tries](const QHostInfo &info) {
         if (!guard)

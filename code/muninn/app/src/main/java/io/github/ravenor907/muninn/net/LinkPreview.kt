@@ -24,8 +24,9 @@ object LinkPreview {
         Net.client.newBuilder().callTimeout(6, TimeUnit.SECONDS).connectTimeout(4, TimeUnit.SECONDS)
             .followRedirects(true).followSslRedirects(false)
             .dns(object : okhttp3.Dns {
+                // Ultra privacy turned on while a preview was on its way: no name is looked up here any more.
                 override fun lookup(hostname: String): List<java.net.InetAddress> =
-                    okhttp3.Dns.SYSTEM.lookup(hostname).filter { publicAddress(it) }.ifEmpty { throw java.net.UnknownHostException("not a public address") }
+                    if (!UltraPrivacy.previewsAllowed) throw java.net.UnknownHostException("Ultra privacy") else okhttp3.Dns.SYSTEM.lookup(hostname).filter { publicAddress(it) }.ifEmpty { throw java.net.UnknownHostException("not a public address") }
             })
             .addNetworkInterceptor { chain ->
                 val req = chain.request()
@@ -95,7 +96,7 @@ object LinkPreview {
     } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
 
     private fun get(url: String, max: Int, type: String): ByteArray? {
-        if (!allowedUrl(url)) return null
+        if (!UltraPrivacy.previewsAllowed || !allowedUrl(url)) return null
         val req = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0 (compatible; link preview)").header("Accept", if (type.endsWith("/")) "image/*" else type).build()
         client.newCall(req).execute().use { r ->
             if (!r.isSuccessful) return null

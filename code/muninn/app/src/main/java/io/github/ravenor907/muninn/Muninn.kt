@@ -54,9 +54,26 @@ class Muninn : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Round 19: Tor runs in its own process (":tor", AndroidManifest), which starts this Application too. Nothing of
+        // Muninn's runs there: no vault, relays, Nearby or calls.
+        if (io.github.ravenor907.muninn.net.TorRunner.isTorProcess(this)) return
         // A Kids' Device whose Muninn keeps crashing as it starts: only the updater runs (tv/SafeStart).
         io.github.ravenor907.muninn.tv.SafeStart.begin(this)
         vault = Vault(this)
+        // The phone is shutting down or restarting: what's left of a running wait after wrong tries is saved now, so the
+        // restart loses none of it.
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(this, object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: android.content.Context, i: Intent) {
+                    val done = goAsync()
+                    Thread { try { vault.tries.snapshot() } finally { done.finish() } }.start()
+                }
+            }, android.content.IntentFilter().apply { addAction(Intent.ACTION_SHUTDOWN); addAction(Intent.ACTION_REBOOT) },
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        } catch (_: Exception) {}
+        // Video copies left from a send cut short when Muninn closed (no send runs yet at start). Full-size copies
+        // waiting to go live in noBackupFilesDir/videos-out instead, and stay.
+        Thread { try { io.github.ravenor907.muninn.net.VideoPick.clearOld(this, false) } catch (_: Exception) {} }.start()
         // A panic lock from before the process ended stays on: no names on any notification until unlocked.
         io.github.ravenor907.muninn.ui.Panic.restore(this, vault.hasPassword)
         identity = Identity(this, vault)

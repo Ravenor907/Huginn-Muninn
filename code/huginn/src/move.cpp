@@ -964,8 +964,9 @@ void Move::stopMoving(const QString &note)
 
 bool Move::abort(const QString &secret)
 {
-    // Stopping a move under way needs the person's own password or pattern.
-    if (!m_locked || !m_vault->unlock(secret))
+    // Stopping a move under way needs the person's own password or pattern. Round 19 (owner decision): inside the open
+    // app it's never counted as a try at the lock (no wait, no erase); behind the lock screen it is one.
+    if (!m_locked || !m_vault->checkLock(secret))
         return false;
     stopMoving(QStringLiteral("Moving stopped. This computer is yours again."));
     return true;

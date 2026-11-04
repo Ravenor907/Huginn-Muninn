@@ -140,7 +140,8 @@ Rectangle {
         const body = (isToday ? "Stanza " + shown.n + "\n\n" : "") + shown.verse + "\n\nWhat it means\n" + shown.means
         const listEarlier = () => { quiet(); page.earlierVerses() }
         Ui.sure(isToday ? "Today's verse" : "Stanza " + shown.n, body, speaks ? "Read aloud" : "Earlier verses",
-                speaks ? () => { ReadAloud.speak(shown.verse.replace(/\n/g, " ") + ". What it means. " + shown.means); page.openVerse(shown) } : listEarlier,
+                speaks ? () => { ReadAloud.speak(shown.verse.replace(/\n/g, " ") + ". What it means. " + shown.means); page.openVerse(shown)
+                                  if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } : listEarlier,
                 false, false, quiet)
         const c = Ui.confirm
         if (!c) return
@@ -227,8 +228,7 @@ Rectangle {
         : more.prompts.length ? more.prompts
         : finder.visible && !Voice.recording ? [{ key: "dpad", label: "Older or newer" }, { key: "a", label: "Type" }, { key: "b", label: "Close" }]
         : Voice.recording ? [{ key: "y", label: "Let go: send" }, { key: "b", label: "Cancel" }]
-        : lock.visible ? [{ key: "a", label: lock.usePattern ? "Start or finish" : "Type password" }].concat(!lock.asks ? [{ key: "lb", label: "Pattern or password" }] : [])
-                         .concat(lock.canForget ? [{ key: "y", label: "Forgot it?" }] : []).concat(lock.mode === "renew" ? [] : [{ key: "b", label: "Back" }])
+        : lock.visible ? lock.prompts   // only the buttons that do something on its current step (LockPanel)
         : showCode ? [{ key: "a", label: "Copy link" }, { key: "x", label: "New code" }, { key: "b", label: "Close" }]
         : zone === "messages" && fileStrip.focusIndex >= 0 ? [{ key: "a", label: fileStrip.focusLabel() }, { key: "b", label: "Back" }]
         : reactPicker.visible || compose.emojiShown || threadBox.emojiShown ? [{ key: "a", label: "Pick" }, { key: "b", label: "Close" }]
@@ -237,7 +237,7 @@ Rectangle {
                                                                                   : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
-        : zone === "list" && entries[row] && entries[row].kind === "verse" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Hide for today" }, { key: "b", label: "Back" }]
+        : zone === "list" && entries[row] && entries[row].kind === "verse" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Options" }, { key: "b", label: "Back" }]
         : zone === "list" && entries[row] && entries[row].kind === "newfrom" ? [{ key: "a", label: unreadChats.length === 1 ? "Open" : "Go to them" },
                                                                              { key: "lt", label: "Hide" }, { key: "b", label: "Back" }]
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
@@ -2113,7 +2113,7 @@ Rectangle {
             return true
         case "x":
             if (zone === "list" && entries[row] && entries[row].kind === "newfrom") hideNewFrom()   // the "New from" bar's X
-            else if (zone === "list" && entries[row] && entries[row].kind === "verse") hideVerse()   // today's verse: hidden for today
+            else if (zone === "list" && entries[row] && entries[row].kind === "verse") rowContext(entries[row])   // today's verse: Open or Hide for today (LT is X here, so one press never hides it)
             else if (zone === "list") listOptions()
             else if (zone === "messages" && sel >= 0) options()
             else if (zone === "messages" && openKey !== "") chatMenu()

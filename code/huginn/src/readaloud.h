@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <atomic>
+#include <functional>
 #include <memory>
 
 class QAudioOutput;
@@ -35,8 +36,13 @@ class VoiceEngine;
 class ReadAloud : public QObject
 {
     Q_OBJECT
-    // Something can read right now, or will once the natural voice is in (the engine is bundled).
+    // Something can read: the natural voice (in, or on its way: its line is in voices.sha256), or the computer's own
+    // voice where one can speak (in the Flatpak only through the host's speech-dispatcher).
     Q_PROPERTY(bool available READ available NOTIFY changed)
+    // The natural voice is offered in this build: the engine is here and the chosen voice has its line in
+    // voices.sha256. False until the voices are published: Settings then hides the voice rows and says
+    // "Natural voices aren't ready yet".
+    Q_PROPERTY(bool natural READ natural NOTIFY changed)
     Q_PROPERTY(bool speaking READ speaking NOTIFY changed)
     // "f" (Female, Alba) or "m" (Male, northern English).
     Q_PROPERTY(QString voice READ voice WRITE setVoice NOTIFY changed)
@@ -46,13 +52,15 @@ class ReadAloud : public QObject
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
     // Any voice files are kept (Delete voices shows).
     Q_PROPERTY(bool hasFiles READ hasFiles NOTIFY changed)
-    // One line for Settings: "Ready", "Downloading, 40%", "Waits for Wi-Fi"...
-    Q_PROPERTY(QString status READ status NOTIFY changed)
+    // One line for Settings: "Ready", "Downloading, 40%", "Waits for Wi-Fi"... Its own signal, so a download's
+    // percentage doesn't rebuild every Settings row.
+    Q_PROPERTY(QString status READ status NOTIFY statusChanged)
 public:
     explicit ReadAloud(QObject *parent = nullptr);
     ~ReadAloud() override;
 
     bool available() const;
+    bool natural() const;
     bool speaking() const { return m_speaking; }
     QString voice() const;
     void setVoice(const QString &v);
@@ -69,10 +77,17 @@ public:
     Q_INVOKABLE void prepare();
     // Deletes every downloaded voice (the computer's own voice reads until it's downloaded again).
     Q_INVOKABLE void deleteVoices();
+    // main.cpp: true while nothing may be read (the lock is up, the screen lock shows, a call is on). speak() checks it.
+    void setBlocker(std::function<bool()> blocked) { m_blocked = std::move(blocked); }
 
     // ---- the parts the self-test checks (the same rules as Muninn's ReadAloudText)
-    // What is read for a message: links as "link", no emoji, marks or @, spaces tidied.
+    // What is read for a message: links as "link", no emoji, marks or @, no control characters or markup, words of at
+    // most kMaxWord letters, spaces tidied, at most kMaxText long.
     static QString plain(const QString &text);
+    // What the natural voice's engine (and its eSpeak NG) is given for one piece: Latin letters (with at most two
+    // accents each), digits 0 to 9, spaces and . , ! ? ; : ' " ( ) - / % + only; anything else becomes a space. No
+    // brackets, angle brackets or backslashes, so eSpeak's phoneme input ([[ ]]) and SSML can never be reached.
+    static QString forEngine(const QString &piece);
     // [text] in pieces to speak one at a time: sentences and lines, none longer than kMaxPiece.
     static QStringList pieces(const QString &text);
     // code/shared/voices.sha256: file name to SHA-256 (lowercase hex). Comments and odd lines are skipped.
@@ -88,11 +103,14 @@ public:
     static bool selfTest();
 
     static constexpr int kMaxPiece = 400;
+    static constexpr int kMaxText = 4000;
+    static constexpr int kMaxWord = 40;
     static constexpr qint64 kMaxDownload = 160 * 1024 * 1024;
     static constexpr qint64 kMaxFile = 120 * 1024 * 1024;
 
 Q_SIGNALS:
     void changed();
+    void statusChanged();
 
 private:
     friend class VoiceEngine;
@@ -105,11 +123,16 @@ private:
     void onEngineFailed(quint64 token, const QString &why);
     void startDownload();
     void downloadDone();
-    void downloadFailed(const QString &why, bool later);
+    // Says [why], and tries again in [retryMs] (0: not on its own).
+    void downloadFailed(const QString &why, int retryMs);
     void cleanOther();
-    void releaseEngine();
+    // The engine lets go of the voice's files on its thread, then [then] runs here (never blocking the window).
+    void releaseEngine(std::function<void()> then);
     bool meteredNow() const;
     void loadDeviceVoice();
+    bool deviceCan() const;
+    void networkMoved();
+    void recoverUnpacked();
 
     QThread *m_thread = nullptr;
     VoiceEngine *m_engine = nullptr;
@@ -128,6 +151,10 @@ private:
     QFile *m_part = nullptr;
     QCryptographicHash *m_sha = nullptr;
     QString m_downloading;
+    // Download tries in a row that failed (the next try comes sooner for the first few).
+    int m_failures = 0;
+    // The network changed (or the computer woke) while downloading: the cut-off reply resumes at once.
+    bool m_resumeNow = false;
     qint64 m_got = 0;
     qint64 m_base = 0;
     qint64 m_total = 0;
@@ -138,5 +165,13 @@ private:
     QTextToSpeech *m_device = nullptr;
 #endif
     bool m_deviceOk = false;
+    // The computer's own voice failed to start (no speech service): not offered again this run.
+    bool m_deviceFailed = false;
     const bool m_engineThere;
+    // The engine wouldn't load or start, or stopped Huginn twice mid-sentence: the computer's own voice reads.
+    bool m_engineBroken = false;
+    // Voice files are being deleted (the engine is letting go of them first).
+    bool m_deleting = false;
+    QStringList m_lastParts;
+    std::function<bool()> m_blocked;
 };

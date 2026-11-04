@@ -1,4 +1,5 @@
 #include "roommanager.h"
+#include "../ultraprivacy.h"
 
 #include "audioio.h"
 #include "../settings.h"
@@ -355,6 +356,9 @@ QString RoomManager::join(const QString &g, const QString &ch)
 {
     if (!opusAvailable())
         return QStringLiteral("Calls aren't available in this build.");
+    // Owner decision (round 19): voice rooms and group calls are off with Ultra privacy, as 1:1 calls are.
+    if (!UltraPrivacy::callsAllowed())
+        return UltraPrivacy::callsOffText() + QStringLiteral(" Turn it off in Settings › Privacy and lock to join.");
     if (m_calls && m_calls->inCall())
         return QStringLiteral("Hang up the call first.");
     if (!RoomWire::isRoomId(ch))
@@ -849,6 +853,11 @@ void RoomManager::onRoomMessage(const QString &from, const QJsonObject &msg)
         if (here || (ringing() && m_ringG == g && m_ringCh == ch))
             return;   // in it already, or the same ring again (6.5 step 1)
         const bool busy = inRoom() || (m_calls && (m_calls->inCall() || m_calls->state() == QLatin1String("incoming")));
+        // Ultra privacy: never rings; a line in the group says why.
+        if (fresh && !UltraPrivacy::callsAllowed()) {
+            Q_EMIT logged(g, QStringLiteral("Missed group call from %1 · Calls are off while Ultra privacy is on").arg(nameOf(g, from)), true);
+            return;
+        }
         if (!fresh || busy || ringing()) {
             const QString text = QStringLiteral("Missed group call from %1").arg(nameOf(g, from));
             Q_EMIT finished(text);
@@ -882,7 +891,8 @@ void RoomManager::onRoomOffer(const QString &from, const QJsonObject &msg)
     if (why == QLatin1String("signature") || why == QLatin1String("malformed") || why == QLatin1String("stale"))
         return;
     const QJsonObject st = groupState ? groupState(g) : QJsonObject();
-    if (!isIn(g, ch) || !GroupWire::isMember(st, from) || why == QLatin1String("codec") || (barred && barred(g, from))) {
+    if (!isIn(g, ch) || !GroupWire::isMember(st, from) || why == QLatin1String("codec") || (barred && barred(g, from))
+        || !UltraPrivacy::callsAllowed()) {
         m_signal->send(from, QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), call}});
         return;
     }

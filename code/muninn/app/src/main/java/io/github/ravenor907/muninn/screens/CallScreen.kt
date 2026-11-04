@@ -393,6 +393,8 @@ private fun status(c: CallManager.Ui): String {
             "dropped" -> "Call dropped"
             "missed" -> "Missed call"
             "error" -> "Call failed"
+            // Ultra privacy turned on during the call: calls are off while it's on.
+            "ultra" -> "Call ended: calls are off while Ultra privacy is on"
             else -> "Call ended"
         }
     }

@@ -21,7 +21,12 @@ object Backup {
     private const val PREFS = "muninn"
     /** Settings that belong to this phone, not to the person: never copied over. */
     private val phoneOnly = setOf("fingerprint", "lockFails", "lockAt", "lockWait", "lockBoot", "lockErase", "unlockRecall", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
-        RESTORED_AT, RESTORE_ANNOUNCE)
+        RESTORED_AT, RESTORE_ANNOUNCE, "lockSeq", "lockLeft", "lockWallEnd", "lockChecking", ERASE_NOTE)
+    /**
+     * "Erase after too many tries" belongs to the phone and never comes along, so a backup or move made with it on says
+     * so, and the device it's put back on says once that it's off there ([ERASE_NOTE] then set; MainActivity shows it).
+     */
+    const val ERASE_NOTE = "eraseNote"
     /** When a backup was last restored here (ms): for 7 days a relay envelope for a day key not here yet waits (see Chat). */
     const val RESTORED_AT = "restoredAt"
     /** A backup was restored: a new day key goes to every e1 contact once the chats open (see Chat). */
@@ -152,6 +157,7 @@ object Backup {
             }
             o.put(k, JSONObject().put("t", t).put("v", if (v is Set<*>) JSONArray(v.map { it.toString() }) else v))
         }
+        if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("lockErase", false)) o.put(ERASE_NOTE, JSONObject().put("t", "b").put("v", true))
         return o.toString()
     }
 
@@ -160,6 +166,8 @@ object Backup {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val e = prefs.edit()
         prefs.all.keys.filter { it !in phoneOnly }.forEach { e.remove(it) }
+        // Erase was on where this came from: said once here (it stays off until turned on here).
+        if (o.optJSONObject(ERASE_NOTE)?.optBoolean("v") == true) e.putBoolean(ERASE_NOTE, true)
         o.keys().forEach { k ->
             if (k in phoneOnly) return@forEach
             val x = o.optJSONObject(k) ?: return@forEach

@@ -149,4 +149,28 @@ class UltraPrivacyTest {
         val v = Net.client.newBuilder().callTimeout(3, TimeUnit.SECONDS).build()
         assertTrue(v.proxySelector === UltraPrivacy.selector)
     }
+
+    @Test
+    fun aVideoIsKnownByItsFirstBytes() {
+        // The same cases as Huginn's self-test (ultraprivacy.cpp).
+        fun b(vararg parts: Any): ByteArray = parts.fold(ByteArray(0)) { acc, p -> acc + when (p) { is String -> p.toByteArray(Charsets.ISO_8859_1); is Int -> byteArrayOf(p.toByte()); else -> ByteArray(0) } }
+        assertTrue(UltraPrivacy.looksLikeVideo(b(0, 0, 0, 0x18, "ftypmp42", 0, 0, 0, 0)))
+        assertTrue(UltraPrivacy.looksLikeVideo(b(0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01, 0x42, 0xF7, 0x81)))
+        assertTrue(UltraPrivacy.looksLikeVideo(b("RIFF", 0x10, 0, 0, 0, "AVI LIST")))
+        assertFalse(UltraPrivacy.looksLikeVideo(b(0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, "JFIF", 0x00, 0x01, 0x01, 0x00)))
+        assertFalse(UltraPrivacy.looksLikeVideo(b("hello there, nothing here")))
+        assertFalse(UltraPrivacy.looksLikeVideo(b(0, 0, 0, 0x18, "ftypheic", 0, 0, 0, 0)))
+        assertFalse(UltraPrivacy.looksLikeVideo(b(0, 0, 0, 0x18, "ftypM4A ", 0, 0, 0, 0)))
+        // A video renamed: blocked by what it is, only while Ultra privacy is on.
+        val f = java.io.File.createTempFile("ultra", ".bin")
+        try {
+            f.writeBytes(b(0, 0, 0, 0x18, "ftypisom", 0, 0, 0, 0) + ByteArray(100))
+            UltraPrivacy.use(false)
+            assertFalse(UltraPrivacy.blocksFile(f, "clip.bin"))
+            UltraPrivacy.use(true)
+            assertTrue(UltraPrivacy.blocksFile(f, "clip.bin"))
+            f.writeBytes(b("plain text, not a video at all"))
+            assertFalse(UltraPrivacy.blocksFile(f, "notes.txt"))
+        } finally { f.delete() }
+    }
 }

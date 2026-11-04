@@ -978,8 +978,8 @@ bool Link::openOwn(const QString &secret)
     ensureLoaded();
     if (!m_chat->ready())
         return false;
-    // The app lock's own check (a wrong one counts as a wrong try, like on the lock screen).
-    if (m_chat->m_vault->hasLock() && !m_chat->m_vault->unlock(secret))
+    // The app lock's own check, inside the open app (round 19, owner decision): never counted toward a wait or the erase.
+    if (m_chat->m_vault->hasLock() && !m_chat->m_vault->checkLock(secret))
         return false;
     m_ownOpen = true;
     Q_EMIT changed();

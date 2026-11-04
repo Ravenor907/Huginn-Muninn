@@ -122,7 +122,8 @@ object FullScreenKeep {
     fun beforeInstall(c: Context, version: String, how: String) {
         val e = prefs(c).edit().putString(HOW, FsiRules.note(version, how))
         allowed(c)?.let { e.putInt(SEEN_ON, if (it) 1 else 0) }
-        e.apply()
+        // Round 19: written now (commit, not apply): the install ends this process right away.
+        e.commit()
     }
 
     /**
@@ -180,6 +181,9 @@ object FullScreenKeep {
                     setAppPackageName(c.packageName)
                     setInstallReason(PackageManager.INSTALL_REASON_USER)
                     setSize(apk.length())
+                    // Round 19: Android still asks before installing, also once Muninn is the installer of record (the
+                    // manifest's UPDATE_PACKAGES_WITHOUT_USER_ACTION would otherwise let it install and close with no question).
+                    if (android.os.Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED)
                     // Android's own installer asks for DENIED here on every install; Muninn asks for it to stay on.
                     if (FsiRules.sessionGrants(on))
                         setPermissionState(Manifest.permission.USE_FULL_SCREEN_INTENT, PackageInstaller.SessionParams.PERMISSION_STATE_GRANTED)

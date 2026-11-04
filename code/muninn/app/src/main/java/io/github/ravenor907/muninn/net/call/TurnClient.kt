@@ -320,6 +320,8 @@ class TurnClient(
          */
         fun lookup(host: String, tries: Int = 3): InetAddress? {
             if (host.all { it.isDigit() || it == '.' } || host.contains(':')) return CallLogic.literal(host)
+            // Ultra privacy: names are never looked up with the system resolver (calls are off then anyway).
+            if (io.github.ravenor907.muninn.net.UltraPrivacy.on) return null
             repeat(tries) { n ->
                 if (n > 0) try { Thread.sleep(1_000) } catch (e: InterruptedException) { return null }
                 try {
@@ -333,6 +335,7 @@ class TurnClient(
         /** The IPv6 address of [host] (one lookup), or null. An IP literal has no other address: null. */
         fun lookup6(host: String): InetAddress? {
             if (host.all { it.isDigit() || it == '.' } || host.contains(':')) return null
+            if (io.github.ravenor907.muninn.net.UltraPrivacy.on) return null
             return try { InetAddress.getAllByName(host).firstOrNull { it is Inet6Address } } catch (e: Exception) { null }
         }
     }

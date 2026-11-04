@@ -21,6 +21,7 @@ import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
+import androidx.media3.transformer.EditedMediaItemSequence
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
@@ -34,16 +35,23 @@ import kotlin.coroutines.resume
 /**
  * Cap v3 (protocol.md 29): a video picked from the phone, read ([probe]) and, when it's over the limits, converted with
  * Media3 Transformer ([fullCopy], [relayCopy]), which keeps the picture upright and uses the phone's own H.264 encoder.
+ * Only plain H.264 and AAC in an MP4 goes as it is; anything else (HEVC, AV1, 10-bit, HDR) is converted. Every copy has
+ * its location and camera details taken out (Mp4Scrub) before it goes, as photos do.
  * Low-end phones: no 1080p encoder or little memory makes the full copy 720p; a copy that fails is tried once smaller
  * (720p, then 480p) before giving up with a plain reason. Nothing here touches the network.
  */
 @OptIn(UnstableApi::class)
 object VideoPick {
-    /** Where copies are made (deleted once sent; whatever is left is cleared on the next pick). */
+    /**
+     * Where copies are made: a relay copy is read and deleted at once, a full copy once Chat.sendVideoFull has given each
+     * member their own name for it in noBackupFilesDir/videos-out (kept there until FileLink is done with it, up to a day).
+     */
     fun dir(context: Context): File = File(context.cacheDir, "videos").also { it.mkdirs() }
 
-    /** Clears copies left from before (a pick that was closed part way). */
-    fun clearOld(context: Context) { dir(context).listFiles()?.forEach { if (System.currentTimeMillis() - it.lastModified() > 3_600_000L) it.delete() } }
+    /** Clears copies left from before (a send cut short when Muninn closed): all of them, unless a send is running ([busy]). */
+    fun clearOld(context: Context, busy: Boolean) {
+        if (!busy) dir(context).listFiles()?.forEach { it.delete() }
+    }
 
     /** What [uri] is, or null if it isn't a video Android can read. */
     fun probe(context: Context, uri: Uri): GroupVideo.Info? {
@@ -59,34 +67,71 @@ object VideoPick {
                 if (Build.VERSION.SDK_INT >= 28 && ms > 0) {
                     r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_FRAME_COUNT)?.toLongOrNull()?.let { n -> fps = n * 1000f / ms }
                 }
-                val (trackFps, audio) = tracks(context, uri)
-                if (trackFps > 0f) fps = trackFps
-                if (w <= 0 || h <= 0 || ms <= 0) null else GroupVideo.Info(w, h, rot, fps, ms, size(context, uri), audio)
+                val t = tracks { it.setDataSource(context, uri, null) }
+                if (t.fps > 0f) fps = t.fps
+                val plain = t.plain && GroupVideo.isMp4Head(head(context, uri))
+                if (w <= 0 || h <= 0 || ms <= 0) null else GroupVideo.Info(w, h, rot, fps, ms, size(context, uri), t.audioBps, plain)
             }
         } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null } finally {
             try { r.release() } catch (_: Exception) {}
         }
     }
 
-    /** The video track's frame rate and the sound's bitrate, as the file says (0 when it doesn't). */
-    private fun tracks(context: Context, uri: Uri): Pair<Float, Int> {
+    /** The file's first bytes (for its "ftyp"), or nothing. */
+    private fun head(context: Context, uri: Uri): ByteArray = try {
+        context.contentResolver.openInputStream(uri)?.use { i -> val b = ByteArray(12); var n = 0
+            while (n < b.size) { val r = i.read(b, n, b.size - n); if (r <= 0) break; n += r }
+            b.copyOf(n) } ?: ByteArray(0)
+    } catch (_: Exception) { ByteArray(0) }
+
+    /**
+     * The video track's frame rate, the sound's bitrate (0 when the file doesn't say), and [plain]: GroupVideo.plainCodecs
+     * for the first video track and the first sound track (the container is checked by the caller).
+     */
+    private class Tracks(val fps: Float, val audioBps: Int, val plain: Boolean)
+
+    private fun intOf(f: MediaFormat, key: String): Int =
+        if (!f.containsKey(key)) -1 else try { f.getInteger(key) } catch (_: Exception) { -1 }
+
+    private fun tracks(source: (MediaExtractor) -> Unit): Tracks {
         val x = MediaExtractor()
         return try {
-            x.setDataSource(context, uri, null)
+            source(x)
             var fps = 0f
             var audio = 0
+            var video: MediaFormat? = null
+            var sound: String? = null
             for (i in 0 until x.trackCount) {
                 val f = x.getTrackFormat(i)
                 val mime = f.getString(MediaFormat.KEY_MIME).orEmpty()
-                if (mime.startsWith("video/") && f.containsKey(MediaFormat.KEY_FRAME_RATE))
-                    fps = try { f.getInteger(MediaFormat.KEY_FRAME_RATE).toFloat() } catch (_: Exception) { try { f.getFloat(MediaFormat.KEY_FRAME_RATE) } catch (_: Exception) { 0f } }
-                if (mime.startsWith("audio/") && f.containsKey(MediaFormat.KEY_BIT_RATE))
-                    audio = try { f.getInteger(MediaFormat.KEY_BIT_RATE) } catch (_: Exception) { 0 }
+                if (mime.startsWith("video/") && video == null) {
+                    video = f
+                    if (f.containsKey(MediaFormat.KEY_FRAME_RATE))
+                        fps = try { f.getInteger(MediaFormat.KEY_FRAME_RATE).toFloat() } catch (_: Exception) { try { f.getFloat(MediaFormat.KEY_FRAME_RATE) } catch (_: Exception) { 0f } }
+                }
+                if (mime.startsWith("audio/") && sound == null) {
+                    sound = mime
+                    if (f.containsKey(MediaFormat.KEY_BIT_RATE)) audio = try { f.getInteger(MediaFormat.KEY_BIT_RATE) } catch (_: Exception) { 0 }
+                }
             }
-            fps to audio
-        } catch (e: Exception) { 0f to 0 } finally {
+            val v = video
+            val plain = v != null && GroupVideo.plainCodecs(true, v.getString(MediaFormat.KEY_MIME).orEmpty(), intOf(v, MediaFormat.KEY_PROFILE),
+                intOf(v, MediaFormat.KEY_COLOR_TRANSFER), intOf(v, MediaFormat.KEY_COLOR_STANDARD), sound)
+            Tracks(fps, audio, plain)
+        } catch (e: Exception) { Tracks(0f, 0, false) } finally {
             try { x.release() } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * A copy made here is ready to go: its location and camera details are out (Mp4Scrub), and it is plain H.264 and AAC
+     * in an MP4 (an HDR source the phone couldn't map to SDR isn't). Deleted when it isn't.
+     */
+    private fun ready(out: File): Boolean {
+        val ok = out.length() > 0 && Mp4Scrub.scrubFile(out) && tracks { it.setDataSource(out.absolutePath) }.plain &&
+            GroupVideo.isMp4Head(try { out.inputStream().use { i -> ByteArray(12).also { b -> i.read(b) } } } catch (_: Exception) { ByteArray(0) })
+        if (!ok) out.delete()
+        return ok
     }
 
     private fun size(context: Context, uri: Uri): Long {
@@ -117,17 +162,28 @@ object VideoPick {
         context.contentResolver.openInputStream(uri)?.use { i -> out.outputStream().use { o -> i.copyTo(o) } } != null && out.length() > 0
     } catch (_: Exception) { out.delete(); false }
 
+    // The sizes copies are tried at (long side, short side): 1080p, 720p, and the old 480p video message size.
+    private val P1080 = GroupVideo.FULL_LONG to GroupVideo.FULL_SHORT
+    private val P720 = GroupVideo.RELAY_LONG to GroupVideo.RELAY_SHORT
+    private val P480 = 854 to Videos.SIDE
+
     /**
-     * The full copy (1080p30 at most) of [uri] into [out]: as it is when it's within the limits, else converted.
-     * [clip]: start and end in ms, or null for all of it. Null when made, else what to say.
+     * The full copy (1080p30 at most) of [uri] into [out]: as it is (without its location and camera details) when it's
+     * plain H.264 within the limits, else converted. [clip]: start and end in ms, or null for all of it. Null when made,
+     * else what to say.
      */
     suspend fun fullCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, clip: Pair<Int, Int>?, progress: (Float) -> Unit): String? {
-        if (clip == null && GroupVideo.fitsFull(info)) return if (copy(context, uri, out)) null else "That video can't be read."
+        if (clip == null && GroupVideo.fitsFull(info)) {
+            if (!copy(context, uri, out)) return "That video can't be read."
+            if (ready(out) && out.length() in 1..GroupVideo.FULL_MAX_BYTES) return null
+            out.delete()   // its details couldn't be taken out as it is: converted below instead
+        }
         val ms = clip?.let { it.second - it.first } ?: info.ms
-        val shorts = if (lowEnd(context) || !canEncode(GroupVideo.FULL_LONG, GroupVideo.FULL_SHORT, GroupVideo.FULL_FPS))
-            listOf(GroupVideo.RELAY_SHORT) else listOf(GroupVideo.FULL_SHORT, GroupVideo.RELAY_SHORT)
-        for (short in shorts) {
-            if (convert(context, uri, info, out, short, GroupVideo.fullBitrate(ms), clip, progress) && out.length() in 1..GroupVideo.FULL_MAX_BYTES) return null
+        val sizes = if (lowEnd(context) || !canEncode(GroupVideo.FULL_LONG, GroupVideo.FULL_SHORT, GroupVideo.FULL_FPS))
+            listOf(P720) else listOf(P1080, P720)
+        for ((long, short) in sizes) {
+            if (convert(context, uri, info, out, long, short, GroupVideo.fullBitrate(ms), clip, progress) && ready(out) &&
+                out.length() in 1..GroupVideo.FULL_MAX_BYTES) return null
             out.delete()
         }
         return "This phone couldn't convert that video. Try a shorter one."
@@ -135,27 +191,37 @@ object VideoPick {
 
     /** The relay copy (720p, at most 20 s, fits the relays) into [out]. Null when made, else what to say. */
     suspend fun relayCopy(context: Context, uri: Uri, info: GroupVideo.Info, out: File, clip: Pair<Int, Int>?, progress: (Float) -> Unit): String? {
-        if (clip == null && GroupVideo.fitsRelay(info)) return if (copy(context, uri, out)) null else "That video can't be read."
+        if (clip == null && GroupVideo.fitsRelay(info)) {
+            if (!copy(context, uri, out)) return "That video can't be read."
+            if (ready(out) && GroupVideo.relayFits(out.length())) return null
+            out.delete()
+        }
         val ms = clip?.let { it.second - it.first } ?: info.ms
         if (ms > GroupVideo.RELAY_MAX_MS + GroupVideo.SLACK_MS) return "Over the internet, videos can be up to 20 seconds. Trim it first."
         var bitrate = GroupVideo.relayBitrate(ms, audioBps = info.audioBps)
-        // 720p, once more at a lower bitrate if it ran over, then the old 480p video message size.
-        for (short in listOf(GroupVideo.RELAY_SHORT, GroupVideo.RELAY_SHORT, Videos.SIDE)) {
-            if (convert(context, uri, info, out, short, bitrate, clip, progress)) {
+        // 720p, once more at a lower bitrate if it ran over, then 480p. A 720p try that failed outright goes straight to
+        // 480p: the same try again would only fail the same way.
+        val sizes = listOf(P720, P720, P480)
+        var i = 0
+        while (i < sizes.size) {
+            val (long, short) = sizes[i]
+            if (convert(context, uri, info, out, long, short, bitrate, clip, progress) && ready(out)) {
                 val got = out.length()
                 if (GroupVideo.relayFits(got)) return null
                 bitrate = GroupVideo.retryBitrate(bitrate, got, ms)
-            }
+                i++
+            } else i = if (i < sizes.size - 1) sizes.size - 1 else sizes.size
             out.delete()
         }
         return "This phone couldn't make a small enough copy of that video. Try a shorter one."
     }
 
     /**
-     * Converts [uri] to an H.264 and AAC MP4 in [out]: its short side at most [short] (never made bigger), at most 30
-     * frames a second, video at [bitrate]. False if the phone couldn't (the reason isn't shown: the caller tries smaller).
+     * Converts [uri] to an H.264 and AAC MP4 in [out]: within [long] x [short] either way up (both sides, never made
+     * bigger, its shape kept), at most 30 frames a second, video at [bitrate], HDR mapped to SDR (Android 10 and up).
+     * False if the phone couldn't (the reason isn't shown: the caller tries smaller).
      */
-    private suspend fun convert(context: Context, uri: Uri, info: GroupVideo.Info, out: File, short: Int, bitrate: Int, clip: Pair<Int, Int>?,
+    private suspend fun convert(context: Context, uri: Uri, info: GroupVideo.Info, out: File, long: Int, short: Int, bitrate: Int, clip: Pair<Int, Int>?,
                                 progress: (Float) -> Unit): Boolean = suspendCancellableCoroutine { cont ->
         val main = Handler(Looper.getMainLooper())
         out.delete()
@@ -167,8 +233,15 @@ object VideoPick {
                 }.build()
                 val effects = ArrayList<Effect>()
                 if (!GroupVideo.withinFps(info.fps, GroupVideo.FULL_FPS)) effects.add(FrameDropEffect.createDefaultFrameDropEffect(GroupVideo.FULL_FPS.toFloat()))
-                if (minOf(info.w, info.h) > short) effects.add(Presentation.createForShortSide(short))
+                // The frames reach the effects upright, so the target is worked out on the upright size.
+                val (uw, uh) = GroupVideo.upright(info)
+                GroupVideo.target(uw, uh, long, short)?.let { (tw, th) -> effects.add(Presentation.createForWidthAndHeight(tw, th, Presentation.LAYOUT_SCALE_TO_FIT)) }
                 val edited = EditedMediaItem.Builder(item).setEffects(Effects(emptyList(), effects)).build()
+                @Suppress("DEPRECATION")
+                val sequence = EditedMediaItemSequence(edited)
+                val comp = Composition.Builder(sequence).apply {
+                    if (Build.VERSION.SDK_INT >= 29) setHdrMode(Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL)
+                }.build()
                 val encoders = DefaultEncoderFactory.Builder(context.applicationContext)
                     .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
                     .setEnableFallback(true)
@@ -200,7 +273,7 @@ object VideoPick {
                     })
                     .build()
                 cont.invokeOnCancellation { main.post { over = true; try { t.cancel() } catch (_: Exception) {}; out.delete() } }
-                t.start(edited, out.absolutePath)
+                t.start(comp, out.absolutePath)
                 main.postDelayed(tick, 300)
             } catch (e: Exception) {
                 out.delete()

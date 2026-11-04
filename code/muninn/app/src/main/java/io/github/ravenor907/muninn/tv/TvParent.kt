@@ -332,8 +332,8 @@ object TvParent {
                 // each quick message's emoji.
                 access = if (k14) t.access else null, child = if (k14) t.child.ifEmpty { null } else null,
                 gok = if (k14) t.gok else null, wait = if (k14) t.waitKid.keys.toList() else null, pics = if (k14) true else null,
-                // k15: the read-aloud voice, once a parent picked one.
-                voice = KidVoice.toSend(t.voice, k15(app, key))) else null
+                // k15: the read-aloud voice, once a parent picked one, and only while every co-parent's app reads it.
+                voice = KidVoice.toSend(t.voice, k15(app, key), coParentCaps(app, t))) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -439,6 +439,7 @@ object TvParent {
         var lostTo: String? = null
         var news: String? = null
         var both: String? = null
+        var probe: ManagedTv? = null
         synchronized(lock) {
             val t = _tvs.value[fromKey]
             if (t == null) {
@@ -539,10 +540,17 @@ object TvParent {
                     if (done && runs != null && !runs.raw.has("look") && k13(app, fromKey)) resend = true
                     // The device just showed it speaks k14: its accessibility, child's name and the rest go out.
                     if (done && runs != null && !runs.raw.has("gok") && k14(app, fromKey)) resend = true
+                    // Round 19: the device runs a voice pick that a co-parent's older app can't read (that parent was
+                    // added, or the pick went out before): the config goes out again without it, so they see it all again.
+                    if (done && runs != null && KidVoice.of(runs.raw) != null && !KidVoice.allRead(coParentCaps(app, t))) { resend = true; probe = t }
+                    // ...and once every co-parent reads it, the voice picked here goes out.
+                    if (done && runs != null && KidVoice.of(runs.raw) == null && t.voice.isNotEmpty() && k15(app, fromKey) && KidVoice.allRead(coParentCaps(app, t))) resend = true
                 }
             }
             _tvs.value[fromKey]?.let { if (it.havHeld != held) put(it.copy(havHeld = held)) }
         }
+        // Round 19: a co-parent's caps may be old (they updated): asked again, so the voice goes out once they read it.
+        probe?.let { probeVoice(app, it) }
         lostTo?.let { Ui.say("$it changed the Kids' Device just before you, so your last change didn't go through. Make it again.", true) }
         both?.let { Ui.say("$it changed the Kids' Device at the same moment as you. Your change is going out again on top of theirs, so both are on it.") }
         news?.let { n ->
@@ -1077,6 +1085,32 @@ object TvParent {
 
     /** The device's app said "k15". */
     fun k15(app: Muninn, key: String): Boolean = KidVoice.CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** Round 19: each other parent's caps (null: not a contact here), for fields every parent's app must read. */
+    private fun coParentCaps(app: Muninn, t: ManagedTv): List<Set<String>?> {
+        val me = app.identity.publicKey
+        return t.parents.filter { it != me && it != t.key }.distinct().map { app.contacts.get(it)?.caps }
+    }
+
+    /**
+     * Round 19: why the voice can't be picked yet because of a co-parent (what the device page says), or null when every
+     * co-parent's app reads it.
+     */
+    fun voiceBlockedBy(app: Muninn, t: ManagedTv): String? {
+        val me = app.identity.publicKey
+        val k = t.parents.filter { it != me && it != t.key }.distinct().firstOrNull { KidVoice.CAP !in (app.contacts.get(it)?.caps ?: emptySet()) }
+            ?: return null
+        val n = nameOnDevice(app, t, k)
+        return if (app.contacts.get(k) == null) "Add $n as a contact first, so this phone can tell their Muninn reads it."
+        else "Ask $n to update Muninn first."
+    }
+
+    /** Asks each co-parent whose app doesn't say k15 for its caps again (the device page, once when it opens). */
+    fun probeVoice(app: Muninn, t: ManagedTv) {
+        val me = app.identity.publicKey
+        t.parents.filter { it != me && it != t.key && KidVoice.CAP !in (app.contacts.get(it)?.caps ?: emptySet()) && app.contacts.get(it) != null }
+            .forEach { try { app.chat.probeCaps(it) } catch (_: Exception) {} }
+    }
 
     /** The parent picked the device's read-aloud voice ("f" or "m"). */
     fun setVoice(key: String, voice: String) {

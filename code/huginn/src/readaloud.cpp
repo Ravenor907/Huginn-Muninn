@@ -26,6 +26,7 @@
 #include <QSettings>
 #include <QStorageInfo>
 #include <QThread>
+#include <QPointer>
 #include <QUrl>
 #include <QtEndian>
 #include <cstdio>
@@ -49,17 +50,74 @@ QString folderFor(const QString &voice) { return voice == QLatin1String("m") ? Q
 // Room for the download, unpacking and the rest of the disk.
 constexpr qint64 kRoom = 300LL * 1024 * 1024;
 
-// Where the bundled engine is: lib\ beside Huginn.exe (Windows), /app/lib (the Flatpak), or found by name.
+// Where the bundled engine is: lib\ beside Huginn.exe (Windows), /app/lib (the Flatpak), or lib/ beside a local build's
+// bin/. Full paths only: never a copy found by name on the library path, whose structs could differ.
 QStringList engineCandidates()
 {
     const QString app = QCoreApplication::applicationDirPath();
 #ifdef Q_OS_WIN
     return {app + QStringLiteral("/lib/sherpa-onnx-c-api.dll"), app + QStringLiteral("/sherpa-onnx-c-api.dll")};
 #else
-    return {QStringLiteral("/app/lib/libsherpa-onnx-c-api.so"), app + QStringLiteral("/../lib/libsherpa-onnx-c-api.so"),
-            QStringLiteral("sherpa-onnx-c-api")};
+    return {QStringLiteral("/app/lib/libsherpa-onnx-c-api.so"), QDir::cleanPath(app + QStringLiteral("/../lib/libsherpa-onnx-c-api.so"))};
 #endif
 }
+
+#ifdef Q_OS_WIN
+// Loads a DLL by its full path with its imports found only in its own folder and System32 (never the current folder or
+// PATH). It stays loaded for the life of Huginn, so QLibrary's load of the same path gets this copy.
+bool loadPinned(const QString &path)
+{
+    const std::wstring wide = QDir::toNativeSeparators(path).toStdWString();
+    return LoadLibraryExW(wide.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) != nullptr;
+}
+#endif
+
+// Inside the Flatpak, and whether the host's speech-dispatcher is reachable there (the manifest shares only its
+// folder in the runtime directory, read-only). Without it, speech-dispatcher would start a copy inside the sandbox
+// that has no voice, so nothing would be heard.
+[[maybe_unused]] bool inFlatpak()
+{
+#ifdef Q_OS_LINUX
+    return QFileInfo::exists(QStringLiteral("/.flatpak-info"));
+#else
+    return false;
+#endif
+}
+
+[[maybe_unused]] bool speechdThere()
+{
+    const QString run = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    return !run.isEmpty() && QFileInfo::exists(run + QStringLiteral("/speech-dispatcher/speechd.sock"));
+}
+
+// A downloaded voice unpacked into "<dir>.new" (marked ".unpacked" once whole) goes into its place: the old folder is
+// moved aside first, so a crash in between never leaves neither (the next start finishes the move).
+bool placeUnpacked(const QString &dir)
+{
+    const QString fresh = dir + QStringLiteral(".new");
+    const QString old = dir + QStringLiteral(".old");
+    QDir(old).removeRecursively();
+    if (QFileInfo::exists(dir) && !QDir().rename(dir, old))
+        QDir(dir).removeRecursively();
+    if (!QDir().rename(fresh, dir)) {
+        if (QFileInfo::exists(old) && !QFileInfo::exists(dir))
+            QDir().rename(old, dir);
+        return false;
+    }
+    QFile::remove(dir + QStringLiteral("/.unpacked"));
+    QDir(old).removeRecursively();
+    return true;
+}
+
+// Settings' line while voices.sha256 has no line for the voice (before the voices are published).
+QString notReadyYet(bool device)
+{
+    return device ? QStringLiteral("Natural voices aren't ready yet. The computer's own voice reads")
+                  : QStringLiteral("Natural voices aren't ready yet");
+}
+
+// How long a download may get no bytes before it's cut and resumed (sleep, a dead Wi-Fi, a stuck Tor circuit).
+constexpr int kStallMs = 60 * 1000;
 
 bool engineFileThere()
 {
@@ -150,10 +208,21 @@ public:
             QMetaObject::invokeMethod(to, [to, token, why] { to->onEngineFailed(token, why); }, Qt::QueuedConnection);
             return;
         }
+        // Marked while the engine works: a mark left at the next start means it stopped Huginn mid-sentence.
+        const QString mark = QFileInfo(dir).path() + QStringLiteral("/reading");
+        {
+            QFile m(mark);
+            if (m.open(QIODevice::WriteOnly))
+                m.close();
+        }
         for (const QString &p : pieces) {
             if (m_token->load() != token)
                 break;
-            const QByteArray utf8 = p.toUtf8();
+            // Only plain letters, digits and simple punctuation reach the engine (ReadAloud::forEngine).
+            const QString clean = ReadAloud::forEngine(p);
+            if (clean.isEmpty())
+                continue;
+            const QByteArray utf8 = clean.toUtf8();
             const SherpaOnnxGeneratedAudio *a = m_generate(m_tts, utf8.constData(), 0, 1.0f);
             if (!a)
                 continue;
@@ -163,6 +232,7 @@ public:
                 continue;
             QMetaObject::invokeMethod(to, [to, token, wav] { to->onSpoken(token, wav); }, Qt::QueuedConnection);
         }
+        QFile::remove(mark);
         QMetaObject::invokeMethod(to, [to, token] { to->onSpoken(token, QByteArray()); }, Qt::QueuedConnection);
         // Let go of the model (and its memory) after a minute with nothing to read.
         m_idle->start();
@@ -183,14 +253,18 @@ private:
 #ifdef Q_OS_WIN
         // ONNX Runtime first, from lib\ by its full path: a different onnxruntime.dll elsewhere (Windows has one) is never used.
         const QString ort = QCoreApplication::applicationDirPath() + QStringLiteral("/lib/onnxruntime.dll");
-        if (QFileInfo::exists(ort)) {
+        if (QFileInfo::exists(ort) && loadPinned(ort)) {
             m_ort.setFileName(ort);
             m_ort.load();
         }
 #endif
         for (const QString &c : engineCandidates()) {
-            if (c.contains(QLatin1Char('/')) && !QFileInfo::exists(c))
+            if (!QFileInfo::exists(c))
                 continue;
+#ifdef Q_OS_WIN
+            if (!loadPinned(c))
+                continue;
+#endif
             m_lib.setFileName(c);
             if (m_lib.load())
                 break;
@@ -209,6 +283,15 @@ private:
             m_lib.unload();
             return false;
         }
+        // Only the exact version sherpatts.h was copied from: another one's structs could differ.
+        const auto version = reinterpret_cast<SherpaOnnxGetVersionStrFn>(m_lib.resolve("SherpaOnnxGetVersionStr"));
+        const QByteArray have = version ? QByteArray(version()) : QByteArray();
+        if (have != HUGINN_SHERPA_ONNX_VERSION) {
+            if (why) *why = QStringLiteral("The speech engine is a different version (%1)").arg(have.isEmpty() ? QStringLiteral("unknown") : QString::fromLatin1(have));
+            m_create = nullptr;
+            m_lib.unload();
+            return false;
+        }
         return true;
     }
 
@@ -222,8 +305,10 @@ private:
         const QByteArray model = enginePath(dir + QStringLiteral("/model.onnx"));
         const QByteArray tokens = enginePath(dir + QStringLiteral("/tokens.txt"));
         const QByteArray data = enginePath(dir + QStringLiteral("/espeak-ng-data"));
-        SherpaOnnxOfflineTtsConfig c;
-        std::memset(&c, 0, sizeof c);
+        // In a zeroed buffer 4 KB larger than the struct: a library whose struct were bigger reads zeros, never the stack.
+        alignas(SherpaOnnxOfflineTtsConfig) unsigned char room[sizeof(SherpaOnnxOfflineTtsConfig) + 4096];
+        std::memset(room, 0, sizeof room);
+        SherpaOnnxOfflineTtsConfig &c = *reinterpret_cast<SherpaOnnxOfflineTtsConfig *>(room);
         c.model.vits.model = model.constData();
         c.model.vits.tokens = tokens.constData();
         c.model.vits.data_dir = data.constData();
@@ -286,13 +371,20 @@ ReadAloud::ReadAloud(QObject *parent)
         m_hashes = hashes(f.readAll());
     m_retry.setSingleShot(true);
     connect(&m_retry, &QTimer::timeout, this, &ReadAloud::startDownload);
-    // A metered connection that ends (back on Wi-Fi) starts a waiting download.
-    if (QNetworkInformation::loadBackendByFeatures(QNetworkInformation::Feature::Metered)) {
-        if (auto *ni = QNetworkInformation::instance())
+    // A metered connection that ends (back on Wi-Fi) starts a waiting download. A new network (another Wi-Fi, back
+    // online after sleep) cuts a download that may be talking to a dead connection and resumes it at once.
+    if (QNetworkInformation::loadBackendByFeatures(QNetworkInformation::Feature::Metered) || QNetworkInformation::loadDefaultBackend()) {
+        if (auto *ni = QNetworkInformation::instance()) {
             connect(ni, &QNetworkInformation::isMeteredChanged, this, [this](bool metered) {
                 if (!metered && !m_downloading.isEmpty() && !m_reply)
                     startDownload();
             });
+            connect(ni, &QNetworkInformation::reachabilityChanged, this, [this](QNetworkInformation::Reachability r) {
+                if (r == QNetworkInformation::Reachability::Online)
+                    networkMoved();
+            });
+            connect(ni, &QNetworkInformation::transportMediumChanged, this, [this] { networkMoved(); });
+        }
     }
     // Ultra privacy: a download waiting for Tor goes once it's ready; one made the old way starts again through Tor.
     if (UltraPrivacy *u = UltraPrivacy::instance()) {
@@ -307,12 +399,24 @@ ReadAloud::ReadAloud(QObject *parent)
             QTimer::singleShot(0, this, &ReadAloud::startDownload);
         });
     }
-    if (ready())
+    // A voice unpacked just before Huginn stopped goes into its place now.
+    recoverUnpacked();
+    // The engine stopped Huginn mid-sentence (a mark is left): twice in a row and the computer's own voice reads.
+    const QString mark = voicesDir() + QStringLiteral("/reading");
+    if (QFileInfo::exists(mark)) {
+        QFile::remove(mark);
+        const int n = Settings::store().value(QStringLiteral("readAloud/cutShort"), 0).toInt() + 1;
+        Settings::store().setValue(QStringLiteral("readAloud/cutShort"), n);
+    }
+    m_engineBroken = Settings::store().value(QStringLiteral("readAloud/cutShort"), 0).toInt() >= 2;
+    if (m_engineBroken)
+        m_status = QStringLiteral("The natural voice closed Huginn twice, so the computer's own voice reads. Delete voices to try it again");
+    else if (ready())
         m_status = QStringLiteral("Ready");
-    else if (m_hashes.contains(fileFor(voice())))
+    else if (natural())
         m_status = QStringLiteral("Downloads the first time something is read aloud");
     else
-        m_status = QStringLiteral("Not available yet: the computer's own voice reads");
+        m_status = notReadyYet(deviceCan());
 }
 
 ReadAloud::~ReadAloud()
@@ -321,16 +425,48 @@ ReadAloud::~ReadAloud()
     if (m_reply)
         m_reply->abort();
     if (m_thread) {
+        // No time limit: the sentence being made always ends (the token above stops the rest), and the thread must be
+        // gone before the engine or this object is.
         m_thread->quit();
-        m_thread->wait(3000);
+        m_thread->wait();
     }
     delete m_part;
     delete m_sha;
 }
 
+bool ReadAloud::natural() const
+{
+    return m_engineThere && !m_engineBroken && (ready() || m_hashes.contains(fileFor(voice())));
+}
+
 bool ReadAloud::available() const
 {
-    return m_engineThere || m_deviceOk;
+    return natural() || deviceCan();
+}
+
+bool ReadAloud::deviceCan() const
+{
+#ifdef HUGINN_HAVE_QTSPEECH
+    if (m_deviceFailed)
+        return false;
+    // The Flatpak: the host's speech-dispatcher, or Qt's own offline engine (flite) when the runtime has it.
+    if (inFlatpak()) {
+        static const bool flite = QTextToSpeech::availableEngines().contains(QStringLiteral("flite"));
+        return speechdThere() || flite;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+void ReadAloud::recoverUnpacked()
+{
+    for (const QString &v : {QStringLiteral("f"), QStringLiteral("m")}) {
+        const QString dir = voiceDir(v);
+        if (QFileInfo::exists(dir + QStringLiteral(".new/.unpacked")) && !QFileInfo::exists(dir + QStringLiteral("/model.onnx")))
+            placeUnpacked(dir);
+    }
 }
 
 QString ReadAloud::voice() const
@@ -353,6 +489,8 @@ void ReadAloud::setVoice(const QString &v)
     if (ready()) {
         setStatus(QStringLiteral("Ready"));
         cleanOther();
+    } else if (!natural()) {
+        setStatus(m_engineBroken ? m_status : notReadyYet(deviceCan()));
     } else if (hasFiles()) {
         // Switching downloads the new voice now; the old one is deleted once the new one is in.
         prepare();
@@ -395,16 +533,24 @@ void ReadAloud::setStatus(const QString &s)
     if (s == m_status)
         return;
     m_status = s;
-    Q_EMIT changed();
+    Q_EMIT statusChanged();
 }
 
 void ReadAloud::speak(const QString &text)
 {
     stop();
+    // Never while the lock is up, the screen lock shows or a call is on (main.cpp says which), whatever asked.
+    if (m_blocked && m_blocked())
+        return;
     const QStringList parts = pieces(plain(text));
+    m_lastParts = parts;
     if (parts.isEmpty())
         return;
-    if (ready() && m_engineThere) {
+    // Text with nothing the engine reads (another script only) goes to the computer's own voice.
+    bool engineReads = false;
+    for (const QString &p : parts)
+        engineReads = engineReads || !forEngine(p).isEmpty();
+    if (natural() && ready() && !m_deleting && engineReads) {
         const quint64 token = m_token->load();
         if (!m_thread) {
             m_thread = new QThread(this);
@@ -430,7 +576,8 @@ void ReadAloud::speak(const QString &text)
 void ReadAloud::speakDevice(const QStringList &parts)
 {
 #ifdef HUGINN_HAVE_QTSPEECH
-    loadDeviceVoice();
+    if (deviceCan())
+        loadDeviceVoice();
     if (m_device && m_deviceOk) {
         m_speaking = true;
         Q_EMIT changed();
@@ -443,8 +590,8 @@ void ReadAloud::speakDevice(const QStringList &parts)
     // Nothing on this computer can read yet: the status says why (the menu shows it).
     m_speaking = false;
     if (!m_reply)
-        setStatus(m_hashes.contains(fileFor(voice())) ? QStringLiteral("Read aloud starts once the natural voice is downloaded")
-                                                       : QStringLiteral("No voice to read with on this computer yet"));
+        setStatus(natural() ? QStringLiteral("Read aloud starts once the natural voice is downloaded")
+                            : QStringLiteral("No voice to read with on this computer yet"));
     Q_EMIT changed();
 }
 
@@ -453,9 +600,23 @@ void ReadAloud::loadDeviceVoice()
 #ifdef HUGINN_HAVE_QTSPEECH
     if (m_device)
         return;
-    m_device = new QTextToSpeech(this);
+    // In the Flatpak without the host's speech-dispatcher, Qt's own offline engine (deviceCan() checked it's there).
+    if (inFlatpak() && !speechdThere())
+        m_device = new QTextToSpeech(QStringLiteral("flite"), this);
+    else
+        m_device = new QTextToSpeech(this);
     const auto take = [this](QTextToSpeech::State s) {
         const bool ok = s != QTextToSpeech::Error;
+        if (!ok && !m_deviceFailed) {
+            // No speech service here: Read aloud isn't offered again this run unless the natural voice comes.
+            m_deviceFailed = true;
+            if (m_speaking && m_pending == 0 && m_queue.isEmpty())
+                m_speaking = false;
+            if (!m_reply && !ready())
+                setStatus(natural() ? QStringLiteral("Read aloud starts once the natural voice is downloaded")
+                                    : QStringLiteral("No voice to read with on this computer yet"));
+            Q_EMIT changed();
+        }
         if (ok != m_deviceOk) {
             m_deviceOk = ok;
             Q_EMIT changed();
@@ -502,7 +663,9 @@ void ReadAloud::onSpoken(quint64 token, const QByteArray &wav)
     if (token != m_token->load())
         return;
     if (wav.isEmpty()) {
-        // The engine finished this text.
+        // The engine finished this text (so it didn't stop Huginn).
+        if (Settings::store().value(QStringLiteral("readAloud/cutShort"), 0).toInt() != 0)
+            Settings::store().setValue(QStringLiteral("readAloud/cutShort"), 0);
         m_pending = 0;
         if (m_queue.isEmpty() && m_playing.isEmpty()) {
             m_speaking = false;
@@ -522,8 +685,12 @@ void ReadAloud::onEngineFailed(quint64 token, const QString &why)
     std::fprintf(stderr, "Read aloud: %s\n", qPrintable(why));
     m_pending = 0;
     m_speaking = false;
-    setStatus(why);
+    // The engine won't load or start here (a missing or blocked library, a CPU it can't use): the computer's own voice
+    // reads this text and the next ones, this run.
+    m_engineBroken = true;
+    setStatus(why + QStringLiteral(". The computer's own voice reads"));
     Q_EMIT changed();
+    speakDevice(m_lastParts);
 }
 
 void ReadAloud::playNext()
@@ -577,6 +744,11 @@ void ReadAloud::prepare()
 {
     if (ready() || m_reply)
         return;
+    if (!natural()) {
+        // Nothing to download yet (or the engine can't run here): say so, never a download that can't start.
+        setStatus(m_engineBroken ? m_status : notReadyYet(deviceCan()));
+        return;
+    }
     m_downloading = voice();
     startDownload();
 }
@@ -588,7 +760,7 @@ void ReadAloud::startDownload()
     const QString file = fileFor(m_downloading);
     const QString sum = m_hashes.value(file);
     if (sum.isEmpty()) {
-        setStatus(QStringLiteral("Not available yet: the computer's own voice reads"));
+        setStatus(notReadyYet(deviceCan()));
         return;
     }
     if (meteredNow() && !mobileData()) {
@@ -626,12 +798,15 @@ void ReadAloud::startDownload()
         QFile::remove(partPath);
     }
     if (!m_part->open(QIODevice::WriteOnly | QIODevice::Append)) {
-        downloadFailed(QStringLiteral("Can't save the voice in the data folder"), true);
+        downloadFailed(QStringLiteral("Can't save the voice in the data folder"), 15 * 60 * 1000);
         return;
     }
     QNetworkRequest req(QUrl(QString::fromLatin1(kDownload) + file));
     req.setHeader(QNetworkRequest::UserAgentHeader, QString::fromLatin1(kAgent));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    // No bytes for a minute (sleep, another network, a stuck Tor circuit): cut, and resumed from the part kept.
+    req.setTransferTimeout(kStallMs);
+    m_resumeNow = false;
     if (m_got > 0)
         req.setRawHeader("Range", "bytes=" + QByteArray::number(m_got) + "-");
     m_base = m_got;
@@ -642,9 +817,14 @@ void ReadAloud::startDownload()
         if (!m_reply)
             return;
         const int code = m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (code != 200 && code != 206) {
+            // An error page (a 416 for a part that is already whole, a 404, a 5xx) never goes into the part.
+            m_reply->readAll();
+            return;
+        }
         if (!m_checked) {
             m_checked = true;
-            if (code != 206 && m_base > 0) {
+            if (code == 200 && m_base > 0) {
                 // The server sent the whole file again: start the part over.
                 m_part->resize(0);
                 m_sha->reset();
@@ -686,19 +866,24 @@ void ReadAloud::downloadDone()
     // 416: the part kept was already the whole file (Huginn closed before checking it): checked now.
     const bool whole = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 416 && m_base > 0;
     if (r->error() != QNetworkReply::NoError && !whole) {
-        // A size over the limit is never right: start over next time. Anything else picks up where it stopped.
+        // A size over the limit is never right: start over next time. Anything else picks up where it stopped: at
+        // once after a network change, within a minute for the first few cuts (a stall, sleep), later after that.
         if (m_got > kMaxDownload || r->error() == QNetworkReply::ContentNotFoundError)
             QFile::remove(partPath);
-        downloadFailed(QStringLiteral("The natural voice couldn't download. It tries again later"), true);
+        ++m_failures;
+        const int wait = m_resumeNow ? 3 * 1000 : m_failures <= 3 ? 60 * 1000 : 15 * 60 * 1000;
+        m_resumeNow = false;
+        downloadFailed(QStringLiteral("The natural voice couldn't download. It tries again soon"), wait);
         return;
     }
     const QString got = QString::fromLatin1(m_sha->result().toHex());
     if (got != m_hashes.value(file)) {
         QFile::remove(partPath);
-        downloadFailed(QStringLiteral("The natural voice didn't match its check, so it wasn't used. It tries again later"), true);
+        downloadFailed(QStringLiteral("The natural voice didn't match its check, so it wasn't used. It tries again later"), 15 * 60 * 1000);
         return;
     }
-    // Unpacked beside its final place, then put there in one step.
+    m_failures = 0;
+    // Unpacked beside its final place (marked once whole), then put there.
     const QString dir = voiceDir(m_downloading);
     const QString fresh = dir + QStringLiteral(".new");
     QDir(fresh).removeRecursively();
@@ -706,53 +891,86 @@ void ReadAloud::downloadDone()
     if (!unpack(partPath, fresh, &why)) {
         QDir(fresh).removeRecursively();
         QFile::remove(partPath);
-        downloadFailed(QStringLiteral("The natural voice couldn't be unpacked (%1)").arg(why), true);
+        downloadFailed(QStringLiteral("The natural voice couldn't be unpacked (%1)").arg(why), 15 * 60 * 1000);
         return;
     }
-    QDir(dir).removeRecursively();
-    if (!QDir().rename(fresh, dir)) {
+    {
+        QFile done(fresh + QStringLiteral("/.unpacked"));
+        if (done.open(QIODevice::WriteOnly))
+            done.close();
+    }
+    if (!placeUnpacked(dir)) {
         QDir(fresh).removeRecursively();
-        downloadFailed(QStringLiteral("Can't save the voice in the data folder"), true);
+        downloadFailed(QStringLiteral("Can't save the voice in the data folder"), 15 * 60 * 1000);
         return;
     }
     QFile::remove(partPath);
     m_downloading.clear();
+    // A fresh voice gets a fresh start.
+    if (m_engineBroken || Settings::store().value(QStringLiteral("readAloud/cutShort"), 0).toInt() != 0) {
+        Settings::store().setValue(QStringLiteral("readAloud/cutShort"), 0);
+        m_engineBroken = false;
+    }
     cleanOther();
     setStatus(QStringLiteral("Ready"));
     Q_EMIT changed();
 }
 
-void ReadAloud::downloadFailed(const QString &why, bool later)
+void ReadAloud::downloadFailed(const QString &why, int retryMs)
 {
     setStatus(why);
-    if (later)
-        m_retry.start(15 * 60 * 1000);
+    if (retryMs > 0)
+        m_retry.start(retryMs);
 }
 
-void ReadAloud::releaseEngine()
+void ReadAloud::networkMoved()
 {
-    // The engine lets go of the voice's files (Windows can't delete files in use) before any are deleted.
+    if (m_downloading.isEmpty())
+        return;
+    if (m_reply) {
+        // The connection may be dead without saying so: cut it, and the part kept resumes in a moment.
+        m_resumeNow = true;
+        m_reply->abort();
+    } else if (m_retry.isActive()) {
+        m_retry.start(3 * 1000);
+    }
+}
+
+void ReadAloud::releaseEngine(std::function<void()> then)
+{
+    // The engine lets go of the voice's files (Windows can't delete files in use) on its own thread, after the
+    // sentence it may be making; then [then] runs here. The window never waits for it.
     if (m_engine && m_thread && m_thread->isRunning()) {
         VoiceEngine *engine = m_engine;
-        QMetaObject::invokeMethod(engine, [engine] { engine->release(); }, Qt::BlockingQueuedConnection);
+        QPointer<ReadAloud> self(this);
+        QMetaObject::invokeMethod(engine, [engine, self, then] {
+            engine->release();
+            if (self)
+                QMetaObject::invokeMethod(self.data(), then, Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
+        return;
     }
+    then();
 }
 
 void ReadAloud::cleanOther()
 {
-    releaseEngine();
-    // Only the chosen voice is kept: the other one (and any leftovers) go once this one is in.
-    const QString keep = folderFor(voice());
-    const QDir d(voicesDir());
-    for (const QString &e : d.entryList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
-        if (e == keep || (!m_downloading.isEmpty() && e.startsWith(fileFor(m_downloading))))
-            continue;
-        const QString p = d.filePath(e);
-        if (QFileInfo(p).isDir())
-            QDir(p).removeRecursively();
-        else
-            QFile::remove(p);
-    }
+    releaseEngine([this] {
+        // Only the chosen voice is kept: the other one (and any leftovers) go once this one is in. A download under
+        // way (its part and its unpack folder) stays.
+        const QString keep = folderFor(voice());
+        const QDir d(voicesDir());
+        for (const QString &e : d.entryList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
+            if (e == keep || (!m_downloading.isEmpty() && (e.startsWith(fileFor(m_downloading)) || e.startsWith(folderFor(m_downloading)))))
+                continue;
+            const QString p = d.filePath(e);
+            if (QFileInfo(p).isDir())
+                QDir(p).removeRecursively();
+            else
+                QFile::remove(p);
+        }
+        Q_EMIT changed();
+    });
 }
 
 void ReadAloud::deleteVoices()
@@ -765,18 +983,26 @@ void ReadAloud::deleteVoices()
     m_retry.stop();
     if (m_part)
         m_part->close();
+    // Meanwhile anything read uses the computer's own voice.
+    m_deleting = true;
+    setStatus(QStringLiteral("Deleting the voices"));
     // The engine lets go of the files first (on its thread), then they go.
-    releaseEngine();
-    QDir(voicesDir()).removeRecursively();
-    setStatus(QStringLiteral("Deleted. Downloads again the next time something is read aloud"));
-    Q_EMIT changed();
+    releaseEngine([this] {
+        QDir(voicesDir()).removeRecursively();
+        m_deleting = false;
+        Settings::store().setValue(QStringLiteral("readAloud/cutShort"), 0);
+        m_engineBroken = false;
+        m_failures = 0;
+        setStatus(natural() ? QStringLiteral("Deleted. Downloads again the next time something is read aloud") : notReadyYet(deviceCan()));
+        Q_EMIT changed();
+    });
 }
 
 // ------------------------------------------------------------------ the rules (also in Muninn's ReadAloudText)
 
 QString ReadAloud::plain(const QString &text)
 {
-    QString t = text.left(6000);
+    QString t = text.left(kMaxText);
     static const QRegularExpression link(QStringLiteral("(?:https?://|www\\.)\\S+"), QRegularExpression::CaseInsensitiveOption);
     t.replace(link, QStringLiteral(" link "));
     // Marks people type for emphasis or code, and quotes.
@@ -789,13 +1015,39 @@ QString ReadAloud::plain(const QString &text)
     t.replace(at, QStringLiteral("\\1\\2"));
     QString out;
     out.reserve(t.size());
-    for (const char32_t c : t.toUcs4())
-        if (!isDropped(c))
-            out.append(QString::fromUcs4(&c, 1));
+    int run = 0;
+    for (const char32_t c : t.toUcs4()) {
+        if (isDropped(c))
+            continue;
+        if (c == U'\n') {
+            out.append(QLatin1Char('\n'));
+            run = 0;
+            continue;
+        }
+        // Control and format characters, unpaired halves, private and unassigned ones, and markup (<, >, [, ], {, },
+        // backslash): a space. Nothing that could steer a speech engine gets through.
+        const QChar::Category cat = QChar::category(c);
+        const bool space = cat == QChar::Other_Control || cat == QChar::Other_Format || cat == QChar::Other_Surrogate
+            || cat == QChar::Other_PrivateUse || cat == QChar::Other_NotAssigned || cat == QChar::Separator_Line
+            || cat == QChar::Separator_Paragraph || cat == QChar::Separator_Space || c == U'<' || c == U'>' || c == U'['
+            || c == U']' || c == U'{' || c == U'}' || c == U'\\';
+        if (space) {
+            out.append(QLatin1Char(' '));
+            run = 0;
+            continue;
+        }
+        // Very long "words" are cut into pieces of kMaxWord.
+        if (run == kMaxWord) {
+            out.append(QLatin1Char(' '));
+            run = 0;
+        }
+        out.append(QString::fromUcs4(&c, 1));
+        ++run;
+    }
     // Lines stay (each is read on its own); spaces within a line are tidied.
     QStringList lines = out.split(QLatin1Char('\n'));
     QStringList kept;
-    static const QRegularExpression spaces(QStringLiteral("[ \\t\\r\\f\\v\\x{00A0}]+"));
+    static const QRegularExpression spaces(QStringLiteral(" +"));
     for (QString &l : lines) {
         l.replace(spaces, QStringLiteral(" "));
         l = l.trimmed();
@@ -803,6 +1055,48 @@ QString ReadAloud::plain(const QString &text)
             kept.append(l);
     }
     return kept.join(QLatin1Char('\n'));
+}
+
+QString ReadAloud::forEngine(const QString &piece)
+{
+    QString out;
+    out.reserve(piece.size());
+    bool afterLetter = false;
+    int accents = 0;
+    for (const char32_t c : piece.toUcs4()) {
+        const QChar::Category cat = QChar::category(c);
+        if (cat == QChar::Mark_NonSpacing || cat == QChar::Mark_SpacingCombining || cat == QChar::Mark_Enclosing) {
+            // An accent on a letter (a typed "a" plus its ring): at most two on one letter.
+            if (afterLetter && accents < 2) {
+                out.append(QString::fromUcs4(&c, 1));
+                ++accents;
+            }
+            continue;
+        }
+        accents = 0;
+        afterLetter = false;
+        if (QChar::isLetter(c) && QChar::script(c) == QChar::Script_Latin) {
+            out.append(QString::fromUcs4(&c, 1));
+            afterLetter = true;
+        } else if (c >= U'0' && c <= U'9') {
+            out.append(QChar(char16_t(c)));
+        } else if (c == U'&') {
+            out.append(QStringLiteral(" and "));
+        } else if (c == 0x2018 || c == 0x2019) {
+            out.append(QLatin1Char('\''));
+        } else if (c == 0x201C || c == 0x201D) {
+            out.append(QLatin1Char('"'));
+        } else if (c == 0x2026) {
+            out.append(QStringLiteral("..."));
+        } else if (c < 0x80 && std::strchr(".,!?;:'\"()-/%+", char(c)) && c != 0) {
+            out.append(QChar(char16_t(c)));
+        } else {
+            out.append(QLatin1Char(' '));
+        }
+    }
+    static const QRegularExpression spaces(QStringLiteral(" +"));
+    out.replace(spaces, QStringLiteral(" "));
+    return out.trimmed();
 }
 
 QStringList ReadAloud::pieces(const QString &text)
@@ -1004,6 +1298,13 @@ bool ReadAloud::selfTest()
     check("emoji go", plain(QStringLiteral("Dinner \U0001F355\U0001F44D\U0001F3FD ready ❤️")) == QLatin1String("Dinner ready"));
     check("lines stay, spaces tidied", plain(QStringLiteral("  one   two \n\n > three ")) == QLatin1String("one two\nthree"));
     check("only emoji is nothing", plain(QStringLiteral("\U0001F600 \U0001F600")).isEmpty());
+    // Untrusted text: no control characters or markup, no endless words, a length cap; the engine gets plain Latin.
+    check("controls and markup go", plain(QStringLiteral("a\u0007b<speak>c</speak>\u202Ed")) == QLatin1String("a b speak c /speak d"));
+    check("long words are cut", plain(QString(100, QLatin1Char('x'))) == QString(40, QLatin1Char('x')) + QLatin1Char(' ') + QString(40, QLatin1Char('x')) + QLatin1Char(' ') + QString(20, QLatin1Char('x')));
+    check("long text is capped", plain(QStringLiteral("ab ").repeated(5000)).size() <= kMaxText);
+    check("phonemes and SSML never reach the engine", forEngine(QStringLiteral("[[h@'loU]] <speak>Hi</speak> \u00C5sa & co \u2019s")) == QStringLiteral("h 'loU speak Hi /speak \u00C5sa and co 's"));
+    check("only Latin letters and digits for the engine", forEngine(QStringLiteral("\u041F\u0440\u0438 \u65E5\u672C 123")) == QLatin1String("123"));
+    check("at most two accents on a letter", forEngine(QStringLiteral("a\u030A\u0301\u0300\u0302b")) == QStringLiteral("a\u030A\u0301b"));
     const QStringList p = pieces(QStringLiteral("Hello there. How are you? Fine!\nNew line"));
     check("sentences and lines", p == QStringList{QStringLiteral("Hello there."), QStringLiteral("How are you?"), QStringLiteral("Fine!"), QStringLiteral("New line")});
     const QString longText = QString(300, QLatin1Char('a')) + QStringLiteral(", ") + QString(300, QLatin1Char('b'));

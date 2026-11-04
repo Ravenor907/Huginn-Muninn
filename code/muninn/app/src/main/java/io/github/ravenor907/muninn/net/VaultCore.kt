@@ -26,6 +26,13 @@ class VaultCore(
     val keyFile = File(root, "vault.key")
     private val keyLock = Any()
     @Volatile private var dataKey: ByteArray? = null
+    /**
+     * While the data key is being changed: the one before it. Files not re-sealed yet still open with it; it's kept in
+     * the lock file sealed with the new key ([PREV]) until every file is re-sealed, so nothing is ever unreadable.
+     */
+    @Volatile private var prevKey: ByteArray? = null
+    private val rekeyLock = Any()
+    @Volatile private var rekeying: Thread? = null
     private val _locked = MutableStateFlow(true)
     val locked: StateFlow<Boolean> = _locked.asStateFlow()
 
@@ -112,9 +119,12 @@ class VaultCore(
     /** The data key from one wrap and its secret (scrypt), or null. */
     private fun openWrap(w: JSONObject?, secret: String): ByteArray? {
         if (w == null || w.optString("kdf") != "scrypt") return null
+        val n = w.optInt("N", Vault.SCRYPT_N); val r = w.optInt("r", Vault.SCRYPT_R); val p = w.optInt("p", Vault.SCRYPT_P)
+        // Never weaker than Muninn has ever written (a lock file swapped for a weaker one), never big enough to run out of memory.
+        if (!kdfOk(n, r, p)) { log("the lock's settings are outside what Muninn writes; not used"); return null }
         return try {
             val salt = Vault.Crypto.b64d(w.getString("salt"))
-            val kek = Vault.Crypto.scrypt(secret.toByteArray(), salt, w.optInt("N", Vault.SCRYPT_N), w.optInt("r", Vault.SCRYPT_R), w.optInt("p", Vault.SCRYPT_P))
+            val kek = Vault.Crypto.scrypt(secret.toByteArray(), salt, n, r, p)
             Vault.Crypto.open(kek, Vault.Crypto.b64d(w.getString("wrapped"))).also { kek.fill(0) }
         } catch (_: Exception) { null }
     }
@@ -129,10 +139,16 @@ class VaultCore(
         } finally { kek.fill(0) }
     }
 
-    fun unlock(password: String): Boolean {
+    /**
+     * [onResult]: told right or wrong as soon as the check ends, before the vault opens and before anything can show the
+     * answer (the wrong-try count is settled there, so stopping Muninn after a right try can't leave it counted).
+     */
+    fun unlock(password: String, onResult: ((Boolean) -> Unit)? = null): Boolean {
         val o = (readKey() as? SafeFile.Read.Ok)?.value ?: return openDefault()
         if (o.optString("mode") != "password") return openDefault()
-        val k = openWrap(wrapFor(o, password), password) ?: return false
+        val k = openWrap(wrapFor(o, password), password)
+        try { onResult?.invoke(k != null) } catch (e: Exception) { log("couldn't note the try: ${e.message}") }
+        if (k == null) return false
         synchronized(this) {
             if (dataKey == null && !opened(k)) return false
             weak = !Vault.LockRules.strong(password)
@@ -158,14 +174,23 @@ class VaultCore(
     /** The data key is in hand: checked against the keys file, then the vault opens and waiting saves go out. */
     private fun opened(k: ByteArray): Boolean {
         val secrets = File(root, SECRETS)
-        if (SafeFile.read(secrets) { b -> openSealed(k, b) } is SafeFile.Read.Bad)
+        // A change of data key that hasn't finished: the key before it, for the files not re-sealed yet.
+        val prev = prevIn(lockJson(), k)
+        if (SafeFile.read(secrets) { b -> openSealed(k, b) ?: prev?.let { openSealed(it, b) } } is SafeFile.Read.Bad)
             return trouble(Trouble.DATA, "secrets.json can't be read with this key; nothing is changed")
-        synchronized(keyLock) { dataKey = k }
+        synchronized(keyLock) { dataKey = k; prevKey = prev }
         _trouble.value = null
         applyRestore()
         flush()
         _locked.value = false
+        if (prev != null) startRekey()
         return true
+    }
+
+    /** The key before this one, kept in the lock file sealed with [k] while a change of data key runs. */
+    private fun prevIn(o: JSONObject?, k: ByteArray): ByteArray? {
+        val s = o?.optString(PREV)?.takeIf { it.isNotEmpty() } ?: return null
+        return try { Vault.Crypto.open(k, Vault.Crypto.b64d(s))?.takeIf { it.size == 32 } } catch (_: Exception) { null }
     }
 
     private fun trouble(t: Trouble, why: String): Boolean {
@@ -180,35 +205,67 @@ class VaultCore(
 
     fun lock() {
         if (!hasPassword) return   // without a password there's nothing to lock with
-        synchronized(keyLock) { dataKey?.fill(0); dataKey = null }
+        synchronized(keyLock) { dataKey?.fill(0); dataKey = null; prevKey?.fill(0); prevKey = null }
         _locked.value = true
     }
 
     /**
      * Sets, changes or (with null) removes the password. Must be unlocked. [spare]: a pattern's unlock password, a
      * second wrap of the same data key (both copies of the lock file are rewritten, so no older wrap lingers).
+     *
+     * Setting or changing a lock also changes the data key: a new one is made and wrapped with the new lock, the old one
+     * is kept in the lock file sealed with the new one, and every file is re-sealed in the background ([rekeyNow]); then
+     * the old key goes. An old copy of the lock file and the old lock can't open what's written from then on, and once
+     * that's done, nothing at all. Copies set aside in "kept-" folders are re-wrapped with the new lock too, and their
+     * plain open keys go.
      */
+    @Synchronized
     fun setPassword(password: String?, pattern: Boolean = false, spare: String? = null) {
         val k = key() ?: return
+        require(!(pattern && spare != null && spare.startsWith(PATTERN))) { "an unlock password can't start with $PATTERN" }
         // Removing the lock while a new one is needed keeps it needed.
         val needs = password.isNullOrEmpty() && lockNeeded
-        try { store(k, password, pattern, needs, if (pattern) spare else null) } finally { k.fill(0) }
+        val prev = prev()
+        try {
+            if (!password.isNullOrEmpty() && prev == null) {
+                val k2 = ByteArray(32).also { SecureRandom().nextBytes(it) }
+                try {
+                    // The lock file first: from here on it opens the new key, and the old one through it.
+                    val o = store(k2, password, pattern, needs, if (pattern) spare else null, Vault.Crypto.b64(Vault.Crypto.seal(k2, k)))
+                    synchronized(keyLock) { dataKey?.fill(0); dataKey = k2.copyOf(); prevKey = k.copyOf() }
+                    rewrapKept(o, k2, listOf(k))
+                } finally { k2.fill(0) }
+                startRekey()
+            } else {
+                // A change already running (or no lock): the same key, the old one still kept with it.
+                val o = store(k, password, pattern, needs, if (pattern) spare else null, prev?.let { Vault.Crypto.b64(Vault.Crypto.seal(k, it)) })
+                if (!password.isNullOrEmpty()) rewrapKept(o, k, listOfNotNull(prev))
+            }
+        } finally { k.fill(0); prev?.fill(0) }
         if (!password.isNullOrEmpty()) weak = !Vault.LockRules.strong(password)
     }
 
-    /** Sets or changes a pattern's unlock password, keeping the pattern's own wrap as it is. Must be unlocked. False without a pattern. */
+    /**
+     * Sets or changes a pattern's unlock password, keeping the pattern's own wrap as it is. Must be unlocked. False without
+     * a pattern, or for one that starts like a drawn pattern ("pattern:"), which could never open Muninn.
+     * The data key stays: the pattern itself isn't known here to wrap a new one.
+     */
+    @Synchronized
     fun setSpare(spare: String): Boolean {
         val o = lockJson() ?: return false
-        if (o.optString("mode") != "password" || o.optString("kind") != "pattern" || spare.isEmpty()) return false
+        if (o.optString("mode") != "password" || o.optString("kind") != "pattern" || spare.isEmpty() || spare.startsWith(PATTERN)) return false
         val k = key() ?: return false
         try {
             o.put(SPARE, makeWrap(spare, k))
             SafeFile.writeMirror(keyFile, o.toString().toByteArray())
+            rewrapKept(o, k, listOfNotNull(prev()))
         } finally { k.fill(0) }
         return true
     }
 
-    private fun store(k: ByteArray, password: String?, pattern: Boolean = false, needsLock: Boolean = false, spare: String? = null) {
+    /** Writes the lock file for [k]; [prev]: the key before it, sealed with [k], while a change of key runs. Returns what it wrote. */
+    private fun store(k: ByteArray, password: String?, pattern: Boolean = false, needsLock: Boolean = false, spare: String? = null,
+                      prev: String? = null): JSONObject {
         val o = JSONObject()
         if (password.isNullOrEmpty()) {
             // No secret to lock it with: the key in Muninn's private files, written before vault.key points to it.
@@ -224,10 +281,96 @@ class VaultCore(
             // 1.42: a pattern's unlock password, its own salt and scrypt, wrapping the same data key. Never a hash, never the password.
             if (pattern && !spare.isNullOrEmpty()) o.put(SPARE, makeWrap(spare, k))
         }
+        if (prev != null) o.put(PREV, prev)
         // Two copies of the same lock, never an older one: an old password must not open it.
         SafeFile.writeMirror(keyFile, o.toString().toByteArray())
         // Locked by a password now: the open key must not stay behind.
         if (!password.isNullOrEmpty()) SafeFile.delete(openKeyFile)
+        return o
+    }
+
+    /**
+     * After the lock is set or changed: each "kept-" copy made with this vault's key ([keys]: the key before, or the one
+     * before that) gets the new lock file, its own key sealed in it with the new data key (so the next change finds it
+     * again), so the old lock no longer opens it, and its copy of the plain open key goes. A copy made with another key
+     * (a vault set aside after its lock was forgotten or damaged) is left as it is: only its own lock opens it.
+     */
+    private fun rewrapKept(lock: JSONObject, now: ByteArray, keys: List<ByteArray>) {
+        root.listFiles()?.filter { it.isDirectory && it.name.startsWith(KEPT) }?.forEach { dir ->
+            try {
+                // Its key: kept in its lock file sealed with the key it was last re-wrapped with (one of ours), or found by
+                // opening its keys file with ours.
+                val mine = listOf(now) + keys
+                val own = (SafeFile.read(File(dir, keyFile.name), bakWhenMissing = true) { JSONObject(String(it)) } as? SafeFile.Read.Ok)?.value
+                val theirs = mine.firstNotNullOfOrNull { prevIn(own, it) } ?: run {
+                    val probe = (SafeFile.read(File(dir, SECRETS)) { it } as? SafeFile.Read.Ok)?.value ?: return@forEach
+                    mine.firstOrNull { openSealed(it, probe) != null }
+                } ?: return@forEach
+                val o = JSONObject(lock.toString())
+                o.remove(PREV)
+                if (!theirs.contentEquals(now)) o.put(PREV, Vault.Crypto.b64(Vault.Crypto.seal(now, theirs)))
+                SafeFile.writeMirror(File(dir, keyFile.name), o.toString().toByteArray())
+                dir.listFiles()?.filter { it.name.startsWith("open-") }?.forEach { it.delete() }
+            } catch (e: Exception) { log("couldn't re-wrap ${dir.name}: ${e.message}") }
+        }
+    }
+
+    // ------------------------------------------------------------------ changing the data key
+
+    /** Re-seals the files in the background (one at a time); goes on at the next unlock if Muninn locks or stops first. */
+    private fun startRekey() {
+        synchronized(rekeyLock) {
+            if (rekeying?.isAlive == true) return
+            rekeying = Thread({
+                try { rekeyNow() } catch (e: Exception) { log("changing the data key: ${e.message}") }
+            }, "vault-rekey").apply { isDaemon = true; priority = Thread.MIN_PRIORITY; start() }
+        }
+    }
+
+    /** A change of data key is still running (some files may still be under the key before). */
+    val rekeyPending: Boolean get() = prevKey != null
+
+    /**
+     * Every file still sealed with the key before is opened with it and sealed again with the new key, in one safe step
+     * each (its last good copy too). Saves meanwhile use the new key; a file that opens with neither key is left as it is.
+     * Once all are done the old key leaves the lock file and memory. True when nothing is left to do.
+     */
+    fun rekeyNow(): Boolean {
+        if (prevKey == null) return true
+        var ok = true
+        val files = root.walkTopDown().onEnter { it == root || !(it.parentFile == root && (it.name.startsWith(KEPT) || it.name == "tls")) }
+            .filter { it.isFile && it.name != keyFile.name && !it.name.startsWith(keyFile.name + ".") && !it.name.endsWith(SafeFile.TMP) }.toList()
+        for (f in files) {
+            val k = key() ?: return false   // locked meanwhile: goes on at the next unlock
+            val p = prev()
+            if (p == null) { k.fill(0); return true }
+            try {
+                // A last good copy is guarded by its file's lock (SafeFile keeps both under one).
+                val main = if (f.name.endsWith(SafeFile.BAK)) File(f.path.removeSuffix(SafeFile.BAK)) else f
+                synchronized(SafeFile.lockFor(main)) {
+                    if (!f.exists() || !isSealed(f)) return@synchronized
+                    val b = f.readBytes()
+                    if (openSealed(k, b) != null) return@synchronized
+                    val plain = openSealed(p, b) ?: return@synchronized
+                    try { SafeFile.write(f, Vault.Crypto.MAGIC + Vault.Crypto.seal(k, plain), keepBak = false) } finally { plain.fill(0) }
+                }
+            } catch (e: Exception) { ok = false; log("couldn't re-seal ${f.name}: ${e.message}") }
+            finally { k.fill(0); p.fill(0) }
+        }
+        return ok && finishRekey()
+    }
+
+    @Synchronized
+    private fun finishRekey(): Boolean {
+        if (key()?.also { it.fill(0) } == null) return false
+        val o = lockJson() ?: return false
+        if (o.has(PREV)) {
+            o.remove(PREV)
+            SafeFile.writeMirror(keyFile, o.toString().toByteArray())
+        }
+        synchronized(keyLock) { prevKey?.fill(0); prevKey = null }
+        log("the data key was changed")
+        return true
     }
 
     /**
@@ -247,7 +390,7 @@ class VaultCore(
         unreadable.clear(); good.clear(); synchronized(pending) { pending.clear() }
         val k = ByteArray(32).also { SecureRandom().nextBytes(it) }
         store(k, null, needsLock = needsLock)
-        synchronized(keyLock) { dataKey = k }
+        synchronized(keyLock) { dataKey = k; prevKey?.fill(0); prevKey = null }
         _trouble.value = null
         _locked.value = false
         log("set everything aside in ${kept.name} and started a new vault")
@@ -278,7 +421,7 @@ class VaultCore(
 
     /** Forgets the key and everything about the files (Erase everything). */
     fun forget() {
-        synchronized(keyLock) { dataKey?.fill(0); dataKey = null }
+        synchronized(keyLock) { dataKey?.fill(0); dataKey = null; prevKey?.fill(0); prevKey = null }
         unreadable.clear(); good.clear(); synchronized(pending) { pending.clear() }
         _trouble.value = null
     }
@@ -287,6 +430,12 @@ class VaultCore(
 
     /** A copy of the data key (null while locked), so locking meanwhile can't change it under a write. */
     private fun key(): ByteArray? = synchronized(keyLock) { dataKey?.copyOf() }
+    /** A copy of the key before (only while the data key is being changed). */
+    private fun prev(): ByteArray? = synchronized(keyLock) { prevKey?.copyOf() }
+
+    /** [b] opened with the key, or with the key before while a change of key runs. */
+    private fun openEither(k: ByteArray, b: ByteArray): ByteArray? =
+        openSealed(k, b) ?: prev()?.let { p -> try { openSealed(p, b) } finally { p.fill(0) } }
 
     private fun openSealed(k: ByteArray, b: ByteArray): ByteArray? {
         if (b.size < Vault.Crypto.MAGIC.size || !b.copyOfRange(0, Vault.Crypto.MAGIC.size).contentEquals(Vault.Crypto.MAGIC)) return null
@@ -316,7 +465,7 @@ class VaultCore(
     private fun seal(k: ByteArray, file: File, plain: ByteArray, bak: Boolean) {
         val path = file.absolutePath
         // Only a file known to be good becomes the last good copy.
-        val keep = bak && file.exists() && (path in good || (try { openSealed(k, file.readBytes()) } catch (_: Exception) { null }) != null)
+        val keep = bak && file.exists() && (path in good || (try { openEither(k, file.readBytes()) } catch (_: Exception) { null }) != null)
         SafeFile.write(file, Vault.Crypto.MAGIC + Vault.Crypto.seal(k, plain), keep)
         good.add(path)
     }
@@ -356,7 +505,7 @@ class VaultCore(
             return null
         }
         try {
-            return when (val r = SafeFile.read(file) { b -> openSealed(k, b) }) {
+            return when (val r = SafeFile.read(file) { b -> openEither(k, b) }) {
                 is SafeFile.Read.Missing -> null
                 is SafeFile.Read.Ok -> {
                     unreadable.remove(path)
@@ -452,5 +601,12 @@ class VaultCore(
         /** In a pattern's lock file: the unlock password's wrap of the data key. */
         private const val SPARE = "spare"
         private const val PATTERN = "pattern:"
+        /** In the lock file while the data key is being changed: the key before, sealed with the new one. */
+        private const val PREV = "prev"
+
+        /** scrypt settings a wrap may have: never below what Muninn writes, never more memory than a phone can give. */
+        internal fun kdfOk(n: Int, r: Int, p: Int): Boolean =
+            n >= Vault.SCRYPT_N && n <= (1 shl 17) && (n and (n - 1)) == 0 && r >= Vault.SCRYPT_R && r <= 16 &&
+                n.toLong() * r <= (1L shl 17) * 8 && p >= Vault.SCRYPT_P && p <= 4
     }
 }

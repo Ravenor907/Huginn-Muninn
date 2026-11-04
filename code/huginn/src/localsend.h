@@ -86,6 +86,10 @@ public:
     // Battery saver: the home network's addresses are looked at every 20 seconds instead of every 5.
     void setRelaxed(bool relaxed) { m_lanTimer.setInterval(relaxed ? 20000 : 5000); }
     Q_INVOKABLE void refresh();
+    // Round 19 (interop 2): a contact met on this Wi-Fi before 1.42 whose certificate was never saved and who hasn't
+    // named one (an older app): with Nearby off they aren't asked here until they update or Nearby is on once. For a
+    // note in their panel.
+    Q_INVOKABLE bool waitsForPin(const QString &key) const;
     Q_INVOKABLE void accept();
     Q_INVOKABLE void decline();
     Q_INVOKABLE void send(const QString &deviceId, const QStringList &paths, const QString &pin = QString());

@@ -701,11 +701,13 @@ QJsonObject pairJson(const ChatCrypto::KeyPair &k, const QByteArray &secret)
 
 qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
 
-// ring-key.json and ring-allow.json: readable by this user only, written beside the file and swapped in one step.
+// ring-key.json and ring-allow.json: written beside the file and swapped in one step. On Linux the file is this user's
+// only (0600). On Windows the read-only bits mean nothing for privacy: the file is private only because the data folder
+// is (portable.cpp onlyThisAccount), which is skipped on a USB stick or memory card. So don't rely on this for privacy.
 // QSaveFile swaps with a replacing rename (MoveFileEx on Windows), so the old file is never deleted first: on Windows a
 // deleted file whose name is still held (a virus scan, the indexer) refuses a rename onto it. A swap that fails while
 // something else has the file open is tried again a few times.
-bool writeOwnerOnly(const QString &path, const QByteArray &data)
+bool writeSwapped(const QString &path, const QByteArray &data)
 {
     const QFileDevice::Permissions owner = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -782,7 +784,7 @@ bool RingKey::save() const
         o.insert(QStringLiteral("older"), older);
     }
     // Readable by this user only (like the certificate's key, tls.cpp), swapped in one step.
-    return writeOwnerOnly(m_path, compact(o));
+    return writeSwapped(m_path, compact(o));
 }
 
 QString RingKey::publicKey()
@@ -1318,7 +1320,7 @@ void RingTags::saveAll()
     QStringList list(hashes.cbegin(), hashes.cend());
     list.sort();
     // Readable by this user only, like ring-key.json, swapped in one step.
-    writeOwnerOnly(m_path, compact(QJsonObject{{QStringLiteral("a"), QJsonArray::fromStringList(list)}}));
+    writeSwapped(m_path, compact(QJsonObject{{QStringLiteral("a"), QJsonArray::fromStringList(list)}}));
 }
 
 QString RingTags::tagFor(const QString &key)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QIODevice>
 #include <QHash>
 #include <QJsonValue>
 #include <QList>
@@ -14,7 +15,8 @@
 //    a file offer with "vid") to members on the same Wi-Fi, or with Direct calls and files on for each other.
 //  - Everyone else: a relay copy of at most 720p, kRelayMaxMs and kRelayPieces pieces, its pieces paced.
 //  - Huginn converts nothing (Qt 6.6 can't turn a file into another file): a video goes full size only if it's already
-//    within the limits, and as the relay copy only if it already fits that (29.6).
+//    plain H.264 within the limits, and as the relay copy only if it already fits that (29.6). It does take out the
+//    location and camera details (scrub), which needs no converting.
 namespace GroupVideo
 {
 inline const char kCap[] = "v3";
@@ -42,14 +44,36 @@ constexpr int kSlackMs = 500;
 
 constexpr int kPacePerSecond = 3;                       // relay pieces of videos, from this computer in all
 constexpr qint64 kBackoffMs = 60000;                    // after a relay's "rate-limited"
+constexpr qint64 kMaxMoov = 16LL * 1024 * 1024;         // a bigger "moov" isn't read (a minute's is well under 1 MB)
 
-// What an MP4 is, read from its own boxes (no decoding): the video track's picture, frames a second, length, size.
+// What an MP4 is, read from its own boxes (no decoding): the video track's picture, frames a second, length, size, and
+// its codecs: [video] and [sound] are the first sample entries' 4CCs ("avc1", "hvc1", "mp4a"; sound empty when none).
+// [plain]: H.264 in 8 bits and not HDR, with AAC or no sound (29.1), so every app plays it as it is; Huginn sends
+// nothing else as a video (it can't convert), only as a file.
 struct Info {
     int w = 0, h = 0, ms = 0;
     double fps = 0;
     qint64 bytes = 0;
+    QByteArray video, sound;
+    bool plain = true;
 };
 Info probe(const QByteArray &mp4);
+// The same from a file, reading only its top boxes' headers and "moov" (fast on a slow card or a network share).
+// [head]: set to the file's first 12 bytes (for MoreWire::isVideo).
+Info probeFile(const QString &path, QByteArray *head);
+bool plainCodecs(const QByteArray &video, int avcProfile, bool hdr, const QByteArray &sound);
+
+// Round 19: location and camera details out of a video before it goes (as Photos does for pictures), changed in place
+// so the picture, the sound and every sample offset stay exactly as they are (Muninn's Mp4Scrub does the same):
+// "udta", "meta" and "uuid" boxes (Android's location, an iPhone's location keys, XMP, make and model) at the top, in
+// "moov" and in each track become "free" and are zeroed; tracks other than picture and sound (GPS and other timed
+// metadata) become "free" and their samples are zeroed; creation times are zeroed; anything after the last whole box is
+// cut off. A file it can't do that to safely (fragmented, malformed) is refused: then it only goes as a file.
+// scrub: in place on [d] (open for reading and writing); the length to cut it to, or -1. [write] false: only checks
+// that it could be done (reads the top boxes' headers and "moov"; [d] may be read-only).
+qint64 scrub(QIODevice *d, bool write = true);
+QByteArray scrubbed(const QByteArray &mp4);            // a cleaned copy, or empty
+bool scrubFile(const QString &path);                     // in place (and cut); false: don't send it as a video
 
 bool withinSize(int w, int h, int longSide, int shortSide);
 bool withinFps(double fps, int most);

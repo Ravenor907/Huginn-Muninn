@@ -351,6 +351,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun nameOf(peer: String) = this@Chat.nameOf(peer)
             override fun cacheDir(): File = File(context.cacheDir, "files").also { it.mkdirs() }
             override fun notice(text: String) { notices.tryEmit(text) }
+            override fun videosOutDir(): File? = try { videosOut() } catch (_: Exception) { null }
+            override fun isKidDevice() = try { io.github.ravenor907.muninn.tv.KidMode.saved(context) } catch (_: Exception) { false }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
             // Cap f2 (section 27): the same Wi-Fi first, group files and their rules, where files go.
             override fun lanAddress(peer: String): java.net.InetAddress? =
@@ -1007,6 +1009,17 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (contacts.get(peerKey) == null) peerKeys.forget(peerKey)
         // Cap r2 (1.42): no longer a contact, so their ring tag is taken back (a new one if they come back).
         try { ringTags?.revoke(peerKey) } catch (_: Exception) {}
+        // Round 19: they still hold the ring key, and a ring without a tag would still ring. As with calls off, a new
+        // ring key goes to every other contact who may call.
+        if (was != null && RingWire.RING_CAP in was.caps && !was.noCalls) ringKey?.let { r ->
+            bg {
+                try {
+                    r.renew()
+                    nostr.resubscribe()
+                    announceKeys { RingWire.RING_CAP in it.caps && it.chatKey != peerKey && !it.noCalls }
+                } catch (_: Exception) {}
+            }
+        }
         synchronized(lock) { _met.update { it - peerKey }; saveMet() }
         // Not in touch any way now: their profile picture goes too.
         if (contacts.get(peerKey) == null) profile?.forget(peerKey)
@@ -1131,7 +1144,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // A Kids' TV only talks to the people its parents listed, and only about what it allows.
         // With no TV handler set, a Kids' TV takes nothing but configs (which it checks itself).
         val tv = tvHandler
-        if (if (tv != null) !tv.allow(fromKey, room) else room != "tvconfig" && io.github.ravenor907.muninn.tv.KidMode.saved(context)) return 403 to "{}"
+        if (if (tv != null) !tv.allow(fromKey, room) else room != "tvconfig" && io.github.ravenor907.muninn.tv.KidMode.saved(context)) {
+            // Round 19 (interop 3, K19-4): a Kids' Device takes no files straight, but a full-size video offered to it is
+            // answered at once with a decline, so the sender's app sends the relay copy now instead of waiting.
+            if (room == "file" && io.github.ravenor907.muninn.tv.KidMode.saved(context) && (contacts.contact(fromKey) != null || groups.sharesGroup(fromKey)))
+                return opened(o, fromKey, { null }) { plain -> kidVideoOffer(fromKey, String(plain, Charsets.UTF_8)) }
+            return 403 to "{}"
+        }
         if (room == "photo") return receivePiece(o, fromKey, name, via)
         if (room == "gphoto") return receiveGroupPiece(o, fromKey, name)
         val mailbox = o.optString("mailbox").takeIf { it.length == 64 }
@@ -1142,6 +1161,14 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         dup()?.let { return it }
         if (room == "nearby" && from.isNotEmpty() && !roomRate(from)) return 429 to "{}"
         return opened(o, fromKey, dup) { plain -> handle(o, room, fromKey, name, mailbox, sentId, via, String(plain, Charsets.UTF_8)) }
+    }
+
+    /** On a Kids' Device: only a full-size video offer is answered (declined, see FileLink.onSignal). Anything else is turned away. */
+    private fun kidVideoOffer(fromKey: String, text: String): Pair<Int, String> {
+        val p = try { JSONObject(text) } catch (e: Exception) { return 400 to "{}" }
+        if (p.optString("t") != "offer" || !p.has("vid") || !FileLink.ok(p)) return 403 to "{}"
+        FileLink.onSignal(fromKey, p)
+        return 200 to "{}"
     }
 
     /** The Nearby room: at most 10 messages in 10 seconds from one address or connection, whatever keys they use. */
@@ -1654,7 +1681,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val cardId = id ?: Proto06.newLogicalId()
         if (id != null && FileLink.isStopped(id)) { file.delete(); return null }
         // Ultra privacy: sending videos is off, as a file too (receiving still works).
-        if (UltraPrivacy.blocksFile(clean)) { FileLink.failed(peerKey, clean, file.length(), UltraPrivacy.VIDEO_OFF, cardId); file.delete(); return null }
+        if (UltraPrivacy.blocksFile(file, clean)) { FileLink.failed(peerKey, clean, file.length(), UltraPrivacy.VIDEO_OFF, cardId); file.delete(); return null }
         if (!hasF1(peerKey)) {
             probeCaps(peerKey)
             FileLink.failed(peerKey, clean, file.length(), "${nameOf(peerKey)} needs the latest Muninn or Huginn for files.", cardId)
@@ -1684,7 +1711,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val size = file.length()
         val members = groups.group(g)?.takeIf { !it.readOnly }?.state?.members?.map { it.k }?.filter { it != id.publicKey }.orEmpty()
         if (members.isEmpty()) { file.delete(); return "Nobody else is in this group yet." }
-        if (UltraPrivacy.blocksFile(clean)) { file.delete(); return UltraPrivacy.VIDEO_OFF }   // Ultra privacy: no videos out
+        if (UltraPrivacy.blocksFile(file, clean)) { file.delete(); return UltraPrivacy.VIDEO_OFF }   // Ultra privacy: no videos out
         groups.fileRefusal(g, id.publicKey, size).let { if (it.isNotEmpty()) { file.delete(); return it } }
         for (k in members) {
             // One file on the disk for every member (a second name for it where the storage allows, else a copy).
@@ -2896,6 +2923,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         return msgId to null
     }
 
+    /** Full-size videos waiting to go straight to someone (FileLink deletes each when its transfer ends; [sweepCache] after 2 days). */
+    private fun videosOut(): File = File(context.noBackupFilesDir, "videos-out").also { it.mkdirs() }
+
     /** Cap v3: [k]'s full copy couldn't go straight, so they get the relay copy of message [msgId] after all. */
     fun addGroupVideoMember(g: String, msgId: String, k: String): Boolean = groups.addBlobMember(g, msgId, k).also { if (it) sends.tryEmit(Folders.groupKey(g)) }
 
@@ -2909,7 +2939,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val size = file.length()
         if (!UltraPrivacy.videoSendAllowed) { FileLink.failed(k, clean, size, UltraPrivacy.VIDEO_OFF, group = g); return }
         // One file for every member (a second name for it where the storage allows, else a copy), as sendGroupFile.
-        val mine = File(file.parentFile, file.name + "-" + k.take(8).filter { it.isLetterOrDigit() } + "-" + System.nanoTime())
+        // Round 19: kept in its own folder outside the cache ([videosOut]), so the next pick's clean-up (VideoPick.clearOld,
+        // an hour) or Android trimming the cache can't take it while it waits for them (up to a day, cap f3).
+        val mine = File(videosOut(), file.name + "-" + k.take(8).filter { it.isLetterOrDigit() } + "-" + System.nanoTime())
         val ok = try { java.nio.file.Files.createLink(mine.toPath(), file.toPath()); true } catch (_: Exception) {
             try { file.copyTo(mine, overwrite = true); true } catch (_: Exception) { false }
         }
@@ -3213,6 +3245,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         for (d in listOf("files", "camera")) File(context.cacheDir, d).listFiles()?.forEach { if (now - it.lastModified() > Limits.DEFAULT * DAY) it.deleteRecursively() }
         // Copies of what was shared into Muninn (Share › Muninn, or picked in Files): gone after a day.
         File(context.cacheDir, "outgoing").listFiles()?.forEach { if (now - it.lastModified() > DAY) it.deleteRecursively() }
+        // Full-size videos still waiting after 2 days: an offer waits a day at most (cap f3).
+        File(context.noBackupFilesDir, "videos-out").listFiles()?.forEach { if (now - it.lastModified() > 2 * DAY) it.deleteRecursively() }
     }
 
     /** Erases every conversation on this phone. */

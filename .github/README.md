@@ -171,7 +171,7 @@ flowchart LR
 **What leaves your device**
 
 - Sealed messages to public Nostr relays.
-- Calls: straight over the same Wi-Fi or Bluetooth, straight between people who trust each other, or otherwise through Cloudflare's call relay (TURN). The relay carries encrypted media it can't decode, and it sees your public address. The login for it comes from the project's free relay Worker on Cloudflare, which sees your address, a hash of a random id and the time. Turn off **Internet calls** and calls use only Wi-Fi and Bluetooth. See [relay.md](../code/shared/docs/relay.md).
+- Calls: straight over the same Wi-Fi or Bluetooth, straight between people who trust each other, or otherwise through Cloudflare's call relay (TURN). The relay carries encrypted media it can't decode, and it sees your public address. The login for it comes from the project's free relay Worker on Cloudflare, which sees your address, a hash of a random id and the time. Turn off **Internet calls** and calls use only Wi-Fi and Bluetooth. With **Ultra privacy** on, calls are off both ways. See [relay.md](../code/shared/docs/relay.md).
 - STUN lookups to Cloudflare's STUN server to find a direct path: one for each file sent straight, and a few in each call with a trusted contact.
 - Update checks to GitHub (can be turned off).
 - Labs bug reports, only when a tester sends one: sealed to the project's key alone, with the app version, system and device model.

@@ -44,7 +44,8 @@ void checkHost(const QString &host, QObject *ctx, std::function<void(bool)> then
         then(LinkPreview::publicAddress(literal));
         return;
     }
-    if (host.isEmpty()) {
+    // Round 19 (m10): Ultra privacy went on after the preview started: no lookup here, nothing fetched.
+    if (host.isEmpty() || !UltraPrivacy::previewsAllowed()) {
         then(false);
         return;
     }
@@ -67,7 +68,7 @@ void get(const QString &url, int max, const QString &type, QObject *ctx, std::fu
     }
     QPointer<QObject> guard(ctx);
     checkHost(QUrl(url).host(), ctx, [url, max, type, guard, done](bool ok) {
-        if (!ok || !guard) {
+        if (!ok || !guard || !UltraPrivacy::previewsAllowed()) {
             done({});
             return;
         }
@@ -77,14 +78,21 @@ void get(const QString &url, int max, const QString &type, QObject *ctx, std::fu
 
 void fetchChecked(const QString &url, int max, const QString &type, QObject *ctx, std::function<void(const QByteArray &)> done)
 {
+    if (!UltraPrivacy::previewsAllowed()) {
+        done({});
+        return;
+    }
     QNetworkRequest req{QUrl(url)};
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
     req.setTransferTimeout(6000);
     req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Mozilla/5.0 (compatible; link preview)"));
     req.setRawHeader("Accept", type.endsWith(QLatin1Char('/')) ? QByteArray("image/*") : type.toLatin1());
     QNetworkReply *r = web()->get(req);
+    // Ultra privacy turned on while it loads: it stops now.
+    if (UltraPrivacy *u = UltraPrivacy::instance())
+        QObject::connect(u, &UltraPrivacy::turnedOn, r, [r] { r->abort(); });
     QObject::connect(r, &QNetworkReply::redirected, ctx, [r](const QUrl &to) {
-        if (to.scheme() != QLatin1String("https")) {
+        if (to.scheme() != QLatin1String("https") || !UltraPrivacy::previewsAllowed()) {
             r->abort();
             return;
         }

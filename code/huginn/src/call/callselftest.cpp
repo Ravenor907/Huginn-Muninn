@@ -14,6 +14,7 @@
 #include "roomwire.h"
 #include "stun.h"
 #include "turnclient.h"
+#include "../ultraprivacy.h"
 
 #ifdef HUGINN_HAVE_VOICE
 #include "tv_voice.h"
@@ -119,6 +120,22 @@ void relayChecks()
         waitFor([&] { return bothDone; }, 5000);
         check(bothDone && b4.isNull() && b6 == QHostAddress(QHostAddress::LocalHostIPv6),
               "an IPv6 literal is kept as the IPv6 address to fall back to");
+        // Round 19 (interop 5): with Ultra privacy on, no name is looked up here (calls are off then too).
+        {
+            UltraPrivacy u;
+            u.use(true);
+            QHostAddress ultra4(QStringLiteral("10.0.0.1")), ultra6(QStringLiteral("::2"));
+            bool ultraDone = false;
+            CallNet::resolveBoth(QStringLiteral("localhost"), &ctx, [&](const QHostAddress &v4, const QHostAddress &v6) {
+                ultra4 = v4;
+                ultra6 = v6;
+                ultraDone = true;
+            });
+            waitFor([&] { return ultraDone; }, 5000);
+            check(ultraDone && ultra4.isNull() && ultra6.isNull() && !UltraPrivacy::callsAllowed() && !UltraPrivacy::directAllowed(),
+                  "Ultra privacy: no name looked up for a call, and calls and the direct path are off");
+            u.use(false);
+        }
     }
     const auto s = TurnClient::servers({QStringLiteral("turn:turn.cloudflare.com:3478?transport=udp"), QStringLiteral("turn:turn.cloudflare.com:3478?transport=tcp"),
                                         QStringLiteral("turns:turn.cloudflare.com:5349?transport=tcp"), QStringLiteral("turns:turn.cloudflare.com:443?transport=tcp"),

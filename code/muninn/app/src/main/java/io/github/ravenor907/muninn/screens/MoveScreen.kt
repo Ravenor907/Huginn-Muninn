@@ -138,7 +138,7 @@ fun MoveCover(app: Muninn): Boolean {
     val o = out ?: return false
     if (unlocking) {
         // Stopping a move needs the person's own password or pattern.
-        LockScreen(app) { ok -> unlocking = false; if (ok) Move.abort(app) }
+        LockScreen(app, inApp = true) { ok -> unlocking = false; if (ok) Move.abort(app) }
         return true
     }
     when (o.state) {

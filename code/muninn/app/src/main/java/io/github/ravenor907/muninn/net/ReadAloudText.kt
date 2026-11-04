@@ -17,7 +17,9 @@ object ReadAloudText {
     /** The longest piece spoken at once. */
     const val MAX_PIECE = 400
     /** The most of a message read. */
-    const val MAX_TEXT = 6000
+    const val MAX_TEXT = 4000
+    /** The longest "word" read as one: longer runs are cut. */
+    const val MAX_WORD = 40
     const val MAX_DOWNLOAD = 160L * 1024 * 1024
     const val MAX_FILE = 120L * 1024 * 1024
     /** The voices-1 release (a pre-release: the update checks never look at it). */
@@ -38,6 +40,11 @@ object ReadAloudText {
     private val AT = Regex("""(^|\s)@([\p{L}\p{N}_])""")
     private val SPACES = Regex("[ \\t\\r\\u000B\\u000C\\u00A0]+")
     private val END = Regex("""(?<=[.!?…])\s+""")
+    private val ONE_SPACE = Regex(" +")
+    /** The punctuation the speech engine is given (with letters, digits and spaces). */
+    private const val ENGINE_PUNCT = ".,!?;:'\"()-/%+"
+    /** Markup that never reaches a speech engine. */
+    private const val MARKUP = "<>[]{}\\"
     private val HASH_LINE = Regex("""^([0-9a-f]{64}) {2}([A-Za-z0-9._-]{1,128})$""")
     private val TOP = setOf("model.onnx", "tokens.txt", "MODEL_CARD", "natural-voices.txt", "espeak-ng-data")
 
@@ -45,7 +52,18 @@ object ReadAloudText {
     fun dropped(c: Int): Boolean = c in 0x1F000..0x1FAFF || c in 0x2600..0x27BF || c in 0x2B00..0x2BFF || c in 0xFE00..0xFE0F ||
         c == 0x200D || c == 0x20E3 || c in 0xE0000..0xE007F
 
-    /** What is read for a message: links as "link", no emoji, marks or @, spaces tidied; lines stay. */
+    /** Control and format characters, unpaired halves, private and unassigned ones, other spaces and markup: a space. */
+    private fun blank(c: Int): Boolean {
+        val ty = Character.getType(c)
+        return ty == Character.CONTROL.toInt() || ty == Character.FORMAT.toInt() || ty == Character.SURROGATE.toInt() ||
+            ty == Character.PRIVATE_USE.toInt() || ty == Character.UNASSIGNED.toInt() || ty == Character.LINE_SEPARATOR.toInt() ||
+            ty == Character.PARAGRAPH_SEPARATOR.toInt() || ty == Character.SPACE_SEPARATOR.toInt() || (c < 0x80 && MARKUP.indexOf(c.toChar()) >= 0)
+    }
+
+    /**
+     * What is read for a message: links as "link", no emoji, marks or @, no control characters or markup, words of at
+     * most [MAX_WORD], spaces tidied, at most [MAX_TEXT] long; lines stay.
+     */
     fun plain(text: String): String {
         var t = if (text.length > MAX_TEXT) text.substring(0, MAX_TEXT) else text
         t = LINK.replace(t, " link ")
@@ -54,8 +72,54 @@ object ReadAloudText {
         t = QUOTE.replace(t, "$1")
         t = AT.replace(t, "$1$2")
         val out = StringBuilder(t.length)
-        t.codePoints().forEach { c -> if (!dropped(c)) out.appendCodePoint(c) }
+        var run = 0
+        t.codePoints().forEach { c ->
+            when {
+                dropped(c) -> {}
+                c == '\n'.code -> { out.append('\n'); run = 0 }
+                blank(c) -> { out.append(' '); run = 0 }
+                else -> {
+                    // Very long "words" are cut into pieces of MAX_WORD.
+                    if (run == MAX_WORD) { out.append(' '); run = 0 }
+                    out.appendCodePoint(c)
+                    run++
+                }
+            }
+        }
         return out.toString().split('\n').map { SPACES.replace(it, " ").trim() }.filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
+    /**
+     * What the natural voice's engine (and its eSpeak NG, native code inside Muninn) is given for one piece: Latin
+     * letters (at most two accents each), digits 0 to 9, spaces and . , ! ? ; : ' " ( ) - / % + only; anything else is a
+     * space. No brackets, angle brackets or backslashes, so eSpeak's phoneme input ([[ ]]) and SSML can't be reached.
+     * The same as Huginn's ReadAloud::forEngine.
+     */
+    fun forEngine(piece: String): String {
+        val out = StringBuilder(piece.length)
+        var afterLetter = false
+        var accents = 0
+        piece.codePoints().forEach { c ->
+            val ty = Character.getType(c)
+            if (ty == Character.NON_SPACING_MARK.toInt() || ty == Character.COMBINING_SPACING_MARK.toInt() || ty == Character.ENCLOSING_MARK.toInt()) {
+                // An accent on a letter (a typed "a" plus its ring): at most two on one letter.
+                if (afterLetter && accents < 2) { out.appendCodePoint(c); accents++ }
+                return@forEach
+            }
+            accents = 0
+            afterLetter = false
+            when {
+                Character.isLetter(c) && Character.UnicodeScript.of(c) == Character.UnicodeScript.LATIN -> { out.appendCodePoint(c); afterLetter = true }
+                c in '0'.code..'9'.code -> out.appendCodePoint(c)
+                c == '&'.code -> out.append(" and ")
+                c == 0x2018 || c == 0x2019 -> out.append('\'')
+                c == 0x201C || c == 0x201D -> out.append('"')
+                c == 0x2026 -> out.append("...")
+                c < 0x80 && ENGINE_PUNCT.indexOf(c.toChar()) >= 0 -> out.appendCodePoint(c)
+                else -> out.append(' ')
+            }
+        }
+        return ONE_SPACE.replace(out, " ").trim()
     }
 
     /** [text] in pieces to speak one at a time: sentences and lines, none longer than [MAX_PIECE]. */

@@ -1028,20 +1028,37 @@ private fun KidLookPart(app: Muninn, t: ManagedTv) {
  */
 @Composable
 private fun KidVoicePart(app: Muninn, t: ManagedTv) {
-    val k15 = TvParent.k15(app, t.key)
+    val deviceK15 = TvParent.k15(app, t.key)
+    // Round 19: every co-parent's app must read the pick too (an older one would stop seeing the device's settings).
+    val blocked = if (deviceK15) TvParent.voiceBlockedBy(app, t) else null
+    LaunchedEffect(t.key, blocked != null) { if (blocked != null) TvParent.probeVoice(app, t) }
+    val k15 = deviceK15 && blocked == null
+    // Round 19: no natural voice in this release yet (its download can't be checked): no promise of one.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val natural = remember { naturalShipped(ctx) }
     Box(Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Palette.hairline))
     Text("Read-aloud voice", style = Type.big.copy(fontSize = 17.sp, color = if (k15) Palette.text else Palette.textFaint))
-    if (!k15) Note(UPDATE_FIRST)
+    if (!deviceK15) Note(UPDATE_FIRST) else if (blocked != null) Note(blocked)
     ChoiceRow(KidVoice.CHOICES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
         val (v, name) = KidVoice.CHOICES[i]
         // None picked yet: the device reads with Female, the usual voice.
         val on = t.voice == v || (t.voice.isEmpty() && v == io.github.ravenor907.muninn.net.ReadAloudText.FEMALE)
         MButton(name, m, if (on) Kind.Accent else Kind.Normal, enabled = k15) {
-            if (t.voice != v) { TvParent.setVoice(t.key, v); Ui.say("Saved. The device downloads this voice on Wi-Fi, then reads with it.") }
+            if (t.voice != v) {
+                TvParent.setVoice(t.key, v)
+                Ui.say(if (natural) "Saved. The device downloads this voice on Wi-Fi, then reads with it." else "Saved. It changes on the device once it's online.")
+            }
         }
     }
-    Note("A natural voice, downloaded once on the device (about 65 MB). Until then it reads with its own voice.")
+    Note(if (natural) "A natural voice, downloaded once on the device (about 65 MB). Until then it reads with its own voice."
+        else "For now the device reads with its own voice. The natural voice comes with an update.")
 }
+
+/** Round 19: whether this release carries the natural voices' hashes (without them no device can download one). */
+private fun naturalShipped(context: android.content.Context): Boolean = try {
+    val h = context.assets.open("voices.sha256").bufferedReader(Charsets.UTF_8).use { io.github.ravenor907.muninn.net.ReadAloudText.hashes(it.readText()) }
+    io.github.ravenor907.muninn.net.ReadAloudText.VOICES.all { h.containsKey(io.github.ravenor907.muninn.net.ReadAloudText.fileFor(it)) }
+} catch (_: Exception) { false }
 
 /**
  * k14: the device's accessibility, the same choices as Settings › Look on a phone: text size, size of everything, high

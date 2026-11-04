@@ -98,7 +98,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation">
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -195,6 +195,14 @@
             android:name=".net.NearbyService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- Ultra privacy: Tor (tor-android's TorService) runs in its own process, never in Muninn's. Tor can't start
+             twice in one process, so turning Ultra privacy off ends this process and every start gets a fresh one.
+             Muninn talks to Tor only over its control socket and SOCKS port (net/TorRunner). -->
+        <service
+            android:name="org.torproject.jni.TorService"
+            android:exported="false"
+            android:process=":tor"
+            tools:node="merge" />
 
         <!-- Calls: the call screen (also over the lock screen for an incoming ring), its service and
              the Decline / Hang up buttons on the call notification. -->

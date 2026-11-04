@@ -323,25 +323,23 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
     var wrong by remember { mutableStateOf(false) }
     var shakes by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
-    // The same count and waits as the lock screen, so guessing here is just as slow.
+    var short by remember { mutableStateOf(false) }
+    var fails by remember { mutableIntStateOf(0) }
     val tries = remember { LockTries(app) }
-    var waitUntil by remember { mutableStateOf(tries.waitUntil()) }
-    var now by remember { mutableStateOf(tries.elapsed()) }
-    LaunchedEffect(waitUntil) { while (tries.elapsed() < waitUntil) { now = tries.elapsed(); delay(500) }; now = tries.elapsed() }
-    val waiting = now < waitUntil
     fun tryIt(secret: String) {
-        if (busy || waiting) return
-        busy = true; wrong = false
+        if (busy) return
+        busy = true; wrong = false; short = false
+        // Round 19 (owner rule): a prompt inside the open app never counts toward the lock screen's waits or the erase.
+        // Counted in memory with Confirm it's you and the other in-app prompts: 5 wrong in a row put the lock up, and the
+        // lock screen counts as usual.
+        val begun = tries.begin(inApp = true)
         scope.launch {
-            // 1.42: counted on disk before the check (stopping Muninn mid-check can't skip it); never erases from here.
-            val begun = withContext(Dispatchers.IO) { tries.begin(inApp = true) }
-            if (begun == null) { busy = false; waitUntil = withContext(Dispatchers.IO) { tries.waitUntil() }; return@launch }
             val ok = withContext(Dispatchers.Default) { try { app.vault.check(secret) } catch (_: Exception) { false } }
-            if (ok) withContext(Dispatchers.IO) { tries.right() }
             busy = false
-            if (ok) { pw = ""; Link.showOwn(true); onDone(true) }
-            else if (begun.lockApp) { onDone(false); io.github.ravenor907.muninn.ui.AppLock.raise() }
-            else { wrong = true; shakes++; val until = withContext(Dispatchers.IO) { tries.waitedUntil() }; if (until > 0) waitUntil = until }
+            if (ok) { withContext(Dispatchers.IO) { tries.right() }; pw = ""; Link.showOwn(true); onDone(true); return@launch }
+            if (begun?.lockApp == true) { onDone(false); io.github.ravenor907.muninn.ui.AppLock.raise(); return@launch }
+            fails = begun?.fails ?: 0
+            wrong = true; shakes++
         }
     }
     AlertDialog(onDismissRequest = { onDone(false) }, containerColor = Palette.panel,
@@ -350,15 +348,20 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(if (pattern) "Draw your pattern." else "Type your password.", style = Type.normal)
                 if (pattern) Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.Center) {
-                    PatternPad(error = wrong, enabled = !busy && !waiting, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
+                    // Fewer than 4 dots can't be any pattern (a stray tap): not tried, not counted.
+                    PatternPad(error = wrong || short, enabled = !busy, shake = shakes, trail = app.identity.patternTrail) { dots ->
+                        if (dots.size < 4) { short = true; wrong = false; shakes++ } else tryIt(patternSecret(dots))
+                    }
                 } else Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
                     keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt(pw) })
-                val status = triesStatus(tries.fails(), tries.erase, waiting, waitUntil - now, false, wrong)
+                    onDone = { if (pw.isNotEmpty() && !busy) tryIt(pw) })
+                val status = if (short) "Connect at least 4 dots."
+                    else if (wrong) listOf("That's not it.", inAppText(fails)).filter { it.isNotEmpty() }.joinToString(" ")
+                    else ""
                 if (status.isNotEmpty()) Text(status, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             }
         },
-        confirmButton = { if (!pattern) MButton(if (busy) "Opening…" else "Open", kind = Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt(pw) } },
+        confirmButton = { if (!pattern) MButton(if (busy) "Opening…" else "Open", kind = Kind.Accent, enabled = pw.isNotEmpty() && !busy) { tryIt(pw) } },
         dismissButton = { MButton("Cancel") { onDone(false) } })
 }
 

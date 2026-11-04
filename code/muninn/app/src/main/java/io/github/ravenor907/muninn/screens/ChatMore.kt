@@ -205,6 +205,21 @@ internal fun PollCard(poll: More.Poll, votes: Map<String, More.Vote>, me: String
     }
 }
 
+/**
+ * "Open example.com?" before the browser opens a link. Round 19: with Ultra privacy on it says the browser isn't behind
+ * Tor, and offers Copy link instead.
+ */
+internal fun askOpenLink(context: android.content.Context, url: String) {
+    val ultra = io.github.ravenor907.muninn.net.UltraPrivacy.on
+    val open = {
+        try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        catch (_: Exception) { Ui.say("No app here opens web links.", true) }
+    }
+    Ui.sure(if (!ultra) Ask("Open ${More.host(url)}?", url, "Open", onConfirm = open)
+        else Ask("Open ${More.host(url)}?", url + "\n\nIt opens in your browser, outside Tor. The site sees your internet address.", "Open",
+            extra = "Copy link", onExtra = { io.github.ravenor907.muninn.ui.Clip.copy(context, "Link", url); Ui.say("Link copied.") }, onConfirm = open))
+}
+
 /** What a link goes to, made on the sender's phone. Nothing is fetched here; tapping asks before the browser opens it. */
 @Composable
 internal fun PreviewCard(lp: More.Preview) {
@@ -213,10 +228,7 @@ internal fun PreviewCard(lp: More.Preview) {
     val host = More.host(lp.url)
     Row(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp).widthIn(max = 280.dp).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.groundDeep)
         .clickable(role = Role.Button) {
-            Ui.sure(Ask("Open $host?", lp.url, "Open", onConfirm = {
-                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(lp.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                catch (_: Exception) { Ui.say("No app here opens web links.", true) }
-            }))
+            askOpenLink(context, lp.url)
         }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
         thumb?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(56.dp).clip(io.github.ravenor907.muninn.ui.Corner)) }
         Column(Modifier.padding(start = if (thumb != null) 10.dp else 2.dp)) {
@@ -274,6 +286,8 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
     val player = remember { MediaPlayer() }
     // The video's own shape (width / height, already turned as recorded): a sideways clip is never squeezed into a tall box.
     var ratio by remember(bytes) { mutableStateOf(9f / 16f) }
+    // Round 19: a video this device can't decode (HEVC 10-bit, AV1 on an older tablet or TV) says so instead of staying black.
+    var failed by remember(bytes) { mutableStateOf(false) }
     // Round 17: where it was when its surface went (screen off, a minimised window), so it goes on from there.
     val at = remember { intArrayOf(0) }
     DisposableEffect(Unit) { onDispose { try { player.release() } catch (_: Exception) {} } }
@@ -284,7 +298,8 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
             actions()
         }
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            if (bytes == null) Text("This video can't be played.", style = Type.normal)
+            if (bytes == null || failed) Text(if (failed) "This video can't be played on this device." else "This video can't be played.",
+                style = Type.normal.copy(color = Color.White), modifier = Modifier.padding(24.dp))
             else AndroidView(factory = { ctx ->
                 SurfaceView(ctx).apply {
                     holder.addCallback(object : SurfaceHolder.Callback {
@@ -300,6 +315,7 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
                                     if (playing) mp.start()
                                 }
                                 player.setOnCompletionListener { playing = false }
+                                player.setOnErrorListener { _, _, _ -> failed = true; playing = false; true }
                                 player.prepareAsync()
                             } catch (e: Exception) { Ui.say("This video can't be played.", true) }
                         }
@@ -432,9 +448,7 @@ internal fun SharedMedia(title: String, msgs: List<Chat.Msg>, bytes: (Chat.Msg) 
                         val lp = m.preview
                         if (lp != null) PreviewCard(lp)
                         else More.firstLink(m.text)?.let { u -> Line(More.host(u), u, icon = "link") {
-                            Ui.sure(Ask("Open ${More.host(u)}?", u, "Open", onConfirm = {
-                                try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) {}
-                            }))
+                            askOpenLink(context, u)
                         } }
                     }
                 }

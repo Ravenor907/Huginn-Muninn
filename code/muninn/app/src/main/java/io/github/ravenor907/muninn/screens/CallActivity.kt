@@ -151,6 +151,13 @@ class CallActivity : ComponentActivity() {
             }
             CALL -> {
                 val key = i.getStringExtra(KEY) ?: return finish()
+                // Ultra privacy (owner decision): calls are off while it's on.
+                if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) {
+                    i.action = SHOW
+                    Toast.makeText(this, io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF, Toast.LENGTH_LONG).show()
+                    if (CallManager.call.value == null) finish()
+                    return
+                }
                 val video = i.getBooleanExtra(VIDEO, false)
                 i.action = SHOW   // a rotation or a return must not start a second call
                 val go = { withVideo: Boolean ->
@@ -184,8 +191,15 @@ class CallActivity : ComponentActivity() {
         private const val ANSWERED_VOICE = "Answered as a voice call: video needs the camera. Allow it in Android's settings for Muninn."
 
         /** Calls [peerKey]: opens the call screen, asks for the microphone (and for [video] the camera) if needed, and starts the call. */
-        fun call(c: Context, peerKey: String, video: Boolean = false) = c.startActivity(Intent(c, CallActivity::class.java).setAction(CALL).putExtra(KEY, peerKey)
-            .putExtra(VIDEO, video).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        fun call(c: Context, peerKey: String, video: Boolean = false) {
+            // Ultra privacy: calls are off while it's on; said here, without opening the call screen.
+            if (!io.github.ravenor907.muninn.net.UltraPrivacy.callsAllowed) {
+                Toast.makeText(c, io.github.ravenor907.muninn.net.UltraPrivacy.CALLS_OFF, Toast.LENGTH_LONG).show()
+                return
+            }
+            c.startActivity(Intent(c, CallActivity::class.java).setAction(CALL).putExtra(KEY, peerKey)
+                .putExtra(VIDEO, video).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        }
 
         /** Back to the call going on (a "Return to call" bar). */
         fun show(c: Context) = c.startActivity(Intent(c, CallActivity::class.java).setAction(SHOW).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))

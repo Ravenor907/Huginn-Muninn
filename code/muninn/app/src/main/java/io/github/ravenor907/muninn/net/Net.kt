@@ -30,4 +30,15 @@ object Net {
     fun forgetConnections() {
         try { client.connectionPool.evictAll() } catch (_: Exception) {}
     }
+
+    /**
+     * Ultra privacy turned on: every request still running stops now (an update or voice download, an update check,
+     * the call relay's Worker), since it may have connected the normal way. Each one says it stopped, and the next try
+     * goes through Tor. Every client made from [client] shares its dispatcher, so this reaches them all.
+     */
+    fun dropDirect() {
+        // The relays' WebSockets are left to Nostr (it dials them all again the new way itself).
+        try { for (c in client.dispatcher.runningCalls()) if (c.request().header("Upgrade") == null) c.cancel() } catch (_: Exception) {}
+        forgetConnections()
+    }
 }

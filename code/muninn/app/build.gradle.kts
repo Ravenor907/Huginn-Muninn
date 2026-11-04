@@ -220,8 +220,8 @@ androidComponents {
 }
 
 // Read aloud's speech engine, bundled: sherpa-onnx 1.13.8's Android library (Apache-2.0) with ONNX Runtime linked in
-// (MIT), from its GitHub release, checked against its line in code/shared/voices.sha256 once that line is there (the
-// Publish voices workflow prints it). Fetched once into build/sherpa; abiFilters keeps only the ABIs each APK needs
+// (MIT), from its GitHub release. The build stops unless it matches its line in code/shared/voices.sha256 (and when
+// that line is missing). Fetched once into build/sherpa; abiFilters keeps only the ABIs each APK needs
 // (arm64-v8a and armeabi-v7a in a release). 1.13.8 is the last version that still reads Piper voices from text
 // (2.0 dropped eSpeak NG).
 val sherpaVersion = "1.13.8"
@@ -235,13 +235,13 @@ val fetchSherpa by tasks.registering {
         fun sha(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
         val line = Regex("^([0-9a-f]{64}) {2}" + Regex.escape(sherpaAarName) + "$")
         val want = sharedVoicesFile.readLines().firstNotNullOfOrNull { line.find(it.trim())?.groupValues?.get(1) }
-        if (sherpaAar.exists() && (want == null || sha(sherpaAar) == want)) return@doLast
+            ?: throw GradleException("code/shared/voices.sha256 has no line for $sherpaAarName: the speech engine is native code and is never bundled unchecked (code/shared/docs/voices.md)")
+        if (sherpaAar.exists() && sha(sherpaAar) == want) return@doLast
         sherpaAar.parentFile.mkdirs()
         URI("https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/$sherpaAarName").toURL().openStream()
             .use { input -> sherpaAar.outputStream().use { input.copyTo(it) } }
         val got = sha(sherpaAar)
-        if (want == null) logger.lifecycle("$sherpaAarName has SHA-256 $got (not pinned yet: the Publish voices workflow prints its line for code/shared/voices.sha256)")
-        else if (got != want) { sherpaAar.delete(); throw GradleException("$sherpaAarName download has SHA-256 $got, expected $want") }
+        if (got != want) { sherpaAar.delete(); throw GradleException("$sherpaAarName download has SHA-256 $got, expected $want") }
     }
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(fetchSherpa) }

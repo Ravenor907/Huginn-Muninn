@@ -21,6 +21,7 @@
 #include <QUrl>
 #include <QWebSocket>
 #include <atomic>
+#include <iterator>
 #include <cstdio>
 
 namespace {
@@ -37,15 +38,23 @@ QString bullets(const QStringList &lines)
     return out.join(QLatin1Char('\n'));
 }
 
-// A free port on 127.0.0.1 right now (Tor takes it a moment later), or 0.
-int freePort()
+// Round 19: started again by itself this long after Tor ended or couldn't start (then the banner's Try again).
+const int kRetryMs[] = {5000, 30000, 120000};
+// While ready, Tor is asked how it's doing every this many seconds (each second while it connects).
+const int kReadyPollEvery = 10;
+
+// "127.0.0.1:43215" (or quoted, or the first of several) to its port when it's on 127.0.0.1, else 0.
+int loopbackPort(QString v)
 {
-    QTcpServer probe;
-    if (!probe.listen(QHostAddress::LocalHost, 0))
+    v = v.trimmed();
+    if (v.startsWith(QLatin1Char('"')))
+        v = v.mid(1, v.indexOf(QLatin1Char('"'), 1) - 1);
+    v = v.section(QLatin1Char(' '), 0, 0);
+    if (!v.startsWith(QLatin1String("127.0.0.1:")))
         return 0;
-    const int p = probe.serverPort();
-    probe.close();
-    return p;
+    bool ok = false;
+    const int p = v.mid(10).toInt(&ok);
+    return ok && p > 0 && p < 65536 ? p : 0;
 }
 }
 
@@ -94,6 +103,43 @@ void UltraPrivacy::prepare(QNetworkAccessManager *nam)
         nam->setProxy(proxy());
 }
 
+bool UltraPrivacy::looksLikeVideo(const QByteArray &h)
+{
+    if (h.size() < 12)
+        return false;
+    const QByteArray box = h.mid(4, 4);
+    if (box == "ftyp") {
+        // Photos (HEIC, AVIF) and sound (M4A) use the same box: only those aren't videos.
+        static const QList<QByteArray> notVideo{"heic", "heix", "heim", "heis", "mif1", "msf1", "avif", "M4A ", "M4B ", "M4P ", "F4A ", "F4B "};
+        return !notVideo.contains(h.mid(8, 4));
+    }
+    if (box == "moov" || box == "mdat" || box == "wide")
+        return true;   // MP4, MOV, 3GP
+    if ((box == "free" || box == "skip") && (h.contains("moov") || h.contains("mdat") || h.contains("ftyp")))
+        return true;   // an older QuickTime file
+    if (h.startsWith(QByteArray("\x1A\x45\xDF\xA3", 4)))
+        return true;   // Matroska, WebM
+    if (h.startsWith("RIFF") && h.mid(8, 4) == "AVI ")
+        return true;
+    if (h.startsWith(QByteArray("\x30\x26\xB2\x75\x8E\x66\xCF\x11", 8)))
+        return true;   // ASF, WMV
+    if (h.startsWith("FLV\x01"))
+        return true;
+    if (h.startsWith(QByteArray("\x00\x00\x01\xBA", 4)) || h.startsWith(QByteArray("\x00\x00\x01\xB3", 4)))
+        return true;   // MPEG program or video stream
+    return false;
+}
+
+bool UltraPrivacy::blocksPath(const QString &path)
+{
+    if (!on())
+        return false;
+    if (isVideoName(path))
+        return true;
+    QFile f(path);
+    return f.open(QIODevice::ReadOnly) && looksLikeVideo(f.read(64));
+}
+
 bool UltraPrivacy::isVideoName(const QString &name)
 {
     static const QStringList ext{QStringLiteral("mp4"), QStringLiteral("m4v"), QStringLiteral("mov"), QStringLiteral("webm"),
@@ -125,7 +171,7 @@ QString UltraPrivacy::statusLine() const
     case Tor::Ready: return QStringLiteral("On. Your internet address is hidden");
     case Tor::Slow: return QStringLiteral("Tor is slow to connect… %1%").arg(m_progress);
     case Tor::Blocked: return QStringLiteral("Tor can't connect on this network");
-    case Tor::Missing: return QStringLiteral("Tor couldn't start");
+    case Tor::Missing: return m_noBinary ? QStringLiteral("Tor isn't in this copy of Huginn") : QStringLiteral("Tor couldn't start");
     }
     return QString();
 }
@@ -135,31 +181,42 @@ QString UltraPrivacy::bannerText() const
     switch (m_tor) {
     case Tor::Slow: return QStringLiteral("Tor is slow to connect. Messages wait until it does.");
     case Tor::Blocked: return QStringLiteral("Tor can't connect here. It may be blocked on this network. Messages wait until it connects.");
-    case Tor::Missing: return QStringLiteral("Tor couldn't start on this computer. Nothing goes out until you turn Ultra privacy off.");
+    case Tor::Missing:
+#ifdef Q_OS_WIN
+        // Round 19 (FIX 8): antivirus took tor.exe away (or the update left it out). Said plainly, with the way back.
+        if (m_noBinary)
+            return QStringLiteral("Tor isn't in this copy of Huginn: antivirus may have removed lib\\tor\\tor.exe. Nothing goes out until it's "
+                                  "back. Allow tor.exe in your antivirus, then use Check now in Settings › Updates and about, or turn Ultra "
+                                  "privacy off.");
+#else
+        if (m_noBinary)
+            return QStringLiteral("Tor isn't installed with this copy of Huginn. Nothing goes out until it is, or you turn Ultra privacy off.");
+#endif
+        return QStringLiteral("Tor couldn't start on this computer. Nothing goes out until it does. Try again, or turn Ultra privacy off.");
     default: return QString();
     }
 }
 
 QString UltraPrivacy::nearbyNote() const
 {
-    return QStringLiteral("Still on with Ultra privacy: Nearby and the same Wi-Fi never leave your home network");
+    return QStringLiteral("Still on with Ultra privacy: Nearby and the same Wi-Fi. They stay on this Wi-Fi, so on a public Wi-Fi others there can see Nearby");
 }
 
 QString UltraPrivacy::whatItDoes() const
 {
     return bullets({QStringLiteral("Hides your internet address from the relays, from GitHub and from everyone you message."),
                     QStringLiteral("Messages, update checks and downloads go through Tor, a volunteer network that hides where they come from."),
-                    QStringLiteral("Calls always go through the call relay, never straight to the other person."),
+                    QStringLiteral("Calls are off while it's on: Tor can't carry a call, and the call relay would see your address."),
                     QStringLiteral("Anything that would still show your address is turned off while it's on."),
-                    QStringLiteral("Nearby and the same Wi-Fi keep working: they never leave your home network.")});
+                    QStringLiteral("Nearby and the same Wi-Fi keep working: they stay on this Wi-Fi.")});
 }
 
 QString UltraPrivacy::downsides() const
 {
     return QStringLiteral("Ultra privacy has these downsides:\n")
         + bullets({QStringLiteral("Messages are slower, and may arrive much later while your computer sleeps."),
-                   QStringLiteral("The call relay sees your address for calls, and calls use up the relay's daily allowance faster."),
-                   QStringLiteral("Direct calls and direct file and photo transfers are off."),
+                   QStringLiteral("Calls are off, both ways, because the call relay would see your address. Calls to you show as missed."),
+                   QStringLiteral("Direct file and photo transfers are off. Big files wait until you're on the same Wi-Fi."),
                    QStringLiteral("Sending videos is off. You can still receive them."),
                    QStringLiteral("Link previews and GIF search are off."),
                    QStringLiteral("Update checks and downloads are slower."),
@@ -219,6 +276,21 @@ void UltraPrivacy::turnOff()
     use(false);
 }
 
+void UltraPrivacy::stopNow()
+{
+    QProcess *p = m_proc;
+    stopTor();
+    s_port.store(0);
+    if (p && p->state() != QProcess::NotRunning && !p->waitForFinished(3000)) {
+        p->kill();
+        p->waitForFinished(2000);
+    }
+    if (on())
+        setTor(Tor::Missing);
+    m_retries = int(std::size(kRetryMs));   // not started again by itself
+    Q_EMIT redial();
+}
+
 void UltraPrivacy::waitLonger()
 {
     m_since.start();
@@ -226,18 +298,34 @@ void UltraPrivacy::waitLonger()
         setTor(Tor::Starting);
 }
 
+void UltraPrivacy::tryAgain()
+{
+    if (!on())
+        return;
+    if (m_proc) {
+        waitLonger();
+        return;
+    }
+    m_retries = 0;
+    startTor();
+}
+
 void UltraPrivacy::use(bool want)
 {
     if (s_on.load() == want && (want || m_tor == Tor::Off))
         return;
+    const bool turning = want && !s_on.load();
     s_on.store(want);
     s_port.store(0);
     m_progress = 0;
     m_circuit = false;
     m_warned = false;
     m_since.start();
+    m_retries = 0;
     setTor(want ? Tor::Starting : Tor::Off);
     Q_EMIT redial();
+    if (turning)
+        Q_EMIT turnedOn();
 }
 
 void UltraPrivacy::ready(int socksPort)
@@ -247,6 +335,7 @@ void UltraPrivacy::ready(int socksPort)
     const bool again = s_port.load() != socksPort || m_tor != Tor::Ready;
     s_port.store(socksPort);
     m_progress = 100;
+    m_retries = 0;
     setTor(Tor::Ready);
     if (again)
         Q_EMIT redial();
@@ -255,6 +344,7 @@ void UltraPrivacy::ready(int socksPort)
 void UltraPrivacy::setTor(Tor t)
 {
     m_tor = t;
+    m_shownProgress = m_progress;
     Q_EMIT changed();
 }
 
@@ -298,12 +388,27 @@ QString UltraPrivacy::torBinary()
 {
 #ifdef Q_OS_WIN
     const QString p = QCoreApplication::applicationDirPath() + QStringLiteral("/lib/tor/tor.exe");
-    return QFileInfo::exists(p) ? p : QString();
+#ifdef HUGINN_TOR_SHA256
+    // Round 19 (security 15): when the build pins tor.exe's SHA-256, a changed or partly quarantined copy is never run.
+    QFile f(p);
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    QCryptographicHash h(QCryptographicHash::Sha256);
+    if (!h.addData(&f) || h.result().toHex() != QByteArray(HUGINN_TOR_SHA256).toLower())
+        return QString();
+    return p;
 #else
-    // The Flatpak's own (built from source in the manifest), else one installed on the system.
-    if (QFileInfo::exists(QStringLiteral("/app/bin/tor")))
-        return QStringLiteral("/app/bin/tor");
-    return QStandardPaths::findExecutable(QStringLiteral("tor"));
+    return QFileInfo::exists(p) ? p : QString();
+#endif
+#else
+    // The Flatpak's own (built from source in the manifest), else one the system installed. Only these known places,
+    // never whatever "tor" comes first on PATH.
+    for (const char *p : {"/app/bin/tor", "/usr/bin/tor", "/usr/sbin/tor", "/usr/local/bin/tor"}) {
+        const QFileInfo fi(QString::fromLatin1(p));
+        if (fi.isFile() && fi.isExecutable())
+            return fi.absoluteFilePath();
+    }
+    return QString();
 #endif
 }
 
@@ -314,22 +419,27 @@ void UltraPrivacy::startTor()
     if (m_proc)
         return;
     const QString bin = torBinary();
-    m_socksPort = freePort();
-    m_ctlPort = freePort();
-    while (m_ctlPort == m_socksPort && m_ctlPort != 0)
-        m_ctlPort = freePort();
-    const QString dir = System::dataDir() + QStringLiteral("/tor");
-    if (bin.isEmpty() || m_socksPort == 0 || m_ctlPort == 0 || !QDir().mkpath(dir + QStringLiteral("/data"))) {
-        s_port.store(0);
-        setTor(Tor::Missing);
+    m_dir = System::dataDir() + QStringLiteral("/tor");
+    const QString dir = m_dir;
+    m_socksPort = 0;
+    m_ctlPort = 0;
+    m_pidOk = false;
+    m_progress = 0;
+    m_since.start();
+    m_noBinary = bin.isEmpty();
+    if (bin.isEmpty() || !QDir().mkpath(dir + QStringLiteral("/data"))) {
+        torLost();
         return;
     }
-    // Empty settings files of its own: nothing from a Tor installed on the system is read.
+    // Empty settings files of its own: nothing from a Tor installed on the system is read. The port file of the last
+    // run goes, so only this run's is read; Tor's own log starts over each time (kept in its folder, for "couldn't start").
     for (const QString &f : {QStringLiteral("/torrc"), QStringLiteral("/torrc-defaults")}) {
         QFile t(dir + f);
         if (t.open(QIODevice::WriteOnly | QIODevice::Truncate))
             t.close();
     }
+    QFile::remove(dir + QStringLiteral("/ctl"));
+    QFile::remove(dir + QStringLiteral("/tor.log"));
     // A new random password every start; Tor only ever sees its hash.
     QByteArray secret(32, Qt::Uninitialized), salt(8, Qt::Uninitialized);
     QRandomGenerator::system()->fillRange(reinterpret_cast<quint32 *>(secret.data()), secret.size() / 4);
@@ -342,12 +452,24 @@ void UltraPrivacy::startTor()
 
     m_proc = new QProcess(this);
     m_proc->setProgram(bin);
-    m_proc->setArguments({QStringLiteral("-f"), QDir::toNativeSeparators(dir + QStringLiteral("/torrc")),
-                          QStringLiteral("--defaults-torrc"), QDir::toNativeSeparators(dir + QStringLiteral("/torrc-defaults")),
+#ifdef Q_OS_WIN
+    // tor.exe reads its arguments in the ANSI code page: a folder name with other letters (or a long path) would break.
+    // It starts in its own folder and is given names relative to it.
+    m_proc->setWorkingDirectory(dir);
+    const QString at;
+#else
+    const QString at = dir + QLatin1Char('/');
+#endif
+    // Tor picks both ports itself (no gap where another program could take one) and writes the control port to "ctl";
+    // the SOCKS port is asked for once connected. Each relay and site gets its own circuit (IsolateDestAddr).
+    m_proc->setArguments({QStringLiteral("-f"), QDir::toNativeSeparators(at + QStringLiteral("torrc")),
+                          QStringLiteral("--defaults-torrc"), QDir::toNativeSeparators(at + QStringLiteral("torrc-defaults")),
                           QStringLiteral("--ignore-missing-torrc"),
-                          QStringLiteral("--DataDirectory"), QDir::toNativeSeparators(dir + QStringLiteral("/data")),
-                          QStringLiteral("--SocksPort"), QStringLiteral("127.0.0.1:%1").arg(m_socksPort),
-                          QStringLiteral("--ControlPort"), QStringLiteral("127.0.0.1:%1").arg(m_ctlPort),
+                          QStringLiteral("--DataDirectory"), QDir::toNativeSeparators(at + QStringLiteral("data")),
+                          QStringLiteral("--SocksPort"), QStringLiteral("127.0.0.1:auto IsolateDestAddr"),
+                          QStringLiteral("--ControlPort"), QStringLiteral("127.0.0.1:auto"),
+                          QStringLiteral("--ControlPortWriteToFile"), QDir::toNativeSeparators(at + QStringLiteral("ctl")),
+                          QStringLiteral("--Log"), QStringLiteral("notice file ") + QDir::toNativeSeparators(at + QStringLiteral("tor.log")),
                           QStringLiteral("--HashedControlPassword"), QString::fromLatin1(hashPassword(m_password, salt)),
                           QStringLiteral("--ClientOnly"), QStringLiteral("1"),
                           QStringLiteral("--AvoidDiskWrites"), QStringLiteral("1"),
@@ -359,28 +481,19 @@ void UltraPrivacy::startTor()
         if (e == QProcess::FailedToStart && m_proc == proc) {
             m_proc = nullptr;
             proc->deleteLater();
-            s_port.store(0);
-            setTor(Tor::Missing);
+            torLost();
         }
     });
     connect(m_proc, &QProcess::finished, this, [this, proc] {
         if (m_proc != proc)
             return;
-        // Tor ended while Ultra privacy is on: nothing goes out (closed port) until it's turned off.
+        // Tor ended while Ultra privacy is on: nothing goes out (closed port) until it's back.
         m_proc = nullptr;
         proc->deleteLater();
-        if (m_ctl) {
-            m_ctl->abort();
-            m_ctl->deleteLater();
-            m_ctl = nullptr;
-        }
-        if (on()) {
-            s_port.store(0);
-            setTor(Tor::Missing);
-            Q_EMIT redial();
-        }
+        torLost();
     });
-    m_since.start();
+    if (m_tor != Tor::Starting)
+        setTor(Tor::Starting);
     m_proc->start();
 
     if (!m_timer) {
@@ -388,7 +501,44 @@ void UltraPrivacy::startTor()
         m_timer->setInterval(1000);
         connect(m_timer, &QTimer::timeout, this, &UltraPrivacy::poll);
     }
+    m_ticks = 0;
     m_timer->start();
+}
+
+void UltraPrivacy::torLost()
+{
+    if (m_ctl) {
+        m_ctl->abort();
+        m_ctl->deleteLater();
+        m_ctl = nullptr;
+    }
+    m_authed = false;
+    m_password.clear();
+    if (!on())
+        return;
+    s_port.store(0);
+    setTor(Tor::Missing);
+    Q_EMIT redial();
+    // Round 19: a port clash, an old Tor still holding its folder, or a scan holding tor.exe passes: started again by
+    // itself a few times before only the banner's Try again is left.
+    if (!m_noBinary && m_retries < int(std::size(kRetryMs))) {
+        const int wait = kRetryMs[m_retries++];
+        QTimer::singleShot(wait, this, [this] {
+            if (on() && !m_proc && m_tor == Tor::Missing)
+                startTor();
+        });
+    }
+}
+
+void UltraPrivacy::notOurs()
+{
+    // The password wasn't taken, or another program answers on the port: not the Tor this Huginn started. Nothing goes
+    // out through it.
+    stopTor();
+    m_retries = int(std::size(kRetryMs));   // never by itself: the banner's Try again
+    s_port.store(0);
+    setTor(Tor::Missing);
+    Q_EMIT redial();
 }
 
 void UltraPrivacy::stopTor()
@@ -397,12 +547,15 @@ void UltraPrivacy::stopTor()
         m_timer->stop();
     if (m_ctl) {
         // TAKEOWNERSHIP: Tor ends when its controller goes.
-        m_ctl->write("SIGNAL SHUTDOWN\r\n");
+        if (m_authed)
+            m_ctl->write("SIGNAL SHUTDOWN\r\n");
         m_ctl->flush();
         m_ctl->disconnectFromHost();
         m_ctl->deleteLater();
         m_ctl = nullptr;
     }
+    m_authed = false;
+    m_pidOk = false;
     if (m_proc) {
         QProcess *proc = m_proc;
         m_proc = nullptr;
@@ -416,9 +569,21 @@ void UltraPrivacy::stopTor()
     m_password.clear();
 }
 
+void UltraPrivacy::readControlFile()
+{
+    // "PORT=127.0.0.1:43215", written by Tor once its control port listens.
+    QFile f(m_dir + QStringLiteral("/ctl"));
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    const QList<QByteArray> lines = f.read(4096).split('\n');
+    for (const QByteArray &l : lines)
+        if (l.trimmed().startsWith("PORT="))
+            m_ctlPort = loopbackPort(QString::fromLatin1(l.trimmed().mid(5)));
+}
+
 void UltraPrivacy::connectControl()
 {
-    if (m_ctl)
+    if (m_ctl || m_ctlPort <= 0)
         return;
     m_ctl = new QTcpSocket(this);
     m_ctl->setProxy(QNetworkProxy::NoProxy);
@@ -444,17 +609,23 @@ void UltraPrivacy::poll()
 {
     if (!on() || !m_proc)
         return;
+    if (m_ctlPort <= 0)
+        readControlFile();
     if (!m_ctl) {
         connectControl();
     } else if (m_authed && m_ctl->state() == QAbstractSocket::ConnectedState) {
-        m_ctl->write("GETINFO status/bootstrap-phase status/circuit-established\r\n");
+        // Each second while it connects; every few seconds once ready (enough to see lost circuits).
+        if (m_tor != Tor::Ready || ++m_ticks % kReadyPollEvery == 0)
+            m_ctl->write("GETINFO process/pid net/listeners/socks status/bootstrap-phase status/circuit-established\r\n");
     }
     if (m_tor != Tor::Ready && m_tor != Tor::Missing) {
         const Tor t = startState(m_since.elapsed(), m_warned);
         if (t != m_tor)
             setTor(t);
-        else
-            Q_EMIT changed();   // the percentage
+        else if (m_progress != m_shownProgress) {
+            m_shownProgress = m_progress;
+            Q_EMIT changed();   // the percentage, only when it moved
+        }
     }
 }
 
@@ -470,25 +641,34 @@ void UltraPrivacy::controlRead()
         const QString line = QString::fromUtf8(m_ctlBuffer.left(nl));
         m_ctlBuffer.remove(0, nl + 2);
         if (line.startsWith(QLatin1String("515")) || line.startsWith(QLatin1String("514"))) {
-            // The password wasn't taken: not our Tor on that port. Nothing goes out.
-            stopTor();
-            s_port.store(0);
-            setTor(Tor::Missing);
+            notOurs();
             return;
         }
         if (!m_authed && line == QLatin1String("250 OK")) {
             m_authed = true;
             continue;
         }
-        if (line.startsWith(QLatin1String("250-status/bootstrap-phase="))) {
+        if (line.startsWith(QLatin1String("250-process/pid="))) {
+            // The Tor this Huginn started, not another program that answers on that port.
+            const qint64 pid = line.mid(16).trimmed().toLongLong();
+            m_pidOk = m_proc && pid > 0 && pid == m_proc->processId();
+            if (!m_pidOk) {
+                notOurs();
+                return;
+            }
+        } else if (line.startsWith(QLatin1String("250-net/listeners/socks="))) {
+            const int p = loopbackPort(line.mid(24));
+            if (p > 0)
+                m_socksPort = p;
+        } else if (line.startsWith(QLatin1String("250-status/bootstrap-phase="))) {
             m_progress = qBound(0, percentOf(line), 100);
             m_warned = line.contains(QLatin1String("=WARN "));
         } else if (line.startsWith(QLatin1String("250-status/circuit-established="))) {
             m_circuit = line.endsWith(QLatin1Char('1'));
         } else if (line == QLatin1String("250 OK") && m_authed) {
-            if (m_circuit && m_progress >= 100)
+            if (m_circuit && m_progress >= 100 && m_pidOk && m_socksPort > 0)
                 ready(m_socksPort);
-            else if (m_tor == Tor::Ready) {
+            else if (m_tor == Tor::Ready && !m_circuit) {
                 // Lost its circuits: closed until they're back.
                 s_port.store(0);
                 m_since.start();
@@ -520,6 +700,12 @@ bool UltraPrivacy::selfTest()
     check(!videoSendAllowed(), "sending videos is off");
     check(!previewsAllowed(), "link previews are off");
     check(!gifSearchAllowed(), "GIF search is off");
+    check(!callsAllowed(), "calls are off, both ways");
+    check(looksLikeVideo(QByteArray("\x00\x00\x00\x18" "ftypmp42" "\x00\x00\x00\x00", 16)) && looksLikeVideo(QByteArray("\x1A\x45\xDF\xA3" "\x9F\x42\x86\x81\x01\x42\xF7\x81", 12))
+              && looksLikeVideo(QByteArray("RIFF\x10\x00\x00\x00" "AVI LIST", 16)) && !looksLikeVideo(QByteArray("\xFF\xD8\xFF\xE0\x00\x10" "JFIF\x00\x01\x01\x00", 14))
+              && !looksLikeVideo(QByteArray("hello there, nothing here")) && !looksLikeVideo(QByteArray("\x00\x00\x00\x18" "ftypheic" "\x00\x00\x00\x00", 16))
+              && !looksLikeVideo(QByteArray("\x00\x00\x00\x18" "ftypM4A " "\x00\x00\x00\x00", 16)),
+          "a video renamed to another name is still held back");
     check(blocksFile(QStringLiteral("clip.MP4")) && blocksFile(QStringLiteral("a.webm")) && blocksFile(QStringLiteral("b.mov"))
               && !blocksFile(QStringLiteral("photo.jpg")) && !blocksFile(QStringLiteral("mp4")) && !blocksFile(QStringLiteral("notes.txt")),
           "video files are held back, other files go");
@@ -613,7 +799,7 @@ bool UltraPrivacy::selfTest()
     check(!all.contains(QChar(0x2014)) && !all.contains(QChar(0x2013)), "no long dashes in the wording");
     const QString d = u.downsides().toLower();
     bool every = true;
-    for (const char *w : {"slower", "relay sees your address", "direct", "sending videos", "link previews", "gif search", "update", "power",
+    for (const char *w : {"slower", "calls are off", "calls to you show as missed", "direct", "sending videos", "link previews", "gif search", "update", "power",
                           "bigger", "blocked", "volunteers", "no encryption"})
         every = every && d.contains(QLatin1String(w));
     check(every, "every downside is listed");

@@ -50,6 +50,23 @@ DailyVerse::DailyVerse(Vault *vault, QObject *parent)
     m_clock.start();
     if (m_vault) {
         connect(m_vault, &Vault::opened, this, &DailyVerse::loadMine);
+        // Round 19: your own translation is vault data, so it isn't kept in memory while the lock is up or after an
+        // erase. It's read again on the next unlock (opened() comes only with the first one).
+        const auto drop = [this](bool again) {
+            if (m_mine.isEmpty() && m_mineOf == 0) { m_mineDropped = again; return; }
+            m_mine.clear();
+            m_mineOf = 0;
+            m_mineDropped = again;
+            Q_EMIT changed();
+        };
+        connect(m_vault, &Vault::lockedNow, this, [drop] { drop(true); });
+        connect(m_vault, &Vault::panicked, this, [drop] { drop(true); });
+        connect(m_vault, &Vault::erased, this, [drop] { drop(false); });
+        connect(m_vault, &Vault::changed, this, [this] {
+            if (!m_mineDropped || m_vault->locked() || m_vault->screenLocked()) return;
+            m_mineDropped = false;
+            loadMine();
+        });
         if (!m_vault->locked())
             loadMine();
     }

@@ -3,7 +3,7 @@ import Huginn
 
 // Round 17 (B1): Back up, Restore, Move here, Move from this device and showing this PC's chats on another device ask
 // for the current lock first, so someone holding an unlocked Huginn can't take the account. The lock is checked by
-// Vault.confirmLock (a wrong one counts as a wrong try, as unlocking does), which grants that one thing once; the C++
+// Vault.confirmLock (a wrong one counts toward the waits; inside the open app it never erases), which grants that one thing once; the C++
 // that does it takes the grant, so nothing can skip this. Without a lock there is nothing to ask: it goes straight on.
 // Over the pages and panels, under questions, calls and toasts. B or Cancel closes it.
 Item {
@@ -58,6 +58,9 @@ Item {
         if (Ui.main) Ui.main.restoreFocus()
     }
     function handleButton(b) { return lockAsk.handleButton(b) }
+    // Round 19 (m1 handheld): the buttons that do something right now (the pattern draws with A, X switches to the
+    // unlock password), for Main.qml's hint bar instead of a fixed "A: Confirm, B: Cancel".
+    readonly property var prompts: lockAsk.prompts
 
     Rectangle { anchors.fill: parent; color: Theme.groundDeep; opacity: 0.94 }
     // Nothing under it takes a click or the wheel while it shows.

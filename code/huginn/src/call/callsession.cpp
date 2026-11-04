@@ -117,8 +117,8 @@ void CallSession::sendThrice(const QJsonObject &o)
 bool CallSession::shareDirect() const
 {
     // Only to someone this side trusts, and as the callee only when the caller asked for it (5.8.1).
-    // Ultra privacy: never the direct path (no STUN, no address swapped); the call goes through the call relay, or the
-    // same Wi-Fi.
+    // Ultra privacy: never the direct path (no STUN, no address swapped). Calls are off while it's on (round 19), so a
+    // call that got this far ends when it turns on.
     return c2Local && trusted && internet && (m_offerer || m_peerP2p) && UltraPrivacy::directAllowed();
 }
 
@@ -241,7 +241,7 @@ void CallSession::applyCands(const QJsonObject &msg)
         const QString host = lanHost();
         if (!host.isEmpty())
             m_media->setLanPeer(QHostAddress(host), m_peerLanPort);
-        if (m_directOn)
+        if (m_directOn && UltraPrivacy::directAllowed())
             m_media->enableDirect(m_peerDirect);
     }
 }
@@ -514,6 +514,18 @@ void CallSession::restartRelay()
     }
 }
 
+void CallSession::stopDirect()
+{
+    // Ultra privacy went on (round 19): the direct path stops now, and nothing more of this side's addresses goes out.
+    m_directOn = false;
+    if (m_media)
+        m_media->disableDirect();
+    m_peerDirect.clear();
+    delete m_probe;
+    m_probe = nullptr;
+    Q_EMIT pathsChanged();
+}
+
 void CallSession::setTrusted(bool on)
 {
     if (on == trusted)
@@ -741,7 +753,8 @@ void CallSession::answer()
         return;
     m_answered = true;
     m_eph = CallCrypto::newEphemeral();
-    m_directOn = m_c2 && m_peerC2 && trusted && internet && m_peerP2p;
+    // Round 19 (B3): never with Ultra privacy on, whatever the caller asked for: answering must not send to their address.
+    m_directOn = m_c2 && m_peerC2 && trusted && internet && m_peerP2p && UltraPrivacy::directAllowed();
     if (!startMedia()) {
         hangup(QStringLiteral("error"));
         return;
@@ -775,12 +788,12 @@ void CallSession::sendAnswer()
     m_resend.start(2000);
 }
 
-void CallSession::decline()
+void CallSession::decline(const QString &endText)
 {
     if (m_state != Incoming)
         return;
     sendThrice(QJsonObject{{QStringLiteral("t"), QStringLiteral("decline")}, {QStringLiteral("call"), m_callId}});
-    finish(QStringLiteral("Declined"));
+    finish(endText);
 }
 
 // ------------------------------------------------------------------ both
@@ -817,7 +830,7 @@ bool CallSession::startMedia()
         m_media->setLanPeer(QHostAddress(host), m_peerLanPort);
     if (m_turn && m_peerRelayed.valid())
         m_media->setRelay(m_turn, m_peerRelayed);
-    if (m_directOn)
+    if (m_directOn && UltraPrivacy::directAllowed())
         m_media->enableDirect(m_peerDirect);
     if (m_signal && m_signal->bleReady(m_peer)) {
         QPointer<CallSignal> sig = m_signal;
@@ -884,12 +897,17 @@ void CallSession::handle(const QJsonObject &msg)
         m_theirEph = QByteArray::fromBase64(eph.toLatin1());
         readC2(msg);
         // Direct only when both trust each other: we asked (p2p in the offer), they answered with theirs.
-        m_directOn = m_c2 && m_peerC2 && trusted && internet && m_peerP2p;
+        m_directOn = m_c2 && m_peerC2 && trusted && internet && m_peerP2p && UltraPrivacy::directAllowed();
         applyCands(msg);
         if (!startMedia()) {
             hangup(QStringLiteral("error"));
             return;
         }
+        // Round 19 (interop 7): they sent their relay address and no direct path will be tried (they didn't ask for it,
+        // as with Ultra privacy on their side), and no Wi-Fi or Bluetooth carries the call: the relay is asked for now,
+        // not 2.5 s later.
+        if (!m_directOn && parseCands(msg).relay.valid() && lanHost().isEmpty() && !(m_signal && m_signal->bleReady(m_peer)))
+            m_relayWanted = true;
         setState(Connecting);
         m_noPath.start(15000);
         m_watch.start();

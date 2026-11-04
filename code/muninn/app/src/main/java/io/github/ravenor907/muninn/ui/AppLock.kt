@@ -36,7 +36,27 @@ object AppLock {
         _locked.value = true
         // Nothing is read out loud on a locked Muninn (Read aloud stops at once).
         try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
+        // Round 19: your own Hávamál translation (vault data) and a lock proven in Settings don't outlive the lock.
+        try { io.github.ravenor907.muninn.screens.DailyHav.forget() } catch (_: Throwable) {}
+        io.github.ravenor907.muninn.screens.ProvenLock.clear()
         try { onRaise() } catch (_: Exception) {}
+    }
+
+    /** Round 19: stops Read aloud when the lock comes due while Muninn is in the background (raise() only runs when a window shows again). */
+    private var quietLater: Runnable? = null
+    private fun cancelQuiet() {
+        val r = quietLater ?: return
+        quietLater = null
+        try { android.os.Handler(android.os.Looper.getMainLooper()).removeCallbacks(r) } catch (_: Throwable) {}
+    }
+    private fun quietAfter(ms: Long) {
+        cancelQuiet()
+        val away = awaySince
+        val r = Runnable {
+            quietLater = null
+            if (awaySince == away && away > 0) try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
+        }
+        try { if (android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(r, ms)) quietLater = r } catch (_: Throwable) {}
     }
 
     /** The right pattern or password was given on the lock screen: the only way the lock comes down. */
@@ -50,6 +70,7 @@ object AppLock {
      * down here, so a recreated window can't skip it. Returns whether the lock is up.
      */
     fun onShow(hasPassword: Boolean, now: Long, lockAfter: Long): Boolean {
+        cancelQuiet()
         if (due(hasPassword, awaySince, now, lockAfter)) raise()
         // On screen and open: nothing to count. While locked the time away is kept until the lock is opened.
         if (!_locked.value) awaySince = 0L
@@ -64,6 +85,7 @@ object AppLock {
         if (changing) return
         awaySince = now.coerceAtLeast(1L)
         if (hasPassword && lockAfter == 0L) raise()
+        else if (hasPassword) quietAfter(lockAfter)
     }
 
     /** A window restored from saved state (after recreation or process death) that was locked stays locked. */
@@ -72,7 +94,7 @@ object AppLock {
     }
 
     /** Test use only: back to a fresh process. */
-    internal fun reset() { _locked.value = false; awaySince = 0L; onRaise = {} }
+    internal fun reset() { cancelQuiet(); _locked.value = false; awaySince = 0L; onRaise = {} }
 
     /**
      * True when the lock must show before anything else is drawn. [awaySince] 0 means a screen was on
