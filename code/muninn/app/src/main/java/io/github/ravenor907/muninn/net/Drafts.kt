@@ -71,9 +71,6 @@ object Drafts {
         else if (old != clean) { map[key] = clean; dirty = true }
     }
 
-    /** Replies refused while locked (a notification's inline reply), by draft key, until the drafts are read. */
-    private val refused = ConcurrentHashMap<String, String>()
-
     /** The draft key a notification's chat key goes to: a chat's own, or a group's main channel ("g:" + id). */
     fun replyKey(key: String): String = if (key.startsWith("g:") && '/' !in key) groupKey(key.removePrefix("g:"), "main") else key
 
@@ -82,24 +79,28 @@ object Drafts {
         old.copy(text = (if (old.text.isBlank()) text else old.text + "\n" + text).take(KEEP_MAX))
 
     /**
-     * A notification reply that couldn't be sent (Muninn locked): it waits in its chat's box instead of being lost. Kept in
-     * memory until the drafts can be read (the vault open), then added to the saved draft.
+     * A notification reply that couldn't be sent (Muninn locked): it waits in its chat's box as a draft, never sent by
+     * itself. 1.42: with the drafts readable (the vault open) it goes straight into the draft. With the vault closed it's
+     * kept outside the vault only sealed ([ReplyHold]), and added to the draft once the vault opens; when it can't be
+     * sealed it's dropped ([ReplyHold.Kept.DROPPED]) and the caller says so. Nothing typed is kept in plain text.
      */
-    fun keepReply(app: io.github.ravenor907.muninn.Muninn, key: String, text: String) {
-        if (text.isBlank()) return
-        refused.merge(replyKey(key), text) { a, b -> a + "\n" + b }
+    fun keepReply(app: io.github.ravenor907.muninn.Muninn, key: String, text: String): ReplyHold.Kept {
+        if (text.isBlank()) return ReplyHold.Kept.DROPPED
         load(app)
-        if (loaded) { synchronized(lock) { takeRefused() }; save(app) }
+        if (loaded) {
+            synchronized(lock) { addReplies(listOf(replyKey(key) to text)) }
+            save(app)
+            return ReplyHold.Kept.DRAFT
+        }
+        return if (ReplyHold.hold(app, replyKey(key), text)) ReplyHold.Kept.SEALED else ReplyHold.Kept.DROPPED
     }
 
-    private fun takeRefused() {
-        var any = false
-        for (k in refused.keys.toList()) {
-            val t = refused.remove(k) ?: continue
-            map[k] = withReply(map[k] ?: Draft(), t)
-            dirty = true; any = true
-        }
-        if (any) _revision.value++
+    /** [replies] (draft key and text) added to their drafts, each on a new line. Holds [lock]. */
+    private fun addReplies(replies: List<Pair<String, String>>) {
+        if (replies.isEmpty()) return
+        for ((k, t) in replies) map[k] = withReply(map[k] ?: Draft(), t)
+        dirty = true
+        _revision.value++
     }
 
     private val _revision = kotlinx.coroutines.flow.MutableStateFlow(0)
@@ -176,7 +177,12 @@ object Drafts {
             decode(saved).forEach { (k, v) -> if (!(mirrorsGone && k.startsWith(MIRROR))) map.putIfAbsent(k, v) }
             if (mirrorsGone) dirty = true
             loaded = true
-            takeRefused()
+            // 1.42: replies refused and sealed while the vault was closed join their drafts, written to the vault
+            // before they're deleted from outside it.
+            ReplyHold.opened(app) { replies ->
+                addReplies(replies)
+                try { app.vault.write(File(app.filesDir, FILE), encode(map.toMap())); dirty = false; true } catch (_: Exception) { false }
+            }
         }
     }
 

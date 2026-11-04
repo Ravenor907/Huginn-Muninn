@@ -1,4 +1,6 @@
 #include "nostr.h"
+#include "groupvideo.h"
+#include "ultraprivacy.h"
 #include "busy.h"
 #include "settings.h"
 #include "schnorr.h"
@@ -239,6 +241,7 @@ public:
     void reconnectNow();
     void resubscribe();
     void disconnectAll();
+    void redialAll();
     void shutdown();
     void publish(quint64 token, const QString &mailboxHex, const QString &content, int days, int maxRelays, bool low);
     void warmSenders()
@@ -429,6 +432,7 @@ void NostrWorker::open(const QString &url)
     if (m_down || m_links.contains(url))
         return;
     auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+    UltraPrivacy::prepare(ws);   // Ultra privacy: through Tor, the relay's name looked up by Tor
     Busy::nameSocket(ws, "nostr relay");
     Busy::count(QStringLiteral("relay connects: ") + hostOf(url));
     m_links.insert(url, Link{ws, true});
@@ -570,6 +574,24 @@ void NostrWorker::reconnectNow()
         m_retries.remove(url);
         open(url);
     }
+}
+
+// Ultra privacy went on or off, or Tor became ready or was lost: every socket (listening and sending) goes at once, so
+// nothing more goes the old way, and the relays connect again the new way. What a dropped sending socket still held goes
+// again as after any failed send.
+void NostrWorker::redialAll()
+{
+    if (m_down)
+        return;
+    const bool keep = m_keepAlive;
+    const QStringList sending = m_senders.keys();
+    for (const QString &url : sending)
+        dropSender(url, m_senders.value(url).ws.data());
+    disconnectAll();
+    m_retries.clear();
+    m_keepAlive = keep;
+    if (keep)
+        connectRelays();
 }
 
 void NostrWorker::disconnectAll()
@@ -929,6 +951,7 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
     auto it = m_senders.find(url);
     if (it == m_senders.end() || !it->ws) {
         auto *ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+        UltraPrivacy::prepare(ws);   // Ultra privacy: through Tor
         Busy::nameSocket(ws, "nostr send");
         Busy::count(QStringLiteral("relay sending sockets opened: ") + hostOf(url));
         auto *closer = new QTimer(ws);
@@ -963,6 +986,9 @@ void NostrWorker::send(const QString &url, const QStringList &msgs)
             const QJsonArray a = QJsonDocument::fromJson(text.toUtf8()).array();
             if (a.at(0).toString() == QLatin1String("OK") && a.at(2).toBool())
                 takeOk(a.at(1).toString());
+            // Cap v3 (29.4): a relay asking us to slow down pauses paced video pieces for a minute.
+            else if (a.at(0).toString() == QLatin1String("OK") && GroupVideo::isRateLimit(a.at(3).toString()))
+                GroupVideo::noteRateLimited(QDateTime::currentMSecsSinceEpoch());
         });
         it = m_senders.insert(url, Sender{ws, {}, false, closer});
         ws->open(QUrl(url));
@@ -1354,6 +1380,12 @@ void Nostr::reconnectNow()
 {
     pushKeys();
     post([](NostrWorker *w) { w->reconnectNow(); });
+}
+
+void Nostr::redial()
+{
+    pushKeys();
+    post([](NostrWorker *w) { w->redialAll(); });
 }
 
 void Nostr::disconnect()

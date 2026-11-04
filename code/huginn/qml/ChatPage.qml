@@ -113,6 +113,9 @@ Rectangle {
     readonly property bool newFromShown: newFromText !== "" && newestUnread > newFromClosed
     // The bar comes and goes above the rows: the controller's focus stays on the same row.
     onNewFromShownChanged: row = Math.max(0, row + (newFromShown ? 1 : -1))
+    // Daily Havamal (Settings › Look): today's verse as the first row. A opens it, X (or its own X) hides it for today.
+    readonly property bool verseShown: !locked && DailyVerse.cardShown && !!DailyVerse.today.n
+    onVerseShownChanged: row = Math.max(0, row + (verseShown ? 1 : -1))
     function openNewFrom() {
         if (unreadChats.length === 1) { openKey = unreadChats[0].key; picked = true; zone = "messages"; return }
         // Several: the first unread row (they sit at the top of their section), or a folded folder holding one.
@@ -124,12 +127,41 @@ Rectangle {
         listPane.positionViewAtIndex(i, ListView.Beginning)
     }
     function hideNewFrom() { newFromClosed = newestUnread }
+    function hideVerse() { DailyVerse.hideToday(); Ui.say("Hidden until tomorrow.") }
+    // Today's verse (or an earlier one, v) big: what it means, Read aloud (when it can speak), Earlier verses. Every
+    // answer is a controller button: A reads aloud, X lists the earlier verses, Y goes back to today's, B closes.
+    function openVerse(v) {
+        const today = DailyVerse.today
+        const shown = v || today
+        if (!shown || !shown.n) return
+        const isToday = shown.n === today.n
+        const speaks = typeof ReadAloud !== "undefined" && !!ReadAloud && ReadAloud.available
+        const quiet = () => { if (typeof ReadAloud !== "undefined" && ReadAloud) ReadAloud.stop() }
+        const body = (isToday ? "Stanza " + shown.n + "\n\n" : "") + shown.verse + "\n\nWhat it means\n" + shown.means
+        const listEarlier = () => { quiet(); page.earlierVerses() }
+        Ui.sure(isToday ? "Today's verse" : "Stanza " + shown.n, body, speaks ? "Read aloud" : "Earlier verses",
+                speaks ? () => { ReadAloud.speak(shown.verse.replace(/\n/g, " ") + ". What it means. " + shown.means); page.openVerse(shown) } : listEarlier,
+                false, false, quiet)
+        const c = Ui.confirm
+        if (!c) return
+        c.cancelText = "Close"
+        if (speaks) { c.otherText = "Earlier verses"; c.otherCallback = listEarlier }
+        if (!isToday) { c.extraText = "Today's verse"; c.extraCallback = () => { quiet(); page.openVerse(null) } }
+    }
+    function earlierVerses() {
+        const list = DailyVerse.earlier()
+        if (!list.length) { Ui.note("Earlier verses", "New verses show here after today."); return }
+        Ui.pickFrom("Earlier verses", [{ header: "", items: list.map(v => ({ name: "Stanza " + v.n, detail: v.first, icon: "text", url: String(v.n) })) }],
+                    n => { const v = list.find(x => String(x.n) === n); if (v) page.openVerse(v) }, () => page.openVerse(null))
+    }
 
     // A person shows under every folder they're in ("section" is the folder, "" for none). Folders
     // keep their own order; people in no folder go newest first until they're moved.
     readonly property var entries: {
         // Rows waiting for an answer carry a short tag instead of a second line.
         const out = []
+        // Daily Hávamál first: today's verse and its first line.
+        if (verseShown) out.push({ kind: "verse", name: "Today's verse · Stanza " + DailyVerse.today.n, last: DailyVerse.today.first || "" })
         // "New from Mom, Taylor +3" at the top (plan 2.14): A opens the one unread chat, or goes to the unread ones.
         if (newFromShown) out.push({ kind: "newfrom", name: newFromText })
         // A linked phone (this device as its companion): its chats in their own section at the top, then this device's own.
@@ -205,6 +237,7 @@ Rectangle {
                                                                                   : headButtons[headSel] === "find" ? "Find" : "Call" }, { key: "b", label: "Back" }]
         : zone === "side" ? (side === "thread" ? [{ key: "a", label: "Reply in the thread" }] : [{ key: "a", label: "Go to it" }])
                             .concat([{ key: "lt", label: "Options" }, { key: "b", label: "Close" }])
+        : zone === "list" && entries[row] && entries[row].kind === "verse" ? [{ key: "a", label: "Open" }, { key: "lt", label: "Hide for today" }, { key: "b", label: "Back" }]
         : zone === "list" && entries[row] && entries[row].kind === "newfrom" ? [{ key: "a", label: unreadChats.length === 1 ? "Open" : "Go to them" },
                                                                              { key: "lt", label: "Hide" }, { key: "b", label: "Back" }]
         : zone === "list" ? [{ key: "a", label: entries[row] && entries[row].kind === "folder" ? (entries[row].collapsed ? "Expand" : "Collapse") : "Open" },
@@ -361,7 +394,7 @@ Rectangle {
                 readonly property bool isHeader: modelData.kind === "folder"
                 readonly property real labelHeight: modelData.label ? Theme.px(30) : 0
                 // A chat with messages: two lines (the name, then the last message).
-                readonly property bool twoLines: modelData.kind === "chat" && !!modelData.last
+                readonly property bool twoLines: (modelData.kind === "chat" || modelData.kind === "verse") && !!modelData.last
                 readonly property real rowHeight: twoLines ? Theme.px(54) : Theme.px(42)
                 width: listPane.width
                 height: labelHeight + (isHeader ? Theme.px(30) : rowHeight)
@@ -450,10 +483,10 @@ Rectangle {
                     // The one being dragged stays dim in its old place until it's dropped.
                     opacity: page.dragKey !== "" && modelData.kind === "chat" && modelData.key === page.dragKey && modelData.section === page.dragFrom ? 0.4 : 1
                     // The "New from" bar sits on the accent's soft fill.
-                    color: on || here ? Theme.tile : modelData.kind === "newfrom" ? Theme.accentFill : rowHover.hovered ? Theme.raised : "transparent"
+                    color: on || here ? Theme.tile : modelData.kind === "newfrom" || modelData.kind === "verse" ? Theme.accentFill : rowHover.hovered ? Theme.raised : "transparent"
                     border.width: on ? Theme.focusWidth : 0
                     border.color: Theme.accent
-                    Accessible.role: modelData.kind === "newfrom" ? Accessible.Button : Accessible.ListItem
+                    Accessible.role: modelData.kind === "newfrom" || modelData.kind === "verse" ? Accessible.Button : Accessible.ListItem
                     Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.muted ? ", muted" : "")
                                      + ((modelData.newCount || 0) > 0 ? ", " + modelData.newCount + " unread" : modelData.unread ? ", unread" : "")
                                      + (entry.twoLines ? ", " + modelData.last : "")
@@ -478,8 +511,8 @@ Rectangle {
                             anchors.centerIn: parent
                             size: Theme.px(18)
                             name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : modelData.kind === "archived" ? "folder"
-                                : modelData.kind === "newfrom" ? "bell" : "people"
-                            color: parent.parent.here || parent.parent.on || modelData.kind === "newfrom" ? Theme.accent : Theme.textMuted
+                                : modelData.kind === "newfrom" ? "bell" : modelData.kind === "verse" ? "text" : "people"
+                            color: parent.parent.here || parent.parent.on || modelData.kind === "newfrom" || modelData.kind === "verse" ? Theme.accent : Theme.textMuted
                         }
                         // Requests wait for an answer: a lock badge so they stand out.
                         Rectangle {
@@ -501,16 +534,16 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.verticalCenterOffset: entry.twoLines ? -Theme.px(9) : 0
                         elide: Text.ElideRight; text: modelData.name || ""
-                        color: parent.on || parent.here || modelData.unread || modelData.kind === "newfrom" ? Theme.text : Theme.textSoft
+                        color: parent.on || parent.here || modelData.unread || modelData.kind === "newfrom" || modelData.kind === "verse" ? Theme.text : Theme.textSoft
                         font.family: Theme.body; font.pixelSize: Theme.fs(15)
-                        font.weight: (modelData.newCount || 0) > 0 ? Font.Bold : modelData.unread || modelData.kind === "newfrom" ? Font.DemiBold : Font.Normal
+                        font.weight: (modelData.newCount || 0) > 0 ? Font.Bold : modelData.unread || modelData.kind === "newfrom" || modelData.kind === "verse" ? Font.DemiBold : Font.Normal
                     }
                     // The last message, under the name.
                     Text {
                         visible: entry.twoLines
                         textFormat: Text.PlainText
                         anchors.left: nameText.left
-                        anchors.right: dot.visible ? dot.left : rowMore.left
+                        anchors.right: closeNew.visible ? closeNew.left : dot.visible ? dot.left : rowMore.left
                         anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.verticalCenterOffset: Theme.px(10)
@@ -519,21 +552,22 @@ Rectangle {
                         color: (modelData.newCount || 0) > 0 ? Theme.text : Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(13)
                     }
-                    // The "New from" bar's X: hidden until the next new message (a controller uses X).
+                    // The "New from" bar's X: hidden until the next new message (a controller uses X). Today's verse: hidden for today.
                     Rectangle {
                         id: closeNew
-                        visible: modelData.kind === "newfrom"
+                        readonly property bool verse: modelData.kind === "verse"
+                        visible: modelData.kind === "newfrom" || verse
                         anchors.right: rowMore.left; anchors.rightMargin: Theme.px(2)
                         anchors.verticalCenter: parent.verticalCenter
                         width: visible ? Theme.px(28) : 0; height: Theme.px(28)
                         radius: Theme.radius
                         color: closeArea.containsMouse ? Theme.raised : "transparent"
                         Accessible.role: Accessible.Button
-                        Accessible.name: "Hide until the next message"
-                        Accessible.onPressAction: page.hideNewFrom()
+                        Accessible.name: closeNew.verse ? "Hide for today" : "Hide until the next message"
+                        Accessible.onPressAction: closeNew.verse ? page.hideVerse() : page.hideNewFrom()
                         Icon { anchors.centerIn: parent; name: "close"; size: Theme.px(14); lineWidth: 2; color: closeArea.containsMouse ? Theme.text : Theme.textMuted }
                         // A MouseArea, so the click never reaches the bar underneath.
-                        MouseArea { id: closeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: page.hideNewFrom() }
+                        MouseArea { id: closeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: closeNew.verse ? page.hideVerse() : page.hideNewFrom() }
                     }
                     // A muted chat: a bell struck through.
                     Icon {
@@ -789,7 +823,7 @@ Rectangle {
             id: lock
             visible: page.locked || page.changeLock || page.lockOff || page.ownLock
             mode: page.ownLock && !page.locked ? "own" : page.lockOff && !page.locked ? "off" : page.changeLock && !page.locked ? "change"
-                : Vault.lockNeeded ? "renew" : Vault.exists ? "unlock" : "setup"
+                : Vault.lockNeeded ? "renew" : Vault.spareStep !== "" ? "spare" : Vault.exists ? "unlock" : "setup"
             anchors.top: convHead.bottom
             anchors.bottom: parent.bottom
             anchors.horizontalCenter: parent.horizontalCenter
@@ -1481,6 +1515,15 @@ Rectangle {
             return
         }
         if (e.kind === "folder") { folderOptions(e); return }
+        // Today's verse: open, or hide it for today.
+        if (e.kind === "verse") {
+            Ui.pickFrom("Today's verse", [{ header: "", items: [{ name: "Open", icon: "text", url: "open" },
+                                                                { name: "Hide for today", icon: "close", url: "hide" }] }], a => {
+                if (a === "open") page.openVerse(null)
+                else if (a === "hide") page.hideVerse()
+            })
+            return
+        }
         // The "New from" bar: open, or hide it until the next new message.
         if (e.kind === "newfrom") {
             Ui.pickFrom("New messages", [{ header: "", items: [{ name: unreadChats.length === 1 ? "Open" : "Go to them", icon: "thread", url: "open" },
@@ -1728,6 +1771,7 @@ Rectangle {
         if (!e) return
         switch (e.kind) {
         case "newfrom": openNewFrom(); return
+        case "verse": openVerse(null); return
         case "nearby": openKey = ""; picked = true; zone = "messages"; return
         case "folder": Chat.setCollapsed(e.id, !e.collapsed); return
         case "ginvite":
@@ -1800,6 +1844,8 @@ Rectangle {
         if (openKey !== "" && !m.unsent && !tour) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
         if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.photo) items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
+        // Read aloud (src/readaloud.h): the plain text, in the voice picked in Settings › Look.
+        if (m.text && !m.unsent && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
         // Right-click extras: the link, Forward (its text) and the saved file's folder.
         const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
         if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
@@ -1823,6 +1869,7 @@ Rectangle {
             else if (a === "pin") togglePin(m.id)
             else if (a === "edit") startEdit(m)
             else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
+            else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
             else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
             else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
             else if (a === "forward") PeopleActions.forwardMenu(m.text)
@@ -2063,6 +2110,7 @@ Rectangle {
             return true
         case "x":
             if (zone === "list" && entries[row] && entries[row].kind === "newfrom") hideNewFrom()   // the "New from" bar's X
+            else if (zone === "list" && entries[row] && entries[row].kind === "verse") hideVerse()   // today's verse: hidden for today
             else if (zone === "list") listOptions()
             else if (zone === "messages" && sel >= 0) options()
             else if (zone === "messages" && openKey !== "") chatMenu()

@@ -723,7 +723,7 @@ void Move::finishIfReady()
     store(QStringLiteral("in"), s);
     Vault::Files kept;
     for (const auto &e : files)
-        if (e.first != QLatin1String("move.json") && e.first != QLatin1String("move-out.bin"))
+        if (e.first != QLatin1String("move.json") && e.first != QLatin1String("move-out.bin") && e.first != QLatin1String("havamal-own.json"))
             kept.push_back(e);
     kept.emplace_back(QStringLiteral("move.json"), compact({{QStringLiteral("in"), s}}));
     files = kept;
@@ -824,7 +824,7 @@ void Move::go()
     }
     Vault::Files keep;
     for (const auto &e : entries)
-        if (e.first != QLatin1String("move.json") && e.first != QLatin1String("move-out.bin"))
+        if (e.first != QLatin1String("move.json") && e.first != QLatin1String("move-out.bin") && e.first != QLatin1String("havamal-own.json"))
             keep.push_back(e);
     const QByteArray blob = MoveWire::pack(keep);
     // Kept in the vault until the move is done, so an interrupted one goes on after a restart.

@@ -53,6 +53,8 @@ Item {
         // Linking to a phone first (most people who install Huginn already use Muninn), or starting new here.
         case "welcome": return [{ id: "restore", label: "Restore from a backup" }, { id: "skipAll", label: "Skip setup" }, { id: "newHere", label: "New here" },
                                 { id: "linkFirst", label: "Link to my phone" }]
+        // 1.42: "Your privacy, built in": what protects every chat, and Ultra privacy (off) in Settings.
+        case "privacy": return [{ id: "back", label: "Back" }, { id: "next", label: "Next" }]
         case "lock": return lockSet ? [{ id: "back", label: "Back" }, { id: "next", label: "Next" }] : [{ id: "back", label: "Back" }, { id: "skipLock", label: "Skip" }]
         case "name": return [{ id: "nameField", label: "Type" }, { id: "picture", label: "Add a picture" }, { id: "back", label: "Back" }, { id: "next", label: "Skip" }, { id: "saveName", label: "Next" }]
         case "link": return [{ id: "linkNow", label: "Show the code" }, { id: "back", label: "Back" }, { id: "next", label: Linked.phone.key && !practice ? "Next" : "Skip" }]
@@ -70,11 +72,14 @@ Item {
     function primaryIndex() {
         const ids = order.map(o => o.id)
         for (const p of ["linkFirst", "next", "saveName", "linkNow", "showCode", "nextStop", "finish", "skipLock"])
-            if (ids.indexOf(p) >= 0 && (p !== "next" || step === "welcome" || step === "lock")) return ids.indexOf(p)
+            if (ids.indexOf(p) >= 0 && (p !== "next" || step === "welcome" || step === "privacy" || step === "lock")) return ids.indexOf(p)
         return 0
     }
 
     readonly property var prompts: {
+        // 1.42: the new pattern's unlock password: A types it, B goes back to drawing.
+        if (step === "lock" && !(Vault.exists && !practice) && lockPanel.pendingPattern !== "")
+            return [{ key: "a", label: "Type" }, { key: "x", label: "Skip" }, { key: "b", label: "Back" }]
         if (step === "lock" && !(Vault.exists && !practice))
             // The pattern: the D-pad moves, A starts and ends, B clears while drawing.
             return (lockPanel.usePattern ? [{ key: "dpad", label: "Move" }, { key: "a", label: lockPanel.drawing ? "Done" : "Draw" }] : [])
@@ -90,7 +95,7 @@ Item {
     function open(isPractice, shotStep, shotStop) {
         practice = !!isPractice || !!shotStep
         ribbon = !!isPractice && !shotStep
-        const s = ["welcome"]
+        const s = ["welcome", "privacy"]
         if (practice || !Vault.exists) s.push("lock")
         // Link comes before the name: a linked phone's name and picture are used here, so they aren't asked for.
         if (practice || (!Linked.phone.key && Linked.companions.length === 0)) s.push("link")
@@ -138,7 +143,7 @@ Item {
         if (picker.visible) picker.close()
         visible = false
         practice = false; ribbon = false; steps = []; index = 0
-        if (real) Settings.setupState = "done"
+        if (real) { Settings.setupState = "done"; Vault.setupEnded() }   // a pattern's unlock password is asked from memory next
         if (!Ui.main) return
         if (labs) Ui.main.openPage("settings", { section: "labs" })
         else if (real) {
@@ -305,6 +310,18 @@ Item {
                 Line { text: "Already use Muninn on your phone? Link this computer to it and your chats come here too."; topPadding: Theme.px(8) }
                 Line { text: "Restoring a backup makes this computer your only device. To use it with your phone, link instead."; font.pixelSize: Theme.fs(13) }
                 HButton { anchors.horizontalCenter: parent.horizontalCenter; text: "Restore from a backup"; focused: setup.lit("restore"); onClicked: setup.run("restore") }
+            }
+
+            // Your privacy, built in (1.42): what protects every chat, and that Ultra privacy is there, off. Next only.
+            Column {
+                id: privacyPage
+                visible: setup.step === "privacy"
+                width: body.width
+                spacing: Theme.px(12)
+                topPadding: Theme.px(12)
+                Title { text: UltraPrivacy.setupTitle.toUpperCase() }
+                Line { text: UltraPrivacy.setupText; horizontalAlignment: Text.AlignLeft; color: Theme.text }
+                Line { text: UltraPrivacy.setupUltra; horizontalAlignment: Text.AlignLeft }
             }
 
             // The lock: the usual lock screen. Skip asks first.
@@ -474,7 +491,7 @@ Item {
                     HButton {
                         required property var modelData
                         text: modelData.label
-                        kind: modelData.id === "next" && setup.step !== "welcome" && setup.step !== "lock" ? "normal"
+                        kind: modelData.id === "next" && setup.step !== "welcome" && setup.step !== "privacy" && setup.step !== "lock" ? "normal"
                             : ["next", "next2", "saveName", "finish", "linkFirst"].indexOf(modelData.id) >= 0 ? "primary" : modelData.id === "newHere" ? "normal" : "plain"
                         focused: setup.lit(modelData.id)
                         onClicked: setup.run(modelData.id)
@@ -494,7 +511,7 @@ Item {
         }
     }
     readonly property var footIds: ["skipAll", "back", "skipLock", "next", "next2", "saveName", "finish", "newHere", "linkFirst"]
-    readonly property real pageHeight: step === "welcome" ? welcomePage.implicitHeight : step === "lock" ? Theme.px(540)
+    readonly property real pageHeight: step === "welcome" ? welcomePage.implicitHeight : step === "privacy" ? privacyPage.implicitHeight : step === "lock" ? Theme.px(540)
                                      : step === "name" ? namePage.implicitHeight : step === "link" ? linkPage.implicitHeight
                                      : step === "people" ? peoplePage.implicitHeight : step === "done" ? donePage.implicitHeight : 0
     // The progress marks: every page but the tour.

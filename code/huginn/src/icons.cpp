@@ -21,6 +21,8 @@ const QHash<QString, QString> &paths()
     static const QHash<QString, QString> p{
         {QStringLiteral("folder"), QStringLiteral("M3 6h7l2 2h9v11H3z")},
         {QStringLiteral("file"), QStringLiteral("M6 3h8l4 4v14H6z M14 3v4h4")},
+        // A page with lines: Daily Havamal's verse (Muninn's "text").
+        {QStringLiteral("text"), QStringLiteral("M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6 M9 15h6 M9 18h4")},
         {QStringLiteral("image"), QStringLiteral("M3 5h18v14H3z M3 16l5-5 4 4 3-3 6 6")},
         {QStringLiteral("network"), QStringLiteral("M3 5h18v10H3z M8 19h8 M12 15v4")},
         {QStringLiteral("phone"), QStringLiteral("M8 3h8v18H8z M11 18h2")},

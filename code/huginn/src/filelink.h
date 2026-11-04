@@ -149,6 +149,11 @@ public:
     // trust each other, through the relays when it's 2 MB or less. group: it's that group's file (27.2). "" when it's on
     // its way (its card says how it goes), else what to tell the person.
     Q_INVOKABLE QString send(const QString &peer, const QString &path, const QString &group = QString());
+    // Cap v3 (29.3): a full-size video ([vidMs] long) straight to [peer] (in [group], or ""), as an offer with "vid". If it
+    // can't go straight (no answer within kRelayAfterMs, no way through, refused by rules or space, broken off), its
+    // card goes and [back] sends the relay copy. With no [back] (a long video in full), it waits as any file does.
+    // [path]: the video itself (never changed or deleted here).
+    QString sendVideo(const QString &peer, const QString &path, const QString &group, int vidMs, std::function<void()> back);
     // The one way to send (Send file, drag and drop): files to a chat, their key or "g:<group>[:<channel>]". In a group,
     // once to each member, after the group's own file rules said yes. "" when on their way, else why not.
     Q_INVOKABLE QString sendTo(const QString &where, const QVariantList &urls);
@@ -286,6 +291,11 @@ private:
     void fail(Xfer *x, const QString &why, bool tell = true);
     // No straight path for a file of mine: a small one goes over the internet route instead, else it fails with why.
     void fallBack(Xfer *x, const QString &why);
+    // Cap v3: a full-size video of mine that can't go straight: its card goes and its relay copy is sent instead. True
+    // when it was one (x is gone then).
+    bool videoFellBack(Xfer *x, const QString &why);
+    int m_nextVid = 0;
+    std::function<void()> m_nextBack;
     void drop(const QString &id);
     void finish(Xfer *x);
     void end(Xfer *x);

@@ -528,6 +528,8 @@ QtObject {
     property var askedDirect: ({})
     function directLabel(k) { return !Calls.trusted(k) ? "Allow direct" : askedDirect[k] ? "Asked" : "Ask " + Chat.nameOf(k) }
     function allowDirect(k) {
+        // Ultra privacy: nothing goes straight over the internet while it's on (the same Wi-Fi still does).
+        if (UltraPrivacy.active) { Ui.say("Direct files: " + UltraPrivacy.offNote + ". On the same Wi-Fi they still go straight.", true); return }
         const name = Chat.nameOf(k)
         if (Calls.trusted(k) && askedDirect[k]) { Ui.say(name + " was already asked. Retry once they turn on Direct calls and files."); return }
         const ask = () => {

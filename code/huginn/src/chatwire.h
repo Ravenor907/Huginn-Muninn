@@ -25,7 +25,7 @@ extern const char kCap[];   // "r1"
 // no k1 or k2 (managing a kids' TV is Muninn only), or peers would try it and fail. t1: takes a
 // kids' TV card (7.6), so a parent can invite someone on Huginn to talk with the kids. v1: voice
 // rooms and group calls (section 6).
-extern const char kCaps[];  // "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2 g3 f3 c3 g4 n1 n2 p2" (p2: pictures that always arrive, see Profile) (n1, n2: nudges to a locked phone, see RingWire) (g4: join refusals, see GroupWire) (v2: room heartbeats, see RoomWire) (a1: animated GIFs, see Photos) (g2: group timeouts and bans, see ModWire) (f2: file sharing, see Sharing) (f3: resume and long waits, see FileLink) (c3: no screen frames to a peer not watching, see CallMedia)
+extern const char kCaps[];  // "r1 g1 c1 c2 t1 v1 m1 m2 d1 i1 f1 j1 x1 s1 b1 e1 a1 p1 v2 g2 f2 g3 f3 c3 g4 n1 n2 p2 v3 h1 r2" (h1: hidden certificates named to contacts, r2: a ring tag per caller, see RingWire) (p2: pictures that always arrive, see Profile) (n1, n2: nudges to a locked phone, see RingWire) (g4: join refusals, see GroupWire) (v2: room heartbeats, see RoomWire) (a1: animated GIFs, see Photos) (g2: group timeouts and bans, see ModWire) (f2: file sharing, see Sharing) (f3: resume and long waits, see FileLink) (c3: no screen frames to a peer not watching, see CallMedia) (v3: picked videos, full size straight and a paced relay copy, see GroupVideo)
 
 // The ratchet is for private-room and group payloads to a contact (or group peer) that said it
 // can read it.

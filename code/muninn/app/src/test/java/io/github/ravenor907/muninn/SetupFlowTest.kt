@@ -14,13 +14,13 @@ class SetupFlowTest {
 
     @Test
     fun freshPhoneShowsEveryPage() {
-        assertEquals(listOf(Step.WELCOME, Step.LOCK, Step.NAME, Step.ALLOW, Step.PEOPLE, Step.TOUR, Step.DONE), SetupFlow.steps(facts()))
+        assertEquals(listOf(Step.WELCOME, Step.PRIVACY, Step.LOCK, Step.NAME, Step.ALLOW, Step.PEOPLE, Step.TOUR, Step.DONE), SetupFlow.steps(facts()))
     }
 
     @Test
     fun whatsSetIsNotAskedAgain() {
         val s = SetupFlow.steps(facts(lock = true, name = true, allow = false))
-        assertEquals(listOf(Step.WELCOME, Step.PEOPLE, Step.TOUR, Step.DONE), s)
+        assertEquals(listOf(Step.WELCOME, Step.PRIVACY, Step.PEOPLE, Step.TOUR, Step.DONE), s)
     }
 
     @Test
@@ -38,7 +38,7 @@ class SetupFlowTest {
 
     @Test
     fun optionalPagesHaveSkip() {
-        assertFalse(Step.WELCOME.optional); assertFalse(Step.DONE.optional)
+        assertFalse(Step.WELCOME.optional); assertFalse(Step.PRIVACY.optional); assertFalse(Step.DONE.optional)
         listOf(Step.LOCK, Step.NAME, Step.ALLOW, Step.PEOPLE, Step.LINK, Step.TOUR).forEach { assertTrue(it.name, it.optional) }
     }
 
@@ -63,7 +63,7 @@ class SetupFlowTest {
     fun runMovesAndCountsDots() {
         val r = SetupFlow.Run(false, SetupFlow.steps(facts()))
         assertTrue(r.first); assertFalse(r.back())
-        assertEquals(6, r.dots)   // 7 pages, the tour has no dot
+        assertEquals(7, r.dots)   // 8 pages, the tour has no dot
         while (r.step != Step.TOUR) assertTrue(r.next())
         val dotAtTour = r.dot
         assertTrue(r.next()); assertEquals(Step.DONE, r.step)

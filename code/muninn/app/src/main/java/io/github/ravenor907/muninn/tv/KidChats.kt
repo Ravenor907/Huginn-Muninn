@@ -1,7 +1,6 @@
 package io.github.ravenor907.muninn.tv
 
 import android.content.Context
-import android.speech.tts.TextToSpeech
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -140,39 +139,24 @@ internal object KidChats {
     fun isPhoto(m: Chat.Msg): Boolean = m.photo.isNotEmpty() && m.voice == 0 && m.video == 0 && m.file.isEmpty()
 }
 
-/** Reads a message out loud on a Kids' Device (Android's text to speech), for a child who can't read yet. */
+/**
+ * Reads a message out loud on a Kids' Device, for a child who can't read yet: through Read aloud (net/ReadAloud), in the
+ * natural voice a parent picked on the device's page (k15), or the device's own offline voice until it's downloaded.
+ */
 internal object KidSpeak {
-    private var tts: TextToSpeech? = null
-    @Volatile private var ready = false
-    @Volatile private var waiting: String? = null
-
-    /** The device has no text to speech (it said so when asked): a tap says that instead of doing nothing. */
-    @Volatile private var none = false
-    const val NONE = "This device can't read out loud"
+    const val NONE = io.github.ravenor907.muninn.net.ReadAloud.NONE
 
     fun say(context: Context, text: String) {
         if (text.isBlank()) return
-        if (none) { io.github.ravenor907.muninn.ui.Ui.say(NONE, true); return }
-        val t = tts
-        if (t == null) {
-            waiting = text
-            tts = TextToSpeech(context.applicationContext) { st ->
-                ready = st == TextToSpeech.SUCCESS
-                if (ready) waiting?.let { w -> waiting = null; try { tts?.speak(w, TextToSpeech.QUEUE_FLUSH, null, "kid") } catch (_: Exception) {} }
-                else { none = true; waiting = null; io.github.ravenor907.muninn.ui.Ui.say(NONE, true) }
-            }
-            return
-        }
-        if (ready) try { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "kid") } catch (_: Exception) {}
-        else waiting = text
+        io.github.ravenor907.muninn.net.ReadAloud.speak(context, text)
     }
 
-    fun stop() { try { tts?.stop() } catch (_: Exception) {} }
+    fun stop() = io.github.ravenor907.muninn.net.ReadAloud.stop()
 
-    /** Round 17: left kids' mode: the speech engine is let go. */
-    fun shutdown() {
-        try { tts?.stop(); tts?.shutdown() } catch (_: Exception) {}
-        tts = null; ready = false; waiting = null
+    /** Round 17: left kids' mode: the speech engines are let go, and the parent's voice pick with them. */
+    fun shutdown(context: Context? = null) {
+        io.github.ravenor907.muninn.net.ReadAloud.release()
+        context?.let { io.github.ravenor907.muninn.net.ReadAloud.parentForgot(it) }
     }
 }
 

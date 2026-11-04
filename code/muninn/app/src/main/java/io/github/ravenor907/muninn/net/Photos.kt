@@ -97,7 +97,14 @@ object Photos {
 
     /** Phones store photos sideways and note the turn in the file; apply it, since that note is dropped. */
     private fun upright(context: Context, uri: Uri, b: Bitmap): Bitmap {
-        val turn = try {
+        // Round 17 (m12): read from a file descriptor first, which can be searched: a HEIC photo read from a plain stream
+        // may give no turn on some Android versions and stay sideways. The stream stays as the fallback.
+        val fromFd = try {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { fd ->
+                ExifInterface(fd.fileDescriptor).getAttributeInt(ExifInterface.TAG_ORIENTATION, 0)
+            }
+        } catch (e: Exception) { null }
+        val turn = if (fromFd != null && fromFd != 0) ExifTurn.of(fromFd) else try {
             context.contentResolver.openInputStream(uri)?.use {
                 ExifTurn.of(ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL))
             } ?: ExifTurn.of(1)

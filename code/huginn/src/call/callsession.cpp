@@ -1,4 +1,5 @@
 #include "callsession.h"
+#include "../ultraprivacy.h"
 #include "../busy.h"
 
 #include "callmedia.h"
@@ -116,7 +117,9 @@ void CallSession::sendThrice(const QJsonObject &o)
 bool CallSession::shareDirect() const
 {
     // Only to someone this side trusts, and as the callee only when the caller asked for it (5.8.1).
-    return c2Local && trusted && internet && (m_offerer || m_peerP2p);
+    // Ultra privacy: never the direct path (no STUN, no address swapped); the call goes through the call relay, or the
+    // same Wi-Fi.
+    return c2Local && trusted && internet && (m_offerer || m_peerP2p) && UltraPrivacy::directAllowed();
 }
 
 QJsonArray CallSession::cands() const

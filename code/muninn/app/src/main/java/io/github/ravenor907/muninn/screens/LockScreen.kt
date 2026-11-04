@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.github.ravenor907.muninn.Muninn
+import io.github.ravenor907.muninn.net.LockWait
 import io.github.ravenor907.muninn.net.Vault
 import io.github.ravenor907.muninn.ui.Ask
 import io.github.ravenor907.muninn.ui.AskDialog
@@ -47,6 +48,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 
 /** Shown while Muninn is locked with a password. Nothing else is readable until it's typed. */
 @Composable
@@ -61,24 +64,28 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
     var forgot by remember { mutableStateOf(false) }   // "Forgot it?": the way back is a backup
     val ask by Ui.ask.collectAsState()
     val scope = rememberCoroutineScope()
-    val prefs = remember { app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE) }
     val pattern = remember { app.vault.usesPattern }
-    // After every 5 wrong tries, wait (kept across restarts), so guessing is slow. Timed by the time since
-    // start-up and the boot count (LockWait), so changing the clock doesn't skip it.
-    fun bootCount() = try { android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0) } catch (_: Exception) { 0 }
-    fun elapsed() = android.os.SystemClock.elapsedRealtime()
-    fun storedLeft(): Long {
-        val s = io.github.ravenor907.muninn.net.LockWait.State(prefs.getLong("lockAt", 0L), prefs.getLong("lockWait", 0L), prefs.getInt("lockBoot", -1))
-        val boot = bootCount()
-        val left = io.github.ravenor907.muninn.net.LockWait.left(s, elapsed(), boot)
-        // Restarted since: the wait starts again from now, in this start-up's time.
-        if (left > 0 && s.boot != boot) prefs.edit().putLong("lockAt", elapsed() + left).putInt("lockBoot", boot).apply()
-        return left
+    // 1.42: a pattern lock also opens with its unlock password, typed instead of drawn.
+    val hasSpare = remember { app.vault.hasSpare }
+    var useSpare by remember { mutableStateOf(false) }
+    val drawing = pattern && !useSpare
+    // Wrong tries (pattern and unlock password share one count) and their waits (LockWait), in the vault's lock-state
+    // file: each try is counted on disk before it's checked, so stopping Muninn in the middle can't skip it.
+    val tries = remember { LockTries(app) }
+    var fails by remember { mutableStateOf(tries.fails()) }
+    val erase = remember { tries.erase }
+    var waitUntil by remember { mutableStateOf(tries.waitUntil()) }
+    var now by remember { mutableStateOf(tries.elapsed()) }
+    LaunchedEffect(waitUntil) {
+        while (tries.elapsed() < waitUntil) { now = tries.elapsed(); kotlinx.coroutines.delay(500) }
+        now = tries.elapsed()
+        // Over: the wait is forgotten, so a restart later can't bring it back.
+        withContext(Dispatchers.IO) { tries.waitUntil() }
     }
-    var waitUntil by remember { mutableStateOf(elapsed() + storedLeft()) }
-    var now by remember { mutableStateOf(elapsed()) }
-    LaunchedEffect(waitUntil) { while (elapsed() < waitUntil) { now = elapsed(); kotlinx.coroutines.delay(500) }; now = elapsed() }
     val waiting = now < waitUntil
+    // Messages still arrive (sealed) during a wait, and calls still ring, as "Incoming call" only (CallService.shown).
+    // Erase on, and the last try counted before Muninn was stopped mid-check: it was wrong.
+    LaunchedEffect(Unit) { if (withContext(Dispatchers.IO) { tries.eraseDue() }) LockErase.start(app) }
     if (forgot) {
         ForgotLock(app) { forgot = false }
         ask?.let { AskDialog(it) }
@@ -88,22 +95,39 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         if (waiting || busy) return
         busy = true; wrong = false
         scope.launch {
+            // Counted and on disk first; null while a wait runs.
+            val begun = withContext(Dispatchers.IO) { tries.begin(inApp = false) }
+            if (begun == null) { busy = false; waitUntil = withContext(Dispatchers.IO) { tries.waitUntil() }; return@launch }
             val ok = withContext(Dispatchers.Default) { app.vault.unlock(secret) }   // the key stretching takes a moment
-            busy = false
             if (ok) {
-                pw = ""; prefs.edit().putInt("lockFails", 0).remove("lockAt").remove("lockWait").remove("lockBoot").apply()
+                withContext(Dispatchers.IO) { tries.right() }
+                busy = false
+                pw = ""; fails = 0
                 io.github.ravenor907.muninn.ui.Panic.unlocked(app); done(true)
             } else {
+                busy = false
                 wrong = true
                 shakes++
-                val fails = prefs.getInt("lockFails", 0) + 1
-                prefs.edit().putInt("lockFails", fails).apply()
-                val wait = io.github.ravenor907.muninn.net.LockWait.after(fails)
-                if (wait > 0) {
-                    waitUntil = elapsed() + wait
-                    prefs.edit().putLong("lockAt", waitUntil).putLong("lockWait", wait).putInt("lockBoot", bootCount()).apply()
-                }
+                pw = ""
+                fails = begun.fails
+                if (io.github.ravenor907.muninn.net.LockWait.erases(begun.fails, begun.erase)) { LockErase.start(app); return@launch }
+                val until = withContext(Dispatchers.IO) { tries.waitedUntil() }
+                if (until > 0) waitUntil = until
             }
+        }
+    }
+    // CI screenshots only: the words after LockSample's tries, as if a wait had just begun.
+    val sample = LockSample.fails
+    val status = if (sample >= 0) triesStatus(sample, LockSample.erase, LockWait.after(sample, LockSample.erase) > 0,
+            LockWait.after(sample, LockSample.erase) - 1_000L, false, true)
+        else triesStatus(fails, erase, waiting, waitUntil - now, busy, wrong)
+    val alarm = sample >= 0 || waiting || wrong || LockWait.lastLeft(fails, erase) > 0
+    // After 5 wrong patterns the unlock password is offered first: it's the way back, not another way to use up tries.
+    val spareLink: @Composable () -> Unit = {
+        if (pattern && hasSpare) {
+            if (useSpare) LinkText("Draw your pattern instead") { useSpare = false; wrong = false }
+            else if (fails >= io.github.ravenor907.muninn.net.LockWait.STEP) MButton("Use your unlock password", Modifier.fillMaxWidth().padding(top = 8.dp), Kind.Accent) { useSpare = true; wrong = false }
+            else LinkText("Use your unlock password") { useSpare = true; wrong = false }
         }
     }
     // Clear of the gesture bar too, so the pattern and Erase never sit under it.
@@ -111,52 +135,93 @@ fun LockScreen(app: Muninn, done: (Boolean) -> Unit) {
         Brand()
         // A pattern: the dots sit where Settings › Privacy and lock says (Lower unless changed), for one-handed use.
         // PadPage keeps the words and Forgot it? in reach and the pad on screen, upright or sideways, at any text size.
-        if (pattern) PadPage(Modifier.weight(1f).fillMaxWidth().padding(16.dp), padBias(app.identity.patternPos), top = {
+        if (drawing) PadPage(Modifier.weight(1f).fillMaxWidth().padding(16.dp), padBias(app.identity.patternPos), top = {
             Text("Draw your pattern to open", style = Type.big, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            Text(when {
-                waiting -> "Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s."
-                busy -> "Opening…"
-                wrong -> "That's not it. Try again."
-                else -> "Your messages, contacts and keys stay encrypted until you do."
-            }, style = Type.small.copy(color = if (waiting || wrong) Palette.danger else Palette.textMuted),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.padding(top = 4.dp))
+            Text(status.ifEmpty { "Your messages, contacts and keys stay encrypted until you do." },
+                style = Type.small.copy(color = if (alarm) Palette.danger else Palette.textMuted),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.padding(top = 4.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
+            spareLink()
             ForgotLink { forgot = true }
         }) {
             PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
         }
-        // A password: scrolls, so with larger size and text settings the field and buttons can always be reached.
+        // A password (or the unlock password): scrolls, so with larger size and text settings the field and buttons can always be reached.
         else Column(Modifier.weight(1f).verticalScroll(androidx.compose.foundation.rememberScrollState()).imePadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Panel {
                 Text("Muninn is locked", style = Type.big)
-                Text(if (pattern) "Draw your pattern. Your messages, contacts and keys stay encrypted until you do."
+                Text(if (pattern) "Type your unlock password. Your messages, contacts and keys stay encrypted until you do."
                     else "Type your password. Your messages, contacts and keys stay encrypted until you do.", style = Type.normal)
-                if (pattern) {
-                    Box(Modifier.fillMaxWidth().padding(top = 12.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                        PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
-                    }
-                } else {
-                    // Round 17: with a hardware keyboard (a keyboard cover), typing goes straight into the password.
-                    val pwFocus = remember { androidx.compose.ui.focus.FocusRequester() }
-                    val hardKeys = androidx.compose.ui.platform.LocalConfiguration.current.let {
-                        it.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY && it.hardKeyboardHidden != android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
-                    }
-                    LaunchedEffect(hardKeys) { if (hardKeys) try { pwFocus.requestFocus() } catch (_: Exception) {} }
-                    Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
-                        keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt() }, focus = pwFocus)
+                // Round 17: with a hardware keyboard (a keyboard cover), typing goes straight into the password.
+                val pwFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+                val hardKeys = androidx.compose.ui.platform.LocalConfiguration.current.let {
+                    it.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY && it.hardKeyboardHidden != android.content.res.Configuration.HARDKEYBOARDHIDDEN_YES
                 }
-                when {
-                    waiting -> Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
-                    busy -> Text("Opening…", style = Type.normal, modifier = Modifier.padding(top = 6.dp))
-                    wrong -> Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
-                }
-                if (!pattern) MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt() }
+                LaunchedEffect(hardKeys) { if (hardKeys) try { pwFocus.requestFocus() } catch (_: Exception) {} }
+                Field(pw, { pw = it; wrong = false }, if (pattern) "Unlock password" else "Password", Modifier.padding(top = 10.dp), secret = true,
+                    keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt() }, focus = pwFocus)
+                if (status.isNotEmpty()) Text(status, style = Type.normal.copy(color = if (alarm) Palette.danger else Palette.text),
+                    modifier = Modifier.padding(top = 6.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
+                MButton(if (busy) "Opening…" else "Unlock", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt() }
+                spareLink()
                 ForgotLink { forgot = true }
             }
         }
     }
     // No app-wide question is drawn over the lock: one asked before the lock went up must never be answered here
     // (AppLock closes them), and one that comes in while locked waits for the unlock. Only Forgot it? asks here.
+}
+
+/**
+ * What the lock says about wrong tries, in plain words: during a wait, the wait, what comes next and the time left;
+ * otherwise what the next wrong tries bring (counting down in the last stage). "" when there's nothing to say.
+ */
+internal fun triesStatus(fails: Int, erase: Boolean, waiting: Boolean, leftMs: Long, busy: Boolean, wrong: Boolean, checking: String = "Opening…"): String {
+    val w = io.github.ravenor907.muninn.net.LockWait
+    return when {
+        waiting -> w.waitText(fails, erase) + " " + w.leftText(leftMs)
+        busy -> checking
+        else -> listOf(if (wrong) "That's not it." else "", w.triesText(fails, erase)).filter { it.isNotEmpty() }.joinToString(" ")
+    }
+}
+
+/** CI screenshots only (a debug build started with "ci"): the lock screen's words after [fails] wrong tries. Nothing is counted. */
+object LockSample {
+    @Volatile var fails = -1
+        private set
+    @Volatile var erase = false
+        private set
+
+    fun show(fails: Int, erase: Boolean) { this.fails = fails; this.erase = erase }
+}
+
+/** A small underlined link (Use your unlock password, Draw your pattern instead). */
+@Composable
+private fun LinkText(text: String, onClick: () -> Unit) {
+    Text(text, style = Type.small.copy(color = Palette.accent, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline),
+        modifier = Modifier.padding(top = 8.dp).heightIn(min = 48.dp).wrapContentHeight()
+            .clickable(role = androidx.compose.ui.semantics.Role.Button) { onClick() })
+}
+
+/**
+ * "Erase after too many tries" reached its last wrong try: everything is erased at once, the same as Erase everything,
+ * on its own thread so nothing on screen can stop it halfway, then Muninn starts again as new.
+ */
+internal object LockErase {
+    @Volatile private var running = false
+
+    fun start(app: Muninn) {
+        if (running) return
+        running = true
+        val ctx = app.applicationContext
+        Thread {
+            try { app.vault.eraseAll() } catch (_: Exception) {}
+            val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)?.component
+            if (launch != null) try { ctx.startActivity(android.content.Intent.makeRestartActivityTask(launch)) } catch (_: Exception) {}
+            Runtime.getRuntime().exit(0)
+        }.start()
+    }
 }
 
 /** "Forgot it?" under the lock. */
@@ -202,10 +267,10 @@ private fun ForgotLock(app: Muninn, onBack: () -> Unit) {
                     // The lock isn't in the backup: after the restart a new one is set before any chat shows.
                     val old = app.vault.startOverKeeping(needsLock = true)
                     io.github.ravenor907.muninn.net.Backup.restore(ctx, app.vault, files)
-                    // What was here can't be opened without the lock: erased, not kept. The wrong tries go too.
+                    // What was here can't be opened without the lock: erased, not kept. The wrong tries go too: they counted
+                    // against a lock that's gone (this took the backup and its Backup password, and erased what was here).
                     old.deleteRecursively()
-                    app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit()
-                        .remove("lockFails").remove("lockAt").remove("lockWait").remove("lockBoot").commit()
+                    try { app.vault.tries.right() } catch (_: Exception) {}
                     "Restored. Muninn is restarting. Set a new lock next: your old one isn't in the backup."
                 }
             }
@@ -220,14 +285,16 @@ internal fun padWeights(pos: String): Pair<Float, Float> = when (pos) { "top" ->
 internal fun padBias(pos: String): Float { val (t, b) = padWeights(pos); return (t - b) / (t + b) }
 
 /**
- * Choose and confirm a lock: a 9-dot pattern (at least 6 dots) or a password (at least 6 characters).
+ * Choose and confirm a lock: a 9-dot pattern (at least 6 dots) or a password (at least 6 characters). A pattern also
+ * needs its unlock password (1.42), typed twice; either one opens Muninn.
  * Used on first open (suggested, with Skip) and for Settings › Change lock. [onCancel] null = no Cancel button.
  * [cancelText]: what the Cancel button says. [header]: the page's own title and words, above the choice, so they
- * scroll with it and never squeeze the pad or push Cancel and Skip off the screen.
+ * scroll with it and never squeeze the pad or push Cancel and Skip off the screen. [recallNow]: the unlock password
+ * is asked once more from memory right after it's saved; false (first setup) asks at the end of setup instead.
  */
 @Composable
 fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false, cancelText: String = "Cancel",
-              header: @Composable ColumnScope.() -> Unit = {}, onDone: () -> Unit) {
+              recallNow: Boolean = true, header: @Composable ColumnScope.() -> Unit = {}, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     var usePattern by remember { mutableStateOf(true) }
     var first by remember { mutableStateOf<List<Int>?>(null) }
@@ -236,14 +303,45 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
     var pw2 by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var shakes by remember { mutableStateOf(0) }   // a pattern that won't do shakes the pad
-    fun save(secret: String, pattern: Boolean) {
+    // The pattern drawn twice, waiting for its unlock password; then the unlock password asked from memory.
+    var drawn by remember { mutableStateOf<String?>(null) }
+    var recalling by remember { mutableStateOf(false) }
+    fun save(secret: String, pattern: Boolean, spare: String? = null) {
         saving = true
         scope.launch {
-            withContext(Dispatchers.Default) { app.vault.setPassword(secret, pattern) }
+            withContext(Dispatchers.Default) { app.vault.setPassword(secret, pattern, spare) }
             saving = false
-            Ui.say(if (pattern) "Pattern set. Nobody can reset it, so a backup is a good idea." else "Password set. Nobody can reset it, so a backup is a good idea.")
+            pw1 = ""; pw2 = ""
+            if (pattern) {
+                Ui.say("Pattern and unlock password set. Nobody can reset them, so a backup is a good idea.")
+                if (recallNow) { recalling = true; return@launch }
+                setRecallPending(app, true)
+            } else Ui.say("Password set. Nobody can reset it, so a backup is a good idea.")
             onDone()
         }
+    }
+    val cancel: @Composable ColumnScope.() -> Unit = {
+        if (onCancel != null) MButton(cancelText, Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { onCancel() }
+    }
+    if (recalling) {
+        UnlockPasswordSteps(app, recall = true, fill = fill) { recalling = false; onDone() }
+        return
+    }
+    val pattern = drawn
+    if (pattern != null) {
+        // The pattern's unlock password: typed twice, then saved with the pattern (two wraps of the same key).
+        val scroll = androidx.compose.foundation.rememberScrollState()
+        Column(if (fill) Modifier.fillMaxSize().imePadding().verticalScroll(scroll) else Modifier,
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+            header()
+            SpareWords()
+            SpareFields(pw1, { pw1 = it }, pw2, { pw2 = it })
+            MButton(if (saving) "Saving…" else "Save", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
+                enabled = pw1.length >= Vault.LockRules.MIN && pw1 == pw2 && !saving) { save(pattern, true, pw1) }
+            MButton("Draw a different pattern", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { drawn = null; first = null; pw1 = ""; pw2 = "" }
+            cancel()
+        }
+        return
     }
     val choose: @Composable ColumnScope.() -> Unit = {
         header()
@@ -254,12 +352,9 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
         if (usePattern) Text(when {
             saving -> "Saving…"
             note.isNotEmpty() -> note
-            first == null -> "Draw a pattern: connect at least 6 dots."
+            first == null -> "Draw a pattern: connect at least 6 dots. Next you set an unlock password too."
             else -> "Draw it again to confirm."
         }, style = Type.normal.copy(color = if (note.isNotEmpty()) Palette.danger else Palette.text), modifier = Modifier.padding(top = 10.dp))
-    }
-    val cancel: @Composable ColumnScope.() -> Unit = {
-        if (onCancel != null) MButton(cancelText, Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !saving) { onCancel() }
     }
     if (usePattern) {
         val pad: @Composable () -> Unit = {
@@ -269,7 +364,7 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
                     dots.size < Vault.LockRules.MIN -> { note = "Connect at least 6 dots."; shakes++ }
                     f == null -> { first = dots; note = "" }
                     f != dots -> { first = null; note = "That didn't match. Start over."; shakes++ }
-                    else -> save(patternSecret(dots), true)
+                    else -> { drawn = patternSecret(dots); note = "" }
                 }
             }
         }
@@ -297,6 +392,112 @@ fun LockSetup(app: Muninn, onCancel: (() -> Unit)? = null, fill: Boolean = false
     }
 }
 
+/** What the unlock password is, above its two fields. */
+@Composable
+private fun SpareWords() {
+    Text("Unlock password", style = Type.big, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+    Text("A pattern also needs an unlock password. Either one opens Muninn, so if you forget the pattern, the unlock password still gets you in. " +
+        "It isn't your Backup password: that one is only for backup files.", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+}
+
+/** The unlock password typed twice, with what's still missing. */
+@Composable
+private fun SpareFields(pw1: String, set1: (String) -> Unit, pw2: String, set2: (String) -> Unit) {
+    Field(pw1, set1, "Unlock password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+    Field(pw2, set2, "Type it again", Modifier.padding(top = 8.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+    if (pw1.isNotEmpty() && pw1.length < Vault.LockRules.MIN) Text("At least 6 characters.", style = Type.small.copy(color = Palette.textMuted), modifier = Modifier.padding(top = 4.dp))
+    if (pw2.isNotEmpty() && pw1 != pw2) Text("They don't match yet.", style = Type.small.copy(color = Palette.danger), modifier = Modifier.padding(top = 4.dp))
+}
+
+/**
+ * The unlock password on its own (the pattern stays): [recall] false sets it (typed twice), then asks for it once more
+ * from memory; true only asks from memory. Asking from memory checks it by opening its wrap, then forgets it; it isn't
+ * a try at the lock (Muninn is open). Wrong: try again, or set a new one.
+ */
+@Composable
+fun UnlockPasswordSteps(app: Muninn, recall: Boolean, fill: Boolean = true, header: @Composable ColumnScope.() -> Unit = {}, onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var asking by remember { mutableStateOf(recall) }
+    var pw1 by remember { mutableStateOf("") }
+    var pw2 by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var wrong by remember { mutableStateOf(false) }
+    val scroll = androidx.compose.foundation.rememberScrollState()
+    Column(if (fill) Modifier.fillMaxSize().imePadding().verticalScroll(scroll) else Modifier,
+        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        header()
+        if (asking) {
+            Text("Type your unlock password", style = Type.big, modifier = Modifier.fillMaxWidth().padding(top = 10.dp))
+            Text("From memory this time, so you know you'll have it if you forget your pattern.", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+            Field(pw1, { pw1 = it; wrong = false }, "Unlock password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password))
+            if (wrong) Text("That's not it. Try again, or set a new one.", style = Type.normal.copy(color = Palette.danger),
+                modifier = Modifier.padding(top = 6.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
+            MButton(if (busy) "Checking…" else "Check", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw1.isNotEmpty() && !busy) {
+                busy = true
+                val given = pw1
+                scope.launch {
+                    val right = withContext(Dispatchers.Default) { try { app.vault.checkSpare(given) } catch (_: Exception) { false } }
+                    busy = false
+                    pw1 = ""
+                    if (right) { setRecallPending(app, false); Ui.say("That's it. Keep it somewhere safe."); onDone() } else wrong = true
+                }
+            }
+            if (wrong) MButton("Set a new unlock password", Modifier.fillMaxWidth().padding(top = 8.dp), enabled = !busy) { asking = false; wrong = false; pw1 = ""; pw2 = "" }
+        } else {
+            SpareWords()
+            SpareFields(pw1, { pw1 = it }, pw2, { pw2 = it })
+            MButton(if (busy) "Saving…" else "Save", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent,
+                enabled = pw1.length >= Vault.LockRules.MIN && pw1 == pw2 && !busy) {
+                busy = true
+                val given = pw1
+                scope.launch {
+                    val saved = withContext(Dispatchers.Default) { try { app.vault.setSpare(given) } catch (_: Exception) { false } }
+                    busy = false
+                    pw1 = ""; pw2 = ""
+                    if (saved) { setRecallPending(app, true); asking = true } else Ui.say("That didn't save. Try again.", true)
+                }
+            }
+        }
+    }
+}
+
+/** The unlock password still has to be asked once more from memory (set during first setup, asked at its end). */
+fun recallPending(app: Muninn): Boolean =
+    app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).getBoolean(UNLOCK_RECALL, false) && app.vault.hasSpare
+
+internal fun setRecallPending(app: Muninn, on: Boolean) {
+    app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().putBoolean(UNLOCK_RECALL, on).apply()
+}
+
+private const val UNLOCK_RECALL = "unlockRecall"
+
+/**
+ * After an unlock: a pattern set before 1.42 gets its unlock password now ("set"), and one set during first setup is
+ * asked once more from memory ("recall") once setup is over. Null when there's nothing to ask.
+ */
+fun spareStep(app: Muninn): String? = when {
+    app.vault.needsSpare -> "set"
+    recallPending(app) -> "recall"
+    else -> null
+}
+
+/** [spareStep]'s page, full screen, before any chat shows. No Skip: the unlock password is the way back in. */
+@Composable
+fun UnlockPasswordPage(app: Muninn, step: String, done: () -> Unit) {
+    Column(Modifier.fillMaxSize().background(Palette.ground).statusBarsPadding().navigationBarsPadding()) {
+        Brand {}
+        Box(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
+            UnlockPasswordSteps(app, recall = step == "recall", header = {
+                if (step == "set") {
+                    Text("One more step for your pattern", style = Type.big, modifier = Modifier.fillMaxWidth())
+                    Text("Muninn now asks for an unlock password with every pattern. ${io.github.ravenor907.muninn.net.LockWait.EXPLAINER}",
+                        style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                }
+            }) { done() }
+        }
+    }
+}
+
 /** First open: a lock is suggested before anything else, with Skip to go without one. */
 @Composable
 fun FirstLock(app: Muninn, done: () -> Unit) {
@@ -311,6 +512,7 @@ fun FirstLock(app: Muninn, done: () -> Unit) {
                 Text("Protect Muninn", style = Type.big, modifier = Modifier.fillMaxWidth())
                 Text("Muninn opens with your pattern or password, and everything it keeps is encrypted with it. There's no way to recover it, so pick one you'll remember.",
                     style = Type.small, modifier = Modifier.fillMaxWidth())
+                Text(io.github.ravenor907.muninn.net.LockWait.EXPLAINER, style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
             }) { done() }
         }
     }
@@ -371,54 +573,52 @@ fun lockChosen(app: Muninn): Boolean = app.vault.hasPassword ||
 private const val LOCK_SKIPPED = "lockSkipped"
 
 /**
- * Wrong tries at Muninn's lock, shared by every place that asks for it (the lock screen's own count and wait): after
- * every 5, a wait that doubles ([io.github.ravenor907.muninn.net.LockWait]), kept across restarts and timed by the time
- * since start-up and the boot count, so changing the clock doesn't skip it.
+ * Wrong tries at Muninn's lock, shared by every place that asks for it (the lock screen, Confirm it's you, linking):
+ * one count for the pattern and the unlock password, and the 1.42 waits ([io.github.ravenor907.muninn.net.LockWait]),
+ * kept in the vault's lock-state file across restarts and timed by the time since start-up and the boot count, so
+ * changing the clock doesn't skip them. A try is counted on disk ([begin]) before it's checked.
  */
-internal class LockTries(app: Muninn) {
-    private val resolver = app.contentResolver
-    private val prefs = app.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
-    private fun bootCount() = try { android.provider.Settings.Global.getInt(resolver, android.provider.Settings.Global.BOOT_COUNT, 0) } catch (_: Exception) { 0 }
+internal class LockTries(private val app: Muninn) {
+    private val store get() = app.vault.tries
     fun elapsed() = android.os.SystemClock.elapsedRealtime()
 
-    /** When the wait after too many tries ends (in [elapsed] time); now when there is none. */
-    fun waitUntil(): Long {
-        val s = io.github.ravenor907.muninn.net.LockWait.State(prefs.getLong("lockAt", 0L), prefs.getLong("lockWait", 0L), prefs.getInt("lockBoot", -1))
-        val boot = bootCount()
-        val left = io.github.ravenor907.muninn.net.LockWait.left(s, elapsed(), boot)
-        // Restarted since: the wait starts again from now, in this start-up's time.
-        if (left > 0 && s.boot != boot) prefs.edit().putLong("lockAt", elapsed() + left).putInt("lockBoot", boot).apply()
-        return elapsed() + left
-    }
+    /** When the wait after too many tries ends (in [elapsed] time); now when there is none. Writes to disk: off the main thread when it can be. */
+    fun waitUntil(): Long = elapsed() + store.left()
+
+    /** Wrong tries in a row so far, and whether "Erase after too many tries" is on. */
+    fun fails(): Int = store.fails()
+    val erase: Boolean get() = store.erase
+    fun eraseDue(): Boolean = store.eraseDue()
+
+    /** Counts a try and writes it to disk before the check. Null while a wait runs. [inApp]: never reaches the erase. */
+    fun begin(inApp: Boolean): io.github.ravenor907.muninn.net.LockStore.Begun? = store.begin(inApp)
 
     /** The right lock: the count starts again. */
-    fun right() { prefs.edit().putInt("lockFails", 0).remove("lockAt").remove("lockWait").remove("lockBoot").apply() }
+    fun right() = store.right()
 
-    /** A wrong try, counted. Returns when the wait it brings ends, or 0 when there's no wait yet. */
-    fun wrong(): Long {
-        val fails = prefs.getInt("lockFails", 0) + 1
-        prefs.edit().putInt("lockFails", fails).apply()
-        val wait = io.github.ravenor907.muninn.net.LockWait.after(fails)
-        if (wait <= 0) return 0L
-        val until = elapsed() + wait
-        prefs.edit().putLong("lockAt", until).putLong("lockWait", wait).putInt("lockBoot", bootCount()).apply()
-        return until
-    }
+    /** After a wrong check (already counted by [begin]): when the wait it brought ends, or 0 when there's none. */
+    fun waitedUntil(): Long { val l = store.left(); return if (l > 0) elapsed() + l else 0L }
 }
 
 /**
  * Asks for the current lock before anything that changes it or gets around it: Change lock, Turn off the lock, turning
- * off panic lock, linking a tablet or computer, moving to another device. The same wrong-try waits as the lock screen.
+ * off panic lock, linking a tablet or computer, moving to another device. The same wrong-try count and waits as the lock
+ * screen, but a wrong try here never erases: when the next one would, Muninn locks instead (the lock screen takes over).
  * [what] is the page's title. [onOk] runs once the right pattern or password is given; Cancel and Back run [onCancel].
  */
 @Composable
 fun ConfirmLock(app: Muninn, what: String, modifier: Modifier = Modifier, onCancel: () -> Unit, onOk: () -> Unit) {
     val tries = remember { LockTries(app) }
     val pattern = remember { app.vault.usesPattern }
+    val hasSpare = remember { app.vault.hasSpare }
+    var useSpare by remember { mutableStateOf(false) }
+    val drawing = pattern && !useSpare
     var pw by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var wrong by remember { mutableStateOf(false) }
     var shakes by remember { mutableStateOf(0) }
+    var fails by remember { mutableStateOf(tries.fails()) }
+    val erase = remember { tries.erase }
     var waitUntil by remember { mutableStateOf(tries.waitUntil()) }
     var now by remember { mutableStateOf(tries.elapsed()) }
     LaunchedEffect(waitUntil) { while (tries.elapsed() < waitUntil) { now = tries.elapsed(); kotlinx.coroutines.delay(500) }; now = tries.elapsed() }
@@ -431,34 +631,36 @@ fun ConfirmLock(app: Muninn, what: String, modifier: Modifier = Modifier, onCanc
         if (waiting || busy) return
         busy = true; wrong = false
         scope.launch {
+            val begun = withContext(Dispatchers.IO) { tries.begin(inApp = true) }
+            if (begun == null) { busy = false; waitUntil = withContext(Dispatchers.IO) { tries.waitUntil() }; return@launch }
             val right = withContext(Dispatchers.Default) { try { app.vault.check(secret) } catch (_: Exception) { false } }
+            if (right) { withContext(Dispatchers.IO) { tries.right() }; busy = false; pw = ""; ok(); return@launch }
             busy = false
-            if (right) { pw = ""; tries.right(); ok() }
-            else { wrong = true; shakes++; val until = tries.wrong(); if (until > 0) waitUntil = until }
+            wrong = true; shakes++; pw = ""; fails = begun.fails
+            // One more wrong try would erase: never from in here. Muninn locks, and the lock screen says what's left.
+            if (begun.lockApp) { cancelNow(); io.github.ravenor907.muninn.ui.AppLock.raise(); return@launch }
+            val until = withContext(Dispatchers.IO) { tries.waitedUntil() }; if (until > 0) waitUntil = until
         }
     }
-    val status = when {
-        waiting -> "Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s."
-        busy -> "Checking…"
-        wrong -> "That's not it. Try again."
-        else -> ""
-    }
+    val status = triesStatus(fails, erase, waiting, waitUntil - now, busy, wrong, "Checking…")
     val top: @Composable ColumnScope.() -> Unit = {
         Text(what, style = Type.big, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth())
-        Text(if (pattern) "Draw your current pattern first." else "Type your current password first.", style = Type.normal,
+        Text(if (drawing) "Draw your current pattern first." else if (pattern) "Type your unlock password first." else "Type your current password first.", style = Type.normal,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
         if (status.isNotEmpty()) Text(status, style = Type.small.copy(color = if (busy) Palette.textMuted else Palette.danger),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp).semantics { liveRegion = androidx.compose.ui.semantics.LiveRegionMode.Polite })
+        if (pattern && hasSpare) LinkText(if (useSpare) "Draw your pattern instead" else "Use your unlock password") { useSpare = !useSpare; wrong = false }
     }
     val cancel: @Composable ColumnScope.() -> Unit = {
         MButton("Cancel", Modifier.fillMaxWidth().padding(top = 8.dp)) { cancelNow() }
     }
-    if (pattern) PadPage(modifier, 0f, top = top, bottom = cancel) {
+    if (drawing) PadPage(modifier, 0f, top = top, bottom = cancel) {
         PatternPad(error = wrong, enabled = !waiting && !busy, shake = shakes, trail = app.identity.patternTrail) { dots -> tryIt(patternSecret(dots)) }
     }
     else Column(modifier.imePadding().verticalScroll(androidx.compose.foundation.rememberScrollState()), horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
         top()
-        Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
+        Field(pw, { pw = it; wrong = false }, if (pattern) "Unlock password" else "Password", Modifier.padding(top = 10.dp), secret = true, keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
             onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt(pw) })
         MButton(if (busy) "Checking…" else "Continue", Modifier.fillMaxWidth().padding(top = 10.dp), Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt(pw) }
         cancel()

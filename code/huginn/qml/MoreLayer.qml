@@ -60,7 +60,9 @@ Item {
             { name: "Pictures from this device", detail: "Up to 10 as an album", url: "files", icon: "image" },
             { name: "Recent pictures", url: "recent", icon: "image" },
             { name: "Video message", detail: "Up to a minute", url: "record", icon: "play" },
-            { name: "Video file", detail: "MP4, up to a minute", url: "videofile", icon: "play" },
+            // Cap v3: off (with why) while Ultra privacy is on.
+            { name: "Video from this device", detail: Chat.videoSendingOff() ? "Off while Ultra privacy is on" : "Full size close by, up to 20 seconds over the internet",
+              url: "videofile", icon: "play" },
             { name: "Poll", url: "poll", icon: "check" }] }], a => {
                 if (a === "files") pickPictures()
                 else if (a === "recent") recentPicture()
@@ -105,15 +107,33 @@ Item {
         }
     }
     function sendVideoFile() {
+        if (Chat.videoSendingOff()) { Ui.say("Off while Ultra privacy is on.", true); return }
         if (Ui.ownPicker()) { Ui.pickFiles(paths => more.sendVideoPath(paths[0]), "videos", true); return }
         sendVideoPath(Videos.pickFile())
     }
+    // Cap v3 (protocol.md 29): full size straight to those close by, the video itself over the internet when it already
+    // fits (720p, 20 seconds); Huginn converts nothing, so anything else can go as a file instead.
     function sendVideoPath(path) {
         if (!path) return
-        // Too big or too long for a video message: it goes as a file instead.
-        if (!Videos.fitsMessage(path)) { PeopleActions.sendFiles(where, [path]); return }
-        const r = Videos.sendFile(where, path)
-        Ui.say(r !== "" ? r : "Sending the video message.", r !== "" && r.indexOf("need") < 0)
+        const plan = Chat.planVideo(where, path, false)
+        const asFile = { name: "As a file", detail: "Saved on their device, full quality", url: "file", icon: "attach" }
+        if (!plan.ok) {
+            if (!plan.asFile) { Ui.say(plan.why, true); return }
+            Ui.say(plan.why)
+            Ui.pickFrom("Send this video", [{ header: "", items: [asFile] }], a => PeopleActions.sendFiles(where, [path]))
+            return
+        }
+        const items = []
+        if (plan.full + plan.relay > 0)
+            items.push({ name: plan.inFull ? "Send in full later, when direct" : "Send", detail: plan.summary, url: "send", icon: "play" })
+        else
+            Ui.say(plan.summary)
+        items.push(asFile)
+        Ui.pickFrom("Send this video (" + Math.round(plan.ms / 1000) + " seconds)", [{ header: "", items: items }], a => {
+            if (a === "file") { PeopleActions.sendFiles(where, [path]); return }
+            const r = Chat.sendPickedVideo(where, path, plan.inFull)
+            Ui.say(r.said, !r.ok)
+        })
     }
     function sendClips(paths) {
         let sent = 0

@@ -40,10 +40,13 @@
 #include "icons.h"
 #include "livelist.h"
 #include "updater.h"
+#include "ultraprivacy.h"
 #include "labs.h"
 #include "appstorage.h"
 #include "perfcheck.h"
 #include "wifiselftest.h"
+#include "readaloud.h"
+#include "dailyverse.h"
 #include "sharing.h"
 #include "proof.h"
 #include "move.h"
@@ -258,6 +261,8 @@ int main(int argc, char *argv[])
     args.addOption(restarted);
     QCommandLineOption releaseSigTest(QStringLiteral("release-sig-selftest"), QStringLiteral("Check the update signature check against the shared test vectors (for CI), then quit."), QStringLiteral("FILE"));
     args.addOption(releaseSigTest);
+    QCommandLineOption readAloudTest(QStringLiteral("readaloud-selftest"), QStringLiteral("Check Read aloud's plain text, sentences, voice hashes and safe unpacking, and that the bundled speech engine loads (for CI), then quit."));
+    args.addOption(readAloudTest);
     args.process(app);
     if (args.isSet(tour)) {
         QDir().mkpath(args.value(tour));
@@ -308,6 +313,8 @@ int main(int argc, char *argv[])
     }
     if (args.isSet(releaseSigTest))
         return selfTested(Updater::selfTest(args.value(releaseSigTest)));
+    if (args.isSet(readAloudTest))
+        return selfTested(ReadAloud::selfTest());
     if (args.isSet(backupTest))
         return selfTested(Vault::backupSelfTest());
     if (args.isSet(ratchetTest))
@@ -325,7 +332,10 @@ int main(int argc, char *argv[])
         const bool d = !scrubbed.contains(QLatin1String("192.168")) && !scrubbed.contains(QLatin1String("fe80"))
             && (home.size() <= 1 || !scrubbed.contains(home)) && scrubbed.contains(QLatin1String("QQuickWindow::sceneGraphError"));
         std::printf("crash log keeps out addresses and the home folder: %s\n", d ? "ok" : "FAILED");
-        return selfTested(a && b && c && d && e);
+        // 1.42 (cap h1): saved addresses asked only with a pin, and when the hidden certificate changes.
+        const bool h = LocalSend::hiddenSelfTest();
+        std::printf("hidden certificates: pins and when they change: %s\n", h ? "ok" : "FAILED");
+        return selfTested(a && b && c && d && e && h);
     }
     if (args.isSet(perfTest)) {
         WifiSelfTest::isolate();
@@ -346,7 +356,11 @@ int main(int argc, char *argv[])
         const bool g = TapTwins::selfTest();
         // A voice message held on Y goes only to the chat it started in, never across a sleep (round 17).
         const bool h = Voice::selfTest();
-        return selfTested(a && b && c && d && e && f && g && h);
+        // Daily Havamal: the shared verses, the verse of the day as Muninn picks it, an import, off by default.
+        const bool i = DailyVerse::selfTest();
+        // Ultra privacy (1.42): the switch gates each feature, Tor's proxy goes on the sockets, names go to Tor.
+        const bool ultra = UltraPrivacy::selfTest();
+        return selfTested(a && b && c && d && e && f && g && h && i && ultra);
     }
 
     // Said on screen when Huginn can't keep its data where it is (Windows: a folder it can't write, like Program
@@ -511,6 +525,7 @@ int main(int argc, char *argv[])
     if (quiet && !vault->exists())
         vault->setSecret(QStringLiteral("tour mode only"), false);   // the throwaway profile only: no lock to draw
     auto *updater = new Updater(settings, &app);
+    auto *dailyVerse = new DailyVerse(vault, &app);
     updater->saving = [system] { return system->batterySaving(); };   // Battery saver: timed update checks every 12 hours
     // The internet inbox's key lives in the vault; empty while locked (the inbox still says "new message").
     auto *nostr = new Nostr([vault] {
@@ -534,6 +549,12 @@ int main(int argc, char *argv[])
         return secret;
     }, &app);
     // The inbox key is read from the vault once and kept in memory until the vault locks or is erased.
+    // Ultra privacy: Tor starts now when it's on (never on the throwaway profile of the tour and Wi-Fi self-test). On,
+    // off, or Tor ready or lost: every relay socket made the old way goes, and they connect again the new way.
+    auto *ultra = new UltraPrivacy(&app);
+    QObject::connect(ultra, &UltraPrivacy::redial, nostr, [nostr] { nostr->redial(); });
+    if (!quiet)
+        ultra->start();
     QObject::connect(vault, &Vault::erased, nostr, [nostr] { nostr->forgetSecret(); });
     QObject::connect(vault, &Vault::changed, nostr, [vault, nostr] {
         if (vault->locked())
@@ -597,12 +618,18 @@ int main(int argc, char *argv[])
     // on the ring mailbox's request, but only the ring key ever opens a ring: a ring sealed to the nudge key never rings.
     auto *nudgeKey = new NudgeKey(System::dataDir() + QStringLiteral("/nudge-key.json"));
     chat->setNudgeKey(nudgeKey);
+    // Cap r2 (1.42): the ring tag each contact was given is in the vault; beside ring-key.json only the hashes of the
+    // ones still allowed, so a locked Huginn tells callers apart and a taken-back tag never rings.
+    auto *ringTags = new RingTags(System::dataDir() + QStringLiteral("/ring-allow.json"), [vault] { return vault->read(QStringLiteral("ring-tags.json")); },
+                                  [vault](const QByteArray &b) { vault->write(QStringLiteral("ring-tags.json"), b); });
+    chat->setRingTags(ringTags);
     nostr->ringMailboxes = [ringKey, nudgeKey] { return ringKey->mailboxes() + nudgeKey->mailboxes(); };
     nostr->ringSecrets = [ringKey, nudgeKey] { return ringKey->nostrSecrets() + nudgeKey->nostrSecrets(); };
     // Erase everything (and Move, which erases this computer when it's done): the ring and nudge key files go too.
-    QObject::connect(vault, &Vault::erased, vault, [ringKey, nudgeKey] {
+    QObject::connect(vault, &Vault::erased, vault, [ringKey, nudgeKey, ringTags] {
         ringKey->forget();
         nudgeKey->forget();
+        ringTags->forget();
     });
     // Two days after a block renewed the ring and nudge keys, the old mailboxes are no longer read.
     auto *ringOld = new QTimer(&app);
@@ -632,11 +659,16 @@ int main(int argc, char *argv[])
     // Caps n1 and n2: a nudge while the vault is locked says a real message came (lockedNudge, set below once the
     // message sound is made). Unlocked, a nudge is ignored: the message itself notifies.
     auto lockedNudge = std::make_shared<std::function<void(const RingWire::Nudge &)>>();
-    nostr->onRing = [ringKey, nudgeKey, calls, vault, lockedNudge](const QString &content, bool live) {
-        QString call;
+    nostr->onRing = [ringKey, nudgeKey, calls, vault, lockedNudge, ringTags](const QString &content, bool live) {
+        QString call, rt;
         qint64 ts = 0;
-        if (ringKey->open(content, &call, &ts)) {
-            calls->ringLocked(call, ts, live);
+        bool old = false;
+        if (ringKey->open(content, &call, &ts, &rt, &old)) {
+            // Cap r2 (1.42): a tag taken back (blocked, calls off, removed) never rings; a replaced ring key rings only
+            // with a tag still allowed (a ring without one, on a replaced key, may be from whoever was blocked).
+            const RingTags::Who who = ringTags->judge(rt);
+            if (who == RingTags::TagAllowed || (who == RingTags::NoTag && !old))
+                calls->ringLocked(call, ts, live, rt.isEmpty() ? QString() : RingWire::tagHash(rt));
             return;
         }
         // Round 14: the ring key only contacts hold, so its nudge may name them; the nudge key may be any group peer's,
@@ -1026,6 +1058,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Gamepad", gamepad);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Transfer", transfer);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Updater", updater);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "UltraPrivacy", ultra);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "LocalSend", localSend);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Chat", chat);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Vault", vault);
@@ -1046,6 +1079,7 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Labs", labs);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "AppStorage", appStorage);
     qmlRegisterSingletonInstance("Huginn", 1, 0, "Perf", perf);
+    qmlRegisterSingletonInstance("Huginn", 1, 0, "DailyVerse", dailyVerse);
 
     // Closed cleanly once everything below (the window, the engine) has gone; a run that never gets here shows in crash.log.
     struct CleanExit {
@@ -1053,6 +1087,14 @@ int main(int argc, char *argv[])
         ~CleanExit() { if (on) CrashLog::cleanExit(); }
     } cleanExit{!quiet};
     QQmlApplicationEngine engine;
+    // Read aloud (shared/docs/voices.md): every message's menu and Daily Hávamál call ReadAloud.speak(text), stop() and
+    // read ReadAloud.available. It stops when the lock goes up and when a call starts.
+    auto *readAloud = new ReadAloud(&app);
+    QObject::connect(vault, &Vault::changed, readAloud, [vault, readAloud] { if (vault->locked()) readAloud->stop(); });
+    QObject::connect(vault, &Vault::lockedNow, readAloud, &ReadAloud::stop);
+    QObject::connect(vault, &Vault::panicked, readAloud, &ReadAloud::stop);
+    QObject::connect(calls, &CallManager::changed, readAloud, [calls, readAloud] { if (calls->inCall()) readAloud->stop(); });
+    engine.rootContext()->setContextProperty(QStringLiteral("ReadAloud"), readAloud);
     engine.addImageProvider(QStringLiteral("qr"), new QrImageProvider);
     // The image providers run on Qt's loading threads: they read copies kept for them, never waiting on the main
     // thread (which could hang Huginn while it closes).

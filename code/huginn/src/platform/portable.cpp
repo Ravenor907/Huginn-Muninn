@@ -50,7 +50,7 @@ bool huginnsOwn(const QString &name)
     static const QStringList kNames = {
         QStringLiteral("Huginn"), QStringLiteral("chat"), QStringLiteral("chat.restore"), QStringLiteral("chat.old"), QStringLiteral("chat.old.replaced"), QStringLiteral("cache"),
         QStringLiteral("scratch"), QStringLiteral("tls"), QStringLiteral("crash.log"), QStringLiteral("running.mark"),
-        QStringLiteral("Huginn-start.log"), QStringLiteral("ring-key.json"), QStringLiteral("nudge-key.json"), QStringLiteral("QtProject.ini"),
+        QStringLiteral("Huginn-start.log"), QStringLiteral("ring-key.json"), QStringLiteral("nudge-key.json"), QStringLiteral("ring-allow.json"), QStringLiteral("QtProject.ini"),
         QStringLiteral(".huginn-write-test"), kMark, kMoving, QStringLiteral("instance.lock"), QStringLiteral("instance.closing"),
         QStringLiteral("instance.end")};
     return kNames.contains(name, Qt::CaseInsensitive) || name.startsWith(QLatin1String("chat-kept-"), Qt::CaseInsensitive)

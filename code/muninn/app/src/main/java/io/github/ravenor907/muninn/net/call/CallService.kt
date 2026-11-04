@@ -34,6 +34,8 @@ import io.github.ravenor907.muninn.ui.Panic
  */
 class CallService : Service() {
     private var lastPhase: CallSession.Phase? = null
+    /** 1.42: whether the notification last shown hid the name (Muninn's lock), so a change shows at once. */
+    private var lastHidden: Boolean? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -43,8 +45,10 @@ class CallService : Service() {
         // Cleared before the call is looked at: a hang-up from here on stops the service as usual (see stop).
         starting = false
         val ui = CallManager.call.value
-        if (intent?.action == UPDATE && foreground && lastPhase == ui?.phase) return START_NOT_STICKY
+        val hidden = CallPrivacy.lockedNow(applicationContext as? Muninn, false)
+        if (intent?.action == UPDATE && foreground && lastPhase == ui?.phase && lastHidden == hidden) return START_NOT_STICKY
         lastPhase = ui?.phase
+        lastHidden = hidden
         // Always go foreground first: a service started with startForegroundService must, even to stop at once.
         val n = if (ui != null) Ringer.ongoing(this, ui) else Ringer.placeholder(this)
         val types = when {
@@ -148,8 +152,17 @@ object Ringer {
     private fun shown(c: Context, name: String): String? {
         // A Kids' Device always shows who calls (it has no Settings, and the kids need to know).
         val preview = try { (c.applicationContext as Muninn).identity.showNames || io.github.ravenor907.muninn.tv.KidMode.saved(c) } catch (e: Exception) { false }
-        return if (preview && !Panic.locked.value) name else null
+        // 1.42: never a name while a wait after wrong tries runs (the vault's lock-state file says so, screen or not).
+        val waiting = try { (c.applicationContext as Muninn).vault.tries.left() > 0 } catch (e: Exception) { false }
+        return if (preview && !Panic.locked.value && !waiting) name else null
     }
+
+    /**
+     * 1.42: the call's own notifications (the ring and the call going on) name nobody while Muninn's lock is up or, for
+     * the ring, due ([CallPrivacy.lockedNow]), as the call screen doesn't. A missed call follows the message notifications.
+     */
+    private fun shownOnCall(c: Context, name: String, ringing: Boolean): String? =
+        if (CallPrivacy.lockedNow(c.applicationContext as? Muninn, ringing)) null else shown(c, name)
 
     private fun screen(c: Context, action: String) = PendingIntent.getActivity(c, action.hashCode(),
         Intent(c, CallActivity::class.java).setAction(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
@@ -164,7 +177,7 @@ object Ringer {
      */
     fun ring(c: Context, callId: String, name: String, key: String, silent: Boolean = false) {
         channels(c)
-        val who = if (name.isEmpty()) null else shown(c, name)
+        val who = if (name.isEmpty()) null else shownOnCall(c, name, ringing = true)
         // "Incoming call", with the name when Settings › Notifications shows names (never while panic-locked).
         val person = Person.Builder().setName(who ?: "Incoming call").setImportant(true).build()
         val n = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)
@@ -188,7 +201,7 @@ object Ringer {
 
     fun ongoing(c: Context, ui: CallManager.Ui): android.app.Notification {
         channels(c)
-        val who = shown(c, ui.name)
+        val who = shownOnCall(c, ui.name, ringing = false)
         val person = Person.Builder().setName(who ?: "Muninn call").setImportant(true).build()
         val b = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle(who ?: "Muninn call")
@@ -227,7 +240,7 @@ object Ringer {
      */
     fun ringInRoom(c: Context, name: String, room: String) {
         channels(c)
-        val who = shown(c, name)
+        val who = shownOnCall(c, name, ringing = true)
         val n = NotificationCompat.Builder(c, CALLS).setSmallIcon(R.drawable.ic_notify)
             .setContentTitle((who ?: "Someone") + " is calling")
             .setContentText(if (room.isEmpty()) "You're in a voice room" else "You're in $room")

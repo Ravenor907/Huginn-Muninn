@@ -402,17 +402,26 @@ object CallLogic {
 }
 
 /**
- * Round 17: a locked phone can't tell who rings, so rings while locked are limited: at most [max] in [windowMs], then
- * silent until the window moves on (the calls are still seen once Muninn is unlocked). Pure, so it can be tested.
+ * Round 17: rings while locked are limited: at most [max] in [windowMs], then silent until the window moves on (the
+ * calls are still seen once Muninn is unlocked). 1.42 (cap r2): per caller, by the ring tag's hash ([who]), so one
+ * contact ringing again and again never silences another; rings without a tag (older apps) share one count ("").
+ * Pure, so it can be tested.
  */
 class LockedRingLimit(private val max: Int = 3, private val windowMs: Long = 10 * 60_000L) {
-    private val at = ArrayDeque<Long>()
+    private val at = HashMap<String, ArrayDeque<Long>>()
 
-    /** True if a ring at [now] may ring; counted only when it may. */
-    @Synchronized fun take(now: Long): Boolean {
-        while (at.isNotEmpty() && (now - at.first() >= windowMs || now < at.first())) at.removeFirst()
-        if (at.size >= max) return false
-        at.addLast(now)
+    /** True if a ring from [who] at [now] may ring; counted only when it may. */
+    @Synchronized fun take(now: Long, who: String = ""): Boolean {
+        // Old entries go, for everyone (a caller list never grows without end).
+        val iter = at.entries.iterator()
+        while (iter.hasNext()) {
+            val q = iter.next().value
+            while (q.isNotEmpty() && (now - q.first() >= windowMs || now < q.first())) q.removeFirst()
+            if (q.isEmpty()) iter.remove()
+        }
+        val q = at.getOrPut(who) { ArrayDeque() }
+        if (q.size >= max) return false
+        q.addLast(now)
         return true
     }
 

@@ -216,9 +216,12 @@ object KidRules {
      * that agree move it either way, by any amount. One source alone moves it forward at most [SOLO_STEP_MS] and never back,
      * so one relay's clock or one parent's fast phone can't shift quiet times. Between readings the uptime counts.
      */
-    fun clockFrom(cur: TimeAnchor?, readings: Map<String, TimeAnchor>, elapsed: Long): TimeAnchor? {
-        val est = readings.values.filter { it.wall >= MIN_WALL && elapsed - it.at in 0L..READING_MS }.map { it.wall + (elapsed - it.at) }.sorted()
+    fun clockFrom(cur: TimeAnchor?, readings: Map<String, TimeAnchor>, elapsed: Long, deviceWall: Long? = null): TimeAnchor? {
+        val live = readings.filter { (_, r) -> r.wall >= MIN_WALL && elapsed - r.at in 0L..READING_MS }.mapValues { (_, r) -> r.wall + (elapsed - r.at) }
+        val est = live.values.sorted()
         if (est.isEmpty()) return cur
+        // 1.42: right after the device started (no trusted time yet) one reading alone never sets the time.
+        if (cur == null) return firstClock(live, deviceWall)?.let { TimeAnchor(it, elapsed) }
         val now = trustedNow(cur, elapsed)
         var bestI = 0; var bestJ = 0
         var j = 0
@@ -233,12 +236,38 @@ object KidRules {
         }
         val target = est[(bestI + bestJ) / 2]
         val agree = bestJ - bestI + 1
-        if (now == null) return TimeAnchor(target, elapsed)
+        if (now == null) return TimeAnchor(target, elapsed)   // never: no trusted time is handled above
         val d = target - now
         if (kotlin.math.abs(d) < 1_000L) return cur
         if (agree >= 2) return TimeAnchor(target, elapsed)
         if (d < 0 || d > SOLO_STEP_MS) return cur
         return TimeAnchor(target, elapsed)
+    }
+
+    /**
+     * 1.42: the first trusted time after the device started, from [live] (each source's reading carried to now), or null
+     * to wait (the device's own clock stands in meanwhile, as before any reading). In order:
+     *  - two or more sources that agree within [AGREE_MS]: their median;
+     *  - a parent's signed config ("parent:" sources; the newest) that no other source disagrees with;
+     *  - a source the device's own clock ([deviceWall]) agrees with: two that agree, though the clock alone never counts
+     *    (one relay is then enough on a network that reaches no other, but only when the device's clock is right).
+     * One relay alone, or a parent's config another source disagrees with, waits for more.
+     */
+    fun firstClock(live: Map<String, Long>, deviceWall: Long?): Long? {
+        val est = live.values.sorted()
+        if (est.isEmpty()) return null
+        var bestI = 0; var bestJ = 0
+        var j = 0
+        for (i in est.indices) {
+            if (j < i) j = i
+            while (j + 1 < est.size && est[j + 1] - est[i] <= AGREE_MS) j++
+            if (j - i > bestJ - bestI) { bestI = i; bestJ = j }
+        }
+        if (bestJ > bestI) return est[(bestI + bestJ) / 2]
+        val parent = live.filterKeys { it.startsWith("parent:") }.values.maxOrNull()
+        if (parent != null && est.all { kotlin.math.abs(it - parent) <= AGREE_MS }) return parent
+        if (deviceWall == null) return null
+        return est.filter { kotlin.math.abs(it - deviceWall) <= AGREE_MS }.minByOrNull { kotlin.math.abs(it - deviceWall) }
     }
 
     /** The quiet time on at [epochMs] in zone [tz] (empty or unknown: [fallback], the device's own), or null. */

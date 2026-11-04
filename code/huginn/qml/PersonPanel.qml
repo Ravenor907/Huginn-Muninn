@@ -32,7 +32,7 @@ Item {
     function isOn(id) {
         revision; Chat.chats
         if (tour) return id !== "direct"
-        if (id === "direct") return Calls.trusted(key)
+        if (id === "direct") return Calls.trusted(key) && !UltraPrivacy.active
         return !!hook(getters[id], [key], id !== "always")
     }
     readonly property string tint: tour ? "" : (revision, Chat.chats, hook("chatColor", [key], ""))
@@ -44,7 +44,8 @@ Item {
         { id: "calls", label: "Call me", toggle: true },
         { id: "files", label: "Send me files", toggle: true },
         { id: "active", label: "See when I'm active", toggle: true },
-        { id: "direct", label: "Direct calls and files (shares your address)", toggle: true },
+        // Ultra privacy: nothing goes straight while it's on (the saved choice stays), and the row says so.
+        { id: "direct", label: UltraPrivacy.active ? "Direct calls and files: " + UltraPrivacy.offNote : "Direct calls and files (shares your address)", toggle: true },
         { id: "days", label: "How long messages stay", value: tour ? "7 days" : (revision, Chat.chats, Chat.chatDays(key)) + " days" }
     ] : [
         { id: "nick", label: "Nickname", value: nick !== "" ? nick : "None" },
@@ -79,6 +80,7 @@ Item {
         else if (id === "picture") { if (typeof Profile.askPicture === "function") Ui.say(Profile.askPicture(k)) }
         // The list opens over this panel (it stays open on the same row); back here after a pick or B.
         else if (id === "days") PeopleActions.daysMenu(k, () => { panel.reopen(); if (Ui.main) Ui.main.restoreFocus() })
+        else if (id === "direct" && UltraPrivacy.active) Ui.say(UltraPrivacy.offNote + ".")
         else if (id === "direct") { Calls.setTrusted(k, !Calls.trusted(k)); revision++ }
         else if (setters[id] && has(setters[id])) { Chat[setters[id]](k, !isOn(id)); revision++ }
     }

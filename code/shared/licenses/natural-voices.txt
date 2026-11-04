@@ -1,0 +1,26 @@
+Natural voices in Huginn and Muninn
+
+Read aloud speaks with one of two Piper voices (British English, medium quality), run on the device by the speech
+engine below. Nothing is sent anywhere to speak: the voice is downloaded once, from this project's "voices-1" release,
+checked against code/shared/voices.sha256, and kept.
+
+Female: Alba (en_GB-alba-medium)
+  Piper voice by Michael Hansen (rhasspy/piper-voices), trained on a dataset from the University of Edinburgh. License: Creative Commons Attribution 4.0 International (CC BY 4.0),
+  https://creativecommons.org/licenses/by/4.0/
+
+Male: Northern English Male (en_GB-northern_english_male-medium)
+  Piper voice by Michael Hansen (rhasspy/piper-voices). License: Creative Commons Attribution-ShareAlike 4.0
+  International (CC BY-SA 4.0), https://creativecommons.org/licenses/by-sa/4.0/. The voice files are passed on
+  unchanged, under the same license.
+
+Both medium voices were fine-tuned from Piper's US English "lessac" voice, whose source recordings (Blizzard
+Challenge 2013) carry a research license. Huginn and Muninn are free and the voices are never sold.
+Each voice's MODEL_CARD travels inside its download.
+
+Speech engine
+  sherpa-onnx, Apache License 2.0 (sherpa-onnx-Apache-2.0.txt), https://github.com/k2-fsa/sherpa-onnx
+  ONNX Runtime, MIT License (onnxruntime-MIT.txt), https://github.com/microsoft/onnxruntime
+  eSpeak NG (inside sherpa-onnx, it turns words into sounds), GNU General Public License 3.0, the same license as
+  Huginn and Muninn (LICENSE at the top of the project). Its source: https://github.com/espeak-ng/espeak-ng and the
+  copy sherpa-onnx builds, https://github.com/csukuangfj/espeak-ng. The voice downloads carry espeak-ng-data
+  (English only), from the same project, under the same license.

@@ -80,8 +80,8 @@ object LinkPreview {
         else -> true
     }
 
-    /** Null when the page couldn't be read or has no title. Call off the main thread. */
-    fun fetch(url: String): More.Preview? = try {
+    /** Null when the page couldn't be read or has no title, and always while Ultra privacy is on. Call off the main thread. */
+    fun fetch(url: String): More.Preview? = if (!UltraPrivacy.previewsAllowed) null else try {
         val html = get(url, PAGE_MAX, "text/html")?.let { String(it, Charsets.UTF_8) } ?: null
         html?.let { page ->
             val title = (meta(page, "og:title") ?: meta(page, "twitter:title") ?: tag(page, "title"))?.let { clean(it, More.TITLE_MAX) }

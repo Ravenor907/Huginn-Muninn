@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chatwire.h"
+#include "groupvideo.h"
 #include "ratchet.h"
 #include "ring.h"
 
@@ -202,6 +203,14 @@ public:
     Q_INVOKABLE QString sendPhotos(const QString &where, const QStringList &paths, bool hd);
     Q_INVOKABLE QStringList pickPictures() const;     // the system's file picker, several at once
     QString sendVideo(const QString &where, const QByteArray &mp4, int ms);
+    // Cap v3 (protocol.md 29): a video picked from this computer, to a contact or "g:<group>:<channel>". planVideo says
+    // what would happen: {ok, why, ms, length ("short", "long", "too long"), summary, full, relay, none (counts),
+    // relayOk (the video itself fits the relay copy), asFile (it can only go as a file)}. sendPickedVideo sends it
+    // ([inFull]: a long video only as full copies, to those it can reach straight): {ok, said}.
+    Q_INVOKABLE QVariantMap planVideo(const QString &where, const QString &path, bool inFull);
+    Q_INVOKABLE QVariantMap sendPickedVideo(const QString &where, const QString &path, bool inFull);
+    // Ultra privacy is on: sending videos is off ("Off while Ultra privacy is on"); receiving still works.
+    Q_INVOKABLE bool videoSendingOff() const;
     Q_INVOKABLE QString sendPoll(const QString &where, const QString &question, const QStringList &answers, bool multi);
     // My vote on a poll ([] takes it back).
     Q_INVOKABLE QString vote(const QString &where, const QString &id, const QVariantList &choices);
@@ -487,6 +496,14 @@ public:
     void setRingKey(RingKey *ring) { m_ringKey = ring; }
     // Cap n2: this device's nudge key, outside the vault (main.cpp makes it). It only ever takes nudges, never rings.
     void setNudgeKey(NudgeKey *key) { m_nudgeKey = key; }
+    // Cap r2 (1.42): the ring tags given to contacts (main.cpp makes it); once the vault is open the hashes outside it
+    // are made to match the tags in it.
+    void setRingTags(RingTags *tags)
+    {
+        m_ringTags = tags;
+        if (tags && ready())
+            tags->sync();
+    }
     // Round 17: a new ring key and nudge key (both mailboxes too), announced to every contact and group peer who may use
     // them, except one just blocked. After a block, every RingKey::kRenewMs, and on every lock change (main.cpp). The
     // old mailboxes are still read for two days. Only while unlocked (the keys go out sealed); false when it couldn't.
@@ -586,6 +603,16 @@ private:
     bool sendGifTo(const QString &key, const QByteArray &gif);   // cap a1: a cleaned GIF to a contact or "g:<group>:<channel>"
     bool bigIncoming() const;                                      // three GIFs over 3.2 MB already coming in
     bool groupGif(const QString &g, const QString &id) const;      // a group message of mine that is a GIF
+    int groupVideoMs(const QString &g, const QString &id) const;   // a group message of mine that is a video: its length
+    // Cap v3: one member as a picked video's sender sees them now, and everyone it would go to.
+    GroupVideo::Member videoMember(const QString &key, bool group) const;
+    QList<GroupVideo::Member> videoMembers(const QString &where) const;
+    // Cap v3: [k]'s full copy couldn't go straight: they get the relay copy of my group message [gid] after all.
+    bool addGroupBlobMember(const QString &g, const QString &gid, const QString &k);
+    // Cap v3 (29.4): video relay pieces leave paced, a few a second in all; one queue per key ("member|message").
+    GroupVideo::Pacer m_videoPacer;
+    QSet<QString> m_paced;
+    qint64 m_pacerLimitSeen = 0;
     QList<QJsonObject> pieces(const QVariantMap &m);
     QList<QByteArray> sealedFor(const QString &key, const QString &id, const QVariantMap &m);
     void keepSealed(const QString &id, const QString &key, const QList<QByteArray> &bodies);
@@ -641,6 +668,7 @@ private:
     std::unique_ptr<PeerKeys> m_peerKeys;
     RingKey *m_ringKey = nullptr;
     NudgeKey *m_nudgeKey = nullptr;   // cap n2
+    RingTags *m_ringTags = nullptr;   // cap r2 (1.42)
     QSet<QString> m_rung;       // call ids a ring envelope already went out for
     QSet<QString> m_keysSent;   // contacts my keys went to when their app first said b1 or e1
     // A receipt to an app that says b1 or e1 carries my day key ("wk", "wt"), and to a contact (not a group-only peer,
@@ -666,7 +694,7 @@ private:
     // days: how long relays may keep it (0: this chat's message limit).
     // step: after each piece a relay took, how many have been so far.
     bool sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox,
-                      std::function<void()> sent = nullptr, int days = 0, std::function<void(int)> step = nullptr);
+                      std::function<void()> sent = nullptr, int days = 0, std::function<void(int)> step = nullptr, const QString &pace = QString());
     QVariantMap uploads() const { return m_uploads; }
     // replace (round 14, 1.1): the caps came on an empty receipt (a caps probe or its answer), made now and never an old
     // copy sent again, so they are what the app says now: they replace the set instead of adding to it.
@@ -752,7 +780,9 @@ private:
     static QString refusalText(const QString &why, const QString &group);
     QString groupName(const QString &g) const;
     QString memberName(const QString &g, const QString &key) const;
-    QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap());
+    // only: just these members (cap v3: a picked video's relay copy goes to those not getting the full copy straight).
+    QString sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra = QVariantMap(),
+                          const QStringList &only = QStringList());
     QList<QByteArray> groupPieces(const QString &g, const QString &ch, const QString &gid, const QString &to, const QByteArray &bytes, int voiceMs,
                                   const QVariantMap &extra = QVariantMap());
     void updateGroupMessage(const QString &g, const QString &id, const std::function<void(QVariantMap &)> &f);

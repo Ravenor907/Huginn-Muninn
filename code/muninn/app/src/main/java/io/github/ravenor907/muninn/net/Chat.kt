@@ -77,7 +77,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val ts = o.optLong("ts", System.currentTimeMillis())
         if (call.isEmpty() || !rung.add(call)) return
         if (rung.size > 200) rung.clear()
-        nostr.publish(rp, RingWire.ringContent(rk, call, ts), days = Limits.LONGEST)
+        // Cap r2: the tag they gave me, so their locked phone counts my rings apart from everyone else's.
+        val rt = if (RingWire.TAG_CAP in c.caps) k.rt.orEmpty() else ""
+        nostr.publish(rp, RingWire.ringContent(rk, call, ts, rt), days = Limits.LONGEST)
     }
 
     /**
@@ -281,6 +283,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     @Volatile var ringKey: RingKey? = null
     /** Cap n2: this device's nudge key, outside the vault (set by the app). It only ever takes nudges, never rings. */
     @Volatile var nudgeKey: NudgeKey? = null
+    /** Cap r2: the ring tags given to contacts (set by the app); the allowed ones outside the vault match the vault's. */
+    @Volatile var ringTags: RingTags? = null
+        set(v) { field = v; if (v != null) bg { try { v.sync() } catch (_: Exception) {} } }
     /** Call ids a ring envelope already went out for (one per call). */
     private val rung: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /** Caps n1 and n2: when each person (and chat, n2) was last nudged. */
@@ -542,6 +547,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         net.isContact = { k -> isContact(k) }
         val lanPeers = File(context.filesDir, "lanpeers.json")
         net.keepPeers = { json -> bg { vault.write(lanPeers, json) } }
+        // Cap h1 (1.42): a contact's saved address is asked with Nearby off only with a certificate they named pinned;
+        // my hidden certificate changes, and the next one goes to every h1 contact before it's used.
+        net.pinsFor = { k -> peerKeys.get(k)?.hf.orEmpty() }
+        net.onHiddenChanged = { bg { announceKeys { RingWire.HIDDEN_CAP in it.caps && !it.groupOnly } } }
         bg { net.loadPeers(vault.read(lanPeers)) }
         ble.prove = { n -> Proof.close(id.keys.private, id.publicKey, n) }
         // Someone said yes while out of range: say it again when they're back.
@@ -931,6 +940,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (was == !on) return
         // Round 17 (cap b1): a locked phone can't tell who rings, so calls off works like a block for the ring key: a new
         // one goes to every other contact who may call, and what they hold no longer rings. Back on: they get it again.
+        // Cap r2 (1.42): their tag is taken back at once, so their rings stop now, even on a replaced key.
+        if (!on) try { ringTags?.revoke(peerKey) } catch (_: Exception) {}
         ringKey?.let { r ->
             bg {
                 try {
@@ -964,6 +975,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         mute(peerKey, on)
         _blocked.value = id.muted()
         Link.accountChanged()   // cap l1: a linked computer shows the block too
+        // Cap r2 (1.42): their ring tag is taken back at once: nothing they send rings this phone, on any ring key.
+        if (on) try { ringTags?.revoke(peerKey) } catch (_: Exception) {}
         // Cap b1: what they hold no longer rings this phone. A new ring key and ring mailbox go to the other b1
         // contacts; the old mailbox is listened on 2 more days. Cap n2: the nudge key is made new with it, so they
         // can't nudge either, and goes to the other n2 contacts and group peers.
@@ -992,6 +1005,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (was != null && groups.sharesGroup(peerKey)) contacts.peer(peerKey, was.name, was.mailbox ?: "")
         synchronized(ratchets.lock(peerKey)) { ratchets.drop(peerKey) }
         if (contacts.get(peerKey) == null) peerKeys.forget(peerKey)
+        // Cap r2 (1.42): no longer a contact, so their ring tag is taken back (a new one if they come back).
+        try { ringTags?.revoke(peerKey) } catch (_: Exception) {}
         synchronized(lock) { _met.update { it - peerKey }; saveMet() }
         // Not in touch any way now: their profile picture goes too.
         if (contacts.get(peerKey) == null) profile?.forget(peerKey)
@@ -1233,6 +1248,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // Caps b1, e1 and n2: their app says so now, so my ring key, day key and nudge key go to them.
         if ((RingWire.RING_CAP in caps && RingWire.RING_CAP !in c.caps) || (RingWire.WRAP_CAP in caps && RingWire.WRAP_CAP !in c.caps) ||
             (NudgeWire.RICH_CAP in caps && NudgeWire.RICH_CAP !in c.caps)) sendKeys(fromKey)
+        else if ((RingWire.TAG_CAP in caps && RingWire.TAG_CAP !in c.caps) || (RingWire.HIDDEN_CAP in caps && RingWire.HIDDEN_CAP !in c.caps)) {
+            // Caps r2 and h1 (1.42): my ring tag and my certificates go to them as soon as their app says so, even this run.
+            keysSent.remove(fromKey); sendKeys(fromKey)
+        }
         // Cap p2: their profile version rides on everything they send; a newer one than here is asked for.
         if (ProfileWire.CAP2 in caps) ProfileWire.pvOf(o)?.let { profile?.sawVersion(fromKey, it) }
     }
@@ -1615,6 +1634,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** A video message (cap m2): an MP4 of at most a minute. Null when sent, else what to say. */
     fun sendVideo(peerKey: String, mp4: ByteArray, ms: Int): String? {
+        if (!UltraPrivacy.videoSendAllowed) return UltraPrivacy.VIDEO_OFF   // receiving still works
         if (!mayHave(peerKey, More.CAP)) return "${nameOf(peerKey)} needs a newer Muninn to get video messages."
         if (!More.isVideo(mp4) || !Videos.fits(mp4.size)) return "That video is too big to send. Videos can be up to 2 MB."
         sendBlob(peerKey, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))
@@ -1633,6 +1653,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val clean = cleanFileName(name)
         val cardId = id ?: Proto06.newLogicalId()
         if (id != null && FileLink.isStopped(id)) { file.delete(); return null }
+        // Ultra privacy: sending videos is off, as a file too (receiving still works).
+        if (UltraPrivacy.blocksFile(clean)) { FileLink.failed(peerKey, clean, file.length(), UltraPrivacy.VIDEO_OFF, cardId); file.delete(); return null }
         if (!hasF1(peerKey)) {
             probeCaps(peerKey)
             FileLink.failed(peerKey, clean, file.length(), "${nameOf(peerKey)} needs the latest Muninn or Huginn for files.", cardId)
@@ -1662,6 +1684,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val size = file.length()
         val members = groups.group(g)?.takeIf { !it.readOnly }?.state?.members?.map { it.k }?.filter { it != id.publicKey }.orEmpty()
         if (members.isEmpty()) { file.delete(); return "Nobody else is in this group yet." }
+        if (UltraPrivacy.blocksFile(clean)) { file.delete(); return UltraPrivacy.VIDEO_OFF }   // Ultra privacy: no videos out
         groups.fileRefusal(g, id.publicKey, size).let { if (it.isNotEmpty()) { file.delete(); return it } }
         for (k in members) {
             // One file on the disk for every member (a second name for it where the storage allows, else a copy).
@@ -2024,6 +2047,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val caps = capsOf(peerKey)
         // The ring key only to contacts (never a group peer or someone met close by), and never to one with calls off.
         if (RingWire.RING_CAP in caps && isContact(peerKey) && callsAllowed(peerKey)) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
+        // Cap r2 (1.42): with it, the ring tag that is theirs alone, so a locked phone tells callers apart.
+        if (RingWire.TAG_CAP in caps && o.has("rk") && peerKey !in id.muted()) ringTags?.let { t -> try { o.put("rt", t.tagFor(peerKey)) } catch (_: Exception) {} }
+        // Cap h1 (1.42): the certificates my Wi-Fi server may show (lasting, hidden now and next), to contacts only.
+        if (RingWire.HIDDEN_CAP in caps && isContact(peerKey) && peerKey !in id.muted())
+            try { net.myFingerprints().takeIf { it.isNotEmpty() }?.let { o.put("hf", JSONArray(it.take(RingWire.MAX_HF))) } } catch (_: Exception) {}
         if (RingWire.WRAP_CAP in caps) try { wrapKeys.current().let { d -> o.put("wk", d.pub).put("wt", d.t) } } catch (_: Exception) {}
         // Cap n2: the nudge key to a contact or group peer (never anyone blocked). It can only nudge, never ring.
         if (NudgeWire.RICH_CAP in caps && contacts.get(peerKey) != null && peerKey !in id.muted())
@@ -2448,9 +2476,11 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             }
         }
         val mailbox = backupMailbox(m)
-        if ((!any || t.count >= 2) && parts.size <= (if (m.gif) Gifs.PIECES else Photos.INTERNET_PIECES) && mailbox != null) {
+        // Cap v3 (29): a video's relay copy may be up to GroupVideo.RELAY_PIECES pieces, and its pieces go paced.
+        if ((!any || t.count >= 2) && parts.size <= (if (m.gif) Gifs.PIECES else if (m.video > 0) GroupVideo.RELAY_PIECES else Photos.INTERNET_PIECES) && mailbox != null) {
             if (!publishNow(t)) any = true
-            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step)) { any = true; nudgeIf("photo", "", k, NudgeWire.blobKind(m.voice, m.video, m.file)) }
+            else if (internet(m.peerKey, parts, mailbox, stored = { markSent(m, "internet") }, held = heldBy(t), step = step,
+                    pace = if (m.video > 0) VideoPace.key(k, m.id) else null)) { any = true; nudgeIf("photo", "", k, NudgeWire.blobKind(m.voice, m.video, m.file)) }
         }
         if (!any && t.count == 1) {
             update(m.peerKey, m.id) { it.copy(failed = true) }
@@ -2621,7 +2651,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** The internet: Nostr, their mailbox, which waits for them while they're offline. False without a mailbox. */
     private fun internet(peerKey: String, bodies: List<String>, mailbox: String?, stored: (() -> Unit)? = null, held: (() -> Unit)? = null, days: Int = 0,
-                         step: ((Int) -> Unit)? = null): Boolean {
+                         step: ((Int) -> Unit)? = null, pace: String? = null): Boolean {
         if (mailbox == null || Move.locked) return false
         // Relays may drop it after the longest message limit (Nostr.expiration): it's gone from the phones by then.
         val keep = if (days > 0) days else try { chatDays(peerKey) } catch (_: Exception) { Limits.LONGEST }
@@ -2632,6 +2662,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
         val heldLeft = java.util.concurrent.atomic.AtomicInteger(bodies.size)
         val all: (() -> Unit)? = held?.let { done -> { if (heldLeft.decrementAndGet() == 0) done() } }
+        // Cap v3 (29.4): a video's pieces go paced (VideoPace), a few a second, so the relays don't block us.
+        if (pace != null) { VideoPace.go(pace, bodies.map { b -> { nostr.publish(mailbox, wrap(peerKey, b), ok, all, keep); Unit } }); return true }
         bodies.forEach { nostr.publish(mailbox, wrap(peerKey, it), ok, all, keep) }
         return true
     }
@@ -2821,11 +2853,74 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     /** A video message to everyone in [g] whose app plays it (cap m2). Null when sent, else what to say. */
     fun sendGroupVideo(g: String, ch: String, mp4: ByteArray, ms: Int): String? {
+        if (!UltraPrivacy.videoSendAllowed) return UltraPrivacy.VIDEO_OFF
         if (!More.isVideo(mp4) || !Videos.fits(mp4.size)) return "That video is too big to send. Videos can be up to 2 MB."
         val s = groups.group(g)?.state ?: return "That group isn't here any more."
         val older = s.members.filter { it.k != id.publicKey && !hasM2(it.k) }
         if (!sendGroupBlob(g, ch, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))) return "That video didn't send."
         return if (older.isEmpty()) null else "${older.size} ${if (older.size == 1) "person needs" else "people need"} a newer Muninn to see video messages."
+    }
+
+    // ------------------------------------------------------------------ cap v3: picked videos (protocol.md 29)
+
+    /** [k] as a picked video's sender sees them now (GroupVideo.delivery decides full or relay copy). [group]: in a group (needs f2). */
+    fun videoMember(k: String, group: Boolean): GroupVideo.Member {
+        val h = FileLink.host
+        val caps = capsOf(k) + envCaps[k].orEmpty()
+        return GroupVideo.Member(k, sameWifi = h?.lanAddress(k) != null, trusted = h?.trusted(k) == true,
+            files = hasF1(k) && (!group || hasF2(k)), v3 = GroupVideo.CAP in caps,
+            kid = try { io.github.ravenor907.muninn.tv.TvParent.isKidDevice(k) } catch (_: Exception) { false })
+    }
+
+    /** A picked video's relay copy to one person (at most GroupVideo.RELAY_PIECES pieces, paced). Null when sent, else what to say. */
+    fun sendVideoClip(peerKey: String, mp4: ByteArray, ms: Int): String? {
+        if (!UltraPrivacy.videoSendAllowed) return UltraPrivacy.VIDEO_OFF
+        if (!mayHave(peerKey, More.CAP)) return "${nameOf(peerKey)} needs a newer Muninn to get videos."
+        if (!More.isVideo(mp4) || !GroupVideo.relayFits(mp4.size.toLong())) return "That video came out too big to send over the internet."
+        sendBlob(peerKey, mp4, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS))
+        return null
+    }
+
+    /**
+     * A picked video's relay copy in group [g], to [only] (those not getting the full copy straight). The message's id, or
+     * null with what to say.
+     */
+    fun sendGroupVideoClip(g: String, ch: String, mp4: ByteArray, ms: Int, only: Set<String>): Pair<String?, String?> {
+        if (!UltraPrivacy.videoSendAllowed) return null to UltraPrivacy.VIDEO_OFF
+        if (!More.isVideo(mp4) || !GroupVideo.relayFits(mp4.size.toLong())) return null to "That video came out too big to send over the internet."
+        val blob = "g-" + UUID.randomUUID().toString()
+        vault.writeBytes(File(photosDir, blob), mp4)
+        val msgId = groups.sendBlobId(g, ch, blob, 0, videoMs = ms.coerceIn(1, More.VIDEO_MAX_MS), only = only)
+        if (msgId == null) { File(photosDir, blob).delete(); return null to "That video didn't send." }
+        sends.tryEmit(Folders.groupKey(g))
+        return msgId to null
+    }
+
+    /** Cap v3: [k]'s full copy couldn't go straight, so they get the relay copy of message [msgId] after all. */
+    fun addGroupVideoMember(g: String, msgId: String, k: String): Boolean = groups.addBlobMember(g, msgId, k).also { if (it) sends.tryEmit(Folders.groupKey(g)) }
+
+    /**
+     * Cap v3 (29.3): [file] (the full-size MP4, [ms] long) straight to [k], in group [g] or ("") the chat with them, with
+     * its own card. If it can't go straight, its card goes and [back] sends the relay copy instead; with no [back] (a long
+     * video sent in full) its card waits for them as any file does, and says why if it can't. [file] stays mine.
+     */
+    fun sendVideoFull(k: String, file: File, name: String, ms: Int, g: String, back: (() -> Unit)?) {
+        val clean = cleanFileName(name)
+        val size = file.length()
+        if (!UltraPrivacy.videoSendAllowed) { FileLink.failed(k, clean, size, UltraPrivacy.VIDEO_OFF, group = g); return }
+        // One file for every member (a second name for it where the storage allows, else a copy), as sendGroupFile.
+        val mine = File(file.parentFile, file.name + "-" + k.take(8).filter { it.isLetterOrDigit() } + "-" + System.nanoTime())
+        val ok = try { java.nio.file.Files.createLink(mine.toPath(), file.toPath()); true } catch (_: Exception) {
+            try { file.copyTo(mine, overwrite = true); true } catch (_: Exception) { false }
+        }
+        if (!ok) { if (back != null) back() else FileLink.failed(k, clean, size, "Not enough space on this phone to send it.", group = g); return }
+        val card = FileLink.preparing(k, clean, size, g)
+        if (back != null) FileLink.onNoPath(card, back)
+        if (FileLink.send(k, mine, clean, card, g, vid = ms.coerceIn(1, GroupVideo.FULL_MAX_MS)) != null) {
+            mine.delete()
+            if (back != null) FileLink.videoFellBack(card)
+            else FileLink.failed(k, clean, size, "Can't reach ${nameOf(k)} straight. Full-size videos go on the same Wi-Fi, or with Direct calls and files on for each other.", card, g)
+        }
     }
 
     /** An animated GIF (cap a1, already cleaned) to group [g]: members whose app doesn't show GIFs get its first frame. */
@@ -2867,7 +2962,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val bodies = (if (!o.retry) listOf(envelope(o.room, o.to, o.plain, o.env).toString())
             else outbox.fresh(o.env, stale(o.to)) { if (o.room == "gphoto") groupPieces(o) else listOf(envelope(o.room, o.to, o.plain, o.env).toString()) }) ?: return
         spread(o.to, bodies, o.room == "gphoto", o.tries, c.mailbox, o.net, if (o.retry) ({ groups.relaysHold(o.env) }) else null, groupDays(o.g),
-            if (o.gif) Gifs.PIECES else Photos.INTERNET_PIECES)
+            if (o.gif) Gifs.PIECES else if (o.video > 0) GroupVideo.RELAY_PIECES else Photos.INTERNET_PIECES,
+            pace = if (o.room == "gphoto" && o.video > 0) VideoPace.key(o.to, o.env) else null)
         // Caps n1 and n2: a group message or invite nudges; n2 says which group, and what came.
         if (o.net) nudgeIf(o.room, o.plain, o.to, if (o.room == "gphoto") NudgeWire.blobKind(o.voice, o.video, "") else NudgeWire.kindOf(o.room),
             try { groups.group(o.g)?.state?.name.orEmpty() } catch (_: Exception) { "" })
@@ -2897,13 +2993,13 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * [publish]: false while relays already hold it (it isn't sent to them again yet); [held] runs once they do.
      */
     private fun spread(k: String, bodies: List<String>, big: Boolean, tries: Int, mailbox: String?, publish: Boolean = true, held: (() -> Unit)? = null, days: Int = 0,
-                       relayPieces: Int = Photos.INTERNET_PIECES) {
+                       relayPieces: Int = Photos.INTERNET_PIECES, pace: String? = null) {
         if (Move.locked) return
         var local = false
         // Cap s1: only a route that proved it's them keeps a big photo off the internet.
         if (ble.has(k, strict(k)) && bodies.all { ble.send(k, it, strict(k)) } && ble.proven(k)) local = true
         wifiTo(k)?.let { d -> if (d.proven) local = true; bg { bodies.forEach { net.post(d, PATH, it) } } }
-        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= relayPieces))) internet(k, bodies, mailbox, held = held, days = days)
+        if (publish && (!big || ((!local || tries >= 2) && bodies.size <= relayPieces))) internet(k, bodies, mailbox, held = held, days = days, pace = pace)
     }
 
     private fun receiveGroup(o: JSONObject, room: String, fromKey: String, name: String, mailbox: String?): Pair<Int, String> {

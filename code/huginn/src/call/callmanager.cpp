@@ -607,7 +607,7 @@ void CallManager::notifyIncoming(bool on)
                                           [self = QPointer<CallManager>(this)](const QString &a) { if (self) self->onNotificationAction(a); });
 }
 
-void CallManager::ringLocked(const QString &callId, qint64 ts, bool live)
+void CallManager::ringLocked(const QString &callId, qint64 ts, bool live, const QString &who)
 {
     // Unlocked: the offer itself rings, with the name.
     if (!m_vault || !m_vault->locked() || callId.isEmpty() || callId == m_lockedCall || m_handled.contains(callId))
@@ -617,6 +617,10 @@ void CallManager::ringLocked(const QString &callId, qint64 ts, bool live)
     const qint64 t = nowMs();
     const bool skewedLive = live && ts >= t - CallSkewGate::kSkewMs && ts <= t + CallSkewGate::kSkewMs;
     if ((m_session && m_session->state() != CallSession::Ended) || !(RingWire::ringFresh(ts, t) || skewedLive))
+        return;
+    // 1.42 (cap r2, as Muninn): anyone holding the ring key could ring without end, so at most 3 in 10 minutes while
+    // locked, counted per caller by its ring tag (rings without one share a count). The calls still show once unlocked.
+    if (!m_lockedLimit.take(t, who))
         return;
     m_lockedCall = callId;
     m_lockedChoice = 0;

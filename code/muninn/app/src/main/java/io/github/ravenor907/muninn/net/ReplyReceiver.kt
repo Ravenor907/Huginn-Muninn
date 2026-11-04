@@ -31,9 +31,13 @@ class ReplyReceiver : BroadcastReceiver() {
             try {
                 // Muninn may have just restarted for this: everything is running before it's checked.
                 try { app.ensureStarted() } catch (_: Exception) {}
-                // Refused: the typed reply waits in the chat's box (Drafts), so nothing typed is lost. Not sent: said
-                // in its place, so the reply doesn't look sent (nothing about the chat shows on it).
-                if (!app.canReply()) { try { Drafts.keepReply(app, key, text) } catch (_: Exception) {}; notSent(context, key) }
+                // Refused: the typed reply becomes a draft in the chat's box (Drafts), never sent by itself. 1.42: with the
+                // vault closed it's kept only sealed (ReplyHold), else dropped. Said in its place either way, so the reply
+                // doesn't look sent (nothing about the chat shows on it).
+                if (!app.canReply()) {
+                    val kept = try { Drafts.keepReply(app, key, text) } catch (_: Exception) { ReplyHold.Kept.DROPPED }
+                    notSent(context, key, ReplyHold.note(kept))
+                }
                 else {
                     try { app.chat.replyFromNotification(key, text) } catch (_: Exception) {}
                     nm.cancel(key.hashCode())
@@ -42,11 +46,11 @@ class ReplyReceiver : BroadcastReceiver() {
         }.start()
     }
 
-    private fun notSent(context: Context, key: String) {
+    private fun notSent(context: Context, key: String, note: String) {
         val open = PendingIntent.getActivity(context, key.hashCode(), Intent(context, MainActivity::class.java).putExtra("chat", key)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(context, Muninn.QUIET).setSmallIcon(R.drawable.ic_notify)
-            .setContentTitle("Muninn").setContentText("Unlock Muninn to send your reply. It waits in the chat.")
+            .setContentTitle("Muninn").setContentText(note)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE).setPriority(NotificationCompat.PRIORITY_LOW).setSilent(true)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setAutoCancel(true).setContentIntent(open)
             .setTimeoutAfter(NOT_SENT_MS).build()
@@ -54,7 +58,7 @@ class ReplyReceiver : BroadcastReceiver() {
     }
 
     companion object {
-        /** How long "Unlock Muninn to send your reply. It waits in the chat." stays. */
+        /** How long the note after a refused reply ([ReplyHold.note]) stays. */
         private const val NOT_SENT_MS = 60_000L
         const val KEY = "key"
         const val TEXT = "reply"

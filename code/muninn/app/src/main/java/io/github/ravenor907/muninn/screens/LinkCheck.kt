@@ -333,10 +333,15 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
         if (busy || waiting) return
         busy = true; wrong = false
         scope.launch {
+            // 1.42: counted on disk before the check (stopping Muninn mid-check can't skip it); never erases from here.
+            val begun = withContext(Dispatchers.IO) { tries.begin(inApp = true) }
+            if (begun == null) { busy = false; waitUntil = withContext(Dispatchers.IO) { tries.waitUntil() }; return@launch }
             val ok = withContext(Dispatchers.Default) { try { app.vault.check(secret) } catch (_: Exception) { false } }
+            if (ok) withContext(Dispatchers.IO) { tries.right() }
             busy = false
-            if (ok) { pw = ""; tries.right(); Link.showOwn(true); onDone(true) }
-            else { wrong = true; shakes++; val until = tries.wrong(); if (until > 0) waitUntil = until }
+            if (ok) { pw = ""; Link.showOwn(true); onDone(true) }
+            else if (begun.lockApp) { onDone(false); io.github.ravenor907.muninn.ui.AppLock.raise() }
+            else { wrong = true; shakes++; val until = withContext(Dispatchers.IO) { tries.waitedUntil() }; if (until > 0) waitUntil = until }
         }
     }
     AlertDialog(onDismissRequest = { onDone(false) }, containerColor = Palette.panel,
@@ -349,8 +354,8 @@ fun OwnChatsUnlock(app: Muninn, onDone: (Boolean) -> Unit) {
                 } else Field(pw, { pw = it; wrong = false }, "Password", Modifier.padding(top = 10.dp), secret = true,
                     keyboard = KeyboardOptions(keyboardType = KeyboardType.Password),
                     onDone = { if (pw.isNotEmpty() && !busy && !waiting) tryIt(pw) })
-                if (waiting) Text("Too many tries. Try again in ${(waitUntil - now + 999) / 1000} s.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
-                else if (wrong) Text("That's not it. Try again.", style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
+                val status = triesStatus(tries.fails(), tries.erase, waiting, waitUntil - now, false, wrong)
+                if (status.isNotEmpty()) Text(status, style = Type.normal.copy(color = Palette.danger), modifier = Modifier.padding(top = 6.dp))
             }
         },
         confirmButton = { if (!pattern) MButton(if (busy) "Opening…" else "Open", kind = Kind.Accent, enabled = pw.isNotEmpty() && !busy && !waiting) { tryIt(pw) } },

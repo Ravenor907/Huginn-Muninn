@@ -1,4 +1,5 @@
 #include "morewire.h"
+#include "groupvideo.h"
 #include "groupwire.h"
 #include "photos.h"
 #include "richwire.h"
@@ -433,5 +434,7 @@ bool MoreWire::selfTest(const QString &vectorsPath)
     std::printf("m2 self-test: %d passed, %d failed\n", pass, fail);
     // Cap a1: animated GIFs, from the vectors next to these.
     const bool gifs = Photos::gifSelfTest(QFileInfo(vectorsPath).absoluteDir().filePath(QStringLiteral("gif-vectors.json")));
-    return fail == 0 && gifs;
+    // Cap v3: picked videos (size, bitrate and length rules, who gets what, pacing).
+    const bool videos = GroupVideo::selfTest();
+    return fail == 0 && gifs && videos;
 }

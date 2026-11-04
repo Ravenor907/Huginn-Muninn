@@ -62,6 +62,7 @@ qt_add_executable(huginn
     src/transfer.cpp src/transfer.h
     src/livelist.cpp src/livelist.h
     src/updater.cpp src/updater.h
+    src/ultraprivacy.cpp src/ultraprivacy.h
     src/labs.cpp src/labs.h
     src/appstorage.cpp src/appstorage.h
     src/perfcheck.cpp src/perfcheck.h src/busy.h
@@ -86,6 +87,7 @@ qt_add_executable(huginn
     src/chatfiles.cpp
     src/linkpreview.cpp src/linkpreview.h
     src/videomsg.cpp src/videomsg.h
+    src/groupvideo.cpp src/groupvideo.h src/chatvideo.cpp
     src/thumbs.cpp src/thumbs.h
     src/msglimits.cpp src/msglimits.h
     src/modwire.cpp src/modwire.h
@@ -106,6 +108,9 @@ qt_add_executable(huginn
     src/tls.cpp src/tls.h
     src/lan.cpp src/lan.h
     src/wifiselftest.cpp src/wifiselftest.h
+    # Read aloud (shared/docs/voices.md): the natural voices, with the speech engine loaded at run time.
+    src/readaloud.cpp src/readaloud.h src/sherpatts.h
+    src/dailyverse.cpp src/dailyverse.h
     # 1:1 calls (shared/docs/protocol.md section 5: TURN relay over the internet, direct between trusted
     # contacts, video and screen share between two c2 apps, 5.8)
     src/call/relayconfig.h
@@ -327,6 +332,22 @@ foreach(font IN LISTS HUGINN_FONTS)
     set_source_files_properties(${font} PROPERTIES QT_RESOURCE_ALIAS fonts/${name})
 endforeach()
 
+# Daily Havamal's verses: the one file both apps use (code/shared/havamal.json), served as :/huginn/havamal.json.
+qt_add_resources(huginn "huginn_havamal" PREFIX "/huginn" BASE ${CMAKE_CURRENT_SOURCE_DIR}/../shared
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/havamal.json)
+
+# Read aloud: the voices' SHA-256 (code/shared/voices.sha256), served as :/huginn/voices.sha256.
+qt_add_resources(huginn "huginn_voices" PREFIX "/huginn" BASE ${CMAKE_CURRENT_SOURCE_DIR}/../shared
+    FILES ${CMAKE_CURRENT_SOURCE_DIR}/../shared/voices.sha256)
+# The computer's own voice for Read aloud until the natural one is downloaded (Qt TextToSpeech, when this Qt has it).
+find_package(Qt6 QUIET COMPONENTS TextToSpeech)
+if(TARGET Qt6::TextToSpeech)
+    target_link_libraries(huginn PRIVATE Qt6::TextToSpeech)
+    target_compile_definitions(huginn PRIVATE HUGINN_HAVE_QTSPEECH)
+else()
+    message(STATUS "Qt TextToSpeech not found: Read aloud waits for the natural voice")
+endif()
+
 target_link_libraries(huginn PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Quick Qt6::QuickControls2 Qt6::Network
     Qt6::WebSockets Qt6::Bluetooth Qt6::Multimedia
@@ -399,5 +420,8 @@ if(WIN32)
 endif()
 install(FILES packaging/io.github.ravenor907.Huginn.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES packaging/io.github.ravenor907.Huginn.metainfo.xml DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+# Read aloud's speech engine (bundled by the Flatpak manifest) and the natural voices: their licenses.
+install(FILES ../shared/licenses/sherpa-onnx-Apache-2.0.txt ../shared/licenses/onnxruntime-MIT.txt ../shared/licenses/natural-voices.txt
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/io.github.ravenor907.Huginn)
 install(FILES packaging/io.github.ravenor907.Huginn-256.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps RENAME io.github.ravenor907.Huginn.png)
 install(FILES packaging/io.github.ravenor907.Huginn-512.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps RENAME io.github.ravenor907.Huginn.png)

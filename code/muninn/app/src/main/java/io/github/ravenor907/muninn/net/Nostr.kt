@@ -405,6 +405,23 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
         }
     }
 
+    /**
+     * Ultra privacy went on or off, or Tor became ready: every socket (listening, sending, a short inbox check) is
+     * dropped at once, so nothing more goes the old way, and the relays connect again the new way. What a dropped
+     * sending socket still held goes again as after any failed send.
+     */
+    fun redial() {
+        val bursting = burst.keys.toList()
+        synchronized(sockets) { for ((url, ws) in sockets) { ended(url, ws); ws.cancel() }; sockets.clear() }
+        live.clear()
+        _connected.value = 0
+        synchronized(senders) { for (s in senders.values) s.ws?.cancel(); senders.clear() }
+        retries.clear()
+        streak.set(0)
+        if (keepAlive) connect()
+        for (url in bursting) open(url)
+    }
+
     /** The network came back: drop dead connections and connect again now. */
     fun reconnectNow() {
         if (!keepAlive && sockets.isEmpty()) return
@@ -750,6 +767,8 @@ class Nostr(private val context: Context, private val secretHex: () -> String?) 
             val a = try { JSONArray(text) } catch (e: Exception) { return }
             // "AUTH" is never answered here: signing in would name my mailbox.
             if (a.optString(0) == "OK" && a.optBoolean(2)) storedAt(url, a.optString(1))
+            // Cap v3 (29.4): a relay asking us to slow down pauses paced video pieces for a minute.
+            else if (a.optString(0) == "OK" && GroupVideo.isRateLimit(a.optString(3))) VideoPace.limited()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { senders.remove(url, this) }

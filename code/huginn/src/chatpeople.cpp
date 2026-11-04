@@ -91,7 +91,23 @@ void Chat::setAllowed(const QString &key, const QString &what, bool on)
     Q_EMIT changed();
 }
 
-void Chat::setCallsAllowed(const QString &key, bool on) { setAllowed(key, QStringLiteral("noCalls"), on); }
+void Chat::setCallsAllowed(const QString &key, bool on)
+{
+    const bool was = callsAllowed(key);
+    setAllowed(key, QStringLiteral("noCalls"), on);
+    if (!m_contacts.contains(key) || was == on || !ready())
+        return;
+    // 1.42 (security M4, as Muninn's round 17): a locked device can't tell who rings by the ring key alone, so calls off
+    // works like a block for it: their ring tag (cap r2) is taken back at once, a new ring key goes to everyone else who
+    // may call, and they no longer get it. Back on: the current one (and a new tag) goes to them.
+    if (!on) {
+        if (m_ringTags)
+            m_ringTags->revoke(key);
+        renewRingKeys(key);
+    } else if (hasCap(key, QLatin1String(RingWire::kRingCap))) {
+        sendKeys(key, true);
+    }
+}
 void Chat::setFilesAllowed(const QString &key, bool on) { setAllowed(key, QStringLiteral("noFiles"), on); }
 
 void Chat::setShowsActive(const QString &key, bool on)

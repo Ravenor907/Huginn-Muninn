@@ -24,6 +24,10 @@ Identity load();
 // can follow its lasting certificate from place to place. Invalid if it couldn't be made.
 Identity throwaway();
 
+// 1.42 (cap h1): an identity kept in the app data folder under sub (like load(), made and saved when missing or
+// damaged): the hidden certificates "now" and "next", named to contacts before they are shown.
+Identity loadIn(const QString &sub);
+
 // Uppercase hex SHA-256 of a certificate's DER bytes; empty for a null certificate.
 QString fingerprintOf(const QSslCertificate &cert);
 

@@ -117,13 +117,27 @@ QByteArray lockKey(const QJsonObject &o, const QString &secret)
     return Vault::derive(secret, salt, o.value(QStringLiteral("rounds")).toInt(kRounds));
 }
 
+// 1.42: the wrap a secret is for. A drawn pattern ("pattern:...") opens the lock's own wrap; with a pattern lock,
+// anything typed is the unlock password and opens only its wrap ("spare"; a pattern set before 1.42 has none: its own
+// wrap then). Only one wrap is ever tried: no double wait, nothing to learn from timing.
+QJsonObject wrapFor(const QJsonObject &o, const QString &secret)
+{
+    if (o.value(QStringLiteral("kind")).toString() == QLatin1String("pattern") && !secret.startsWith(QLatin1String("pattern:"))
+        && o.value(QStringLiteral("spare")).isObject())
+        return o.value(QStringLiteral("spare")).toObject();
+    return o;
+}
+
 // The vault key from a lock file and its secret. Only the lock guards it: nothing outside Huginn is asked.
 QByteArray openLock(const QJsonObject &o, const QString &secret, bool *ok)
 {
     *ok = false;
-    const QByteArray kek = lockKey(o, secret);
-    const QByteArray wrapped = QByteArray::fromBase64(o.value(QStringLiteral("wrapped")).toString().toLatin1());
-    return kek.isEmpty() || wrapped.isEmpty() ? QByteArray() : Vault::open(kek, wrapped, ok);
+    const QJsonObject w = wrapFor(o, secret);
+    QByteArray kek = lockKey(w, secret);
+    const QByteArray wrapped = QByteArray::fromBase64(w.value(QStringLiteral("wrapped")).toString().toLatin1());
+    const QByteArray key = kek.isEmpty() || wrapped.isEmpty() ? QByteArray() : Vault::open(kek, wrapped, ok);
+    kek.fill(0);
+    return key;
 }
 
 // "pattern:0,3,6,..." counts dots; a password counts characters.
@@ -174,6 +188,123 @@ QByteArray random(int n)
 QSettings &settings()
 {
     static QSettings s = Settings::store();
+    return s;
+}
+
+// ---------------------------------------------------------------- 1.42: wrong tries at the lock
+// The count and its wait, in the lock-state file beside the chat folder (never in a backup, a move or a restore's swap)
+// and mirrored in settings ("vault/..."): the higher count of the two is used, so removing one doesn't reset it.
+// Anyone who can copy or change Huginn's files can still set them back (and guess against a copy of vault.key without
+// Huginn at all): the waits and the erase guard against guessing at the screen, not against a copied folder.
+struct LockState
+{
+    int fails = 0;
+    qint64 at = 0;        // the wait ends here, in time since start-up (ms)
+    qint64 wait = 0;      // how long it is (ms); 0: none
+    qint64 started = 0;   // clock minus time since start-up when it began
+    bool erase = false;   // Erase after too many tries
+};
+
+QString lockStatePath() { return System::dataDir() + QStringLiteral("/lock-state.json"); }
+
+bool readLockFile(const QString &file, LockState *s)
+{
+    QFile f(file);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    if (!o.value(QStringLiteral("fails")).isDouble())
+        return false;
+    s->fails = qMax(0, o.value(QStringLiteral("fails")).toInt());
+    s->at = qint64(o.value(QStringLiteral("at")).toDouble());
+    s->wait = qMax<qint64>(0, qint64(o.value(QStringLiteral("wait")).toDouble()));
+    s->started = qint64(o.value(QStringLiteral("started")).toDouble());
+    s->erase = o.value(QStringLiteral("erase")).toBool();
+    return true;
+}
+
+// Written in one step (a temporary file flushed to the disk, then renamed), before it returns.
+bool writeLockFile(const QString &file, const LockState &s)
+{
+    const QJsonObject o{{QStringLiteral("fails"), s.fails}, {QStringLiteral("at"), double(s.at)}, {QStringLiteral("wait"), double(s.wait)},
+                        {QStringLiteral("started"), double(s.started)}, {QStringLiteral("erase"), s.erase}};
+    const QByteArray bytes = QJsonDocument(o).toJson(QJsonDocument::Compact);
+    QSaveFile f(file);
+    if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size())
+        return false;
+    return f.commit();
+}
+
+LockState loadLock()
+{
+    LockState fromFile, fromSettings;
+    const bool file = readLockFile(lockStatePath(), &fromFile);
+    QSettings &st = settings();
+    const bool mirror = st.contains(QStringLiteral("vault/fails")) || st.contains(QStringLiteral("vault/erase"));
+    if (mirror) {
+        fromSettings.fails = qMax(0, st.value(QStringLiteral("vault/fails"), 0).toInt());
+        fromSettings.at = st.value(QStringLiteral("vault/at"), 0).toLongLong();
+        fromSettings.wait = qMax<qint64>(0, st.value(QStringLiteral("vault/wait"), 0).toLongLong());
+        fromSettings.started = st.value(QStringLiteral("vault/started"), 0).toLongLong();
+        fromSettings.erase = st.value(QStringLiteral("vault/erase"), false).toBool();
+    }
+    if (!file)
+        return fromSettings;
+    if (!mirror)
+        return fromFile;
+    LockState best = fromSettings.fails > fromFile.fails ? fromSettings : fromFile;
+    best.erase = fromFile.erase || fromSettings.erase;
+    return best;
+}
+
+void saveLock(const LockState &s)
+{
+    if (!writeLockFile(lockStatePath(), s))
+        qWarning("vault: couldn't write the lock-state file");
+    QSettings &st = settings();
+    st.setValue(QStringLiteral("vault/fails"), s.fails);
+    st.setValue(QStringLiteral("vault/at"), s.at);
+    st.setValue(QStringLiteral("vault/wait"), s.wait);
+    st.setValue(QStringLiteral("vault/started"), s.started);
+    st.setValue(QStringLiteral("vault/erase"), s.erase);
+    st.sync();
+}
+
+// Ms left of s's wait at mono (time since start-up) and clock (ms since 1970). A restart since (the time since start-up
+// went back): the whole wait again, from now. A changed clock or a computer that slept changes nothing: the time since
+// start-up moves with neither. A wait that's over is forgotten. *moved: s changed (save it).
+qint64 lockLeft(LockState *s, qint64 mono, qint64 clock, bool *moved)
+{
+    *moved = false;
+    if (s->wait <= 0)
+        return 0;
+    if (mono < s->at - s->wait) {
+        s->at = mono + s->wait;
+        s->started = clock - mono;
+        *moved = true;
+        return s->wait;
+    }
+    const qint64 left = qBound<qint64>(0, s->at - mono, s->wait);
+    if (left == 0) {
+        s->at = 0;
+        s->wait = 0;
+        *moved = true;
+    }
+    return left;
+}
+
+// A try counted before its check: the new state (and the wait it brings, from now). *lockApp: an in-app try stopped
+// one short of the erase.
+LockState countedTry(LockState s, bool inApp, qint64 mono, qint64 clock, bool *lockApp)
+{
+    const int n = Vault::nextFails(s.fails, s.erase, inApp, lockApp);
+    const qint64 w = n != s.fails ? Vault::waitAfter(n, s.erase) : 0;
+    s.fails = n;
+    if (w > 0) {
+        s.wait = w;
+        s.at = mono + w;
+        s.started = clock - mono;
+    }
     return s;
 }
 
@@ -394,6 +525,13 @@ Vault::Vault(QObject *parent)
     m_combo.setSingleShot(true);
     m_combo.setInterval(1000);
     connect(&m_combo, &QTimer::timeout, this, &Vault::panic);
+    // 1.42: Erase after too many tries was due when Huginn stopped (killed in the middle of the last check, which counted
+    // first): it was wrong, so everything goes now, once everything listens for erased().
+    QTimer::singleShot(0, this, [this] {
+        const LockState st = loadLock();
+        if (exists() && hasLock() && erasesAt(st.fails, st.erase))
+            eraseForTries();
+    });
     // Round 17: how far sealing for a new lock is, a few times a second (sealProgress).
     m_sealTick.setInterval(250);
     connect(&m_sealTick, &QTimer::timeout, this, &Vault::sealProgressChanged);
@@ -453,16 +591,22 @@ bool Vault::turnOffLock(const QString &secret)
         QFile lock(keyFile());
         if (!lock.open(QIODevice::ReadOnly))
             return false;
+        const QJsonObject o = QJsonDocument::fromJson(lock.readAll()).object();
+        lock.close();
+        // 1.42: counted on disk before the check; inside the open app it never erases.
+        bool lockApp = false;
+        if (!beginTry(true, &lockApp))
+            return false;
         bool ok = false;
-        QByteArray given = openLock(QJsonDocument::fromJson(lock.readAll()).object(), secret, &ok);
+        QByteArray given = openLock(o, secret, &ok);
         const bool same = ok && given == m_key;
         given.fill(0);
         if (!same) {
-            wrongTry();
+            wrongTry(lockApp);
             Q_EMIT changed();
             return false;
         }
-        settings().setValue(QStringLiteral("vault/fails"), 0);
+        rightTry();
     }
     // No secret: the data key itself goes in vault.key. Nothing outside Huginn keeps it.
     const QJsonObject o{{QStringLiteral("mode"), QStringLiteral("open")}, {QStringLiteral("key"), QString::fromLatin1(m_key.toBase64())}};
@@ -525,23 +669,261 @@ bool Vault::usesPattern() const
 
 int Vault::waitSeconds() const
 {
-    const qint64 wait = settings().value(QStringLiteral("vault/wait"), 0).toLongLong();
-    if (wait <= 0)
+    // 1.42: the lock-state file (and its copy in settings); see lockLeft.
+    LockState st = loadLock();
+    if (st.wait <= 0)
         return 0;
-    const qint64 mono = sinceStart(), started = QDateTime::currentMSecsSinceEpoch() - mono;
-    const qint64 at = settings().value(QStringLiteral("vault/at"), 0).toLongLong();
-    const qint64 was = settings().value(QStringLiteral("vault/started"), 0).toLongLong();
-    if (mono < at - wait) {
-        // Restarted (the time since start-up went back): the whole wait again, from now.
-        settings().setValue(QStringLiteral("vault/at"), mono + wait);
-        settings().setValue(QStringLiteral("vault/started"), started);
-        return int((wait + 999) / 1000);
-    }
-    // The clock moved, or the computer slept: the wait runs on time since start-up, so neither changes it.
-    if (qAbs(started - was) > 120000)
-        settings().setValue(QStringLiteral("vault/started"), started);
-    const qint64 left = qBound<qint64>(0, at - mono, wait);
+    bool moved = false;
+    const qint64 left = lockLeft(&st, sinceStart(), QDateTime::currentMSecsSinceEpoch(), &moved);
+    if (moved)
+        saveLock(st);
     return left > 0 ? int((left + 999) / 1000) : 0;
+}
+
+// ---------------------------------------------------------------- 1.42: wrong tries and the unlock password
+
+qint64 Vault::waitAfter(int fails, bool erase)
+{
+    static const qint64 waits[] = {5 * 60000, 3600000, 12 * qint64(3600000), 24 * qint64(3600000)};
+    if (fails <= 0 || fails % 5 != 0 || erasesAt(fails, erase))
+        return 0;
+    return waits[qMin(fails / 5, 4) - 1];
+}
+
+bool Vault::erasesAt(int fails, bool erase) { return erase && fails >= 25; }
+
+int Vault::lastLeft(int fails, bool erase) { return erase && fails >= 20 && fails < 25 ? 25 - fails : 0; }
+
+int Vault::nextFails(int fails, bool erase, bool inApp, bool *lockApp)
+{
+    if (lockApp)
+        *lockApp = false;
+    if (inApp && erasesAt(fails + 1, erase)) {
+        if (lockApp)
+            *lockApp = true;
+        return qMin(fails, 24);
+    }
+    return fails + 1;
+}
+
+namespace
+{
+// "5 minutes", "1 hour", "12 hours", "24 hours".
+QString spanWords(qint64 ms)
+{
+    if (ms >= 3600000 && ms % 3600000 == 0) {
+        const qint64 h = ms / 3600000;
+        return h == 1 ? QStringLiteral("1 hour") : QStringLiteral("%1 hours").arg(h);
+    }
+    const qint64 m = (ms + 59999) / 60000;
+    return m == 1 ? QStringLiteral("1 minute") : QStringLiteral("%1 minutes").arg(m);
+}
+}
+
+QString Vault::waitText(int fails, bool erase)
+{
+    const QString now = QStringLiteral("Wait %1.").arg(spanWords(waitAfter(fails, erase)));
+    if (erasesAt(fails + 5, erase))
+        return now + QStringLiteral(" Next: the last 5 tries. If all 5 are wrong, everything is erased for good.");
+    const qint64 next = waitAfter(fails + 5, erase);
+    return now + QStringLiteral(" Next: %1%2 after 5 more wrong tries.").arg(spanWords(next), next == waitAfter(fails, erase) ? QStringLiteral(" again") : QString());
+}
+
+QString Vault::triesText(int fails, bool erase)
+{
+    const int last = lastLeft(fails, erase);
+    if (last == 1)
+        return QStringLiteral("Last try. If it's wrong, everything is erased for good.");
+    if (last > 1)
+        return QStringLiteral("Last %1 tries. If all %1 are wrong, everything is erased for good.").arg(last);
+    if (fails <= 0)
+        return QString();
+    const int left = 5 - fails % 5;
+    const QString wait = spanWords(waitAfter(fails + left, erase));
+    return left == 1 ? QStringLiteral("1 more wrong try, then a wait of %1.").arg(wait)
+                     : QStringLiteral("%1 more wrong tries, then a wait of %2.").arg(left).arg(wait);
+}
+
+QString Vault::leftText(qint64 ms)
+{
+    if (ms < 60000) {
+        const qint64 sec = qMax<qint64>(1, (ms + 999) / 1000);
+        return sec == 1 ? QStringLiteral("Try again in 1 second.") : QStringLiteral("Try again in %1 seconds.").arg(sec);
+    }
+    const qint64 mins = (ms + 59999) / 60000, h = mins / 60, m = mins % 60;
+    const QString hours = h == 1 ? QStringLiteral("1 hour") : QStringLiteral("%1 hours").arg(h);
+    const QString minutes = m == 1 ? QStringLiteral("1 minute") : QStringLiteral("%1 minutes").arg(m);
+    const QString both = hours + QLatin1Char(' ') + minutes;
+    return QStringLiteral("Try again in %1.").arg(h == 0 ? minutes : m == 0 ? hours : both);
+}
+
+int Vault::wrongTries() const { return loadLock().fails; }
+
+bool Vault::eraseAfterTries() const { return loadLock().erase; }
+
+void Vault::setEraseAfterTries(bool on)
+{
+    LockState st = loadLock();
+    if (on == st.erase)
+        return;
+    // On: only with a lock, and only after it was confirmed for this (Settings asks first).
+    if (on && (!hasLock() || !takeGrant(QStringLiteral("erase")))) {
+        Q_EMIT changed();
+        return;
+    }
+    st.erase = on;
+    saveLock(st);
+    Q_EMIT changed();
+}
+
+QString Vault::triesWords() const
+{
+    const LockState st = loadLock();
+    const int wait = waitSeconds();
+    if (wait > 0)
+        return waitText(st.fails, st.erase) + QLatin1Char(' ') + leftText(qint64(wait) * 1000);
+    return triesText(st.fails, st.erase);
+}
+
+QString Vault::triesWordsFor(int fails, bool erase) const
+{
+    const qint64 wait = waitAfter(fails, erase);
+    return wait > 0 ? waitText(fails, erase) + QLatin1Char(' ') + leftText(wait - 1000) : triesText(fails, erase);
+}
+
+bool Vault::beginTry(bool inApp, bool *lockApp)
+{
+    if (lockApp)
+        *lockApp = false;
+    LockState st = loadLock();
+    bool moved = false;
+    const qint64 mono = sinceStart(), clock = QDateTime::currentMSecsSinceEpoch();
+    if (lockLeft(&st, mono, clock, &moved) > 0) {
+        if (moved)
+            saveLock(st);
+        return false;
+    }
+    // On disk before the check runs: stopping Huginn in the middle of it can't skip the count.
+    saveLock(countedTry(st, inApp, mono, clock, lockApp));
+    return true;
+}
+
+void Vault::rightTry()
+{
+    LockState fresh;
+    fresh.erase = loadLock().erase;
+    saveLock(fresh);
+}
+
+void Vault::wrongTry(bool lockApp)
+{
+    const LockState st = loadLock();
+    if (erasesAt(st.fails, st.erase) && !lockApp) {
+        eraseForTries();
+        return;
+    }
+    // Inside the open app, one more would erase: the lock goes up instead (the lock screen says what's left).
+    if (lockApp && hasLock())
+        lockScreen();
+}
+
+void Vault::eraseForTries()
+{
+    if (m_restarting)
+        return;
+    CrashLog::note(QStringLiteral("vault: erased after too many wrong tries"));
+    // The same as Erase everything: Huginn's data only (on Windows too, the program stays), then a fresh start.
+    eraseAll();
+    m_restarting = true;
+    m_busy = true;
+    Q_EMIT changed();
+    QTimer::singleShot(500, this, [this] { restartHuginn(QStringLiteral("Everything was erased after too many wrong tries. Close Huginn and open it again.")); });
+}
+
+bool Vault::hasUnlockPassword() const
+{
+    QFile f(keyFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    return o.value(QStringLiteral("mode")).toString() == QLatin1String("password") && o.value(QStringLiteral("spare")).isObject();
+}
+
+QString Vault::spareStep() const
+{
+    if (m_key.size() != 32 || m_screenLocked || m_lockNeeded || m_sealing || m_restarting || !hasLock() || !usesPattern())
+        return QString();
+    if (m_spareChange || !hasUnlockPassword())
+        return QStringLiteral("set");
+    // During first setup its last page asks (FirstSetup.qml); the lock screen asks only once setup is over.
+    if (settings().value(QStringLiteral("chatlock/recall"), false).toBool()
+        && settings().value(QStringLiteral("setup/state")).toString() != QLatin1String("started"))
+        return QStringLiteral("recall");
+    return QString();
+}
+
+bool Vault::setUnlockPassword(const QString &password)
+{
+    if (m_restarting || m_sealing || m_key.size() != 32 || m_screenLocked || password.size() < kMinSecret || !hasLock() || !usesPattern())
+        return false;
+    QFile f(keyFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    f.close();
+    const QByteArray spare = lockBlob(password, false, m_key);
+    if (spare.isEmpty())
+        return false;
+    QJsonObject w = QJsonDocument::fromJson(spare).object();
+    w.remove(QStringLiteral("mode"));
+    w.remove(QStringLiteral("kind"));
+    o.insert(QStringLiteral("spare"), w);
+    if (!writeKeyFile(QJsonDocument(o).toJson(QJsonDocument::Compact)))
+        return false;
+    m_spareChange = false;
+    settings().setValue(QStringLiteral("chatlock/recall"), true);
+    settings().sync();
+    Q_EMIT changed();
+    return true;
+}
+
+bool Vault::recallUnlockPassword(const QString &password)
+{
+    if (m_key.size() != 32 || password.isEmpty())
+        return false;
+    QFile f(keyFile());
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    if (!o.value(QStringLiteral("spare")).isObject())
+        return false;
+    bool ok = false;
+    QByteArray key = openLock(o.value(QStringLiteral("spare")).toObject(), password, &ok);
+    const bool same = ok && key == m_key;
+    key.fill(0);
+    if (!same)
+        return false;
+    settings().remove(QStringLiteral("chatlock/recall"));
+    settings().sync();
+    Q_EMIT changed();
+    return true;
+}
+
+bool Vault::startUnlockPasswordChange()
+{
+    if (!hasLock() || !usesPattern() || !takeGrant(QStringLiteral("spare")))
+        return false;
+    m_spareChange = true;
+    Q_EMIT changed();
+    return true;
+}
+
+void Vault::cancelUnlockPasswordChange()
+{
+    if (!m_spareChange)
+        return;
+    m_spareChange = false;
+    Q_EMIT changed();
 }
 
 bool Vault::unlock(const QString &secret)
@@ -553,17 +935,17 @@ bool Vault::unlock(const QString &secret)
         return false;
     const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
     f.close();
+    // 1.42: counted on disk before the check, so stopping Huginn in the middle can't skip it.
+    if (!beginTry(false))
+        return false;
     bool ok = false;
     const QByteArray key = openLock(o, secret, &ok);
     if (!ok || key.size() != 32) {
-        wrongTry();
+        wrongTry(false);
         Q_EMIT changed();
         return false;
     }
-    settings().setValue(QStringLiteral("vault/fails"), 0);
-    settings().remove(QStringLiteral("vault/wait"));
-    settings().remove(QStringLiteral("vault/at"));
-    settings().remove(QStringLiteral("vault/started"));
+    rightTry();
     const bool first = m_key.isEmpty();
     m_key = key;
     m_weak = !strongSecret(secret);
@@ -586,6 +968,9 @@ void Vault::unlockInBackground(const QString &secret)
         return fail();
     const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
     f.close();
+    // 1.42: the try is counted and on disk before the key is worked out: stopping Huginn meanwhile can't skip it.
+    if (!beginTry(false))
+        return fail();
     // The first unlock reads and opens the saved chat files there too (not pictures: they are read when shown).
     const bool first = m_key.isEmpty();
     const QString dir = dataDir();
@@ -630,16 +1015,13 @@ void Vault::finishUnlock(bool ok, const QByteArray &key, bool weak, const Files 
 {
     m_unlocking = false;
     if (m_restarting || !ok) {
-        if (!ok)
-            wrongTry();
         Q_EMIT changed();
         Q_EMIT unlockFinished(false);
+        if (!ok && !m_restarting)
+            wrongTry(false);   // may erase (Erase after too many tries), after the lock screen heard how it went
         return;
     }
-    settings().setValue(QStringLiteral("vault/fails"), 0);
-    settings().remove(QStringLiteral("vault/wait"));
-    settings().remove(QStringLiteral("vault/at"));
-    settings().remove(QStringLiteral("vault/started"));
+    rightTry();
     const bool first = m_key.isEmpty();
     m_key = key;
     m_weak = weak;
@@ -658,24 +1040,17 @@ void Vault::finishUnlock(bool ok, const QByteArray &key, bool weak, const Files 
     Q_EMIT unlockFinished(true);
 }
 
-void Vault::wrongTry()
-{
-    // Every 5 wrong tries the wait doubles: 30 s, 1 min, 2 min ... up to an hour (kept across restarts).
-    const int fails = settings().value(QStringLiteral("vault/fails"), 0).toInt() + 1;
-    settings().setValue(QStringLiteral("vault/fails"), fails);
-    if (fails % 5 == 0) {
-        const qint64 wait = qMin<qint64>(3600000, qint64(30000) << qMin(fails / 5 - 1, 7)), mono = sinceStart();
-        settings().setValue(QStringLiteral("vault/wait"), wait);
-        settings().setValue(QStringLiteral("vault/at"), mono + wait);
-        settings().setValue(QStringLiteral("vault/started"), QDateTime::currentMSecsSinceEpoch() - mono);
-    }
-}
-
-bool Vault::setSecret(const QString &secret, bool pattern)
+bool Vault::setSecret(const QString &secret, bool pattern, const QString &spare)
 {
     m_secretError.clear();
     if (!strongSecret(secret))
         return false;
+    // 1.42: a pattern needs its unlock password (at least 6 characters, never a pattern). A password lock has none.
+    if (pattern && (spare.size() < kMinSecret || spare.startsWith(QLatin1String("pattern:")))) {
+        m_secretError = QStringLiteral("Set an unlock password too (6 or more characters).");
+        return false;
+    }
+    const QString second = pattern ? spare : QString();
     if (exists() && m_key.isEmpty())
         return false;   // changing needs the old lock opened first
     if (m_restarting)
@@ -702,10 +1077,10 @@ bool Vault::setSecret(const QString &secret, bool pattern)
             m_secretError = QStringLiteral("Huginn is still saving. Try again in a moment.");
             return false;
         }
-        startSeal(secret, pattern);
+        startSeal(secret, pattern, second);
         return false;
     }
-    if (!writeLock(secret, pattern)) {
+    if (!writeLock(secret, pattern, second)) {
         if (first)
             m_key.clear();
         return false;
@@ -713,7 +1088,13 @@ bool Vault::setSecret(const QString &secret, bool pattern)
     m_weak = false;
     m_screenLocked = false;
     m_lockNeeded = false;   // the new lock is set
+    m_spareChange = false;
     m_grantFor.clear();
+    // The unlock password is asked once more from memory (spareStep "recall"; during first setup, its last page).
+    if (pattern)
+        settings().setValue(QStringLiteral("chatlock/recall"), true);
+    else
+        settings().remove(QStringLiteral("chatlock/recall"));
     Q_EMIT changed();
     Q_EMIT lockChanged();
     if (first)
@@ -741,16 +1122,22 @@ bool Vault::confirmLock(const QString &secret, const QString &what)
     QFile lock(keyFile());
     if (!lock.open(QIODevice::ReadOnly))
         return false;
+    const QJsonObject o = QJsonDocument::fromJson(lock.readAll()).object();
+    lock.close();
+    // 1.42: counted on disk before the check; inside the open app it never erases (the lock goes up instead).
+    bool lockApp = false;
+    if (!beginTry(true, &lockApp))
+        return false;
     bool ok = false;
-    QByteArray given = openLock(QJsonDocument::fromJson(lock.readAll()).object(), secret, &ok);
+    QByteArray given = openLock(o, secret, &ok);
     const bool same = ok && given == m_key;
     given.fill(0);
     if (!same) {
-        wrongTry();
+        wrongTry(lockApp);
         Q_EMIT changed();
         return false;
     }
-    settings().setValue(QStringLiteral("vault/fails"), 0);
+    rightTry();
     m_grantFor = what;
     // Long enough to pick a file and type a backup password; used once.
     m_grantUntil = QDeadlineTimer::current().deadline() + 10 * 60 * 1000;
@@ -773,13 +1160,13 @@ bool Vault::takeGrant(const QString &what)
     return true;
 }
 
-bool Vault::writeLock(const QString &secret, bool pattern) const
+bool Vault::writeLock(const QString &secret, bool pattern, const QString &spare) const
 {
-    const QByteArray blob = lockBlob(secret, pattern, m_key);
+    const QByteArray blob = lockBlob(secret, pattern, m_key, spare);
     return !blob.isEmpty() && writeKeyFile(blob);
 }
 
-QByteArray Vault::lockBlob(const QString &secret, bool pattern, const QByteArray &key)
+QByteArray Vault::lockBlob(const QString &secret, bool pattern, const QByteArray &key, const QString &spare)
 {
     const QByteArray salt = random(16);
     QJsonObject o{{QStringLiteral("mode"), QStringLiteral("password")}, {QStringLiteral("kind"), pattern ? QStringLiteral("pattern") : QStringLiteral("text")},
@@ -805,6 +1192,16 @@ QByteArray Vault::lockBlob(const QString &secret, bool pattern, const QByteArray
     const QByteArray wrapped = seal(kek, key);
     kek.fill(0);
     o.insert(QStringLiteral("wrapped"), QString::fromLatin1(wrapped.toBase64()));
+    // 1.42: a pattern's unlock password: a second wrap of the same key, its own salt, the same KDF. Never a hash of it
+    // anywhere else, never the password itself.
+    if (pattern && !spare.isEmpty()) {
+        QJsonObject w = QJsonDocument::fromJson(lockBlob(spare, false, key)).object();
+        if (!w.value(QStringLiteral("wrapped")).isString())
+            return QByteArray();
+        w.remove(QStringLiteral("mode"));
+        w.remove(QStringLiteral("kind"));
+        o.insert(QStringLiteral("spare"), w);
+    }
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -858,7 +1255,13 @@ void Vault::eraseAll()
     m_key.fill(0);
     m_key.clear();
     m_unreadable.clear();
+    m_dirty.clear();
+    m_spareChange = false;
     settings().remove(QStringLiteral("vault"));
+    // 1.42: the wrong tries, their wait and the erase switch (the lock-state file beside the chat folder), and a
+    // pending "type your unlock password from memory".
+    QFile::remove(lockStatePath());
+    settings().remove(QStringLiteral("chatlock/recall"));
     // The inbox address and chat identity go too. The day keys were vault files (gone above); the ring key and its
     // ring mailbox live outside the vault and go on erased() (main.cpp, RingKey::forget), so an erased computer
     // keeps none of its old mailboxes.
@@ -911,13 +1314,10 @@ bool Vault::write(const QString &name, const QByteArray &data) const
         qWarning("vault: not saving over a file that couldn't be read");
         return false;
     }
-    // Round 17: sealing for a new lock: held until it ends, then written with the key in use then.
-    if (m_sealing) {
-        Held h;
-        h.data = data;
-        m_held.insert(name, h);
-        return true;
-    }
+    // Round 18 m2: sealing for a new lock: written now with the key in use (the old one), and sealed again into the new
+    // folder just before it's swapped in (sealDirty). Never held in memory only, so a crash meanwhile loses nothing.
+    if (m_sealing)
+        m_dirty.insert(name);
     // A save of the same file still waiting on the saving thread goes first: a file's saves stay in order.
     m_saves->waitFor(name, 10000);
     QDir().mkpath(QFileInfo(path(name)).absolutePath());
@@ -939,12 +1339,8 @@ void Vault::writeLater(const QString &name, std::function<QByteArray()> make) co
         qWarning("vault: not saving over a file that couldn't be read");
         return;
     }
-    if (m_sealing) {   // round 17: held until sealing for a new lock ends (write())
-        Held h;
-        h.make = std::move(make);
-        m_held.insert(name, h);
-        return;
-    }
+    if (m_sealing)   // round 18 m2: on disk with the old key now, sealed again for the new lock at the end (write())
+        m_dirty.insert(name);
     SaveQueue::Job job;
     job.name = name;
     job.file = path(name);
@@ -1094,12 +1490,8 @@ std::function<QByteArray(const QString &)> Vault::anyThreadReader() const
 
 void Vault::remove(const QString &name) const
 {
-    if (m_sealing) {   // round 17: the old folder stays as it is until sealing ends; removed then
-        Held h;
-        h.removed = true;
-        m_held.insert(name, h);
-        return;
-    }
+    if (m_sealing)   // round 18 m2: gone from the new folder too, just before it's swapped in (sealDirty)
+        m_dirty.insert(name);
     m_saves->waitFor(name, 10000);   // a save of it still waiting never brings it back
     QFile::remove(path(name));
 }
@@ -1837,7 +2229,7 @@ bool Vault::swapIn(const QString &dir, const QString &what, QString *error)
 // into the stage one at a time on this thread (never the whole folder in memory), after checking there is room for the
 // second copy. Any file that can't be read stops it, and nothing changes. Only the two renames run on the window's
 // thread (finishSeal, under s_swap), as a restore's do; cut off anywhere, the next start finishes or undoes it.
-void Vault::startSeal(const QString &secret, bool pattern)
+void Vault::startSeal(const QString &secret, bool pattern, const QString &spare)
 {
     const QString dir = QDir::cleanPath(dataDir());
     const QByteArray oldKey = m_key;
@@ -1847,11 +2239,12 @@ void Vault::startSeal(const QString &secret, bool pattern)
     const auto done = m_sealDone, total = m_sealTotal;
     const auto stop = m_sealStop;
     m_sealing = true;
+    m_dirty.clear();
     m_secretError.clear();
     Q_EMIT changed();
     Q_EMIT sealProgressChanged();
     m_sealTick.start();
-    QThread *t = QThread::create([this, dir, oldKey, secret, pattern, done, total, stop] {
+    QThread *t = QThread::create([this, dir, oldKey, secret, pattern, spare, done, total, stop] {
         Busy::ThreadScope busy("sealing thread: sealing every file again for a new lock");
         const QString stage = dir + QStringLiteral(".restore"), old = dir + QStringLiteral(".old");
         QByteArray fresh = random(32);
@@ -1885,7 +2278,7 @@ void Vault::startSeal(const QString &secret, bool pattern)
                 return fail(QStringLiteral("Setting a lock needs about %1 free on this drive for a moment, while your chats are sealed again. "
                                            "Free up space, then try again. Nothing changed.")
                                 .arg(QLocale().formattedDataSize(need)));
-            const QByteArray blob = lockBlob(secret, pattern, fresh);
+            const QByteArray blob = lockBlob(secret, pattern, fresh, spare);
             if (blob.isEmpty())
                 return fail(QStringLiteral("Couldn't make the lock on this computer. Nothing changed."));
             QString why;
@@ -1959,7 +2352,15 @@ void Vault::finishSeal(bool ok, const QString &error, QByteArray fresh)
     const QString dir = System::dataDir() + QStringLiteral("/chat");
     const bool stopped = (m_sealStop && m_sealStop->load()) || m_restarting || m_key.isEmpty();
     if (ok && !stopped) {
-        ok = swapIn(dir, QStringLiteral("lock"), &why);
+        // Round 18 m2: what was saved meanwhile (with the old key, on disk) is sealed again into the new folder first.
+        // Until the swap the old folder holds everything, so a crash anywhere before it loses nothing.
+        ok = drainSaves(30000) && sealDirty(QDir::cleanPath(dir), m_key, fresh, &why);
+        if (!ok && why.isEmpty())
+            why = QStringLiteral("Huginn is still saving. Try again in a moment. Nothing changed.");
+        if (ok)
+            ok = swapIn(dir, QStringLiteral("lock"), &why);
+        else
+            QDir(QDir::cleanPath(dir) + QStringLiteral(".restore")).removeRecursively();
     } else {
         if (ok)
             why = QStringLiteral("Stopped. Nothing changed.");
@@ -1973,14 +2374,19 @@ void Vault::finishSeal(bool ok, const QString &error, QByteArray fresh)
         m_weak = false;
         m_screenLocked = false;
         m_lockNeeded = false;
+        m_spareChange = false;
         m_grantFor.clear();
+        // 1.42: a pattern's unlock password is asked once more from memory.
+        if (usesPattern())
+            settings().setValue(QStringLiteral("chatlock/recall"), true);
     } else {
         CrashLog::note(QStringLiteral("vault: setting a lock didn't finish: %1").arg(why));
         m_secretError = why;   // LockPanel says why
     }
     fresh.fill(0);
     m_sealing = false;
-    // What was saved meanwhile goes to disk now, sealed with the key in use (the new one when it worked).
+    m_dirty.clear();
+    // Round 18 m2: nothing is held any more (saves went to disk meanwhile); an older build's held saves would go here.
     if (!m_key.isEmpty())
         flushHeld();
     m_held.clear();
@@ -1989,6 +2395,53 @@ void Vault::finishSeal(bool ok, const QString &error, QByteArray fresh)
     if (ok)
         Q_EMIT lockChanged();
     Q_EMIT secretFinished(ok, ok ? QString() : why);
+}
+
+bool Vault::sealDirty(const QString &dir, const QByteArray &oldKey, const QByteArray &fresh, QString *why)
+{
+    const QString stage = dir + QStringLiteral(".restore");
+    for (const QString &name : std::as_const(m_dirty)) {
+        if (!safeName(name) || name == QLatin1String("vault.key"))
+            continue;
+        const QString from = dir + QLatin1Char('/') + name, target = stage + QLatin1Char('/') + name;
+        if (!QFileInfo::exists(from)) {
+            QFile::remove(target);   // removed meanwhile: gone from the new folder too
+            continue;
+        }
+        QByteArray b;
+        if (!readTrying(from, &b)) {
+            *why = QStringLiteral("Huginn couldn't read %1 just now, so nothing changed. Try again in a moment.").arg(fileWords(name));
+            return false;
+        }
+        QByteArray out = b;
+        if (b.startsWith(kMagic)) {
+            bool opened = false;
+            QByteArray plain = open(oldKey, b.mid(kMagic.size()), &opened);
+            if (opened)
+                out = kMagic + seal(fresh, plain);
+            plain.fill(0);
+        }
+        b.fill(0);
+        QDir().mkpath(QFileInfo(target).absolutePath());
+        QSaveFile f(target);
+        if (!f.open(QIODevice::WriteOnly) || f.write(out) != out.size() || !f.commit()) {
+            *why = QStringLiteral("Couldn't write your chats sealed with the new lock, so nothing changed. Is the disk full?");
+            return false;
+        }
+    }
+    // Saves went on beside the sealing thread: anything it carried across that isn't here any more (a save's temporary
+    // file, a file removed meanwhile) goes from the new folder too.
+    if (!m_dirty.isEmpty()) {
+        const QDir base(stage);
+        QDirIterator it(stage, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString full = it.next();
+            const QString name = base.relativeFilePath(full);
+            if (name != QLatin1String("vault.key") && name != kComplete && !QFileInfo::exists(dir + QLatin1Char('/') + name))
+                QFile::remove(full);
+        }
+    }
+    return true;
 }
 
 void Vault::flushHeld()
@@ -2169,7 +2622,8 @@ void Vault::backupTo(const QString &path, const QString &password, bool withFile
         *skipped = int(damaged.size());
         Files files;
         for (auto &e : all)
-            if (e.first != QLatin1String("move-out.bin") && (withFiles || !isMedia(e.first)))
+            // Daily Havamal's own translation (DailyVerse::kFile) stays on this computer only.
+            if (e.first != QLatin1String("move-out.bin") && e.first != QLatin1String("havamal-own.json") && (withFiles || !isMedia(e.first)))
                 files.push_back(std::move(e));
         files.emplace_back(kSettingsEntry, extra);
         if (!shared.isEmpty())
@@ -2413,9 +2867,11 @@ void Vault::restoreErasing()
     for (auto &e : files)
         e.second.fill(0);
     forgetOpened();
-    // The wrong tries and their wait belonged to the old lock.
-    settings().remove(QStringLiteral("vault"));
+    // The wrong tries and their wait belonged to the old lock (this took the backup and its Backup password, and erased
+    // what was here). Erase after too many tries stays as it was.
+    rightTry();
     settings().remove(QStringLiteral("chatlock/strongerAsked"));
+    settings().remove(QStringLiteral("chatlock/recall"));
     // As after any restore: a new day key is made and announced at the next start (see restoreOpened).
     settings().setValue(QStringLiteral("restore/at"), QDateTime::currentMSecsSinceEpoch());
     settings().setValue(QStringLiteral("restore/announce"), true);
@@ -2818,6 +3274,106 @@ bool Vault::selfTest()
         std::printf("vault lock opens with its secret only: %s\n", lk ? "ok" : "FAILED");
         all &= lk;
     }
+    // 1.42: the wrong-try steps, the lock-state file and the unlock password.
+    all &= lockRulesSelfTest();
+    return all;
+}
+
+bool Vault::lockRulesSelfTest()
+{
+    bool all = true;
+    const auto check = [&all](const char *what, bool ok) {
+        std::printf("lock rules %s: %s\n", what, ok ? "ok" : "FAILED");
+        all &= ok;
+    };
+    const qint64 min = 60000, hour = 60 * min;
+    // The steps: 5 minutes, 1 hour, 12 hours, then 24 hours again and again.
+    check("no wait before 5", waitAfter(4, false) == 0 && waitAfter(1, true) == 0);
+    check("5 wrong: 5 minutes", waitAfter(5, false) == 5 * min && waitAfter(6, false) == 0);
+    check("5 more: 1 hour", waitAfter(10, false) == hour);
+    check("5 more: 12 hours", waitAfter(15, false) == 12 * hour);
+    check("5 more: 24 hours", waitAfter(20, false) == 24 * hour && waitAfter(20, true) == 24 * hour);
+    check("24 hours repeats with erase off", waitAfter(25, false) == 24 * hour && waitAfter(30, false) == 24 * hour && waitAfter(500, false) == 24 * hour
+                                                 && !erasesAt(25, false) && !erasesAt(1000, false));
+    check("erase on: the 5th try after the 24-hour wait erases", !erasesAt(24, true) && erasesAt(25, true) && waitAfter(25, true) == 0);
+    check("last stage counts down", lastLeft(20, true) == 5 && lastLeft(24, true) == 1 && lastLeft(19, true) == 0 && lastLeft(22, false) == 0);
+    bool lockApp = false;
+    const int inApp = nextFails(24, true, true, &lockApp);
+    check("an in-app try never erases: it locks instead", inApp == 24 && lockApp);
+    check("a lock-screen try counts on", nextFails(24, true, false, &lockApp) == 25 && !lockApp && nextFails(24, false, true, &lockApp) == 25 && !lockApp);
+    // The words: each step spelled out, never a total like "25".
+    check("wait words", waitText(10, false) == QLatin1String("Wait 1 hour. Next: 12 hours after 5 more wrong tries.")
+                            && waitText(20, false) == QLatin1String("Wait 24 hours. Next: 24 hours again after 5 more wrong tries.")
+                            && waitText(20, true) == QLatin1String("Wait 24 hours. Next: the last 5 tries. If all 5 are wrong, everything is erased for good."));
+    check("last tries words", triesText(20, true) == QLatin1String("Last 5 tries. If all 5 are wrong, everything is erased for good.")
+                                  && triesText(23, true) == QLatin1String("Last 2 tries. If all 2 are wrong, everything is erased for good.")
+                                  && triesText(24, true) == QLatin1String("Last try. If it's wrong, everything is erased for good."));
+    check("tries words", triesText(0, false).isEmpty() && triesText(1, false) == QLatin1String("4 more wrong tries, then a wait of 5 minutes.")
+                             && triesText(9, false) == QLatin1String("1 more wrong try, then a wait of 1 hour."));
+    check("time left words", leftText(hour) == QLatin1String("Try again in 1 hour.") && leftText(24 * hour - 90000) == QLatin1String("Try again in 23 hours 59 minutes.")
+                                 && leftText(39500) == QLatin1String("Try again in 40 seconds."));
+    bool no25 = true;
+    for (int f = 0; f <= 60; ++f)
+        for (bool e : {false, true})
+            no25 = no25 && !triesText(f, e).contains(QLatin1String("25")) && (waitAfter(f, e) == 0 || !waitText(f, e).contains(QLatin1String("25")));
+    check("never a total", no25);
+
+    // The lock-state file: a try is on disk before its check, so a kill mid-check still counts.
+    QTemporaryDir tmp;
+    const QString file = tmp.path() + QStringLiteral("/lock-state.json");
+    qint64 mono = 3600000, clock = qint64(1700000000) * 1000;
+    LockState st;
+    bool moved = false;
+    for (int i = 0; i < 4; ++i)
+        st = countedTry(st, false, mono, clock, &lockApp);
+    check("four wrong: no wait", st.fails == 4 && lockLeft(&st, mono, clock, &moved) == 0);
+    st = countedTry(st, false, mono, clock, &lockApp);
+    check("the try is written before the check", writeLockFile(file, st));
+    LockState after;   // Huginn killed and started again: what's on disk
+    check("a kill mid-check still counts, with its wait", readLockFile(file, &after) && after.fails == 5 && lockLeft(&after, mono, clock, &moved) == 5 * min);
+    // The clock moved a day back or forward: the wait runs on time since start-up, so nothing changes.
+    check("a changed clock can't skip it", lockLeft(&after, mono + min, clock - 24 * hour, &moved) == 4 * min
+                                               && lockLeft(&after, mono + min, clock + 24 * hour, &moved) == 4 * min);
+    // A restart: time since start-up back near zero. The whole wait again, from now.
+    check("a restart starts it again", lockLeft(&after, 5000, clock + 10 * min, &moved) == 5 * min && moved);
+    check("then it runs out and is forgotten", lockLeft(&after, 5000 + 5 * min, clock, &moved) == 0 && after.wait == 0 && moved);
+    // On to the end with erase on: 24 hours after 20, then the 25th erases (and a kill there still erases on the next start).
+    LockState on;
+    on.erase = true;
+    for (int i = 0; i < 20; ++i)
+        on = countedTry(on, false, mono, clock, &lockApp);
+    check("erase on: 24 hours after 20", on.fails == 20 && lockLeft(&on, mono, clock, &moved) == 24 * hour && !erasesAt(on.fails, on.erase));
+    mono += 24 * hour;
+    for (int i = 0; i < 4; ++i)
+        on = countedTry(on, false, mono, clock, &lockApp);
+    check("erase on: 24 wrong, nothing erased", on.fails == 24 && !erasesAt(on.fails, on.erase));
+    const LockState inside = countedTry(on, true, mono, clock, &lockApp);
+    check("erase on: an in-app try stops short and locks", inside.fails == 24 && lockApp);
+    on = countedTry(on, false, mono, clock, &lockApp);
+    LockState onDisk;
+    check("erase on: the 25th erases, even after a kill", writeLockFile(file, on) && readLockFile(file, &onDisk) && erasesAt(onDisk.fails, onDisk.erase));
+    LockState off;
+    for (int i = 0; i < 40; ++i) {
+        mono += 24 * hour;
+        off = countedTry(off, false, mono, clock, &lockApp);
+    }
+    check("erase off: never erased, 24 hours again", off.fails == 40 && !erasesAt(off.fails, off.erase) && lockLeft(&off, mono, clock, &moved) == 24 * hour);
+
+    // The unlock password: a second wrap of the same key. The pattern opens its wrap, the typed password its own.
+    {
+        const QByteArray key = random(32);
+        const QByteArray blob = lockBlob(QStringLiteral("pattern:0,1,2,5,8,7"), true, key, QStringLiteral("spare words"));
+        const QJsonObject o = QJsonDocument::fromJson(blob).object();
+        bool a = false, b = false, c = true, d = true;
+        const QByteArray byPattern = openLock(o, QStringLiteral("pattern:0,1,2,5,8,7"), &a);
+        const QByteArray bySpare = openLock(o, QStringLiteral("spare words"), &b);
+        openLock(o, QStringLiteral("pattern:0,1,2,5,8,6"), &c);
+        openLock(o, QStringLiteral("other words"), &d);
+        check("either the pattern or the unlock password opens", a && b && byPattern == key && bySpare == key && !c && !d);
+        check("never stored as it is", !blob.contains("spare words") && !blob.contains("0,1,2,5,8,7") && o.value(QStringLiteral("spare")).isObject());
+        const QJsonObject plain = QJsonDocument::fromJson(lockBlob(QStringLiteral("a password"), false, key, QStringLiteral("ignored"))).object();
+        check("a password lock has no unlock password", !plain.contains(QStringLiteral("spare")));
+    }
     return all;
 }
 
@@ -2901,8 +3457,9 @@ bool Vault::stabilitySelfTest()
         check("a backup, move or link needs the current lock given again, once", none && wrong && right && once);
     }
 
-    // Round 17: setting a lock after it was off seals every file again on its own thread, with what is saved meanwhile
-    // held and written after; nothing is left behind, and every file opens with the new key.
+    // Round 17: setting a lock after it was off seals every file again on its own thread; what is saved meanwhile goes to
+    // disk at once and is sealed again before the swap (round 18 m2); nothing is left behind, and every file opens with
+    // the new key.
     if (v.hasLock() && v.turnOffLock(secret)) {
         const QString a = QStringLiteral("selftest-chats.json"), p = QStringLiteral("photos/selftest-photo");
         const QByteArray big(300000, 'p');
@@ -2917,8 +3474,10 @@ bool Vault::stabilitySelfTest()
             loop.quit();
         });
         const bool started = !v.setSecret(secret, false) && v.sealing();
-        // Saved while it seals: held, read back as saved, and written after.
+        // Saved while it seals: on disk at once (round 18 m2: a crash meanwhile loses nothing), read back as saved, and
+        // sealed again with the new key just before the swap.
         const bool held = v.write(QStringLiteral("selftest-meanwhile.json"), QByteArrayLiteral("[1]"))
+                          && QFileInfo::exists(v.path(QStringLiteral("selftest-meanwhile.json")))
                           && v.read(QStringLiteral("selftest-meanwhile.json")) == QByteArrayLiteral("[1]");
         if (started)
             QTimer::singleShot(60000, &loop, &QEventLoop::quit);

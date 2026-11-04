@@ -7,6 +7,7 @@
 #include "linkpreview.h"
 #include "morewire.h"
 #include "photos.h"
+#include "ultraprivacy.h"
 #include "vault.h"
 
 #include <QDateTime>
@@ -103,6 +104,8 @@ QString Chat::sendPhotos(const QString &where, const QStringList &paths, bool hd
 
 QString Chat::sendVideo(const QString &where, const QByteArray &mp4, int ms)
 {
+    if (!UltraPrivacy::videoSendAllowed())
+        return UltraPrivacy::videoOffText();   // Ultra privacy: receiving still works
     if (!MoreWire::isVideo(mp4) || mp4.size() > Photos::kVideoSendBytes)
         return QStringLiteral("That video is too big to send. Videos can be up to 2 MB.");
     const int length = qBound(1, ms, MoreWire::kVideoMaxMs);
@@ -252,7 +255,7 @@ void Chat::attemptWithPreview(const QString &key, const QString &id)
     for (const QVariant &v : m_private.value(key))
         if (str(v.toMap(), "id") == id)
             m = v.toMap();
-    const QString link = linkPreviews() && !Settings::dataSaverOn() && !m.contains(QStringLiteral("poll")) && hasM1(key) ? MoreWire::firstLink(str(m, "text")) : QString();
+    const QString link = linkPreviews() && !Settings::dataSaverOn() && UltraPrivacy::previewsAllowed() && !m.contains(QStringLiteral("poll")) && hasM1(key) ? MoreWire::firstLink(str(m, "text")) : QString();
     if (link.isEmpty()) {
         attempt(key, id);
         return;
@@ -278,7 +281,7 @@ void Chat::queueGroupMessage(const QString &g, const QString &id, const QStringL
         for (const QString &k : to)
             queueGroup(g, k, QStringLiteral("gmsg"), id, plain);
     };
-    const QString link = linkPreviews() && !Settings::dataSaverOn() && !p.contains(QStringLiteral("poll")) && !to.isEmpty() ? MoreWire::firstLink(p.value(QStringLiteral("text")).toString()) : QString();
+    const QString link = linkPreviews() && !Settings::dataSaverOn() && UltraPrivacy::previewsAllowed() && !p.contains(QStringLiteral("poll")) && !to.isEmpty() ? MoreWire::firstLink(p.value(QStringLiteral("text")).toString()) : QString();
     if (link.isEmpty()) {
         go(p);
         return;

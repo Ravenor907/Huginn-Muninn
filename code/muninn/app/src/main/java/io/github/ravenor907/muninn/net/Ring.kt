@@ -23,6 +23,22 @@ import java.util.Base64
 object RingWire {
     const val RING_CAP = "b1"
     const val WRAP_CAP = "e1"
+    /**
+     * Cap r2 (protocol.md 23.2, 1.42): a ring tag per caller. The callee gives each contact who may call its own tag
+     * ("rt", 32 lowercase hex, in receipts with "rk", so sealed through the ratchet); a caller with r2 puts it in the
+     * ring plaintext. Locked, the callee knows only which tags it still allows (their hashes, outside the vault), so
+     * the locked-ring limit is per caller and a tag taken back (a block, calls off, removed) stops ringing at once.
+     */
+    const val TAG_CAP = "r2"
+    /**
+     * Cap h1 (protocol.md 21.3, 1.42): the certificates this device's Wi-Fi server may show ("hf", 1 to 4 fingerprints
+     * of 64 uppercase hex, in receipts to contacts): its lasting one and its hidden ones (now and next). A contact asks
+     * a saved address with Nearby off only with one of them pinned.
+     */
+    const val HIDDEN_CAP = "h1"
+    private val TAG = Regex("^[0-9a-f]{32}$")
+    private val FINGERPRINT = Regex("^[0-9A-F]{64}$")
+    const val MAX_HF = 4
     private val WRAP_DOMAIN = "huginn-muninn wrap v2".toByteArray()
     private val RING_DOMAIN = "huginn-muninn ring v1".toByteArray()
     const val DAY_S = 86_400L
@@ -93,8 +109,25 @@ object RingWire {
         ChatCrypto.openBytes(ringKey(k), ChatCrypto.Sealed(o.getString("n"), o.getString("d")))
     } catch (e: Exception) { null }
 
-    /** The ring plaintext: {"t":"ring","call":<call id>,"ts":<ms>}. Nothing else: no name, no key. */
-    fun ringPlain(callId: String, ts: Long): String = JSONObject().put("t", "ring").put("call", callId).put("ts", ts).toString()
+    /**
+     * The ring plaintext: {"t":"ring","call":<call id>,"ts":<ms>}. No name, no key. Cap r2: plus "rt", the ring tag the
+     * callee gave this caller (only when it gave one).
+     */
+    fun ringPlain(callId: String, ts: Long, rt: String = ""): String =
+        JSONObject().put("t", "ring").put("call", callId).put("ts", ts).apply { if (tagOk(rt)) put("rt", rt) }.toString()
+
+    /** A ring tag: 32 lowercase hex characters. */
+    fun tagOk(x: Any?): Boolean = x is String && TAG.matches(x)
+
+    /** A new ring tag (16 random bytes). */
+    fun newTag(): String = ByteArray(16).also { random.nextBytes(it) }.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+
+    /** What a locked device keeps of a tag: its hash, so a copy of the file can't be used to ring as someone. */
+    fun tagHash(rt: String): String = ChatWire.hex(sha256(TAG_DOMAIN, rt.toByteArray(Charsets.US_ASCII))).take(32)
+    private val TAG_DOMAIN = "huginn-muninn ring tag|".toByteArray()
+
+    /** A certificate fingerprint as "hf" carries it. */
+    fun fingerprintOk(x: Any?): Boolean = x is String && FINGERPRINT.matches(x)
 
     /** Well-formed: t "ring", call a call id (22 base64url characters), ts an integer 0 <= ts < 2^53. Other fields are ignored. */
     fun ringOk(p: JSONObject): Boolean {
@@ -107,18 +140,29 @@ object RingWire {
     fun ringFresh(ts: Long, now: Long) = ts >= now - RING_OLD_MS && ts <= now + RING_AHEAD_MS
 
     /** The content of the relay event for a ring envelope: padded like every relay envelope (section 20). */
-    fun ringContent(ringPub: String, callId: String, ts: Long): String =
-        Base64.getEncoder().encodeToString(EnvelopePad.pad(sealRing(ringPub, ringPlain(callId, ts).toByteArray()).toString()).toByteArray())
+    fun ringContent(ringPub: String, callId: String, ts: Long, rt: String = ""): String =
+        Base64.getEncoder().encodeToString(EnvelopePad.pad(sealRing(ringPub, ringPlain(callId, ts, rt).toByteArray()).toString()).toByteArray())
 
     /** A ring envelope's content opened with [ring]: (call id, ts), or null when it isn't a good one. */
-    fun openRingContent(content: String, ring: KeyPair): Pair<String, Long>? = try {
+    fun openRingContent(content: String, ring: KeyPair): Pair<String, Long>? = openRingTagged(content, ring)?.let { it.call to it.ts }
+
+    /** An opened ring: its call id, time and ring tag ("" without one, cap r2); [old]: it opened only with a replaced key. */
+    data class Rang(val call: String, val ts: Long, val rt: String, val old: Boolean = false)
+
+    /** A ring envelope's content opened with [ring], with its tag (a malformed "rt" counts as none), or null. */
+    fun openRingTagged(content: String, ring: KeyPair): Rang? = try {
         val o = JSONObject(String(Base64.getDecoder().decode(content)))
         val p = openRing(o, ring)?.let { JSONObject(String(it, Charsets.UTF_8)) }
-        if (p == null || !ringOk(p)) null else p.getString("call") to (p.get("ts") as Number).toLong()
+        if (p == null || !ringOk(p)) null
+        else Rang(p.getString("call"), (p.get("ts") as Number).toLong(), p.opt("rt").takeIf { tagOk(it) } as? String ?: "")
     } catch (e: Exception) { null }
 
-    /** What a receipt's "rk", "rp", "wk", "wt" (and "nk", "np", cap n2) say; each half null when absent or malformed. */
-    data class Announce(val rk: String?, val rp: String?, val wk: String?, val wt: Long, val nk: String? = null, val np: String? = null)
+    /**
+     * What a receipt's "rk", "rp", "wk", "wt" (and "nk", "np", cap n2) say; each half null when absent or malformed.
+     * Cap r2: "rt", the ring tag they gave me (with a good "rk" only). Cap h1: "hf", their certificate fingerprints.
+     */
+    data class Announce(val rk: String?, val rp: String?, val wk: String?, val wt: Long, val nk: String? = null, val np: String? = null,
+                        val rt: String? = null, val hf: List<String>? = null)
 
     fun announceOf(r: JSONObject, nowS: Long): Announce {
         val ringOk = keyOk(r.opt("rk")) && (r.opt("rp") as? String)?.let { MAILBOX.matches(it) } == true
@@ -127,7 +171,17 @@ object RingWire {
         val nudgeOk = keyOk(r.opt("nk")) && (r.opt("np") as? String)?.let { MAILBOX.matches(it) } == true
         return Announce(if (ringOk) r.getString("rk") else null, if (ringOk) r.getString("rp") else null,
             if (wrapOk) r.getString("wk") else null, if (wrapOk) (wt as Number).toLong() else 0L,
-            if (nudgeOk) r.getString("nk") else null, if (nudgeOk) r.getString("np") else null)
+            if (nudgeOk) r.getString("nk") else null, if (nudgeOk) r.getString("np") else null,
+            if (ringOk && tagOk(r.opt("rt"))) r.getString("rt") else null, hfOf(r.opt("hf")))
+    }
+
+    /** Cap h1: "hf" as a list of 1 to [MAX_HF] fingerprints, or null when absent or malformed (then nothing changes). */
+    fun hfOf(x: Any?): List<String>? {
+        val a = x as? JSONArray ?: return null
+        if (a.length() !in 1..MAX_HF) return null
+        val l = (0 until a.length()).map { a.opt(it) }
+        if (!l.all { fingerprintOk(it) }) return null
+        return l.map { it as String }.distinct()
     }
 
     /** A sender wraps with a day key only within a week of when it was made. */
@@ -523,32 +577,35 @@ class WrapKeys(private val read: () -> String?, private val write: (String) -> U
  * nudge key and nudge mailbox. Saved (encrypted) through [write].
  */
 class PeerKeys(private val read: () -> String?, private val write: (String) -> Unit) {
+    /** [rt]: the ring tag they gave me (cap r2). [hf]: the certificates their Wi-Fi server may show (cap h1). */
     data class Keys(val rk: String? = null, val rp: String? = null, val wk: String? = null, val wt: Long = 0,
-                    val nk: String? = null, val np: String? = null)
+                    val nk: String? = null, val np: String? = null, val rt: String? = null, val hf: List<String> = emptyList())
     private val lock = Any()
     private var map: MutableMap<String, Keys>? = null
 
     private fun all(): MutableMap<String, Keys> = map ?: try {
         val o = JSONObject(read() ?: "{}")
         o.keys().asSequence().associateWith { k -> o.getJSONObject(k).let { Keys(it.optString("rk").ifEmpty { null }, it.optString("rp").ifEmpty { null },
-            it.optString("wk").ifEmpty { null }, it.optLong("wt"), it.optString("nk").ifEmpty { null }, it.optString("np").ifEmpty { null }) } }.toMutableMap()
+            it.optString("wk").ifEmpty { null }, it.optLong("wt"), it.optString("nk").ifEmpty { null }, it.optString("np").ifEmpty { null },
+            it.optString("rt").ifEmpty { null }, RingWire.hfOf(it.optJSONArray("hf")).orEmpty()) } }.toMutableMap()
     } catch (e: Exception) { mutableMapOf() }.also { map = it }
 
     private fun save(m: Map<String, Keys>) {
         val o = JSONObject()
         for ((k, v) in m) o.put(k, JSONObject().put("rk", v.rk ?: "").put("rp", v.rp ?: "").put("wk", v.wk ?: "").put("wt", v.wt)
-            .put("nk", v.nk ?: "").put("np", v.np ?: ""))
+            .put("nk", v.nk ?: "").put("np", v.np ?: "").put("rt", v.rt ?: "").apply { if (v.hf.isNotEmpty()) put("hf", JSONArray(v.hf)) })
         try { write(o.toString()) } catch (_: Exception) {}
     }
 
     /** Takes what an authentic receipt from [key] announced: the ring and nudge keys as it says, a day key only when newer. */
     fun take(key: String, a: RingWire.Announce) = synchronized(lock) {
-        if (a.rk == null && a.wk == null && a.nk == null) return@synchronized
+        if (a.rk == null && a.wk == null && a.nk == null && a.hf == null) return@synchronized
         val m = all()
         val old = m[key] ?: Keys()
+        // Cap r2: a ring key that comes without a tag means they gave none (calls with it carry none).
         val now = Keys(a.rk ?: old.rk, if (a.rk != null) a.rp else old.rp,
             if (a.wk != null && a.wt > old.wt) a.wk else old.wk, if (a.wk != null && a.wt > old.wt) a.wt else old.wt,
-            a.nk ?: old.nk, if (a.nk != null) a.np else old.np)
+            a.nk ?: old.nk, if (a.nk != null) a.np else old.np, if (a.rk != null) a.rt else old.rt, a.hf ?: old.hf)
         if (now != old) { m[key] = now; save(m) }
     }
 
@@ -631,6 +688,17 @@ class RingKey(private val file: File) {
     fun open(content: String, nowMs: Long = System.currentTimeMillis()): Pair<String, Long>? =
         RingWire.openRingContent(content, load().now.keys)
 
+    /**
+     * Cap r2 (1.42): a ring opened with the current key, or with a replaced one still read ([RingWire.Rang.old] true).
+     * Whether it rings is the caller's choice: a replaced key rings only with a tag still allowed ([RingTags]), so
+     * other contacts' calls ring while their phones haven't heard of the new key, and a blocked contact's never does.
+     */
+    fun openTagged(content: String, nowMs: Long = System.currentTimeMillis()): RingWire.Rang? {
+        val a = load()
+        RingWire.openRingTagged(content, a.now.keys)?.let { return it }
+        return a.old.filter { it.until > nowMs }.firstNotNullOfOrNull { RingWire.openRingTagged(content, it.keys) }?.copy(old = true)
+    }
+
     /** A nudge's content opened (caps n1 and n2): what it says, or null. */
     fun nudge(content: String, nowMs: Long = System.currentTimeMillis()): NudgeWire.Nudge? =
         live(nowMs).firstNotNullOfOrNull { NudgeWire.openContent(content, it.keys) }
@@ -664,5 +732,76 @@ class RingKey(private val file: File) {
     companion object {
         /** How long a ring mailbox replaced after a block is still listened on. */
         const val OLD_MS = 2 * 86_400_000L
+    }
+}
+
+/**
+ * Cap r2 (protocol.md 23.2, 1.42): the ring tags this device gave its contacts. Which contact has which tag is in the
+ * vault ([read], [write]); outside it, next to the ring key ([file]), only the hashes of the tags still allowed, so a
+ * locked phone can tell callers apart and drop a taken-back tag at once, and a copy of that file names nobody and
+ * can't ring as anyone.
+ */
+class RingTags(private val file: File, private val read: () -> String?, private val write: (String) -> Unit) {
+    private val lock = Any()
+    private var byKey: MutableMap<String, String>? = null
+    @Volatile private var allowed: Set<String>? = null
+
+    private fun mine(): MutableMap<String, String> = byKey ?: try {
+        val o = JSONObject(read() ?: "{}")
+        o.keys().asSequence().mapNotNull { k -> o.optString(k).takeIf { RingWire.tagOk(it) }?.let { k to it } }.toMap().toMutableMap()
+    } catch (e: Exception) { mutableMapOf() }.also { byKey = it }
+
+    private fun allowedNow(): Set<String> = allowed ?: synchronized(lock) {
+        allowed ?: when (val r = SafeFile.read(file) { b ->
+            val a = JSONObject(String(b)).optJSONArray("a") ?: JSONArray()
+            (0 until a.length()).map { a.optString(it) }.filter { it.length == 32 }.toSet()
+        }) {
+            is SafeFile.Read.Ok -> r.value
+            else -> emptySet()
+        }.also { allowed = it }
+    }
+
+    private fun saveAll(m: Map<String, String>) {
+        val o = JSONObject()
+        m.forEach { (k, v) -> o.put(k, v) }
+        try { write(o.toString()) } catch (_: Exception) {}
+        val hashes = m.values.map { RingWire.tagHash(it) }.toSet()
+        allowed = hashes
+        try { SafeFile.write(file, JSONObject().put("a", JSONArray(hashes.sorted())).toString().toByteArray()) } catch (_: Exception) {}
+    }
+
+    /** The tag for [key] (made now when it has none). Only while unlocked: the map is in the vault. */
+    fun tagFor(key: String): String = synchronized(lock) {
+        val m = mine()
+        m[key] ?: RingWire.newTag().also { m[key] = it; saveAll(m) }
+    }
+
+    /** [key] was blocked, had calls turned off or was removed: its tag stops ringing now, and a later one is new. */
+    fun revoke(key: String) = synchronized(lock) {
+        val m = mine()
+        if (m.remove(key) != null) saveAll(m)
+    }
+
+    /** Locked: a ring's tag ("" for none) is [Who.NONE], [Who.ALLOWED] or [Who.REVOKED] (unknown or taken back). */
+    enum class Who { NONE, ALLOWED, REVOKED }
+    fun judge(rt: String): Who = when {
+        rt.isEmpty() -> Who.NONE
+        RingWire.tagHash(rt) in allowedNow() -> Who.ALLOWED
+        else -> Who.REVOKED
+    }
+
+    /** Erase everything and Move: the tags go with the ring key. */
+    fun forget() = synchronized(lock) { byKey = null; allowed = emptySet(); SafeFile.delete(file) }
+
+    /**
+     * Once the vault is open: the hashes outside it are written again from the tags in it when they differ (after a
+     * restore, or a write that didn't get there), so a tag given out always rings and one taken back never does.
+     */
+    fun sync() = synchronized(lock) {
+        byKey = null   // read from the vault again (a restore may have put other tags there)
+        val m = mine()
+        // Nothing read from the vault while tags were allowed: maybe a read that failed, so nothing is written over.
+        val allowedHere = allowedNow()
+        if (m.values.map { RingWire.tagHash(it) }.toSet() != allowedHere && !(m.isEmpty() && allowedHere.isNotEmpty())) saveAll(m)
     }
 }

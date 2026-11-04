@@ -67,7 +67,7 @@ object CallManager {
     private class LockedRing(val app: Muninn, val callId: String, val at: Long)
     @Volatile private var lockedRing: LockedRing? = null
     private val lockedSeen = LinkedHashMap<String, Long>()
-    /** Round 17: rings while locked, at most 3 in 10 minutes. */
+    /** Round 17: rings while locked, at most 3 in 10 minutes (1.42, cap r2: per caller, by ring tag). */
     private val lockedLimit = LockedRingLimit()
     /** Call id to (answered: true, declined: false; when), for the offer to find after unlocking. */
     private val lockedChoice = LinkedHashMap<String, Pair<Boolean, Long>>()
@@ -83,8 +83,11 @@ object CallManager {
         if (lockedRing === r) lockedRing = null
     }
 
-    /** A ring envelope opened while Muninn is locked: rings as "Incoming call", with no name. */
-    fun ringLocked(a: Muninn, callId: String, ts: Long) {
+    /**
+     * A ring envelope opened while Muninn is locked: rings as "Incoming call", with no name. [who]: the hash of its ring
+     * tag (cap r2), "" for a ring without one; the limit counts each caller on its own.
+     */
+    fun ringLocked(a: Muninn, callId: String, ts: Long, who: String = "") {
         exec.execute {
             val now = System.currentTimeMillis()
             // Unlocked: the offer itself rings, with the name.
@@ -100,7 +103,8 @@ object CallManager {
             // Extreme battery saver: calls ring only while Muninn is open.
             if (a.quietUntilOpen()) return@execute
             // Round 17: anyone holding the ring key could ring without end: at most 3 in 10 minutes while locked.
-            if (!lockedLimit.take(android.os.SystemClock.elapsedRealtime())) return@execute
+            // 1.42 (cap r2): per caller, so one contact can't silence everyone else's calls.
+            if (!lockedLimit.take(android.os.SystemClock.elapsedRealtime(), who)) return@execute
             val r = LockedRing(a, callId, now)
             lockedRing = r
             _call.value = Ui(callId, "", LOCKED_NAME, false, CallSession.Phase.INCOMING, 0, false, false, false, false, false, false, false, "",

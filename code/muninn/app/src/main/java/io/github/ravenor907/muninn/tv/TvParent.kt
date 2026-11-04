@@ -94,6 +94,8 @@ data class ManagedTv(
      * another parent's config it took): an older parent app's config can't bring them back.
      */
     val goneC: List<String> = emptyList(), val goneP: List<String> = emptyList(),
+    /** k15 (7.18): the read-aloud voice picked for the device, "f" or "m" ("": none picked yet, the device keeps its own). */
+    val voice: String = "",
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
 }
@@ -329,7 +331,9 @@ object TvParent {
                 // k14: the child's name, accessibility, approved group members, other families' devices still waiting, and
                 // each quick message's emoji.
                 access = if (k14) t.access else null, child = if (k14) t.child.ifEmpty { null } else null,
-                gok = if (k14) t.gok else null, wait = if (k14) t.waitKid.keys.toList() else null, pics = if (k14) true else null) else null
+                gok = if (k14) t.gok else null, wait = if (k14) t.waitKid.keys.toList() else null, pics = if (k14) true else null,
+                // k15: the read-aloud voice, once a parent picked one.
+                voice = KidVoice.toSend(t.voice, k15(app, key))) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)
@@ -590,6 +594,8 @@ object TvParent {
                 if (cfg.raw.has("still")) cfg.access.still else t.access.still),
             gok = if (cfg.raw.has("gok")) cfg.gok else t.gok,
             waitKid = if (cfg.raw.has("wait")) cfg.wait.associateWith { t.waitKid[it] ?: System.currentTimeMillis() } else t.waitKid,
+            // k15: another parent's voice pick (the latest config wins); a config without one leaves this phone's as it was.
+            voice = KidVoice.of(cfg.raw) ?: t.voice,
         )
     }
 
@@ -1067,6 +1073,16 @@ object TvParent {
     /** The parent picked part of the device's accessibility. */
     fun setAccess(key: String, f: (KidAccess) -> KidAccess) = change(key) { it.copy(access = f(it.access)) }
 
+    // ---- k15 (7.18): the read-aloud voice
+
+    /** The device's app said "k15". */
+    fun k15(app: Muninn, key: String): Boolean = KidVoice.CAP in (app.contacts.get(key)?.caps ?: emptySet())
+
+    /** The parent picked the device's read-aloud voice ("f" or "m"). */
+    fun setVoice(key: String, voice: String) {
+        if (voice in io.github.ravenor907.muninn.net.ReadAloudText.VOICES) change(key) { it.copy(voice = voice) }
+    }
+
     /**
      * The device holds a group member who isn't on its list: a card on its page, a notification, and a dialog when no
      * other dialog is open. Once approved it's let in; once declined it isn't asked about again.
@@ -1322,7 +1338,7 @@ object TvParent {
             .put("holdAsks", JSONArray().apply { t.holdAsks.forEach { put(JSONObject(KidK14.holdMessage(it))) } })
             .put("waitKid", JSONObject().apply { t.waitKid.forEach { (k, v) -> put(k, v) } })
             .put("kidAsks", JSONArray().apply { t.kidAsks.forEach { put(JSONObject().put("a", JSONObject(KidK14.kidAddMessage(it.add))).put("from", it.from)) } })
-            .put("goneC", JSONArray(t.goneC)).put("goneP", JSONArray(t.goneP))
+            .put("goneC", JSONArray(t.goneC)).put("goneP", JSONArray(t.goneP)).put("voice", t.voice)
             .apply { t.pin?.let { put("pin", KidRules.pinJson(it)) } })
     }
 
@@ -1368,7 +1384,8 @@ object TvParent {
                     val add = e.optJSONObject("a")?.let { KidK14.kidAddIn(it) } ?: return@mapNotNull null
                     e.optString("from").takeIf { it.isNotEmpty() }?.let { KidAddAsk(add, it) }
                 } } ?: emptyList(),
-                goneC = strs(x.optJSONArray("goneC")), goneP = strs(x.optJSONArray("goneP")))
+                goneC = strs(x.optJSONArray("goneC")), goneP = strs(x.optJSONArray("goneP")),
+                voice = x.optString("voice").takeIf { it in io.github.ravenor907.muninn.net.ReadAloudText.VOICES } ?: "")
         } catch (e: Exception) { null }
     }.toMap()
 }

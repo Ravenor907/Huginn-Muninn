@@ -64,6 +64,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import io.github.ravenor907.muninn.net.call.AudioRoute
 import io.github.ravenor907.muninn.net.call.CallManager
+import io.github.ravenor907.muninn.net.call.CallPrivacy
 import io.github.ravenor907.muninn.net.call.CallVideo
 import io.github.ravenor907.muninn.net.call.Vp8
 import io.github.ravenor907.muninn.net.call.CallSession.Phase
@@ -110,7 +111,8 @@ internal fun Glyph(path: String, color: Color, size: Dp, weight: Float = 1.8f) {
 /**
  * A 1:1 call: who, how long, which paths carry it, mute, speaker, message, end.
  * Incoming, it offers Decline and Answer instead. Never shows an address of any kind.
- * [hideName]: panic-locked or previews off on the lock screen: "Muninn call" instead of the name.
+ * [hideName]: panic-locked, Muninn's own lock up (1.42), or previews off on the lock screen: no name and no picture,
+ * "Incoming call" while it rings and "Muninn call" after ([CallPrivacy.title]).
  */
 /**
  * [onAnswerVideo]: answer a video call with the camera on (asks for the camera first). [onCamera]: turn the camera on
@@ -127,7 +129,8 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
     // Once either camera is on: the picture on top, then a strip with who, how and how long, then the buttons.
     // Nothing is drawn over the picture but the small self view. A voice call keeps the big avatar.
     if (c != null && c.phase != Phase.INCOMING && (showRemote || showSelf)) {
-        VideoCall(c, video, showRemote, showSelf, if (hideName) "Muninn call" else c.name, onBack, onMessage, onAnswer, onAnswerVideo, onCamera)
+        VideoCall(c, video, showRemote, showSelf, CallPrivacy.title(c.name, hideName, false, c.videoCall), onBack, onMessage, onAnswer, onAnswerVideo, onCamera,
+            hideName = hideName)
         return
     }
     Box(Modifier.fillMaxSize().background(Palette.ground)) {
@@ -143,15 +146,15 @@ fun CallScreen(onBack: () -> Unit, onMessage: (String) -> Unit, onAnswer: () -> 
             return@Column
         }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
-            val name = if (hideName) "Muninn call" else c.name
+            val name = CallPrivacy.title(c.name, hideName, c.phase == Phase.INCOMING, c.videoCall)
             Spacer(Modifier.height(56.dp))
             Avatar(if (hideName) "" else c.peerKey, name, c.peerSpeaking && c.phase == Phase.LIVE)
             Spacer(Modifier.height(36.dp))
             Text(name, style = Type.title.copy(fontSize = 30.sp, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold), maxLines = 1,
                 overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 340.dp))
             Spacer(Modifier.height(6.dp))
-            Text(status(c), style = Type.normal.copy(fontSize = 17.sp, color = Palette.textMuted), textAlign = TextAlign.Center)
-            if (c.peerMuted && c.phase == Phase.LIVE) Text("$name is muted", style = Type.small, modifier = Modifier.padding(top = 4.dp))
+            Text(CallPrivacy.statusUnder(name, status(c)), style = Type.normal.copy(fontSize = 17.sp, color = Palette.textMuted), textAlign = TextAlign.Center)
+            if (c.peerMuted && c.phase == Phase.LIVE) Text(if (hideName) "They're muted" else "$name is muted", style = Type.small, modifier = Modifier.padding(top = 4.dp))
             if (ways && c.phase != Phase.INCOMING && c.phase != Phase.ENDED) {
                 Spacer(Modifier.height(24.dp))
                 Paths(c)
@@ -252,16 +255,18 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
  */
 @Composable
 private fun VideoCall(c: CallManager.Ui, video: CallVideo.State, showRemote: Boolean, showSelf: Boolean, name: String, onBack: () -> Unit,
-                      onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit, onCamera: (Boolean) -> Unit) {
+                      onMessage: (String) -> Unit, onAnswer: () -> Unit, onAnswerVideo: () -> Unit, onCamera: (Boolean) -> Unit,
+                      hideName: Boolean = false) {
     val picture: @Composable (Modifier) -> Unit = { m ->
         Box(m.background(Palette.groundDeep)) {
             if (showRemote) RemoteVideo(video, Modifier.fillMaxSize())
             // Their camera is off: just who it is, small, so the self view still has room.
             else Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Avatar(if (name == c.name) c.peerKey else "", name, c.peerSpeaking && c.phase == Phase.LIVE)
+                Avatar(if (hideName) "" else c.peerKey, name, c.peerSpeaking && c.phase == Phase.LIVE)
             }
-            // Sideways the camera's picture is sideways too: a wide self view, not a slit.
-            val wideSelf = androidx.compose.ui.platform.LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp }
+            // Sideways the camera's picture is sideways too: a wide self view, not a slit. Round 17 (tablet 8): by the
+            // display, not the window, so a landscape tablet in a 50/50 split still gets a wide one.
+            val wideSelf = selfWide()
             if (showSelf) SelfView(Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 12.dp)
                 .size(width = if (wideSelf) 128.dp else 96.dp, height = if (wideSelf) 96.dp else 128.dp))
         }
@@ -275,7 +280,7 @@ private fun VideoCall(c: CallManager.Ui, video: CallVideo.State, showRemote: Boo
                 Text(status(c), style = Type.normal.copy(fontSize = 15.sp, color = Palette.textMuted), maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false))
             }
-            if (c.peerMuted && c.phase == Phase.LIVE) Text("$name is muted", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
+            if (c.peerMuted && c.phase == Phase.LIVE) Text(if (hideName) "They're muted" else "$name is muted", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 2.dp))
             Box(Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState())) { Paths(c) }
             if (c.note.isNotEmpty()) Text(c.note, style = Type.small.copy(color = Palette.danger), modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
         }
@@ -331,6 +336,28 @@ fun VideoPicture(onSurface: (Surface?) -> Unit, width: Int, height: Int, rotatio
 /** A [VideoPicture]'s latest picture size and turn, applied to its view at the view's current size. */
 private class PictureFit(var w: Int = 0, var h: Int = 0, var r: Int = 0) {
     fun fitTo(tv: TextureView) { tv.setTransform(Vp8.fit(tv.width.toFloat(), tv.height.toFloat(), w, h, r)) }
+}
+
+/**
+ * Round 17 (tablet 8): whether your own camera's picture is wide, by the display (the camera's picture turns with the
+ * display, not the window). Falls back to the window's shape when the display can't be read.
+ */
+@Composable
+internal fun selfWide(): Boolean {
+    val conf = androidx.compose.ui.platform.LocalConfiguration.current
+    val view = androidx.compose.ui.platform.LocalView.current
+    // The configuration is a key: a turn of the device changes it, so the shape is worked out again.
+    return remember(conf, view) {
+        val d = view.display
+        val mode = try { d?.mode } catch (_: Exception) { null }
+        if (d == null || mode == null) conf.screenWidthDp > conf.screenHeightDp
+        else SelfShape.wide(mode.physicalWidth, mode.physicalHeight, d.rotation)
+    }
+}
+
+/** The display's shape now, from its natural size ([w] by [h] pixels) and its turn ([rotation], Surface.ROTATION_0 to 270 as 0 to 3). */
+object SelfShape {
+    fun wide(w: Int, h: Int, rotation: Int): Boolean = if (rotation == 1 || rotation == 3) h > w else w > h
 }
 
 /** Your own camera, small in the corner (picture in picture), mirrored like a mirror. */

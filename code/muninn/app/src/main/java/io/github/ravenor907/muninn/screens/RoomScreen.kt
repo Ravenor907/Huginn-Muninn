@@ -176,7 +176,8 @@ fun RoomScreen(onBack: () -> Unit, onJoinRing: () -> Unit, hideNames: Boolean = 
                 val tileW = RoomTiles.tileWidth(rowW.value, tileConf.screenHeightDp.toFloat(), tileCols).dp
                 FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(RoomTiles.GAP.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp),
                     maxItemsInEachRow = tileCols) {
-                    if (vid.cameraOn) RoomSelfView(Modifier.width(tileW).aspectRatio(3f / 4f))
+                    // Round 17 (tablet 8): my own tile takes the camera's shape (wide when the display is), not always 3:4.
+                    if (vid.cameraOn) RoomSelfView(Modifier.width(tileW).aspectRatio(if (selfWide()) 4f / 3f else 3f / 4f))
                     showing.forEach { p ->
                         val pic = vid.pics[p.key] ?: io.github.ravenor907.muninn.net.call.RoomVideo.Pic()
                         Box(Modifier.width(tileW).aspectRatio(3f / 4f).clip(io.github.ravenor907.muninn.ui.Corner).background(Palette.field)) {

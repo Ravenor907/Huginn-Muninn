@@ -123,6 +123,8 @@ android {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
         // Native libraries stored compressed: a smaller download (Android unpacks them once, at install).
         jniLibs.useLegacyPackaging = true
+        // Read aloud uses the speech engine's Java/Kotlin side only (libsherpa-onnx-jni.so): its C and C++ API libraries stay out.
+        jniLibs.excludes += setOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
     }
 }
 
@@ -167,6 +169,83 @@ val fetchTvVoice by tasks.registering {
 }
 tasks.configureEach { if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) dependsOn(fetchOpus, fetchTvVoice) }
 
+// Daily Hávamál's verses: one file for both apps, code/shared/havamal.json (Huginn builds the same file in as a Qt
+// resource). Copied into the APK's assets as havamal.json, so there is no second copy in this folder to drift.
+abstract class SharedHavamal : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val verses: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copyIn() {
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        verses.get().asFile.copyTo(File(out, "havamal.json"), overwrite = true)
+    }
+}
+val sharedHavamalFile = rootProject.file("../shared/havamal.json")
+androidComponents {
+    onVariants { variant ->
+        val copy = tasks.register<SharedHavamal>("${variant.name}SharedHavamal") { verses.set(sharedHavamalFile) }
+        variant.sources.assets?.addGeneratedSourceDirectory(copy, SharedHavamal::outputDir)
+    }
+}
+
+// Read aloud's natural voices (code/shared/docs/voices.md): the hashes of the voice files (code/shared/voices.sha256),
+// copied into the APK's assets as voices.sha256, so a voice is only ever used when it matches its line there.
+abstract class SharedVoices : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val hashes: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copyIn() {
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        hashes.get().asFile.copyTo(File(out, "voices.sha256"), overwrite = true)
+    }
+}
+val sharedVoicesFile = rootProject.file("../shared/voices.sha256")
+androidComponents {
+    onVariants { variant ->
+        val copy = tasks.register<SharedVoices>("${variant.name}SharedVoices") { hashes.set(sharedVoicesFile) }
+        variant.sources.assets?.addGeneratedSourceDirectory(copy, SharedVoices::outputDir)
+    }
+}
+
+// Read aloud's speech engine, bundled: sherpa-onnx 1.13.8's Android library (Apache-2.0) with ONNX Runtime linked in
+// (MIT), from its GitHub release, checked against its line in code/shared/voices.sha256 once that line is there (the
+// Publish voices workflow prints it). Fetched once into build/sherpa; abiFilters keeps only the ABIs each APK needs
+// (arm64-v8a and armeabi-v7a in a release). 1.13.8 is the last version that still reads Piper voices from text
+// (2.0 dropped eSpeak NG).
+val sherpaVersion = "1.13.8"
+val sherpaAarName = "sherpa-onnx-static-link-onnxruntime-$sherpaVersion.aar"
+val sherpaAar = layout.buildDirectory.file("sherpa/$sherpaAarName").get().asFile
+val fetchSherpa by tasks.registering {
+    description = "Downloads the pinned sherpa-onnx Android library for Read aloud and checks its SHA-256."
+    inputs.file(sharedVoicesFile)
+    outputs.file(sherpaAar)
+    doLast {
+        fun sha(f: File) = MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) }
+        val line = Regex("^([0-9a-f]{64}) {2}" + Regex.escape(sherpaAarName) + "$")
+        val want = sharedVoicesFile.readLines().firstNotNullOfOrNull { line.find(it.trim())?.groupValues?.get(1) }
+        if (sherpaAar.exists() && (want == null || sha(sherpaAar) == want)) return@doLast
+        sherpaAar.parentFile.mkdirs()
+        URI("https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaVersion/$sherpaAarName").toURL().openStream()
+            .use { input -> sherpaAar.outputStream().use { input.copyTo(it) } }
+        val got = sha(sherpaAar)
+        if (want == null) logger.lifecycle("$sherpaAarName has SHA-256 $got (not pinned yet: the Publish voices workflow prints its line for code/shared/voices.sha256)")
+        else if (got != want) { sherpaAar.delete(); throw GradleException("$sherpaAarName download has SHA-256 $got, expected $want") }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(fetchSherpa) }
+
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
@@ -186,6 +265,12 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.5")   // Play services pulls an old Fragment; permission requests need 1.3+
     implementation("com.squareup.okhttp3:okhttp:4.12.0") // Nostr relays (WebSockets)
     implementation("androidx.work:work-runtime-ktx:2.10.0") // checking the inbox in the background
+    // Read aloud's speech engine (sherpa-onnx, fetched and checked by fetchSherpa above; Kotlin API in com.k2fsa.sherpa.onnx).
+    implementation(files(sherpaAar).builtBy(fetchSherpa))
+    // Ultra privacy: Tor inside Muninn's process (TorService, SOCKS5 on 127.0.0.1), no VPN. The Guardian Project's
+    // tor-android (BSD-3-Clause; Tor BSD-3-Clause, OpenSSL Apache-2.0, libevent BSD-3-Clause, zlib, zstd BSD).
+    // 0.4.8.22 is the newest built for compileSdk 36 and Java 21; 0.4.9.x needs compileSdk 37 and Java 24 class files.
+    implementation("info.guardianproject:tor-android:0.4.8.22")
     // Video calls: the camera (encoded with Android's own VP8 encoder, see net/call/CallVideo.kt)
     val camerax = "1.4.1"
     implementation("androidx.camera:camera-core:$camerax")
@@ -193,6 +278,12 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("androidx.camera:camera-video:$camerax") // video messages (cap m2)
+    // Picked videos (cap v3, net/VideoPick.kt): converting to 1080p30 or the 720p relay copy with the phone's own encoder.
+    // About 3 MB more in the APK (no shrinking here); compare CI's APK sizes before and after.
+    val media3 = "1.8.0"
+    implementation("androidx.media3:media3-transformer:$media3")
+    implementation("androidx.media3:media3-effect:$media3")
+    implementation("androidx.media3:media3-common:$media3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303") // org.json is a stub in unit tests

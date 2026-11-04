@@ -818,6 +818,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                     listOf("all" to "All", "unread" to "Unread", "groups" to "Groups", "tv" to "Kids' Devices").filter { it.first != "tv" || tvKeys.isNotEmpty() }
                         .forEach { (id, label) -> Chip(label, chip == id) { ChatNav.filter = id } }
                 }
+                // Daily Hávamál (Settings › Look): today's verse at the top of All, inside this item so no row moves.
+                if (sectioned) DailyHavCard(app, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
                 // Something waiting (a group invite, someone wanting to chat, an introduction): one row at the top, so it's never missed.
                 val firstAsk = ginvites.firstOrNull()?.let { "${app.chat.contacts.get(it.from)?.shown ?: it.fromName} invited you to ${it.name}" }
                     ?: requests.firstOrNull()?.let { "${it.name} wants to chat" }
@@ -830,6 +832,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                         style = Type.normal.copy(color = Palette.text), maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
                     Text("See", style = Type.normal.copy(color = Palette.goldBright, fontWeight = FontWeight.SemiBold))
                 }
+                // Right after an update that turned "Full-screen calls" off: one card, once per version.
+                FullScreenAfterUpdate(app, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
                 // Permissions still missing, the message limits note and mirrored chats: one row, one sheet.
                 FinishRow(app, onAllowNearby, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
                 BackupNudge(contacts.firstOrNull { !it.groupOnly }?.shown, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
@@ -841,6 +845,8 @@ private fun ChatList(app: Muninn, onAllowNearby: () -> Unit) {
                 if (app.power.extreme) Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) {
                     ExtremeBanner("Battery") { SettingsNav.goSettings = "battery" }
                 }
+                // Ultra privacy: Tor slow, blocked or not starting (it shows nothing otherwise), with Wait or Turn off.
+                UltraBanner(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp))
                 // "New from Mom, Taylor +3" (plan 2.14): one unread chat opens it, several scroll to them at the top.
                 // X hides it until the next new message.
                 if (showBar) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp).clip(io.github.ravenor907.muninn.ui.Corner)
@@ -1157,6 +1163,8 @@ private fun Conversation(app: Muninn, key: String) {
     val typingNow = key in typingMap
     val activeNow = key in activeMap
     val me = app.identity.publicKey
+    // Cap v3: a video picked from the phone, full size if they're close by, else a smaller copy.
+    val pickVideo = rememberVideoPicker(app, io.github.ravenor907.muninn.net.VideoSend.Target("", "", key))
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
         // GIFs go on their own, animated; the rest as a photo or an album.
         if (uris.isNotEmpty()) scope.launch {
@@ -1409,7 +1417,8 @@ private fun Conversation(app: Muninn, key: String) {
         }
         if (attaching) AttachDialog(onPhotos = { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) } },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
-            onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
+            onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } },
+            onPickVideo = pickVideo) { attaching = false }
         DirectFiles(key, name) { p, file, n -> scope.launch(Dispatchers.IO) { app.chat.sendFile(p, file, n)?.let { Ui.say(it, true) } } }
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -1453,6 +1462,12 @@ private fun Conversation(app: Muninn, key: String) {
                 io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", s.text)
                 Ui.say("Copied.")
             })
+            // Read aloud (net/ReadAloud): the plain text, in the voice picked in Settings › Look.
+            if (s.unsent.isEmpty() && s.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available)
+                add(SheetAction(if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) "Stop reading" else "Read aloud", "sound") {
+                    if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) io.github.ravenor907.muninn.net.ReadAloud.stop()
+                    else io.github.ravenor907.muninn.net.ReadAloud.speak(context, s.text)
+                })
             if (s.mine && s.unsent.isEmpty() && !s.failed && s.photo.isEmpty() && s.text.isNotEmpty())
                 add(SheetAction("Edit", "edit") {
                     if (!app.chat.hasM1(key)) Ui.say("$name needs an update for edits.", true)
@@ -2663,6 +2678,8 @@ private fun GroupConversation(app: Muninn, g: String) {
         }
         if (action.isNotEmpty()) ChatNav.action = ""
     }
+    // Cap v3: a video picked from the phone, full size to those close by, a smaller copy to the rest.
+    val pickVideo = rememberVideoPicker(app, io.github.ravenor907.muninn.net.VideoSend.Target(g, ch, ""))
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(io.github.ravenor907.muninn.net.More.ALBUM_MAX)) { uris ->
         // GIFs go on their own, animated; the rest as a photo or an album.
         if (uris.isNotEmpty()) scope.launch {
@@ -2898,7 +2915,8 @@ private fun GroupConversation(app: Muninn, g: String) {
         val pickGroupFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) sendFileFrom(app, context, scope, key, uri) }
         if (attaching) AttachDialog(onPhotos = { try { io.github.ravenor907.muninn.ui.Picking.launch(pick, PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: Exception) { Ui.say("This phone has no photo picker.", true) } },
             onCamera = { camera = "photo" }, onVideo = { camera = "video" }, onPoll = { polling = true },
-            onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickGroupFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } }) { attaching = false }
+            onFile = { try { io.github.ravenor907.muninn.ui.Picking.launch(pickGroupFile, arrayOf("*/*")) } catch (_: Exception) { Ui.say("This phone has no file picker.", true) } },
+            onPickVideo = pickVideo) { attaching = false }
         DirectFiles(key, s.name)
         if (polling) PollDialog { poll -> polling = false; if (poll != null) sendPollHere(poll) }
         if (pickedMany.isNotEmpty()) Panel(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
@@ -2954,6 +2972,12 @@ private fun GroupConversation(app: Muninn, g: String) {
                 io.github.ravenor907.muninn.ui.Clip.copy(context, "Message", gm.text)
                 Ui.say("Copied.")
             })
+            // Read aloud (net/ReadAloud): the plain text, in the voice picked in Settings › Look.
+            if (gm.unsent.isEmpty() && gm.text.isNotEmpty() && io.github.ravenor907.muninn.net.ReadAloud.available)
+                add(SheetAction(if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) "Stop reading" else "Read aloud", "sound") {
+                    if (io.github.ravenor907.muninn.net.ReadAloud.speaking.value) io.github.ravenor907.muninn.net.ReadAloud.stop()
+                    else io.github.ravenor907.muninn.net.ReadAloud.speak(context, gm.text)
+                })
             if (!grp.readOnly && gm.mine && gm.unsent.isEmpty() && gm.photo.isEmpty() && gm.text.isNotEmpty())
                 add(SheetAction("Edit", "edit") { replyTo = null; editing = gm; text = gm.text })
             add(SheetAction((if (gm.mine) "Sent " else "Received ") + clock(gm.time), "clock", folder = "Info", info = true))
@@ -2965,6 +2989,9 @@ private fun GroupConversation(app: Muninn, g: String) {
             // Per member: whose phones have it and whose it's still waiting for.
             if (gm.mine && gm.unsent.isEmpty()) io.github.ravenor907.muninn.net.Ticks.groupLines(gm.to, gm.delivered) { k ->
                 s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check", folder = "Info", info = true)) }
+            // Cap v3: how far a video's paced relay pieces got, member by member.
+            if (gm.mine && gm.video > 0 && gm.unsent.isEmpty()) pacedVideoLines(gm) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }
+                .forEach { add(SheetAction(it, "video", folder = "Info", info = true)) }
             if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly) add(SheetAction("Unsend", "undo", danger = true) {
                 Ui.sure(Ask("Unsend this message?",
                     "Removes it from everyone's phone.",

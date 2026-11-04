@@ -65,14 +65,63 @@ public:
     bool unlocking() const { return m_unlocking; }
     // Sets the lock the first time (creating the data key), or changes it (must be unlocked). Set again after it was
     // off: a new data key, and every file is sealed again with it (the old key sat unprotected on disk).
-    // At least 6 pattern dots or 6 characters.
-    Q_INVOKABLE bool setSecret(const QString &secret, bool pattern);
+    // At least 6 pattern dots or 6 characters. 1.42: a pattern needs its unlock password (spare, at least 6 characters):
+    // a second wrap of the same data key, with its own salt and the same KDF. Either one opens Huginn.
+    Q_INVOKABLE bool setSecret(const QString &secret, bool pattern, const QString &spare = QString());
+
+    // ---------------------------------------------------------------- 1.42: unlock password and wrong tries
+    // A pattern lock with its unlock password (typed instead of drawn on the lock screen; one count of wrong tries for both).
+    Q_PROPERTY(bool hasUnlockPassword READ hasUnlockPassword NOTIFY changed)
+    bool hasUnlockPassword() const;
+    // What the lock asks before anything shows (screenLocked() is true meanwhile), once Huginn is open:
+    // "set": a pattern without its unlock password (set before 1.42), or Settings › Unlock password › Change;
+    // "recall": the unlock password just set, asked once more from memory (not during first setup: its last page asks).
+    // "" when nothing.
+    Q_PROPERTY(QString spareStep READ spareStep NOTIFY changed)
+    QString spareStep() const;
+    // Sets or changes the pattern's unlock password (the pattern's own wrap stays). Must be open. Then "recall".
+    Q_INVOKABLE bool setUnlockPassword(const QString &password);
+    // The unlock password from memory: checked by opening its wrap, then forgotten. Not a try at the lock (Huginn is
+    // open). True clears "recall".
+    Q_INVOKABLE bool recallUnlockPassword(const QString &password);
+    // Settings › Unlock password › Change, after the lock was confirmed ("spare" grant): spareStep becomes "set".
+    Q_INVOKABLE bool startUnlockPasswordChange();
+    Q_INVOKABLE void cancelUnlockPasswordChange();
+    // First setup just ended (FirstSetup.qml): an unlock password set during it is asked from memory now.
+    Q_INVOKABLE void setupEnded() { Q_EMIT changed(); }
+    // "Erase after too many tries" (Settings › Privacy and lock, off unless turned on). Turning it on takes the "erase"
+    // grant (confirmLock first); off any time. Kept in the lock-state file with the count.
+    Q_PROPERTY(bool eraseAfterTries READ eraseAfterTries WRITE setEraseAfterTries NOTIFY changed)
+    bool eraseAfterTries() const;
+    void setEraseAfterTries(bool on);
+    // Wrong tries in a row so far (pattern and unlock password together).
+    Q_PROPERTY(int wrongTries READ wrongTries NOTIFY changed)
+    int wrongTries() const;
+    // What the lock says about wrong tries, in plain words (Vault::waitText, triesText, leftText): during a wait, the
+    // wait, what comes next and the time left; otherwise what the next wrong tries bring. "" when nothing.
+    Q_INVOKABLE QString triesWords() const;
+    // The same for fails wrong tries with erase on or off, as if a wait had just begun (the screenshot tour).
+    Q_INVOKABLE QString triesWordsFor(int fails, bool erase) const;
+    // The rules, the same as Muninn's (LockWait.kt): 5 wrong: 5 minutes; 5 more: 1 hour; 5 more: 12 hours; 5 more: 24
+    // hours, then 24 hours again after every 5 more. Erase on: 5 more after the 24-hour wait erase everything.
+    static qint64 waitAfter(int fails, bool erase);
+    static bool erasesAt(int fails, bool erase);
+    static int lastLeft(int fails, bool erase);   // 1 to 5 in the last stage, 0 otherwise
+    // The count a wrong try makes; inApp (Confirm it's you, Turn off the lock, own chats): never the erase, *lockApp then.
+    static int nextFails(int fails, bool erase, bool inApp, bool *lockApp);
+    static QString waitText(int fails, bool erase);
+    static QString triesText(int fails, bool erase);
+    static QString leftText(qint64 ms);
+    // --privacy-selftest: the steps, the words, a try counted on disk before its check (a kill mid-check still counts),
+    // a restart and a changed clock, the erase switch, and the unlock password's wrap.
+    static bool lockRulesSelfTest();
     // Why the last setSecret() didn't save, when there is something to tell (round 16: a folder in the way), else "".
     Q_INVOKABLE QString secretError() const { return m_secretError; }
     // Round 17: setting a lock after it was off seals every file again, one at a time, on a thread of its own (with lots
     // of photos that takes a while). setSecret() then answers false with sealing true; sealProgress says how far it is
     // ("Sealing 1,240 of 3,900 files"), and secretFinished(ok, error) tells how it ended. Free space is checked first.
-    // Whatever Huginn saves meanwhile is held in memory and written once it ends, with the key then in use.
+    // Round 18 m2: whatever Huginn saves meanwhile goes to disk at once with the key in use, and is sealed again into
+    // the new folder just before it's swapped in, so a crash or power cut meanwhile loses nothing.
     Q_PROPERTY(bool sealing READ sealing NOTIFY changed)
     Q_PROPERTY(QString sealProgress READ sealProgress NOTIFY sealProgressChanged)
     bool sealing() const { return m_sealing; }
@@ -95,7 +144,7 @@ public:
     // Huginn never locks on its own: only Lock now, the panic lock, or Lock and close when leaving (Main.qml) do.
     // Restored after "Forgot it?" also counts: nothing shows until a new lock is set (lockNeeded).
     Q_PROPERTY(bool screenLocked READ screenLocked NOTIFY changed)
-    bool screenLocked() const { return m_screenLocked || m_lockNeeded || locked(); }
+    bool screenLocked() const { return m_screenLocked || m_lockNeeded || locked() || !spareStep().isEmpty(); }
     // Restored after "Forgot it?": open, but a new lock must be set before any chat shows (no Skip). Kept in vault.key
     // ("needsLock", never in a backup), so a restart still asks; only setSecret() clears it.
     Q_PROPERTY(bool lockNeeded READ lockNeeded NOTIFY changed)
@@ -275,11 +324,23 @@ private:
     void shareKey();
     mutable QSet<QString> m_unreadable;
     QString keyFile() const;
-    bool writeLock(const QString &secret, bool pattern) const;
+    bool writeLock(const QString &secret, bool pattern, const QString &spare = QString()) const;
     // vault.key's bytes for a lock on key (the KDF runs here): written by writeLock, or swapped in with the files.
-    static QByteArray lockBlob(const QString &secret, bool pattern, const QByteArray &key);
+    static QByteArray lockBlob(const QString &secret, bool pattern, const QByteArray &key, const QString &spare = QString());
     bool writeKeyFile(const QByteArray &bytes) const;
-    void wrongTry();   // counts a wrong pattern or password (the wait doubles every 5)
+    // 1.42: a try at the lock is counted and on disk (lock-state file and settings) before its check; false while
+    // a wait runs. rightTry() starts the count again; wrongTry() after a wrong check erases when the count says so
+    // (only at the lock screen: inApp tries never erase, *lockApp then puts the lock up instead).
+    bool beginTry(bool inApp, bool *lockApp = nullptr);
+    void rightTry();
+    void wrongTry(bool lockApp);
+    // Erase after too many tries: everything goes (eraseAll, data only, never the program), then Huginn starts again.
+    void eraseForTries();
+    bool m_spareChange = false;   // Settings › Unlock password › Change under way
+    // Round 18 m2: while sealing for a new lock, saves go on to disk with the old key; these names are sealed again
+    // into the new folder just before it's swapped in, so a crash meanwhile loses nothing.
+    mutable QSet<QString> m_dirty;
+    bool sealDirty(const QString &dir, const QByteArray &oldKey, const QByteArray &fresh, QString *why);
     QByteArray m_key;
     QString m_secretError;
     SaveQueue *m_saves = nullptr;       // the saving thread
@@ -304,7 +365,7 @@ private:
     std::shared_ptr<std::atomic<bool>> m_sealStop;
     QPointer<QThread> m_sealThread;
     QTimer m_sealTick;
-    void startSeal(const QString &secret, bool pattern);
+    void startSeal(const QString &secret, bool pattern, const QString &spare = QString());
     void finishSeal(bool ok, const QString &error, QByteArray fresh);
     void flushHeld();
     // The second half of replaceAll(): a complete stage swapped in for dir. what names it in errors ("restore", "lock").

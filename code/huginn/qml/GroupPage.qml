@@ -1534,6 +1534,8 @@ Rectangle {
         if (m.mine && !m.unsent && !m.photo && !readOnly) items.push({ name: "Edit", icon: "edit", url: "edit" })
         if (!m.unsent) items.push({ name: pins.indexOf(m.id) >= 0 ? "Unpin" : "Pin", icon: "pin", url: "pin" })
         if (m.text && !m.unsent) items.push({ name: "Copy text", url: "copy" })
+        // Read aloud (src/readaloud.h): the plain text, in the voice picked in Settings › Look.
+        if (m.text && !m.unsent && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
         // Right-click extras: the link, Forward (its text) and Report to admins (in a private message to each).
         const link = m.unsent ? "" : PeopleActions.firstLink(m.text)
         if (link !== "") items.push({ name: "Copy link", icon: "attach", url: "link" })
@@ -1566,6 +1568,7 @@ Rectangle {
             else if (a === "edit") startEdit(m)
             else if (a === "pin") togglePin(m.id)
             else if (a === "copy") { Chat.copyText(m.text, true); Ui.say("Copied. It's cleared from the clipboard in a minute.") }
+            else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
             else if (a === "link") { Chat.copyText(link); Ui.say("Link copied.") }
             else if (a === "joingroup") PeopleActions.joinGroup(m.text, null)
             else if (a === "forward") PeopleActions.forwardMenu(m.text)

@@ -258,12 +258,13 @@ fun FirstSetup(app: Muninn) {
                 androidx.compose.runtime.key(run.index) {
                     when (run.step) {
                         Step.WELCOME -> WelcomePage(app)
+                        Step.PRIVACY -> PrivacyPage()
                         Step.LOCK -> LockPage(app)
                         Step.NAME -> NamePage(app)
                         Step.ALLOW -> AllowPage(app)
                         Step.PEOPLE -> PeoplePage(app)
                         Step.LINK -> LinkPage(app)
-                        Step.DONE -> DonePage()
+                        Step.DONE -> DonePage(app)
                         Step.TOUR -> {}
                     }
                 }
@@ -357,6 +358,12 @@ private fun WelcomePage(app: Muninn) {
     }
 }
 
+/** 1.42: "Your privacy, built in": what protects every chat, and Ultra privacy (off) in Settings, briefly. Next only. */
+@Composable
+private fun PrivacyPage() {
+    Page { PrivacyBuiltIn(Modifier.padding(top = 16.dp)) }
+}
+
 /** The lock, on by default: Skip asks first. In practice the pattern is drawn but never set. */
 @Composable
 private fun LockPage(app: Muninn) {
@@ -381,8 +388,12 @@ private fun LockPage(app: Muninn) {
                 "you can change that in Settings › Privacy and lock.", style = Type.small, modifier = Modifier.fillMaxWidth())
             Text("Your chats are locked with it, so nobody can reset it. Pick one you'll remember, and make a backup after setup " +
                 "(Settings › Devices and backup) to be safe.", style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+            // 1.42: the waits after wrong tries, and the pattern's unlock password, in plain words.
+            Text(io.github.ravenor907.muninn.net.LockWait.EXPLAINER + " A pattern also gets an unlock password: either one opens Muninn.",
+                style = Type.small, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
         }
-        if (w.live) LockSetup(app, onCancel = null, fill = true, header = words) { Setup.hasLock = true; Setup.next() }
+        // The unlock password is asked once more from memory at the end of setup (the Done page), not right away.
+        if (w.live) LockSetup(app, onCancel = null, fill = true, recallNow = false, header = words) { Setup.hasLock = true; Setup.next() }
         else io.github.ravenor907.muninn.ui.PadPage(Modifier.fillMaxSize(), top = {
             words()
             Text(drawn.ifEmpty { "Draw a pattern: connect at least 6 dots." }, style = Type.normal, modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
@@ -574,8 +585,14 @@ private fun LinkPage(app: Muninn) {
 }
 
 @Composable
-private fun DonePage() {
+private fun DonePage(app: Muninn) {
     val practice = Setup.run?.practice == true
+    // 1.42: a pattern set during setup: its unlock password is asked once more from memory before setup ends.
+    var recall by remember { mutableStateOf(!practice && recallPending(app)) }
+    if (recall) {
+        Page(next = null, scroll = false) { UnlockPasswordSteps(app, recall = true) { recall = false } }
+        return
+    }
     Page(next = "Start a chat", onNext = { Setup.finish(!practice) }) {
         Column(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.size(72.dp).clip(CircleShape).background(Palette.accentFill).border(2.dp, Palette.accent, CircleShape),

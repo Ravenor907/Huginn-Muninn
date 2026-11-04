@@ -117,6 +117,15 @@ object LinkWire {
     const val L4 = "l4"
     fun saysL4(caps: String) = caps.split(' ').any { it == L4 }
     /**
+     * Cap l5 (15, "Clocks more than 36 hours apart", 1.42): this device answers a ping from either side with a pong
+     * that says its "pn" back, even one more than 36 hours off (straight over the Wi-Fi or Bluetooth, at most once a
+     * minute), and the phone pings its companions too. So each side learns how far the other's clock is off, from its
+     * own challenge only. Said in "caps" on "sync" and "ping".
+     */
+    const val L5 = "l5"
+    /** A new ping nonce ("pn"): 16 random hex digits. */
+    fun pingNonce(): String = java.security.SecureRandom().nextLong().let { "%016x".format(it) }
+    /**
      * Round 16: what this device says about a linked device found on an older version ([LinkReplay.olderOnes]).
      * [phone]: it is this device's phone (this device is the companion); else a computer or tablet linked to this phone.
      */
@@ -211,7 +220,47 @@ class LinkReplay {
     private val older = HashSet<String>()              // devices found on an older version (kept)
     private val news = HashSet<String>()               // just found, for [found]
     private val probed = HashMap<String, Long>()       // device -> when its caps were last asked for
+    private val offset = HashMap<String, Long>()       // 1.42 (cap l5): a device's clock minus this one's (ms), kept
+    private val pings = HashMap<String, Pair<String, Long>>()   // the last ping sent to each device: (pn, when); not kept
+    private val answered = HashMap<String, Long>()     // when a ping more than 36 hours off was last answered
+    private val pingedOff = HashMap<String, Long>()    // when a device more than 36 hours off was last pinged
     @Volatile var dirty = false; private set
+
+    /** 1.42 (cap l5): a ping with [pn] went to [to]; only its own pong within [CHALLENGE_MS] teaches that clock. */
+    @Synchronized
+    fun pinged(to: String, pn: String, nowMs: Long) { pings[to] = pn to nowMs }
+
+    /** Where [p]'s own time is, against this clock moved by what's known of [from]'s ("lts" more than 36 hours off). */
+    @Synchronized
+    fun skewed(from: String, p: JSONObject, nowMs: Long): Boolean {
+        val lts = p.opt("lts")
+        if (lts !is Number || lts is Double || lts is Float) return false
+        val t = lts.toLong()
+        val within = { at: Long -> t >= at - MAX_AGE_MS && t <= at + MAX_AGE_MS }
+        return !within(nowMs) && !(offset[from]?.let { within(nowMs + it) } ?: false)
+    }
+
+    /** A ping from [from] more than 36 hours off may be answered now (at most once a minute). */
+    @Synchronized
+    fun answerDue(from: String, nowMs: Long): Boolean {
+        val last = answered[from]
+        if (last != null && nowMs - last in 0 until ANSWER_MS) return false
+        answered[from] = nowMs
+        return true
+    }
+
+    /** A device more than 36 hours off may be pinged now, to learn its clock (at most every [PROBE_MS]). */
+    @Synchronized
+    fun pingDue(from: String, nowMs: Long): Boolean {
+        val last = pingedOff[from]
+        if (last != null && nowMs - last in 0 until PROBE_MS) return false
+        pingedOff[from] = nowMs
+        return true
+    }
+
+    /** How far [from]'s clock is known to be off (ms, 0 when it isn't). */
+    @Synchronized
+    fun offsetOf(from: String): Long = offset[from] ?: 0L
 
     /** Taken (true), or dropped: too old or far ahead, seen before, or unstamped from a device that stamps. */
     @Synchronized
@@ -231,7 +280,21 @@ class LinkReplay {
         val lts = p.opt("lts")
         if (ln !is String || !NONCE.matches(ln) || lts !is Number || lts is Double || lts is Float) return false
         val t = lts.toLong()
-        if (t < nowMs - MAX_AGE_MS || t > nowMs + MAX_AGE_MS) return false
+        // 1.42 (cap l5, as Huginn's round 17): a device's clock offset is learned only from a pong that came straight
+        // ([counts]) within [CHALLENGE_MS] of this app's own ping and says its "pn" back; never from a frame on its own.
+        val asked = pings[from]
+        val pnv = p.opt("pn")
+        if (counts && p.optString("t") == "pong" && asked != null && nowMs >= asked.second && nowMs - asked.second <= CHALLENGE_MS &&
+            asked.first.isNotEmpty() && pnv is String && pnv == asked.first) {
+            pings.remove(from)
+            val off = t - nowMs
+            if (kotlin.math.abs(off) > OFFSET_MIN_MS) {
+                val had = offset[from]
+                if (had == null || kotlin.math.abs(had - off) > 600_000L) { offset[from] = off; dirty = true }
+            } else if (offset.remove(from) != null) dirty = true
+        }
+        val within = { at: Long -> t >= at - MAX_AGE_MS && t <= at + MAX_AGE_MS }
+        if (!within(nowMs) && !(offset[from]?.let { within(nowMs + it) } ?: false)) return false
         seen.entries.removeIf { it.value < nowMs }
         if (p.optString("t") in UNREMEMBERED) { stamped(from); return true }
         val key = from + "\n" + ln
@@ -274,15 +337,19 @@ class LinkReplay {
     fun forget(from: String) {
         if (stamps.remove(from)) dirty = true
         if (older.remove(from)) dirty = true
-        quiet.remove(from); news.remove(from); probed.remove(from)
+        if (offset.remove(from) != null) dirty = true
+        quiet.remove(from); news.remove(from); probed.remove(from); pings.remove(from)
     }
 
-    /** Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "old": [devices on an older version]}. */
+    /**
+     * Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "old": [devices on an older
+     * version], "o": {device: clock offset} (1.42, cap l5; the same field as Huginn's)}.
+     */
     @Synchronized
     fun save(): String {
         dirty = false
         return JSONObject().put("s", org.json.JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } })
-            .put("old", org.json.JSONArray(older.toList())).toString()
+            .put("old", org.json.JSONArray(older.toList())).put("o", JSONObject().apply { offset.forEach { (k, v) -> put(k, v) } }).toString()
     }
 
     @Synchronized
@@ -293,6 +360,7 @@ class LinkReplay {
             o.optJSONArray("s")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { stamps.add(it) } }
             o.optJSONObject("n")?.let { n -> n.keys().forEach { k -> seen[k] = n.optLong(k) } }
             o.optJSONArray("old")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { older.add(it) } }
+            o.optJSONObject("o")?.let { n -> n.keys().forEach { k -> (n.opt(k) as? Number)?.let { offset[k] = it.toLong() } } }
         } catch (_: Exception) {}
     }
 
@@ -310,6 +378,12 @@ class LinkReplay {
         fun olderBy(first: Long, count: Long, nowMs: Long) = count >= OLDER_FRAMES && nowMs - first >= OLDER_MS
         /** Asking a device for its caps again: at most this often. */
         const val PROBE_MS = 2 * 60_000L
+        /** 1.42 (cap l5): a pong teaches the clock only this soon after the ping it answers. */
+        const val CHALLENGE_MS = 30_000L
+        /** A clock offset is kept only when over an hour (round 15, as Huginn). */
+        const val OFFSET_MIN_MS = 3_600_000L
+        /** A ping more than 36 hours off is answered at most this often per device. */
+        const val ANSWER_MS = 60_000L
         private val NONCE = Regex("^[0-9a-f]{32}$")
         private val rng = java.security.SecureRandom()
 
@@ -847,6 +921,15 @@ object Link {
         if ((comp != null || ph != null) && !replayOk(h, from, p, relayed)) {
             if (!p.has("ln") && ph != null && replay.probeDue(from, System.currentTimeMillis())) probeCaps(h, ph)
             if (replay.found(from)) _older.value = replay.olderOnes()
+            // 1.42 (cap l5): a device more than 36 hours off, straight over the Wi-Fi or Bluetooth. Its ping is answered
+            // (only the pong, which says its "pn" back, so it learns this clock), and it is pinged, so its own pong
+            // teaches this device its clock. Nothing else of the frame is taken.
+            val now = System.currentTimeMillis()
+            val dev = comp ?: ph
+            if (dev != null && !relayed && p.has("ln") && replay.skewed(from, p, now)) {
+                if (t == "ping" && replay.answerDue(from, now)) h.send(dev, LinkWire.pong(p).toString())
+                if (replay.pingDue(from, now)) pingFor(h, dev)
+            }
             return true
         }
         if (comp != null) {
@@ -942,6 +1025,8 @@ object Link {
             // Not checked here yet, but a first "sync" that says "relink" is kept for this phone's own They match (J11-1).
             comp != null && !comp.ok && t == "sync" && p.optBoolean("f") && p.optBoolean("relink") -> relinkSeen.add(comp.key)
             comp != null && !comp.ok && (t == "sync" || t == "get" || t == "setme" || t == "acct" || t == "ping" || t == "read" || t == "pask") -> {}
+            // 1.42 (cap l5): this device is the companion and its phone pinged it: the pong says the ping's "pn" back.
+            ph != null && t == "ping" -> h.send(ph, LinkWire.pong(p).toString())
             // Cap l2 (15.2): the companion asks whether this phone is there, says it takes "read" and gives its device name.
             comp != null && t == "ping" -> {
                 val dn = LinkWire.deviceName(p.optString("dn"))
@@ -1207,9 +1292,17 @@ object Link {
     /** Stamps a frame before it goes (every route of one send carries the same stamp). */
     fun stamp(json: String): String = LinkReplay.stamp(json)
 
-    /** Cap l4: asks the phone for its caps (its "pong" says whether it still stamps). */
-    private fun probeCaps(h: Host, ph: Device) {
-        h.send(ph, JSONObject().put("t", "ping").put("caps", LinkWire.L4).toString())
+    /** Cap l4: asks the phone for its caps (its "pong" says whether it still stamps). 1.42: with a "pn" (cap l5). */
+    private fun probeCaps(h: Host, ph: Device) = pingFor(h, ph)
+
+    /**
+     * 1.42 (cap l5): a ping with a fresh "pn" to [d], the phone or a companion. Only its own pong, straight over the
+     * Wi-Fi or Bluetooth within 30 seconds, teaches how far that device's clock is off ([LinkReplay.pinged]).
+     */
+    private fun pingFor(h: Host, d: Device) {
+        val pn = LinkWire.pingNonce()
+        replay.pinged(d.key, pn, System.currentTimeMillis())
+        h.send(d, JSONObject().put("t", "ping").put("caps", LinkWire.L4 + " " + LinkWire.L5).put("pn", pn).toString())
     }
 
     private fun ensureReplay(h: Host) {

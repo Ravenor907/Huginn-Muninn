@@ -582,14 +582,36 @@ class Groups(
     }
 
     /** A photo or voice message already stored as [blob] (Chat seals the pieces per member). */
-    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false): Boolean = act {
-        val (s, chId) = target(g, ch) ?: return@act false
+    fun sendBlob(g: String, ch: String, blob: String, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false,
+                 only: Set<String>? = null): Boolean = sendBlobId(g, ch, blob, voiceMs, videoMs, album, gif, only) != null
+
+    /**
+     * [sendBlob], returning the message's id (null when it can't go). [only]: just these members (cap v3: a picked video's
+     * relay copy goes to those not getting the full copy straight).
+     */
+    fun sendBlobId(g: String, ch: String, blob: String, voiceMs: Int, videoMs: Int = 0, album: Triple<String, Int, Int>? = null, gif: Boolean = false,
+                   only: Set<String>? = null): String? = act {
+        val (s, chId) = target(g, ch) ?: return@act null
         val id = Proto06.newLogicalId()
         // A video message goes only to members whose app plays it (m2); an album's fields are ignored by apps without m2.
-        val to = s.members.map { it.k }.filter { it != me && (videoMs == 0 || host.hasM2(it)) }.toSet()
+        val to = s.members.map { it.k }.filter { it != me && (videoMs == 0 || host.hasM2(it)) && (only == null || it in only) }.toSet()
         addMsg(GMsg(id, g, chId, me, host.myName, "", true, now(), photo = blob, voice = voiceMs, state = if (to.isEmpty()) "sent" else "sending", to = to,
             video = videoMs, album = album?.first ?: "", albumAt = album?.second ?: 0, albumOf = album?.third ?: 0, gif = gif))
         to.forEach { out(it, "gphoto", "", id, g, photo = blob, voice = voiceMs, ch = chId, video = videoMs, album = album, gif = gif) }
+        id
+    }
+
+    /**
+     * Cap v3: one more member gets my video message [msgId] (its full copy couldn't go straight to them, so the relay
+     * copy goes after all). False when the message or the member is gone.
+     */
+    fun addBlobMember(g: String, msgId: String, k: String): Boolean = act {
+        val s = groups[g]?.takeIf { !it.readOnly }?.state ?: return@act false
+        val m = chats[g]?.firstOrNull { it.id == msgId && it.mine && it.unsent.isEmpty() && it.photo.isNotEmpty() } ?: return@act false
+        if (k == me || !s.has(k) || k in m.to || (m.video > 0 && !host.hasM2(k))) return@act false
+        edit(g, msgId) { it.copy(to = it.to + k) }
+        out(k, "gphoto", "", msgId, g, photo = m.photo, voice = m.voice, ch = m.ch, video = m.video,
+            album = if (m.album.isEmpty()) null else Triple(m.album, m.albumAt, m.albumOf), gif = m.gif)
         true
     }
 

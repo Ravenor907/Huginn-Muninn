@@ -173,7 +173,9 @@ data class TvExtras(val calls: Boolean = true, val mic: Int = TvRules.DEFAULT_MI
                      val lookPick: Boolean? = null, val kname: String? = null,
                      /** k14: only for a device whose app said "k14" (null: left out). [pics]: quick messages carry their emoji. */
                      val access: KidAccess? = null, val child: String? = null, val gok: List<Pair<String, String>>? = null,
-                     val wait: List<String>? = null, val pics: Boolean? = null)
+                     val wait: List<String>? = null, val pics: Boolean? = null,
+                     /** k15: the read-aloud voice, "f" or "m", only for a device whose app said "k15" (null: left out). */
+                     val voice: String? = null)
 
 /**
  * The kids' TV rules (shared/docs/protocol.md, section 7): what a well-formed config is, when a TV takes a new
@@ -211,7 +213,7 @@ object TvRules {
 
     private val FIELDS = setOf("tv", "v", "by", "parents", "quick", "contacts", "dictation", "ts", "sig")
     /** k2 (7.5): may be there or not; a TV without k2 never gets a config that has them. */
-    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz") + KidLook.FIELDS + KidK14.FIELDS
+    private val OPTIONAL = setOf("calls", "mic", "nr", "upd", "keep", "chat", "quiet", "pin", "hav", "havw", "havh", "tz") + KidLook.FIELDS + KidK14.FIELDS + KidVoice.FIELDS
     private val DISCONNECT_FIELDS = setOf("tv", "v", "by", "ts", "sig")
     private val random = SecureRandom()
 
@@ -236,6 +238,8 @@ object TvRules {
         KidLook.check(c)
         // k14 (7.18): accessibility, the child's name, approved group members and other families' devices still waiting.
         KidK14.check(c)
+        // k15 (7.18): the read-aloud voice a parent picked.
+        KidVoice.check(c)
         val v = c.get("v")
         require(Canon.isInt(v) && (v as Number).toLong() >= 1) { "version" }
         val parents = strings(c.get("parents"), "parents")
@@ -353,7 +357,9 @@ object TvRules {
             it.lookPick?.let { k -> o.put("lookpick", k) }
             it.kname?.let { n -> clean(n, MAX_NAME).takeIf { x -> x.isNotEmpty() }?.let { x -> o.put("kname", x) } }
             // k14: accessibility, the child's name, approved group members and other families' devices still waiting.
-            KidK14.putInto(o, it) }
+            KidK14.putInto(o, it)
+            // k15: the read-aloud voice a parent picked.
+            it.voice?.takeIf { v -> v in io.github.ravenor907.muninn.net.ReadAloudText.VOICES }?.let { v -> o.put(KidVoice.FIELD, v) } }
         return Canon.sign(priv, CONFIG, o)
     }
 

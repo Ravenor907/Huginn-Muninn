@@ -242,6 +242,11 @@
         <receiver
             android:name=".tv.TvInstallResult"
             android:exported="false" />
+        <!-- Phones and tablets: the answer from Android's installer when Muninn updates itself with its own session
+             (Android 14 and newer), which keeps "Full-screen calls" on (update/FullScreenKeep). -->
+        <receiver
+            android:name=".update.PhoneInstallResult"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

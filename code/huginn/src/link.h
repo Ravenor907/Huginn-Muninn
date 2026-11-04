@@ -46,6 +46,12 @@ public:
     // it, so an older phone is held to the strict 36 hours); never from a frame on its own.
     static constexpr qint64 kChallengeMs = 30000;
     void pinged(const QString &to, const QString &pn, qint64 nowMs);
+    // 1.42 (cap l5): a ping more than 36 hours off, straight over Wi-Fi or Bluetooth, is answered (only the pong saying
+    // its "pn" back) at most once every kAnswerMs per device, and such a device is pinged at most every 2 minutes, so
+    // each side learns the other's clock from its own challenge.
+    static constexpr qint64 kAnswerMs = 60000;
+    bool answerDue(const QString &from, qint64 nowMs);
+    bool pingDue(const QString &from, qint64 nowMs);
     Verdict judge(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false);
     bool take(const QString &from, const QJsonObject &p, qint64 nowMs, bool direct = false) { return judge(from, p, nowMs, direct) == Verdict::Taken; }
     // A device linked again or unlinked: whether it stamps is learned anew.
@@ -76,6 +82,7 @@ private:
         qint64 at = 0;
     };
     QHash<QString, Ping> m_pings;    // round 17: the last ping sent to each device (not kept between runs)
+    QHash<QString, qint64> m_answered, m_pingedOff;   // 1.42 (cap l5): when a ping off by days was answered, a device pinged
     QHash<QString, qint64> m_lastStamped;   // round 17: when a stamped frame from each device last came (this run)
     struct Quiet {
         qint64 first = 0;
@@ -350,7 +357,7 @@ public:
     static void pruneItems(QHash<QString, Item> &set, qint64 now);
     static bool acctInternetOk(const QJsonObject &msg);
     static bool saysL1(const QString &caps);
-    static QString linkCaps();   // "l1 l2 l3 l4", in "sync" and "ping"
+    static QString linkCaps();   // "l1 l2 l3 l4 l5", in "sync" and "ping"
 
 Q_SIGNALS:
     void changed();
@@ -391,6 +398,8 @@ private:
     void reprobe();                             // asks the phone what it is now (its "pong" says l4 or not), once a minute
     QSet<QString> m_skewSaid;                   // devices whose clock was said to be off this run
     void sayClockOff(const QString &from, qint64 skewMs);
+    // 1.42 (cap l5): a ping with a fresh "pn" to d (the phone or a companion): its own pong teaches d's clock offset.
+    void pingDevice(const Device &d);
     QSet<QString> m_readOwed;                   // the companion's side: chats whose "read" goes to the phone soon
     QSet<QString> m_freshPages;                 // the companion's side: chats new from this sync's pages (their history counts as read)
     QTimer m_readSoon;

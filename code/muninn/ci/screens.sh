@@ -39,6 +39,9 @@ shot settings-look --es screen settings --es folder look
 shot settings-battery --es screen settings --es folder battery
 shot settings-devices --es screen settings --es folder devices
 shot settings-about --es screen settings --es folder about
+# Daily Hávamál: the card at the top of the chats, then the verse opened (shown for CI only, nothing saved).
+shot daily-verse --es screen chat --ei havamal 1
+shot daily-verse-open --es screen chat --ei havamal 2
 # A conversation (top bar, bubbles, composer), Add someone (camera first) and the lock screen.
 shot conversation --es chat demo
 shot add-someone --es chat add
@@ -53,6 +56,9 @@ shot room --ez room true
 # Press and hold: the person and chat sheet (here on the group).
 shot hold-sheet --ez group true --ez hold true
 shot lock --es screen lock
+# 1.42: the lock during a wait (1 hour, and what comes next), and the last stage with Erase after too many tries on.
+shot lock-wait --es screen lock --ei lockfails 10
+shot lock-last-tries --es screen lock --ei lockfails 22 --ez lockerase true
 # The Kids' TV voice processing library (echo canceller, RNNoise) loads and runs on Android.
 adb shell am force-stop $PKG
 adb shell am start -W -n $PKG/.MainActivity --ez ci true --ez tvvoice true >/dev/null

@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QTemporaryDir>
@@ -23,6 +24,8 @@ const char RingWire::kRingCap[] = "b1";
 const char RingWire::kWrapCap[] = "e1";
 const char RingWire::kNudgeCap[] = "n1";
 const char RingWire::kRichNudgeCap[] = "n2";
+const char RingWire::kTagCap[] = "r2";
+const char RingWire::kHiddenCap[] = "h1";
 
 namespace
 {
@@ -118,9 +121,50 @@ QByteArray RingWire::openRing(const QJsonObject &o, const ChatCrypto::KeyPair &r
     return ChatCrypto::open(ringKey(k), unb64(o.value(QStringLiteral("n"))), unb64(o.value(QStringLiteral("d"))), ok);
 }
 
-QByteArray RingWire::ringPlain(const QString &callId, qint64 ts)
+QByteArray RingWire::ringPlain(const QString &callId, qint64 ts, const QString &rt)
 {
-    return compact(QJsonObject{{QStringLiteral("t"), QStringLiteral("ring")}, {QStringLiteral("call"), callId}, {QStringLiteral("ts"), ts}});
+    QJsonObject o{{QStringLiteral("t"), QStringLiteral("ring")}, {QStringLiteral("call"), callId}, {QStringLiteral("ts"), ts}};
+    if (tagOk(rt))
+        o.insert(QStringLiteral("rt"), rt);
+    return compact(o);
+}
+
+bool RingWire::tagOk(const QJsonValue &v)
+{
+    static const QRegularExpression tag(QStringLiteral("^[0-9a-f]{32}$"));
+    return v.isString() && tag.match(v.toString()).hasMatch();
+}
+
+QString RingWire::newTag()
+{
+    QByteArray b(16, Qt::Uninitialized);
+    for (int i = 0; i < 16; i += 4) {
+        const quint32 r = QRandomGenerator::system()->generate();
+        for (int j = 0; j < 4; ++j)
+            b[i + j] = char((r >> (8 * j)) & 0xff);
+    }
+    return QString::fromLatin1(b.toHex());
+}
+
+QString RingWire::tagHash(const QString &rt)
+{
+    return QString::fromLatin1(sha256(QByteArrayLiteral("huginn-muninn ring tag|") + rt.toLatin1()).toHex().left(32));
+}
+
+QStringList RingWire::hfOf(const QJsonValue &v)
+{
+    static const QRegularExpression fp(QStringLiteral("^[0-9A-F]{64}$"));
+    const QJsonArray a = v.toArray();
+    if (!v.isArray() || a.isEmpty() || a.size() > kMaxHf)
+        return {};
+    QStringList out;
+    for (const QJsonValue &x : a) {
+        if (!x.isString() || !fp.match(x.toString()).hasMatch())
+            return {};
+        if (!out.contains(x.toString()))
+            out << x.toString();
+    }
+    return out;
 }
 
 bool RingWire::ringOk(const QJsonObject &p)
@@ -133,15 +177,15 @@ bool RingWire::ringOk(const QJsonObject &p)
 
 bool RingWire::ringFresh(qint64 ts, qint64 now) { return ts >= now - kRingOldMs && ts <= now + kRingAheadMs; }
 
-QString RingWire::ringContent(const QString &ringPub, const QString &callId, qint64 ts)
+QString RingWire::ringContent(const QString &ringPub, const QString &callId, qint64 ts, const QString &rt)
 {
-    const QJsonObject o = sealRing(ringPub, ringPlain(callId, ts));
+    const QJsonObject o = sealRing(ringPub, ringPlain(callId, ts, rt));
     if (o.isEmpty())
         return QString();
     return b64(Nostr::pad(compact(o)));
 }
 
-bool RingWire::openRingContent(const QString &content, const ChatCrypto::KeyPair &ring, QString *callId, qint64 *ts)
+bool RingWire::openRingContent(const QString &content, const ChatCrypto::KeyPair &ring, QString *callId, qint64 *ts, QString *rt)
 {
     const QJsonObject o = QJsonDocument::fromJson(QByteArray::fromBase64(content.toLatin1())).object();
     if (o.isEmpty())
@@ -152,6 +196,8 @@ bool RingWire::openRingContent(const QString &content, const ChatCrypto::KeyPair
         return false;
     *callId = p.value(QStringLiteral("call")).toString();
     *ts = p.value(QStringLiteral("ts")).toInteger();
+    if (rt)
+        *rt = tagOk(p.value(QStringLiteral("rt"))) ? p.value(QStringLiteral("rt")).toString() : QString();
     return true;
 }
 
@@ -417,6 +463,10 @@ RingWire::Announce RingWire::announceOf(const QJsonObject &r, qint64 nowS)
         a.nk = r.value(QStringLiteral("nk")).toString();
         a.np = np.toString();
     }
+    // Caps r2 and h1 (1.42): their ring tag for me (with a good ring key only) and their certificates.
+    if (!a.rk.isEmpty() && tagOk(r.value(QStringLiteral("rt"))))
+        a.rt = r.value(QStringLiteral("rt")).toString();
+    a.hf = hfOf(r.value(QStringLiteral("hf")));
     return a;
 }
 
@@ -567,6 +617,8 @@ void PeerKeys::load()
         a.wt = o.value(QStringLiteral("wt")).toInteger();
         a.nk = o.value(QStringLiteral("nk")).toString();
         a.np = o.value(QStringLiteral("np")).toString();
+        a.rt = o.value(QStringLiteral("rt")).toString();
+        a.hf = RingWire::hfOf(o.value(QStringLiteral("hf")));
         m_keys.insert(it.key(), a);
     }
 }
@@ -574,16 +626,22 @@ void PeerKeys::load()
 void PeerKeys::save() const
 {
     QJsonObject all;
-    for (auto it = m_keys.cbegin(); it != m_keys.cend(); ++it)
-        all.insert(it.key(), QJsonObject{{QStringLiteral("rk"), it->rk}, {QStringLiteral("rp"), it->rp}, {QStringLiteral("wk"), it->wk},
-                                         {QStringLiteral("wt"), it->wt}, {QStringLiteral("nk"), it->nk}, {QStringLiteral("np"), it->np}});
+    for (auto it = m_keys.cbegin(); it != m_keys.cend(); ++it) {
+        QJsonObject o{{QStringLiteral("rk"), it->rk}, {QStringLiteral("rp"), it->rp}, {QStringLiteral("wk"), it->wk},
+                      {QStringLiteral("wt"), it->wt}, {QStringLiteral("nk"), it->nk}, {QStringLiteral("np"), it->np}};
+        if (!it->rt.isEmpty())
+            o.insert(QStringLiteral("rt"), it->rt);
+        if (!it->hf.isEmpty())
+            o.insert(QStringLiteral("hf"), QJsonArray::fromStringList(it->hf));
+        all.insert(it.key(), o);
+    }
     if (m_write)
         m_write(QJsonDocument(all).toJson(QJsonDocument::Compact));
 }
 
 void PeerKeys::take(const QString &key, const RingWire::Announce &a)
 {
-    if (a.rk.isEmpty() && a.wk.isEmpty() && a.nk.isEmpty())
+    if (a.rk.isEmpty() && a.wk.isEmpty() && a.nk.isEmpty() && a.hf.isEmpty())
         return;
     load();
     const RingWire::Announce old = m_keys.value(key);
@@ -591,7 +649,10 @@ void PeerKeys::take(const QString &key, const RingWire::Announce &a)
     if (!a.rk.isEmpty()) {
         now.rk = a.rk;
         now.rp = a.rp;
+        now.rt = a.rt;   // cap r2: a ring key without a tag means they gave none
     }
+    if (!a.hf.isEmpty())
+        now.hf = a.hf;   // cap h1: the latest list replaces the one before
     if (!a.wk.isEmpty() && a.wt > old.wt) {
         now.wk = a.wk;
         now.wt = a.wt;
@@ -600,7 +661,8 @@ void PeerKeys::take(const QString &key, const RingWire::Announce &a)
         now.nk = a.nk;
         now.np = a.np;
     }
-    if (now.rk == old.rk && now.rp == old.rp && now.wk == old.wk && now.wt == old.wt && now.nk == old.nk && now.np == old.np)
+    if (now.rk == old.rk && now.rp == old.rp && now.wk == old.wk && now.wt == old.wt && now.nk == old.nk && now.np == old.np
+        && now.rt == old.rt && now.hf == old.hf)
         return;
     m_keys.insert(key, now);
     save();
@@ -756,16 +818,20 @@ QList<QByteArray> RingKey::nostrSecrets()
     return out;
 }
 
-bool RingKey::open(const QString &content, QString *callId, qint64 *ts)
+bool RingKey::open(const QString &content, QString *callId, qint64 *ts, QString *rt, bool *old)
 {
     if (m_forgotten)
         return false;
     load();
-    if (RingWire::openRingContent(content, m_now.keys, callId, ts))
+    if (old)
+        *old = false;
+    if (RingWire::openRingContent(content, m_now.keys, callId, ts, rt))
         return true;
-    if (m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_old.keys, callId, ts))
+    if (old)
+        *old = true;
+    if (m_oldUntil > nowMs() && !m_old.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_old.keys, callId, ts, rt))
         return true;
-    return m_olderUntil > nowMs() && !m_older.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_older.keys, callId, ts);
+    return m_olderUntil > nowMs() && !m_older.keys.privateDer.isEmpty() && RingWire::openRingContent(content, m_older.keys, callId, ts, rt);
 }
 
 bool RingKey::nudge(const QString &content, RingWire::Nudge *n)
@@ -1119,5 +1185,212 @@ bool RingWire::selfTest(const QString &vectorsPath)
         RingKey d(path);
         check("ring key forgotten", gone && d.publicKey() != cpub && d.mailboxes().size() == 1);
     }
+    // 1.42 (caps r2 and h1), the same as Muninn's Fix142DTest.
+    {
+        const QStringList caps = QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' '));
+        check("caps say h1 and r2, after p2", caps.contains(QLatin1String(kTagCap)) && caps.contains(QLatin1String(kHiddenCap))
+                                                  && caps.indexOf(QLatin1String(kTagCap)) > caps.indexOf(QStringLiteral("p2"))
+                                                  && caps.indexOf(QLatin1String(kHiddenCap)) > caps.indexOf(QStringLiteral("p2")));
+        const ChatCrypto::KeyPair ring = ChatCrypto::newKeyPair();
+        const QString pub = b64(ring.publicDer), tag = newTag(), cid = QStringLiteral("AAECAwQFBgcICQoLDA0ODw");
+        QString call, rt = QStringLiteral("x");
+        qint64 ts = 0;
+        const bool tagged = openRingContent(ringContent(pub, cid, 42, tag), ring, &call, &ts, &rt) && call == cid && ts == 42 && rt == tag;
+        const bool untagged = openRingContent(ringContent(pub, cid, 42), ring, &call, &ts, &rt) && rt.isEmpty();
+        const bool bad = openRingContent(ringContent(pub, cid, 42, QStringLiteral("XYZ")), ring, &call, &ts, &rt) && rt.isEmpty();
+        check("a ring carries its tag", tagOk(tag) && tagged && untagged && bad
+                                            && !QJsonDocument::fromJson(ringPlain(cid, 1)).object().contains(QStringLiteral("rt"))
+                                            && tagHash(tag).size() == 32 && tagHash(tag) == tagHash(tag) && tagHash(tag) != tag);
+        const QString fpA(64, QLatin1Char('A')), fpB = QStringLiteral("0123456789ABCDEF").repeated(4);
+        const QJsonObject r{{QStringLiteral("rk"), pub}, {QStringLiteral("rp"), QString(64, QLatin1Char('a'))}, {QStringLiteral("rt"), tag},
+                            {QStringLiteral("hf"), QJsonArray{fpA, fpB}}};
+        const Announce a = announceOf(r, 1761500000);
+        check("receipts carry rt and hf", a.rt == tag && a.hf == QStringList({fpA, fpB})
+                                              && announceOf(QJsonObject{{QStringLiteral("rt"), tag}}, 0).rt.isEmpty()
+                                              && hfOf(QJsonArray{fpA.toLower()}).isEmpty() && hfOf(QJsonArray{fpA, fpB, fpA, fpB, fpA}).isEmpty()
+                                              && hfOf(QJsonArray()).isEmpty() && hfOf(QJsonValue(QStringLiteral("x"))).isEmpty()
+                                              && hfOf(QJsonArray{fpA, fpA}) == QStringList({fpA}));
+        QByteArray stored;
+        PeerKeys keys([&stored] { return stored; }, [&stored](const QByteArray &b) { stored = b; });
+        keys.take(QStringLiteral("C"), a);
+        PeerKeys back([&stored] { return stored; }, [&stored](const QByteArray &b) { stored = b; });
+        const bool kept = back.get(QStringLiteral("C")).rt == tag && back.get(QStringLiteral("C")).hf == QStringList({fpA, fpB});
+        keys.take(QStringLiteral("C"), announceOf(QJsonObject{{QStringLiteral("hf"), QJsonArray{fpB}}}, 0));
+        const bool hfOnly = keys.get(QStringLiteral("C")).hf == QStringList({fpB}) && keys.get(QStringLiteral("C")).rt == tag;
+        keys.take(QStringLiteral("C"), announceOf(QJsonObject{{QStringLiteral("rk"), pub}, {QStringLiteral("rp"), QString(64, QLatin1Char('a'))}}, 0));
+        check("contacts' ring tags and certificates", kept && hfOnly && keys.get(QStringLiteral("C")).rt.isEmpty());
+
+        QTemporaryDir tmp;
+        RingKey k(tmp.path() + QStringLiteral("/ring-key.json"));
+        const QString before = k.publicKey();
+        k.renew();
+        QString c2, rt2;
+        qint64 t2 = 0;
+        bool old = false;
+        const bool viaOld = k.open(ringContent(before, cid, 7, tag), &c2, &t2, &rt2, &old) && old && rt2 == tag;
+        const bool viaNow = k.open(ringContent(k.publicKey(), cid, 7), &c2, &t2, &rt2, &old) && !old && rt2.isEmpty();
+        check("a replaced ring key opens as old", tmp.isValid() && viaOld && viaNow);
+
+        const QString allow = tmp.path() + QStringLiteral("/ring-allow.json");
+        QByteArray vault;
+        RingTags tags(allow, [&vault] { return vault; }, [&vault](const QByteArray &b) { vault = b; });
+        const QString ta = tags.tagFor(QStringLiteral("A")), tb = tags.tagFor(QStringLiteral("B"));
+        RingTags locked(allow, [] { return QByteArray(); }, [](const QByteArray &) {});
+        QFile af(allow);
+        const bool named = af.open(QIODevice::ReadOnly) && !af.readAll().contains(ta.toLatin1());
+        af.close();
+        const bool given = tags.judge(QString()) == RingTags::NoTag && tags.tagFor(QStringLiteral("A")) == ta && ta != tb
+                           && tags.judge(ta) == RingTags::TagAllowed && tags.judge(newTag()) == RingTags::TagRevoked
+                           && locked.judge(ta) == RingTags::TagAllowed && !named;
+        tags.revoke(QStringLiteral("A"));
+        RingTags lockedAgain(allow, [] { return QByteArray(); }, [](const QByteArray &) {});
+        const bool taken = tags.judge(ta) == RingTags::TagRevoked && lockedAgain.judge(ta) == RingTags::TagRevoked
+                           && tags.judge(tb) == RingTags::TagAllowed && tags.tagFor(QStringLiteral("A")) != ta;
+        QFile::remove(allow);
+        RingTags again(allow, [&vault] { return vault; }, [&vault](const QByteArray &b) { vault = b; });
+        again.sync();
+        RingTags lockedSync(allow, [] { return QByteArray(); }, [](const QByteArray &) {});
+        check("ring tags given, taken back at once, and written again", given && taken && lockedSync.judge(tb) == RingTags::TagAllowed);
+
+        LockedRingLimit l;
+        const qint64 t0 = 1000000;
+        const bool three = l.take(t0, QStringLiteral("a")) && l.take(t0 + 1, QStringLiteral("a")) && l.take(t0 + 2, QStringLiteral("a"));
+        check("locked rings limited per caller", three && !l.take(t0 + 5, QStringLiteral("a")) && l.take(t0 + 6, QStringLiteral("b"))
+                                                     && l.take(t0 + 7) && l.take(t0 + LockedRingLimit::kWindowMs, QStringLiteral("a")));
+    }
     return all;
+}
+
+// ------------------------------------------------------------------ cap r2: ring tags given to contacts
+
+RingTags::RingTags(const QString &path, std::function<QByteArray()> read, std::function<void(const QByteArray &)> write)
+    : m_path(path), m_read(std::move(read)), m_write(std::move(write))
+{
+}
+
+void RingTags::loadMine()
+{
+    if (m_mineLoaded)
+        return;
+    m_mineLoaded = true;
+    const QJsonObject o = QJsonDocument::fromJson(m_read ? m_read() : QByteArray()).object();
+    for (auto it = o.begin(); it != o.end(); ++it)
+        if (RingWire::tagOk(it.value()))
+            m_mine.insert(it.key(), it.value().toString());
+}
+
+void RingTags::loadAllowed()
+{
+    if (m_allowedLoaded)
+        return;
+    m_allowedLoaded = true;
+    QFile f(m_path);
+    if (!f.open(QIODevice::ReadOnly))
+        return;
+    for (const QJsonValue &v : QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("a")).toArray())
+        if (v.toString().size() == 32)
+            m_allowed.insert(v.toString());
+}
+
+void RingTags::saveAll()
+{
+    QJsonObject o;
+    QSet<QString> hashes;
+    for (auto it = m_mine.cbegin(); it != m_mine.cend(); ++it) {
+        o.insert(it.key(), it.value());
+        hashes.insert(RingWire::tagHash(it.value()));
+    }
+    if (m_write)
+        m_write(compact(o));
+    m_allowed = hashes;
+    m_allowedLoaded = true;
+    QStringList list(hashes.cbegin(), hashes.cend());
+    list.sort();
+    // Readable by this user only, like ring-key.json: written beside the file, then swapped in.
+    const QByteArray data = compact(QJsonObject{{QStringLiteral("a"), QJsonArray::fromStringList(list)}});
+    QDir().mkpath(QFileInfo(m_path).absolutePath());
+    const QString tmp = m_path + QStringLiteral(".new");
+    QFile::remove(tmp);
+    QFile f(tmp);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
+        return;
+    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    const bool ok = f.write(data) == data.size();
+    f.close();
+    if (!ok || f.error() != QFileDevice::NoError) {
+        QFile::remove(tmp);
+        return;
+    }
+    QFile::remove(m_path);
+    QFile::rename(tmp, m_path);
+}
+
+QString RingTags::tagFor(const QString &key)
+{
+    loadMine();
+    const auto it = m_mine.constFind(key);
+    if (it != m_mine.constEnd())
+        return it.value();
+    const QString t = RingWire::newTag();
+    m_mine.insert(key, t);
+    saveAll();
+    return t;
+}
+
+void RingTags::revoke(const QString &key)
+{
+    loadMine();
+    if (m_mine.remove(key))
+        saveAll();
+}
+
+RingTags::Who RingTags::judge(const QString &rt)
+{
+    if (rt.isEmpty())
+        return NoTag;
+    loadAllowed();
+    return m_allowed.contains(RingWire::tagHash(rt)) ? TagAllowed : TagRevoked;
+}
+
+void RingTags::sync()
+{
+    // Read from the vault again (a restore may have put other tags there).
+    m_mine.clear();
+    m_mineLoaded = false;
+    loadMine();
+    loadAllowed();
+    QSet<QString> hashes;
+    for (const QString &t : std::as_const(m_mine))
+        hashes.insert(RingWire::tagHash(t));
+    // Nothing read from the vault while tags were allowed: maybe a read that failed, so nothing is written over.
+    if (hashes != m_allowed && !(m_mine.isEmpty() && !m_allowed.isEmpty()))
+        saveAll();
+}
+
+void RingTags::forget()
+{
+    m_mine.clear();
+    m_allowed.clear();
+    m_mineLoaded = false;
+    m_allowedLoaded = true;
+    QFile::remove(m_path);
+}
+
+bool LockedRingLimit::take(qint64 nowMs, const QString &who)
+{
+    // Old entries go, for everyone, so the list of callers never grows without end.
+    for (auto it = m_at.begin(); it != m_at.end();) {
+        QList<qint64> &q = it.value();
+        while (!q.isEmpty() && (nowMs - q.first() >= kWindowMs || nowMs < q.first()))
+            q.removeFirst();
+        if (q.isEmpty())
+            it = m_at.erase(it);
+        else
+            ++it;
+    }
+    QList<qint64> &q = m_at[who];
+    if (q.size() >= kMax)
+        return false;
+    q.append(nowMs);
+    return true;
 }

@@ -60,12 +60,13 @@ class SecDataTest {
         assertTrue(Vault.LockRules.strong("abcdef"))
     }
 
-    @Test fun waitDoublesEveryFiveTries() {
+    @Test fun waitGrowsEveryFiveTries() {
+        // 1.42: 5 minutes, 1 hour, 12 hours, then 24 hours again and again (LockRulesTest has the rest).
         assertEquals(0L, LockWait.after(4))
-        assertEquals(30_000L, LockWait.after(5))
+        assertEquals(300_000L, LockWait.after(5))
         assertEquals(0L, LockWait.after(6))
-        assertEquals(60_000L, LockWait.after(10))
-        assertEquals(3_600_000L, LockWait.after(100))
+        assertEquals(3_600_000L, LockWait.after(10))
+        assertEquals(86_400_000L, LockWait.after(100))
     }
 
     @Test fun waitCantBeSkipped() {

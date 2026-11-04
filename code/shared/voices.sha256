@@ -1,0 +1,4 @@
+# SHA-256 of the natural voice files (code/shared/docs/voices.md). One line each: <sha256>  <file name>.
+# The "Publish voices" workflow prints these lines; paste them below, once. Never change a line: a fixed voice goes out
+# as a new release (voices-2) with new names. The apps download a voice only when its line is here; builds check the
+# speech engine they bundle against its line when there is one.

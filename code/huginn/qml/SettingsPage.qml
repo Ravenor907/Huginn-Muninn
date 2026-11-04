@@ -126,17 +126,33 @@ Rectangle {
             { group: "Lock", kind: "button", key: "changeLock", title: Vault.exists && !Vault.hasLock ? "Lock: off" : "Lock",
               note: "Locks only when you choose. Can't be recovered", label: Vault.exists && !Vault.hasLock ? "Set a lock" : "Change", enabled: Vault.exists },
             { group: "Lock", kind: "toggle", key: "panicLock", vault: true, hide: Vault.exists && !Vault.hasLock, title: "Panic lock", note: "Ctrl+Shift+Q, or hold L3+R3" },
+            // 1.42: a pattern's unlock password, and the erase after too many wrong tries (off unless turned on).
+            { group: "Lock", kind: "button", key: "unlockPassword", hide: !Vault.hasLock || !Vault.usesPattern, title: "Unlock password",
+              note: "Opens Huginn too, if you forget the pattern", label: "Change" },
+            { group: "Lock", kind: "toggle", key: "eraseAfterTries", vault: true, hide: !Vault.hasLock, title: "Erase after too many tries",
+              note: Vault.eraseAfterTries ? "On: 5 wrong tries after the 24-hour wait erase everything" : "Off: the waits go on, nothing is erased" },
             { group: "Privacy", kind: "toggle", key: "readReceipts", chat: true, title: "Send read receipts" },
             { group: "Privacy", kind: "toggle", key: "activeStatus", chat: true, title: "Active status", note: "Shows when Huginn is open" },
-            { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews", note: Settings.dataSaver ? "Off while Data saver is on" : "" },
+            { group: "Privacy", kind: "toggle", key: "linkPreviews", chat: true, title: "Link previews",
+              note: UltraPrivacy.active ? UltraPrivacy.offNote : Settings.dataSaver ? "Off while Data saver is on" : "" },
             // Windows only: screenshots and screen recordings leave Huginn's window out.
             { group: "Privacy", kind: "toggle", key: "blockScreenshots", hide: Qt.platform.os !== "windows", title: "Block screenshots", note: "Hides Huginn from captures" },
             { group: "Privacy", kind: "segmented", key: "deleteAfter", chat: true, title: "Keep messages",
               options: [{ value: "0", label: "Each chat's limit" }, { value: "86400000", label: "1 day" }] },
             // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
-            { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby", note: "Off: contacts only, nothing announced" },
+            { group: "Nearby", kind: "toggle", key: "visibleNearby", chat: true, title: "Nearby",
+              note: UltraPrivacy.active ? UltraPrivacy.nearbyNote : "Off: contacts only, nothing announced" },
             { group: "Nearby", kind: "toggle", key: "nearbyOn", chat: true, hide: !Chat.visibleNearby, title: "Nearby room" },
-            { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" }
+            { group: "Nearby", kind: "toggle", key: "keepNearby", chat: true, hide: !Chat.visibleNearby, title: "Keep Nearby messages" },
+            // Ultra privacy (1.42, src/ultraprivacy.h): Tor, off by default. Turning it on shows what it does, then every
+            // downside, then asks; while Tor is slow or blocked, Wait or Turn off.
+            { group: "Ultra privacy", kind: "toggle", key: "active", ultra: true, title: "Ultra privacy", note: UltraPrivacy.statusLine },
+            { group: "Ultra privacy", kind: "info", hide: !UltraPrivacy.active, title: UltraPrivacy.offNote,
+              note: "Direct calls and files, sending videos, link previews and GIF search. Calls go through the call relay" },
+            { group: "Ultra privacy", kind: "button", key: "ultraWait", hide: !UltraPrivacy.bannerShows || UltraPrivacy.torState === "missing",
+              title: UltraPrivacy.bannerText, label: "Wait" },
+            { group: "Ultra privacy", kind: "button", key: "ultraFallBack", hide: !UltraPrivacy.bannerShows,
+              title: "Turn off Ultra privacy", note: "Connects the normal way again", label: "Turn off" }
         ], [
             { kind: "segmented", key: "lockPosition", title: "Pattern position",
               options: [{ value: "top", label: "Top" }, { value: "middle", label: "Middle" }, { value: "lower", label: "Lower" }] },
@@ -196,7 +212,23 @@ Rectangle {
             { group: "Accessibility", kind: "toggle", key: "highContrast", title: "High contrast" },
             { group: "Accessibility", kind: "toggle", key: "reduceMotion", title: "Reduce motion" },
             // Color vision: every color that means something, remapped for it; its preview is under More.
-            { group: "Accessibility", kind: "segmented", key: "colorVision", title: "Color vision", options: Theme.visionChoices }
+            { group: "Accessibility", kind: "segmented", key: "colorVision", title: "Color vision", options: Theme.visionChoices },
+            // Daily Hávamál: a verse a day at the top of the chat list, off until it's turned on (src/dailyverse.h).
+            { group: "Daily Hávamál", kind: "toggle", key: "verseOn", verse: true, title: "Daily Hávamál", note: "A verse a day at the top of your chats" },
+            { group: "Daily Hávamál", kind: "segmented", key: "verseWording", verse: true, hide: !DailyVerse.verseOn || !DailyVerse.hasMine,
+              title: "Wording", value: DailyVerse.verseWording, options: [{ value: "b", label: "Bellows (1923)" }, { value: "y", label: "Your translation" }] },
+            { group: "Daily Hávamál", kind: "button", key: "verseImport", hide: !DailyVerse.verseOn, title: "Your translation",
+              note: DailyVerse.hasMine ? DailyVerse.mineLine : "A .txt file with stanza numbers. It stays on this computer and is never sent",
+              label: DailyVerse.hasMine ? "Import another" : "Import" },
+            { group: "Daily Hávamál", kind: "button", key: "verseRemove", hide: !DailyVerse.verseOn || !DailyVerse.hasMine, title: "Remove your translation", label: "Remove" },
+            // Read aloud (src/readaloud.h): the natural voice is downloaded once (only the one picked) and kept; the
+            // computer's own voice reads until it's in.
+            { group: "Read aloud", kind: "segmented", key: "voice", aloud: true, title: "Voice", note: ReadAloud.status, value: ReadAloud.voice,
+              options: [{ value: "f", label: "Female" }, { value: "m", label: "Male" }] },
+            { group: "Read aloud", kind: "toggle", key: "mobileData", aloud: true, title: "Allow on mobile data",
+              note: "Downloads the voice (about 65 MB) on a metered connection too" },
+            { group: "Read aloud", kind: "button", key: "voiceDelete", hide: !ReadAloud.hasFiles, title: "Delete voices",
+              note: "Frees the space. It downloads again the next time something is read aloud", label: "Delete" }
         ], [
             { group: "Color vision", kind: "preview", key: "visionPreview", title: "Preview", hide: !Theme.cb },
             // Seasonal, over any theme: the season, its background (on Dark), what falls and how much.
@@ -270,6 +302,14 @@ Rectangle {
               note: System.portable ? "Keep the data folder when you update by hand" : "", label: "Open folder" },
             { kind: "info", hide: System.softwareGraphics || System.graphics === "", title: "Graphics", note: System.graphics },
             { kind: "info", title: "Made by Ravenor907", note: "GPL-3.0. Fonts: SIL Open Font License" },
+            // Read aloud's voices and speech engine (code/shared/licenses/natural-voices.txt).
+            { group: "Credits and licenses", kind: "info", title: "Natural voices",
+              note: "Alba (CC BY 4.0) and Northern English Male (CC BY-SA 4.0), Piper voices by Michael Hansen" },
+            { group: "Credits and licenses", kind: "info", title: "Speech engine",
+              note: "sherpa-onnx (Apache-2.0), ONNX Runtime (MIT) and eSpeak NG (GPL-3.0). License texts: " + (System.portable ? "lib/licenses beside Huginn.exe" : "share/licenses in the app") },
+            // Ultra privacy's Tor (code/shared/licenses/Tor-BSD-3-Clause.txt).
+            { group: "Credits and licenses", kind: "info", title: "Tor",
+              note: "Ultra privacy. The Tor Project (BSD-3-Clause), with libevent (BSD-3-Clause), OpenSSL (Apache-2.0) and zlib" },
             // The controller's buttons, while one is connected (or on a handheld), and every keyboard shortcut.
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Show the buttons", note: "Press View (Select)" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Move and pick", note: "D-pad moves, A picks, B goes back" },
@@ -283,7 +323,7 @@ Rectangle {
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "In voice", note: "While Huginn is in front: hold LB, then Up mutes and Down deafens" },
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
             { group: "Controls and shortcuts", kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
-        ], "Your data, Controls and shortcuts")
+        ], "Your data, Credits and licenses, Controls and shortcuts")
         case "labs": return [
             { kind: "button", key: "report", title: "Report a bug", note: "Screenshot optional", label: "Report" },
             { kind: "button", key: "perf", title: "Performance check", note: "Lag and size", label: "Open" },
@@ -888,13 +928,44 @@ Rectangle {
         })
     }
     // Where a toggle's value lives.
-    function source(r) { return r.vault ? Vault : r.chat ? Chat : Settings }
+    function source(r) { return r.ultra ? UltraPrivacy : r.aloud ? ReadAloud : r.verse ? DailyVerse : r.vault ? Vault : r.chat ? Chat : Settings }
     // A switch as it shows (invert: it reads the other way round from the setting).
     function switchOn(r) { return !!source(r)[r.key] !== !!r.invert }
     // A switch flipped.
     function flip(r) {
+        if (r.key === "eraseAfterTries") { eraseSwitch(); return }
+        if (r.ultra) { flipUltra(); return }
         const o = source(r)
         o[r.key] = !o[r.key]
+    }
+    // 1.42: Erase after too many tries. Off at once; on only after a strong backup reminder and the current lock.
+    function eraseSwitch() {
+        if (Vault.eraseAfterTries) { Vault.eraseAfterTries = false; Ui.say("Erase after too many tries is off. The waits stay."); return }
+        if (!Vault.hasLock || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
+        Ui.sure("Erase after too many tries?", "Wrong tries already make people wait: 5 minutes, then 1 hour, 12 hours and 24 hours. With this on, 5 more wrong tries "
+                + "after the 24-hour wait erase everything Huginn keeps on this computer at once, for good: chats, contacts and keys. Children or anyone guessing can "
+                + "set it off. Huginn itself stays installed.\n\nMake a backup first (Settings › Devices and backup). Without one, an erase can't be undone. Your saved "
+                + "backup files are kept, and Forgot it? puts one back.\n\nThis guards against guessing at this screen. Someone who copies Huginn's files can still "
+                + "guess without it, so a long password is the stronger lock on a computer.",
+                "Turn on", () => Ui.main.askLock("Erase after too many tries", "Confirm it's you first", "erase", () => {
+                    Vault.eraseAfterTries = true
+                    if (Vault.eraseAfterTries) Ui.say("Erase after too many tries is on. Keep a recent backup.")
+                }), false, true)
+    }
+    // 1.42: Settings › Unlock password › Change: the current lock first, then the new one on the lock page.
+    function changeUnlockPassword() {
+        if (!Vault.hasLock || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
+        Ui.main.askLock("Unlock password", "Confirm it's you first", "spare", () => { if (Vault.startUnlockPasswordChange()) Ui.openPage("chat", {}) })
+    }
+    // Ultra privacy: on only after what it does, then every downside, then Turn on; off at once.
+    function flipUltra() {
+        if (UltraPrivacy.active) { UltraPrivacy.turnOff(); Ui.say("Ultra privacy is off."); return }
+        Ui.sure("What Ultra privacy does", UltraPrivacy.whatItDoes, "Next", () => {
+            Ui.sure("Before you turn it on", UltraPrivacy.downsides, "Turn on Ultra privacy", () => {
+                UltraPrivacy.turnOn()
+                Ui.say("Ultra privacy is on. Connecting to Tor…")
+            })
+        })
     }
     // Quiet hours: an hour of the day, the way the clock shows it.
     function hourName(h) { return h === 0 ? "12 AM" : h === 12 ? "12 PM" : h < 12 ? h + " AM" : (h - 12) + " PM" }
@@ -912,6 +983,8 @@ Rectangle {
     // A choice in a row of choices.
     function pickSegment(r, v) {
         if (r.rooms) { Rooms[r.key] = v; return }
+        if (r.verse) { DailyVerse[r.key] = v; return }
+        if (r.aloud) { ReadAloud[r.key] = v; return }
         if (r.chat) Chat[r.key] = Number(v)
         else Settings[r.key] = v
     }
@@ -947,6 +1020,15 @@ Rectangle {
         })
     }
 
+    // Look › Daily Hávamál › Your translation: a plain-text file, kept in this computer's vault only.
+    function importVerses() {
+        if (!Vault.exists || Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
+        Ui.pickFiles(paths => {
+            const line = DailyVerse.importFile(paths[0])
+            Ui.say(line, line.indexOf("Imported") !== 0)
+        }, "", true)
+    }
+
     function press(key) {
         const job = running()
         if (key === "chatName") Ui.ask("Your name", "A nickname is fine", Ui.myName, "Save", t => Ui.setMyName(t))
@@ -971,6 +1053,8 @@ Rectangle {
         else if (key === "more") moreOpen = !moreOpen
         else if (key === "status") { if (Ui.main) Ui.main.openStatusCard() }
         else if (key === "rightAway") seeRightAway()
+        else if (key === "ultraWait") UltraPrivacy.waitLonger()
+        else if (key === "ultraFallBack") { UltraPrivacy.turnOff(); Ui.say("Ultra privacy is off.") }
         else if (key === "muteKey" || key === "deafenKey") {
             const which = key === "muteKey" ? 1 : 2
             if (GlobalKeys.capturing === which) GlobalKeys.stopCapture(); else GlobalKeys.capture(which)
@@ -979,9 +1063,15 @@ Rectangle {
         else if (key === "resetPanels") { Ui.resetPanels(); Ui.say("Panels reset.") }
         else if (key === "fallAnyway") { Settings.seasonAnimation = "battery"; Ui.say("Animation: On, even on battery. It moves slower on battery to save power.") }
         else if (key === "shortcuts") Ui.main.showShortcuts()
+        else if (key === "verseImport") importVerses()
+        else if (key === "voiceDelete") Ui.sure("Delete voices?", "The computer's own voice reads until the natural voice downloads again.", "Delete",
+                                                () => { ReadAloud.deleteVoices(); Ui.say("Voices deleted.") }, false, true)
+        else if (key === "verseRemove") Ui.sure("Remove your translation?", "It's erased from this computer. Bellows shows again.", "Hold to remove",
+                                                () => { DailyVerse.removeMine(); Ui.say("Removed.") }, true, true)
         else if (key === "backup") startBackup()
         else if (key === "restore") startRestore()
         else if (key === "changeLock") Ui.openPage("chat", { changeLock: true })
+        else if (key === "unlockPassword") changeUnlockPassword()
         else if (key === "lockOff") Ui.sure("Turn off the lock?", "Anyone here could read your chats.",
                                             "Turn off", () => Ui.openPage("chat", { lockOff: true }), false, true)
         else if (key === "deleteMessages" && !Chat.ready) Ui.say("Unlock Huginn first.", true)

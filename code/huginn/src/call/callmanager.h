@@ -10,6 +10,7 @@
 #include <functional>
 
 #include "callsession.h"   // CallSkewGate
+#include "../ring.h"       // LockedRingLimit
 
 class CallSession;
 class CallSignal;
@@ -124,7 +125,9 @@ public:
     // offer itself, read once Huginn is unlocked, follows it.
     // live: it came as it was sent (after the relay's stored events), so a caller whose clock is off by up to
     // CallSkewGate::kSkewMs still rings (round 15, interop M3); one a relay kept rings only inside the usual window.
-    void ringLocked(const QString &callId, qint64 ts, bool live = false);
+    // who (1.42, cap r2): the hash of the ring's tag, empty for a ring without one; at most LockedRingLimit::kMax rings
+    // in its window per caller, so one contact ringing again and again never silences everyone else's calls.
+    void ringLocked(const QString &callId, qint64 ts, bool live = false, const QString &who = QString());
     // A TURN login from the relay Worker (also used by voice rooms, so one cache serves both).
     void getLogin(std::function<void(const TurnLogin &, const QString &)> done);
     QByteArray relayId();
@@ -155,6 +158,7 @@ private:
     int m_lockedChoice = 0;        // 0 nothing yet, 1 answer, 2 decline
     bool m_lockedRinging = false;
     QTimer m_lockedTimer;
+    LockedRingLimit m_lockedLimit;   // 1.42 (cap r2): rings while locked, per caller
     void onNotificationAction(const QString &action);   // a button on the ringing notification
 
     CallSignal *m_signal;

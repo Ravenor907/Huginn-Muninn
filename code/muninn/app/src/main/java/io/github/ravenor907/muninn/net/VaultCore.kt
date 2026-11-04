@@ -60,6 +60,8 @@ class VaultCore(
 
     val hasPassword: Boolean get() = lockJson()?.optString("mode") == "password"
     val usesPattern: Boolean get() = lockJson()?.optString("kind") == "pattern"
+    /** 1.42: a pattern lock also has its unlock password (a second wrap of the same data key). */
+    val hasSpare: Boolean get() = lockJson()?.let { it.optString("mode") == "password" && it.optJSONObject(SPARE) != null } == true
     /**
      * Restored after "Forgot it?": open for now, but a new lock must be set before anything else shows. Kept in the
      * lock file (never in a backup, so a restore can't clear it), and only a new password or pattern clears it.
@@ -99,13 +101,38 @@ class VaultCore(
         return opened(k)
     }
 
+    /**
+     * The wrap [secret] is for: a drawn pattern ("pattern:...") opens the lock's own wrap; with a pattern lock, anything
+     * typed is the unlock password and opens only its wrap (a pattern set before 1.42 has none: its own wrap then). Only
+     * one wrap is ever tried (no double wait, nothing to time).
+     */
+    private fun wrapFor(o: JSONObject, secret: String): JSONObject =
+        if (o.optString("kind") == "pattern" && !secret.startsWith(PATTERN)) (o.optJSONObject(SPARE) ?: o) else o
+
+    /** The data key from one wrap and its secret (scrypt), or null. */
+    private fun openWrap(w: JSONObject?, secret: String): ByteArray? {
+        if (w == null || w.optString("kdf") != "scrypt") return null
+        return try {
+            val salt = Vault.Crypto.b64d(w.getString("salt"))
+            val kek = Vault.Crypto.scrypt(secret.toByteArray(), salt, w.optInt("N", Vault.SCRYPT_N), w.optInt("r", Vault.SCRYPT_R), w.optInt("p", Vault.SCRYPT_P))
+            Vault.Crypto.open(kek, Vault.Crypto.b64d(w.getString("wrapped"))).also { kek.fill(0) }
+        } catch (_: Exception) { null }
+    }
+
+    /** A new wrap of [k] with [secret]: its own salt, scrypt. About a second. */
+    private fun makeWrap(secret: String, k: ByteArray): JSONObject {
+        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val kek = Vault.Crypto.scrypt(secret.toByteArray(), salt, Vault.SCRYPT_N, Vault.SCRYPT_R, Vault.SCRYPT_P)
+        try {
+            return JSONObject().put("salt", Vault.Crypto.b64(salt)).put("kdf", "scrypt").put("N", Vault.SCRYPT_N).put("r", Vault.SCRYPT_R)
+                .put("p", Vault.SCRYPT_P).put("wrapped", Vault.Crypto.b64(Vault.Crypto.seal(kek, k)))
+        } finally { kek.fill(0) }
+    }
+
     fun unlock(password: String): Boolean {
         val o = (readKey() as? SafeFile.Read.Ok)?.value ?: return openDefault()
         if (o.optString("mode") != "password") return openDefault()
-        if (o.optString("kdf") != "scrypt") return false
-        val salt = Vault.Crypto.b64d(o.getString("salt"))
-        val kek = Vault.Crypto.scrypt(password.toByteArray(), salt, o.optInt("N", Vault.SCRYPT_N), o.optInt("r", Vault.SCRYPT_R), o.optInt("p", Vault.SCRYPT_P))
-        val k = Vault.Crypto.open(kek, Vault.Crypto.b64d(o.getString("wrapped"))) ?: return false
+        val k = openWrap(wrapFor(o, password), password) ?: return false
         synchronized(this) {
             if (dataKey == null && !opened(k)) return false
             weak = !Vault.LockRules.strong(password)
@@ -117,11 +144,12 @@ class VaultCore(
     fun check(password: String): Boolean {
         val o = lockJson() ?: return true
         if (o.optString("mode") != "password") return true
-        if (o.optString("kdf") != "scrypt") return false
-        val salt = Vault.Crypto.b64d(o.getString("salt"))
-        val kek = Vault.Crypto.scrypt(password.toByteArray(), salt, o.optInt("N", Vault.SCRYPT_N), o.optInt("r", Vault.SCRYPT_R), o.optInt("p", Vault.SCRYPT_P))
-        return Vault.Crypto.open(kek, Vault.Crypto.b64d(o.getString("wrapped")))?.also { it.fill(0) } != null
+        return openWrap(wrapFor(o, password), password)?.also { it.fill(0) } != null
     }
+
+    /** [password] is the unlock password (asked once more from memory after it's set). Nothing changes. */
+    fun checkSpare(password: String): Boolean =
+        openWrap(lockJson()?.optJSONObject(SPARE), password)?.also { it.fill(0) } != null
 
     /** The lock just opened is shorter than new locks may be. Only known after an unlock. */
     @Volatile var weak = false
@@ -156,16 +184,31 @@ class VaultCore(
         _locked.value = true
     }
 
-    /** Sets, changes or (with null) removes the password. Must be unlocked. */
-    fun setPassword(password: String?, pattern: Boolean = false) {
+    /**
+     * Sets, changes or (with null) removes the password. Must be unlocked. [spare]: a pattern's unlock password, a
+     * second wrap of the same data key (both copies of the lock file are rewritten, so no older wrap lingers).
+     */
+    fun setPassword(password: String?, pattern: Boolean = false, spare: String? = null) {
         val k = key() ?: return
         // Removing the lock while a new one is needed keeps it needed.
         val needs = password.isNullOrEmpty() && lockNeeded
-        try { store(k, password, pattern, needs) } finally { k.fill(0) }
+        try { store(k, password, pattern, needs, if (pattern) spare else null) } finally { k.fill(0) }
         if (!password.isNullOrEmpty()) weak = !Vault.LockRules.strong(password)
     }
 
-    private fun store(k: ByteArray, password: String?, pattern: Boolean = false, needsLock: Boolean = false) {
+    /** Sets or changes a pattern's unlock password, keeping the pattern's own wrap as it is. Must be unlocked. False without a pattern. */
+    fun setSpare(spare: String): Boolean {
+        val o = lockJson() ?: return false
+        if (o.optString("mode") != "password" || o.optString("kind") != "pattern" || spare.isEmpty()) return false
+        val k = key() ?: return false
+        try {
+            o.put(SPARE, makeWrap(spare, k))
+            SafeFile.writeMirror(keyFile, o.toString().toByteArray())
+        } finally { k.fill(0) }
+        return true
+    }
+
+    private fun store(k: ByteArray, password: String?, pattern: Boolean = false, needsLock: Boolean = false, spare: String? = null) {
         val o = JSONObject()
         if (password.isNullOrEmpty()) {
             // No secret to lock it with: the key in Muninn's private files, written before vault.key points to it.
@@ -178,6 +221,8 @@ class VaultCore(
             o.put("mode", "password").put("kind", if (pattern) "pattern" else "text").put("salt", Vault.Crypto.b64(salt))
                 .put("kdf", "scrypt").put("N", Vault.SCRYPT_N).put("r", Vault.SCRYPT_R).put("p", Vault.SCRYPT_P)
                 .put("wrapped", Vault.Crypto.b64(Vault.Crypto.seal(Vault.Crypto.scrypt(password.toByteArray(), salt, Vault.SCRYPT_N, Vault.SCRYPT_R, Vault.SCRYPT_P), k)))
+            // 1.42: a pattern's unlock password, its own salt and scrypt, wrapping the same data key. Never a hash, never the password.
+            if (pattern && !spare.isNullOrEmpty()) o.put(SPARE, makeWrap(spare, k))
         }
         // Two copies of the same lock, never an older one: an old password must not open it.
         SafeFile.writeMirror(keyFile, o.toString().toByteArray())
@@ -404,5 +449,8 @@ class VaultCore(
         private const val DONE = ".done"
         /** In an open lock file: a new lock must be set first (see [lockNeeded]). */
         private const val NEEDS_LOCK = "needsLock"
+        /** In a pattern's lock file: the unlock password's wrap of the data key. */
+        private const val SPARE = "spare"
+        private const val PATTERN = "pattern:"
     }
 }

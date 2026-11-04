@@ -1019,6 +1019,28 @@ private fun KidLookPart(app: Muninn, t: ManagedTv) {
     TvToggle("Let the kid choose", "Shows My colors on the device, with the same choices and text size. Your pick here goes on again whenever you change it.",
         t.lookPick, enabled = k13) { on -> TvParent.setLookPick(t.key, on); saved() }
     KidAccessPart(app, t)
+    KidVoicePart(app, t)
+}
+
+/**
+ * k15: the voice the device reads aloud with (messages, quick messages, Daily Hávamál): Female or Male. The device
+ * downloads only that natural voice, once; until it's in, its own voice reads.
+ */
+@Composable
+private fun KidVoicePart(app: Muninn, t: ManagedTv) {
+    val k15 = TvParent.k15(app, t.key)
+    Box(Modifier.fillMaxWidth().padding(vertical = 10.dp).height(1.dp).background(Palette.hairline))
+    Text("Read-aloud voice", style = Type.big.copy(fontSize = 17.sp, color = if (k15) Palette.text else Palette.textFaint))
+    if (!k15) Note(UPDATE_FIRST)
+    ChoiceRow(KidVoice.CHOICES.size, Modifier.padding(vertical = 6.dp)) { i, m ->
+        val (v, name) = KidVoice.CHOICES[i]
+        // None picked yet: the device reads with Female, the usual voice.
+        val on = t.voice == v || (t.voice.isEmpty() && v == io.github.ravenor907.muninn.net.ReadAloudText.FEMALE)
+        MButton(name, m, if (on) Kind.Accent else Kind.Normal, enabled = k15) {
+            if (t.voice != v) { TvParent.setVoice(t.key, v); Ui.say("Saved. The device downloads this voice on Wi-Fi, then reads with it.") }
+        }
+    }
+    Note("A natural voice, downloaded once on the device (about 65 MB). Until then it reads with its own voice.")
 }
 
 /**

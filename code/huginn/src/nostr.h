@@ -92,6 +92,8 @@ public:
     Q_INVOKABLE void connectRelays();
     // The network came back: drop dead connections and connect again now.
     Q_INVOKABLE void reconnectNow();
+    // Ultra privacy went on or off, or Tor became ready: every relay socket goes and connects again the new way.
+    void redial();
     // Asks every open relay for the inbox again: after unlocking (the key and the handler change),
     // or once the mailbox is first known on a fresh install.
     Q_INVOKABLE void resubscribe();

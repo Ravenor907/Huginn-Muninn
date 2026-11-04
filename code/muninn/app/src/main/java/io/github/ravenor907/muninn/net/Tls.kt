@@ -76,11 +76,12 @@ class Tls private constructor(private val key: PrivateKey, val cert: X509Certifi
      * Refusing in the handshake means nothing (not even the request line) reaches a wrong device.
      */
     private class Pinned(expected: String?) : X509ExtendedTrustManager() {
-        private val expected = expected?.uppercase()
+        // 1.42 (cap h1): several fingerprints, comma-separated, when a contact named more than one (any of them will do).
+        private val expected = expected?.uppercase()?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
         private fun check(chain: Array<out X509Certificate>?) {
             if (expected == null) return
             val got = chain?.firstOrNull()?.let { fingerprintOf(it) }
-            if (got != expected) throw CertificateException("Certificate doesn't match the fingerprint the device announced")
+            if (got == null || got !in expected) throw CertificateException("Certificate doesn't match the fingerprint the device announced")
         }
         override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = check(chain)
         override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?, socket: Socket?) = check(chain)
@@ -91,8 +92,31 @@ class Tls private constructor(private val key: PrivateKey, val cert: X509Certifi
         override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
     }
 
+    /**
+     * 1.42 (cap h1): hands the TLS stack whichever certificate [pick] says at each handshake (Nearby off: the hidden one),
+     * by its fingerprint as the alias, so a handshake that straddles a change still gets a matching key and certificate.
+     */
+    private class Picking(private val pick: () -> Tls, private val all: () -> List<Tls>) : X509ExtendedKeyManager() {
+        private fun of(alias: String?): Tls? = all().firstOrNull { it.fingerprint == alias }
+        override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?) = all().map { it.fingerprint }.toTypedArray()
+        override fun chooseClientAlias(keyType: Array<out String>?, issuers: Array<out Principal>?, socket: Socket?) = pick().fingerprint
+        override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?) = all().map { it.fingerprint }.toTypedArray()
+        override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?) = pick().fingerprint
+        override fun chooseEngineClientAlias(keyType: Array<out String>?, issuers: Array<out Principal>?, engine: SSLEngine?) = pick().fingerprint
+        override fun chooseEngineServerAlias(keyType: String?, issuers: Array<out Principal>?, engine: SSLEngine?) = pick().fingerprint
+        override fun getCertificateChain(alias: String?): Array<X509Certificate>? = of(alias)?.let { arrayOf(it.cert) }
+        override fun getPrivateKey(alias: String?): PrivateKey? = of(alias)?.key
+    }
+
     companion object {
         private const val ALIAS = "muninn"
+
+        /**
+         * A server context whose certificate is [pick]'s at each handshake; [all] lists every one it may pick (the
+         * lasting one and the hidden ones). Any client certificate is fine, as for [serverContext].
+         */
+        fun picking(pick: () -> Tls, all: () -> List<Tls>): SSLContext =
+            SSLContext.getInstance("TLS").apply { init(arrayOf<KeyManager>(Picking(pick, all)), arrayOf<TrustManager>(Pinned(null)), SecureRandom()) }
 
         fun fingerprintOf(cert: X509Certificate): String =
             MessageDigest.getInstance("SHA-256").digest(cert.encoded).joinToString("") { "%02X".format(it) }
@@ -198,5 +222,49 @@ class Tls private constructor(private val key: PrivateKey, val cert: X509Certifi
             val signature = Signature.getInstance("SHA256withECDSA").apply { initSign(key); update(tbs) }.sign()
             return seq(tbs, algorithm, der(0x03, byteArrayOf(0) + signature))   // BIT STRING: no unused bits
         }
+    }
+}
+
+/**
+ * 1.42 (cap h1, protocol.md 21.3): the certificates Muninn shows with Nearby off, kept in [dir] (outside the vault, like
+ * the lasting one). "now" is shown; "next" is already made and named to contacts ("hf" in receipts) before it is ever
+ * shown, so a contact with Nearby off still has it pinned when it takes over. Turning Nearby off, and every day while
+ * it's off, "next" becomes "now" and a new "next" is made ([rotate]). Nobody close by can follow the phone from day to
+ * day by its certificate, and contacts never lose the route.
+ */
+class HiddenTls(private val dir: File) {
+    @Volatile private var now: Tls? = null
+    @Volatile private var next: Tls? = null
+    private val atFile = File(dir, "at")
+
+    private fun load() {
+        if (now != null && next != null) return
+        synchronized(this) {
+            if (now == null) now = Tls.load(File(dir, "now"))
+            if (next == null) next = Tls.load(File(dir, "next"))
+            if (!atFile.isFile) try { atFile.writeText(System.currentTimeMillis().toString()) } catch (_: Exception) {}
+        }
+    }
+
+    /** Shown now with Nearby off; null only if none could be made (then the lasting one is shown). */
+    fun current(): Tls? { load(); return now }
+    /** Named to contacts already; shown after the next [rotate]. */
+    fun upcoming(): Tls? { load(); return next }
+    /** When "now" took over (ms). */
+    fun since(): Long = try { atFile.readText().trim().toLong() } catch (_: Exception) { 0L }
+
+    /** "next" becomes "now", and a new "next" is made. True when it changed. */
+    fun rotate(nowMs: Long = System.currentTimeMillis()): Boolean = synchronized(this) {
+        load()
+        val nowDir = File(dir, "now")
+        val nextDir = File(dir, "next")
+        try {
+            nowDir.deleteRecursively()
+            if (!nextDir.renameTo(nowDir)) return@synchronized false
+        } catch (_: Exception) { return@synchronized false }
+        now = next
+        next = Tls.load(nextDir)
+        try { atFile.writeText(nowMs.toString()) } catch (_: Exception) {}
+        true
     }
 }

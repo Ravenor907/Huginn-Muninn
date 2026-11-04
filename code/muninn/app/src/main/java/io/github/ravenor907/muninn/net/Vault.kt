@@ -38,8 +38,41 @@ class Vault(private val context: Context) {
     /** The lock just opened is shorter than new locks may be. Only known after an unlock. */
     val weak: Boolean get() = core.weak
     fun lock() = core.lock()
-    /** Sets, changes or (with null) removes the password. Must be unlocked. */
-    fun setPassword(password: String?, pattern: Boolean = false) = core.setPassword(password, pattern)
+    /** Sets, changes or (with null) removes the password. Must be unlocked. [spare]: a pattern's unlock password. */
+    fun setPassword(password: String?, pattern: Boolean = false, spare: String? = null) = core.setPassword(password, pattern, spare)
+
+    // ------------------------------------------------------------------ 1.42: unlock password and wrong tries
+
+    /** A pattern lock with its unlock password set. Either one opens Muninn. */
+    val hasSpare: Boolean get() = core.hasSpare
+    /** A pattern lock without its unlock password (set before 1.42): it's asked for after the next unlock. */
+    val needsSpare: Boolean get() = core.hasPassword && core.usesPattern && !core.hasSpare
+    /** The unlock password, asked once more from memory. Changes nothing. */
+    fun checkSpare(password: String): Boolean = core.checkSpare(password)
+    /** Sets or changes the pattern's unlock password (the pattern stays). Must be unlocked. */
+    fun setSpare(password: String): Boolean = core.setSpare(password)
+
+    /**
+     * Wrong tries at the lock and their waits ([LockWait]), in the vault's lock-state file (no-backup folder, so never in a
+     * backup or a move; Erase everything removes it), mirrored in Muninn's settings (also never in a backup, Backup.phoneOnly).
+     */
+    val tries: LockStore by lazy {
+        val prefs = context.getSharedPreferences("muninn", Context.MODE_PRIVATE)
+        val resolver = context.contentResolver
+        LockStore(File(context.noBackupFilesDir, "lock-state"), object : LockStore.Clock {
+            override fun now() = android.os.SystemClock.elapsedRealtime()
+            override fun boot() = try { android.provider.Settings.Global.getInt(resolver, android.provider.Settings.Global.BOOT_COUNT, 0) } catch (_: Exception) { 0 }
+        }, object : LockStore.Mirror {
+            override fun read(): LockStore.Data? = if (!prefs.contains("lockFails") && !prefs.contains("lockErase")) null
+                else LockStore.Data(prefs.getInt("lockFails", 0), prefs.getLong("lockAt", 0L), prefs.getLong("lockWait", 0L), prefs.getInt("lockBoot", -1),
+                    prefs.getBoolean("lockErase", false))
+            override fun write(d: LockStore.Data) {
+                // commit(), not apply(): on disk before the check runs.
+                prefs.edit().putInt("lockFails", d.fails).putLong("lockAt", d.until).putLong("lockWait", d.wait).putInt("lockBoot", d.boot)
+                    .putBoolean("lockErase", d.erase).commit()
+            }
+        })
+    }
 
     // ------------------------------------------------------------------ files
 

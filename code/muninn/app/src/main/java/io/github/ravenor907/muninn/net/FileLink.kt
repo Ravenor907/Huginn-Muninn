@@ -173,7 +173,9 @@ object FileLink {
             "offer" -> (p.opt("name") as? String)?.let { it.isNotBlank() && it.length <= 200 && it.none { c -> c.code < 0x20 || c == '/' || c == '\\' } } == true &&
                 (p.opt("size") as? Number)?.toLong()?.let { it in 1..MAX_BYTES } == true &&
                 (p.opt("sha") as? String)?.let { it.length == 64 && it.all { c -> c in '0'..'9' || c in 'a'..'f' } } == true &&
-                p.opt("e") is String && p.opt("c") is JSONArray
+                p.opt("e") is String && p.opt("c") is JSONArray &&
+                // Cap v3 (29.3): a full-size video's length.
+                GroupVideo.vidOk(p.opt("vid"))
             "accept" -> p.opt("e") is String && p.opt("c") is JSONArray
             "decline", "done" -> true
             else -> false
@@ -225,6 +227,8 @@ object FileLink {
         val paused = p.id in pausedIds
         val held = p.id in heldIds
         val since = started[p.id]
+        // Cap v3: a full-size video that got there needs no relay copy any more.
+        if (p.state == "done" || p.id in stopped) videoBack.remove(p.id)
         val pace = if (merged.state == "sending" && since != null && !paused && !held)
             (base[p.id] ?: 0L).let { b -> FileText.pace(merged.done - b, merged.size - b, System.currentTimeMillis() - since - (pausedFor[p.id] ?: 0L)) } else ""
         _all.value = _all.value + (p.id to merged.copy(paused = paused, held = held, pace = pace))
@@ -517,8 +521,28 @@ object FileLink {
         if (name.isNotEmpty()) ins.entries.removeIf { it.value.peer == peer && it.value.name == name && _all.value[it.key] == null }
     }
 
+    /**
+     * Cap v3 (29.3): a full-size video's copy for one member. If it can't go straight (no answer within [RELAY_AFTER_MS],
+     * no way through, refused by rules or space, or it broke off), its card goes and [back] sends the relay copy instead.
+     */
+    private val videoBack = ConcurrentHashMap<String, () -> Unit>()
+    fun onNoPath(id: String, back: () -> Unit) { videoBack[id] = back }
+
+    /** True when [id] was a full-size video: its card is gone and its relay copy is on its way instead (also when send() said no). */
+    fun videoFellBack(id: String): Boolean {
+        val back = videoBack.remove(id) ?: return false
+        if (id in stopped) return true
+        again.remove(id)?.second?.delete()
+        againGroup.remove(id)
+        _all.value = _all.value - id
+        saveKept()
+        try { back() } catch (_: Exception) {}
+        return true
+    }
+
     /** No straight path for a file of mine: a small one goes over the internet route instead, else its card says [why]. */
     private fun fallBack(id: String, peer: String, file: File, name: String, why: String, group: String = "") {
+        if (videoFellBack(id)) return
         val h = host
         // A group's file goes over the relays only to a contact, into the chat with them.
         if (h != null && file.isFile && file.length() <= FileText.RELAY_MAX && (group.isEmpty() || h.isContact(peer))) {
@@ -552,12 +576,13 @@ object FileLink {
      * Sends [file] to [peer] directly: on the same Wi-Fi, or straight over the internet with trust (Sharing.route). Null
      * when it started, else why not ("not trusted": Chat may use the relays for a small one). [group]: a group's file.
      */
-    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId(), group: String = ""): String? {
+    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId(), group: String = "", vid: Int = 0): String? {
         val h = host ?: return "Not ready."
         if (!h.hasF1(peer)) return "needs a newer Muninn"
         if (group.isNotEmpty() && !h.hasF2(peer)) return "needs a newer Muninn"
         val lan = h.lanAddress(peer)?.takeIf { h.hasF2(peer) }
-        val trust = h.trusted(peer)
+        // Ultra privacy: never straight over the internet (no STUN, no address swapped); the same Wi-Fi still works.
+        val trust = h.trusted(peer) && UltraPrivacy.directAllowed
         val route = Sharing.route(lan != null, trust, file.length(), FileText.RELAY_MAX)
         if (route != "direct" && route != "internet") return "not trusted"
         val lanOnly = route == "direct" && !trust
@@ -586,12 +611,14 @@ object FileLink {
                 val offer = JSONObject().put("t", "offer").put("id", id).put("name", name).put("size", size).put("sha", sha)
                     .put("e", ChatCrypto.b64(keys.public.encoded)).put("c", cs)
                 if (group.isNotEmpty()) offer.put("g", group)
+                if (vid > 0) offer.put("vid", vid)
                 h.signal(peer, offer.toString())
                 put(Progress(id, peer, name, size, true, "offered", group = group))
                 // Nothing back in time: a small file goes over the internet route (it arrives when they're back); a
                 // bigger one waits as long as the other phone may ask first.
                 val long = h.resumes(peer)
-                val until = System.currentTimeMillis() + answerMs(size, long)
+                // Cap v3: a full-size video waits only as long as a small file; then its relay copy goes instead.
+                val until = System.currentTimeMillis() + (if (videoBack.containsKey(id)) RELAY_AFTER_MS else answerMs(size, long))
                 // Cap f3: a big file may wait a day. A STUN ask a minute keeps this socket's way through the router
                 // open, so the address in the offer still works when they accept.
                 var lastStun = System.currentTimeMillis()
@@ -634,7 +661,7 @@ object FileLink {
                 val size = p.getLong("size")
                 val g = p.optString("g")
                 val c = p.getJSONArray("c")
-                val trust = h.trusted(from)
+                val trust = h.trusted(from) && UltraPrivacy.directAllowed   // Ultra privacy: the same Wi-Fi only
                 val lan = lanTarget(h.lanAddress(from), c)
                 // A group's file (27.2, 27.3): only for a group we're both in, within its file rules. Dropped, and said.
                 if (g.isNotEmpty()) {
@@ -699,7 +726,7 @@ object FileLink {
                     // Refused (group rules, no space, they said no: 27.4) ends it; otherwise a small one can still go
                     // over the internet route.
                     val why = p.optString("why")
-                    if (why.isNotEmpty()) fail(id, Sharing.declineText(why))
+                    if (why.isNotEmpty()) { if (why == "no") videoBack.remove(id); fail(id, Sharing.declineText(why)) }
                     else if (!it.lanOnly) { directIds.add(id); fallBack(id, it.peer, it.file, it.name, Sharing.declineText(""), it.group) }
                     else fallBack(id, it.peer, it.file, it.name, "Couldn't reach them on this Wi-Fi.", it.group)
                 } else {
@@ -760,6 +787,7 @@ object FileLink {
 
     private fun fail(id: String, why: String) {
         if (id in stopped) return
+        if (videoFellBack(id)) return
         _all.value[id]?.let { put(it.copy(state = "failed", note = why)) }
         if (again.containsKey(id)) saveKept()   // its Retry card, with why, comes back after a restart
         host?.notice(why)

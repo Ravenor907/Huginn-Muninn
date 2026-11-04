@@ -251,6 +251,9 @@ void Chat::start()
                                             [this](const QByteArray &b) { m_vault->write(QStringLiteral("wrapkeys.json"), b); });
     m_peerKeys = std::make_unique<PeerKeys>([this] { return m_vault->read(QStringLiteral("peerkeys.json")); },
                                             [this](const QByteArray &b) { m_vault->write(QStringLiteral("peerkeys.json"), b); });
+    // Cap r2 (1.42): the allowed ring tags outside the vault match the ones in it (after a restore too).
+    if (m_ringTags)
+        m_ringTags->sync();
     loadPrefs();
     load();
     m_seen.load(m_vault->read(QStringLiteral("seen.json")), now(), 2 * kDay);
@@ -292,6 +295,16 @@ void Chat::start()
     // Nearby off: only contacts are listed and answered, asked straight where they were last seen (kept in the vault).
     m_net->isContact = [this](const QString &k) { return m_contacts.contains(k) && !isBlocked(k) && !isTrashed(k); };
     m_net->keepPeers = [this](const QByteArray &json) { m_vault->write(QStringLiteral("lanpeers.json"), json); };
+    // Cap h1 (1.42): a contact's saved address is asked with Nearby off only with a certificate they named pinned; my
+    // hidden certificate changes, and the next one goes to every h1 contact before it's used.
+    m_net->pinsFor = [this](const QString &k) { return m_peerKeys ? m_peerKeys->get(k).hf : QStringList(); };
+    connect(m_net, &LocalSend::hiddenRotated, this, [this] {
+        if (!ready())
+            return;
+        for (const QString &k : m_contacts.keys())
+            if (!isBlocked(k) && hasCap(k, QLatin1String(RingWire::kHiddenCap)))
+                sendKeys(k, true);
+    });
     m_net->loadPeers(m_vault->read(QStringLiteral("lanpeers.json")));
     m_ble->prove = [this](const QString &n) { return Proof::close(m_priv, myKey(), n); };
     m_net->chatReceive = [this](const QByteArray &body, const QString &ip) { return receive(body, QStringLiteral("wifi"), QStringLiteral("ip:") + ip); };
@@ -865,7 +878,7 @@ QString Chat::netStatus() const
 }
 
 bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, const QString &mailbox, std::function<void()> sent, int days,
-                        std::function<void(int)> step)
+                        std::function<void(int)> step, const QString &pace)
 {
     if (bodies.isEmpty() || mailbox.isEmpty() || m_moving)
         return false;
@@ -887,6 +900,34 @@ bool Chat::sendInternet(const QString &key, const QList<QByteArray> &bodies, con
             if (l == 0 && sent)
                 sent();
         };
+    }
+    if (!pace.isEmpty()) {
+        // Cap v3 (29.4): a video's pieces go paced, a few a second in all, so the relays don't block us. A retry while
+        // they're still queued adds nothing; a relay's "rate-limited" holds everything back for a minute.
+        if (m_paced.contains(pace))
+            return true;
+        m_paced.insert(pace);
+        const qint64 t0 = now();
+        const qint64 limited = GroupVideo::rateLimitedAt();
+        if (limited > m_pacerLimitSeen) {
+            m_pacerLimitSeen = limited;
+            m_videoPacer.limited(limited);
+        }
+        QPointer<Chat> self(this);
+        for (int i = 0; i < bodies.size(); ++i) {
+            const qint64 at = m_videoPacer.take(t0);
+            const QByteArray body = bodies.at(i);
+            const bool last = i == bodies.size() - 1;
+            QTimer::singleShot(int(qMin<qint64>(at - t0, 3600000)), this, [self, key, mailbox, body, keep, ok, last, pace] {
+                if (!self)
+                    return;
+                if (!self->m_moving)
+                    self->m_nostr->publishTo(mailbox, self->wrap(key, body), keep, ok);
+                if (last)
+                    self->m_paced.remove(pace);
+            });
+        }
+        return true;
     }
     for (const QByteArray &b : bodies)
         m_nostr->publishTo(mailbox, wrap(key, b), keep, ok);
@@ -928,6 +969,9 @@ void Chat::noteCaps(const QString &key, bool present, const QStringList &caps, b
     if ((have.contains(ringCap) && !before.contains(ringCap)) || (have.contains(wrapCap) && !before.contains(wrapCap))
         || (have.contains(nudgeCap) && !before.contains(nudgeCap)))
         QTimer::singleShot(0, this, [this, key] { sendKeys(key); });
+    else if ((have.contains(QLatin1String(RingWire::kTagCap)) && !before.contains(QLatin1String(RingWire::kTagCap)))
+             || (have.contains(QLatin1String(RingWire::kHiddenCap)) && !before.contains(QLatin1String(RingWire::kHiddenCap))))
+        QTimer::singleShot(0, this, [this, key] { sendKeys(key, true); });   // caps r2 and h1 (1.42): my ring tag and certificates
 }
 
 void Chat::probeCaps(const QString &key)
@@ -970,7 +1014,8 @@ void Chat::ring(const QString &key, const QJsonObject &msg)
         m_rung.clear();
     m_rung.insert(call);
     const qint64 ts = msg.contains(QStringLiteral("ts")) ? msg.value(QStringLiteral("ts")).toInteger() : now();
-    const QString content = RingWire::ringContent(k.rk, call, ts);
+    // Cap r2: the tag they gave me, so their locked device counts my rings apart from everyone else's.
+    const QString content = RingWire::ringContent(k.rk, call, ts, hasCap(key, QLatin1String(RingWire::kTagCap)) ? k.rt : QString());
     if (!content.isEmpty())
         m_nostr->publish(k.rp, content, Nostr::kLongestDays);
 }
@@ -1006,10 +1051,20 @@ void Chat::nudge(const QString &key, const QString &room, const QByteArray &plai
 
 QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
 {
-    // Cap b1: the ring key only to contacts, so a group-only peer (or someone blocked) can't ring this device.
-    if (m_ringKey && isContact(key) && !isBlocked(key) && hasCap(key, QLatin1String(RingWire::kRingCap))) {
+    // Cap b1: the ring key only to contacts, so a group-only peer (or someone blocked) can't ring this device. 1.42 (as
+    // Muninn's round 17): never to a contact whose calls are off here.
+    if (m_ringKey && isContact(key) && !isBlocked(key) && callsAllowed(key) && hasCap(key, QLatin1String(RingWire::kRingCap))) {
         o.insert(QStringLiteral("rk"), m_ringKey->publicKey());
         o.insert(QStringLiteral("rp"), m_ringKey->mailbox());
+        // Cap r2 (1.42): with it, the ring tag that is theirs alone, so a locked Huginn tells callers apart.
+        if (m_ringTags && hasCap(key, QLatin1String(RingWire::kTagCap)))
+            o.insert(QStringLiteral("rt"), m_ringTags->tagFor(key));
+    }
+    // Cap h1 (1.42): the certificates my Wi-Fi server may show (lasting, hidden now and next), to contacts only.
+    if (isContact(key) && !isBlocked(key) && hasCap(key, QLatin1String(RingWire::kHiddenCap))) {
+        const QStringList fps = m_net->myFingerprints().mid(0, RingWire::kMaxHf);
+        if (!fps.isEmpty())
+            o.insert(QStringLiteral("hf"), QJsonArray::fromStringList(fps));
     }
     if (m_wrapKeys && hasCap(key, QLatin1String(RingWire::kWrapCap))) {
         const WrapKeys::Day d = m_wrapKeys->current(now() / 1000);
@@ -1460,6 +1515,9 @@ void Chat::block(const QString &key, bool on)
         // Cap b1: they may hold my ring key, so a new one (and a new ring mailbox) goes to everyone else who may ring
         // this device. The old ring mailbox is still read for two days (main.cpp), then dropped. Cap n2: the nudge key
         // is made new with it and goes to the other contacts and group peers whose app says n2.
+        // Cap r2 (1.42): their ring tag is taken back at once, so nothing they send rings, on any ring key.
+        if (m_ringTags)
+            m_ringTags->revoke(key);
         if (!was)
             renewRingKeys(key);
     }
@@ -1504,6 +1562,9 @@ void Chat::removeContact(const QString &key)
     if (!met.isEmpty())
         t.insert(QStringLiteral("met"), met);
     m_trash.insert(key, t);
+    // Cap r2 (1.42): no longer a contact, so their ring tag is taken back (a new one if they come back).
+    if (m_ringTags)
+        m_ringTags->revoke(key);
     m_unsentKeeps.remove(key);
     m_requests.remove(key);
     m_held.remove(key);
@@ -2769,9 +2830,12 @@ void Chat::attempt(const QString &key, const QString &id)
     }
     const QString mailbox = backupMailbox(m);
     // Big photos only go over the internet if the close routes didn't deliver them within 5 s.
-    const int relayPieces = m.value(QStringLiteral("gif")).toBool() ? Photos::kGifPieces : Photos::kInternetPieces;   // cap a1: a GIF up to 8 MB
+    // Cap a1: a GIF up to 8 MB. Cap v3 (29): a video up to GroupVideo::kRelayPieces, its pieces paced.
+    const bool video = m.value(QStringLiteral("video")).toInt() > 0;
+    const int relayPieces = m.value(QStringLiteral("gif")).toBool() ? Photos::kGifPieces : video ? GroupVideo::kRelayPieces : Photos::kInternetPieces;
     if (!mailbox.isEmpty() && (!photo || !any || t.count >= 2) && bodies.size() <= relayPieces) {
-        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step)) {
+        if (sendInternet(key, bodies, mailbox, [markSent] { markSent(QStringLiteral("internet")); }, 0, step,
+                         photo && video ? key + QLatin1Char('|') + id : QString())) {
             any = true;
             nudge(key, photo ? QStringLiteral("photo") : QStringLiteral("private"), {},
                   photo ? RingWire::blobKind(m.value(QStringLiteral("voice")).toInt(), m.value(QStringLiteral("video")).toInt(), str(m, "file")) : QString());

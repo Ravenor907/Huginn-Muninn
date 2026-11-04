@@ -8,7 +8,7 @@ package io.github.ravenor907.muninn.screens
 object SetupFlow {
     /** One page. [optional]: it has Skip. */
     enum class Step(val optional: Boolean) {
-        WELCOME(false), LOCK(true), NAME(true), ALLOW(true), PEOPLE(true), LINK(true), TOUR(true), DONE(false)
+        WELCOME(false), PRIVACY(false), LOCK(true), NAME(true), ALLOW(true), PEOPLE(true), LINK(true), TOUR(true), DONE(false)
     }
 
     /**
@@ -21,6 +21,8 @@ object SetupFlow {
     /** The pages, in order. Practice shows every page; a real run leaves out what's already set, so nothing is asked twice. */
     fun steps(f: Facts): List<Step> = buildList {
         add(Step.WELCOME)
+        // 1.42: "Your privacy, built in", what protects every chat and that Ultra privacy is there (off).
+        add(Step.PRIVACY)
         if (f.practice || !f.lockChosen) add(Step.LOCK)
         if (f.practice || !f.nameAsked) add(Step.NAME)
         if (f.practice || f.needsAllow) add(Step.ALLOW)

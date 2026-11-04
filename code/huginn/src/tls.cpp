@@ -127,7 +127,12 @@ Tls::Identity Tls::throwaway()
 
 Tls::Identity Tls::load()
 {
-    const QString dir = System::dataDir() + QStringLiteral("/tls");
+    return loadIn(QStringLiteral("tls"));
+}
+
+Tls::Identity Tls::loadIn(const QString &sub)
+{
+    const QString dir = System::dataDir() + QLatin1Char('/') + sub;
     const QString keyPath = dir + QStringLiteral("/key.pem");
     const QString certPath = dir + QStringLiteral("/cert.pem");
 

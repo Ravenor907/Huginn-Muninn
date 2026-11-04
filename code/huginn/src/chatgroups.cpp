@@ -1048,9 +1048,13 @@ void Chat::groupAttempt(const QString &envId)
                     sent();
             });
     }
-    // Cap a1: a GIF may use all its pieces over the internet (8 MB); other media 2 MB.
-    if ((!media || !any || o.count >= 2) && (bodies.size() <= Photos::kInternetPieces || (media && groupGif(o.g, o.logical) && bodies.size() <= Photos::kGifPieces)))
-        sendInternet(o.to, bodies, mailboxOf(o.to), sent, groupDays(o.g));
+    // Cap a1: a GIF may use all its pieces over the internet (8 MB); other media 2 MB. Cap v3 (29): a video up to
+    // GroupVideo::kRelayPieces, its pieces paced.
+    const bool video = media && groupVideoMs(o.g, o.logical) > 0;
+    if ((!media || !any || o.count >= 2)
+        && (bodies.size() <= Photos::kInternetPieces || (media && groupGif(o.g, o.logical) && bodies.size() <= Photos::kGifPieces)
+            || (video && bodies.size() <= GroupVideo::kRelayPieces)))
+        sendInternet(o.to, bodies, mailboxOf(o.to), sent, groupDays(o.g), nullptr, video ? o.to + QLatin1Char('|') + envId : QString());
 }
 
 void Chat::groupRetry()
@@ -1263,7 +1267,7 @@ bool Chat::sendGroupPhoto(const QString &g, const QString &ch, const QString &pa
     return !sendGroupBlob(g, ch, jpeg, 0).isEmpty();
 }
 
-QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra)
+QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArray &bytes, int voiceMs, const QVariantMap &extra, const QStringList &only)
 {
     const auto it = m_groups.constFind(g);
     if (!m_ready || it == m_groups.cend() || it->state.isEmpty())
@@ -1290,6 +1294,9 @@ QString Chat::sendGroupBlob(const QString &g, const QString &ch, const QByteArra
     // Cap m2: a video message goes only to members whose app plays it; an album's fields are ignored by apps without m2.
     if (extra.value(QStringLiteral("video")).toInt() > 0)
         to.erase(std::remove_if(to.begin(), to.end(), [this](const QString &k) { return !hasM2(k); }), to.end());
+    // Cap v3: a picked video's relay copy, only to those not getting the full copy straight.
+    if (!only.isEmpty())
+        to.erase(std::remove_if(to.begin(), to.end(), [&only](const QString &k) { return !only.contains(k); }), to.end());
     QVariantMap m{{QStringLiteral("id"), gid}, {QStringLiteral("ch"), channel}, {QStringLiteral("from"), myKey()}, {QStringLiteral("name"), username()},
                   {QStringLiteral("text"), QString()}, {QStringLiteral("mine"), true}, {QStringLiteral("time"), now()},
                   {QStringLiteral("state"), to.isEmpty() ? QStringLiteral("delivered") : QStringLiteral("sending")}, {QStringLiteral("to"), to},
@@ -1393,6 +1400,19 @@ void Chat::retryGroup(const QString &g, const QString &id)
         }
     updateGroupMessage(g, id, [](QVariantMap &m) { m.insert(QStringLiteral("failed"), false); });
     groupRetry();
+}
+
+int Chat::groupVideoMs(const QString &g, const QString &id) const
+{
+    const auto it = m_groups.constFind(g);
+    if (it == m_groups.cend())
+        return 0;
+    for (int i = int(it->messages.size()) - 1; i >= 0; --i) {
+        const QVariantMap m = it->messages.at(i).toMap();
+        if (str(m, "id") == id)
+            return m.value(QStringLiteral("video")).toInt();
+    }
+    return 0;
 }
 
 bool Chat::groupGif(const QString &g, const QString &id) const

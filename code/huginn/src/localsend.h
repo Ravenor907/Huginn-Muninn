@@ -102,6 +102,8 @@ Q_SIGNALS:
     void requestChanged();
     void pinNeeded(const QString &deviceId, bool wrong);
     void finished(bool ok, const QString &message);
+    // Cap h1 (1.42): the hidden certificate changed (its next one is new), so Chat tells contacts ("hf" in receipts).
+    void hiddenRotated();
 
 private:
     struct Device {
@@ -127,7 +129,21 @@ public:
     void askContacts();
     // Nearby changed (Chat): from now on the server shows a throwaway certificate while off (never the lasting one,
     // which anyone close by could follow), and the lasting one again once on. Off: nobody but contacts stays listed.
+    // 1.42 (cap h1): the hidden certificate is kept ("now" and "next", in the data folder) and named to contacts before
+    // it's shown; turning Nearby off, and every day while it's off, "next" takes over and a new "next" is made.
     void hiddenChanged();
+    // Cap h1: every certificate this computer's server may show (lasting, hidden now and next), for "hf" to contacts.
+    QStringList myFingerprints();
+    // Cap h1: the fingerprints a contact named ("hf"), to pin its saved address with (Chat sets it).
+    std::function<QStringList(const QString &key)> pinsFor;
+    // Cap h1: the fingerprints a saved address is asked with, comma-separated: the one it showed there and every one the
+    // contact named. Empty: never asked (an address kept before 1.41 is asked once the contact names one).
+    static QString pins(const QString &saved, const QStringList &named);
+    // Cap h1: whether the hidden certificate that took over at since changes now (daily while off; at once when turned
+    // off unless it changed in the last hour; when the clock is a day behind it).
+    static bool rotateDue(qint64 since, qint64 nowMs, bool turningOff);
+    // --stability-selftest: pins and rotateDue, the same as Muninn's Fix142DTest.
+    static bool hiddenSelfTest();
     // Our own server's port: the first free one from 53318.
     int serverPort() const { return m_port; }
     std::function<int(const QByteArray &body, const QString &ip)> chatReceive;
@@ -219,8 +235,12 @@ private:
     Tls::Identity m_tls;
     bool m_secure = false;      // false only if no certificate could be made: then plain HTTP
     QSslConfiguration m_serverTls;
-    QSslConfiguration m_hiddenTls;   // while hidden: a certificate made for this time only, kept in memory
+    QSslConfiguration m_hiddenTls;   // while hidden: the hidden certificate now
     QString m_hiddenFp;              // its fingerprint (empty while visible)
+    Tls::Identity m_hiddenNow, m_hiddenNext;   // cap h1: kept in the data folder (tls/hidden/now and next)
+    qint64 m_hiddenSince = 0;                  // when "now" took over (ms)
+    void loadHidden();
+    void rotateHidden(bool turningOff);
     QSslConfiguration serverTls();
     void applyTls();   // the servers show serverTls() (the throwaway certificate while Nearby is off)
     bool off() const { return silent && silent(); }
@@ -229,7 +249,7 @@ private:
     bool mine(const QString &fp) const;
     // The contact a device's info stands for (its chat key, or a hidden one's hint), or empty.
     QString contactIn(const QJsonObject &o) const;
-    struct KnownPeer { QString ip, protocol; int port = 0; qint64 seen = 0; };
+    struct KnownPeer { QString ip, protocol; int port = 0; qint64 seen = 0; QString fp; };   // fp: the certificate it showed (cap h1)
     QHash<QString, KnownPeer> m_peers;   // contact's chat key -> where it was last reached
     void keepPeer(const QString &key, const Device &d);
     int m_port = 53318;                 // our server's port (the same on every home-network address)

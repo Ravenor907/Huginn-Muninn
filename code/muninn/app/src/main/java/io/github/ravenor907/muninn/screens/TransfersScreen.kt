@@ -164,6 +164,11 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
  */
 internal fun allowDirect(context: Context, peer: String, who: String) {
     val app = context.applicationContext as? Muninn ?: return
+    // Ultra privacy: nothing goes straight over the internet while it's on (the same Wi-Fi still does).
+    if (!io.github.ravenor907.muninn.net.UltraPrivacy.directAllowed) {
+        Ui.say("Direct files: ${io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE}. On the same Wi-Fi they still go straight.", true)
+        return
+    }
     val ask = {
         if (!io.github.ravenor907.muninn.net.call.CallManager.trusted(peer)) io.github.ravenor907.muninn.net.call.CallManager.setTrusted(peer, true)
         app.chat.sendPrivate(peer, "Can you turn on Direct calls and files for me? It's in the menu for my name. Then big files go straight between us.")

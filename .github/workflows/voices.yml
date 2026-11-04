@@ -1,0 +1,115 @@
+name: Publish voices
+
+# Run by hand, once (code/shared/docs/voices.md): puts the natural voices on the "voices-1" pre-release and prints the
+# SHA-256 lines to paste into code/shared/voices.sha256 (the voices and the speech engine the builds bundle).
+# Never replaces a file that is already published: a fixed voice goes out as voices-2.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-voices
+  cancel-in-progress: false
+
+jobs:
+  voices:
+    name: Publish voices
+    runs-on: ubuntu-latest
+    env:
+      TAG: voices-1
+      ENGINE: "1.13.8"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Download the Piper voices and the speech engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work out
+          get() { curl -fsSL --retry 5 --retry-delay 5 -o "$2" "$1" || { echo "::error title=Download failed::$1"; exit 1; }; }
+          models=https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models
+          get "$models/vits-piper-en_GB-alba-medium.tar.bz2" work/female.tar.bz2
+          get "$models/vits-piper-en_GB-northern_english_male-medium.tar.bz2" work/male.tar.bz2
+          # The engine the builds bundle (Muninn's AAR, Huginn's Linux and Windows libraries): only their hashes are needed.
+          rel=https://github.com/k2-fsa/sherpa-onnx/releases/download/v$ENGINE
+          get "$rel/sherpa-onnx-static-link-onnxruntime-$ENGINE.aar" "work/sherpa-onnx-static-link-onnxruntime-$ENGINE.aar"
+          get "$rel/sherpa-onnx-v$ENGINE-linux-x64-shared-lib.tar.bz2" "work/sherpa-onnx-v$ENGINE-linux-x64-shared-lib.tar.bz2"
+          get "$rel/sherpa-onnx-v$ENGINE-win-x64-shared-MD-Release.tar.bz2" "work/sherpa-onnx-v$ENGINE-win-x64-shared-MD-Release.tar.bz2"
+      - name: Pack each voice (model, tokens, model card, English espeak-ng-data)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in female male; do
+            src="work/$v"; dst="work/$v-pack"
+            mkdir -p "$src" "$dst"
+            tar -xjf "work/$v.tar.bz2" -C "$src"
+            top=$(find "$src" -mindepth 1 -maxdepth 1 -type d | head -n1)
+            model=$(find "$top" -maxdepth 1 -name '*.onnx' | head -n1)
+            [ -n "$model" ] && [ -f "$top/tokens.txt" ] && [ -d "$top/espeak-ng-data" ] || { echo "::error title=Voice $v::model, tokens.txt or espeak-ng-data missing"; ls -la "$top"; exit 1; }
+            cp "$model" "$dst/model.onnx"
+            cp "$top/tokens.txt" "$dst/tokens.txt"
+            if [ -f "$top/MODEL_CARD" ]; then cp "$top/MODEL_CARD" "$dst/MODEL_CARD"; else echo "No MODEL_CARD in the upstream package" > "$dst/MODEL_CARD"; fi
+            cp code/shared/licenses/natural-voices.txt "$dst/natural-voices.txt"
+            cp -r "$top/espeak-ng-data" "$dst/espeak-ng-data"
+            # English only: the other languages' dictionaries are never read by an English voice.
+            find "$dst/espeak-ng-data" -maxdepth 1 -type f -name '*_dict' ! -name 'en_dict' -delete
+            # No links or odd files: the apps unpack regular files and folders only.
+            if find "$dst" ! -type f ! -type d | grep -q .; then echo "::error title=Voice $v::links or special files in the package"; exit 1; fi
+            # The same bytes every run: names sorted, no times, owners or modes that differ.
+            (cd "$dst" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort > ../$v-list.txt)
+            tar --format=ustar --no-recursion --mtime=@0 --owner=0 --group=0 --numeric-owner --mode='u=rwX,go=rX' \
+              -C "$dst" -T "work/$v-list.txt" -cf "out/voice-$v-1.tar"
+            echo "voice-$v-1.tar: $(stat -c %s "out/voice-$v-1.tar") bytes, $(wc -l < "work/$v-list.txt") entries"
+          done
+      - name: The lines for code/shared/voices.sha256
+        id: sums
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            (cd out && sha256sum voice-female-1.tar voice-male-1.tar)
+            (cd work && sha256sum "sherpa-onnx-static-link-onnxruntime-$ENGINE.aar" "sherpa-onnx-v$ENGINE-linux-x64-shared-lib.tar.bz2" "sherpa-onnx-v$ENGINE-win-x64-shared-MD-Release.tar.bz2")
+          } > sums.txt
+          cat sums.txt
+          {
+            echo "### Paste these lines at the end of code/shared/voices.sha256"
+            echo '```'
+            cat sums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Lines already committed must match (a voice is never changed in place).
+          bad=0
+          while read -r sum name; do
+            have=$(grep -E "^[0-9a-f]{64}  $name\$" code/shared/voices.sha256 | cut -d' ' -f1 || true)
+            if [ -n "$have" ] && [ "$have" != "$sum" ]; then echo "::error title=Hash changed::$name is $sum, voices.sha256 says $have"; bad=1; fi
+          done < sums.txt
+          exit $bad
+      - name: Publish the voices-1 pre-release (never replacing a file)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp code/shared/licenses/natural-voices.txt out/natural-voices.txt
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            have=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+            for f in out/*; do
+              n=$(basename "$f")
+              if printf '%s\n' "$have" | grep -qx "$n"; then echo "$n is already published; left as it is."
+              else gh release upload "$TAG" "$f"; fi
+            done
+            # Make sure it stays a pre-release that is never "latest".
+            gh release edit "$TAG" --prerelease --latest=false
+          else
+            gh release create "$TAG" out/* --prerelease --latest=false --title "Natural voices 1" \
+              --notes "Voice data for Read aloud in Huginn and Muninn (code/shared/docs/voices.md). Not an app release: the apps download one of these files themselves and check it against code/shared/voices.sha256. Licenses: natural-voices.txt."
+          fi
+      - name: GitHub's latest release is still a version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          echo "Latest release: ${tag:-none yet}"
+          if [ -n "$tag" ] && ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+$'; then
+            echo "::error title=Latest release::GitHub's latest release is $tag, not a version: the update checks would break."; exit 1
+          fi

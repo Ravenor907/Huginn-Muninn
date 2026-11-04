@@ -83,13 +83,21 @@ import kotlinx.coroutines.withContext
  * From + › GIF and the emoji window's GIF button.
  */
 internal fun gifHelp(onPhotos: () -> Unit) {
+    // Ultra privacy: GIF search is off (a keyboard's GIF search reaches the internet outside Muninn); saved GIFs still go.
+    if (!io.github.ravenor907.muninn.net.UltraPrivacy.gifSearchAllowed) {
+        Ui.sure(io.github.ravenor907.muninn.ui.Ask("Send a GIF", "GIF search: ${io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE}. " +
+            "Your keyboard's GIF search would show your address. A GIF saved in your photos still sends.", "Pick from photos", onConfirm = { onPhotos() }))
+        return
+    }
     Ui.sure(io.github.ravenor907.muninn.ui.Ask("Send a GIF", "Tap your keyboard's GIF key (on Gboard: the smiley key, then GIF), " +
         "or pick a GIF saved in your photos.", "Pick from photos", onConfirm = { onPhotos() }))
 }
 
 /** The "+" in the message box: photos, a GIF, the camera, a video message, a poll. */
 @Composable
-internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: () -> Unit, onPoll: () -> Unit, onFile: (() -> Unit)? = null, done: () -> Unit) {
+internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: () -> Unit, onPoll: () -> Unit, onFile: (() -> Unit)? = null,
+                          /** Cap v3: a video picked from the phone (VideoSendDialog). */
+                          onPickVideo: (() -> Unit)? = null, done: () -> Unit) {
     androidx.compose.material3.AlertDialog(
         onDismissRequest = done,
         containerColor = Palette.panel,
@@ -99,7 +107,13 @@ internal fun AttachDialog(onPhotos: () -> Unit, onCamera: () -> Unit, onVideo: (
                 Line("Photos", "Up to 10 at once", icon = "image") { done(); onPhotos() }
                 Line("GIF", "From your keyboard or photos", icon = "image") { done(); gifHelp(onPhotos) }
                 Line("Camera", "Take a photo now", icon = "image") { done(); onCamera() }
-                Line("Video message", "Up to a minute", icon = "video") { done(); onVideo() }
+                // Ultra privacy: sending videos is off (receiving still works), said here rather than hidden.
+                val videoOff = !io.github.ravenor907.muninn.net.UltraPrivacy.videoSendAllowed
+                Line("Video message", if (videoOff) io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE else "Up to a minute", icon = "video",
+                    enabled = !videoOff) { done(); onVideo() }
+                // Cap v3: off (shown, with why) while Ultra privacy is on.
+                if (onPickVideo != null) Line("Video from your phone", pickedVideoDetail(), icon = "video",
+                    enabled = !io.github.ravenor907.muninn.net.UltraPrivacy.on) { done(); onPickVideo() }
                 Line("Poll", "Ask a question", icon = "check") { done(); onPoll() }
                 if (onFile != null) Line("File", "Any file", icon = "file") { done(); onFile() }
             }

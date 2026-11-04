@@ -174,6 +174,12 @@ object TvUpd {
     /** The reason a parent reads when the device has no room for an update. */
     const val NO_SPACE = "Not enough space on the device"
 
+    /**
+     * Round 17 (TV minor 9): the downloaded APK is gone or empty ([exists], [bytes]). It waits in the cache, which Android
+     * empties when space runs low, so that's said as no space (and tried again later), never "Couldn't start the install".
+     */
+    fun apkGone(exists: Boolean, bytes: Long): Boolean = !exists || bytes <= 0L
+
     /** Room for an install of an APK of [apkBytes] with [free] bytes free: Android copies it and unpacks it (2.5 times). */
     fun roomFor(apkBytes: Long, free: Long): Boolean = apkBytes <= 0L || free >= apkBytes * 5 / 2
 

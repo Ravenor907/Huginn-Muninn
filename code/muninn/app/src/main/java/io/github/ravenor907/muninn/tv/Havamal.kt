@@ -12,7 +12,7 @@ data class HavPart(val h: String, val i: Int, val of: Int, val d: String)
 /**
  * Daily Hávamál on a Kids' Device (cap k12, shared/docs/protocol.md 7.18): one verse a day by the device's local date,
  * the same verse all day, cycling through the list in assets/havamal.json (Henry Adams Bellows' translation, 1923,
- * public domain). A parent switches it on per device and picks the wording: Bellows, or a translation they imported
+ * public domain; built from code/shared/havamal.json, the one file Huginn builds in too). A parent switches it on per device and picks the wording: Bellows, or a translation they imported
  * on their phone, which only their own Kids' Devices get. Kept free of Android so the unit tests run it.
  */
 object Havamal {

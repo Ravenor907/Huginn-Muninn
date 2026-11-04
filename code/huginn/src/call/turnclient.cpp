@@ -1,5 +1,6 @@
 #include "turnclient.h"
 #include "../busy.h"
+#include "../ultraprivacy.h"
 
 #include "callcrypto.h"
 #include "relayconfig.h"
@@ -252,6 +253,7 @@ void RelayCredentials::registerThen()
             QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/register")));
             req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
             req.setTransferTimeout(10000);
+            UltraPrivacy::prepare(&self->m_net);   // Ultra privacy: the Worker through Tor (the call itself uses the relay)
             QNetworkReply *r = self->m_net.post(req, regBody(self->m_identity, t, QByteArray(RelayConfig::kAppSecret), pow));
             connect(r, &QNetworkReply::finished, self, [self, r] {
                 r->deleteLater();
@@ -280,6 +282,7 @@ void RelayCredentials::postTurn(const QString &tok)
     QNetworkRequest req(QUrl(QString::fromLatin1(RelayConfig::kWorkerUrl) + QStringLiteral("/turn")));
     req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     req.setTransferTimeout(10000);   // a captive or hostile network: give up soon, the call retries once
+    UltraPrivacy::prepare(&m_net);   // Ultra privacy: the Worker through Tor (the call itself uses the relay)
     QNetworkReply *r = m_net.post(req, body(m_identity, workerNow(), QByteArray(RelayConfig::kAppSecret), tok, true));
     connect(r, &QNetworkReply::finished, this, [this, r, tok] {
         r->deleteLater();

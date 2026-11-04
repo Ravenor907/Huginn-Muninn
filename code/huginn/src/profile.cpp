@@ -997,7 +997,9 @@ bool Profile::p2SelfTest()
             std::printf("p2 self-test: FAILED %s\n", what);
     };
     const QStringList caps = QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' '));
-    check(caps.last() == QLatin1String(kCap2) && caps.contains(QLatin1String(kCap)), "caps say p2, last, and still p1");
+    // 1.42 appends more after it.
+    check(caps.contains(QLatin1String(kCap2)) && caps.indexOf(QLatin1String(kCap2)) > caps.indexOf(QStringLiteral("n2")) && caps.contains(QLatin1String(kCap)),
+          "caps say p2, after n2, and still p1");
     const auto obj = [](const QByteArray &b) { return QJsonDocument::fromJson(b).object(); };
     check(askMsg(0) == QByteArrayLiteral("{\"pv\":0,\"t\":\"profile?\"}") && obj(askMsg(7)).value(QStringLiteral("pv")).toInteger() == 7
               && obj(askMsg(7)).size() == 2,

@@ -263,7 +263,11 @@ void LocalSend::checkPeer(QNetworkReply *r, const QString &expected)
     connect(r, &QNetworkReply::encrypted, this, [r, expected] {
         const QString got = Tls::fingerprintOf(r->sslConfiguration().peerCertificate());
         r->setProperty("peerFingerprint", got);
-        if (!expected.isEmpty() && !Tls::sameFingerprint(got, expected)) {
+        // Cap h1: several fingerprints, comma-separated, when a contact named more than one (any of them will do).
+        bool match = false;
+        for (const QString &e : expected.split(QLatin1Char(','), Qt::SkipEmptyParts))
+            match = match || Tls::sameFingerprint(got, e.trimmed());
+        if (!expected.isEmpty() && !match) {
             qWarning("Nearby sharing: refused a device, its certificate doesn't match the fingerprint it announced");
             r->setProperty("pinFailed", true);
             r->abort();
@@ -302,20 +306,110 @@ void LocalSend::start()
 QSslConfiguration LocalSend::serverTls()
 {
     if (!off()) {
-        m_hiddenTls = QSslConfiguration();   // visible again: the next time hidden gets a new one
+        m_hiddenTls = QSslConfiguration();   // visible again
         m_hiddenFp.clear();
         return m_serverTls;
     }
-    if (m_hiddenTls.localCertificate().isNull()) {
-        const Tls::Identity id = Tls::throwaway();
-        if (!id.isValid())
-            return m_serverTls;   // couldn't make one: /register and /info still answer nothing
+    // 1.42 (cap h1): the hidden certificate is kept and changes every day while Nearby is off; contacts were told the
+    // next one before it's shown, so their pins still match.
+    loadHidden();
+    if (m_hiddenNow.isValid() && rotateDue(m_hiddenSince, QDateTime::currentMSecsSinceEpoch(), false))
+        rotateHidden(false);
+    const Tls::Identity id = m_hiddenNow.isValid() ? m_hiddenNow : Tls::throwaway();
+    if (!id.isValid())
+        return m_serverTls;   // couldn't make one: /register and /info still answer nothing
+    if (m_hiddenFp != id.fingerprint || m_hiddenTls.localCertificate().isNull()) {
+        if (!m_hiddenNow.isValid())
+            m_hiddenNow = id;   // kept for this run at least
         m_hiddenTls = m_serverTls;
         m_hiddenTls.setLocalCertificate(id.cert);
         m_hiddenTls.setPrivateKey(id.key);
         m_hiddenFp = id.fingerprint;
     }
     return m_hiddenTls;
+}
+
+void LocalSend::loadHidden()
+{
+    if (!m_secure || (m_hiddenNow.isValid() && m_hiddenNext.isValid()))
+        return;
+    m_hiddenNow = Tls::loadIn(QStringLiteral("tls/hidden/now"));
+    m_hiddenNext = Tls::loadIn(QStringLiteral("tls/hidden/next"));
+    QFile at(System::dataDir() + QStringLiteral("/tls/hidden/at"));
+    if (at.open(QIODevice::ReadOnly)) {
+        m_hiddenSince = at.readAll().trimmed().toLongLong();
+        at.close();
+    }
+    if (m_hiddenSince <= 0 && at.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        m_hiddenSince = QDateTime::currentMSecsSinceEpoch();
+        at.write(QByteArray::number(m_hiddenSince));
+        at.close();
+    }
+}
+
+void LocalSend::rotateHidden(bool turningOff)
+{
+    loadHidden();
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (!m_hiddenNext.isValid() || !rotateDue(m_hiddenSince, t, turningOff))
+        return;
+    // "next" (already named to contacts) becomes "now", and a new "next" is made and named.
+    const QString base = System::dataDir() + QStringLiteral("/tls/hidden");
+    QDir(base + QStringLiteral("/now")).removeRecursively();
+    if (!QDir().rename(base + QStringLiteral("/next"), base + QStringLiteral("/now")))
+        return;
+    m_hiddenNow = m_hiddenNext;
+    m_hiddenNext = Tls::loadIn(QStringLiteral("tls/hidden/next"));
+    m_hiddenSince = t;
+    QFile at(base + QStringLiteral("/at"));
+    if (at.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        at.write(QByteArray::number(t));
+        at.close();
+    }
+    m_hiddenTls = QSslConfiguration();   // serverTls() shows the new one
+    m_hiddenFp.clear();
+    Q_EMIT hiddenRotated();
+}
+
+QStringList LocalSend::myFingerprints()
+{
+    if (!m_secure)
+        return {};
+    loadHidden();
+    QStringList out{m_fingerprint.toUpper()};
+    for (const Tls::Identity *id : {&m_hiddenNow, &m_hiddenNext})
+        if (id->isValid() && !out.contains(id->fingerprint.toUpper()))
+            out << id->fingerprint.toUpper();
+    return out;
+}
+
+QString LocalSend::pins(const QString &saved, const QStringList &named)
+{
+    QStringList out;
+    for (const QString &f : QStringList{saved} + named) {
+        const QString u = f.toUpper();
+        if (u.size() == 64 && !out.contains(u))
+            out << u;
+    }
+    return out.join(QLatin1Char(','));
+}
+
+bool LocalSend::rotateDue(qint64 since, qint64 nowMs, bool turningOff)
+{
+    const qint64 hour = 3600000, day = 24 * hour;
+    if (since <= 0 || since - nowMs > day)
+        return true;
+    return turningOff ? nowMs - since >= hour : nowMs - since >= day;
+}
+
+bool LocalSend::hiddenSelfTest()
+{
+    const QString a(64, QLatin1Char('A')), b = QStringLiteral("0123456789ABCDEF").repeated(4);
+    const qint64 t = 1761500000000LL, h = 3600000, d = 24 * h;
+    return pins(a.toLower(), {}) == a && pins(QString(), {}).isEmpty() && pins(QString(), {b, a}) == b + QLatin1Char(',') + a
+           && pins(a, {a, b, QStringLiteral("short")}) == a + QLatin1Char(',') + b
+           && rotateDue(0, t, false) && !rotateDue(t - h + 1, t, true) && rotateDue(t - h, t, true) && !rotateDue(t - d + 1, t, false)
+           && rotateDue(t - d, t, false) && rotateDue(t + d + 1, t, false);
 }
 
 void LocalSend::applyTls()
@@ -330,6 +424,9 @@ void LocalSend::applyTls()
 
 void LocalSend::hiddenChanged()
 {
+    // Cap h1: turning Nearby off, a hidden certificate contacts already know takes over.
+    if (off())
+        rotateHidden(true);
     applyTls();
     if (!off())
         return;
@@ -343,7 +440,9 @@ void LocalSend::hiddenChanged()
 
 bool LocalSend::mine(const QString &fp) const
 {
-    return Tls::sameFingerprint(fp, m_fingerprint) || (!m_hiddenFp.isEmpty() && Tls::sameFingerprint(fp, m_hiddenFp));
+    return Tls::sameFingerprint(fp, m_fingerprint) || (!m_hiddenFp.isEmpty() && Tls::sameFingerprint(fp, m_hiddenFp))
+        || (m_hiddenNow.isValid() && Tls::sameFingerprint(fp, m_hiddenNow.fingerprint))
+        || (m_hiddenNext.isValid() && Tls::sameFingerprint(fp, m_hiddenNext.fingerprint));
 }
 
 QString LocalSend::contactIn(const QJsonObject &o) const
@@ -365,7 +464,8 @@ void LocalSend::loadPeers(const QByteArray &json)
         if (ip.isEmpty() || !a.setAddress(ip) || !Lan::isPrivate(a))
             continue;
         m_peers.insert(it.key(), KnownPeer{ip, p.value(QStringLiteral("protocol")).toString(QStringLiteral("https")),
-                                           p.value(QStringLiteral("port")).toInt(kServerFirst), qint64(p.value(QStringLiteral("seen")).toDouble())});
+                                           p.value(QStringLiteral("port")).toInt(kServerFirst), qint64(p.value(QStringLiteral("seen")).toDouble()),
+                                           p.value(QStringLiteral("fp")).toString()});
     }
     askContacts();
 }
@@ -375,10 +475,13 @@ void LocalSend::keepPeer(const QString &key, const Device &d)
     if (!isContact || !isContact(key))
         return;
     const qint64 t = d.seen.toMSecsSinceEpoch();
+    // Cap h1: the certificate it showed there, so it's asked again only with it (or one it named) pinned.
+    const QString fp = d.protocol == QLatin1String("https") ? d.id : QString();
     const auto old = m_peers.constFind(key);
-    if (old != m_peers.constEnd() && old->ip == d.ip && old->port == d.port && old->protocol == d.protocol && t - old->seen < 6 * 3600000LL)
+    if (old != m_peers.constEnd() && old->ip == d.ip && old->port == d.port && old->protocol == d.protocol && old->fp == fp
+        && t - old->seen < 6 * 3600000LL)
         return;
-    m_peers.insert(key, KnownPeer{d.ip, d.protocol, d.port, t});
+    m_peers.insert(key, KnownPeer{d.ip, d.protocol, d.port, t, fp});
     while (m_peers.size() > kMaxPeers) {
         auto oldest = m_peers.begin();
         for (auto it = m_peers.begin(); it != m_peers.end(); ++it)
@@ -391,7 +494,7 @@ void LocalSend::keepPeer(const QString &key, const Device &d)
     QJsonObject o;
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it)
         o.insert(it.key(), QJsonObject{{QStringLiteral("ip"), it->ip}, {QStringLiteral("port"), it->port}, {QStringLiteral("protocol"), it->protocol},
-                                       {QStringLiteral("seen"), double(it->seen)}});
+                                       {QStringLiteral("seen"), double(it->seen)}, {QStringLiteral("fp"), it->fp}});
     keepPeers(QJsonDocument(o).toJson(QJsonDocument::Compact));
 }
 
@@ -404,11 +507,17 @@ void LocalSend::askContacts()
         bool heard = false;
         for (const Device &d : std::as_const(m_devices))
             heard = heard || (d.chatKey == it.key() && d.seen > fresh);
+        // 1.42 (security M3, as Muninn's round 17): only over HTTPS with the contact's certificate pinned (the one it
+        // showed there, or one it named over the ratchet, cap h1), so whoever has that address now fails the handshake
+        // before this computer's certificate, hint or proof goes out. Without one it isn't asked.
+        const QString pinned = pins(it->fp, pinsFor ? pinsFor(it.key()) : QStringList());
+        if (it->protocol != QLatin1String("https") || pinned.isEmpty())
+            continue;
         // Only on this very home network, at most once every 10 seconds per address.
         QHostAddress a;
         if (heard || !a.setAddress(it->ip) || !Lan::isNeighbour(a) || !asking(it->ip))
             continue;
-        registerWith(it->ip, it->port, it->protocol, false);
+        registerWith(it->ip, it->port, it->protocol, false, pinned);
     }
 }
 
@@ -584,7 +693,7 @@ void LocalSend::registerWith(const QString &ip, int port, const QString &protoco
                     proven = Tls::fingerprintOf(r->sslConfiguration().peerCertificate());
             }
             remember(withPort, ip, protocol, proven);
-        } else if (protocol == QLatin1String("https") && (r->error() == QNetworkReply::SslHandshakeFailedError
+        } else if (protocol == QLatin1String("https") && !off() && (r->error() == QNetworkReply::SslHandshakeFailedError
                                                           || r->error() == QNetworkReply::UnknownNetworkError
                                                           || r->error() == QNetworkReply::ProtocolFailure
                                                           || r->error() == QNetworkReply::RemoteHostClosedError)) {

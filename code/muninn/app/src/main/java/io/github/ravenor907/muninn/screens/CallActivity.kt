@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import io.github.ravenor907.muninn.MainActivity
 import io.github.ravenor907.muninn.Muninn
 import io.github.ravenor907.muninn.net.call.CallManager
+import io.github.ravenor907.muninn.net.call.CallPrivacy
 import io.github.ravenor907.muninn.net.call.CallSession
 import io.github.ravenor907.muninn.net.call.Opus
 import io.github.ravenor907.muninn.ui.MuninnTheme
@@ -33,6 +34,8 @@ import kotlinx.coroutines.launch
 class CallActivity : ComponentActivity() {
     /** The phone's own lock screen is up: looked at again on every return, focus change and every second while shown. */
     private var keyguard by mutableStateOf(false)
+    /** 1.42: Muninn's own lock counts for this call ([CallPrivacy.lockedNow]): looked at with [keyguard]. */
+    private var muninnLocked by mutableStateOf(false)
     /** Kids' TV: the microphone is off, so the call screen says "Ask a parent" instead of Android's prompt. */
     private var tvAskParent by mutableStateOf(false)
     private var pending: (() -> Unit)? = null
@@ -75,18 +78,26 @@ class CallActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 27) { setShowWhenLocked(true); setTurnScreenOn(true) }
         else @Suppress("DEPRECATION") window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        keyguard = isLocked()
+        look()
         setContent {
             // The name hides the moment Muninn is panic-locked or the phone locks, and shows again once both are over.
             val panic by Panic.locked.collectAsState()
-            io.github.ravenor907.muninn.ui.EveryWhileShown(1000) { keyguard = isLocked() }
+            // 1.42: and while Muninn's own lock is up (or, while it rings, due): no name or picture until Muninn is unlocked.
+            val appLocked by io.github.ravenor907.muninn.ui.AppLock.locked.collectAsState()
+            io.github.ravenor907.muninn.ui.EveryWhileShown(1000) { look() }
             val previews = (application as? Muninn)?.identity?.showNames ?: false
+            val hide = CallPrivacy.hide(panic, appLocked || muninnLocked, previews, keyguard)
+            // The ongoing call's notification follows (it names nobody while this hides).
+            androidx.compose.runtime.LaunchedEffect(hide) {
+                val ph = CallManager.call.value?.phase
+                if (ph != null && ph != CallSession.Phase.ENDED) io.github.ravenor907.muninn.net.call.CallService.update(this@CallActivity)
+            }
             MuninnTheme {
                 // Kids' TV: the remote-friendly call screen.
                 if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallScreen(app = application as Muninn, onAnswer = { answer(false) }, onClose = { close() }, askParent = tvAskParent)
                 else CallScreen(onBack = { finish() }, onMessage = { key ->
                     startActivity(Intent(this, MainActivity::class.java).putExtra("chat", key).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
-                }, onAnswer = { answer(false) }, hideName = panic || (!previews && keyguard),
+                }, onAnswer = { answer(false) }, hideName = hide,
                     onAnswerVideo = { answer(true) },
                     onCamera = { on -> if (on) withCamera({ CallManager.setCamera(true) }) else CallManager.setCamera(false) })
             }
@@ -101,7 +112,7 @@ class CallActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); handle(intent) }
 
-    override fun onResume() { super.onResume(); keyguard = isLocked() }
+    override fun onResume() { super.onResume(); look() }
 
     // Round 17: on a Kids' TV a call is never live with nothing on screen (TvCallGuard): Home or another app ends it soon
     // after, the TV turned off ends it, and the remote's search, mic and Assistant keys never leave the call screen.
@@ -118,7 +129,13 @@ class CallActivity : ComponentActivity() {
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean =
         if (kidTv() && io.github.ravenor907.muninn.tv.KidRules.isMicKey(keyCode)) true else super.onKeyDown(keyCode, event)
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); keyguard = isLocked() }
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus); look() }
+
+    /** The phone's lock screen and Muninn's own lock (for the call as it is now: ringing or not), looked at again. */
+    private fun look() {
+        keyguard = isLocked()
+        muninnLocked = CallPrivacy.lockedNow(application as? Muninn, CallManager.call.value?.phase == CallSession.Phase.INCOMING)
+    }
 
     /** Kids' TV: back to the show that was on when the call came (not to Muninn); else just closes. */
     private fun close() { if (io.github.ravenor907.muninn.tv.TvMic.active) io.github.ravenor907.muninn.tv.TvCallFocus.leave(this) else finish() }

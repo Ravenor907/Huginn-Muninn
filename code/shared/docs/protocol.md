@@ -92,6 +92,11 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `k14` | a Kids' Device's accessibility, the child's name, group members a parent approves and other families' Kids' Devices (7.18): config fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait`, `e` on a quick message, and `ghold`, `kidadd`, `kidok`. Muninn only. |
 | `p2` | profile pictures that always arrive (22.4): `pv` on every envelope, `profile?` and `profile-ok` in room `profile`, a picture marked sent only on its `profile-ok`, and `pask` in room `link`. Needs `p1`. Muninn and Huginn. |
 | `l4` | stamped link frames (section 15, "Replay"): the sender stamps every frame in room `link` with `lts` and `ln`. Like `l1`, only in room `link` (`caps` on `sync`, `ping` and `pong`). Muninn and Huginn. |
+| `k15` | a Kids' Device's read-aloud voice (7.18): config field `voice`, `f` (Female) or `m` (Male). Muninn only. |
+| `v3` | picked videos (section 29): a file offer may carry `vid` (a full-size video's length in ms, 1 to 60000), sent straight only to an app that says `v3`; a video message's relay copy may be up to 1280 x 720 and 192 pieces, its pieces paced. Muninn and Huginn. |
+| `h1` | hidden certificates named over the ratchet (21.3, 1.42): `hf` in receipts to contacts, the certificates its Wi-Fi server may show (its lasting one, its hidden one now and the next), so a contact asks a saved address with Nearby off only with one of them pinned. Muninn and Huginn. |
+| `r2` | a ring tag per caller (23.2, 1.42): `rt` in receipts with `rk`, and in the ring plaintext of a caller that says `r2`. Locked rings are limited per caller, and a tag taken back stops ringing at once. Muninn and Huginn. |
+| `l5` | the phone pings its companions too, and a ping more than 36 hours off is answered (section 15, "Clocks more than 36 hours apart", 1.42). Like `l1`, only in room `link` (`caps` on `sync` and `ping`). Muninn and Huginn. |
 
 A receiver records the token set per contact from the last **authentic** envelope (after it opened), like
 `authentic()` does for the ratchet. Tokens are never removed by an envelope that lacks them unless
@@ -1039,7 +1044,7 @@ Plaintext `{"t":"config","cfg":{...}}`, where:
 ```
 
 Well-formed (reference `check_tvconfig`): exactly these fields, plus optionally the k2 fields `calls` and `mic`, the k5 field `nr`, the k7 field `upd`, the k8 field `keep`
-and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` and the k14 fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
+and the k11 fields `chat`, `quiet` and `pin`, the k12 fields `hav`, `havw` and `havh` and the k13 fields `look`, `season`, `accent`, `lookpick` and `kname` and the k14 fields `tsz`, `dsz`, `hc`, `cv`, `still`, `child`, `gok` and `wait` and the k15 field `voice` (7.5, 7.10, 7.12, 7.13, 7.18); `parents` sorted, unique, not empty, `by` in
 it; `quick` at most 24, unique ids, each exactly `id` and `text` (and, k14, `e`), each text 1 to 80 characters, array order is the order on screen;
 `contacts` sorted by `k`, unique, at most 50, names at most 40; canonical size at most 16 KB.
 
@@ -1610,6 +1615,13 @@ Apps without `k14` read it as an ordinary code. A code with `"tv":1` is a pairin
 message then keeps the picture it had, by `id`, on the device and on every parent's phone (the device keeps them beside its
 config as `qe`, by `id`, so a restart keeps them too).
 
+**Read-aloud voice (`k15`).** A device whose app says `k15` takes one more optional field, `voice`: `"f"` (Female, the
+Alba voice) or `"m"` (Male, the northern English male voice), the natural voice it reads aloud with (messages, quick
+messages, Daily Hávamál). A parent's phone sends it only to such a device, once a parent picked one on the device's page; a
+device without `k15` would refuse the config as malformed. A device keeps the last `voice` it took (a config without it, from
+an older parent app, changes nothing) and downloads only that voice (code/shared/docs/voices.md); until it is ready the
+device's own voice reads. Every parent's page shows the voice the latest config carries.
+
 **Leaving and disconnecting.** A disconnect (7.3) and Leave kids' mode put back everything kids' mode changed on the device:
 its text size, size of everything, high contrast, color vision and less motion, its look, Seasonal and accent, how long
 messages stay, the parent's colors and accessibility it took, the kids' tabs, drafts and open chat, wrong PIN tries, apps and
@@ -2039,6 +2051,19 @@ own. Every other frame more than 36 hours off
 both is dropped. Either way, the first time in a run that a device's `lts` is more than 36 hours off, the
 receiver says so once: "<device>'s clock and this computer's are about N days apart. Set the right date and time on
 whichever is wrong." A receiver without this drops every frame more than 36 hours off, as above.
+
+**Both ways (cap `l5`, 1.42).** Before this, only a companion pinged, and a phone dropped a `ping` more than 36 hours
+off, so neither side could learn the other's clock and a companion with a wrong date was dropped for good. Now:
+- A `ping` whose `lts` is more than 36 hours off (by the plain clock and any kept difference) that came straight over
+  the Wi-Fi or Bluetooth is still answered: only with the `pong` that says its `pn` back (at most once a minute per
+  device, nothing else of the ping is taken, no device name). A replayed ping only gets a pong for a `pn` nobody waits for.
+- A device that receives any frame more than 36 hours off straight over the Wi-Fi or Bluetooth sends that device a
+  `ping` with a fresh `pn` (at most every 2 minutes). The phone does this to its companions too; a companion answers a
+  `ping` from its phone with `{"t": "pong", "caps": "l4", "pn": ...}`.
+- Each side learns the other's difference only from the `pong` to its own `ping`, as above (Muninn now keeps it too,
+  in `link-replay.json` as `"o"`). Muninn `LinkReplay` (`answerDue`, `pingDue`, `skewed`), Huginn `LinkReplay`
+  (`answerDue`, `pingDue`); tests `Fix142DTest` and Huginn's link self-test. A companion without `l5` ignores a phone's
+  ping, so the phone can't learn its clock until it is updated; the companion still learns the phone's.
 
 **Routes.** A linked pair is usually in one household, behind one internet address that relays rate-limit, so link
 traffic MUST stay off the relays except for small live frames:
@@ -2619,6 +2644,25 @@ Contacts keep the private home Wi-Fi route, with nothing announced to strangers:
 
 A Kids' TV keeps its own behaviour whatever the switch says (Muninn on a TV in kids' mode ignores it).
 
+**Hidden certificates named over the ratchet (cap `h1`, 1.42).** With Nearby off each app shows a certificate of its
+own, never its lasting one, and keeps two in its data folder outside the vault: "now" (shown) and "next" (already
+made). To a **contact** whose caps include `h1` (never a group-only peer, never someone blocked), every receipt carries
+`"hf": [fingerprints]`: 1 to 4 distinct certificate fingerprints, 64 uppercase hex each, that its Wi-Fi server may
+show: the lasting one, the hidden one now and the next. A receiver takes `hf` from an authentic receipt only when every
+entry is such a fingerprint (otherwise it is ignored and the receipt still taken), and keeps the latest list for that
+contact (with the keys of 23.2, in the vault).
+- The next one takes over when Nearby is turned off (unless the current one took over less than an hour ago) and every
+  day while it stays off (or when the clock is a day behind it). Then a new next one is made, and an empty receipt
+  `{"ids":[],"s":"delivered"}` carrying the new `hf` goes at once to every `h1` contact. So contacts hold a hidden
+  certificate a day before it is shown, and nobody close by can tell one day's from the next.
+- A contact's saved address (above) is asked with Nearby off only over HTTPS with a pinned certificate: the one it showed
+  there or any one the contact named in `hf` (any of them will do). An address saved before 1.41, with no certificate of
+  its own, is asked once the contact has named one. An answer over plain HTTP is never tried with Nearby off.
+- The first time a contact's caps gain `h1` (or `r2`), an empty receipt carrying them goes to that contact at once.
+- Huginn before 1.42 made a new throwaway certificate each time Nearby went off (in memory only); now it keeps them as
+  above. Muninn before 1.42 showed its lasting certificate with Nearby off. Muninn `HiddenTls`, `LocalSendRules.pins`
+  and `rotateDue`; Huginn `LocalSend::pins` and `rotateDue`; tests `Fix142DTest` and Huginn's `--stability-selftest`.
+
 A hello or announce may still carry
 `"hint": hex(HMAC-SHA256(key = UTF-8 of the chat key, "huginn-muninn hint v1|" + day))[:32]` in place of the name,
 `chatKey` and `mailbox`, where day is the number of whole days since 1970 (UTC); Muninn's `prepare-upload` carries
@@ -2867,7 +2911,24 @@ can't ring. With `b1` it can:
   ring that opens only with the old key never rings (whoever was blocked could still use it); the old mailbox is read
   for nudges only. **Turning calls off** for a contact renews the ring key the same way (the new one goes to every other
   `b1` contact whose calls are on), and turning them on again sends the current one to that contact. Muninn also rings
-  at most 3 times in 10 minutes while locked, as a locked device can't tell who rings.
+  at most 3 times in 10 minutes while locked, as a locked device can't tell who rings. Huginn does all of this from 1.42.
+- **Ring tags (cap `r2`, 1.42).** With `rk` to a contact whose caps include `r2`, the receipt also carries
+  `"rt"`: that contact's own ring tag, 16 random bytes as 32 lowercase hex, made the first time and kept in the vault
+  (`ring-tags.json`, contact key to tag). Outside the vault, beside the ring key (`ring-allow.json`, readable by this
+  user only), the device keeps only `{"a": [hashes]}` of the tags still allowed, each the first 32 lowercase hex of
+  SHA-256(UTF-8 `"huginn-muninn ring tag|"` + tag), so a copy of the file names nobody and can't ring as anyone. Once
+  the vault is open the hashes are written again from the vault's tags when they differ (after a restore).
+  A receiver takes `rt` from an authentic receipt only with a good `rk`; a `rk` that comes without `rt` means none.
+  A caller whose callee says `r2` puts the tag it holds in the ring plaintext: `{"t":"ring","call":...,"ts":...,"rt":...}`
+  (a receiver without `r2` ignores it). Locked, a ring that opens:
+  - with a tag whose hash is allowed rings, with the current ring key or a replaced one still read (so other contacts'
+    calls ring while their apps haven't heard of the new key yet);
+  - with a tag not allowed (taken back, or never given) never rings;
+  - without a tag (an older caller) rings only with the current ring key.
+  Blocking someone, turning their calls off or removing them takes their tag back at once (a later one is new). The
+  limit while locked is per caller: at most 3 rings in 10 minutes for each tag, and 3 for all rings without one, so
+  one contact can't silence everyone else's calls. A malformed `rt` counts as none. Muninn `RingTags` and
+  `LockedRingLimit`, Huginn `RingTags` and `LockedRingLimit`; tests `Fix142DTest` and Huginn's e1/b1 self-test.
 - A caller sending a 1:1 `offer` (5.2, not one inside a voice room) to someone whose caps include `b1` and whose ring
   key it holds also publishes, once per call, a **ring envelope** to their ring mailbox, padded and expiring like
   any other event (section 20):
@@ -3347,3 +3408,64 @@ The joiner's app takes it only from the admin it is waiting on (3.3 step 2), and
 400. Its waiting row then says "Not let in" and why ("Gaming Crew is full (50 people).", "Update Huginn to join: ..."),
 with Remove; joining again with a new invite starts over. A joiner who isn't a contact is reached as a group peer
 (3.7) while the answer is on its way. An app without `g4` answers 400 and keeps waiting, as before.
+
+## 29. Picked videos (cap `v3`)
+
+A video picked from the device (not recorded in the app) goes to a group or one person. Each member gets one of two
+copies, decided per member when it's sent; it never goes twice to anyone.
+
+### 29.1 The two copies
+
+- **Full size**: at most 1920 x 1080 either way up, at most 30 frames a second, at most a minute and 48 MiB (under the
+  50 MiB a file arrives by itself, 27.6). H.264 and AAC in MP4, about 4.5 Mbps. A bigger or faster video is converted
+  first (Muninn: Media3 Transformer). It goes straight as a file offer (section 14, 27) with `vid`.
+- **Relay copy**: at most 1280 x 720, 20 seconds and 192 pieces of 16 KiB (3 MiB), sent as a video message (12.2) over
+  every route. Its video bitrate is worked out from its length to fit: `192 * 16384 * 8 * 0.9 / seconds` minus the
+  sound (128 kbps when the file doesn't say), between 300 kbps and 1.5 Mbps (about 1 Mbps for 20 seconds). A copy that
+  still runs over is made once more, lower by what it ran over (at least 15% lower), then at 480p.
+
+Why 192 pieces: every app since `m2` takes up to 200 pieces for a video message (`Photos.MAX_PIECES`, 12.2), so 1.41
+apps and Kids' Devices take it as it is. Public relays limit how many events come and how big each is, not how many
+make one message: each piece is still one event of about 22 KB, well under the usual 64 KB to 128 KB event limit. Going
+past 200 would need every receiver to change; going past about 3 MiB a member also costs too many events (29.4).
+
+### 29.2 Who gets which
+
+A member gets the full copy when all of these hold, else the relay copy:
+- their app says `v3`, `f1` and (in a group) `f2`;
+- they are on the same Wi-Fi now (27.1), or Direct calls and files are on for each other (14) and this device is on
+  an unmetered network (no full copies over mobile data);
+- they aren't a Kids' Device, and their app hasn't asked for nothing straight (Ultra privacy on their side).
+
+With Ultra privacy on, sending videos is off entirely (the button says "Off while Ultra privacy is on"); receiving
+still works.
+
+### 29.3 The full copy's offer
+
+`{"t":"offer", ..., "vid": 15000}`: the file is a full-size video `vid` ms long. A receiver checks `vid` (absent, or a
+whole number 1 to 60000; anything else: 400) and handles it as any file (it arrives by itself, 48 MiB at most). The
+sender waits 30 s for an answer (`RELAY_AFTER_MS`). If no answer comes, there's no way through, the receiver declines
+for its rules or space, or the transfer breaks off, the card goes and that member gets the relay copy instead (added to
+the same group message, or a new one). Declined with `why:"no"`: nothing more.
+
+### 29.4 Pacing
+
+Group pieces are sealed per member, so a relay copy to six members is about 1150 events. They leave the device paced:
+at most 3 pieces a second in all (every chat together), one queue per member and message (a retry while it's queued
+adds nothing). A relay answering `OK` false with a message starting `rate-limited` stops all paced pieces for 60
+seconds. Six members at 192 pieces take about 6.5 minutes, inside the 15 minutes a receiver keeps half a video.
+
+### 29.5 Longer videos
+
+Longer than 20 seconds (up to a minute): trim (pick which 20 seconds; both copies are trimmed), or "Send in full later,
+when direct": only full copies, to members whose app takes them and who are on the same Wi-Fi or trusted; each offer
+waits as any big file does (up to a day with `f3`, 27.7), with Retry. Nobody else gets it, and the send sheet says who.
+Over a minute: trim only (a longer video can go as a File).
+
+### 29.6 Huginn
+
+Huginn needs Qt 6.6, whose Qt Multimedia can't convert a file to another file (that needs Qt 6.8's frame input, and
+the LGPL FFmpeg builds have no software H.264 encoder). So Huginn converts nothing: it reads the MP4's own boxes for
+size, frame rate and length, sends the full copy only if the video is already within 29.1, and the relay copy only if
+the video itself already fits it (720p, 20 seconds, 3 MiB). Members it can't serve that way are told why ("Huginn
+can't make a smaller copy: send it from your phone, or send in full when direct").

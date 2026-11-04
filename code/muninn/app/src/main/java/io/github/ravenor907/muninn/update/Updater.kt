@@ -88,7 +88,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                 if (newer && installAfter && !wait) download(tapped = false)
             } catch (e: Exception) {
                 lastCheck = 0L   // try again next time Muninn opens
-                _state.value = State("Couldn't check for updates. Check your internet.")
+                _state.value = State(if (io.github.ravenor907.muninn.net.UltraPrivacy.on) "Couldn't check for updates through Tor. Muninn tries again later." else "Couldn't check for updates. Check your internet.")
             }
         }
     }
@@ -112,7 +112,7 @@ class Updater(private val context: Context, private val identity: Identity) {
                 _state.value = State("Muninn $best is ready to install", best, false, true)
                 download(back = true)
             } catch (e: Exception) {
-                _state.value = State("Couldn't check for updates. Check your internet.")
+                _state.value = State(if (io.github.ravenor907.muninn.net.UltraPrivacy.on) "Couldn't check for updates through Tor. Muninn tries again later." else "Couldn't check for updates. Check your internet.")
             }
         }
     }
@@ -217,7 +217,12 @@ class Updater(private val context: Context, private val identity: Identity) {
             Thread.sleep(2000)
         }
         _state.value = _state.value.copy(busy = false, status = "Tap Install when Android asks")
-        main.post { if (tv?.invoke(out) != true && tapped) install(out) }
+        main.post { if (tv?.invoke(out) != true && tapped) install(out, ver) }
+    }
+
+    /** A line from the install's answer (update/PhoneInstallResult). */
+    fun say(status: String) {
+        _state.value = _state.value.copy(busy = false, status = status)
     }
 
     private fun shaOfFile(f: File): String? = try {
@@ -233,6 +238,9 @@ class Updater(private val context: Context, private val identity: Identity) {
     private fun fromApi(): Found {
         betaSha = null
         betaBlock = null
+        // Ultra privacy: GitHub's API allows few checks per address an hour, and Tor's exits are shared by many, so the
+        // website's "latest release" link (fromWebsite) is asked instead, through Tor as everything else.
+        if (io.github.ravenor907.muninn.net.UltraPrivacy.on) return Found(null, null, null)
         val req = Request.Builder().url(RELEASES).header("Accept", "application/vnd.github+json").header("User-Agent", AGENT).build()
         val text = Net.client.newCall(req).execute().use { r ->
             if (r.code == 403 || r.code == 429) return Found(null, null, null)   // rate limited
@@ -331,7 +339,7 @@ class Updater(private val context: Context, private val identity: Identity) {
         return Found(name, "$DOWNLOAD/$tag/$APK", line?.sha ?: sidecar("$DOWNLOAD/$tag/$APK.sha256"), line)
     }
 
-    private fun install(apk: File) {
+    private fun install(apk: File, ver: String) {
         // Some phones (a work profile, a kiosk, some Go phones) have no such page or block it: say so, never crash.
         try {
             if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
@@ -339,6 +347,22 @@ class Updater(private val context: Context, private val identity: Identity) {
                 _state.value = _state.value.copy(status = "Allow Muninn to install updates, then tap Update now again")
                 return
             }
+            // Android 14 and newer: Android's own installer turns "Full-screen calls" off on every update it installs.
+            // Muninn's own session keeps it as it is (update/FullScreenKeep); the old way only if that can't start.
+            if (Build.VERSION.SDK_INT >= 34) {
+                FullScreenKeep.sessionInstall(context, apk, ver) { main.post { openInstaller(apk, ver) } }
+                return
+            }
+            openInstaller(apk, ver)
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(status = "This phone doesn't let Muninn open the installer. Install Muninn.apk from the release page instead.")
+        }
+    }
+
+    /** Android's own installer, opened with the APK. */
+    private fun openInstaller(apk: File, ver: String) {
+        try {
+            FullScreenKeep.beforeInstall(context, ver, FsiRules.HOW_VIEW)
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
             context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))

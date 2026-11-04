@@ -32,7 +32,8 @@ class HavamalTest {
         TvRules.config(privA, kTV, v, kA, listOf(kA), emptyList(), people, false, 1761500000000 + v, extras)
 
     private fun asset(): String {
-        val f = File("src/main/assets/${Havamal.ASSET}").takeIf { it.isFile } ?: File("app/src/main/assets/${Havamal.ASSET}")
+        // One file for both apps (code/shared/havamal.json), copied into the APK's assets by the build.
+        val f = File("../../shared/${Havamal.ASSET}").takeIf { it.isFile } ?: File("../shared/${Havamal.ASSET}")
         return f.readText(Charsets.UTF_8)
     }
 

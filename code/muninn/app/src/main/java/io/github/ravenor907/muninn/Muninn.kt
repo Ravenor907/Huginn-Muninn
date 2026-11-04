@@ -49,6 +49,8 @@ class Muninn : Application() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     /** A locked nudge's notification was tapped: its sender and group, for the chat to open once unlocked ([openNudge]). */
     @Volatile var nudgeOpen: Pair<String, String>? = null
+    /** Cap r2: the ring tags given to contacts (which one is whose in the vault, the allowed ones outside it). */
+    lateinit var ringTags: io.github.ravenor907.muninn.net.RingTags
 
     override fun onCreate() {
         super.onCreate()
@@ -68,6 +70,10 @@ class Muninn : Application() {
         }
         io.github.ravenor907.muninn.ui.PrivateKeyboard.on = identity.privateKeyboard
         nostr = Nostr(this) { if (vault.locked.value) null else identity.nostrSecret() }
+        // Ultra privacy: Tor starts now when it's on, before any relay connects. Turning it on or off (or Tor becoming
+        // ready) drops every connection made the old way, and the relays connect again the new way.
+        io.github.ravenor907.muninn.net.UltraPrivacy.onChange { io.github.ravenor907.muninn.net.Net.forgetConnections(); nostr.redial() }
+        io.github.ravenor907.muninn.net.TorRunner.init(this)
         direct = Direct(this)
         updater = Updater(this, identity)
         if (Build.VERSION.SDK_INT >= 26) getSystemService(NotificationManager::class.java).apply {
@@ -101,10 +107,18 @@ class Muninn : Application() {
         // (kept sealed with everything else that came while locked) is picked up once Muninn is unlocked.
         val ring = io.github.ravenor907.muninn.net.RingKey(java.io.File(filesDir, "ring-key.json"))
         nostr.ring = ring
+        val tagsFile = java.io.File(filesDir, "ring-tags.json")
+        ringTags = io.github.ravenor907.muninn.net.RingTags(java.io.File(filesDir, "ring-allow.json"), { vault.read(tagsFile) }, { vault.write(tagsFile, it) })
         nostr.onRing = { content ->
-            val rang = ring.open(content)
+            val rang = ring.openTagged(content)
             if (rang != null) {
-                io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, rang.first, rang.second)
+                // Cap r2 (1.42): a tag taken back (blocked, calls off, removed) never rings; a replaced ring key rings only
+                // with a tag still allowed. The limit while locked counts each caller (by its tag's hash) on its own.
+                val who = ringTags.judge(rang.rt)
+                val rings = who == io.github.ravenor907.muninn.net.RingTags.Who.ALLOWED ||
+                    (who == io.github.ravenor907.muninn.net.RingTags.Who.NONE && !rang.old)
+                if (rings) io.github.ravenor907.muninn.net.call.CallManager.ringLocked(this, rang.call, rang.ts,
+                    if (rang.rt.isEmpty()) "" else io.github.ravenor907.muninn.net.RingWire.tagHash(rang.rt))
             } else {
                 // Caps n1 and n2: a nudge says a real message came. Unlocked, it's ignored (the message itself notifies).
                 io.github.ravenor907.muninn.net.NudgeWire.ringMailbox(vault.locked.value, content, ring)?.let { lockedNudge(it) }
@@ -117,6 +131,7 @@ class Muninn : Application() {
         // Erase everything and Move: the ring and nudge keys, the day keys and what was kept while locked all go.
         vault.onErase = {
             ring.forget()
+            ringTags.forget()
             nudgeKey.forget()
             try { java.io.File(filesDir, "legacy-peers.json").delete() } catch (_: Exception) {}
             nostr.forgetHeld()
@@ -173,6 +188,7 @@ class Muninn : Application() {
         chat = Chat(this, net, ble, nostr, contacts, vault)
         chat.ringKey = nostr.ring
         chat.nudgeKey = nostr.nudgeKey
+        chat.ringTags = ringTags
         profile = io.github.ravenor907.muninn.net.Profile(this, vault, contacts, chat)
         chat.profile = profile
         io.github.ravenor907.muninn.tv.Tv.install(this)
@@ -280,6 +296,9 @@ class Muninn : Application() {
         NotificationManagerCompat.from(this).cancel(OLD_LOCKED_ID)
         getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).edit().remove("lockedAlerted").apply()
         Thread {
+            // 1.42: the drafts are read now, so replies refused and sealed while locked join their chats (and the key
+            // they're sealed to is made the first time), even before any chat is opened.
+            try { io.github.ravenor907.muninn.net.Drafts.load(this@Muninn) } catch (_: Exception) {}
             try { nostr.openHeld() } catch (_: Exception) {}
             nostr.resubscribe()
         }.start()

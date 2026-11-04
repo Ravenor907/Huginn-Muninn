@@ -1,6 +1,7 @@
 #include "updater.h"
 #include "settings.h"
 #include "system.h"
+#include "ultraprivacy.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -244,6 +245,14 @@ void Updater::fetch(bool installAfter, bool autoMode)
     m_signedTag.clear();
     m_betaBlock = {};
     m_viaPage = false;
+    // Ultra privacy: every check and download through Tor. GitHub's API allows few checks per address an hour and Tor's
+    // exits are shared by many, so the "latest release" page is asked first instead.
+    UltraPrivacy::prepare(&m_net);
+    if (UltraPrivacy::on()) {
+        m_viaPage = true;
+        fetchLatestPage(installAfter, autoMode);
+        return;
+    }
     QNetworkRequest req = request(QUrl(QString::fromLatin1(kReleases)));
     req.setRawHeader("Accept", "application/vnd.github+json");
     QNetworkReply *r = m_net.get(req);
@@ -397,7 +406,8 @@ void Updater::fetchLatestPage(bool installAfter, bool autoMode)
         const QString ver = versionFromTag(tag);
         if (ver.isEmpty()) {
             m_goingBack = false;
-            m_status = QStringLiteral("Couldn't reach GitHub. Check the connection.");
+            m_status = UltraPrivacy::on() ? QStringLiteral("Couldn't check for updates through Tor. Huginn tries again later.")
+                                          : QStringLiteral("Couldn't reach GitHub. Check the connection.");
             Q_EMIT changed();
             return;
         }
@@ -466,6 +476,7 @@ void Updater::download(const QString &url, const QString &tag)
     m_busy = true;
     m_status = QStringLiteral("Downloading Huginn %1…").arg(labelFor(tag));
     Q_EMIT changed();
+    UltraPrivacy::prepare(&m_net);   // Ultra privacy: through Tor
     QNetworkRequest req = request(QUrl(url));
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     QNetworkReply *r = m_net.get(req);

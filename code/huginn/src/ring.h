@@ -25,6 +25,22 @@ namespace RingWire
 {
 extern const char kRingCap[];   // "b1"
 extern const char kWrapCap[];   // "e1"
+// Cap r2 (protocol.md 23.2, 1.42): a ring tag per caller. The callee gives each contact who may call its own tag ("rt",
+// 32 lowercase hex, in receipts with "rk", so sealed through the ratchet); a caller with r2 puts it in the ring
+// plaintext. Locked, the callee knows only the hashes of the tags it still allows (RingTags, outside the vault), so the
+// locked-ring limit is per caller and a tag taken back (a block, calls off, removed) stops ringing at once.
+extern const char kTagCap[];      // "r2"
+// Cap h1 (protocol.md 21.3, 1.42): "hf" in receipts to contacts, the certificates this device's Wi-Fi server may show
+// (1 to kMaxHf fingerprints, 64 uppercase hex: its lasting one, its hidden one now and the next). A contact asks a saved
+// address with Nearby off only with one of them pinned.
+extern const char kHiddenCap[];   // "h1"
+constexpr int kMaxHf = 4;
+bool tagOk(const QJsonValue &v);
+QString newTag();
+// What a locked device keeps of a tag: the first 32 hex of SHA-256("huginn-muninn ring tag|" + tag).
+QString tagHash(const QString &rt);
+// "hf" as 1 to kMaxHf distinct fingerprints, or empty when absent or malformed (then nothing changes).
+QStringList hfOf(const QJsonValue &v);
 constexpr qint64 kDayS = 86400;
 constexpr qint64 kWrapUseS = 7 * kDayS;     // a sender uses a day key at most this long after it was made
 constexpr qint64 kWrapKeepS = 40 * kDayS;   // the recipient keeps its private half this long
@@ -46,20 +62,23 @@ QByteArray ringKey(const QByteArray &shared);
 // The ring envelope {"e","n","d"}: plain sealed to a ring key.
 QJsonObject sealRing(const QString &ringPub, const QByteArray &plain);
 QByteArray openRing(const QJsonObject &o, const ChatCrypto::KeyPair &ring, bool *ok);
-// {"t":"ring","call":<call id>,"ts":<ms>}: nothing else, no name, no key.
-QByteArray ringPlain(const QString &callId, qint64 ts);
+// {"t":"ring","call":<call id>,"ts":<ms>}: no name, no key. Cap r2: plus "rt", the tag the callee gave this caller.
+QByteArray ringPlain(const QString &callId, qint64 ts, const QString &rt = QString());
 // Well-formed: t "ring", call a call id (22 base64url characters), ts an integer 0 <= ts < 2^53. Other fields are ignored.
 bool ringOk(const QJsonObject &p);
 bool ringFresh(qint64 ts, qint64 now);
 // The content of the relay event for a ring envelope, padded like every relay envelope (section 20).
-QString ringContent(const QString &ringPub, const QString &callId, qint64 ts);
-bool openRingContent(const QString &content, const ChatCrypto::KeyPair &ring, QString *callId, qint64 *ts);
+QString ringContent(const QString &ringPub, const QString &callId, qint64 ts, const QString &rt = QString());
+// rt (optional): the ring's tag, empty without one (a malformed one counts as none).
+bool openRingContent(const QString &content, const ChatCrypto::KeyPair &ring, QString *callId, qint64 *ts, QString *rt = nullptr);
 
 // What a receipt's "rk", "rp", "wk", "wt" (and "nk", "np", cap n2) say; each half empty when absent or malformed.
 struct Announce {
     QString rk, rp, wk;
     qint64 wt = 0;
     QString nk, np;
+    QString rt;        // cap r2: the ring tag they gave me (only with a good "rk")
+    QStringList hf;    // cap h1: their certificates (empty: none said)
 };
 Announce announceOf(const QJsonObject &r, qint64 nowS);
 bool mayUse(qint64 wt, qint64 nowS);
@@ -251,7 +270,9 @@ public:
     QStringList mailboxes();
     QList<QByteArray> nostrSecrets();
     // A ring envelope's content opened (with the current key, or the old one while it's read): true with the call id and ts.
-    bool open(const QString &content, QString *callId, qint64 *ts);
+    // Cap r2 (1.42): rt gets its tag (empty without one) and old whether it opened only with a replaced key; a replaced
+    // key rings only with a tag still allowed (RingTags), so a blocked contact's ring never does.
+    bool open(const QString &content, QString *callId, qint64 *ts, QString *rt = nullptr, bool *old = nullptr);
     // A nudge's content opened the same way (caps n1 and n2): true with what it says.
     bool nudge(const QString &content, RingWire::Nudge *n);
     // Someone was blocked: a new key pair and ring mailbox, so they can't ring this device any more. The old one is read
@@ -308,4 +329,52 @@ public:
 
 private:
     RingKey m_keys;
+};
+
+// Cap r2 (protocol.md 23.2, 1.42): the ring tags this device gave its contacts, the same as Muninn's RingTags. Which
+// contact has which tag is in the vault (read, write); outside it, beside ring-key.json (path), only the hashes of the
+// tags still allowed, readable by this user only, so a locked Huginn tells callers apart and drops a taken-back tag at
+// once, and a copy of that file names nobody and can't ring as anyone.
+class RingTags
+{
+public:
+    enum Who { NoTag, TagAllowed, TagRevoked };
+    RingTags(const QString &path, std::function<QByteArray()> read, std::function<void(const QByteArray &)> write);
+    // The tag for key, made now when it has none. Only while unlocked: the map is in the vault.
+    QString tagFor(const QString &key);
+    // key was blocked, had calls turned off or was removed: its tag stops ringing now, and a later one is new.
+    void revoke(const QString &key);
+    // Locked: a ring's tag (empty for none) is NoTag, TagAllowed, or TagRevoked (unknown or taken back).
+    Who judge(const QString &rt);
+    // Once the vault is open: the hashes outside it are written again from the vault's tags when they differ.
+    void sync();
+    // Erase everything and Move.
+    void forget();
+
+private:
+    void loadMine();
+    void loadAllowed();
+    void saveAll();
+    QString m_path;
+    std::function<QByteArray()> m_read;
+    std::function<void(const QByteArray &)> m_write;
+    QHash<QString, QString> m_mine;   // contact key -> tag (from the vault)
+    QSet<QString> m_allowed;          // hashes of the tags still allowed (outside the vault)
+    bool m_mineLoaded = false;
+    bool m_allowedLoaded = false;
+};
+
+// Rings while locked (cap b1): at most kMax in kWindowMs per caller, by its ring tag's hash (cap r2); rings without a
+// tag (older apps) share one count (""). Then silent until the window moves on; the calls still show once unlocked.
+class LockedRingLimit
+{
+public:
+    static constexpr int kMax = 3;
+    static constexpr qint64 kWindowMs = 10 * 60000;
+    // True if a ring from who at nowMs may ring; counted only when it may.
+    bool take(qint64 nowMs, const QString &who = QString());
+    void clear() { m_at.clear(); }
+
+private:
+    QHash<QString, QList<qint64>> m_at;
 };

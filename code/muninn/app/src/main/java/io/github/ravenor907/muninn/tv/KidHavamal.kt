@@ -2,7 +2,6 @@ package io.github.ravenor907.muninn.tv
 
 import android.content.Context
 import android.net.Uri
-import android.speech.tts.TextToSpeech
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -55,7 +54,7 @@ import java.time.LocalDate
 // Daily Hávamál (cap k12, shared/docs/protocol.md 7.18): one verse a day on a Kids' Device's home, opened big with what it
 // means and Read aloud. The device keeps a parent's imported translation (if one came); the parent's phone keeps its own.
 
-/** The verses in assets/havamal.json (Bellows, 1923), read once. Empty if the file can't be read. */
+/** The verses in assets/havamal.json (Bellows, 1923; built from code/shared/havamal.json), read once. Empty if the file can't be read. */
 object HavAssets {
     @Volatile private var cached: List<HavVerse>? = null
 
@@ -125,6 +124,41 @@ object HavDevice {
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences("muninn-tv", Context.MODE_PRIVATE)
 }
 
+/**
+ * Reading a picked plain-text translation: at most [Havamal.MAX_FILE], only the stanzas on the list kept (matched by
+ * number). The same for a parent's import (sent only to their own Kids' Devices) and the standard app's own (kept on
+ * this device only, see screens/DailyHavamal.kt).
+ */
+object HavImport {
+    sealed class Read {
+        /** The stanzas matched, by number. */
+        class Ok(val stanzas: Map<Int, String>) : Read()
+        /** Nothing to keep: the line to show. */
+        class Bad(val line: String) : Read()
+    }
+
+    /** Slow (a file): call it off the main thread. */
+    fun read(app: Muninn, uri: Uri, verses: List<HavVerse>): Read {
+        if (verses.isEmpty()) return Read.Bad("Can't read the verses")
+        val bytes = try {
+            app.contentResolver.openInputStream(uri)?.use { s ->
+                val buf = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(64 * 1024)
+                while (true) {
+                    val n = s.read(chunk)
+                    if (n < 0) break
+                    buf.write(chunk, 0, n)
+                    if (buf.size() > Havamal.MAX_FILE) return Read.Bad("That file is too big")
+                }
+                buf.toByteArray()
+            }
+        } catch (e: Exception) { null } ?: return Read.Bad("Can't open that file")
+        val map = Havamal.parseImport(String(bytes, Charsets.UTF_8), Havamal.numbers(verses))
+        if (map.isEmpty()) return Read.Bad("No verses matched. The file needs stanza numbers, like \"1.\" or \"St. 1\".")
+        return Read.Ok(map)
+    }
+}
+
 /** The parent's side: their own imported translation, kept in their vault, sent only to their own Kids' Devices. */
 object HavParent {
     private const val FILE = "havamal-mine.json"
@@ -151,22 +185,10 @@ object HavParent {
      */
     fun importFile(app: Muninn, uri: Uri): String {
         val verses = HavAssets.verses(app)
-        if (verses.isEmpty()) return "Can't read the verses"
-        val bytes = try {
-            app.contentResolver.openInputStream(uri)?.use { s ->
-                val buf = java.io.ByteArrayOutputStream()
-                val chunk = ByteArray(64 * 1024)
-                while (true) {
-                    val n = s.read(chunk)
-                    if (n < 0) break
-                    buf.write(chunk, 0, n)
-                    if (buf.size() > Havamal.MAX_FILE) return "That file is too big"
-                }
-                buf.toByteArray()
-            }
-        } catch (e: Exception) { null } ?: return "Can't open that file"
-        val map = Havamal.parseImport(String(bytes, Charsets.UTF_8), Havamal.numbers(verses))
-        if (map.isEmpty()) return "No verses matched. The file needs stanza numbers, like \"1.\" or \"St. 1\"."
+        val map = when (val r = HavImport.read(app, uri, verses)) {
+            is HavImport.Read.Bad -> return r.line
+            is HavImport.Read.Ok -> r.stanzas
+        }
         val json = Havamal.textJson(map)
         try { app.vault.write(file(app), JSONObject().put("text", json).put("of", verses.size).toString()) } catch (e: Exception) { return "Can't save it" }
         _mine.value = Mine(HavText(Havamal.hash(json), json, map), map.size, verses.size)
@@ -252,19 +274,16 @@ private fun HavDialog(cfg: TvConfig, today: HavVerse, earlier: List<HavVerse>, m
     val context = LocalContext.current
     var shown by remember { mutableStateOf(today) }
     var listing by remember { mutableStateOf(false) }
-    var ready by remember { mutableStateOf(false) }
-    val tts = remember { arrayOfNulls<TextToSpeech>(1) }
-    DisposableEffect(Unit) {
-        tts[0] = try { TextToSpeech(context.applicationContext) { status -> ready = status == TextToSpeech.SUCCESS } } catch (e: Exception) { null }
-        onDispose { try { tts[0]?.stop(); tts[0]?.shutdown() } catch (_: Exception) {}; tts[0] = null }
-    }
+    // Read aloud (net/ReadAloud): the natural voice a parent picked (k15), or the device's own offline voice until it's in.
+    val ready = io.github.ravenor907.muninn.net.ReadAloud.available
+    DisposableEffect(Unit) { onDispose { io.github.ravenor907.muninn.net.ReadAloud.stop() } }
     // Round 17: reading aloud stops when a call rings or starts (it would talk over the ring and into the call), and when
     // Muninn goes behind another screen.
     val call by io.github.ravenor907.muninn.net.call.CallManager.call.collectAsState()
-    LaunchedEffect(call != null) { if (call != null) try { tts[0]?.stop() } catch (_: Exception) {} }
+    LaunchedEffect(call != null) { if (call != null) io.github.ravenor907.muninn.net.ReadAloud.stop() }
     val owner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     DisposableEffect(owner) {
-        val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) try { tts[0]?.stop() } catch (_: Exception) {} }
+        val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == androidx.lifecycle.Lifecycle.Event.ON_STOP) io.github.ravenor907.muninn.net.ReadAloud.stop() }
         owner.lifecycle.addObserver(o)
         onDispose { owner.lifecycle.removeObserver(o) }
     }
@@ -292,13 +311,11 @@ private fun HavDialog(cfg: TvConfig, today: HavVerse, earlier: List<HavVerse>, m
             Text(shown.means, style = tvText(small), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
             Column(Modifier.fillMaxWidth().padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (ready) BigButton("Read aloud", icon = "sound", requester = first) {
-                    try {
-                        tts[0]?.speak(text.replace("\n", " ") + ". What it means. " + shown.means, TextToSpeech.QUEUE_FLUSH, null, "hav")
-                    } catch (_: Exception) {}
+                    io.github.ravenor907.muninn.net.ReadAloud.speak(context, text + "\nWhat it means.\n" + shown.means)
                 }
                 if (shown != today) BigButton("Today's verse", requester = if (!ready) first else null) { shown = today }
                 BigButton("Earlier verses", requester = if (!ready && shown == today) first else null) {
-                    try { tts[0]?.stop() } catch (_: Exception) {}
+                    io.github.ravenor907.muninn.net.ReadAloud.stop()
                     listing = true
                 }
                 BigButton("Close") { onClose() }

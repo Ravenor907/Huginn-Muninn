@@ -14,7 +14,8 @@ class P2Test {
     @Test
     fun capIsLastAndKeepsP1() {
         val caps = Proto06.CAPS.split(' ')
-        assertEquals(ProfileWire.CAP2, caps.last())
+        // Appended after everything before it (1.42 appends h1 and r2 after it).
+        assertTrue(ProfileWire.CAP2 in caps && caps.indexOf(ProfileWire.CAP2) > caps.indexOf("k14"))
         assertTrue(ProfileWire.CAP in caps)
     }
 

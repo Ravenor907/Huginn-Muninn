@@ -206,10 +206,15 @@ class MainActivity : ComponentActivity() {
         }
         intent?.getStringExtra("screen")?.let { show(it) }   // CI screenshots open each tab
         if (ciSkip && intent?.getStringExtra("screen") == "lock") io.github.ravenor907.muninn.ui.AppLock.raise()   // CI: the lock screen
+        // CI: the lock screen's words after that many wrong tries (shown only, nothing is counted).
+        if (ciSkip && intent?.hasExtra("lockfails") == true)
+            io.github.ravenor907.muninn.screens.LockSample.show(intent.getIntExtra("lockfails", -1), intent.getBooleanExtra("lockerase", false))
         if (ciSkip) intent?.getStringExtra("folder")?.let { SettingsNav.folder = it }   // CI: a Settings page
         if (ciSkip && intent?.getBooleanExtra("hold", false) == true) ciHold = true   // CI: a person's three-dot menu
         if (ciSkip && intent?.getBooleanExtra("group", false) == true && app.ready.value) ciGroup()   // CI: a group and its settings
         if (ciSkip && intent?.getBooleanExtra("callpick", false) == true) io.github.ravenor907.muninn.screens.ChatNav.callPick = true   // CI: the Call popup
+        // CI: Daily Hávamál's card at the top of the chats (havamal=1), and opened (havamal=2). Nothing is saved.
+        if (ciSkip) intent?.getIntExtra("havamal", 0)?.takeIf { it in 1..2 }?.let { io.github.ravenor907.muninn.screens.DailyHav.ci = it }
         if (ciSkip && intent?.getBooleanExtra("room", false) == true && app.ready.value) ciRoom(false)   // CI: the voice room screen
         if (ciSkip && intent?.getBooleanExtra("roomjoin", false) == true && app.ready.value) ciRoom(true)   // CI: the join sheet
         if (ciSkip && intent?.getBooleanExtra("tvvoice", false) == true)   // CI: the Kids' TV voice library loads and runs
@@ -537,6 +542,14 @@ class MainActivity : ComponentActivity() {
             // Practice goes back to Labs (in Settings); Start a chat opens Add someone, and so does an invite opened from a
             // link during setup that wasn't taken there (the tour doesn't lose it).
             if (e.practice) show("settings") else { show("chat"); if (e.startChat || ChatNav.incoming.isNotEmpty()) ChatNav.open = "add" }
+        }
+        // 1.42: a pattern without its unlock password (set before 1.42) gets one now; one set in first setup is asked once
+        // more from memory after setup (its Done page asks first). Before any chat shows; no Skip.
+        var spareStep by remember { mutableStateOf(if (ciSkip) null else io.github.ravenor907.muninn.screens.spareStep(app)) }
+        val spare = spareStep
+        if (spare != null && (spare == "set" || setupRun == null)) {
+            io.github.ravenor907.muninn.screens.UnlockPasswordPage(app, spare) { spareStep = io.github.ravenor907.muninn.screens.spareStep(app) }
+            return
         }
         if (setupRun != null && setupRun.step != io.github.ravenor907.muninn.screens.SetupFlow.Step.TOUR) {
             io.github.ravenor907.muninn.screens.FirstSetup(app); return

@@ -53,8 +53,45 @@ class LocalSend(private val context: Context, val identity: Identity) {
     /** Our certificate, made once and kept in the app's private files. Null only if it can't be made: then plain HTTP. */
     private val tls: Tls? by lazy { Tls.load(File(context.filesDir, "tls")) }
 
+    /**
+     * 1.42 (cap h1): with Nearby off, a certificate of its own that changes every day and whenever Nearby is turned off,
+     * so nobody close by can follow this phone by it. Contacts are told the next one before it's shown ([myFingerprints]).
+     */
+    // Inside "tls", which the vault never touches (not sealed, not set aside, not restored), like the lasting one.
+    private val hidden by lazy { HiddenTls(File(context.filesDir, "tls/hidden")) }
+
+    /** The certificate shown now: the hidden one with Nearby off, else the lasting one. Null: none (plain HTTP). */
+    private fun shown(): Tls? = if (off()) hidden.current() ?: tls else tls
+
     /** What other devices know us by: our certificate's hash, or (without one) the random id. */
-    val fingerprint: String get() = tls?.fingerprint ?: identity.fingerprint
+    val fingerprint: String get() = shown()?.fingerprint ?: identity.fingerprint
+
+    /** One of this phone's own certificates (lasting or hidden): its own announcement or address, never a device. */
+    private fun mine(fp: String?): Boolean = Tls.same(fp, tls?.fingerprint) || Tls.same(fp, identity.fingerprint) ||
+        (tls != null && (Tls.same(fp, hidden.current()?.fingerprint) || Tls.same(fp, hidden.upcoming()?.fingerprint)))
+
+    /**
+     * Cap h1: every certificate this phone's server may show, for "hf" in receipts to contacts: the lasting one, the hidden
+     * one now and the next one (made now if need be), so a contact can pin any of them. Empty without a certificate.
+     */
+    fun myFingerprints(): List<String> {
+        val t = tls ?: return emptyList()
+        return listOfNotNull(t.fingerprint, hidden.current()?.fingerprint, hidden.upcoming()?.fingerprint).distinct()
+    }
+
+    /** Cap h1: the fingerprints a contact named ("hf"), to pin its saved address with. Set by Chat. */
+    var pinsFor: ((String) -> List<String>)? = null
+
+    /** Cap h1: the hidden certificate changed, so contacts are told the new next one (Chat sends an empty receipt). */
+    var onHiddenChanged: (() -> Unit)? = null
+
+    /** Nearby off: the hidden certificate changes when it's due ([LocalSendRules.rotateDue]). */
+    private fun rotateIfDue(turningOff: Boolean) {
+        if (tls == null || !off()) return
+        val now = System.currentTimeMillis()
+        if (!LocalSendRules.rotateDue(hidden.since(), now, turningOff)) return
+        if (hidden.rotate(now)) try { onHiddenChanged?.invoke() } catch (_: Exception) {}
+    }
 
     data class Device(
         val id: String, val alias: String, val model: String, val type: String,
@@ -119,8 +156,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
     @Volatile var serverPort = SERVER_FIRST
         private set
 
-    /** Cap s1: my chat key vouching for my certificate, made once (the certificate never changes). */
-    private val proof: String? by lazy { tls?.let { Proof.route(identity.keys.private, identity.publicKey, it.fingerprint) } }
+    /** Cap s1: my chat key vouching for the certificate shown now (made once for each, as the hidden one changes). */
+    private val proofs = ConcurrentHashMap<String, String>()
+    private val proof: String? get() = shown()?.fingerprint?.let { fp ->
+        proofs[fp] ?: Proof.route(identity.keys.private, identity.publicKey, fp)?.also { if (proofs.size > 8) proofs.clear(); proofs[fp] = it }
+    }
 
     private val _devices = MutableStateFlow<List<Device>>(emptyList())
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
@@ -242,6 +282,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 if (w == PowerLogic.Radio.OFF || (w == PowerLogic.Radio.LOW && ++quietFor < 5)) continue
                 quietFor = 0
                 announce()
+                rotateIfDue(turningOff = false)   // cap h1: a new hidden certificate every day while Nearby is off
                 askContacts()
                 val cutoff = System.currentTimeMillis() - 10 * 60_000
                 found.entries.removeIf { it.value.seen < cutoff }
@@ -272,7 +313,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private fun listen(port: Int): ServerSocket {
         val t = tls
         return if (t != null) {
-            (t.serverContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
+            // 1.42 (cap h1): the certificate is picked at each handshake, so the hidden one is shown with Nearby off.
+            (Tls.picking({ shown() ?: t }, { listOfNotNull(t, hidden.current(), hidden.upcoming()) }).serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
                 // Ask for the sender's certificate but don't require it (some Huginn and Muninn apps have
                 // none): when one is shown, the fingerprint the sender claims must match it.
                 wantClientAuth = true
@@ -314,7 +356,8 @@ class LocalSend(private val context: Context, val identity: Identity) {
         if (off()) {
             found.entries.removeIf { e -> e.value.chatKey?.let { isContact?.invoke(it) } != true }
             publish()
-            askContacts()
+            // Cap h1: a hidden certificate contacts already know takes over, so nobody close by can tie this time to the last.
+            pool.execute { rotateIfDue(turningOff = true); askContacts() }
         } else announce()
     }
 
@@ -329,9 +372,11 @@ class LocalSend(private val context: Context, val identity: Identity) {
             // Round 17: only with the contact's own certificate pinned. Whoever has that address now (another network,
             // another device) fails the handshake before this phone's certificate, hint or proof goes out. An address
             // kept without one (an older version) is never asked; it's learned again once the contact is heard.
-            if (!LocalSendRules.mayAsk(p.protocol, p.fp)) continue
+            // 1.42 (cap h1): or once the contact names its certificates over the ratchet ("hf"); any of them will do.
+            val pins = LocalSendRules.pins(p.fp, try { pinsFor?.invoke(k).orEmpty() } catch (_: Exception) { emptyList() })
+            if (!LocalSendRules.mayAsk(p.protocol, pins)) continue
             if (found.values.any { it.chatKey == k && it.seen > fresh } || !asking(p.ip)) continue
-            pool.execute { register(p.ip, p.port, p.protocol, scan = false, expected = p.fp) }
+            pool.execute { register(p.ip, p.port, p.protocol, scan = false, expected = pins) }
         }
     }
 
@@ -414,7 +459,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
                 if (!isNeighbour(p.address)) continue
                 val o = JSONObject(String(p.data, 0, p.length))
                 val fp = o.optString("fingerprint")
-                if (Tls.same(fp, fingerprint)) continue   // our own announcement
+                if (mine(fp)) continue   // our own announcement
                 val ip = p.address.hostAddress ?: continue
                 val announce = o.optBoolean("announce", o.optBoolean("announcement", false))
                 // A multicast message proves nothing: a device is only listed once its certificate answered (register).
@@ -477,7 +522,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
         val protocol = o.optString("protocol", fallback)
         if (protocol == "https" && proven == null) return
         var id = proven ?: o.optString("fingerprint")
-        if (id.isEmpty() || Tls.same(id, fingerprint)) return
+        if (id.isEmpty() || mine(id)) return
         if (protocol == "https") id = id.uppercase()   // certificate hashes: one spelling, so a device is listed once
         // A fingerprint seen over HTTPS is a certificate hash. Nobody else may take it over by
         // claiming it with encryption off, which would skip the certificate check when sending.
@@ -1026,7 +1071,7 @@ class LocalSend(private val context: Context, val identity: Identity) {
     private fun open(url: String, timeout: Int, expected: String?, anonymous: Boolean = false): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
         if (c is HttpsURLConnection) {
-            c.sslSocketFactory = (if (anonymous) null else tls?.client(expected)) ?: Tls.anonymousClient(expected)
+            c.sslSocketFactory = (if (anonymous) null else shown()?.client(expected)) ?: Tls.anonymousClient(expected)
             c.hostnameVerifier = anyHost
         }
         c.connectTimeout = minOf(timeout, 4000)
@@ -1126,4 +1171,26 @@ object LocalSendRules {
      * contact's certificate fingerprint pinned, so the handshake fails before anything goes to anyone else there.
      */
     fun mayAsk(protocol: String, fingerprint: String): Boolean = protocol == "https" && fingerprint.length >= 32
+
+    /**
+     * 1.42 (cap h1): the fingerprints a contact's saved address is asked with, comma-separated: the one it showed there
+     * and every one the contact named over the ratchet ("hf"). An address saved before 1.41 (no fingerprint of its own)
+     * is asked once the contact has named one. Empty: never asked.
+     */
+    fun pins(saved: String, named: List<String>): String =
+        (listOf(saved) + named).map { it.uppercase() }.filter { it.length == 64 }.distinct().joinToString(",")
+
+    const val HOUR = 3_600_000L
+    const val DAY = 24 * HOUR
+
+    /**
+     * 1.42 (cap h1): whether the hidden certificate that took over at [since] changes now: every day while Nearby is
+     * off, at once when it's turned off ([turningOff]) unless it changed in the last hour (so a quick off, on, off
+     * never shows one contacts haven't heard of yet), and when the clock is a day behind it.
+     */
+    fun rotateDue(since: Long, nowMs: Long, turningOff: Boolean): Boolean = when {
+        since <= 0L || since - nowMs > DAY -> true
+        turningOff -> nowMs - since >= HOUR
+        else -> nowMs - since >= DAY
+    }
 }

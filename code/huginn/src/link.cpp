@@ -356,6 +356,24 @@ void LinkReplay::pinged(const QString &to, const QString &pn, qint64 nowMs)
     m_pings.insert(to, Ping{pn, nowMs});
 }
 
+bool LinkReplay::answerDue(const QString &from, qint64 nowMs)
+{
+    const auto it = m_answered.constFind(from);
+    if (it != m_answered.constEnd() && nowMs >= it.value() && nowMs - it.value() < kAnswerMs)
+        return false;
+    m_answered.insert(from, nowMs);
+    return true;
+}
+
+bool LinkReplay::pingDue(const QString &from, qint64 nowMs)
+{
+    const auto it = m_pingedOff.constFind(from);
+    if (it != m_pingedOff.constEnd() && nowMs >= it.value() && nowMs - it.value() < 120000)
+        return false;
+    m_pingedOff.insert(from, nowMs);
+    return true;
+}
+
 void LinkReplay::forget(const QString &from)
 {
     m_pings.remove(from);
@@ -555,6 +573,14 @@ void Link::reprobe()
     m_reprobeAt = t;
     sendTo(m_phone, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()}, {QStringLiteral("dn"), myDeviceName()},
                                 {QStringLiteral("pn"), pingNonce()}});
+}
+
+void Link::pingDevice(const Device &d)
+{
+    // 1.42 (cap l5): the same challenge the companion sends its phone, now either way.
+    const QString pn = QString::number(QRandomGenerator::system()->generate64(), 16).rightJustified(16, QLatin1Char('0'));
+    m_replay.pinged(d.key, pn, now());
+    sendTo(d, QJsonObject{{QStringLiteral("t"), QStringLiteral("ping")}, {QStringLiteral("caps"), linkCaps()}, {QStringLiteral("pn"), pn}});
 }
 
 QString Link::pingNonce()
@@ -1804,6 +1830,24 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         const qint64 skew = LinkReplay::skewOf(p, now());
         if (v == LinkReplay::Verdict::Skewed || (v == LinkReplay::Verdict::Taken && qAbs(skew) > LinkReplay::kMaxAgeMs))
             sayClockOff(from, skew);
+        // 1.42 (cap l5): more than 36 hours off, straight over Wi-Fi or Bluetooth. Its ping is answered (only the pong,
+        // which says its "pn" back, so it learns this clock), and it is pinged, so its own pong teaches this device its
+        // clock. Nothing else of the frame is taken.
+        const bool direct = via == QLatin1String("wifi") || via == QLatin1String("bluetooth");
+        if (v == LinkReplay::Verdict::Skewed && direct) {
+            const Device *dev = nullptr;
+            if (ph)
+                dev = &m_phone;
+            for (const Device &d : std::as_const(m_companions))
+                if (comp && d.key == from)
+                    dev = &d;
+            const QString pn = jstr(p, "pn");
+            if (dev && t == QLatin1String("ping") && !pn.isEmpty() && pn.size() <= 32 && m_replay.answerDue(from, now()))
+                sendTo(*dev, QJsonObject{{QStringLiteral("t"), QStringLiteral("pong")}, {QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap)},
+                                         {QStringLiteral("pn"), pn}});
+            if (dev && m_replay.pingDue(from, now()))
+                pingDevice(*dev);
+        }
         else if (v == LinkReplay::Verdict::Unstamped && ph)
             reprobe();
         // Round 16: found on an older version: the person is asked to link it again (Main.qml, Linked.older).
@@ -1886,6 +1930,16 @@ bool Link::receive(const QString &from, const QJsonObject &p, const QString &via
         } else {
             Q_EMIT changed();
         }
+        return true;
+    }
+    if (ph && t == QLatin1String("ping")) {
+        // 1.42 (cap l5): this device is the companion and its phone pinged it: the pong says the ping's "pn" back, so the
+        // phone learns this clock from its own challenge.
+        QJsonObject pong{{QStringLiteral("t"), QStringLiteral("pong")}, {QStringLiteral("caps"), QString::fromLatin1(LinkReplay::kStampCap)}};
+        const QString pn = jstr(p, "pn");
+        if (!pn.isEmpty() && pn.size() <= 32)
+            pong.insert(QStringLiteral("pn"), pn);
+        sendTo(m_phone, pong);
         return true;
     }
     if (ph && t == QLatin1String("read")) {
@@ -2364,8 +2418,9 @@ bool Link::acctInternetOk(const QJsonObject &msg)
 
 QString Link::linkCaps()
 {
-    // l1 to l3 (15.1 to 15.3), and l4: this app stamps its link frames (15, "Replay").
-    return QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3 ") + QString::fromLatin1(LinkReplay::kStampCap);
+    // l1 to l3 (15.1 to 15.3), l4: this app stamps its link frames (15, "Replay"), and l5 (1.42): it answers a ping
+    // from either side, even one more than 36 hours off, and pings its companions too (15, "Clocks").
+    return QString::fromLatin1(kAcctCap) + QStringLiteral(" l2 l3 ") + QString::fromLatin1(LinkReplay::kStampCap) + QStringLiteral(" l5");
 }
 
 bool Link::saysL1(const QString &caps)
@@ -2870,6 +2925,12 @@ bool Link::selfTest(const QJsonObject &v)
         check(caps.contains(QStringLiteral("l4")) && caps.contains(QStringLiteral("l1")) && caps.contains(QStringLiteral("l3"))
                   && QString::fromLatin1(LinkReplay::kStampCap) == QLatin1String("l4"),
               "link caps: l4 is said");
+        // 1.42 (cap l5): said too; a ping days off is answered at most once a minute, such a device pinged every 2 minutes.
+        LinkReplay due;
+        const bool answers = due.answerDue(QStringLiteral("phone"), t0) && !due.answerDue(QStringLiteral("phone"), t0 + 30000)
+                             && due.answerDue(QStringLiteral("phone"), t0 + LinkReplay::kAnswerMs) && due.answerDue(QStringLiteral("tablet"), t0);
+        const bool pings = due.pingDue(QStringLiteral("PC"), t0) && !due.pingDue(QStringLiteral("PC"), t0 + 60000) && due.pingDue(QStringLiteral("PC"), t0 + 120000);
+        check(caps.contains(QStringLiteral("l5")) && answers && pings, "link caps: l5 is said, and pings days off are answered and sent sparingly");
         // A clock 5 days off. Round 17 (security M2): a frame is dropped as off on every route, Wi-Fi and Bluetooth
         // too, until a pong over Wi-Fi or Bluetooth answers this app's own ping within 30 seconds; after that its frames
         // are taken on any route; a replay of a frame is still refused, and an old copy from before still is.

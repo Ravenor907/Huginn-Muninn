@@ -20,12 +20,15 @@ object Backup {
     const val PREFS_ENTRY = "@prefs.json"
     private const val PREFS = "muninn"
     /** Settings that belong to this phone, not to the person: never copied over. */
-    private val phoneOnly = setOf("fingerprint", "lockFails", "lockAt", "lockWait", "lockBoot", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
+    private val phoneOnly = setOf("fingerprint", "lockFails", "lockAt", "lockWait", "lockBoot", "lockErase", "unlockRecall", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
         RESTORED_AT, RESTORE_ANNOUNCE)
     /** When a backup was last restored here (ms): for 7 days a relay envelope for a day key not here yet waits (see Chat). */
     const val RESTORED_AT = "restoredAt"
     /** A backup was restored: a new day key goes to every e1 contact once the chats open (see Chat). */
     const val RESTORE_ANNOUNCE = "restoreAnnounce"
+
+    /** Daily Hávamál's own imported translation: kept on this device only, so never in a backup or a move. */
+    private const val OWN_VERSES = io.github.ravenor907.muninn.screens.DailyHav.FILE
 
     /** The name the Save picker suggests. */
     fun fileName(): String = "Muninn backup ${java.time.LocalDate.now()}.${BackupFormat.EXT}"
@@ -45,7 +48,7 @@ object Backup {
     fun create(app: Muninn, uri: Uri, password: String, withFiles: Boolean, progress: (Float) -> Unit): Saved {
         val vault = app.vault
         val created = java.time.Instant.now().toString()
-        val entries = vault.sealedFiles().filter { it.first != "move-out.bin" && (withFiles || !BackupFormat.isMedia(it.first)) }
+        val entries = vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES && (withFiles || !BackupFormat.isMedia(it.first)) }
             .map { (name, f) -> BackupFormat.Entry(name) { vault.readBytes(f) } } +
             BackupFormat.Entry(PREFS_ENTRY) { prefsJson(app).toByteArray() } +
             BackupFormat.Entry(BackupFormat.SHARED) { MoveCommon.fromMuninn(app).toString().toByteArray() } +
@@ -58,7 +61,7 @@ object Backup {
 
     /** Everything a backup holds, read now (moving to another device, cap x1). */
     fun entries(context: Context, vault: Vault): List<Pair<String, ByteArray>> =
-        vault.sealedFiles().filter { it.first != "move-out.bin" }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
+        vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
             (PREFS_ENTRY to prefsJson(context).toByteArray())
 
     private class Counting(o: OutputStream) : FilterOutputStream(o) {

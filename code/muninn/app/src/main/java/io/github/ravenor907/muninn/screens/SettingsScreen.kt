@@ -81,7 +81,7 @@ private class Page(val id: String, val title: String, val parent: String = "")
 private val PAGES = listOf(
     Page("profile", "Profile"), Page("notify", "Notifications"), Page("lock", "Privacy and lock"), Page("calls", "Calls"),
     Page("look", "Look"), Page("battery", "Battery and data"), Page("devices", "Devices and backup"),
-    Page("about", "Updates and about"), Page("lockset", "Change lock", "lock"),
+    Page("about", "Updates and about"), Page("lockset", "Change lock", "lock"), Page("unlockpw", "Unlock password", "lock"),
 )
 
 /** Older page names (the chat list's Back up and Linked devices, CI) open the page that holds them now. */
@@ -104,6 +104,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
         return
     }
     if (folder == "lockset") { ChangeLock(app); return }
+    if (folder == "unlockpw") { ChangeUnlockPassword(app); return }
     androidx.compose.runtime.key(folder) {
     // At most 720 dp wide, centred: on a wide tablet a switch stays near its label.
     Column(Modifier.fillMaxSize().wrapContentWidth(androidx.compose.ui.Alignment.CenterHorizontally).widthIn(max = 720.dp).fillMaxWidth()
@@ -346,6 +347,9 @@ private fun NotifyPage(app: Muninn) {
             io.github.ravenor907.muninn.net.MessageService.askUnrestricted(ctx)
         }
         if (fullOff) WarnRow("Full-screen calls", "Off: calls won't show on the lock screen. Tap to allow") { openFullScreenSetting(ctx) }
+        // What the last update did to full-screen calls (kept on this phone only, never sent).
+        val fsiLast = remember { io.github.ravenor907.muninn.update.FullScreenKeep.last(ctx) }
+        if (fsiLast != null) Help(fsiLast)
         NotifyShowsChoice(shows) { shows = it; id.notifyShows = it }
         var reduce by remember { mutableStateOf(id.reduceNotifications) }
         ToggleRow("Reduce notifications", "One per chat until you open it", reduce) { reduce = it; id.reduceNotifications = it }
@@ -454,6 +458,10 @@ private fun LookPage(app: Muninn) {
         RowLabel("Color vision")
         io.github.ravenor907.muninn.ui.ColorVisionControls { id.colorVision = Access.colorVision }
     }
+    // Daily Hávamál: off until it's turned on here (screens/DailyHavamal.kt).
+    Framed("Daily Hávamál") { DailyHavSettings(app) }
+    // Read aloud: Female or Male natural voice, downloaded once (screens/ReadAloudSettings.kt).
+    Framed("Read aloud") { ReadAloudSettings() }
     MoreFold {
         // Seasonal, over any look: the season, and what falls.
         io.github.ravenor907.muninn.ui.SeasonControls { id.season = Access.season; id.seasonGround = Access.seasonGround; id.seasonAnim = Access.seasonAnim }
@@ -482,6 +490,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     var hasLock by remember { mutableStateOf(app.vault.hasPassword) }
     var panic by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.enabled(ctx)) }
     var shake by remember { mutableStateOf(io.github.ravenor907.muninn.ui.Panic.shakeOn(ctx)) }
+    var eraseOn by remember { mutableStateOf(app.vault.tries.erase) }
     val blocked by app.chat.blocked.collectAsState()
     Framed("Lock") {
         if (hasLock) PageRow("Change lock", if (app.vault.usesPattern) "Pattern" else "Password") { SettingsNav.folder = "lockset" }
@@ -502,14 +511,32 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
                 if (it) { panic = true; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, true) }
                 else LockGate.ask(app, "Turn off panic lock") { panic = false; io.github.ravenor907.muninn.ui.Panic.setEnabled(ctx, false) }
             }
+            // 1.42: a pattern's unlock password (either one opens Muninn), and the erase after too many wrong tries.
+            if (app.vault.usesPattern) PageRow("Unlock password", if (app.vault.hasSpare) "Change" else "Not set") { SettingsNav.folder = "unlockpw" }
+            ToggleRow("Erase after too many tries", if (eraseOn) "On: 5 wrong tries after the 24-hour wait erase everything" else "Off: the waits go on, nothing is erased", eraseOn) {
+                if (!it) { app.vault.tries.erase = false; eraseOn = false; return@ToggleRow }
+                Ui.sure(Ask("Erase after too many tries?", "Wrong tries already make people wait: 5 minutes, then 1 hour, 12 hours and 24 hours. " +
+                    "With this on, 5 more wrong tries after the 24-hour wait erase everything on this phone at once, for good: chats, contacts and keys. " +
+                    "Children or anyone guessing can set it off.\n\nMake a backup first (Settings › Devices and backup). Without one, an erase can't be undone. " +
+                    "Your saved backup files are kept, and Forgot it? puts one back.", "Turn on", danger = true) {
+                    LockGate.ask(app, "Erase after too many tries") { app.vault.tries.erase = true; eraseOn = true; Ui.say("Erase after too many tries is on. Keep a recent backup.") }
+                })
+            }
         }
     }
     Framed("Privacy") {
         ToggleRow("Send read receipts", "Delivered still shows", receipts) { receipts = it; id.readReceipts = it }
         ToggleRow("Active status", "Off: nobody sees it, both ways", activeOn) { activeOn = it; app.chat.setActiveStatus(it) }
-        ToggleRow("Link previews", "The site sees your address", previews) { previews = it; id.linkPreviews = it }
+        // Ultra privacy: link previews are off, said on the switch (the saved choice comes back when it's off).
+        val ultraTor by io.github.ravenor907.muninn.net.UltraPrivacy.state.collectAsState()
+        val ultraOn = ultraTor != io.github.ravenor907.muninn.net.UltraPrivacy.Tor.OFF
+        ToggleRow("Link previews", if (ultraOn) io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE else "The site sees your address", previews && !ultraOn) {
+            if (ultraOn) Ui.say(io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE + ".") else { previews = it; id.linkPreviews = it }
+        }
         ToggleRow("Block screenshots", "Also hides it in recents", secure) { secure = it; id.secureScreen = it; onSecure() }
     }
+    // Ultra privacy (1.42): Tor, off by default; two screens before it turns on.
+    UltraPrivacySection(app)
     Framed("Keep messages") {
         ChoiceRow(2, Modifier.padding(top = 8.dp), minWidth = 120.dp) { i, m ->
             val day = i == 1
@@ -522,6 +549,7 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
     }
     Framed("Nearby") {
         // One switch for everything nearby: off, nothing is announced or scanned for and nobody nearby is listed.
+        if (io.github.ravenor907.muninn.net.UltraPrivacy.on) Text(io.github.ravenor907.muninn.net.UltraPrivacy.NEARBY_NOTE, style = Type.small, modifier = Modifier.padding(top = 6.dp))
         ToggleRow("Nearby", "Off: contacts only, nothing announced", nearbyOn) {
             nearbyOn = it; id.visibleNearby = it; app.net.nearbyChanged(); app.ble.hiddenChanged()
         }
@@ -560,6 +588,17 @@ private fun LockPage(app: Muninn, onSecure: () -> Unit) {
                 }
             })
         }
+    }
+}
+
+/** Settings › Privacy and lock › Unlock password: the current lock first, then the new one typed twice and asked once more from memory. */
+@Composable
+private fun ChangeUnlockPassword(app: Muninn) {
+    var proven by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        FolderHeader("Unlock password") { SettingsNav.folder = "lock" }
+        if (!proven) ConfirmLock(app, "Unlock password", Modifier.fillMaxSize(), onCancel = { SettingsNav.folder = "lock" }) { proven = true }
+        else UnlockPasswordSteps(app, recall = false) { SettingsNav.folder = "lock" }
     }
 }
 
@@ -718,6 +757,8 @@ private fun AboutPage(app: Muninn) {
         // Hands Muninn itself to a phone close by (Quick Share or Bluetooth), no internet needed.
         PageRow("Share the app", "") { io.github.ravenor907.muninn.ui.ShareApp.share(ctx) }
         Text("Private chat and file sharing. Made by Ravenor907. GPL-3.0.", style = Type.small, modifier = Modifier.padding(vertical = 10.dp))
+        // Read aloud's voices and speech engine, and their licenses.
+        VoiceCredits()
     }
 }
 

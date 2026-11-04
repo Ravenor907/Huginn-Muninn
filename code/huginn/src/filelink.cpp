@@ -1,4 +1,5 @@
 #include "filelink.h"
+#include "groupvideo.h"
 #include "busy.h"
 #include "chat.h"
 #include "call/directpath.h"
@@ -9,6 +10,7 @@
 #include "photos.h"
 #include "settings.h"
 #include "sharing.h"
+#include "ultraprivacy.h"
 #include "vault.h"
 
 #include <QCoreApplication>
@@ -413,7 +415,8 @@ bool FileLink::ok(const QJsonObject &p)
         for (const QChar c : sha.toString())
             if (!((c >= QLatin1Char('0') && c <= QLatin1Char('9')) || (c >= QLatin1Char('a') && c <= QLatin1Char('f'))))
                 return false;
-        return p.value(QStringLiteral("e")).isString() && p.value(QStringLiteral("c")).isArray();
+        // Cap v3 (29.3): a full-size video's length.
+        return p.value(QStringLiteral("e")).isString() && p.value(QStringLiteral("c")).isArray() && GroupVideo::vidOk(p.value(QStringLiteral("vid")));
     }
     if (t == QLatin1String("accept"))
         return p.value(QStringLiteral("e")).isString() && p.value(QStringLiteral("c")).isArray();
@@ -456,6 +459,9 @@ struct FileLink::Xfer {
     qint64 base = 0, lastKeep = 0;
     bool quiet = false, direct = false, baseSet = false;
     int resumeBelow = -1;               // theirs: the pieces a kept part already has, -1 when it starts fresh
+    // Cap v3 (29.3): mine, a full-size video vid ms long; back sends its relay copy if it can't go straight.
+    int vid = 0;
+    std::function<void()> back;
 };
 
 FileLink::FileLink(Chat *chat, QObject *parent)
@@ -816,6 +822,8 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
         return QStringLiteral("That file is empty.");
     if (fi.size() > kMaxBytes)
         return QStringLiteral("Files can be up to 4 GB.");
+    if (UltraPrivacy::blocksFile(fi.fileName()))
+        return UltraPrivacy::videoOffText();   // Ultra privacy: no videos out, as files either
     QString name;
     for (const QChar c : fi.fileName())
         name += c.unicode() < 0x20 || c == QLatin1Char('/') || c == QLatin1Char('\\') ? QLatin1Char('_') : c;
@@ -832,8 +840,9 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
         return QString();
     }
     // The route (27.1): the same Wi-Fi first (their app must know the "lan" candidate), then straight over the
-    // internet with trust, then the relays for a small file.
-    const bool trust = trusted && trusted(peer);
+    // internet with trust, then the relays for a small file. Ultra privacy: never straight over the internet (no STUN,
+    // no address swapped); the same Wi-Fi still works.
+    const bool trust = trusted && trusted(peer) && UltraPrivacy::directAllowed();
     const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
     const QString route = Sharing::route(sameWifi, trust, fi.size(), kRelayMax);
     if (route == QLatin1String("relay")) {
@@ -866,6 +875,10 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     x->id = GroupWire::newLogicalId();
     x->peer = peer;
     x->group = group;
+    x->vid = m_nextVid;                 // cap v3: set by sendVideo for this one file
+    x->back = std::move(m_nextBack);
+    m_nextBack = nullptr;
+    m_nextVid = 0;
     x->name = name;
     x->path = path;
     x->size = fi.size();
@@ -1016,6 +1029,8 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
                       {QStringLiteral("e"), QString::fromLatin1(x->eph.publicDer.toBase64())}, {QStringLiteral("c"), cands}};
     if (!x->group.isEmpty())
         offer.insert(QStringLiteral("g"), x->group);   // cap f2 (27.2): the group it's for
+    if (x->vid > 0)
+        offer.insert(QStringLiteral("vid"), x->vid);   // cap v3 (29.3): a full-size video
     signal(x->peer, offer);
     x->state = QStringLiteral("offered");
     x->note.clear();
@@ -1031,7 +1046,8 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
             fallBack(x, hasF3(x->peer) && x->size > kRelayMax ? QStringLiteral("Not accepted within a day. Try again.")
                                                                : QStringLiteral("They're offline. Try again when they're back."));
     });
-    x->wait->start(answerMs(x->size, hasF3(x->peer)));
+    // Cap v3: a full-size video waits only as long as a small file; then its relay copy goes instead.
+    x->wait->start(x->back ? kRelayAfterMs : answerMs(x->size, hasF3(x->peer)));
     // Cap f3: a big file may wait a day. A STUN ask a minute keeps this socket's way through the router open, so the
     // address in the offer still works when they accept.
     if (!testLocal && !x->lanOnly && x->size > kRelayMax && hasF3(x->peer)) {
@@ -1061,7 +1077,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         if (m_x.contains(id))
             return;
         const QJsonArray cands = p.value(QStringLiteral("c")).toArray();
-        const bool trust = trusted && trusted(from);
+        const bool trust = trusted && trusted(from) && UltraPrivacy::directAllowed();   // Ultra privacy: the same Wi-Fi only
         // Cap f2 (27.1): close by on the same Wi-Fi it can come straight without trust (no internet address swapped).
         const Stun::Address lan = lanTarget(lanOf(from), cands);
         const QString g = jstr(p, "g");
@@ -1176,6 +1192,8 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         // Refused (the group's file rules, no space, they said no: 27.4) ends it. Otherwise they don't trust me with
         // their address: a small file can still go through the relays.
         const QString why = jstr(p, "why");
+        if (why == QLatin1String("no"))
+            x->back = nullptr;   // cap v3: they said no to the full-size video; nothing more
         if (!why.isEmpty())
             fail(x, Sharing::declineText(why));
         else {
@@ -1589,6 +1607,8 @@ void FileLink::end(Xfer *x)
 
 void FileLink::fail(Xfer *x, const QString &why, bool tell)
 {
+    if (videoFellBack(x, why))
+        return;
     x->state = QStringLiteral("failed");
     x->note = why;
     // A half-received file is never left behind.
@@ -1639,8 +1659,56 @@ void FileLink::cancel(const QString &id)
     fail(x, QStringLiteral("Stopped"), false);
 }
 
+bool FileLink::videoFellBack(Xfer *x, const QString &why)
+{
+    // Stopped here (Cancel) is never a reason to send it another way.
+    if (!x->mine || !x->back || why == QLatin1String("Stopped"))
+        return false;
+    const std::function<void()> back = std::move(x->back);
+    x->back = nullptr;
+    const QString id = x->id;
+    end(x);
+    drop(id);           // its card goes; the relay copy's message takes over
+    back();
+    return true;
+}
+
+QString FileLink::sendVideo(const QString &peer, const QString &path, const QString &group, int vidMs, std::function<void()> back)
+{
+    // Ultra privacy: sending videos is off entirely (receiving still works).
+    if (!UltraPrivacy::videoSendAllowed()) {
+        addFailed(peer, QFileInfo(path).fileName(), QFileInfo(path).size(), UltraPrivacy::videoOffText(), path, false, QString(), group);
+        return QString();
+    }
+    // Only straight: a member it can't go straight to gets the relay copy at once (or, with no back, a card saying why).
+    const bool trust = trusted && trusted(peer);
+    const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
+    if (!hasF1(peer) || (!group.isEmpty() && !(hasF2 && hasF2(peer))) || (!trust && !sameWifi)) {
+        if (back) {
+            back();
+        } else {
+            addFailed(peer, QFileInfo(path).fileName(), QFileInfo(path).size(),
+                      QStringLiteral("Can't reach %1 straight. Full-size videos go on the same Wi-Fi, or with Direct calls and files on for each other.").arg(who(peer)),
+                      path, false, QString(), group, !trust);
+        }
+        return QString();
+    }
+    m_nextVid = qBound(1, vidMs, GroupVideo::kFullMaxMs);
+    m_nextBack = std::move(back);
+    const QString r = send(peer, path, group);
+    m_nextVid = 0;
+    if (m_nextBack) {   // send() stopped before it made the transfer
+        const std::function<void()> b = std::move(m_nextBack);
+        m_nextBack = nullptr;
+        b();
+    }
+    return r;
+}
+
 void FileLink::fallBack(Xfer *x, const QString &why)
 {
+    if (videoFellBack(x, why))
+        return;
     QFile f(x->path);
     // A group's file goes over the relays only to a contact (into the chat with them).
     const bool groupOk = x->group.isEmpty() || (isContact && isContact(x->peer));

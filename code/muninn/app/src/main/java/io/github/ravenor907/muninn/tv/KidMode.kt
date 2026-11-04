@@ -355,7 +355,9 @@ object KidTv {
         val next = synchronized(timeLock) {
             // Round 17: each source's newest reading; the time follows what several agree on ([KidRules.clockFrom]).
             readings = KidRules.addReading(readings, source, TimeAnchor(wall, el))
-            val n = KidRules.clockFrom(anchor, readings, el) ?: return
+            // 1.42: after a restart the first reading alone sets nothing: two sources that agree, a parent's config, or a
+            // source the device's own clock agrees with ([KidRules.firstClock]). Until then quiet times stay as they were.
+            val n = KidRules.clockFrom(anchor, readings, el, System.currentTimeMillis()) ?: return
             if (n == anchor) return
             anchor = n
             n
@@ -634,6 +636,8 @@ object KidTv {
                 apply(app, cfg, fromKey, mailbox)
                 // Just paired: the microphone and notifications are asked for now, while the parent is at the TV.
                 if (pairing) { prefs(app).edit().putBoolean(SETUP_ASK, true).apply(); setupAsk.value = true }
+                // k15 (7.18): the read-aloud voice a parent picked (a config without one leaves it as it was).
+                KidVoice.of(new)?.let { v -> io.github.ravenor907.muninn.net.ReadAloud.parentPicked(app, v) }
                 // k8 (7.13): how long messages stay on the TV, as the parent set it.
                 cfg.keep?.let { d ->
                     val ms = TvRules.keepMs(d)
@@ -882,8 +886,8 @@ object KidTv {
         // Wrong PIN tries count only against the PIN they were typed for, never the next family's.
         prefs(app).edit().remove(HELD_ASKED).remove(PIN_FAILS).remove(PIN_AT).remove(PIN_BOOT)
             .remove(ASK_N).remove(ASK_AT).remove(ASK_BOOT).remove(DROP_LATER).apply()
-        // Round 17: nothing of kids' mode stays running (read aloud).
-        KidSpeak.shutdown()
+        // Round 17: nothing of kids' mode stays running (read aloud); k15: the parent's voice pick goes too.
+        KidSpeak.shutdown(app)
         // Everything else kids' mode changed (sizes, look, how long messages stay, drafts, waiting asks): put back.
         KidReset.restore(app)
         unlockedUntil.value = 0L

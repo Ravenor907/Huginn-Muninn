@@ -999,6 +999,25 @@ Window {
         target: Updater
         function onRemind() { app.updateLater = false }
     }
+    // Ultra privacy (src/ultraprivacy.h): Tor slow, blocked or not starting says so once each time, with Wait or Turn off
+    // Ultra privacy (back to the normal way). The same two stay in Settings › Privacy and lock while it lasts. Never over
+    // another question: it waits for that one to close.
+    property bool ultraWarned: false
+    Connections {
+        target: UltraPrivacy
+        function onChanged() {
+            if (!UltraPrivacy.bannerShows) { app.ultraWarned = false; return }
+            if (app.ultraWarned || (Ui.confirm && Ui.confirm.visible)) return
+            app.ultraWarned = true
+            Ui.sure("Ultra privacy", UltraPrivacy.bannerText, UltraPrivacy.torState === "missing" ? "Turn off Ultra privacy" : "Wait",
+                    () => { if (UltraPrivacy.torState === "missing") UltraPrivacy.turnOff(); else UltraPrivacy.waitLonger() })
+            const c = Ui.confirm
+            if (c && UltraPrivacy.torState !== "missing") {
+                c.otherText = "Turn off Ultra privacy"
+                c.otherCallback = () => { UltraPrivacy.turnOff(); Ui.say("Ultra privacy is off.") }
+            }
+        }
+    }
     Rectangle {
         id: updateBar
         anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter
@@ -1909,6 +1928,13 @@ Window {
             { page: "dms", zone: "messages", promptDrop: true, file: "10e-prompt-chat-changed" },
             { page: "dms", zone: "messages", newGroup: true, file: "11-new-group" },
             { page: "settings", section: "look", file: "12-look" },
+            // Daily Hávamál (shown for the tour only, nothing saved): the card at the top of the chats, the verse opened,
+            // Earlier verses, and Settings › Look with it on; then on a handheld, as the controller sees it.
+            { page: "dms", zone: "list", verse: "card", file: "12b-daily-verse" },
+            { page: "dms", zone: "list", verse: "open", file: "12c-daily-verse-open" },
+            { page: "dms", zone: "list", verse: "earlier", file: "12d-daily-verse-earlier" },
+            { page: "settings", section: "look", verse: "card", file: "12e-look-daily-verse" },
+            { page: "dms", zone: "list", verse: "open", handheld: true, file: "12f-handheld-daily-verse" },
             { page: "g:tour-crew", file: "13-group" },
             { page: "g:tour-crew", zone: "messages", file: "14-group-messages" },
             { page: "g:tour-crew", zone: "channels", groupOptions: true, file: "15-group-options" },
@@ -2003,6 +2029,11 @@ Window {
             { page: "dms", zone: "messages", openProgram: true, file: "88-open-program" },
             // Round 17 (B1): Back up (and Move, Restore, linking) asks for the current lock first.
             { page: "settings", section: "devices", lockCheck: true, file: "89-confirm-lock" },
+            // 1.42 lock rules: a wait in plain words (1 hour, and what comes next), the last stage with Erase after too many
+            // tries on, counting down, and setting a pattern's unlock password. Privacy and lock (06) shows the Erase switch.
+            { page: "settings", section: "privacy", lockCheck: true, lockFails: 10, file: "89b-lock-wait" },
+            { page: "settings", section: "privacy", lockCheck: true, lockFails: 22, lockErase: true, file: "89c-lock-last-tries" },
+            { page: "settings", section: "privacy", lockSpare: true, file: "89d-unlock-password" },
             { page: "dms", setup: "welcome", file: "60-setup-welcome" },
             { page: "dms", setup: "lock", file: "61-setup-lock" },
             { page: "dms", setup: "name", file: "62-setup-name" },
@@ -2028,6 +2059,7 @@ Window {
                 Settings.theme = savedTheme; Settings.season = savedSeason; Settings.density = savedDensity; Settings.uiSize = savedSize; Settings.labs = savedLabs; Settings.textSize = savedText
                 app.width = 1920; app.height = 1080
                 System.setTourHandheld(false); app.tourLegend = false
+                DailyVerse.tour = false
                 stop(); System.tourFinished(); return
             }
             const s = steps[step]
@@ -2044,6 +2076,7 @@ Window {
             System.setTourHandheld(!!s.handheld)
             app.tourLegend = !!s.handheld
             Settings.labs = s.labs ? true : savedLabs
+            DailyVerse.tour = !!s.verse
             const args = { tour: true }
             if (s.section) args.section = s.section
             if (s.more) args.more = true
@@ -2066,6 +2099,17 @@ Window {
             if (s.person) personPanel.show("tour", "Mira", { tour: true, page: s.personPage || "can" })
             if (s.filesMenu) Qt.callLater(() => { const p = app.page(); if (p && p.filesMenu) p.filesMenu() })
             if (s.newGroup) app.newGroup()
+            // Today's verse opened from the top of the list, or its Earlier verses (a QML warning fails the tour).
+            if (s.verse === "open" || s.verse === "earlier") {
+                const how = s.verse
+                Qt.callLater(() => {
+                    const p = app.page()
+                    if (!p || !p.openVerse || !p.verseShown) { console.warn("Tour check: Daily Hávamál's card isn't at the top of the chats"); return }
+                    if (p.entries[0].kind !== "verse") console.warn("Tour check: Daily Hávamál's card isn't the first row")
+                    if (how === "open") p.openVerse(null)
+                    else p.earlierVerses()
+                })
+            }
             if (s.report) Qt.callLater(app.openReport)
             if (s.labsInbox) app.openLabsReports()
             if (s.appStorage) app.openAppStorage()
@@ -2075,7 +2119,9 @@ Window {
             if (s.setup) Qt.callLater(() => setup.open(false, s.setup, s.stop || 0))
             if (s.backup) Qt.callLater(() => backupPanel.open("backup", false, true, s.backup))
             if (s.restore) Qt.callLater(() => backupPanel.open("restore", false, true, s.restore))
-            if (s.lockCheck) Qt.callLater(() => lockCheck.sample("Back up", "A backup holds your whole account"))
+            if (s.lockCheck && s.lockFails !== undefined) Qt.callLater(() => lockCheck.sample("Back up", "A backup holds your whole account", s.lockFails, !!s.lockErase))
+            else if (s.lockCheck) Qt.callLater(() => lockCheck.sample("Back up", "A backup holds your whole account"))
+            if (s.lockSpare) Qt.callLater(() => lockCheck.sampleSpare())
             if (s.find) Qt.callLater(() => { const p = app.page(); if (p && p.openFind) p.openFind(s.find) })
             if (s.memberMenu) Qt.callLater(() => { const p = app.page(); if (p && p.memberMenu) p.memberMenu(p.members.find(m => m.key === "s")) })
             if (s.volume) Qt.callLater(() => ModActions.volumeMenu("s", "Sam", null, true))

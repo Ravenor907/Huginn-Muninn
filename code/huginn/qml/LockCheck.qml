@@ -18,6 +18,8 @@ Item {
         if (!Vault.hasLock || Vault.lockConfirmed(what)) { callback(); return }
         if (Vault.screenLocked) { Ui.say("Unlock Huginn first.", true); return }
         after = callback
+        lockAsk.mode = "confirm"
+        lockAsk.sampleFails = -1
         lockAsk.grantFor = what
         lockAsk.lead = title + (why !== "" ? ". " + why : ".")
         lockAsk.note = ""
@@ -25,11 +27,26 @@ Item {
         visible = true
         Qt.callLater(lockAsk.focusField)
     }
-    // The screenshot tour: shown as it looks, with nothing to do once the lock is given.
-    function sample(title, why) {
+    // The screenshot tour: shown as it looks, with nothing to do once the lock is given. fails and erase (1.42): the
+    // words after that many wrong tries (shown only, nothing is counted).
+    function sample(title, why, fails, erase) {
         after = null
+        lockAsk.mode = "confirm"
+        lockAsk.sampleFails = fails === undefined ? -1 : fails
+        lockAsk.sampleErase = !!erase
         lockAsk.grantFor = ""
         lockAsk.lead = title + ". " + why + "."
+        lockAsk.note = ""
+        lockAsk.bad = false
+        visible = true
+    }
+    // The screenshot tour (1.42): setting a pattern's unlock password, as it looks (nothing is saved: the tour has no pattern).
+    function sampleSpare() {
+        after = null
+        lockAsk.mode = "spare"
+        lockAsk.respare = true
+        lockAsk.sampleFails = -1
+        lockAsk.lead = ""
         lockAsk.note = ""
         lockAsk.bad = false
         visible = true

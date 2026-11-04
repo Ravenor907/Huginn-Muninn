@@ -1,5 +1,6 @@
 #include "linkpreview.h"
 #include "morewire.h"
+#include "ultraprivacy.h"
 #include "photos.h"
 
 #include <QBuffer>
@@ -242,6 +243,11 @@ void LinkPreview::fetch(const QString &url, QObject *ctx, std::function<void(con
         const QJsonObject p{{QStringLiteral("text"), url}, {QStringLiteral("lp"), lp}};
         done(!lp.isEmpty() && MoreWire::ok(QStringLiteral("rich"), p) ? lp : QJsonObject());
     };
+    // Ultra privacy: no preview at all (the site would see the address).
+    if (!UltraPrivacy::previewsAllowed()) {
+        checked({});
+        return;
+    }
     get(url, kPageMax, QStringLiteral("text/html"), ctx, [url, ctx, checked](const QByteArray &page) {
         if (page.isEmpty()) {
             checked({});

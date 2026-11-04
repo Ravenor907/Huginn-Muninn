@@ -662,8 +662,12 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 Text("Reaching $name by: ${routeShort(app.chat.route(key))}", style = Type.small, modifier = Modifier.padding(vertical = 6.dp))
                 if (contact != null) {
                     var fast by remember(key) { mutableStateOf(io.github.ravenor907.muninn.net.call.CallManager.trusted(key)) }
-                    ToggleRow("Direct calls and files", "Faster, and big files go straight. They see your address", fast) {
-                        io.github.ravenor907.muninn.net.call.CallManager.setTrusted(key, it); fast = it
+                    // Ultra privacy: the saved choice stays, but nothing goes straight while it's on (said on the switch).
+                    val ultra = io.github.ravenor907.muninn.net.UltraPrivacy.on
+                    ToggleRow("Direct calls and files", if (ultra) io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE
+                        else "Faster, and big files go straight. They see your address", fast && !ultra) {
+                        if (ultra) io.github.ravenor907.muninn.ui.Ui.say(io.github.ravenor907.muninn.net.UltraPrivacy.OFF_NOTE + ".")
+                        else { io.github.ravenor907.muninn.net.call.CallManager.setTrusted(key, it); fast = it }
                     }
                     NavRow("Introduce", "To another contact", icon = "people") { introducing = true }
                 }

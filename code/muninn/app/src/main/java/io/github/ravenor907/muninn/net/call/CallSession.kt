@@ -105,7 +105,9 @@ class CallSession(
     private fun lanPortIfClose(): Int? = if (host.lanAddressOf(peerKey) != null) media?.lanPort else null
 
     /** Put this phone's internet addresses in what it sends: only to someone trusted, and as the callee only when asked (5.8.1). */
-    private fun shareDirect() = c2Local && trusted && host.internetAllowed() && (outgoing || peerP2p)
+    // Ultra privacy: never the direct path (no STUN, no address swapped); the call goes through the call relay, or the
+    // same Wi-Fi.
+    private fun shareDirect() = c2Local && trusted && host.internetAllowed() && (outgoing || peerP2p) && io.github.ravenor907.muninn.net.UltraPrivacy.directAllowed
     private fun extras() = if (!c2Local) null else CallLogic.Extras(host.videoCodec(), wantVideo, shareDirect())
     private fun directCands() = if (shareDirect()) myDirect else emptyList()
 

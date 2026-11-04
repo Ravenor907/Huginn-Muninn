@@ -249,12 +249,14 @@ Rectangle {
         const items = []
         if (!kept && !m.pending) items.push({ name: "Reply", icon: "reply", url: "reply" })
         if (m.text) items.push({ name: "Copy text", icon: "file", url: "copy" })
+        if (m.text && ReadAloud.available) items.push({ name: ReadAloud.speaking ? "Stop reading" : "Read aloud", icon: "speaker", url: "readaloud" })
         linksIn(m.text).forEach((u, i) => items.push({ name: linkLabel(u), icon: "attach", url: "l" + i }))
         if (m.failed) items.push({ name: "Retry", icon: "send", url: "retry" })
         if (!items.length) return
         Ui.pickFrom("Message", [{ header: "", items: items }], a => {
             if (a === "reply") replyTo(m)
             else if (a === "copy") { Chat.copyText(m.text); Ui.say("Copied.") }
+            else if (a === "readaloud") { if (ReadAloud.speaking) ReadAloud.stop(); else { ReadAloud.speak(m.text); if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } }
             else if (a === "retry") Linked.retrySend(m.id)
             else if (a.indexOf("l") === 0) openLink(linksIn(m.text)[Number(a.substring(1))])
         })

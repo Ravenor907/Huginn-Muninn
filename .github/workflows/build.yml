@@ -118,6 +118,19 @@ jobs:
             grep -q "HUGINN_VERSION_LABEL=$label" code/huginn/packaging/io.github.ravenor907.Huginn.json || { echo "::error::The beta label didn't go into the Flatpak manifest"; exit 1; }
             echo "::notice title=Beta::Huginn.flatpak is $label"
           fi
+      - name: Speech engine for Read aloud (sherpa-onnx, checked against code/shared/voices.sha256)
+        shell: bash
+        run: |
+          # Bundled in the Flatpak (code/shared/docs/voices.md). Its SHA-256 goes into the manifest, so flatpak-builder checks it too.
+          f=sherpa-onnx-v1.13.8-linux-x64-shared-lib.tar.bz2
+          curl -fsSL --retry 5 --retry-delay 5 -o "$RUNNER_TEMP/$f" "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$f" \
+            || { echo "::error title=Speech engine::Couldn't download $f"; exit 1; }
+          sum=$(sha256sum "$RUNNER_TEMP/$f" | cut -d' ' -f1)
+          want=$(grep -E "^[0-9a-f]{64}  $f\$" code/shared/voices.sha256 | cut -d' ' -f1 || true)
+          if [ -z "$want" ]; then echo "::notice title=Speech engine not pinned yet::$sum  $f (the Publish voices workflow prints this line for code/shared/voices.sha256)"
+          elif [ "$want" != "$sum" ]; then echo "::error title=Speech engine changed::$f is $sum, voices.sha256 says $want"; exit 1; fi
+          sed -i "s|@SHERPA_ONNX_LINUX_SHA256@|$sum|" code/huginn/packaging/io.github.ravenor907.Huginn.json
+          grep -q "\"$sum\"" code/huginn/packaging/io.github.ravenor907.Huginn.json || { echo "::error::The speech engine's hash didn't go into the Flatpak manifest"; exit 1; }
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: .flatpak-builder
@@ -146,11 +159,12 @@ jobs:
       - name: Download size (Huginn.flatpak)
         shell: bash
         run: |
-          # Reported on every build. A warning past 5.5 MB; the build stops only past 10 MB (something went badly wrong).
+          # Reported on every build. 1.42 bundles the speech engine for Read aloud (sherpa-onnx with ONNX Runtime, about 8 MB
+          # of it). A warning past 20 MB; the build stops only past 40 MB (something went badly wrong).
           size=$(stat -c %s Huginn.flatpak)
           echo "::notice title=Huginn.flatpak::$size bytes"
-          if [ "$size" -gt 10000000 ]; then echo "::error title=Huginn.flatpak far too big::$size bytes"; exit 1; fi
-          if [ "$size" -gt 5500000 ]; then echo "::warning title=Huginn.flatpak grew::$size bytes"; fi
+          if [ "$size" -gt 40000000 ]; then echo "::error title=Huginn.flatpak far too big::$size bytes"; exit 1; fi
+          if [ "$size" -gt 20000000 ]; then echo "::warning title=Huginn.flatpak grew::$size bytes"; fi
       - name: Screenshot tour (fails on any broken screen)
         shell: bash
         run: |
@@ -198,6 +212,8 @@ jobs:
           run timeout 120 dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --perf-selftest
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/code/shared/vectors:ro" io.github.ravenor907.Huginn --call-selftest "$PWD/code/shared/vectors/proto06-vectors.json"
           run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen --filesystem="$PWD/code/shared/vectors:ro" io.github.ravenor907.Huginn --release-sig-selftest "$PWD/code/shared/vectors/release-sig-vectors.json"
+          # Read aloud: plain text, sentences, voice hashes, safe unpacking, and the bundled speech engine loads.
+          run dbus-run-session -- flatpak run --env=QT_QPA_PLATFORM=offscreen io.github.ravenor907.Huginn --readaloud-selftest
           exit $bad
       # Screenshots and logs stay with the run, as artifacts.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
@@ -336,7 +352,8 @@ jobs:
           import os, sys, zipfile
           f = sys.argv[1]
           size = os.path.getsize(f)
-          limit = 16 * 1024 * 1024
+          # 1.42: Read aloud's speech engine (sherpa-onnx with ONNX Runtime) and Ultra privacy's Tor, for both ARM ABIs, are most of it.
+          limit = 64 * 1024 * 1024
           libs = [i for i in zipfile.ZipFile(f).infolist() if i.filename.startswith("lib/")]
           abis = sorted({i.filename.split("/")[1] for i in libs})
           saved = sum(i.file_size - i.compress_size for i in libs)
@@ -450,7 +467,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          modules: qtwebsockets qtconnectivity qtmultimedia
+          modules: qtwebsockets qtconnectivity qtmultimedia qtspeech
           cache: true
           # The cache is keyed by the text "6.10.*", so it would keep the first 6.10 it ever got. A new
           # prefix fetches the newest 6.10 again (6.10.0 and 6.10.1 can crash in QSoundEffect, QTBUG-142694).
@@ -526,6 +543,23 @@ jobs:
           Remove-Item -Force "$out/dxcompiler.dll", "$out/dxil.dll" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "$out/qmltooling" -ErrorAction SilentlyContinue
           Get-ChildItem $out -Filter "pkgconf*.dll" | Remove-Item -Force
+          # Read aloud's speech engine (sherpa-onnx with ONNX Runtime, code/shared/docs/voices.md): its DLLs, checked against
+          # code/shared/voices.sha256 when the line is there. Huginn loads them itself when something is read aloud.
+          $f = "sherpa-onnx-v1.13.8-win-x64-shared-MD-Release.tar.bz2"
+          $tmp = Join-Path $env:RUNNER_TEMP "sherpa"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$f" -OutFile "$tmp/$f" -MaximumRetryCount 5 -RetryIntervalSec 5
+          $sum = (Get-FileHash -Algorithm SHA256 "$tmp/$f").Hash.ToLower()
+          $line = Select-String -Path code/shared/voices.sha256 -Pattern "^([0-9a-f]{64})  $([regex]::Escape($f))$" | Select-Object -First 1
+          if (-not $line) { Write-Output "::notice title=Speech engine not pinned yet::$sum  $f (the Publish voices workflow prints this line for code/shared/voices.sha256)" }
+          elseif ($line.Matches[0].Groups[1].Value -ne $sum) { Write-Output "::error title=Speech engine changed::$f is $sum, voices.sha256 says $($line.Matches[0].Groups[1].Value)"; exit 1 }
+          # Windows' own tar (bsdtar) unpacks .tar.bz2 by itself and takes drive letters in paths.
+          & "$env:SystemRoot/System32/tar.exe" -xjf "$tmp/$f" -C $tmp
+          if ($LASTEXITCODE -ne 0) { Write-Output "::error::Couldn't unpack $f"; exit 1 }
+          $dlls = Get-ChildItem $tmp -Recurse -Filter "*.dll"
+          if (-not ($dlls | Where-Object Name -eq "sherpa-onnx-c-api.dll")) { Write-Output "::error title=Speech engine::sherpa-onnx-c-api.dll isn't in $f"; exit 1 }
+          $dlls | ForEach-Object { Copy-Item $_.FullName $out -Force }
+          Write-Output "Speech engine: $(($dlls | ForEach-Object Name) -join ', ')"
           # The Visual C++ runtime, so nothing has to be installed first
           $crt = Get-ChildItem "$env:VCToolsRedistDir/x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { Write-Output "::error::Visual C++ runtime not found under $env:VCToolsRedistDir"; exit 1 }
@@ -549,6 +583,8 @@ jobs:
           l="$d/lib/licenses"
           mkdir -p "$l/vcpkg" "$l/qt"
           cp code/shared/licenses/Qt-LGPL-3.0.txt code/shared/licenses/FFmpeg-LGPL-2.1.txt "$l/"
+          # Read aloud: the speech engine (sherpa-onnx, ONNX Runtime) and the natural voices' licenses.
+          cp code/shared/licenses/sherpa-onnx-Apache-2.0.txt code/shared/licenses/onnxruntime-MIT.txt code/shared/licenses/natural-voices.txt "$l/"
           vroot="$(cygpath -u "$VCPKG_INSTALLATION_ROOT")/installed/x64-windows/share"
           for c in "$vroot"/*/copyright; do
             [ -f "$c" ] || continue
@@ -582,6 +618,37 @@ jobs:
           n=$(grep -c -a "^import QtQuick" "$d/Huginn.exe" || true)
           [ "$n" = "0" ] || { echo "::error title=QML source in Huginn.exe::$n QML source lines are still in Huginn.exe"; exit 1; }
           echo "Top: $top; lib/ holds $(find "$d/lib" -type f | wc -l) files"
+      - name: Tor for Ultra privacy (the Tor Expert Bundle, signed by the Tor Browser developers)
+        run: |
+          # Ultra privacy (src/ultraprivacy.cpp) starts lib/tor/tor.exe with QProcess. Taken only with a good signature by
+          # the Tor Browser developers' key: its primary fingerprint is pinned here, and the key is in the repo
+          # (code/huginn/packaging/windows/tor-browser-devs.gpg; a newer signing subkey comes from torproject.org's WKD).
+          fp=EF6E286DDA85EA2A4BA7DE684E2C6E8793298290
+          t="$(cygpath -u "$RUNNER_TEMP")/tor"
+          rm -rf "$t"; mkdir -p "$t/gpg" "$t/x"; chmod 700 "$t/gpg"
+          gpg --batch --quiet --homedir "$t/gpg" --import code/huginn/packaging/windows/tor-browser-devs.gpg
+          gpg --batch --quiet --homedir "$t/gpg" --auto-key-locate clear,nodefault,wkd --locate-keys torbrowser@torproject.org > /dev/null 2>&1 || true
+          json=$(curl -fsSL --retry 5 --retry-delay 5 https://aus1.torproject.org/torbrowser/update_3/release/download-windows-x86_64.json) \
+            || { echo "::error title=Tor::Couldn't ask torproject.org which Tor Browser is current"; exit 1; }
+          ver=$(printf '%s' "$json" | python -c "import json, re, sys; print(re.search(r'/torbrowser/([0-9][0-9a-z.]*)/', json.load(sys.stdin)['binary']).group(1))") \
+            || { echo "::error title=Tor::No version in torproject.org's answer"; exit 1; }
+          f="tor-expert-bundle-windows-x86_64-$ver.tar.gz"
+          got=""
+          for base in "https://dist.torproject.org/torbrowser/$ver" "https://archive.torproject.org/tor-package-archive/torbrowser/$ver"; do
+            curl -fsSL --retry 3 --retry-delay 5 -o "$t/$f" "$base/$f" && curl -fsSL --retry 3 --retry-delay 5 -o "$t/$f.asc" "$base/$f.asc" && { got=1; break; }
+          done
+          [ -n "$got" ] || { echo "::error title=Tor::Couldn't download $f"; exit 1; }
+          signer=$(gpg --batch --homedir "$t/gpg" --status-fd 1 --verify "$t/$f.asc" "$t/$f" 2>/dev/null | awk '$2 == "VALIDSIG" { print $NF }' | head -n 1 || true)
+          [ "$signer" = "$fp" ] || { echo "::error title=Tor signature::$f isn't signed by the Tor Browser developers ($fp), so it isn't used"; exit 1; }
+          tar -xzf "$t/$f" -C "$t/x"
+          exe=$(find "$t/x" -iname tor.exe | head -n 1)
+          [ -n "$exe" ] || { echo "::error title=Tor::No tor.exe in $f"; exit 1; }
+          d=dist/Huginn/lib/tor
+          mkdir -p "$d"
+          cp "$exe" "$d/"
+          for dll in "$(dirname "$exe")"/*.dll; do [ -f "$dll" ] && cp "$dll" "$d/"; done
+          cp code/shared/licenses/Tor-BSD-3-Clause.txt dist/Huginn/lib/licenses/
+          echo "::notice title=Tor::Tor Expert Bundle $ver: tor.exe $(stat -c %s "$d/tor.exe") bytes, signed by $fp"
       - name: Nothing in Huginn.exe that looks like malware (scripts, hidden windows, suspended processes)
         run: python code/shared/tools/check-windows-binary.py dist/Huginn
       - name: Zip it, then unpack the zip and test exactly what ships
@@ -596,11 +663,12 @@ jobs:
           $mb = [Math]::Round((Get-Item Huginn-Windows.zip).Length / 1MB, 1)
           $raw = [Math]::Round(((Get-ChildItem dist/Huginn -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
           Write-Output "::notice title=Huginn-Windows.zip::$mb MB zipped, $raw MB unzipped"
-          # Reported on every build. A warning past 48 MB; the build stops only past 80 MB (something went badly wrong).
+          # Reported on every build. A warning past 60 MB (1.42 added Read aloud's speech engine, about 9 MB); the build stops
+          # only past 80 MB (something went badly wrong).
           $limit = 80000000
           $size = (Get-Item Huginn-Windows.zip).Length
           if ($size -gt $limit) { Write-Output "::error title=Huginn-Windows.zip far too big::$size bytes"; exit 1 }
-          if ($size -gt 48000000) { Write-Output "::warning title=Huginn-Windows.zip grew::$size bytes" }
+          if ($size -gt 60000000) { Write-Output "::warning title=Huginn-Windows.zip grew::$size bytes" }
           Remove-Item -Recurse -Force dist/Huginn
           Expand-Archive -LiteralPath Huginn-Windows.zip -DestinationPath dist
           if (-not (Test-Path dist/Huginn/Huginn.exe)) { Write-Output "::error::The zip doesn't unpack to Huginn/Huginn.exe"; exit 1 }
@@ -651,6 +719,8 @@ jobs:
           run timeout 120 "$h" --perf-selftest
           run "$h" --call-selftest code/shared/vectors/proto06-vectors.json
           run "$h" --release-sig-selftest code/shared/vectors/release-sig-vectors.json
+          # Read aloud: plain text, sentences, voice hashes, safe unpacking, and the speech engine's DLLs load from lib\.
+          run "$h" --readaloud-selftest
           # A file signed the way the release job signs (openssl, Ed25519 over the raw bytes) with a throwaway key.
           t="$RUNNER_TEMP/release-sig"; mkdir -p "$t"
           openssl genpkey -algorithm ed25519 -out "$t/k.pem"

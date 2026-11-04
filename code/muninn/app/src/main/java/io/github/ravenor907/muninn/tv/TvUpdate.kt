@@ -207,7 +207,8 @@ object TvUpdate {
                     val held = afterCall ?: return
                     if (inCall()) { timer.schedule(this, 30, TimeUnit.SECONDS); return }
                     afterCall = null
-                    if (held.exists()) install(c, held)
+                    // Round 17 (TV minor 9): a file Android cleared meanwhile is said (no space), never dropped silently.
+                    install(c, held)
                 }
             }, 30, TimeUnit.SECONDS)
             return
@@ -215,7 +216,8 @@ object TvUpdate {
         if (!canInstall(c)) { waiting = apk; post(c, State(needsParent = true, status = TvWords.ASK_PARENT, code = "needs")); setRemote(c, TvUpd.TAP); return }
         waiting = null
         // Not enough room for the install (Android copies the file, then unpacks it): said as it is, and tried again later.
-        if (!TvUpd.roomFor(apk.length(), try { c.filesDir.usableSpace } catch (_: Exception) { Long.MAX_VALUE })) {
+        // Round 17 (TV minor 9): so is a download Android cleared from the cache for want of space.
+        if (TvUpd.apkGone(apk.exists(), apk.length()) || !TvUpd.roomFor(apk.length(), try { c.filesDir.usableSpace } catch (_: Exception) { Long.MAX_VALUE })) {
             post(c, State(status = "There isn't enough space for the update. It tries again later.", code = "failed"))
             setRemote(c, TvUpd.FAILED, why = TvUpd.NO_SPACE)
             return

@@ -34,6 +34,8 @@ object AppLock {
     /** The lock goes up now (it came due, "Right away", Lock now, a panic lock). Only [opened] takes it down. */
     fun raise() {
         _locked.value = true
+        // Nothing is read out loud on a locked Muninn (Read aloud stops at once).
+        try { io.github.ravenor907.muninn.net.ReadAloud.stop() } catch (_: Throwable) {}
         try { onRaise() } catch (_: Exception) {}
     }
 
