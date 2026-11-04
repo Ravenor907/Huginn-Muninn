@@ -204,8 +204,8 @@ jobs:
           git config user.name "Ravenor907"
           git config user.email "Ravenor907@users.noreply.github.com"
           for try in 1 2 3; do
-            git fetch origin "$branch"
-            git reset --hard "origin/$branch"
+            git fetch origin "refs/heads/$branch"
+            git reset --hard FETCH_HEAD
             while read -r sum name; do
               [ -n "$name" ] || continue
               grep -qE "^[0-9a-f]{64}  $name\$" code/shared/voices.sha256 || echo "$sum  $name" >> code/shared/voices.sha256
@@ -214,7 +214,7 @@ jobs:
             git add code/shared/voices.sha256 code/muninn/gradle/verification-metadata.xml
             if git diff --cached --quiet; then echo "Nothing new to commit."; exit 0; fi
             git commit -q -m "Natural voices' lines and Muninn's library checksums"
-            if git push origin "HEAD:$branch"; then
+            if git push origin "HEAD:refs/heads/$branch"; then
               echo "::notice title=Committed::The voices' lines and Muninn's library checksums are on $branch. Pull before your next push."
               exit 0
             fi
