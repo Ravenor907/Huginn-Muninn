@@ -293,7 +293,7 @@ QString FileLink::typeWord(const QString &name)
     const QString ext = dot < 0 ? QString() : name.mid(dot + 1).toUpper();
     bool plain = !ext.isEmpty() && ext.size() <= 8;
     for (const QChar c : ext)
-        plain = plain && c.isLetterOrDigit();
+        plain = plain && c.isLetterOrNumber();
     if (!plain)
         return QStringLiteral("a file");
     return (QStringLiteral("AEFHILMNORSX").contains(ext.at(0)) ? QStringLiteral("an ") : QStringLiteral("a ")) + ext + QStringLiteral(" file");
