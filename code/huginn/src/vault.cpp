@@ -1603,7 +1603,7 @@ void Vault::finishErase()
     const QString root = System::dataDir();
     QStringList todo;
     for (const QString &n : names) {
-        if (n.isEmpty() || n.contains(QLatin1Char('/')) || n.contains(QLatin1Char('\')) || n.startsWith(QLatin1Char('.')))
+        if (n.isEmpty() || n.contains(QLatin1Char('/')) || n.contains(QLatin1Char('\\')) || n.startsWith(QLatin1Char('.')))
             continue;
         // A chat folder whose vault.key opens again was set up since: never touched.
         if (isChatFolder(n) && liveKeyFile(root + QLatin1Char('/') + n + QStringLiteral("/vault.key")))
