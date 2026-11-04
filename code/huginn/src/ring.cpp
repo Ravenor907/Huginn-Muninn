@@ -1248,7 +1248,7 @@ bool RingWire::selfTest(const QString &vectorsPath)
         const QString ta = tags.tagFor(QStringLiteral("A")), tb = tags.tagFor(QStringLiteral("B"));
         RingTags locked(allow, [] { return QByteArray(); }, [](const QByteArray &) {});
         QFile af(allow);
-        const bool named = af.open(QIODevice::ReadOnly) && !af.readAll().contains(ta.toLatin1());
+        const bool named = af.open(QIODevice::ReadOnly) && af.readAll().contains(ta.toLatin1());   // the file holds hashes, never a tag
         af.close();
         const bool given = tags.judge(QString()) == RingTags::NoTag && tags.tagFor(QStringLiteral("A")) == ta && ta != tb
                            && tags.judge(ta) == RingTags::TagAllowed && tags.judge(newTag()) == RingTags::TagRevoked

@@ -343,13 +343,13 @@ class LinkReplay {
 
     /**
      * Kept between runs (in the vault): {"s": [devices that stamp], "n": {key: until}, "old": [devices on an older
-     * version], "o": {device: clock offset} (1.42, cap l5; the same field as Huginn's)}.
+     * version], "off": {device: clock offset} (1.42, cap l5; kept on this phone only)}.
      */
     @Synchronized
     fun save(): String {
         dirty = false
         return JSONObject().put("s", org.json.JSONArray(stamps.toList())).put("n", JSONObject().apply { seen.forEach { (k, v) -> put(k, v) } })
-            .put("old", org.json.JSONArray(older.toList())).put("o", JSONObject().apply { offset.forEach { (k, v) -> put(k, v) } }).toString()
+            .put("old", org.json.JSONArray(older.toList())).put("off", JSONObject().apply { offset.forEach { (k, v) -> put(k, v) } }).toString()
     }
 
     @Synchronized
@@ -360,7 +360,7 @@ class LinkReplay {
             o.optJSONArray("s")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { stamps.add(it) } }
             o.optJSONObject("n")?.let { n -> n.keys().forEach { k -> seen[k] = n.optLong(k) } }
             o.optJSONArray("old")?.let { a -> for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { older.add(it) } }
-            o.optJSONObject("o")?.let { n -> n.keys().forEach { k -> (n.opt(k) as? Number)?.let { offset[k] = it.toLong() } } }
+            o.optJSONObject("off")?.let { n -> n.keys().forEach { k -> (n.opt(k) as? Number)?.let { offset[k] = it.toLong() } } }
         } catch (_: Exception) {}
     }
 
