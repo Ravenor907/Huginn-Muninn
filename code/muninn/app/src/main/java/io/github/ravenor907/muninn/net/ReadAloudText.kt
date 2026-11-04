@@ -35,7 +35,7 @@ object ReadAloudText {
     private val LINK = Regex("""(?:https?://|www\.)\S+""", RegexOption.IGNORE_CASE)
     private val MARKS = Regex("[*~`|]+")
     private val QUOTE = Regex("""(^|\n)\s*>+\s?""")
-    private val AT = Regex("""(?U)(^|\s)@(\w)""")
+    private val AT = Regex("""(^|\s)@([\p{L}\p{N}_])""")
     private val SPACES = Regex("[ \\t\\r\\u000B\\u000C\\u00A0]+")
     private val END = Regex("""(?<=[.!?…])\s+""")
     private val HASH_LINE = Regex("""^([0-9a-f]{64}) {2}([A-Za-z0-9._-]{1,128})$""")
