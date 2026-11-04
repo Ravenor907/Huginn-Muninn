@@ -14,6 +14,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QTemporaryDir>
+#include <QThread>
 #include <cstdio>
 #include <iterator>
 
@@ -699,6 +700,31 @@ QJsonObject pairJson(const ChatCrypto::KeyPair &k, const QByteArray &secret)
 }
 
 qint64 nowMs() { return QDateTime::currentMSecsSinceEpoch(); }
+
+// ring-key.json and ring-allow.json: readable by this user only, written beside the file and swapped in one step.
+// QSaveFile swaps with a replacing rename (MoveFileEx on Windows), so the old file is never deleted first: on Windows a
+// deleted file whose name is still held (a virus scan, the indexer) refuses a rename onto it. A swap that fails while
+// something else has the file open is tried again a few times.
+bool writeOwnerOnly(const QString &path, const QByteArray &data)
+{
+    const QFileDevice::Permissions owner = QFileDevice::ReadOwner | QFileDevice::WriteOwner;
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile::remove(path + QStringLiteral(".new"));   // left by a version that wrote it beside the file
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        if (attempt > 0)
+            QThread::msleep(25 * attempt);
+        QSaveFile f(path);
+        if (!f.open(QIODevice::WriteOnly))
+            continue;
+        f.setPermissions(owner);
+        // Not committed: QSaveFile throws its temporary file away.
+        if (f.write(data) != data.size() || !f.commit())
+            continue;
+        QFile::setPermissions(path, owner);
+        return true;
+    }
+    return false;
+}
 }
 
 void RingKey::load()
@@ -755,23 +781,8 @@ bool RingKey::save() const
         older.insert(QStringLiteral("until"), m_olderUntil);
         o.insert(QStringLiteral("older"), older);
     }
-    const QByteArray data = compact(o);
-    // Readable by this user only (like the certificate's key, tls.cpp), written beside the file and then swapped in.
-    QDir().mkpath(QFileInfo(m_path).absolutePath());
-    const QString tmp = m_path + QStringLiteral(".new");
-    QFile::remove(tmp);
-    QFile f(tmp);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
-        return false;
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    const bool ok = f.write(data) == data.size();
-    f.close();
-    if (!ok || f.error() != QFileDevice::NoError) {
-        QFile::remove(tmp);
-        return false;
-    }
-    QFile::remove(m_path);
-    return QFile::rename(tmp, m_path);
+    // Readable by this user only (like the certificate's key, tls.cpp), swapped in one step.
+    return writeOwnerOnly(m_path, compact(o));
 }
 
 QString RingKey::publicKey()
@@ -1306,23 +1317,8 @@ void RingTags::saveAll()
     m_allowedLoaded = true;
     QStringList list(hashes.cbegin(), hashes.cend());
     list.sort();
-    // Readable by this user only, like ring-key.json: written beside the file, then swapped in.
-    const QByteArray data = compact(QJsonObject{{QStringLiteral("a"), QJsonArray::fromStringList(list)}});
-    QDir().mkpath(QFileInfo(m_path).absolutePath());
-    const QString tmp = m_path + QStringLiteral(".new");
-    QFile::remove(tmp);
-    QFile f(tmp);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
-        return;
-    f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    const bool ok = f.write(data) == data.size();
-    f.close();
-    if (!ok || f.error() != QFileDevice::NoError) {
-        QFile::remove(tmp);
-        return;
-    }
-    QFile::remove(m_path);
-    QFile::rename(tmp, m_path);
+    // Readable by this user only, like ring-key.json, swapped in one step.
+    writeOwnerOnly(m_path, compact(QJsonObject{{QStringLiteral("a"), QJsonArray::fromStringList(list)}}));
 }
 
 QString RingTags::tagFor(const QString &key)

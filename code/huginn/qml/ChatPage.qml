@@ -390,26 +390,29 @@ Rectangle {
             }
             delegate: Item {
                 id: entry
+                // The row's item, kept while the delegate goes away: a removed row (today's verse hidden, the "New from" bar
+                // gone) has no modelData any more, yet its bindings on page.row still run once before it's destroyed.
+                readonly property var rowData: modelData !== undefined && modelData !== null ? modelData : ({})
                 readonly property bool on: page.active && page.zone === "list" && page.row === index
-                readonly property bool isHeader: modelData.kind === "folder"
-                readonly property real labelHeight: modelData.label ? Theme.px(30) : 0
+                readonly property bool isHeader: entry.rowData.kind === "folder"
+                readonly property real labelHeight: entry.rowData.label ? Theme.px(30) : 0
                 // A chat with messages: two lines (the name, then the last message).
-                readonly property bool twoLines: (modelData.kind === "chat" || modelData.kind === "verse") && !!modelData.last
+                readonly property bool twoLines: (entry.rowData.kind === "chat" || entry.rowData.kind === "verse") && !!entry.rowData.last
                 readonly property real rowHeight: twoLines ? Theme.px(54) : Theme.px(42)
                 width: listPane.width
                 height: labelHeight + (isHeader ? Theme.px(30) : rowHeight)
 
                 // The start of the bottom section (Nearby), or of the people around you.
                 Item {
-                    visible: !!modelData.label
+                    visible: !!entry.rowData.label
                     width: parent.width
                     height: entry.labelHeight
-                    Rectangle { visible: modelData.kind === "nearby"; anchors.top: parent.top; anchors.topMargin: Theme.px(6); width: parent.width; height: 1; color: Theme.line }
+                    Rectangle { visible: entry.rowData.kind === "nearby"; anchors.top: parent.top; anchors.topMargin: Theme.px(6); width: parent.width; height: 1; color: Theme.line }
                     Text {
                         textFormat: Text.PlainText
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
                         anchors.bottom: parent.bottom; anchors.bottomMargin: Theme.px(4)
-                        text: String(modelData.label || "").toUpperCase()
+                        text: String(entry.rowData.label || "").toUpperCase()
                         color: Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(1)
                     }
@@ -422,17 +425,17 @@ Rectangle {
                     width: parent.width
                     height: Theme.px(30)
                     radius: Theme.radius
-                    color: entry.on || (page.dragKey !== "" && page.dropSection === modelData.id && page.dropOnHeader) ? Theme.tile : headHover.hovered ? Theme.raised : "transparent"
+                    color: entry.on || (page.dragKey !== "" && page.dropSection === entry.rowData.id && page.dropOnHeader) ? Theme.tile : headHover.hovered ? Theme.raised : "transparent"
                     border.width: entry.on ? Theme.focusWidth : 0
                     border.color: Theme.accent
                     Accessible.role: Accessible.Button
-                    Accessible.name: modelData.name + (modelData.collapsed ? ", folded away" : "")
+                    Accessible.name: entry.rowData.name + (entry.rowData.collapsed ? ", folded away" : "")
                     Icon {
                         id: chevron
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(8)
                         anchors.verticalCenter: parent.verticalCenter
                         name: "down"; size: Theme.px(14)
-                        rotation: modelData.collapsed ? -90 : 0
+                        rotation: entry.rowData.collapsed ? -90 : 0
                         color: Theme.textMuted
                     }
                     Text {
@@ -441,8 +444,8 @@ Rectangle {
                         anchors.right: headDot.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         elide: Text.ElideRight
-                        text: String(modelData.name || "").toUpperCase() + "  " + (modelData.count || 0)
-                        color: entry.on || modelData.unread ? Theme.text : Theme.textMuted
+                        text: String(entry.rowData.name || "").toUpperCase() + "  " + (entry.rowData.count || 0)
+                        color: entry.on || entry.rowData.unread ? Theme.text : Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold; font.letterSpacing: Theme.px(0.5)
                     }
                     Rectangle {
@@ -451,15 +454,15 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         width: Theme.px(8); height: width; radius: width / 2
                         // A chat with its own color shows it here too.
-                        color: modelData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(modelData.key))) : Theme.accent
-                        visible: !!modelData.unread
+                        color: entry.rowData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(entry.rowData.key))) : Theme.accent
+                        visible: !!entry.rowData.unread
                     }
                     HoverHandler { id: headHover }
                     TapHandler {
                         id: headTap
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.rowContextAt(headTap.parent, point.position, modelData); else page.choose() }
-                        onLongPressed: { page.zone = "list"; page.row = index; page.rowContextAt(headTap.parent, point.position, modelData) }
+                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.rowContextAt(headTap.parent, point.position, entry.rowData); else page.choose() }
+                        onLongPressed: { page.zone = "list"; page.row = index; page.rowContextAt(headTap.parent, point.position, entry.rowData) }
                     }
                     MoreButton {
                         id: folderMore
@@ -467,29 +470,29 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         implicitWidth: Theme.px(24); implicitHeight: Theme.px(24)
                         label: "Folder menu"
-                        onClicked: { page.zone = "list"; page.row = index; page.folderOptions(modelData) }
+                        onClicked: { page.zone = "list"; page.row = index; page.folderOptions(entry.rowData) }
                     }
                 }
 
                 Rectangle {
                     readonly property bool on: entry.on
-                    readonly property bool here: (modelData.kind === "nearby" && page.openKey === "") || (modelData.key !== undefined && modelData.key === page.openKey)
-                    readonly property bool person: modelData.kind === "chat" || modelData.kind === "near" || modelData.kind === "request"
+                    readonly property bool here: (entry.rowData.kind === "nearby" && page.openKey === "") || (entry.rowData.key !== undefined && entry.rowData.key === page.openKey)
+                    readonly property bool person: entry.rowData.kind === "chat" || entry.rowData.kind === "near" || entry.rowData.kind === "request"
                     visible: !entry.isHeader
                     anchors.bottom: parent.bottom
                     width: parent.width
                     height: entry.rowHeight
                     radius: Theme.radius
                     // The one being dragged stays dim in its old place until it's dropped.
-                    opacity: page.dragKey !== "" && modelData.kind === "chat" && modelData.key === page.dragKey && modelData.section === page.dragFrom ? 0.4 : 1
+                    opacity: page.dragKey !== "" && entry.rowData.kind === "chat" && entry.rowData.key === page.dragKey && entry.rowData.section === page.dragFrom ? 0.4 : 1
                     // The "New from" bar sits on the accent's soft fill.
-                    color: on || here ? Theme.tile : modelData.kind === "newfrom" || modelData.kind === "verse" ? Theme.accentFill : rowHover.hovered ? Theme.raised : "transparent"
+                    color: on || here ? Theme.tile : entry.rowData.kind === "newfrom" || entry.rowData.kind === "verse" ? Theme.accentFill : rowHover.hovered ? Theme.raised : "transparent"
                     border.width: on ? Theme.focusWidth : 0
                     border.color: Theme.accent
-                    Accessible.role: modelData.kind === "newfrom" || modelData.kind === "verse" ? Accessible.Button : Accessible.ListItem
-                    Accessible.name: modelData.name + (modelData.tag ? ", " + modelData.tag : "") + (modelData.muted ? ", muted" : "")
-                                     + ((modelData.newCount || 0) > 0 ? ", " + modelData.newCount + " unread" : modelData.unread ? ", unread" : "")
-                                     + (entry.twoLines ? ", " + modelData.last : "")
+                    Accessible.role: entry.rowData.kind === "newfrom" || entry.rowData.kind === "verse" ? Accessible.Button : Accessible.ListItem
+                    Accessible.name: entry.rowData.name + (entry.rowData.tag ? ", " + entry.rowData.tag : "") + (entry.rowData.muted ? ", muted" : "")
+                                     + ((entry.rowData.newCount || 0) > 0 ? ", " + entry.rowData.newCount + " unread" : entry.rowData.unread ? ", unread" : "")
+                                     + (entry.twoLines ? ", " + entry.rowData.last : "")
                     Rectangle {
                         id: ava
                         anchors.left: parent.left; anchors.leftMargin: Theme.px(10)
@@ -501,22 +504,22 @@ Rectangle {
                             visible: parent.parent.person
                             anchors.fill: parent
                             size: parent.width
-                            key: page.isTour || modelData.kind !== "chat" ? "" : modelData.key || ""
-                            name: modelData.name
-                            showDot: modelData.kind === "chat" && Chat.activeStatus
+                            key: page.isTour || entry.rowData.kind !== "chat" ? "" : entry.rowData.key || ""
+                            name: entry.rowData.name
+                            showDot: entry.rowData.kind === "chat" && Chat.activeStatus
                             backdrop: parent.parent.on || parent.parent.here ? Theme.tile : Theme.column
                         }
                         Icon {
                             visible: !parent.parent.person
                             anchors.centerIn: parent
                             size: Theme.px(18)
-                            name: modelData.kind === "ginvite" ? "hash" : modelData.kind === "mirror" ? "phone" : modelData.kind === "archived" ? "folder"
-                                : modelData.kind === "newfrom" ? "bell" : modelData.kind === "verse" ? "text" : "people"
-                            color: parent.parent.here || parent.parent.on || modelData.kind === "newfrom" || modelData.kind === "verse" ? Theme.accent : Theme.textMuted
+                            name: entry.rowData.kind === "ginvite" ? "hash" : entry.rowData.kind === "mirror" ? "phone" : entry.rowData.kind === "archived" ? "folder"
+                                : entry.rowData.kind === "newfrom" ? "bell" : entry.rowData.kind === "verse" ? "text" : "people"
+                            color: parent.parent.here || parent.parent.on || entry.rowData.kind === "newfrom" || entry.rowData.kind === "verse" ? Theme.accent : Theme.textMuted
                         }
                         // Requests wait for an answer: a lock badge so they stand out.
                         Rectangle {
-                            visible: modelData.kind === "request" || (modelData.kind === "ginvite" && !modelData.waiting)
+                            visible: entry.rowData.kind === "request" || (entry.rowData.kind === "ginvite" && !entry.rowData.waiting)
                             anchors.right: parent.right; anchors.bottom: parent.bottom
                             anchors.margins: -Theme.px(2)
                             width: Theme.px(14); height: width; radius: width / 2
@@ -533,10 +536,10 @@ Rectangle {
                         anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.verticalCenterOffset: entry.twoLines ? -Theme.px(9) : 0
-                        elide: Text.ElideRight; text: modelData.name || ""
-                        color: parent.on || parent.here || modelData.unread || modelData.kind === "newfrom" || modelData.kind === "verse" ? Theme.text : Theme.textSoft
+                        elide: Text.ElideRight; text: entry.rowData.name || ""
+                        color: parent.on || parent.here || entry.rowData.unread || entry.rowData.kind === "newfrom" || entry.rowData.kind === "verse" ? Theme.text : Theme.textSoft
                         font.family: Theme.body; font.pixelSize: Theme.fs(15)
-                        font.weight: (modelData.newCount || 0) > 0 ? Font.Bold : modelData.unread || modelData.kind === "newfrom" || modelData.kind === "verse" ? Font.DemiBold : Font.Normal
+                        font.weight: (entry.rowData.newCount || 0) > 0 ? Font.Bold : entry.rowData.unread || entry.rowData.kind === "newfrom" || entry.rowData.kind === "verse" ? Font.DemiBold : Font.Normal
                     }
                     // The last message, under the name.
                     Text {
@@ -548,15 +551,15 @@ Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.verticalCenterOffset: Theme.px(10)
                         elide: Text.ElideRight; maximumLineCount: 1
-                        text: String(modelData.last || "").replace(/\s+/g, " ")
-                        color: (modelData.newCount || 0) > 0 ? Theme.text : Theme.textMuted
+                        text: String(entry.rowData.last || "").replace(/\s+/g, " ")
+                        color: (entry.rowData.newCount || 0) > 0 ? Theme.text : Theme.textMuted
                         font.family: Theme.body; font.pixelSize: Theme.fs(13)
                     }
                     // The "New from" bar's X: hidden until the next new message (a controller uses X). Today's verse: hidden for today.
                     Rectangle {
                         id: closeNew
-                        readonly property bool verse: modelData.kind === "verse"
-                        visible: modelData.kind === "newfrom" || verse
+                        readonly property bool verse: entry.rowData.kind === "verse"
+                        visible: entry.rowData.kind === "newfrom" || verse
                         anchors.right: rowMore.left; anchors.rightMargin: Theme.px(2)
                         anchors.verticalCenter: parent.verticalCenter
                         width: visible ? Theme.px(28) : 0; height: Theme.px(28)
@@ -572,7 +575,7 @@ Rectangle {
                     // A muted chat: a bell struck through.
                     Icon {
                         id: mutedIcon
-                        visible: !!modelData.muted
+                        visible: !!entry.rowData.muted
                         anchors.right: tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         name: "belloff"; size: Theme.px(14)
@@ -580,34 +583,34 @@ Rectangle {
                     }
                     Rectangle {
                         id: tagChip
-                        visible: !!modelData.tag
+                        visible: !!entry.rowData.tag
                         anchors.right: dot.visible ? dot.left : rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         width: tagText.implicitWidth + Theme.px(12); height: tagText.implicitHeight + Theme.px(4)
                         radius: Theme.radiusSmall
                         color: "transparent"
-                        border.color: modelData.kind === "nearby" || modelData.waiting ? Theme.lineMuted : Theme.accent
+                        border.color: entry.rowData.kind === "nearby" || entry.rowData.waiting ? Theme.lineMuted : Theme.accent
                         Text {
                             textFormat: Text.PlainText
                             id: tagText
                             anchors.centerIn: parent
-                            text: modelData.tag || ""
-                            color: modelData.kind === "nearby" || modelData.waiting ? Theme.textMuted : Theme.accent
+                            text: entry.rowData.tag || ""
+                            color: entry.rowData.kind === "nearby" || entry.rowData.waiting ? Theme.textMuted : Theme.accent
                             font.family: Theme.body; font.pixelSize: Theme.fs(11); font.weight: Font.DemiBold
                         }
                     }
                     // Unread: how many in the accent (a chat with something new), else a dot.
                     Rectangle {
                         id: dot
-                        readonly property int n: modelData.kind === "chat" ? modelData.newCount || 0 : 0
+                        readonly property int n: entry.rowData.kind === "chat" ? entry.rowData.newCount || 0 : 0
                         anchors.right: rowMore.left; anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         height: n > 0 ? Theme.px(18) : Theme.px(8)
                         width: n > 0 ? Math.max(height, countText.implicitWidth + Theme.px(10)) : height
                         radius: height / 2
                         // A chat with its own color shows it here too.
-                        color: modelData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(modelData.key))) : Theme.accent
-                        visible: !!modelData.unread
+                        color: entry.rowData.kind === "chat" && !page.isTour ? Theme.chatAccent((Chat.chats, Chat.chatColor(entry.rowData.key))) : Theme.accent
+                        visible: !!entry.rowData.unread
                         Text {
                             id: countText
                             visible: dot.n > 0
@@ -622,17 +625,17 @@ Rectangle {
                     // Someone nearby and the other rows: a right click or a long press for their menu (rowContext).
                     TapHandler {
                         id: rowTap
-                        enabled: modelData.kind !== "chat"
+                        enabled: entry.rowData.kind !== "chat"
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.rowContextAt(rowTap.parent, point.position, modelData); else page.choose() }
-                        onLongPressed: { page.zone = "list"; page.row = index; page.rowContextAt(rowTap.parent, point.position, modelData) }
+                        onTapped: (point, button) => { page.zone = "list"; page.row = index; if (button === Qt.RightButton) page.rowContextAt(rowTap.parent, point.position, entry.rowData); else page.choose() }
+                        onLongPressed: { page.zone = "list"; page.row = index; page.rowContextAt(rowTap.parent, point.position, entry.rowData) }
                     }
                     // People: a click opens, a right click shows their options, and a mouse drag moves
                     // them up or down or into another folder. Touch still scrolls the list.
                     MouseArea {
                         id: dragArea
                         anchors.fill: parent
-                        enabled: modelData.kind === "chat"
+                        enabled: entry.rowData.kind === "chat"
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                         property real startY: 0
                         property real startX: 0
@@ -645,7 +648,7 @@ Rectangle {
                         }
                         onPositionChanged: mouse => {
                             if (!preventStealing) return
-                            if (!moved && (Math.abs(mouse.y - startY) > Theme.px(8) || Math.abs(mouse.x - startX) > Theme.px(8))) { moved = true; page.startDrag(modelData) }
+                            if (!moved && (Math.abs(mouse.y - startY) > Theme.px(8) || Math.abs(mouse.x - startX) > Theme.px(8))) { moved = true; page.startDrag(entry.rowData) }
                             if (!moved) return
                             page.dragTo(mapToItem(listPane, mouse.x, mouse.y).y)
                             // Over a group in the rail: let go there to invite them.
@@ -664,21 +667,21 @@ Rectangle {
                         onClicked: mouse => {
                             if (moved) return
                             page.zone = "list"; page.row = index
-                            if (mouse.button === Qt.RightButton) page.rowContextAt(dragArea, Qt.point(mouse.x, mouse.y), modelData); else page.choose()
+                            if (mouse.button === Qt.RightButton) page.rowContextAt(dragArea, Qt.point(mouse.x, mouse.y), entry.rowData); else page.choose()
                         }
                         // Press and hold: the same menu (a touch screen has no right click).
-                        onPressAndHold: mouse => { if (!moved && mouse.source !== Qt.MouseEventNotSynthesized) { page.row = index; page.rowContextAt(dragArea, Qt.point(mouse.x, mouse.y), modelData) } }
+                        onPressAndHold: mouse => { if (!moved && mouse.source !== Qt.MouseEventNotSynthesized) { page.row = index; page.rowContextAt(dragArea, Qt.point(mouse.x, mouse.y), entry.rowData) } }
                         Component.onDestruction: if (moved) page.cancelDrag()
                     }
                     // A person's one menu (only people have one; the rest answer A or a click).
                     MoreButton {
                         id: rowMore
-                        visible: modelData.kind === "chat" || modelData.kind === "near"
+                        visible: entry.rowData.kind === "chat" || entry.rowData.kind === "near"
                         anchors.right: parent.right; anchors.rightMargin: Theme.px(4)
                         anchors.verticalCenter: parent.verticalCenter
                         width: visible ? implicitWidth : 0
-                        label: "More for " + (modelData.name || "")
-                        onClicked: { page.zone = "list"; page.row = index; page.rowMenu(modelData) }
+                        label: "More for " + (entry.rowData.name || "")
+                        onClicked: { page.zone = "list"; page.row = index; page.rowMenu(entry.rowData) }
                     }
                 }
             }
