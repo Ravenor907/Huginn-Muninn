@@ -151,22 +151,29 @@ class ReadAloudTest {
     }
 
     @Test fun speedRules() {
-        // 50% to 150%, 80% until moved; older saved ints and odd values read safely.
-        assertEquals(80f, ReadAloudText.speedOf(null), 0f)
-        assertEquals(80f, ReadAloudText.speedOf(Float.NaN), 0f)
-        assertEquals(50f, ReadAloudText.speedOf(10), 0f)
-        assertEquals(150f, ReadAloudText.speedOf(400f), 0f)
+        // 1.43: 70% to 130%, 100% until moved; older saved ints and odd values read safely.
+        assertEquals(100f, ReadAloudText.speedOf(null), 0f)
+        assertEquals(100f, ReadAloudText.speedOf(Float.NaN), 0f)
+        assertEquals(70f, ReadAloudText.speedOf(10), 0f)
+        assertEquals(130f, ReadAloudText.speedOf(400f), 0f)
         assertEquals(83.4f, ReadAloudText.speedOf(83.4f), 0f)
         assertEquals(120f, ReadAloudText.speedOf(120), 0f)
         assertEquals("83%", ReadAloudText.speedText(83.4f))
         assertEquals("84%", ReadAloudText.speedText(83.6f))
-        assertEquals("80%", ReadAloudText.speedText(ReadAloudText.SPEED_DEFAULT))
+        assertEquals("100%", ReadAloudText.speedText(ReadAloudText.SPEED_DEFAULT))
+        // A speed saved by 1.42: its default 80% becomes 100%, anything else is kept, held to the range.
+        assertEquals(100f, ReadAloudText.migrateSpeed(80f), 0f)
+        assertEquals(100f, ReadAloudText.migrateSpeed(80), 0f)
+        assertEquals(100f, ReadAloudText.migrateSpeed(null), 0f)
+        assertEquals(90f, ReadAloudText.migrateSpeed(90f), 0f)
+        assertEquals(70f, ReadAloudText.migrateSpeed(50f), 0f)
+        assertEquals(130f, ReadAloudText.migrateSpeed(150), 0f)
         assertEquals(0.8f, ReadAloudText.engineSpeed(80f), 1e-6f)
-        assertEquals(1.5f, ReadAloudText.deviceRate(150f), 1e-6f)
-        // Qt's rate: 50% is -1, 100% is 0, 150% is 1, 80% is -0.4.
-        assertEquals(-1f, ReadAloudText.qtRate(50f), 1e-6f)
+        assertEquals(1.3f, ReadAloudText.deviceRate(150f), 1e-6f)
+        // Qt's rate: 100% is 0, 70% is -0.6, 130% is 0.6.
+        assertEquals(-0.6f, ReadAloudText.qtRate(50f), 1e-6f)
         assertEquals(0f, ReadAloudText.qtRate(100f), 1e-6f)
-        assertEquals(1f, ReadAloudText.qtRate(150f), 1e-6f)
+        assertEquals(0.6f, ReadAloudText.qtRate(150f), 1e-6f)
         assertEquals(-0.4f, ReadAloudText.qtRate(80f), 1e-6f)
         // Settings' picks: Female, Male or Device; the device's own never reaches a Kids' Device.
         assertEquals("d", ReadAloudText.choiceOf("d"))
@@ -186,14 +193,23 @@ class ReadAloudTest {
         assertEquals(120, KidVoice.speedOf(JSONObject().put("speed", 120)))
         assertNull(KidVoice.speedOf(JSONObject()))
         assertNull(KidVoice.speedOf(JSONObject().put("speed", 200)))
-        assertEquals(84, KidVoice.speedOut(83.6f))
+        // 1.43: the field still travels as 50 to 150; the device maps it into 70% to 130%, and a parent's slider maps back.
+        assertEquals(70f, ReadAloudText.kidSpeed(50), 1e-4f)
+        assertEquals(100f, ReadAloudText.kidSpeed(100), 1e-4f)
+        assertEquals(130f, ReadAloudText.kidSpeed(150), 1e-4f)
+        assertEquals(88f, ReadAloudText.kidSpeed(80), 1e-4f)
+        assertEquals(100f, ReadAloudText.kidSpeed(null), 0f)
+        assertEquals(50, KidVoice.speedOut(70f))
+        assertEquals(150, KidVoice.speedOut(130f))
         assertEquals(150, KidVoice.speedOut(170f))
+        assertEquals(100, KidVoice.speedOut(100f))
+        for (p in 70..130) assertEquals(p, Math.round(ReadAloudText.kidSpeed(KidVoice.speedOut(p.toFloat()))))
         // Cap k16: sent only when the device says k16 and every co-parent's app does too.
-        assertEquals(90, KidVoice.speedToSend(90f, true, listOf(setOf("k15", "k16"))))
-        assertNull(KidVoice.speedToSend(90f, false, emptyList()))
-        assertNull(KidVoice.speedToSend(90f, true, listOf(setOf("k15"))))
-        assertNull(KidVoice.speedToSend(90f, true, listOf(setOf("k14"))))
-        assertNull(KidVoice.speedToSend(90f, true, listOf(null)))
+        assertEquals(90, KidVoice.speedToSend(90, true, listOf(setOf("k15", "k16"))))
+        assertNull(KidVoice.speedToSend(90, false, emptyList()))
+        assertNull(KidVoice.speedToSend(90, true, listOf(setOf("k15"))))
+        assertNull(KidVoice.speedToSend(90, true, listOf(setOf("k14"))))
+        assertNull(KidVoice.speedToSend(90, true, listOf(null)))
         assertNull(KidVoice.speedToSend(null, true, emptyList()))
     }
 
@@ -211,7 +227,7 @@ class ReadAloudTest {
         TvRules.check(with)
         assertEquals(true to "newer", TvRules.accept(kTV, listOf(kA), null, with))
         assertEquals(120, KidVoice.speedOf(with))
-        // None set, or out of range: left out (the device reads at 80%).
+        // None set, or out of range: left out (the device reads at 100%).
         assertFalse(cfg(io.github.ravenor907.muninn.tv.TvExtras(voice = "f")).has("speed"))
         assertFalse(cfg(io.github.ravenor907.muninn.tv.TvExtras(speed = 300)).has("speed"))
         val bad = JSONObject(with.toString()).put("speed", 10)

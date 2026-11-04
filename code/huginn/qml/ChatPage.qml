@@ -128,8 +128,23 @@ Rectangle {
     }
     function hideNewFrom() { newFromClosed = newestUnread }
     function hideVerse() { DailyVerse.hideToday(); Ui.say("Hidden until tomorrow.") }
+    // 1.43: Next verse (the card, its menu and the verse's view): the next one in the order picked, for today only.
+    function nextVerse(open) {
+        if (typeof DailyVerse.nextVerse !== "function") return
+        if (typeof ReadAloud !== "undefined" && ReadAloud) ReadAloud.stop()
+        DailyVerse.nextVerse()
+        if (open) page.openVerse(null)
+    }
+    // Reads a verse: the verse, a pause, "What it means", then the meaning (ReadAloud.speakVerse).
+    function readVerse(shown) {
+        if (typeof ReadAloud === "undefined" || !ReadAloud || !shown) return
+        const verse = String(shown.verse || ""), means = String(shown.means || "")
+        if (typeof ReadAloud.speakVerse === "function") ReadAloud.speakVerse(verse, means)
+        else ReadAloud.speak(verse.replace(/\n/g, " ").replace(/[\s.,;:]+$/, "") + ". What it means. " + means)
+    }
     // Today's verse (or an earlier one, v) big: what it means, Read aloud (when it can speak), Earlier verses. Every
-    // answer is a controller button: A reads aloud, X lists the earlier verses, Y goes back to today's, B closes.
+    // answer is a controller button: A reads aloud, X lists the earlier verses, Y gives the next verse (on today's) or
+    // goes back to today's (on an earlier one), B closes.
     function openVerse(v) {
         const today = DailyVerse.today
         const shown = v || today
@@ -140,7 +155,7 @@ Rectangle {
         const body = (isToday ? "Stanza " + shown.n + "\n\n" : "") + shown.verse + "\n\nWhat it means\n" + shown.means
         const listEarlier = () => { quiet(); page.earlierVerses() }
         Ui.sure(isToday ? "Today's verse" : "Stanza " + shown.n, body, speaks ? "Read aloud" : "Earlier verses",
-                speaks ? () => { ReadAloud.speak(shown.verse.replace(/\n/g, " ") + ". What it means. " + shown.means); page.openVerse(shown)
+                speaks ? () => { page.readVerse(shown); page.openVerse(shown)
                                   if (!ReadAloud.speaking && ReadAloud.status !== "") Ui.say(ReadAloud.status) } : listEarlier,
                 false, false, quiet)
         const c = Ui.confirm
@@ -148,6 +163,7 @@ Rectangle {
         c.cancelText = "Close"
         if (speaks) { c.otherText = "Earlier verses"; c.otherCallback = listEarlier }
         if (!isToday) { c.extraText = "Today's verse"; c.extraCallback = () => { quiet(); page.openVerse(null) } }
+        else if (typeof DailyVerse.nextVerse === "function") { c.extraText = "Next verse"; c.extraCallback = () => page.nextVerse(true) }
     }
     function earlierVerses() {
         const list = DailyVerse.earlier()
@@ -532,7 +548,7 @@ Rectangle {
                         id: nameText
                         textFormat: Text.PlainText
                         anchors.left: ava.right; anchors.leftMargin: Theme.px(10)
-                        anchors.right: closeNew.visible ? closeNew.left : mutedIcon.visible ? mutedIcon.left : tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left
+                        anchors.right: nextBtn.visible ? nextBtn.left : closeNew.visible ? closeNew.left : mutedIcon.visible ? mutedIcon.left : tagChip.visible ? tagChip.left : dot.visible ? dot.left : rowMore.left
                         anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.verticalCenterOffset: entry.twoLines ? -Theme.px(9) : 0
@@ -546,7 +562,7 @@ Rectangle {
                         visible: entry.twoLines
                         textFormat: Text.PlainText
                         anchors.left: nameText.left
-                        anchors.right: closeNew.visible ? closeNew.left : dot.visible ? dot.left : rowMore.left
+                        anchors.right: nextBtn.visible ? nextBtn.left : closeNew.visible ? closeNew.left : dot.visible ? dot.left : rowMore.left
                         anchors.rightMargin: Theme.px(6)
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.verticalCenterOffset: Theme.px(10)
@@ -571,6 +587,21 @@ Rectangle {
                         Icon { anchors.centerIn: parent; name: "close"; size: Theme.px(14); lineWidth: 2; color: closeArea.containsMouse ? Theme.text : Theme.textMuted }
                         // A MouseArea, so the click never reaches the bar underneath.
                         MouseArea { id: closeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: closeNew.verse ? page.hideVerse() : page.hideNewFrom() }
+                    }
+                    // Today's verse: Next verse (today only), beside its X. A controller uses the row's LT menu.
+                    Rectangle {
+                        id: nextBtn
+                        visible: closeNew.verse && typeof DailyVerse.nextVerse === "function"
+                        anchors.right: closeNew.left; anchors.rightMargin: Theme.px(2)
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: visible ? Theme.px(28) : 0; height: Theme.px(28)
+                        radius: Theme.radius
+                        color: nextArea.containsMouse ? Theme.raised : "transparent"
+                        Accessible.role: Accessible.Button
+                        Accessible.name: "Next verse"
+                        Accessible.onPressAction: page.nextVerse(false)
+                        Icon { anchors.centerIn: parent; name: "forward"; size: Theme.px(14); lineWidth: 2; color: nextArea.containsMouse ? Theme.text : Theme.textMuted }
+                        MouseArea { id: nextArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: page.nextVerse(false) }
                     }
                     // A muted chat: a bell struck through.
                     Icon {
@@ -1545,8 +1576,10 @@ Rectangle {
         // Today's verse: open, or hide it for today.
         if (e.kind === "verse") {
             Ui.pickFrom("Today's verse", [{ header: "", items: [{ name: "Open", icon: "text", url: "open" },
+                                                                { name: "Next verse", detail: "Today only", icon: "forward", url: "next" },
                                                                 { name: "Hide for today", icon: "close", url: "hide" }] }], a => {
                 if (a === "open") page.openVerse(null)
+                else if (a === "next") page.nextVerse(false)
                 else if (a === "hide") page.hideVerse()
             })
             return

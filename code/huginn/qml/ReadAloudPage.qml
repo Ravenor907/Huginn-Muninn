@@ -2,9 +2,10 @@ import QtQuick
 import Huginn
 
 // The Read aloud page (consolidation item 8; Settings › Look › Accessibility › Read aloud), the same as Muninn's: the
-// on/off switch, the voice (Female, Alba; Male, northern English; or Device, this computer's own), the speed (50% to
-// 150%, 80% until moved) with Hear a sample, Download the voice now, Allow on mobile data and Delete voices. Until the
-// natural voices are published only Device can be picked and one line says "Natural voices aren't ready yet".
+// on/off switch, the voice (Female, Alba; Male, northern English; or Device, this computer's own), two smooth sliders
+// under it (1.43: Speed, how fast words are spoken, 70% to 130%; Cadence, the pauses between phrases and sentences,
+// 50% to 200%; both 100% until moved), Hear a sample, Download the voice now, Allow on mobile data and Delete voices.
+// Until the natural voices are published only Device can be picked and one line says "Natural voices aren't ready yet".
 //
 // The host (SettingsPage) shows it as a page and passes the controller on: handleButton(b) takes "up", "down", "left",
 // "right" and "a", and returns false for what it doesn't use ("b", and Left on a row with nothing to its left), so the
@@ -25,18 +26,26 @@ Item {
     readonly property string status: hasRa ? String(ReadAloud.status || "") : ""
     readonly property bool downloading: status.indexOf("Downloading") === 0
     readonly property bool padOn: active && !!Ui.main && !!Ui.main.padInUse
-    // The speed: the saved one, or where the slider is while it moves (saved when it stops).
-    readonly property real savedSpeed: hasRa ? Number(ReadAloud.speed) : 80
-    property real moving: -1
-    readonly property real speedNow: moving >= 0 ? moving : savedSpeed
-    readonly property string speedText: Math.round(Math.max(50, Math.min(150, speedNow))) + "%"
+    // The two sliders: the saved values, or where a slider is while it moves (heard at once, saved when it stops).
+    readonly property real savedSpeed: hasRa && ReadAloud.speed !== undefined ? Number(ReadAloud.speed) : 100
+    readonly property real savedCadence: hasRa && ReadAloud.cadence !== undefined ? Number(ReadAloud.cadence) : 100
+    property real movingSpeed: -1
+    property real movingCadence: -1
     // When a held key or D-pad press started (it moves faster after half a second).
     property double holdStart: 0
+    function isSlider(key) { return key === "speed" || key === "cadence" }
+    function low(key) { return key === "cadence" ? 50 : 70 }
+    function high(key) { return key === "cadence" ? 200 : 130 }
+    function held(key, v) { return Math.max(low(key), Math.min(high(key), Number(v) || 100)) }
+    function valueOf(key) {
+        return key === "cadence" ? (movingCadence >= 0 ? movingCadence : savedCadence) : (movingSpeed >= 0 ? movingSpeed : savedSpeed)
+    }
+    function valueText(key) { return Math.round(held(key, valueOf(key))) + "%" }
 
     readonly property var rows: {
         const r = ["on"]
         if (isOn) {
-            r.push("voice", "speed", "sample")
+            r.push("voice", "speed", "cadence", "sample")
             if (natural && !device && !ready && !downloading) r.push("get")
             if (natural && !device) r.push("mobile")
         }
@@ -77,28 +86,34 @@ Item {
             Ui.sure("Delete voices?", "The computer's own voice reads until the natural voice downloads again.", "Delete",
                     () => { ReadAloud.deleteVoices(); Ui.say("Voices deleted.") }, false, true)
     }
-    // The speed while it moves: heard at once, saved when it stops.
-    function moveSpeed(v) {
+    // A slider while it moves: heard at once (the next word or pause), saved when it stops.
+    function moveTo(key, v) {
         if (!hasRa) return
-        moving = Math.max(50, Math.min(150, v))
-        ReadAloud.previewSpeed(moving)
+        const x = held(key, v)
+        if (key === "cadence") {
+            movingCadence = x
+            if (typeof ReadAloud.previewCadence === "function") ReadAloud.previewCadence(x)
+        } else {
+            movingSpeed = x
+            ReadAloud.previewSpeed(x)
+        }
     }
-    function saveSpeed() {
+    function saveSliders() {
         saveTimer.stop()
-        if (!hasRa || moving < 0) return
-        ReadAloud.speed = moving
-        moving = -1
+        if (!hasRa) return
+        if (movingSpeed >= 0) { ReadAloud.speed = movingSpeed; movingSpeed = -1 }
+        if (movingCadence >= 0) { ReadAloud.cadence = movingCadence; movingCadence = -1 }
     }
     // One key press: 1%, and 5% a repeat once the key is held half a second (the same as Muninn's SliderStep).
-    function nudge(dir, repeat) {
+    function nudge(key, dir, repeat) {
         const now = Date.now()
         if (!repeat || holdStart <= 0) holdStart = now
         const step = now - holdStart >= 500 ? 5 : 1
-        moveSpeed(speedNow + dir * step)
+        moveTo(key, valueOf(key) + dir * step)
         // A controller has no key-up here: saved once the presses stop.
         saveTimer.restart()
     }
-    Timer { id: saveTimer; interval: 400; onTriggered: aloud.saveSpeed() }
+    Timer { id: saveTimer; interval: 400; onTriggered: aloud.saveSliders() }
 
     function cycleVoice(dir) {
         const opts = voiceOptions()
@@ -116,19 +131,19 @@ Item {
         case "a":
             if (toggle) flip(key)
             else if (key === "voice") cycleVoice(0)
-            else if (key === "speed") { moveSpeed(80); saveSpeed() }
+            else if (isSlider(key)) { moveTo(key, 100); saveSliders() }
             else press(key)
             return true
         case "left":
             // On a switch Left turns it off once a press (Left on one that's off goes back).
             if (toggle) { if (repeat) return true; if (switchOn(key)) { flip(key); return true } return false }
             if (key === "voice") { cycleVoice(-1); return true }
-            if (key === "speed") { nudge(-1, repeat); return true }
+            if (isSlider(key)) { nudge(key, -1, repeat); return true }
             return false
         case "right":
             if (toggle) { if (!repeat && !switchOn(key)) flip(key); return true }
             if (key === "voice") { cycleVoice(1); return true }
-            if (key === "speed") { nudge(1, repeat); return true }
+            if (isSlider(key)) { nudge(key, 1, repeat); return true }
             return true
         }
         return false
@@ -145,7 +160,8 @@ Item {
                 required property var modelData
                 readonly property string key: String(modelData || "")
                 readonly property bool focused: aloud.padOn && aloud.row === index
-                readonly property string title: key === "on" ? "Read aloud" : key === "voice" ? "Voice" : key === "speed" ? "Speed"
+                readonly property bool slider: aloud.isSlider(key)
+                readonly property string title: key === "on" ? "Read aloud" : key === "voice" ? "Voice" : key === "speed" ? "Speed" : key === "cadence" ? "Cadence"
                     : key === "sample" ? "Try the voice" : key === "get" ? "Download the voice now"
                     : key === "mobile" ? "Allow on mobile data" : key === "delete" ? "Delete voices" : ""
                 readonly property string note: key === "on" ? "Reads messages out loud"
@@ -153,7 +169,7 @@ Item {
                     : key === "get" ? "About 65 MB" : key === "mobile" ? "Voice download on mobile data"
                     : key === "delete" ? "Frees about 65 MB" : ""
                 width: col.width
-                height: key === "speed" ? speedCol.implicitHeight + Theme.px(20)
+                height: slider ? sliderCol.implicitHeight + Theme.px(20)
                       : Math.max(Theme.px(52), texts.implicitHeight + Theme.px(20), voiceCtl.visible ? voiceCtl.implicitHeight + Theme.px(16) : 0)
                 color: focused ? Theme.focusFill : "transparent"
                 border.width: focused ? Theme.focusWidth : 0
@@ -162,7 +178,7 @@ Item {
 
                 Column {
                     id: texts
-                    visible: rowItem.key !== "speed"
+                    visible: !rowItem.slider
                     anchors.left: parent.left; anchors.leftMargin: Theme.px(16)
                     anchors.right: control.left; anchors.rightMargin: Theme.px(16)
                     y: (parent.height - implicitHeight) / 2
@@ -172,7 +188,7 @@ Item {
                 }
                 Item {
                     id: control
-                    visible: rowItem.key !== "speed"
+                    visible: !rowItem.slider
                     anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
                     anchors.verticalCenter: parent.verticalCenter
                     width: voiceCtl.visible ? Math.min(voiceCtl.implicitWidth, rowItem.width * 0.6)
@@ -206,41 +222,43 @@ Item {
                     }
                 }
 
-                // The speed: its value, a smooth slider (no notches) and the two ends named under it.
+                // Speed or Cadence: its value, a smooth slider (no notches) and the two ends named under it.
                 Column {
-                    id: speedCol
-                    visible: rowItem.key === "speed"
+                    id: sliderCol
+                    visible: rowItem.slider
                     anchors.left: parent.left; anchors.leftMargin: Theme.px(16)
                     anchors.right: parent.right; anchors.rightMargin: Theme.px(16)
                     y: Theme.px(10)
                     spacing: Theme.px(6)
                     Item {
                         width: parent.width
-                        height: speedTitle.implicitHeight
-                        Text { id: speedTitle; textFormat: Text.PlainText; text: "Speed"; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
-                        Text { anchors.right: parent.right; textFormat: Text.PlainText; text: aloud.speedText; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
+                        height: sliderTitle.implicitHeight
+                        Text { id: sliderTitle; textFormat: Text.PlainText; text: rowItem.title; color: Theme.text; font.family: Theme.body; font.pixelSize: Theme.fs(15); font.weight: Font.Medium }
+                        Text { anchors.right: parent.right; textFormat: Text.PlainText; text: rowItem.slider ? aloud.valueText(rowItem.key) : ""; color: Theme.textSoft; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
                     }
                     Item {
                         id: track
                         width: parent.width
                         height: Theme.px(28)
-                        activeFocusOnTab: rowItem.key === "speed"
-                        readonly property real frac: Math.max(0, Math.min(1, (aloud.speedNow - 50) / 100))
+                        activeFocusOnTab: rowItem.slider
+                        readonly property real lo: aloud.low(rowItem.key)
+                        readonly property real hi: aloud.high(rowItem.key)
+                        readonly property real frac: rowItem.slider ? Math.max(0, Math.min(1, (aloud.valueOf(rowItem.key) - lo) / (hi - lo))) : 0
                         Accessible.role: Accessible.Slider
-                        Accessible.name: "Read aloud speed, " + aloud.speedText
-                        Accessible.onIncreaseAction: aloud.nudge(1, false)
-                        Accessible.onDecreaseAction: aloud.nudge(-1, false)
+                        Accessible.name: "Read aloud " + rowItem.title.toLowerCase() + ", " + (rowItem.slider ? aloud.valueText(rowItem.key) : "")
+                        Accessible.onIncreaseAction: aloud.nudge(rowItem.key, 1, false)
+                        Accessible.onDecreaseAction: aloud.nudge(rowItem.key, -1, false)
                         function at(px) {
                             const f = Math.max(0, Math.min(1, (px - knob.width / 2) / Math.max(1, width - knob.width)))
-                            aloud.moveSpeed(50 + f * 100)
+                            aloud.moveTo(rowItem.key, lo + f * (hi - lo))
                         }
                         Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Left || event.key === Qt.Key_Minus) { aloud.nudge(-1, event.isAutoRepeat); event.accepted = true }
-                            else if (event.key === Qt.Key_Right || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) { aloud.nudge(1, event.isAutoRepeat); event.accepted = true }
+                            if (event.key === Qt.Key_Left || event.key === Qt.Key_Minus) { aloud.nudge(rowItem.key, -1, event.isAutoRepeat); event.accepted = true }
+                            else if (event.key === Qt.Key_Right || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) { aloud.nudge(rowItem.key, 1, event.isAutoRepeat); event.accepted = true }
                         }
                         Keys.onReleased: event => {
                             if (!event.isAutoRepeat && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Minus
-                                                         || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) { aloud.saveSpeed(); event.accepted = true }
+                                                         || event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) { aloud.saveSliders(); event.accepted = true }
                         }
                         Rectangle { anchors.verticalCenter: parent.verticalCenter; x: knob.width / 2; width: parent.width - knob.width; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.lineMuted }
                         Rectangle { anchors.verticalCenter: parent.verticalCenter; x: knob.width / 2; width: (parent.width - knob.width) * track.frac; height: Theme.px(4); radius: Theme.radiusSmall; color: Theme.accent }
@@ -255,7 +273,7 @@ Item {
                         }
                         HoverHandler { id: trackHover; cursorShape: Qt.PointingHandCursor }
                         TapHandler {
-                            onTapped: point => { track.forceActiveFocus(); track.at(point.position.x); aloud.saveSpeed() }
+                            onTapped: point => { track.forceActiveFocus(); track.at(point.position.x); aloud.saveSliders() }
                         }
                         DragHandler {
                             target: null
@@ -263,14 +281,14 @@ Item {
                             yAxis.enabled: false
                             onCentroidChanged: if (active) track.at(centroid.position.x)
                             // Saved when the drag ends, never on every pixel.
-                            onActiveChanged: if (!active) aloud.saveSpeed()
+                            onActiveChanged: if (!active) aloud.saveSliders()
                         }
                     }
                     Item {
                         width: parent.width
                         height: slowText.implicitHeight
-                        Text { id: slowText; textFormat: Text.PlainText; text: "Slower"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
-                        Text { anchors.right: parent.right; textFormat: Text.PlainText; text: "Faster"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                        Text { id: slowText; textFormat: Text.PlainText; text: rowItem.key === "cadence" ? "Shorter pauses" : "Slower"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
+                        Text { anchors.right: parent.right; textFormat: Text.PlainText; text: rowItem.key === "cadence" ? "Longer pauses" : "Faster"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(12) }
                     }
                 }
 

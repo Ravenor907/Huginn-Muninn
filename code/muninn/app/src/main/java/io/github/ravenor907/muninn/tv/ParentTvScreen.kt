@@ -1041,7 +1041,7 @@ private fun KidLookPart(app: Muninn, t: ManagedTv, onOpen: (String) -> Unit) {
 /** The Read aloud row's value: the voice and, once picked, the speed ("Female, 90%"). */
 private fun kidVoiceSummary(t: ManagedTv): String {
     val voice = KidVoice.CHOICES.firstOrNull { it.first == t.voice.ifEmpty { io.github.ravenor907.muninn.net.ReadAloudText.FEMALE } }?.second ?: ""
-    return listOfNotNull(voice.takeIf { it.isNotEmpty() }, t.speed?.let { "$it%" }).joinToString(", ")
+    return listOfNotNull(voice.takeIf { it.isNotEmpty() }, t.speed?.let { io.github.ravenor907.muninn.net.ReadAloudText.speedText(io.github.ravenor907.muninn.net.ReadAloudText.kidSpeed(it)) }).joinToString(", ")
 }
 
 /**

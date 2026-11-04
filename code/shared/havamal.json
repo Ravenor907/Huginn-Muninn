@@ -1,307 +1,997 @@
 {
  "title": "Hávamál",
  "translation": "Henry Adams Bellows, The Poetic Edda (1923)",
- "note": "The verses are from Henry Adams Bellows' English translation of the Poetic Edda (1923), which is in the public domain. Stanza numbers follow that translation. The 'means' lines are written for children.",
+ "note": "The verses are from Henry Adams Bellows' English translation of the Poetic Edda (1923), which is in the public domain. Stanza numbers follow that translation. The 'means' lines are written for children. All stanzas; set for reading aloud (words unchanged).",
  "verses": [
   {
    "n": 1,
-   "verse": "Within the gates ere a man shall go,\n(Full warily let him watch,)\nFull long let him look about him;\nFor little he knows where a foe may lurk,\nAnd sit in the seats within.",
-   "means": "When you go into a new place, stop and take a good look around first. It is wise to know who is there before you walk in."
+   "verse": "Within the gates ere a man shall go,\nFull warily let him watch,\nFull long let him look about him.\nFor little he knows where a foe may lurk,\nAnd sit in the seats within",
+   "means": "When you go into a new place, stop and take a good look around first.\nIt is wise to know who is there before you walk in.",
+   "kids": true
+  },
+  {
+   "n": 2,
+   "verse": "Hail to the giver! a guest has come.\nWhere shall the stranger sit??\nSwift shall he be who, with swords shall try,\nThe proof of his might to make",
+   "means": "A guest has come, so make room for them.\nSomeone who arrives in a hurry, ready to prove themselves, needs a calm and kind welcome.",
+   "kids": true
   },
   {
    "n": 3,
-   "verse": "Fire he needs who with frozen knees\nHas come from the cold without;\nFood and clothes must the farer have,\nThe man from the mountains come.",
-   "means": "Someone who comes in from the cold needs a warm fire, food and dry clothes. When a traveler comes to your home, help them get warm and fed."
+   "verse": "Fire he needs who with frozen knees,\nHas come from the cold without.\nFood and clothes must the farer have,\nThe man from the mountains come",
+   "means": "Someone who comes in from the cold needs a warm fire, food and dry clothes.\nWhen a traveler comes to your home, help them get warm and fed.",
+   "kids": true
   },
   {
    "n": 4,
-   "verse": "Water and towels and welcoming speech\nShould he find who comes to the feast;\nIf renown he would get, and again be greeted,\nWisely and well must he act.",
-   "means": "A guest should be given water, a towel and kind words of welcome. And a guest who wants to be welcomed again should behave well and wisely."
+   "verse": "Water and towels and welcoming speech,\nShould he find who comes, to the feast.\nIf renown he would get, and again be greeted,\nWisely and well must he act",
+   "means": "A guest should be given water, a towel and kind words of welcome.\nAnd a guest who wants to be welcomed again should behave well and wisely.",
+   "kids": true
   },
   {
    "n": 5,
-   "verse": "Wits must he have who wanders wide,\nBut all is easy at home;\nAt the witless man the wise shall wink\nWhen among such men he sits.",
-   "means": "When you travel far from home, you need your wits about you, because things are easier at home. Wise people notice when someone acts without thinking."
+   "verse": "Wits must he have who wanders wide,\nBut all is easy at home.\nAt the witless man the wise shall wink,\nWhen among such men he sits",
+   "means": "When you travel far from home, you need your wits about you, because things are easier at home.\nWise people notice when someone acts without thinking.",
+   "kids": true
   },
   {
    "n": 6,
-   "verse": "A man shall not boast of his keenness of mind,\nBut keep it close in his breast;\nTo the silent and wise does ill come seldom\nWhen he goes as guest to a house;\n(For a faster friend one never finds\nThan wisdom tried and true.)",
-   "means": "Don't brag about how clever you are. Quiet, wise guests rarely get into trouble, and good sense is the best friend you can have."
+   "verse": "A man shall not boast of his keenness of mind,\nBut keep it close in his breast.\nTo the silent and wise does ill come seldom,\nWhen he goes as guest to a house.\nFor a faster friend one never finds,\nThan wisdom tried and true",
+   "means": "Don't brag about how clever you are.\nQuiet, wise guests rarely get into trouble, and good sense is the best friend you can have.",
+   "kids": true
   },
   {
    "n": 7,
-   "verse": "The knowing guest who goes to the feast,\nIn silent attention sits;\nWith his ears he hears, with his eyes he watches,\nThus wary are wise men all.",
-   "means": "A wise guest sits quietly, listens with their ears and watches with their eyes. Paying attention is how wise people learn."
+   "verse": "The knowing guest who goes to the feast,\nIn silent attention sits.\nWith his ears he hears, with his eyes he watches,\nThus wary are wise men all",
+   "means": "A wise guest sits quietly, listens with their ears and watches with their eyes.\nPaying attention is how wise people learn.",
+   "kids": true
   },
   {
    "n": 8,
-   "verse": "Happy the one who wins for himself\nFavor and praises fair;\nLess safe by far is the wisdom found\nThat is hid in another’s heart.",
-   "means": "It is a happy thing to earn kind words by what you do. Your own good sense is safer to trust than ideas hidden in someone else's heart."
+   "verse": "Happy the one who wins for himself,\nFavor and praises fair.\nLess safe by far is the wisdom found,\nThat is hid in another's heart",
+   "means": "It is a happy thing to earn kind words by what you do.\nYour own good sense is safer to trust than ideas hidden in someone else's heart.",
+   "kids": true
   },
   {
    "n": 9,
-   "verse": "Happy the man who has while he lives\nWisdom and praise as well,\nFor evil counsel a man full oft\nHas from another’s heart.",
-   "means": "Be glad if you have both wisdom and a good name. Bad advice often comes from other people, so learn to think for yourself."
+   "verse": "Happy the man who has while he lives,\nWisdom and praise as well,\nFor evil counsel a man full oft,\nHas from another's heart",
+   "means": "Be glad if you have both wisdom and a good name.\nBad advice often comes from other people, so learn to think for yourself.",
+   "kids": true
   },
   {
    "n": 10,
-   "verse": "A better burden may no man bear\nFor wanderings wide than wisdom;\nIt is better than wealth on unknown ways,\nAnd in grief a refuge it gives.",
-   "means": "Wisdom is the best thing to carry on a long trip. It is worth more than money in a strange place, and it helps you when you are sad."
+   "verse": "A better burden may no man bear,\nFor wanderings wide than wisdom.\nIt is better than wealth on unknown ways,\nAnd in grief a refuge it gives",
+   "means": "Wisdom is the best thing to carry on a long trip.\nIt is worth more than money in a strange place, and it helps you when you are sad.",
+   "kids": true
+  },
+  {
+   "n": 11,
+   "verse": "A better burden may no man bear,\nFor wanderings wide than wisdom.\nWorse food for the journey he brings not afield,\nThan an over-drinking of ale",
+   "means": "Wisdom is the best thing to carry on a journey.\nDrinking too much is the worst.",
+   "kids": true
+  },
+  {
+   "n": 12,
+   "verse": "Less good there lies than most believe,\nIn ale for mortal men.\nFor the more he drinks the less does man,\nOf his mind the mastery hold",
+   "means": "Ale is not as good for people as many think.\nThe more someone drinks, the less they control their own mind.",
+   "kids": true
+  },
+  {
+   "n": 13,
+   "verse": "Over beer the bird of forgetfulness broods,\nAnd steals the minds of men.\nWith the heron's feathers fettered I lay,\nAnd in Gunnloth's house was held",
+   "means": "Too much drink makes people forget themselves.\nThe High One tells of a time it held him captive.",
+   "kids": false
+  },
+  {
+   "n": 14,
+   "verse": "Drunk I was, I was dead-drunk,\nWhen with Fjalar wise I was.\n'Tis the best of drinking if back one brings,\nHis wisdom with him home",
+   "means": "The High One once drank far too much.\nThe best drinking is the kind where you still come home with your wits.",
+   "kids": false
   },
   {
    "n": 15,
-   "verse": "The son of a king shall be silent and wise,\nAnd bold in battle as well;\nBravely and gladly a man shall go,\nTill the day of his death is come.",
-   "means": "A king's son should be quiet, wise and brave. Everyone should go through life with courage and a glad heart, all their days."
+   "verse": "The son of a king shall be silent and wise,\nAnd bold in battle as well.\nBravely and gladly a man shall go,\nTill the day of his death is come",
+   "means": "A king's son should be quiet, wise and brave.\nEveryone should go through life with courage and a glad heart, all their days.",
+   "kids": true
   },
   {
    "n": 16,
-   "verse": "The sluggard believes he shall live forever,\nIf the fight he faces not;\nBut age shall not grant him the gift of peace,\nThough spears may spare his life.",
-   "means": "A lazy person thinks that running from hard things will keep them safe forever. But nobody can run away from growing older, so it is better to be brave."
+   "verse": "The sluggard believes he shall live forever,\nIf the fight he faces not.\nBut age shall not grant him the gift of peace,\nThough spears may spare his life",
+   "means": "A lazy person thinks that running from hard things will keep them safe forever.\nBut nobody can run away from growing older, so it is better to be brave.",
+   "kids": true
+  },
+  {
+   "n": 17,
+   "verse": "The fool is agape when he comes to the feast,\nHe stammers or else is still.\nBut soon if he gets a drink is it seen,\nWhat the mind of the man is like",
+   "means": "A foolish guest stares and stammers.\nGive them a drink, and their true nature soon shows.",
+   "kids": false
   },
   {
    "n": 18,
-   "verse": "He alone is aware who has wandered wide,\nAnd far abroad has fared,\nHow great a mind is guided by him\nThat wealth of wisdom has.",
-   "means": "People who have traveled far and seen a lot can tell how wise someone else is. Seeing the world helps you understand people."
+   "verse": "He alone is aware who has wandered wide,\nAnd far abroad has fared,\nHow great a mind is guided by him,\nThat wealth of wisdom has",
+   "means": "People who have traveled far and seen a lot can tell how wise someone else is.\nSeeing the world helps you understand people.",
+   "kids": true
   },
   {
    "n": 19,
-   "verse": "Shun not the mead, but drink in measure;\nSpeak to the point or be still;\nFor rudeness none shall rightly blame thee\nIf soon thy bed thou seekest.",
-   "means": "Enjoy good things, but don't have too much. Say what you mean or stay quiet, and nobody will call you rude for going to bed in good time."
+   "verse": "Shun not the mead, but drink in measure.\nSpeak to the point or be still.\nFor rudeness none shall rightly blame thee,\nIf soon thy bed thou seekest",
+   "means": "Enjoy good things, but don't have too much.\nSay what you mean or stay quiet, and nobody will call you rude for going to bed in good time.",
+   "kids": true
   },
   {
    "n": 20,
-   "verse": "The greedy man, if his mind be vague,\nWill eat till sick he is;\nThe vulgar man, when among the wise,\nTo scorn by his belly is brought.",
-   "means": "A greedy person eats until they feel sick. Eating too much can make others laugh at you, so eat what you need and stop there."
+   "verse": "The greedy man, if his mind be vague,\nWill eat till sick he is.\nThe vulgar man, when among the wise,\nTo scorn by his belly is brought",
+   "means": "A greedy person eats until they feel sick.\nEating too much can make others laugh at you, so eat what you need and stop there.",
+   "kids": true
   },
   {
    "n": 21,
-   "verse": "The herds know well when home they shall fare,\nAnd then from the grass they go;\nBut the foolish man his belly’s measure\nShall never know aright.",
-   "means": "Even cows know when they have eaten enough and it is time to go home. A foolish person never learns how much is enough."
+   "verse": "The herds know well when home they shall fare,\nAnd then from the grass they go.\nBut the foolish man his belly's measure,\nShall never know aright",
+   "means": "Even cows know when they have eaten enough and it is time to go home.\nA foolish person never learns how much is enough.",
+   "kids": true
   },
   {
    "n": 22,
-   "verse": "A paltry man and poor of mind\nAt all things ever mocks;\nFor never he knows, what he ought to know,\nThat he is not free from faults.",
-   "means": "Someone with a small mind makes fun of everything. What they never learn is that they have faults too."
+   "verse": "A paltry man and poor of mind,\nAt all things ever mocks.\nFor never he knows, what he ought to know,\nThat he is not free from faults",
+   "means": "Someone with a small mind makes fun of everything.\nWhat they never learn is that they have faults too.",
+   "kids": true
   },
   {
    "n": 23,
-   "verse": "The witless man is awake all night,\nThinking of many things;\nCare-worn he is when the morning comes,\nAnd his woe is just as it was.",
-   "means": "Someone who doesn't think clearly lies awake all night worrying. In the morning they are tired, and the problem is still the same."
+   "verse": "The witless man is awake all night,\nThinking of many things.\nCare-worn he is when the morning comes,\nAnd his woe is just as it was",
+   "means": "Someone who doesn't think clearly lies awake all night worrying.\nIn the morning they are tired, and the problem is still the same.",
+   "kids": true
   },
   {
    "n": 24,
-   "verse": "The foolish man for friends all those\nWho laugh at him will hold;\nWhen among the wise he marks it not\nThough hatred of him they speak.",
-   "means": "A foolish person thinks everyone who laughs at them is a friend. They don't even notice when people are being unkind to them."
+   "verse": "The foolish man for friends all those,\nWho laugh at him will hold.\nWhen among the wise he marks it not,\nThough hatred of him they speak",
+   "means": "A foolish person thinks everyone who laughs at them is a friend.\nThey don't even notice when people are being unkind to them.",
+   "kids": true
   },
   {
    "n": 25,
-   "verse": "The foolish man for friends all those\nWho laugh at him will hold;\nBut the truth when he comes to the council he learns,\nThat few in his favor will speak.",
-   "means": "A foolish person thinks everyone who laughs at them is a friend. But when they need help, they find out that few will speak up for them."
+   "verse": "The foolish man for friends all those,\nWho laugh at him will hold.\nBut the truth when he comes to the council he learns,\nThat few in his favor will speak",
+   "means": "A foolish person thinks everyone who laughs at them is a friend.\nBut when they need help, they find out that few will speak up for them.",
+   "kids": true
+  },
+  {
+   "n": 26,
+   "verse": "An ignorant man thinks that all he knows,\nWhen he sits by himself in a corner.\nBut never what answer to make he knows,\nWhen others with questions come",
+   "means": "Someone who sits alone may think they know everything.\nBut when others ask them questions, they have no answers.",
+   "kids": true
   },
   {
    "n": 27,
-   "verse": "A witless man, when he meets with men,\nHad best in silence abide;\nFor no one shall find that nothing he knows,\nIf his mouth is not open too much.\n(But a man knows not, if nothing he knows,\nWhen his mouth has been open too much.)",
-   "means": "If you don't know much about something, it is often best to stay quiet and listen. Nobody will notice what you don't know unless you talk too much."
+   "verse": "A witless man, when he meets with men,\nHad best in silence abide.\nFor no one shall find that nothing he knows,\nIf his mouth is not open too much.\nBut a man knows not, if nothing he knows,\nWhen his mouth has been open too much",
+   "means": "If you don't know much about something, it is often best to stay quiet and listen.\nNobody will notice what you don't know unless you talk too much.",
+   "kids": true
   },
   {
    "n": 28,
-   "verse": "Wise shall he seem who well can question,\nAnd also answer well;\nNought is concealed that men may say\nAmong the sons of men.",
-   "means": "Wise people know how to ask good questions and give good answers. Whatever people say gets passed around, so choose your words with care."
+   "verse": "Wise shall he seem who well can question,\nAnd also answer well.\nNought is concealed that men may say,\nAmong the sons of men",
+   "means": "Wise people know how to ask good questions and give good answers.\nWhatever people say gets passed around, so choose your words with care.",
+   "kids": true
   },
   {
    "n": 29,
-   "verse": "Often he speaks who never is still\nWith words that win no faith;\nThe babbling tongue, if a bridle it find not,\nOft for itself sings ill.",
-   "means": "Someone who never stops talking says lots of things nobody believes. A tongue that never rests often gets its owner into trouble."
+   "verse": "Often he speaks who never is still,\nWith words that win no faith.\nThe babbling tongue, if a bridle it find not,\nOft for itself sings ill",
+   "means": "Someone who never stops talking says lots of things nobody believes.\nA tongue that never rests often gets its owner into trouble.",
+   "kids": true
   },
   {
    "n": 30,
-   "verse": "In mockery no one a man shall hold,\nAlthough he fare to the feast;\nWise seems one oft, if nought he is asked,\nAnd safely he sits dry-skinned.",
-   "means": "Don't make fun of anyone, even at a party. A guest who sits quietly and isn't put on the spot stays safe and comfortable."
+   "verse": "In mockery no one a man shall hold,\nAlthough he fare to the feast.\nWise seems one oft, if nought he is asked,\nAnd safely he sits dry-skinned",
+   "means": "Don't make fun of anyone, even at a party.\nA guest who sits quietly and isn't put on the spot stays safe and comfortable.",
+   "kids": true
   },
   {
    "n": 31,
-   "verse": "Wise a guest holds it to take to his heels,\nWhen mock of another he makes;\nBut little he knows who laughs at the feast,\nThough he mocks in the midst of his foes.",
-   "means": "A guest who makes fun of someone may soon need to run! Laughing at people can turn them against you, even when you don't notice it."
+   "verse": "Wise a guest holds it to take to his heels,\nWhen mock of another he makes.\nBut little he knows who laughs at the feast,\nThough he mocks in the midst of his foes",
+   "means": "A guest who makes fun of someone may soon need to run!\nLaughing at people can turn them against you, even when you don't notice it.",
+   "kids": true
   },
   {
    "n": 32,
-   "verse": "Friendly of mind are many men,\nTill feasting they mock at their friends;\nTo mankind a bane must it ever be\nWhen guests together strive.",
-   "means": "Lots of people are friendly until they start teasing their friends at a party. When guests quarrel, it is bad for everyone."
+   "verse": "Friendly of mind are many men,\nTill feasting they mock at their friends.\nTo mankind a bane must it ever be,\nWhen guests together strive",
+   "means": "Lots of people are friendly until they start teasing their friends at a party.\nWhen guests quarrel, it is bad for everyone.",
+   "kids": true
   },
   {
    "n": 33,
-   "verse": "Oft should one make an early meal,\nNor fasting come to the feast;\nElse he sits and chews as if he would choke,\nAnd little is able to ask.",
-   "means": "Have a little something to eat before a big meal. If you arrive very hungry, you will be too busy chewing to talk with anyone."
+   "verse": "Oft should one make an early meal,\nNor fasting come to the feast.\nElse he sits and chews as if he would choke,\nAnd little is able to ask",
+   "means": "Have a little something to eat before a big meal.\nIf you arrive very hungry, you will be too busy chewing to talk with anyone.",
+   "kids": true
   },
   {
    "n": 34,
-   "verse": "Crooked and far is the road to a foe,\nThough his house on the highway be;\nBut wide and straight is the way to a friend,\nThough far away he fare.",
-   "means": "The road to someone who doesn't like you feels long and crooked, even if they live close by. The road to a friend feels wide and straight, even if they live far away."
+   "verse": "Crooked and far is the road to a foe,\nThough his house on the highway be.\nBut wide and straight is the way to a friend,\nThough far away he fare",
+   "means": "The road to someone who doesn't like you feels long and crooked, even if they live close by.\nThe road to a friend feels wide and straight, even if they live far away.",
+   "kids": true
   },
   {
    "n": 35,
-   "verse": "Forth shall one go, nor stay as a guest\nIn a single spot forever;\nLove becomes loathing if long one sits\nBy the hearth in another’s home.",
-   "means": "A good guest knows when it is time to go home. Even the warmest welcome wears thin if you stay too long."
+   "verse": "Forth shall one go, nor stay as a guest,\nIn a single spot forever.\nLove becomes loathing if long one sits,\nBy the hearth in another's home",
+   "means": "A good guest knows when it is time to go home.\nEven the warmest welcome wears thin if you stay too long.",
+   "kids": true
   },
   {
    "n": 36,
-   "verse": "Better a house, though a hut it be,\nA man is master at home;\nA pair of goats and a patched-up roof\nAre better far than begging.",
-   "means": "A little home of your own is better than none, because at home you are in charge. Two goats and a patched roof are far better than having to beg."
+   "verse": "Better a house, though a hut it be,\nA man is master at home.\nA pair of goats and a patched-up roof,\nAre better far than begging",
+   "means": "A little home of your own is better than none, because at home you are in charge.\nTwo goats and a patched roof are far better than having to beg.",
+   "kids": true
   },
   {
    "n": 37,
-   "verse": "Better a house, though a hut it be,\nA man is master at home;\nHis heart is bleeding who needs must beg\nWhen food he fain would have.",
-   "means": "A little home of your own is a good thing to have. It hurts the heart to have to ask others for every meal."
+   "verse": "Better a house, though a hut it be,\nA man is master at home.\nHis heart is bleeding who needs must beg,\nWhen food he fain would have",
+   "means": "A little home of your own is a good thing to have.\nIt hurts the heart to have to ask others for every meal.",
+   "kids": true
+  },
+  {
+   "n": 38,
+   "verse": "Away from his arms in the open field,\nA man should fare not a foot.\nFor never he knows when the need for a spear,\nShall arise on the distant road",
+   "means": "In the old days, a traveler kept their weapons close.\nYou never knew what danger waited on the road.\nBe prepared when you set out.",
+   "kids": true
   },
   {
    "n": 39,
-   "verse": "If wealth a man has won for himself,\nLet him never suffer in need;\nOft he saves for a foe what he plans for a friend,\nFor much goes worse than we wish.",
-   "means": "If you have worked hard for what you have, don't go without the things you need. Things don't always turn out the way we plan."
+   "verse": "If wealth a man has won for himself,\nLet him never suffer in need.\nOft he saves for a foe what he plans for a friend,\nFor much goes worse than we wish",
+   "means": "If you have worked hard for what you have, don't go without the things you need.\nThings don't always turn out the way we plan.",
+   "kids": true
   },
   {
    "n": 40,
-   "verse": "None so free with gifts or food have I found\nThat gladly he took not a gift,\nNor one who so widely scattered his wealth\nThat of recompense hatred he had.",
-   "means": "Even the most generous person is glad to get a gift. And nobody who gives a lot minds being given something back."
+   "verse": "None so free with gifts or food have I found,\nThat gladly he took not a gift,\nNor one who so widely scattered his wealth,\nThat of recompense hatred he had",
+   "means": "Even the most generous person is glad to get a gift.\nAnd nobody who gives a lot minds being given something back.",
+   "kids": true
   },
   {
    "n": 41,
-   "verse": "Friends shall gladden each other with arms and garments,\nAs each for himself can see;\nGift-givers’ friendships are longest found,\nIf fair their fates may be.",
-   "means": "Friends make each other happy by giving each other useful things. Friends who give to each other stay friends the longest."
+   "verse": "Friends shall gladden each other with arms and garments,\nAs each for himself can see.\nGift-givers' friendships are longest found,\nIf fair their fates may be",
+   "means": "Friends make each other happy by giving each other useful things.\nFriends who give to each other stay friends the longest.",
+   "kids": true
+  },
+  {
+   "n": 42,
+   "verse": "To his friend a man a friend shall prove,\nAnd gifts with gifts requite.\nBut men shall mocking with mockery answer,\nAnd fraud with falsehood meet",
+   "means": "Be a true friend to your friends, and return their gifts with gifts.\nPeople who mock and deceive will be met the same way.",
+   "kids": true
   },
   {
    "n": 43,
-   "verse": "To his friend a man a friend shall prove,\nTo him and the friend of his friend;\nBut never a man shall friendship make\nWith one of his foeman’s friends.",
-   "means": "Be a true friend to your friend, and to your friend's friends too. Stay loyal to the people who stand by you."
+   "verse": "To his friend a man a friend shall prove,\nTo him and the friend of his friend.\nBut never a man shall friendship make,\nWith one of his foeman's friends",
+   "means": "Be a true friend to your friend, and to your friend's friends too.\nStay loyal to the people who stand by you.",
+   "kids": true
   },
   {
    "n": 44,
-   "verse": "If a friend thou hast whom thou fully wilt trust,\nAnd good from him wouldst get,\nThy thoughts with his mingle, and gifts shalt thou make,\nAnd fare to find him oft.",
-   "means": "When you have a friend you trust, share your thoughts with them, give them gifts and go to see them often."
+   "verse": "If a friend thou hast whom thou fully wilt trust,\nAnd good from him wouldst get,\nThy thoughts with his mingle, and gifts shalt thou make,\nAnd fare to find him oft",
+   "means": "When you have a friend you trust, share your thoughts with them, give them gifts and go to see them often.",
+   "kids": true
+  },
+  {
+   "n": 45,
+   "verse": "If another thou hast whom thou hardly wilt trust,\nYet good from him wouldst get,\nThou shalt speak him fair, but falsely think,\nAnd fraud with falsehood requite",
+   "means": "With someone you cannot trust, be polite, but keep your real thoughts to yourself.",
+   "kids": true
+  },
+  {
+   "n": 46,
+   "verse": "So is it with him whom thou hardly wilt trust,\nAnd whose mind thou mayst not know.\nLaugh with him mayst thou, but speak not thy mind,\nLike gifts to his shalt thou give",
+   "means": "With someone whose mind you cannot read, you can laugh together, but do not share your secrets.",
+   "kids": true
   },
   {
    "n": 47,
-   "verse": "Young was I once, and wandered alone,\nAnd nought of the road I knew;\nRich did I feel when a comrade I found,\nFor man is man’s delight.",
-   "means": "Once I was young and traveled alone, and I didn't know the way. I felt rich when I found a friend, because people bring each other joy."
+   "verse": "Young was I once, and wandered alone,\nAnd nought of the road I knew.\nRich did I feel when a comrade I found,\nFor man is man's delight",
+   "means": "Once I was young and traveled alone, and I didn't know the way.\nI felt rich when I found a friend, because people bring each other joy.",
+   "kids": true
   },
   {
    "n": 48,
-   "verse": "The lives of the brave and noble are best,\nSorrows they seldom feed;\nBut the coward fear of all things feels,\nAnd not gladly the niggard gives.",
-   "means": "Brave, good-hearted people live the best lives and don't dwell on sorrow. Someone who is afraid of everything is never at ease, and a stingy person never likes to give."
+   "verse": "The lives of the brave and noble are best,\nSorrows they seldom feed.\nBut the coward fear of all things feels,\nAnd not gladly the niggard gives",
+   "means": "Brave, good-hearted people live the best lives and don't dwell on sorrow.\nSomeone who is afraid of everything is never at ease, and a stingy person never likes to give.",
+   "kids": true
   },
   {
    "n": 49,
-   "verse": "My garments once in a field I gave\nTo a pair of carven poles;\nHeroes they seemed when clothes they had,\nBut the naked man is nought.",
-   "means": "Once I put my clothes on two carved wooden posts in a field, and they looked like heroes! How you dress and look after yourself changes how others see you."
+   "verse": "My garments once in a field I gave,\nTo a pair of carven poles.\nHeroes they seemed when clothes they had,\nBut the naked man is nought",
+   "means": "Once I put my clothes on two carved wooden posts in a field, and they looked like heroes!\nHow you dress and look after yourself changes how others see you.",
+   "kids": true
+  },
+  {
+   "n": 50,
+   "verse": "On the hillside drear the fir-tree dies,\nAll bootless its needles and bark.\nIt is like a man whom no one loves,\nWhy should his life be long?",
+   "means": "A tree alone on a bare hillside withers away.\nA person whom no one loves is the same.\nWe all need each other.",
+   "kids": true
   },
   {
    "n": 51,
-   "verse": "Hotter than fire between false friends\nDoes friendship five days burn;\nWhen the sixth day comes the fire cools,\nAnd ended is all the love.",
-   "means": "Friendship between people who aren't truly friends can burn hotter than fire for five days. On the sixth day the fire goes out, and that friendship is over."
+   "verse": "Hotter than fire between false friends,\nDoes friendship five days burn.\nWhen the sixth day comes the fire cools,\nAnd ended is all the love",
+   "means": "Friendship between people who aren't truly friends can burn hotter than fire for five days.\nOn the sixth day the fire goes out, and that friendship is over.",
+   "kids": true
   },
   {
    "n": 52,
-   "verse": "No great thing needs a man to give\nOft little will purchase praise;\nWith half a loaf and a half-filled cup\nA friend full fast I made.",
-   "means": "You don't need to give big presents to make a friend. Sharing half a loaf of bread and a cup can be enough."
+   "verse": "No great thing needs a man to give,\nOft little will purchase praise.\nWith half a loaf and a half-filled cup,\nA friend full fast I made",
+   "means": "You don't need to give big presents to make a friend.\nSharing half a loaf of bread and a cup can be enough.",
+   "kids": true
   },
   {
    "n": 53,
-   "verse": "A little sand has a little sea,\nAnd small are the minds of men;\nThough all men are not equal in wisdom,\nYet half-wise only are all.",
-   "means": "A small beach has only a little sea. Some people are wiser than others, but nobody knows everything."
+   "verse": "A little sand has a little sea,\nAnd small are the minds of men.\nThough all men are not equal in wisdom,\nYet half-wise only are all",
+   "means": "A small beach has only a little sea.\nSome people are wiser than others, but nobody knows everything.",
+   "kids": true
   },
   {
    "n": 54,
-   "verse": "A measure of wisdom each man shall have,\nBut never too much let him know;\nThe fairest lives do those men live\nWhose wisdom wide has grown.",
-   "means": "Everyone should have a good amount of wisdom, but nobody needs to know everything. The happiest lives belong to people who know a good many things."
+   "verse": "A measure of wisdom each man shall have,\nBut never too much let him know.\nThe fairest lives do those men live,\nWhose wisdom wide has grown",
+   "means": "Everyone should have a good amount of wisdom, but nobody needs to know everything.\nThe happiest lives belong to people who know a good many things.",
+   "kids": true
   },
   {
    "n": 55,
-   "verse": "A measure of wisdom each man shall have,\nBut never too much let him know;\nFor the wise man’s heart is seldom happy,\nIf wisdom too great he has won.",
-   "means": "Be wise enough, but don't try to know everything. A heart that carries too much knowing is not often happy."
+   "verse": "A measure of wisdom each man shall have,\nBut never too much let him know.\nFor the wise man's heart is seldom happy,\nIf wisdom too great he has won",
+   "means": "Be wise enough, but don't try to know everything.\nA heart that carries too much knowing is not often happy.",
+   "kids": true
   },
   {
    "n": 56,
-   "verse": "A measure of wisdom each man shall have,\nBut never too much let him know;\nLet no man the fate before him see,\nFor so is he freest from sorrow.",
-   "means": "Be wise enough, but you don't need to know everything. Not knowing what tomorrow brings lets you live without worrying about it."
+   "verse": "A measure of wisdom each man shall have,\nBut never too much let him know.\nLet no man the fate before him see,\nFor so is he freest from sorrow",
+   "means": "Be wise enough, but you don't need to know everything.\nNot knowing what tomorrow brings lets you live without worrying about it.",
+   "kids": true
   },
   {
    "n": 57,
-   "verse": "A brand from a brand is kindled and burned,\nAnd fire from fire begotten;\nAnd man by his speech is known to men,\nAnd the stupid by their stillness.",
-   "means": "One flame lights another flame. In the same way, people get to know you by the way you talk with them."
+   "verse": "A brand from a brand is kindled and burned,\nAnd fire from fire begotten.\nAnd man by his speech is known to men,\nAnd the stupid by their stillness",
+   "means": "One flame lights another flame.\nIn the same way, people get to know you by the way you talk with them.",
+   "kids": true
+  },
+  {
+   "n": 58,
+   "verse": "He must early go forth who fain the blood,\nOr the goods of another would get.\nThe wolf that lies idle shall win little meat,\nOr the sleeping man success",
+   "means": "The one who wants something must get up early.\nA sleeping wolf catches nothing, and a sleeping person wins nothing.",
+   "kids": false
   },
   {
    "n": 59,
-   "verse": "He must early go forth whose workers are few,\nHimself his work to seek;\nMuch remains undone for the morning-sleeper,\nFor the swift is wealth half won.",
-   "means": "If you have a lot to do and not many helpers, get started early. A late sleeper leaves things undone, and starting quickly gets the job half done."
+   "verse": "He must early go forth whose workers are few,\nHimself his work to seek.\nMuch remains undone for the morning-sleeper,\nFor the swift is wealth half won",
+   "means": "If you have a lot to do and not many helpers, get started early.\nA late sleeper leaves things undone, and starting quickly gets the job half done.",
+   "kids": true
   },
   {
    "n": 60,
-   "verse": "Of seasoned shingles and strips of bark\nFor the thatch let one know his need,\nAnd how much of wood he must have for a month,\nOr in half a year he will use.",
-   "means": "Know how much wood and bark you will need for your roof and your fire. It is wise to plan ahead for the months to come."
+   "verse": "Of seasoned shingles and strips of bark,\nFor the thatch let one know his need,\nAnd how much of wood he must have for a month,\nOr in half a year he will use",
+   "means": "Know how much wood and bark you will need for your roof and your fire.\nIt is wise to plan ahead for the months to come.",
+   "kids": true
   },
   {
    "n": 61,
-   "verse": "Washed and fed to the council fare,\nBut care not too much for thy clothes;\nLet none be ashamed of his shoes and hose,\nLess still of the steed he rides,\n(Though poor be the horse he has.)",
-   "means": "Go to important places clean and with a full tummy, but don't worry too much about your clothes. Nobody should feel ashamed of their shoes, or of a horse that isn't fancy."
+   "verse": "Washed and fed to the council fare,\nBut care not too much for thy clothes.\nLet none be ashamed of his shoes and hose,\nLess still of the steed he rides,\nThough poor be the horse he has",
+   "means": "Go to important places clean and with a full tummy, but don't worry too much about your clothes.\nNobody should feel ashamed of their shoes, or of a horse that isn't fancy.",
+   "kids": true
   },
   {
    "n": 62,
-   "verse": "When the eagle comes to the ancient sea,\nHe snaps and hangs his head;\nSo is a man in the midst of a throng,\nWho few to speak for him finds.",
-   "means": "When an eagle reaches the sea, it hangs its head. A person feels the same way in a crowd when nobody there will speak up for them."
+   "verse": "When the eagle comes to the ancient sea,\nHe snaps and hangs his head.\nSo is a man in the midst of a throng,\nWho few to speak for him finds",
+   "means": "When an eagle reaches the sea, it hangs its head.\nA person feels the same way in a crowd when nobody there will speak up for them.",
+   "kids": true
+  },
+  {
+   "n": 63,
+   "verse": "To question and answer must all be ready,\nWho wish to be known as wise.\nTell one thy thoughts, but beware of two,\nAll know what is known to three",
+   "means": "A wise person is ready to ask and to answer.\nTell one person your secret, but not two.\nWhat three people know, everyone knows.",
+   "kids": true
   },
   {
    "n": 64,
-   "verse": "The man who is prudent a measured use\nOf the might he has will make;\nHe finds when among the brave he fares\nThat the boldest he may not be.",
-   "means": "A sensible person uses their strength with care. When they are among brave people, they find out they may not be the boldest one there."
+   "verse": "The man who is prudent a measured use,\nOf the might he has will make.\nHe finds when among the brave he fares,\nThat the boldest he may not be",
+   "means": "A sensible person uses their strength with care.\nWhen they are among brave people, they find out they may not be the boldest one there.",
+   "kids": true
+  },
+  {
+   "n": 65,
+   "verse": "Oft for the words that to others one speaks,\nHe will get but an evil gift",
+   "means": "Part of this stanza is lost.\nWhat remains says that careless words to others can come back to us as trouble.",
+   "kids": true
+  },
+  {
+   "n": 66,
+   "verse": "Too early to many a meeting I came,\nAnd some too late have I sought.\nThe beer was all drunk, or not yet brewed.\nLittle the loathed man finds",
+   "means": "Sometimes we arrive too early, and sometimes too late.\nTiming matters, and the unwelcome guest finds little.",
+   "kids": true
+  },
+  {
+   "n": 67,
+   "verse": "To their homes men would bid me hither and yon,\nIf at meal-time I needed no meat,\nOr would hang two hams in my true friend's house,\nWhere only one I had eaten",
+   "means": "People would gladly invite me, if I did not need feeding.\nBe honest about whose generosity is real.",
+   "kids": true
   },
   {
    "n": 68,
-   "verse": "Fire for men is the fairest gift,\nAnd power to see the sun;\nHealth as well, if a man may have it,\nAnd a life not stained with sin.",
-   "means": "Fire and seeing the sun are the finest gifts. Good health is a gift too, and so is a life lived without doing wrong."
+   "verse": "Fire for men is the fairest gift,\nAnd power to see the sun.\nHealth as well, if a man may have it,\nAnd a life not stained with sin",
+   "means": "Fire and seeing the sun are the finest gifts.\nGood health is a gift too, and so is a life lived without doing wrong.",
+   "kids": true
   },
   {
    "n": 69,
-   "verse": "All wretched is no man, though never so sick;\nSome from their sons have joy,\nSome win it from kinsmen, and some from their wealth,\nAnd some from worthy works.",
-   "means": "Nobody is completely unhappy, even when they are sick. Some find joy in their children, some in their family, some in what they have, and some in good work."
+   "verse": "All wretched is no man, though never so sick.\nSome from their sons have joy,\nSome win it from kinsmen, and some from their wealth,\nAnd some from worthy works",
+   "means": "Nobody is completely unhappy, even when they are sick.\nSome find joy in their children, some in their family, some in what they have, and some in good work.",
+   "kids": true
+  },
+  {
+   "n": 70,
+   "verse": "It is better to live than to lie a corpse,\nThe live man catches the cow.\nI saw flames rise for the rich man's pyre,\nAnd before his door he lay dead",
+   "means": "Being alive is better than anything.\nA living person can still work and hope.\nThe dead can do nothing more.",
+   "kids": false
+  },
+  {
+   "n": 71,
+   "verse": "The lame rides a horse, the handless is herdsman,\nThe deaf in battle is bold.\nThe blind man is better than one that is burned,\nNo good can come of a corpse",
+   "means": "Everyone can still do something good.\nSomeone who cannot walk can ride.\nSomeone who cannot hear can be brave.\nLife always has value.",
+   "kids": false
   },
   {
    "n": 72,
-   "verse": "A son is better, though late he be born,\nAnd his father to death have fared;\nMemory-stones seldom stand by the road\nSave when kinsman honors his kin.",
-   "means": "A son is a blessing, even one born after his father has died. Stones to remember people stand by the road because family members honor those who came before."
+   "verse": "A son is better, though late he be born,\nAnd his father to death have fared.\nMemory-stones seldom stand by the road,\nSave when kinsman honors his kin",
+   "means": "A son is a blessing, even one born after his father has died.\nStones to remember people stand by the road because family members honor those who came before.",
+   "kids": true
+  },
+  {
+   "n": 73,
+   "verse": "Two make a battle, the tongue slays the head.\nIn each furry coat a fist I look for",
+   "means": "It takes two to make a fight, and careless words can cost a life.\nBe careful with your tongue.",
+   "kids": false
   },
   {
    "n": 74,
-   "verse": "He welcomes the night whose fare is enough.\n(Short are the yards of a ship,)\nUneasy are autumn nights;\nFull oft does the weather change in a week,\nAnd more in a month’s time.",
-   "means": "Someone who has enough food is glad when night comes. Autumn nights can be uneasy, and the weather can change a lot in a week, so it is good to be ready."
+   "verse": "He welcomes the night whose fare is enough,\nShort are the yards of a ship,\nUneasy are autumn nights.\nFull oft does the weather change in a week,\nAnd more in a month's time",
+   "means": "Someone who has enough food is glad when night comes.\nAutumn nights can be uneasy, and the weather can change a lot in a week, so it is good to be ready.",
+   "kids": true
   },
   {
    "n": 75,
-   "verse": "A man knows not, if nothing he knows,\nThat gold oft apes begets;\nOne man is wealthy and one is poor,\nYet scorn for him none should know.",
-   "means": "Gold can make people act silly. Some people are rich and some are poor, but nobody should be looked down on for being poor."
+   "verse": "A man knows not, if nothing he knows,\nThat gold oft apes begets.\nOne man is wealthy and one is poor,\nYet scorn for him none should know",
+   "means": "Gold can make people act silly.\nSome people are rich and some are poor, but nobody should be looked down on for being poor.",
+   "kids": true
+  },
+  {
+   "n": 76,
+   "verse": "Among Fitjung's sons saw I well-stocked folds,\nNow bear they the beggar's staff.\nWealth is as swift as a winking eye,\nOf friends the falsest it is",
+   "means": "A family that was rich became poor.\nWealth can vanish in the blink of an eye.\nIt is the least faithful of friends.",
+   "kids": true
   },
   {
    "n": 77,
-   "verse": "Cattle die, and kinsmen die,\nAnd so one dies one’s self;\nBut a noble name will never die,\nIf good renown one gets.",
-   "means": "Animals die, family members die, and one day each of us will too. But a good name, earned by how you live, never dies."
+   "verse": "Cattle die, and kinsmen die,\nAnd so one dies one's self.\nBut a noble name will never die,\nIf good renown one gets",
+   "means": "Animals die, family members die, and one day each of us will too.\nBut a good name, earned by how you live, never dies.",
+   "kids": true
   },
   {
    "n": 78,
-   "verse": "Cattle die, and kinsmen die,\nAnd so one dies one’s self;\nOne thing I know that never dies,\nThe fame of a dead man’s deeds.",
-   "means": "Everything that lives will one day die. But the good things a person did are remembered long after they are gone."
+   "verse": "Cattle die, and kinsmen die,\nAnd so one dies one's self.\nOne thing now that never dies,\nThe fame of a dead man's deeds",
+   "means": "Everything that lives will one day die.\nBut the good things a person did are remembered long after they are gone.",
+   "kids": true
+  },
+  {
+   "n": 79,
+   "verse": "Certain is that which is sought from runes,\nThat the gods so great have made,\nAnd the Master-Poet painted.\nof the race of gods,\nSilence is safest and best",
+   "means": "Part of this stanza is lost.\nIt speaks of the runes the gods made, and ends with this: silence is safest and best.",
+   "kids": true
+  },
+  {
+   "n": 80,
+   "verse": "An unwise man, if a maiden's love,\nOr wealth he chances to win,\nHis pride will wax, but his wisdom never,\nStraight forward he fares in conceit",
+   "means": "When a foolish person wins love or wealth, their pride grows, but their wisdom does not.",
+   "kids": true
+  },
+  {
+   "n": 81,
+   "verse": "Give praise to the day at evening, to a woman on her pyre,\nTo a weapon which is tried, to a maid at wed lock,\nTo ice when it is crossed, to ale that is drunk",
+   "means": "Do not praise something until it has proven itself.\nPraise the day when evening comes, and ice once you have crossed it.",
+   "kids": true
+  },
+  {
+   "n": 82,
+   "verse": "When the gale blows hew wood, in fair winds seek the water.\nSport with maidens at dusk, for day's eyes are many.\nFrom the ship seek swiftness, from the shield protection,\nCuts from the sword, from the maiden kisses",
+   "means": "Do each thing at its right time.\nCut wood when the wind blows, and sail when the winds are fair.",
+   "kids": true
+  },
+  {
+   "n": 83,
+   "verse": "By the fire drink ale, over ice go on skates.\nBuy a steed that is lean, and a sword when tarnished,\nThe horse at home fatten, the hound in thy dwelling",
+   "means": "Use things in the way they work best.\nSkate over ice, and choose a horse or sword for its true worth, not its looks.",
+   "kids": true
+  },
+  {
+   "n": 84,
+   "verse": "A man shall trust not the oath of a maid,\nNor the word a woman speaks.\nFor their hearts on a whirling wheel were fashioned,\nAnd fickle their breasts were formed",
+   "means": "This stanza warns against trusting promises too quickly.\nIt reflects the hard feelings of its time.",
+   "kids": false
+  },
+  {
+   "n": 85,
+   "verse": "In a breaking bow or a burning flame,\nA ravening wolf or a croaking raven,\nIn a grunting boar, a tree with roots broken,\nIn billowy seas or a bubbling kettle",
+   "means": "Some things should never be trusted, like a breaking bow, a hungry wolf, or a boiling kettle.",
+   "kids": false
+  },
+  {
+   "n": 86,
+   "verse": "In a flying arrow or falling waters,\nIn ice new formed or the serpent's folds,\nIn a bride's bed-speech or a broken sword,\nIn the sport of bears or in sons of kings",
+   "means": "More things that cannot be trusted: a flying arrow, thin new ice, a broken sword.",
+   "kids": false
+  },
+  {
+   "n": 87,
+   "verse": "In a calf that is sick or a stubborn thrall,\nA flattering witch or a foe new slain",
+   "means": "And still more things that cannot be trusted, like a sick calf or a flatterer.",
+   "kids": false
+  },
+  {
+   "n": 88,
+   "verse": "In a brother's slayer, if thou meet him abroad,\nIn a half-burned house, in a horse full swift,\nOne leg is hurt and the horse is useless,\nNone had ever such faith as to trust in them all",
+   "means": "Do not put your trust in things that can turn on you.\nNo one should trust all of these.",
+   "kids": false
+  },
+  {
+   "n": 89,
+   "verse": "Hope not too surely for early harvest,\nNor trust too soon in thy son.\nThe field needs good weather, the son needs wisdom,\nAnd oft is either denied",
+   "means": "Do not count on things too early.\nA field needs good weather, and a child needs time to grow wise.",
+   "kids": true
+  },
+  {
+   "n": 90,
+   "verse": "The love of women fickle of will,\nIs like starting o'er ice with a steed unshod,\nA two-year-old restive and little tamed,\nOr steering a rudderless ship in a storm,\nOr, lame, hunting reindeer on slippery rocks",
+   "means": "Love that changes its mind is as risky as riding a wild horse on ice, or steering a ship with no rudder in a storm.",
+   "kids": false
+  },
+  {
+   "n": 91,
+   "verse": "Clear now will I speak, for I know them both,\nMen false to women are found.\nWhen fairest we speak, then falsest we think,\nAgainst wisdom we work with deceit",
+   "means": "The High One admits that people can be false in love, saying sweet things while thinking otherwise.\nHonesty matters most.",
+   "kids": false
+  },
+  {
+   "n": 92,
+   "verse": "Soft words shall he speak and wealth shall he offer,\nWho longs for a maiden's love,\nAnd the beauty praise of the maiden bright.\nHe wins whose wooing is best",
+   "means": "Someone who hopes to win love speaks kindly and generously, and praises the one they love.",
+   "kids": false
+  },
+  {
+   "n": 93,
+   "verse": "Fault for loving let no man find,\nEver with any other.\nOft the wise are fettered, where fools go free,\nBy beauty that breeds desire",
+   "means": "Do not blame anyone for falling in love.\nEven wise people can be swept away by it.",
+   "kids": false
+  },
+  {
+   "n": 94,
+   "verse": "Fault with another let no man find,\nFor what touches many a man.\nWise men oft into witless fools,\nAre made by mighty love",
+   "means": "Do not blame others for what happens to so many people.\nLove can make the wise act foolishly.",
+   "kids": false
+  },
+  {
+   "n": 95,
+   "verse": "The head alone knows what dwells near the heart,\nA man knows his mind alone.\nNo sickness is worse to one who is wise,\nThan to lack the longed-for joy",
+   "means": "Only you truly know your own heart.\nNothing hurts more than longing for a joy you cannot have.",
+   "kids": false
+  },
+  {
+   "n": 96,
+   "verse": "This found I myself, when I sat in the reeds,\nAnd long my love awaited.\nAs my life the maiden wise I loved,\nYet her I never had",
+   "means": "The High One tells of waiting for a love he never won.\nNot every wish comes true.",
+   "kids": false
+  },
+  {
+   "n": 97,
+   "verse": "Billing's daughter I found on her bed,\nIn slumber bright as the sun.\nEmpty appeared an earl's estate,\nWithout that form so fair",
+   "means": "The High One begins the tale of Billing's daughter, whose beauty outshone a whole estate.",
+   "kids": false
+  },
+  {
+   "n": 98,
+   "verse": "\"Othin, again at evening come,\nIf a woman thou wouldst win.\nEvil it were if others than we,\nShould know of such a sin.\"",
+   "means": "In the tale, the maiden tells the High One to come back at evening, and keep it secret.",
+   "kids": false
+  },
+  {
+   "n": 99,
+   "verse": "Away I hastened, hoping for joy,\nAnd careless of counsel wise.\nWell I believed that soon I should win,\nMeasureless joy with the maid",
+   "means": "The High One hurried away, hopeful and careless of wise advice.",
+   "kids": false
+  },
+  {
+   "n": 100,
+   "verse": "So came I next when night it was,\nThe warriors all were awake.\nWith burning lights and waving brands,\nI learned my luckess way",
+   "means": "When he came back at night, the warriors were all awake with burning torches, and his plan failed.",
+   "kids": false
+  },
+  {
+   "n": 101,
+   "verse": "At morning then, when once more I came,\nAnd all were sleeping still,\nA dog found in the fair one's place,\nBound there upon her bed",
+   "means": "At morning, he found only a dog tied in her place.\nHe had been outwitted.",
+   "kids": false
+  },
+  {
+   "n": 102,
+   "verse": "Many fair maids, if a man but tries them,\nFalse to a lover are found.\nThat did I learn when I longed to gain,\nWith wiles the maiden wise.\nFoul scorn was my meed from the crafty maid,\nAnd nought from the woman I won",
+   "means": "The High One learned that clever tricks do not win love.\nHe earned only scorn.\nHonest hearts do better than wiles.",
+   "kids": false
+  },
+  {
+   "n": 103,
+   "verse": "Though glad at home, and merry with guests,\nA man shall be wary and wise.\nThe sage and shrewd, wide wisdom seeking,\nMust see that his speech be fair.\nA fool is he named who nought can say,\nFor such is the way of the witless",
+   "means": "Be happy at home and merry with guests, but stay wise.\nSpeak well.\nSomeone who has nothing to say is called a fool.",
+   "kids": true
+  },
+  {
+   "n": 104,
+   "verse": "I found the old giant, now back have I fared,\nSmall gain from silence I got.\nFull many a word, my will to get,\nI spoke in Suttung's hall",
+   "means": "The High One visited the old giant Suttung.\nSilence won him nothing there, so he spoke many words to get his way.",
+   "kids": false
+  },
+  {
+   "n": 105,
+   "verse": "The mouth of Rati made room for my passage,\nAnd space in the stone he gnawed.\nAbove and below the giants' paths lay,\nSo rashly I risked my head",
+   "means": "The drill called Rati bored a path through the stone for him.\nThe High One risked his life to reach the mead.",
+   "kids": false
+  },
+  {
+   "n": 106,
+   "verse": "Gunnloth gave on a golden stool,\nA drink of the marvelous mead.\nA harsh reward did I let her have,\nFor her heroic heart,\nAnd her spirit troubled sore",
+   "means": "Gunnloth gave him a drink of the marvelous mead of poetry.\nHe repaid her kindness poorly, and her heart was troubled.",
+   "kids": false
+  },
+  {
+   "n": 107,
+   "verse": "The well-earned beauty well I enjoyed,\nLittle the wise man lacks.\nSo Othrörir now has up been brought,\nTo the midst of the men of earth",
+   "means": "He brought the mead of poetry, called Othrörir, out into the world of people.\nThat is where the gift of poetry comes from.",
+   "kids": false
+  },
+  {
+   "n": 108,
+   "verse": "Hardly, methinks, would I home have come,\nAnd left the giants' land,\nHad not Gunnloth helped me, the maiden good,\nWhose arms about me had been",
+   "means": "The High One admits he would not have escaped without Gunnloth's help.",
+   "kids": false
+  },
+  {
+   "n": 109,
+   "verse": "The day that followed, the frost-giants came,\nSome word of Hor to win,\nAnd into the hall of Hor.\nOf Bolverk they asked, were he back midst the gods,\nOr had Suttung slain him there?",
+   "means": "The next day the frost giants came asking whether Bolverk, the High One in disguise, had returned or been slain.",
+   "kids": false
+  },
+  {
+   "n": 110,
+   "verse": "On his ring swore Othin the oath, methinks.\nWho now his troth shall trust??\nSuttung's betrayal he sought with drink,\nAnd Gunnloth to grief he left",
+   "means": "The High One broke his oath on the ring, and left Gunnloth in grief.\nEven the wise can do wrong, and we should learn from it.",
+   "kids": false
+  },
+  {
+   "n": 111,
+   "verse": "It is time to chant from the chanter's stool.\nBy the wells of Urth I was,\nI saw and was silent, I saw and thought,\nAnd heard the speech of Hor.\nOf runes heard I words, nor were counsels wanting,\nAt the hall of Hor,\nIn the hall of Hor.\nSuch was the speech I heard",
+   "means": "Now the High One speaks from the singer's seat.\nBy the well of Urth he watched in silence, and listened, and learned.",
+   "kids": true
+  },
+  {
+   "n": 112,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nRise not at night, save if news thou seekest,\nOr fain to the outhouse wouldst fare",
+   "means": "Here begin the lessons for Loddfafnir.\nListen, and you will gain.\nDo not wander out at night unless you must.",
+   "kids": true
+  },
+  {
+   "n": 113,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nBeware of sleep on a witch's bosom,\nNor let her limbs ensnare thee",
+   "means": "Listen, Loddfafnir.\nDo not let a harmful person lull you to sleep or tangle you up.",
+   "kids": false
+  },
+  {
+   "n": 114,
+   "verse": "Such is her might that thou hast no mind,\nFor the council or meeting of men.\nMeat thou hatest, joy thou hast not,\nAnd sadly to slumber thou farest",
+   "means": "Their power can make you lose your mind for your friends and your work, until you are sad and alone.",
+   "kids": false
+  },
+  {
+   "n": 115,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nSeek never to win the wife of another,\nOr long for her secret love",
+   "means": "Listen, Loddfafnir.\nNever try to take someone else's partner.",
+   "kids": false
+  },
+  {
+   "n": 116,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nIf o'er mountains or gulfs thou fain wouldst go,\nLook well to thy food for the way",
+   "means": "Listen, Loddfafnir.\nBefore you cross mountains or deep valleys, pack enough food for the way.",
+   "kids": true
+  },
+  {
+   "n": 117,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nAn evil man thou must not let,\nBring aught of ill to thee.\nFor an evil man will never make,\nReward for a worthy thought",
+   "means": "Listen, Loddfafnir.\nDo not let a bad person bring harm to you.\nThey will never repay a good thought.",
+   "kids": true
+  },
+  {
+   "n": 118,
+   "verse": "I saw a man who was wounded sore,\nBy an evil woman's word.\nA lying tongue his death-blow launched,\nAnd no word of truth there was",
+   "means": "The High One saw a man brought down by cruel lies.\nWords can wound deeply.",
+   "kids": false
+  },
+  {
+   "n": 119,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nIf a friend thou hast whom thou fully wilt trust,\nThen fare to find him oft.\nFor brambles grow and waving grass,\nOn the rarely trodden road",
+   "means": "Listen, Loddfafnir.\nVisit the friends you trust often.\nA path no one walks soon fills with brambles and grass.",
+   "kids": true
+  },
+  {
+   "n": 120,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nA good man find to hold in friendship,\nAnd give heed to his healing charms",
+   "means": "Listen, Loddfafnir.\nFind a good person to be your friend, and take their healing advice.",
+   "kids": true
+  },
+  {
+   "n": 121,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,-,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nBe never the first to break with thy friend,\nThe bond that holds you both.\nCare eats the heart if thou canst not speak,\nTo another all thy thought",
+   "means": "Listen, Loddfafnir.\nNever be the first to break a friendship.\nIt eats at the heart when you have no one to share your thoughts with.",
+   "kids": true
+  },
+  {
+   "n": 122,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nExchange of words with a witless ape,\nThou must not ever make",
+   "means": "Listen, Loddfafnir.\nDo not argue with someone who will not listen to reason.",
+   "kids": true
   },
   {
    "n": 123,
-   "verse": "For never thou mayst from an evil man\nA good requital get;\nBut a good man oft the greatest love\nThrough words of praise will win thee.",
-   "means": "You will never get a good reward from a bad person. But a good person will often speak well of you and win you friends."
+   "verse": "For never thou mayst from an evil man,\nA good requital get.\nBut a good man oft the greatest love,\nThrough words of praise will win thee",
+   "means": "You will never get a good reward from a bad person.\nBut a good person will often speak well of you and win you friends.",
+   "kids": true
   },
   {
    "n": 124,
-   "verse": "Mingled is love when a man can speak\nTo another all his thought;\nNought is so bad as false to be,\nNo friend speaks only fair.",
-   "means": "Real friends can tell each other everything they think. Nothing is worse than being false, and a true friend tells you the truth, not only nice things."
+   "verse": "Mingled is love when a man can speak,\nTo another all his thought.\nNought is so bad as false to be,\nNo friend speaks only fair",
+   "means": "Real friends can tell each other everything they think.\nNothing is worse than being false, and a true friend tells you the truth, not only nice things.",
+   "kids": true
+  },
+  {
+   "n": 125,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nWith a worse man speak not three words in dispute,\nIll fares the better oft,\nWhen the worse man wields a sword",
+   "means": "Listen, Loddfafnir.\nDo not quarrel with a worse person.\nEven a good person can lose when the other has a sword.",
+   "kids": true
+  },
+  {
+   "n": 126,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,-,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nA shoemaker be, or a maker of shafts,\nFor only thy single self.\nIf the shoe is ill made, or the shaft prove false,\nThen evil of thee men think",
+   "means": "Listen, Loddfafnir.\nMake shoes or arrows only for yourself.\nIf they turn out badly, people will think badly of you.",
+   "kids": true
+  },
+  {
+   "n": 127,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nIf evil thou knowest, as evil proclaim it,\nAnd make no friendship with foes",
+   "means": "Listen, Loddfafnir.\nCall wrong what it is, and do not make friends with those who mean harm.",
+   "kids": true
+  },
+  {
+   "n": 128,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nIn evil never joy shalt thou know,\nBut glad the good shall make thee",
+   "means": "Listen, Loddfafnir.\nYou will find no joy in doing wrong.\nGoodness will make you glad.",
+   "kids": true
+  },
+  {
+   "n": 129,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nLook not up when the battle is on,\nLike madmen the sons of men become,\nLest men bewitch thy wits",
+   "means": "Listen, Loddfafnir.\nIn a battle, keep your head down and your mind clear.",
+   "kids": false
+  },
+  {
+   "n": 130,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,-,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nIf thou fain wouldst win a woman's love,\nAnd gladness get from her,\nFair be thy promise and well fulfilled.\nNone loathes what good he gets",
+   "means": "Listen, Loddfafnir.\nIf you hope to win someone's love, make fair promises, and keep them.",
+   "kids": false
+  },
+  {
+   "n": 131,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,-,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nI bid thee be wary, but be not fearful.\nBeware most with ale or another's wife,\nAnd third beware lest a thief outwit thee",
+   "means": "Listen, Loddfafnir.\nBe careful, but do not be afraid.\nWatch out most with ale, and for those who would trick you.",
+   "kids": false
+  },
+  {
+   "n": 132,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,-,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nScorn or mocking ne'er shalt thou make,\nOf a guest or a journey-goer",
+   "means": "Listen, Loddfafnir.\nNever mock a guest or a traveler.",
+   "kids": true
   },
   {
    "n": 133,
-   "verse": "Oft scarcely he knows who sits in the house\nWhat kind is the man who comes;\nNone so good is found that faults he has not,\nNor so wicked that nought he is worth.",
-   "means": "When someone new comes in, you can't tell right away what kind of person they are. Nobody is so good that they have no faults, and nobody is so bad that they are worth nothing."
+   "verse": "Oft scarcely he knows who sits in the house,\nWhat kind is the man who comes.\nNone so good is found that faults he has not,\nNor so wicked that nought he is worth",
+   "means": "When someone new comes in, you can't tell right away what kind of person they are.\nNobody is so good that they have no faults, and nobody is so bad that they are worth nothing.",
+   "kids": true
+  },
+  {
+   "n": 134,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nScorn not ever the gray-haired singer,\nOft do the old speak good.\nOft from shrivelled skin come skillful counsels,\nThough it hang with the hides,\nAnd flap with the pelts,\nAnd is blown with the bellies",
+   "means": "Listen, Loddfafnir.\nNever scorn an old storyteller.\nThe old often give the best advice.",
+   "kids": true
+  },
+  {
+   "n": 135,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nCurse not thy guest, nor show him thy gate,\nDeal well with a man in want",
+   "means": "Listen, Loddfafnir.\nDo not curse a guest or show them the door.\nBe good to someone in need.",
+   "kids": true
+  },
+  {
+   "n": 136,
+   "verse": "Strong is the beam that raised must be,\nTo give an entrance to all.\nGive it a ring, or grim will be,\nThe wish it would work on thee",
+   "means": "The door that welcomes everyone must be strong.\nBe generous, or your stinginess will come back to you.",
+   "kids": true
+  },
+  {
+   "n": 137,
+   "verse": "I rede thee, Loddfafnir! and hear thou my rede,\nProfit thou hast if thou hearest,\nGreat thy gain if thou learnest,\nWhen ale thou drinkest seek might of earth,\nFor earth cures drink, and fire cures ills,\nThe oak cures tightness, the ear cures magic,\nRye cures rupture, the moon cures rage,\nGrass cures the scab, and runes the sword-cut.\nThe field absorbs the flood",
+   "means": "Listen, Loddfafnir.\nThe earth, fire and the old remedies each help with something.\nNature has many ways to heal.",
+   "kids": false
+  },
+  {
+   "n": 138,
+   "verse": "Now are Hor's words spoken in the hall,\nKind for the kindred of men,\nCursed for the kindred of giants,\nHail to the speaker, and to him who learns!!\nProfit be his who has them!!\nHail to them who hearken!",
+   "means": "Now the High One's words have been spoken in the hall.\nBlessings on the one who speaks them, and on all who listen and learn.",
+   "kids": true
+  },
+  {
+   "n": 139,
+   "verse": "I ween that I hung on the windy tree,\nHung there for nights full nine.\nWith the spear I was wounded, and offered I was,\nTo Othin, myself to myself,\nOn the tree that none may ever know,\nWhat root beneath it runs",
+   "means": "The High One tells how he hung on the windy tree for nine nights, wounded and given to himself, to gain wisdom.",
+   "kids": false
+  },
+  {
+   "n": 140,
+   "verse": "None made me happy with loaf or horn,\nAnd there below I looked.\nI took up the runes, shrieking I took them,\nAnd forthwith back I fell",
+   "means": "No one brought him bread or drink.\nHe looked down, took up the runes, cried out, and fell back.",
+   "kids": false
+  },
+  {
+   "n": 141,
+   "verse": "Nine mighty songs I got from the son,\nOf Bolthorn, Bestla's father.\nAnd a drink I got of the goodly mead,\nPoured out from Othrörir",
+   "means": "He learned nine mighty songs, and drank the precious mead of poetry.",
+   "kids": true
+  },
+  {
+   "n": 142,
+   "verse": "Then began I to thrive, and wisdom to get,\nI grew and well I was.\nEach word led me on to another word,\nEach deed to another deed",
+   "means": "Then he began to grow wise and strong.\nEach word led to another word, and each deed to another deed.\nLearning builds on itself.",
+   "kids": true
+  },
+  {
+   "n": 143,
+   "verse": "Runes shalt thou find, and fateful signs,\nThat the king of singers colored,\nAnd the mighty gods have made.\nFull strong the signs, full mighty the signs,\nThat the ruler of gods doth write",
+   "means": "There are runes to find, signs of great power, made by the gods and written by the ruler of the gods.",
+   "kids": true
+  },
+  {
+   "n": 144,
+   "verse": "Othin for the gods, Dain for the elves,\nAnd Dvalin for the dwarfs,\nAlsvith for giants and all mankind,\nAnd some myself I wrote",
+   "means": "Each people had someone who carved their runes: Othin for the gods, Dain for the elves, Dvalin for the dwarfs.",
+   "kids": true
+  },
+  {
+   "n": 145,
+   "verse": "Knowest how one shall write, knowest how one shall rede??\nKnowest how one shall tint, knowest how one makes trial??\nKnowest how one shall ask, knowest how one shall offer??\nKnowest how one shall send, knowest how one shall sacrifice?",
+   "means": "Do you know how to write the runes, read them, and use them rightly?\nKnowledge comes with care.",
+   "kids": true
+  },
+  {
+   "n": 146,
+   "verse": "Better no prayer than too big an offering,\nBy thy getting measure thy gift.\nBetter is none than too big a sacrifice,\nSo Thund of old wrote ere man's race began,\nWhere he rose on high when home he came",
+   "means": "It is better to offer nothing than too much.\nGive in measure with what you have received.",
+   "kids": false
+  },
+  {
+   "n": 147,
+   "verse": "The songs I know that king's wives know not,\nNor men that are sons of men.\nThe first is called help, and help it can bring thee,\nIn sorrow and pain and sickness",
+   "means": "The High One knows songs that few know.\nThe first is called Help.\nIt brings comfort in sorrow, pain and sickness.",
+   "kids": true
+  },
+  {
+   "n": 148,
+   "verse": "A second I know, that men shall need,\nWho leechcraft long to use",
+   "means": "The second song is for those who heal.\nThe rest of this stanza is lost.",
+   "kids": true
+  },
+  {
+   "n": 149,
+   "verse": "A third I know, if great is my need,\nOf fetters to hold my foe.\nBlunt do I make mine enemy's blade,\nNor bites his sword or staff",
+   "means": "The third song blunts an enemy's blade, so it cannot harm.",
+   "kids": false
+  },
+  {
+   "n": 150,
+   "verse": "A fourth I know, if men shall fasten,\nBonds on my bended legs.\nSo great is the charm that forth I may go,\nThe fetters spring from my feet,\nBroken the bonds from my hands",
+   "means": "The fourth song breaks bonds and fetters, so one can walk free.",
+   "kids": false
+  },
+  {
+   "n": 151,
+   "verse": "A fifth I know, if I see from afar,\nAn arrow fly 'gainst the folk.\nIt flies not so swift that I stop it not,\nIf ever my eyes behold it",
+   "means": "The fifth song stops an arrow flying toward the people.",
+   "kids": false
+  },
+  {
+   "n": 152,
+   "verse": "A sixth I know, if harm one seeks,\nWith a sapling's roots to send me.\nThe hero himself who wreaks his hate,\nShall taste the ill ere I",
+   "means": "The sixth song turns harm back on the one who sends it.",
+   "kids": false
+  },
+  {
+   "n": 153,
+   "verse": "A seventh I know, if I see in flames,\nThe hall o'er my comrades' heads.\nIt burns not so wide that I will not quench it,\nI know that song to sing",
+   "means": "The seventh song puts out a fire raging over a hall full of friends.",
+   "kids": false
+  },
+  {
+   "n": 154,
+   "verse": "An eighth I know, that is to all,\nOf greatest good to learn.\nWhen hatred grows among heroes' sons,\nI soon can set it right",
+   "means": "The eighth song is the most useful of all.\nWhen anger grows between people, it can set things right.",
+   "kids": true
+  },
+  {
+   "n": 155,
+   "verse": "A ninth I know, if need there comes,\nTo shelter my ship on the flood.\nThe wind I calm upon the waves,\nAnd the sea I put to sleep",
+   "means": "The ninth song calms the wind and the waves, and puts the sea to sleep to keep a ship safe.",
+   "kids": true
+  },
+  {
+   "n": 156,
+   "verse": "A tenth I know, what time I see,\nHouse-riders flying on high.\nSo can I work that wildly they go,\nShowing their true shapes,\nHence to their own homes",
+   "means": "The tenth song sends night riders flying back to their own homes.",
+   "kids": false
+  },
+  {
+   "n": 157,
+   "verse": "An eleventh I know, if needs I must lead,\nTo the fight my long-loved friends.\nI sing in the shields, and in strength they go,\nWhole to the field of fight,\nWhole from the field of fight,\nAnd whole they come thence home",
+   "means": "The eleventh song keeps friends safe, so they go out whole and come home whole.",
+   "kids": true
+  },
+  {
+   "n": 158,
+   "verse": "A twelfth I know, if high on a tree,\nI see a hanged man swing.\nSo do I write and color the runes,\nThat forth he fares,\nAnd to me talks",
+   "means": "The twelfth song is a dark rune spell from the old tales.",
+   "kids": false
+  },
+  {
+   "n": 159,
+   "verse": "A thirteenth I know, if a thane full young,\nWith water I sprinkle well.\nHe shall not fall, though he fares mid the host,\nNor sink beneath the swords",
+   "means": "The thirteenth song protects a young warrior, so they do not fall in battle.",
+   "kids": false
+  },
+  {
+   "n": 160,
+   "verse": "A fourteenth I know, if fain I would name,\nTo men the mighty gods.\nAll know I well of the gods and elves,\nFew be the fools know this",
+   "means": "The fourteenth song lets him name all the gods and elves.\nFew know this.",
+   "kids": true
+  },
+  {
+   "n": 161,
+   "verse": "A fifteenth I know, that before the doors,\nOf Delling sang Thjothrörir the dwarf.\nMight he sang for the gods, and glory for elves,\nAnd wisdom for Hroptatyr wise",
+   "means": "The fifteenth song was sung by the dwarf Thjothrörir, bringing strength to the gods, glory to the elves and wisdom to the High One.",
+   "kids": true
+  },
+  {
+   "n": 162,
+   "verse": "A sixteenth I know, if I seek delight,\nTo win from a maiden wise.\nThe mind I turn of the white-armed maid,\nAnd thus change all her thoughts",
+   "means": "The sixteenth song can turn someone's heart toward love.",
+   "kids": false
+  },
+  {
+   "n": 163,
+   "verse": "A seventeenth I know, so that seldom shall go,\nA maiden young from me",
+   "means": "The seventeenth song is about keeping love close.\nThe rest of this stanza is lost.",
+   "kids": false
+  },
+  {
+   "n": 164,
+   "verse": "Long these songs thou shalt, Loddfafnir,\nSeek in vain to sing.\nYet good it were if thou mightest get them,\nWell, if thou wouldst them learn,\nHelp, if thou hadst them",
+   "means": "Loddfafnir may long wish to sing these songs.\nIt would be good to have them, and helpful to learn them.",
+   "kids": true
+  },
+  {
+   "n": 165,
+   "verse": "An eighteenth I know, that ne'er will I tell,\nTo maiden or wife of man,\nThe best is what none but one's self doth know,\nSo comes the end of the songs,\nSave only to her in whose arms I lie,\nOr who else my sister is",
+   "means": "The eighteenth song he will never tell anyone, except the one closest to his heart.\nSome things are best kept to yourself.",
+   "kids": false
   }
  ]
 }

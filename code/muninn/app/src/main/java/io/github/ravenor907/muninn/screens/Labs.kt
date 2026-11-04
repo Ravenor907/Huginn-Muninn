@@ -134,7 +134,7 @@ object Labs {
 
 /**
  * Settings › Labs, one page (consolidation 2.15): Report a bug, Labs reports (the Labs contact's own phone), the
- * update channel, Replay first setup, and Things to test while on Pre-release. The chat list's menu keeps Report a bug
+ * update channel, Replay first setup, and Voice tuning and Things to test while on Pre-release. The chat list's menu keeps Report a bug
  * (it takes a picture of the screen you're on).
  */
 @Composable
@@ -151,6 +151,8 @@ internal fun LabsPage(app: Muninn) {
         MenuRow("refresh", "Replay first setup (practice)") { Setup.practice(app) }
     }
     UpdateChannel(app)
+    // 1.43: the natural voices' tuning, only on the Pre-release channel.
+    if (app.identity.preRelease) Framed { MenuRow("sound", "Voice tuning") { SettingsNav.folder = "tuning" } }
     // The beta's checklist: only on the Pre-release channel.
     if (app.identity.preRelease) ThingsToTest()
 }

@@ -96,7 +96,7 @@ data class ManagedTv(
     val goneC: List<String> = emptyList(), val goneP: List<String> = emptyList(),
     /** k15 (7.18): the read-aloud voice picked for the device, "f" or "m" ("": none picked yet, the device keeps its own). */
     val voice: String = "",
-    /** k15 (1.42): the read-aloud speed picked for the device, a whole percent 50 to 150 (null: none picked, it reads at 80%). */
+    /** k15 (1.42): the read-aloud speed picked for the device, a whole number 50 to 150 as the config carries it (null: none picked, it reads at 100%; 1.43 maps it into 70% to 130%). */
     val speed: Int? = null,
 ) {
     val upToDate: Boolean get() = applied >= v && v > 0
@@ -337,7 +337,7 @@ object TvParent {
                 // k15: the read-aloud voice, once a parent picked one, and only while every co-parent's app reads it.
                 voice = KidVoice.toSend(t.voice, k15(app, key), coParentCaps(app, t)),
                 // k16 (1.42): the speed beside it, only when the device and every co-parent's app say k16.
-                speed = KidVoice.speedToSend(t.speed?.toFloat(), k16(app, key), coParentCaps(app, t))) else null
+                speed = KidVoice.speedToSend(t.speed, k16(app, key), coParentCaps(app, t))) else null
             val cfg = TvRules.config(app.identity.keys.private, key, v, me, t.parents + me, quick, people(app, t), t.dictation, System.currentTimeMillis(), extras)
             try { TvRules.check(cfg) } catch (e: IllegalArgumentException) { Ui.say("That can't go to the Kids' Device (${e.message}).", true); return }
             plain = TvRules.configMessage(cfg)

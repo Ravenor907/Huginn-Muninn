@@ -13,8 +13,9 @@ object KidVoice {
     const val CAP = "k15"
     const val FIELD = "voice"
     /**
-     * 1.42: the read-aloud speed, a whole percent from 50 to 150, sent beside "voice" only when the device and every
-     * co-parent's app say [SPEED_CAP] (k16). A config without one: the device reads at 80%.
+     * 1.42: the read-aloud speed, a whole number from 50 to 150, sent beside "voice" only when the device and every
+     * co-parent's app say [SPEED_CAP] (k16). 1.43: the device maps it into its 70% to 130% ([ReadAloudText.kidSpeed]:
+     * 50 is 70%, 100 is 100%, 150 is 130%); the field itself is unchanged. A config without one: the device reads at 100%.
      */
     const val SPEED = "speed"
     /** Cap k16: the app reads the config field [SPEED]. */
@@ -36,22 +37,22 @@ object KidVoice {
     const val SPEED_MIN = 50
     const val SPEED_MAX = 150
 
-    /** The speed config [c] carries (50 to 150), or null when it has none: the device reads at 80%. */
+    /** The speed config [c] carries (50 to 150, on the wire), or null when it has none: the device reads at 100%. */
     fun speedOf(c: JSONObject): Int? {
         val v = c.opt(SPEED) ?: return null
         if (!Canon.isInt(v)) return null
         return (v as Number).toLong().takeIf { it in SPEED_MIN.toLong()..SPEED_MAX.toLong() }?.toInt()
     }
 
-    /** A parent's slider value (a float percent) as the whole percent a config carries. */
-    fun speedOut(pct: Float): Int = Math.round(ReadAloudText.speedOf(pct)).coerceIn(SPEED_MIN, SPEED_MAX)
+    /** A parent's slider value (70% to 130%) as the whole number a config carries (50 to 150). */
+    fun speedOut(pct: Float): Int = ReadAloudText.kidWire(pct)
 
     /**
-     * What a parent's phone sends for the speed: [pct] (null: none set yet) only when the device says k16 ([k16]) and
-     * every co-parent's app does too ([others]). Left out, the device reads at 80%.
+     * What a parent's phone sends for the speed: [wire] (the config's number, 50 to 150; null: none set yet) only when
+     * the device says k16 ([k16]) and every co-parent's app does too ([others]). Left out, the device reads at 100%.
      */
-    fun speedToSend(pct: Float?, k16: Boolean, others: List<Set<String>?>): Int? =
-        if (pct == null || !k16 || !allReadSpeed(others)) null else speedOut(pct)
+    fun speedToSend(wire: Int?, k16: Boolean, others: List<Set<String>?>): Int? =
+        if (wire == null || !k16 || !allReadSpeed(others)) null else wire.coerceIn(SPEED_MIN, SPEED_MAX)
 
     /** The voice config [c] carries, or null when it has none (an older parent app, or none picked yet). */
     fun of(c: JSONObject): String? = (c.opt(FIELD) as? String)?.takeIf { it in ReadAloudText.VOICES }

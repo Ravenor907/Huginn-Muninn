@@ -98,7 +98,7 @@ private val PAGES = listOf(
     Page("about", "Updates and about"), Page("lockset", "Change lock", "lock"), Page("unlockpw", "Unlock password", "lock"),
     // One level down (consolidation 2.13, 2.11, 2.15): each its own page, opened from a row.
     Page("linked", "Linked devices", "devices"), Page("move", "Move to a new device", "devices"),
-    Page("aloud", "Read aloud", "look"), Page("labs", "Labs"),
+    Page("aloud", "Read aloud", "look"), Page("labs", "Labs"), Page("tuning", "Voice tuning", "labs"),
 )
 
 /** Older page names (the chat list's Back up and Linked devices, CI) open the page that holds them now. */
@@ -143,6 +143,7 @@ fun SettingsScreen(app: Muninn, onSecure: () -> Unit) {
             "move" -> MoveSection(app)
             "aloud" -> ReadAloudPage()
             "labs" -> LabsPage(app)
+            "tuning" -> VoiceTuningPage()
         }
         Spacer(Modifier.height(24.dp))
     }

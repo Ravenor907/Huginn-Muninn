@@ -36,15 +36,23 @@ object ReadAloudText {
     /** Settings' pick: "f", "m" or "d"; anything else is Female. */
     fun choiceOf(v: String?): String = if (v == DEVICE) DEVICE else voiceOf(v)
 
-    // ---- Read aloud speed (todo 1.42): a percent of the usual pace, 50% to 150%, 80% until it's moved.
-    const val SPEED_MIN = 50f
-    const val SPEED_MAX = 150f
-    const val SPEED_DEFAULT = 80f
+    // ---- Read aloud speed (1.43): how fast words are spoken, 70% to 130% of the voice's usual pace, 100% until moved.
+    const val SPEED_MIN = 70f
+    const val SPEED_MAX = 130f
+    const val SPEED_DEFAULT = 100f
+    /** 1.42's default: a speed still saved at exactly this becomes [SPEED_DEFAULT] once. */
+    const val OLD_SPEED_DEFAULT = 80f
 
-    /** [pct] held to 50 to 150; anything not a number (or none saved) is 80. Older saved ints read the same. */
+    /** [pct] held to 70 to 130; anything not a number (or none saved) is 100. Older saved ints read the same. */
     fun speedOf(pct: Number?): Float {
         val f = pct?.toFloat() ?: return SPEED_DEFAULT
         return if (f.isNaN() || f.isInfinite()) SPEED_DEFAULT else f.coerceIn(SPEED_MIN, SPEED_MAX)
+    }
+
+    /** A speed saved before 1.43, read once: 80% (1.42's default) becomes 100%, anything else is kept, held to 70 to 130. */
+    fun migrateSpeed(old: Number?): Float {
+        val f = old?.toFloat() ?: return SPEED_DEFAULT
+        return if (f == OLD_SPEED_DEFAULT) SPEED_DEFAULT else speedOf(f)
     }
 
     /** What the slider shows: "83%" (rounded only for display). */
@@ -56,11 +64,46 @@ object ReadAloudText {
     /** Android TextToSpeech.setSpeechRate for [pct] (1.0 the usual rate). */
     fun deviceRate(pct: Float): Float = speedOf(pct) / 100f
 
-    /** Qt QTextToSpeech's rate (-1 to 1, 0 the usual) for [pct]: 50% is -1, 100% is 0, 150% is 1 (Huginn does the same). */
+    /** Qt QTextToSpeech's rate (-1 to 1, 0 the usual) for [pct]: 100% is 0, 70% is -0.6, 130% is 0.6 (Huginn does the same). */
     fun qtRate(pct: Float): Float = (speedOf(pct) - 100f) / 50f
+
+    /**
+     * A Kids' Device's speed: the parent's config field "speed" (cap k16) still travels as a whole number from 50 to 150
+     * (the caps list is full, so the field keeps its meaning on the wire). The device maps it into 70 to 130: 50 is 70,
+     * 100 is 100, 150 is 130. None sent: 100.
+     */
+    fun kidSpeed(wire: Number?): Float {
+        val f = wire?.toFloat() ?: return SPEED_DEFAULT
+        if (f.isNaN() || f.isInfinite()) return SPEED_DEFAULT
+        return speedOf(100f + (f.coerceIn(WIRE_MIN.toFloat(), WIRE_MAX.toFloat()) - 100f) * 0.6f)
+    }
+
+    /** What a parent's slider (70 to 130) sends as "speed": the whole number [kidSpeed] maps back to it. */
+    fun kidWire(pct: Float): Int = Math.round(100f + (speedOf(pct) - 100f) / 0.6f).coerceIn(WIRE_MIN, WIRE_MAX)
+
+    const val WIRE_MIN = 50
+    const val WIRE_MAX = 150
+
+    // ---- Cadence (1.43): the pauses between phrases and sentences, 50% to 200%, 100% until moved. Never stretches words.
+    const val CADENCE_MIN = 50f
+    const val CADENCE_MAX = 200f
+    const val CADENCE_DEFAULT = 100f
+
+    /** [pct] held to 50 to 200; anything not a number (or none saved) is 100. */
+    fun cadenceOf(pct: Number?): Float {
+        val f = pct?.toFloat() ?: return CADENCE_DEFAULT
+        return if (f.isNaN() || f.isInfinite()) CADENCE_DEFAULT else f.coerceIn(CADENCE_MIN, CADENCE_MAX)
+    }
+
+    fun cadenceText(pct: Float): String = "${Math.round(cadenceOf(pct))}%"
+
+    /** A pause of [ms] (at 100%) at cadence [pct]. */
+    fun pauseMs(ms: Int, pct: Float): Int = Math.round(ms * cadenceOf(pct) / 100f)
 
     /** The line "Hear a sample" reads. */
     const val SAMPLE = "This is how your messages sound when they're read aloud."
+    /** Read after [SAMPLE] by Hear a sample, so Cadence can be heard too. */
+    const val SAMPLE_PAUSES = "Commas, full stops and new lines each get a short pause."
 
     /** The release file for [voice]. */
     fun fileFor(voice: String): String = if (voice == MALE) "voice-male-1.tar" else "voice-female-1.tar"
@@ -177,6 +220,296 @@ object ReadAloudText {
         }
         return out
     }
+
+    // ---- 1.43: the text before the voice. Phrases, our own pauses, plain words for numbers and shorthand.
+
+    /** Our own pauses after a phrase, in ms at Cadence 100% ([pauseMs] scales them). */
+    const val PAUSE_COMMA = 250
+    const val PAUSE_STOP = 500
+    const val PAUSE_LINE = 400
+    const val PAUSE_ELLIPSIS = 500
+    /** Between a Hávamál verse and "What it means". */
+    const val PAUSE_MEANS = 900
+    /** Between two messages read one after the other. */
+    const val PAUSE_MESSAGE = 700
+    /** A sentence longer than this many words is split at a natural break. */
+    const val LONG_WORDS = 18
+    /** "What it means", read between a verse and its meaning. */
+    const val MEANS = "What it means."
+
+    /** One phrase, given to the voice whole, and the pause after it (ms at Cadence 100%; 0 after the last). */
+    data class Phrase(val text: String, val pause: Int)
+
+    /** "..." and "…" while the text is split: a pause, never read. */
+    private const val ELL = '\u0001'
+
+    /**
+     * What is spoken for a message: [plain], then [normalize], then (natural voices only) [respell], in phrases with our
+     * own pauses after each: comma 250 ms, full stop, ? or ! 500, line break 400, "..." 500.
+     */
+    fun phrases(text: String, natural: Boolean): List<Phrase> {
+        var t = normalize(plain(loneEmoji(text) ?: text))
+        if (natural) t = respell(t)
+        return split(t)
+    }
+
+    /** A Hávamál verse read aloud: the verse, 900 ms, "What it means", then the meaning (each of its lines a pause). */
+    fun verse(verse: String, means: String, natural: Boolean): List<Phrase> {
+        val out = ArrayList(phrases(verse, natural))
+        if (out.isNotEmpty()) out[out.size - 1] = out.last().copy(pause = PAUSE_MEANS)
+        out.add(Phrase(MEANS, PAUSE_STOP))
+        out.addAll(phrases(means, natural))
+        return finish(out)
+    }
+
+    /** Several messages one after the other, 700 ms between them. */
+    fun messages(texts: List<String>, natural: Boolean): List<Phrase> {
+        val out = ArrayList<Phrase>()
+        for (t in texts) {
+            val p = phrases(t, natural)
+            if (p.isEmpty()) continue
+            if (out.isNotEmpty()) out[out.size - 1] = out.last().copy(pause = maxOf(out.last().pause, PAUSE_MESSAGE))
+            out.addAll(p)
+        }
+        return finish(out)
+    }
+
+    private fun finish(out: MutableList<Phrase>): List<Phrase> {
+        if (out.isNotEmpty()) out[out.size - 1] = out.last().copy(pause = 0)
+        return out
+    }
+
+    private val CLOSERS = "\"')"
+
+    /** [t] (already [normalize]d) in phrases: at sentence ends, commas, ; and :, "..." and line ends; long ones split again. */
+    fun split(t: String): List<Phrase> {
+        val out = ArrayList<Phrase>()
+        fun add(raw: String, pause: Int) {
+            val s = raw.trim()
+            // Nothing to say (only marks): its pause goes to the phrase before.
+            if (s.none { Character.isLetterOrDigit(it) }) {
+                if (out.isNotEmpty()) out[out.size - 1] = out.last().copy(pause = maxOf(out.last().pause, pause))
+                return
+            }
+            val parts = longSplit(s)
+            parts.forEachIndexed { i, p -> out.add(Phrase(p, if (i == parts.size - 1) pause else PAUSE_COMMA)) }
+        }
+        for (line in t.split('\n')) {
+            val l = line.trim()
+            if (l.isEmpty()) continue
+            val start = out.size
+            var from = 0
+            var i = 0
+            while (i < l.length) {
+                val c = l[i]
+                var pause = -1
+                var end = i
+                if (c == ELL) { pause = PAUSE_ELLIPSIS; end = i }
+                else if (c == '.' || c == '!' || c == '?' || c == ',' || c == ';' || c == ':') {
+                    var j = i
+                    while (j + 1 < l.length && l[j + 1] in ".!?") j++
+                    while (j + 1 < l.length && l[j + 1] in CLOSERS) j++
+                    if (j + 1 >= l.length || l[j + 1] == ' ' || l[j + 1] == ELL) {
+                        pause = if (c == ',' || c == ';' || c == ':') PAUSE_COMMA else PAUSE_STOP
+                        end = j + 1
+                        i = j
+                    }
+                }
+                if (pause >= 0) {
+                    add(l.substring(from, end), pause)
+                    from = if (c == ELL) i + 1 else end
+                }
+                i++
+            }
+            if (from < l.length) add(l.substring(from), PAUSE_LINE)
+            // The line's end: at least the line break's pause.
+            if (out.size > start) out[out.size - 1] = out.last().copy(pause = maxOf(out.last().pause, PAUSE_LINE))
+        }
+        return finish(out)
+    }
+
+    private val BREAKS = Regex("""(?<=;)\s+|(?<=,)\s+(?=(?:and|but)\s)|\s+(?=because\s)""", RegexOption.IGNORE_CASE)
+
+    /** A phrase over [LONG_WORDS] words cut at ", and", ", but", " because" and ";", then to at most [MAX_PIECE]. */
+    private fun longSplit(s: String): List<String> {
+        val words = s.split(' ').count { it.isNotBlank() }
+        val first = if (words > LONG_WORDS) BREAKS.split(s).map { it.trim() }.filter { it.isNotEmpty() } else listOf(s)
+        return first.flatMap { pieces(it) }
+    }
+
+    private val SQUOTES = Regex("[‘’‚‛]")
+    private val DQUOTES = Regex("[“”„‟]")
+    private val ELLIPSIS = Regex("""\.{3,}|…""")
+    private val DOUBLE_DOT = Regex("""\.{2}""")
+    private val SHORT = mapOf("lol" to "laughing out loud", "brb" to "be right back", "idk" to "I don't know",
+        "omw" to "on my way", "tbh" to "to be honest", "imo" to "in my opinion", "ty" to "thank you", "np" to "no problem")
+    private val SHORTHAND = Regex("""(?<![\p{L}\p{N}'])(lol|brb|idk|omw|tbh|imo|ty|np)(?![\p{L}\p{N}'])""", RegexOption.IGNORE_CASE)
+    /** Titles before a name: never the end of a sentence. */
+    private val TITLES = listOf(Regex("""(?<![\p{L}])Dr\.""") to "Doctor", Regex("""(?<![\p{L}])Mrs\.""") to "Missus",
+        Regex("""(?<![\p{L}])Mr\.""") to "Mister", Regex("""(?<![\p{L}])Ms\.""") to "Miz",
+        Regex("""(?<![\p{L}])St\.(?=\s+\p{Lu})""") to "Saint")
+    /** Others: a full stop stays when a sentence ends with one. */
+    private val ABBREVIATIONS = listOf(Regex("""(?<![\p{L}])St\.""") to "Street", Regex("""(?<![\p{L}])etc\.""", RegexOption.IGNORE_CASE) to "et cetera",
+        Regex("""(?<![\p{L}])e\.g\.""", RegexOption.IGNORE_CASE) to "for example", Regex("""(?<![\p{L}])i\.e\.""", RegexOption.IGNORE_CASE) to "that is",
+        Regex("""(?<![\p{L}])vs\.""", RegexOption.IGNORE_CASE) to "versus", Regex("""(?<![\p{L}])Jr\.""") to "Junior",
+        Regex("""(?<![\p{L}])Sr\.""") to "Senior")
+    private val ENDS_HERE = Regex("""^(?:\s*$|\s+[\p{Lu}"'])""")
+    private val TIME = Regex("""(?<![\p{N}:.])([01]?\d|2[0-3]):([0-5]\d)(?![\p{N}:])(?:\s?([AaPp])\.?\s?[Mm]\.?(?![\p{L}]))?""")
+    private val ORDINAL = Regex("""(?<![\p{L}\p{N}.,])(\d{1,9})(st|nd|rd|th)(?![\p{L}\p{N}])""", RegexOption.IGNORE_CASE)
+    private val MONEY = Regex("""([$\u00A3\u20AC])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{2}))?(?![\p{N}])""")
+    private val NUMBER = Regex("""(?<![\p{L}\p{N}.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?![\p{N}])""")
+
+    /**
+     * Small, safe tidying before the voice (both apps the same): curly quotes made straight, "..." and "…" a pause, ".."
+     * one full stop (never "dot"), titles and common abbreviations in words, texting shorthand spelled out, times
+     * ("3:30" is "three thirty") and numbers in words.
+     */
+    fun normalize(text: String): String {
+        var t = SQUOTES.replace(text, "'")
+        t = DQUOTES.replace(t, "\"")
+        t = ELLIPSIS.replace(t, " $ELL ")
+        t = DOUBLE_DOT.replace(t, ".")
+        for ((r, w) in TITLES) t = r.replace(t, w)
+        for ((r, w) in ABBREVIATIONS) t = r.replace(t) { m -> if (ENDS_HERE.containsMatchIn(t.substring(m.range.last + 1))) "$w." else w }
+        t = SHORTHAND.replace(t) { m -> SHORT[m.value.lowercase()] ?: m.value }
+        t = TIME.replace(t) { m -> timeWords(m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3]) }
+        t = ORDINAL.replace(t) { m -> m.groupValues[1].toLongOrNull()?.let { ordinalWords(it) } ?: m.value }
+        t = MONEY.replace(t) { m -> moneyWords(m.groupValues[1], m.groupValues[2].replace(",", ""), m.groupValues[3]) }
+        t = NUMBER.replace(t) { m -> numberText(m.groupValues[1], m.groupValues[2]) }
+        return t.split('\n').joinToString("\n") { ONE_SPACE.replace(it, " ").trim() }
+    }
+
+    private val ONES = arrayOf("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
+        "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen")
+    private val TENS = arrayOf("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
+
+    /** [n] (0 to 999,999,999,999) in words: 1923 is "one thousand nine hundred twenty three". */
+    fun numberWords(n: Long): String {
+        if (n < 0) return "minus " + numberWords(-n)
+        if (n < 20) return ONES[n.toInt()]
+        if (n < 100) return TENS[(n / 10).toInt()] + if (n % 10 != 0L) " " + ONES[(n % 10).toInt()] else ""
+        if (n < 1000) return ONES[(n / 100).toInt()] + " hundred" + if (n % 100 != 0L) " " + numberWords(n % 100) else ""
+        for ((size, name) in listOf(1_000_000_000L to "billion", 1_000_000L to "million", 1000L to "thousand")) {
+            if (n >= size) return numberWords(n / size) + " " + name + if (n % size != 0L) " " + numberWords(n % size) else ""
+        }
+        return n.toString()
+    }
+
+    /** A year said the usual way: 1923 "nineteen twenty three", 1905 "nineteen oh five", 2007 "two thousand seven". */
+    fun yearWords(n: Int): String {
+        if (n in 2000..2009 || n % 1000 == 0) return numberWords(n.toLong())
+        val hi = n / 100; val lo = n % 100
+        return numberWords(hi.toLong()) + when { lo == 0 -> " hundred"; lo < 10 -> " oh " + ONES[lo]; else -> " " + numberWords(lo.toLong()) }
+    }
+
+    /** 1 "first", 22 "twenty second", 100 "one hundredth". */
+    fun ordinalWords(n: Long): String {
+        val w = numberWords(n)
+        val cut = w.lastIndexOf(' ')
+        val head = if (cut < 0) "" else w.substring(0, cut + 1)
+        val last = w.substring(cut + 1)
+        val ord = when (last) {
+            "one" -> "first"; "two" -> "second"; "three" -> "third"; "five" -> "fifth"; "eight" -> "eighth"; "nine" -> "ninth"
+            "twelve" -> "twelfth"
+            else -> if (last.endsWith("y")) last.dropLast(1) + "ieth" else last + "th"
+        }
+        return head + ord
+    }
+
+    /** "3:30" is "three thirty", "3:05" "three oh five", "3:00" "three o'clock", "3:00 pm" "three pee em", "15:00" "fifteen hundred". */
+    fun timeWords(h: Int, m: Int, ampm: String): String {
+        val half = ampm.lowercase()
+        val hour = if (half.isNotEmpty() && h == 0) "twelve" else numberWords(h.toLong())
+        val mins = when {
+            m == 0 && half.isNotEmpty() -> ""
+            m == 0 -> if (h in 1..12) " o'clock" else " hundred"
+            m < 10 -> " oh " + ONES[m]
+            else -> " " + numberWords(m.toLong())
+        }
+        val tail = when (half) { "a" -> " ay em"; "p" -> " pee em"; else -> "" }
+        return hour + mins + tail
+    }
+
+    /** "$15" is "fifteen dollars", "\u00A31.50" "one pound fifty" (the engine never sees the sign). */
+    private fun moneyWords(sign: String, whole: String, cents: String): String {
+        val n = whole.toLongOrNull() ?: return sign + whole
+        val unit = when (sign) { "$" -> "dollar"; "\u00A3" -> "pound"; else -> "euro" }
+        val c = cents.toIntOrNull() ?: 0
+        return numberWords(n) + " " + unit + (if (n == 1L) "" else "s") + if (c > 0) " " + numberWords(c.toLong()) else ""
+    }
+
+    /** One number as found: digits (commas between thousands) and maybe a decimal part. */
+    private fun numberText(whole: String, decimal: String): String {
+        val digits = whole.replace(",", "")
+        fun oneByOne(s: String) = s.map { ONES[it - '0'] }.joinToString(" ")
+        val head = when {
+            digits.length > 1 && digits.startsWith("0") -> oneByOne(digits)
+            digits.length > 12 -> oneByOne(digits)
+            decimal.isEmpty() && whole.length == 4 && digits.toInt().let { it in 1100..1999 || it in 2000..2099 } -> yearWords(digits.toInt())
+            else -> numberWords(digits.toLong())
+        }
+        return if (decimal.isEmpty()) head else head + " point " + oneByOne(decimal.take(6))
+    }
+
+    /** Names the natural voices say wrongly, respelled for them only (never shown, never for the device's own voice). */
+    val RESPELL = listOf("Muninn" to "Moo-nin", "Huginn" to "Hoo-gin", "Hávamál" to "Hah-vah-mawl", "Havamal" to "Hah-vah-mawl",
+        "ere" to "air", "Othin" to "Oh-thin", "Loddfafnir" to "Lodd-fahv-neer")
+    private val RESPELL_RX = RESPELL.map { (w, r) -> Regex("""(?<![\p{L}])${Regex.escape(w)}(?![\p{L}])""", RegexOption.IGNORE_CASE) to r }
+
+    /** [RESPELL] applied, whole words, any case ("Muninn's" too). */
+    fun respell(text: String): String {
+        var t = text
+        for ((rx, r) in RESPELL_RX) t = rx.replace(t) { m -> if (m.value.first().isLowerCase()) r.lowercase() else r.replaceFirstChar { it.uppercaseChar() } }
+        return t
+    }
+
+    private val EMOJI_NAMES = mapOf(0x1F600 to "grinning face", 0x1F603 to "grinning face", 0x1F604 to "grinning face",
+        0x1F601 to "beaming face", 0x1F642 to "smiling face", 0x1F60A to "smiling face", 0x263A to "smiling face",
+        0x1F602 to "face with tears of joy", 0x1F923 to "rolling on the floor laughing", 0x1F606 to "laughing face",
+        0x1F609 to "winking face", 0x1F60D to "smiling face with heart eyes", 0x1F970 to "smiling face with hearts",
+        0x1F618 to "face blowing a kiss", 0x1F60E to "smiling face with sunglasses", 0x1F914 to "thinking face",
+        0x1F622 to "crying face", 0x1F62D to "loudly crying face", 0x1F62E to "surprised face", 0x1F621 to "angry face",
+        0x1F620 to "angry face", 0x1F634 to "sleeping face", 0x1F641 to "sad face", 0x2639 to "sad face",
+        0x2764 to "red heart", 0x1F44D to "thumbs up", 0x1F44E to "thumbs down", 0x1F44B to "waving hand",
+        0x1F44F to "clapping hands", 0x1F64F to "folded hands", 0x1F389 to "party popper", 0x1F525 to "fire",
+        0x1F4AF to "hundred points", 0x2705 to "check mark", 0x2B50 to "star", 0x1F436 to "dog", 0x1F431 to "cat")
+
+    /** A message that is one emoji and nothing else: its name ("smiling face"). Null otherwise, or for one not on the list. */
+    fun loneEmoji(text: String): String? {
+        val cps = text.trim().codePoints().toArray().filter { it != 0xFE0F && it !in 0x1F3FB..0x1F3FF }
+        if (cps.size != 1) return null
+        return EMOJI_NAMES[cps[0]]
+    }
+
+    /** Natural voice samples with the near-silence at both ends taken off (30 ms kept), so our pauses are the pauses. */
+    fun trimSilence(samples: FloatArray, rate: Int, floor: Float = 0.004f): FloatArray {
+        var a = 0
+        while (a < samples.size && Math.abs(samples[a]) < floor) a++
+        if (a == samples.size) return FloatArray(0)
+        var b = samples.size - 1
+        while (b > a && Math.abs(samples[b]) < floor) b--
+        val keep = rate * 30 / 1000
+        val from = maxOf(0, a - keep)
+        val to = minOf(samples.size, b + 1 + keep)
+        return if (from == 0 && to == samples.size) samples else samples.copyOfRange(from, to)
+    }
+
+    /** [samples] with [ms] of silence after. */
+    fun withPause(samples: FloatArray, rate: Int, ms: Int): FloatArray =
+        if (ms <= 0 || rate <= 0) samples else samples.copyOf(samples.size + (rate.toLong() * ms / 1000).toInt())
+
+    // ---- 1.43: per-voice tuning for the natural voices (Labs › Voice tuning, Pre-release only).
+
+    /** One preset: the engine's noise scale and noise width. */
+    data class Tune(val name: String, val noise: Float, val width: Float)
+
+    /** A is the default (what 1.42 used). */
+    val TUNES = listOf(Tune("A", 0.667f, 0.8f), Tune("B", 0.5f, 0.6f), Tune("C", 0.75f, 0.9f), Tune("D", 0.6f, 1.0f), Tune("E", 0.8f, 0.7f))
+
+    fun tuneOf(name: String?): Tune = TUNES.firstOrNull { it.name == name } ?: TUNES[0]
+
+    /** "A: 0.667 / 0.8". */
+    fun tuneText(t: Tune): String = "${t.name}: ${t.noise} / ${t.width}"
 
     /** code/shared/voices.sha256: file name to SHA-256 (lowercase hex). Comments and odd lines are skipped. */
     fun hashes(text: String): Map<String, String> {

@@ -119,7 +119,21 @@ object HavDevice {
     }
 
     /** Switched off: Earlier verses starts over the next time it comes on. */
-    fun forgetStart(context: Context) { prefs(context).edit().remove(START).apply() }
+    fun forgetStart(context: Context) { prefs(context).edit().remove(START).remove(SKIP).apply() }
+
+    private const val SKIP = "havSkip"
+    /** Bumped by "Next verse", so the row, the tile and the view show the new one. */
+    var rev by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
+
+    /** How many times "Next verse" was pressed [today] (0 on any other day: tomorrow starts from its own verse). */
+    fun skips(context: Context, today: Long): Int = Havamal.skipsOn(prefs(context).getString(SKIP, null), today)
+
+    /** "Next verse": the next one in order, today only. */
+    fun next(context: Context, today: Long) {
+        prefs(context).edit().putString(SKIP, Havamal.skipsKept(today, skips(context, today) + 1)).apply()
+        rev++
+    }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences("muninn-tv", Context.MODE_PRIVATE)
 }
@@ -215,17 +229,21 @@ private fun havToday(): Long {
     return day
 }
 
-/** Today's verse and the ones before it, or null when there are none. */
+/** Today's verse (moved on by "Next verse"), the ones before it, the parent's wording, and Next verse; null when there are none. */
+private class HavDay(val first: HavVerse, val second: List<HavVerse>, val third: Map<Int, String>?, val next: () -> Unit)
+
 @Composable
-private fun havDay(cfg: TvConfig): Triple<HavVerse, List<HavVerse>, Map<Int, String>?>? {
+private fun havDay(cfg: TvConfig): HavDay? {
     val context = LocalContext.current
-    val verses = remember { HavAssets.verses(context) }
+    // 1.43: a Kids' Device shows only the verses marked for children, in order.
+    val verses = remember { Havamal.forKids(HavAssets.verses(context)) }
     if (verses.isEmpty()) return null
     val today = havToday()
     val start = remember(today) { HavDevice.start(context, today) }
     val held by HavDevice.mine.collectAsState()
-    val v = verses[Havamal.index(today, verses.size)]
-    return Triple(v, Havamal.at(verses, Havamal.earlier(today, start, verses.size)), HavDevice.stanzasFor(cfg, held))
+    val skips = remember(today, HavDevice.rev) { HavDevice.skips(context, today) }
+    val v = verses[Havamal.index(today + skips, verses.size)]
+    return HavDay(v, Havamal.at(verses, Havamal.earlier(today, start, verses.size)), HavDevice.stanzasFor(cfg, held)) { HavDevice.next(context, today) }
 }
 
 /**
@@ -243,7 +261,7 @@ internal fun HavRow(cfg: TvConfig, modifier: Modifier = Modifier) {
                 MIcon("text", Palette.goldBright, 24.dp)
             }
         }, modifier = modifier) { open = true }
-    if (open) HavDialog(cfg, day.first, day.second, day.third, tv = false) { open = false }
+    if (open) HavDialog(cfg, day.first, day.second, day.third, tv = false, onNext = day.next) { open = false }
 }
 
 /** On a TV: today's verse as a tile at the end of the people, reached with the D-pad. */
@@ -265,14 +283,15 @@ internal fun HavTile(cfg: TvConfig) {
             Text("Stanza ${day.first.n}", style = tvText(22.sp, Palette.textMuted))
         }
     }
-    if (open) HavDialog(cfg, day.first, day.second, day.third, tv = true) { open = false }
+    if (open) HavDialog(cfg, day.first, day.second, day.third, tv = true, onNext = day.next) { open = false }
 }
 
-/** The verse big, what it means, Read aloud (when the device can speak) and Earlier verses. */
+/** The verse big, what it means, Read aloud (when the device can speak), Next verse and Earlier verses. */
 @Composable
-private fun HavDialog(cfg: TvConfig, today: HavVerse, earlier: List<HavVerse>, mine: Map<Int, String>?, tv: Boolean, onClose: () -> Unit) {
+private fun HavDialog(cfg: TvConfig, today: HavVerse, earlier: List<HavVerse>, mine: Map<Int, String>?, tv: Boolean, onNext: () -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
-    var shown by remember { mutableStateOf(today) }
+    // "Next verse" changes [today]: the view follows it.
+    var shown by remember(today) { mutableStateOf(today) }
     var listing by remember { mutableStateOf(false) }
     // Read aloud (net/ReadAloud): the natural voice a parent picked (k15), or the device's own offline voice until it's in.
     val ready = io.github.ravenor907.muninn.net.ReadAloud.available
@@ -311,10 +330,15 @@ private fun HavDialog(cfg: TvConfig, today: HavVerse, earlier: List<HavVerse>, m
             Text(shown.means, style = tvText(small), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
             Column(Modifier.fillMaxWidth().padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (ready) BigButton("Read aloud", icon = "sound", requester = first) {
-                    io.github.ravenor907.muninn.net.ReadAloud.speak(context, text + "\nWhat it means.\n" + shown.means)
+                    // The verse, a pause, "What it means", then the meaning (each line a pause).
+                    io.github.ravenor907.muninn.net.ReadAloud.speakVerse(context, text, shown.means)
                 }
                 if (shown != today) BigButton("Today's verse", requester = if (!ready) first else null) { shown = today }
-                BigButton("Earlier verses", requester = if (!ready && shown == today) first else null) {
+                else BigButton("Next verse", icon = "forward", requester = if (!ready) first else null) {
+                    io.github.ravenor907.muninn.net.ReadAloud.stop()
+                    onNext()
+                }
+                BigButton("Earlier verses") {
                     io.github.ravenor907.muninn.net.ReadAloud.stop()
                     listing = true
                 }

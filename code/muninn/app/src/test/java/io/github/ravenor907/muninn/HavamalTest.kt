@@ -44,11 +44,13 @@ class HavamalTest {
         assertTrue(o.getString("translation").contains("Bellows"))
         assertTrue(o.getString("note").contains("public domain"))
         val verses = Havamal.parse(asset())
-        assertTrue(verses.size in 50..70)
+        // 1.43: all 165 stanzas, each marked for Kids' Devices or not.
+        assertEquals(165, verses.size)
         val raw = o.getJSONArray("verses")
         for (i in 0 until raw.length()) {
             val e = raw.getJSONObject(i)
-            assertEquals(setOf("n", "verse", "means"), e.keys().asSequence().toSet())
+            assertEquals(setOf("n", "verse", "means", "kids"), e.keys().asSequence().toSet())
+            assertTrue(e.get("kids") is Boolean)
             assertTrue(e.getInt("n") > 0)
             assertTrue(e.getString("verse").isNotBlank())
             assertTrue(e.getString("means").isNotBlank())

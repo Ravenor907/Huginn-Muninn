@@ -676,7 +676,7 @@ object KidTv {
                 if (pairing) { prefs(app).edit().putBoolean(SETUP_ASK, true).apply(); setupAsk.value = true }
                 // k15 (7.18): the read-aloud voice a parent picked (a config without one leaves it as it was).
                 KidVoice.of(new)?.let { v -> io.github.ravenor907.muninn.net.ReadAloud.parentPicked(app, v) }
-                // 1.42: the speed beside it (a config without one reads at 80%).
+                // 1.42: the speed beside it (a config without one reads at 100%; 1.43 maps 50 to 150 into 70% to 130%).
                 io.github.ravenor907.muninn.net.ReadAloud.parentSpeed(app, KidVoice.speedOf(new))
                 // k8 (7.13): how long messages stay on the TV, as the parent set it.
                 cfg.keep?.let { d ->

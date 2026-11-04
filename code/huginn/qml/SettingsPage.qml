@@ -7,7 +7,8 @@ import Huginn
 // behind the page's More row. Changes save as you go. A few rows open a page of their own (Calls › Voice rooms, Look ›
 // Accessibility › Read aloud, Devices and backup › Linked devices and Move to a new device). Updates and about starts
 // with the raven: ten presses (a click or A) turn Labs mode on or off, which adds Labs at the bottom, everything Labs in
-// one place (bug reports, Labs reports, the update channel, Performance check, practice setup, Things to test).
+// one place (bug reports, Labs reports, the update channel, Performance check, practice setup, and on Pre-release
+// Voice tuning and Things to test).
 Rectangle {
     id: page
     // Seasonal: a frosted pane, so what falls shows while Look's settings change.
@@ -39,8 +40,10 @@ Rectangle {
     }
     // Pages one level down, opened by a row of their parent (B goes back to that row): Calls › Voice rooms.
     // Look › Accessibility › Read aloud: its own page (ReadAloudPage.qml), shown here with the controller passed on.
+    // Labs › Voice tuning (Pre-release only): the natural voice's five presets.
     readonly property var subs: [{ id: "voicerooms", title: "Voice rooms", parent: "calls", from: "voiceRooms" },
-                                 { id: "aloud", title: "Read aloud", parent: "look", from: "readAloud" }]
+                                 { id: "aloud", title: "Read aloud", parent: "look", from: "readAloud" },
+                                 { id: "tuning", title: "Voice tuning", parent: "labs", from: "voiceTuning" }]
     readonly property var subNow: subs.find(m => m.id === section) || null
     // The left list marks the parent of a page one level down.
     readonly property string navSection: subNow ? subNow.parent : section
@@ -297,6 +300,9 @@ Rectangle {
             { group: "Accessibility", kind: "button", key: "readAloud", title: "Read aloud", live: "aloudRow", label: "Open" },
             // Daily Hávamál: a verse a day at the top of the chat list, off until it's turned on (src/dailyverse.h).
             { group: "Daily Hávamál", kind: "toggle", key: "verseOn", verse: true, title: "Daily Hávamál", note: "A verse a day at the top of your chats" },
+            // 1.43: In order, or Random (no verse again until all 165 have shown).
+            { group: "Daily Hávamál", kind: "segmented", key: "verseOrder", verse: true, hide: !DailyVerse.verseOn || typeof DailyVerse.verseOrder !== "string",
+              title: "Order", value: String(DailyVerse.verseOrder || "o"), options: [{ value: "o", label: "In order" }, { value: "r", label: "Random" }] },
             { group: "Daily Hávamál", kind: "segmented", key: "verseWording", verse: true, hide: !DailyVerse.verseOn || !DailyVerse.hasMine,
               title: "Wording", value: DailyVerse.verseWording, options: [{ value: "b", label: "Bellows (1923)" }, { value: "y", label: "Your translation" }] },
             { group: "Daily Hávamál", kind: "button", key: "verseImport", hide: !DailyVerse.verseOn, title: "Your translation",
@@ -395,8 +401,10 @@ Rectangle {
             { group: "Controls and shortcuts", kind: "info", hide: !page.padHelp, title: "Panic lock", note: Vault.panicLock ? "Hold L3 and R3" : "Off" },
             { group: "Controls and shortcuts", kind: "button", key: "shortcuts", title: "Keyboard shortcuts", note: "Ctrl+/", label: "Open" }
         ], "Your data, Credits and licenses, Controls and shortcuts")
+        // Labs › Voice tuning (Pre-release only): stanza 3 and what it means, read with each of five presets, and Use this.
+        case "tuning": return page.tuningRows
         // Labs, all in one place: Report a bug, Labs reports, the update channel, Performance check, practice setup,
-        // and on Pre-release the beta's Things to test.
+        // and on Pre-release Voice tuning and the beta's Things to test.
         case "labs": return [
             { kind: "button", key: "report", title: "Report a bug", note: "Screenshot optional", label: "Report" },
             { kind: "button", key: "labsReports", hide: !Labs.inbox, title: "Labs reports", note: Labs.reports.length ? String(Labs.reports.length) : "", label: "Open" },
@@ -406,11 +414,47 @@ Rectangle {
             { kind: "button", key: "goStable", hide: Settings.updateChannel !== "beta" && System.version.indexOf("beta") < 0,
               title: "Go back to stable", note: "Installs the latest stable", label: "Go back", enabled: !Updater.busy },
             { kind: "button", key: "perf", title: "Performance check", note: "Lag and size", label: "Open" },
+            { kind: "button", key: "voiceTuning", hide: Settings.updateChannel !== "beta", title: "Voice tuning", note: "Presets for the natural voices", label: "Open" },
             { kind: "button", key: "practice", title: "Replay first setup", note: "Practice. Nothing is saved", label: "Start" }
         ].filter(r => !r.hide).concat(page.betaRows)
         }
         return []
     }
+    // ------------------------------------------------------------- Labs › Voice tuning
+    // The natural voice's noise scale and noise width, five presets (A, the default, to E). "Hear it" reads Hávamál
+    // stanza 3 and what it means with the preset picked here; "Use this" keeps it on this computer for that voice, and
+    // the In use row shows the numbers to report.
+    property string tuneTry: ""
+    readonly property bool tuneThere: section === "tuning" && typeof ReadAloud.tuningText === "function" && typeof ReadAloud.tryTuning === "function"
+    readonly property string tuneInUse: tuneThere ? String(ReadAloud.tuning || "A") : "A"
+    readonly property string tuneNow: tuneTry !== "" ? tuneTry : tuneInUse
+    readonly property var tuningRows: {
+        if (!tuneThere || Settings.updateChannel !== "beta")
+            return [{ kind: "info", title: "Voice tuning", note: "Only on the Pre-release channel" }]
+        const presets = typeof ReadAloud.tuningPresets === "function" ? (ReadAloud.tuningPresets() || []) : []
+        const opts = presets.filter(p => !!p && !!p.id).map(p => ({ value: String(p.id), label: String(p.id) }))
+        const name = typeof ReadAloud.naturalName === "function" ? String(ReadAloud.naturalName() || "") : ""
+        return [
+            { group: "Try a preset", kind: "info", title: name !== "" ? name + " voice" : "Natural voice",
+              note: ReadAloud.voice === "d" ? "Pick Female or Male in Read aloud to tune it" : "Reads stanza 3 and what it means" },
+            { group: "Try a preset", kind: "segmented", key: "tuneTry", tune: true, title: "Preset", value: page.tuneNow, options: opts },
+            { group: "Try a preset", kind: "button", key: "tuneHear", title: "Hear it", note: String(ReadAloud.tuningText(page.tuneNow) || ""), label: "Play" },
+            { group: "Try a preset", kind: "button", key: "tuneUse", title: "Use this", note: page.tuneNow === page.tuneInUse ? "In use" : "",
+              label: "Use this", enabled: page.tuneNow !== page.tuneInUse },
+            { group: "In use", kind: "info", title: String(ReadAloud.tuningText(page.tuneInUse) || ""), note: "Saved on this computer for this voice" }
+        ]
+    }
+    function hearTuning() {
+        const why = String(ReadAloud.tryTuning(tuneNow) || "")
+        if (why !== "") Ui.say(why, true)
+    }
+    function useTuning() {
+        if (typeof ReadAloud.useTuning !== "function") return
+        ReadAloud.useTuning(tuneNow)
+        tuneTry = ""
+        Ui.say("In use: " + String(ReadAloud.tuningText(ReadAloud.tuning) || ""))
+    }
+
     // ------------------------------------------------------------- Labs › Things to test
     // The beta's checklist (code/shared/beta-tests.json, through Chat.betaTests), shown only on Pre-release. Each group
     // folds open; A ticks a check (kept on this device, cleared when the beta changes), Y or Report a problem opens Report
@@ -1144,6 +1188,7 @@ Rectangle {
     }
     // A choice in a row of choices.
     function pickSegment(r, v) {
+        if (r.tune) { tuneTry = String(v); return }
         if (r.rooms) { Rooms[r.key] = v; return }
         if (r.verse) { DailyVerse[r.key] = v; return }
         if (r.aloud && r.key === "voice" && v !== ReadAloud.voice && ReadAloud.hasFiles) {
@@ -1214,6 +1259,9 @@ Rectangle {
         else if (key === "move") PeopleActions.moveDevice()
         else if (key === "voiceRooms") openSub("voicerooms")
         else if (key === "readAloud") openSub("aloud")
+        else if (key === "voiceTuning") { tuneTry = ""; openSub("tuning") }
+        else if (key === "tuneHear") hearTuning()
+        else if (key === "tuneUse") useTuning()
         else if (key === "labsReports") Ui.main.openLabsReports()
         else if (key.indexOf("betaReport:") === 0) { const r = rows.find(x => x.key === key); if (r) reportBeta(r.beta) }
         else if (key.indexOf("beta:") === 0) foldBeta(key.substring(5))

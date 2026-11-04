@@ -74,7 +74,7 @@ object ReadAloud {
     // The phone's own voice, until the natural one is in.
     @Volatile private var device: TextToSpeech? = null
     @Volatile private var deviceOk = false
-    @Volatile private var deviceWaiting: List<String>? = null
+    @Volatile private var deviceWaiting: List<ReadAloudText.Phrase>? = null
     // The phone's own voice failed to start (no offline voice): Read aloud isn't offered on it until Settings is opened
     // again or Muninn restarts, and the next read tries it afresh.
     @Volatile private var deviceBad = false
@@ -135,28 +135,37 @@ object ReadAloud {
      */
     fun useDevice(context: Context): Boolean = prefs(context).let { it.getString("kid", null) == null && it.getString("voice", null) == ReadAloudText.DEVICE }
 
-    // ---- the speed (todo 1.42): a percent of the usual pace, 50 to 150, 80 until it's moved.
+    // ---- the speed and cadence (1.43): speed 70 to 130 (100 until moved), cadence 50 to 200 (100 until moved).
 
-    /** The speed the slider shows and sets, live while it moves ([setSpeed] saves it when the drag ends). */
+    /** The speed and cadence the sliders show and set, live while they move (saved when the drag ends). */
     @Volatile private var liveSpeed: Float? = null
+    @Volatile private var liveCadence: Float? = null
 
-    /** The speed in use: a parent's on a Kids' Device (80 when the parent sent none), else this device's. */
+    /** The speed in use: a parent's on a Kids' Device (100 when the parent sent none), else this device's. */
     fun speed(context: Context): Float {
         val p = prefs(context)
-        if (p.contains("kidSpeed")) return ReadAloudText.speedOf(p.getFloat("kidSpeed", ReadAloudText.SPEED_DEFAULT))
+        if (p.contains("kidSpeed")) return ReadAloudText.kidSpeed(p.getFloat("kidSpeed", 100f))
         return liveSpeed ?: ownSpeed(context)
     }
 
-    /** This device's own speed (Settings). Saved as a float; nothing saved reads 80. */
+    /**
+     * This device's own speed (Settings). Saved as a float; nothing saved reads 100. A speed saved before 1.43 is moved
+     * once: 80% (1.42's default) becomes 100%, anything else is kept, held to 70 to 130.
+     */
     fun ownSpeed(context: Context): Float {
         val p = prefs(context)
         // An int saved by a test build reads the same.
         val v: Number? = try { if (p.contains("speed")) p.getFloat("speed", ReadAloudText.SPEED_DEFAULT) else null }
             catch (_: ClassCastException) { p.getInt("speed", ReadAloudText.SPEED_DEFAULT.toInt()) }
+        if (!p.getBoolean("speed143", false)) {
+            val moved = ReadAloudText.migrateSpeed(v)
+            p.edit().apply { if (v != null) { remove("speed"); putFloat("speed", moved) } }.putBoolean("speed143", true).apply()
+            return moved
+        }
         return ReadAloudText.speedOf(v)
     }
 
-    /** While the slider moves: the next piece read (and Hear a sample) uses [pct] at once, nothing is saved. */
+    /** While the slider moves: the next phrase read (and Hear a sample) uses [pct] at once, nothing is saved. */
     fun previewSpeed(context: Context, pct: Float) {
         appContext = context.applicationContext
         liveSpeed = ReadAloudText.speedOf(pct)
@@ -168,19 +177,77 @@ object ReadAloud {
         val app = context.applicationContext
         appContext = app
         val v = ReadAloudText.speedOf(pct)
-        prefs(app).edit().putFloat("speed", v).apply()
+        prefs(app).edit().putFloat("speed", v).putBoolean("speed143", true).apply()
         liveSpeed = null
         applyDeviceRate(app)
         _files.value++   // the Read aloud row's line shows the new speed
     }
 
-    /** A parent's speed on this Kids' Device (cap k15, field "speed"); null when the config has none: 80. */
-    fun parentSpeed(context: Context, pct: Int?) {
-        val v = if (pct == null) ReadAloudText.SPEED_DEFAULT else ReadAloudText.speedOf(pct)
+    /** The cadence in use: 100 on a Kids' Device (no cap for it), else this device's (live while its slider moves). */
+    fun cadence(context: Context): Float {
+        val p = prefs(context)
+        if (p.contains("kidSpeed") || p.contains("kid")) return ReadAloudText.CADENCE_DEFAULT
+        return liveCadence ?: ownCadence(context)
+    }
+
+    /** This device's own cadence (Settings); nothing saved reads 100. */
+    fun ownCadence(context: Context): Float {
+        val p = prefs(context)
+        return ReadAloudText.cadenceOf(if (p.contains("cadence")) p.getFloat("cadence", ReadAloudText.CADENCE_DEFAULT) else null)
+    }
+
+    /** While the Cadence slider moves: the next pause uses [pct], nothing is saved. */
+    fun previewCadence(context: Context, pct: Float) {
+        appContext = context.applicationContext
+        liveCadence = ReadAloudText.cadenceOf(pct)
+    }
+
+    /** The Cadence drag ended (or a key was let go): [pct] is saved on this device. */
+    fun setCadence(context: Context, pct: Float) {
+        val app = context.applicationContext
+        appContext = app
+        prefs(app).edit().putFloat("cadence", ReadAloudText.cadenceOf(pct)).apply()
+        liveCadence = null
+        _files.value++
+    }
+
+    /**
+     * A parent's speed on this Kids' Device (cap k16, field "speed", a whole number from 50 to 150 on the wire, mapped
+     * into 70 to 130 by [ReadAloudText.kidSpeed]); null when the config has none: 100.
+     */
+    fun parentSpeed(context: Context, wire: Int?) {
+        val v = (wire ?: 100).coerceIn(ReadAloudText.WIRE_MIN, ReadAloudText.WIRE_MAX).toFloat()
         val p = prefs(context)
         if (p.contains("kidSpeed") && p.getFloat("kidSpeed", -1f) == v) return
         p.edit().putFloat("kidSpeed", v).apply()
         applyDeviceRate(context.applicationContext)
+    }
+
+    // ---- per-voice tuning (1.43, Labs › Voice tuning): each natural voice's noise scale and width, A until picked.
+
+    /** The preset in use for natural voice [v] ("f" or "m"). */
+    fun tune(context: Context, v: String): ReadAloudText.Tune = ReadAloudText.tuneOf(prefs(context).getString("tune_" + ReadAloudText.voiceOf(v), null))
+
+    /** "Use this": [name] is kept on this device for voice [v]; the engine opens with it from the next phrase. */
+    fun setTune(context: Context, v: String, name: String) {
+        prefs(context).edit().putString("tune_" + ReadAloudText.voiceOf(v), ReadAloudText.tuneOf(name).name).apply()
+        _files.value++
+    }
+
+    /** Labs: reads [verse] and [means] with voice [v] and preset [t] now, nothing saved (the voice must be downloaded). */
+    fun tryTune(context: Context, v: String, t: ReadAloudText.Tune, verse: String, means: String) {
+        val app = context.applicationContext
+        appContext = app
+        stop()
+        if (!engineThere || !hasVoice(app, v)) return
+        if (io.github.ravenor907.muninn.net.call.CallManager.call.value != null || io.github.ravenor907.muninn.ui.AppLock.isLocked) return
+        val parts = ReadAloudText.verse(verse, means, natural = true)
+        if (parts.isEmpty()) return
+        lastText = null
+        heard = false
+        _speaking.value = true
+        takeFocus(app)
+        speakNatural(app, token.get(), voiceDir(app, v), parts, t, ReadAloudText.verse(verse, means, natural = false))
     }
 
     private fun applyDeviceRate(app: Context) {
@@ -193,7 +260,7 @@ object ReadAloud {
         val app = context.applicationContext
         appContext = app
         lastText = null
-        speak(app, ReadAloudText.SAMPLE)
+        speak(app, ReadAloudText.SAMPLE + "\n" + ReadAloudText.SAMPLE_PAUSES)
     }
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -311,32 +378,44 @@ object ReadAloud {
 
     // ---- reading
 
-    /** Reads the plain text of [text] (links say "link", no emoji or marks). Stops whatever was reading first. */
-    fun speak(context: Context, text: String) {
+    /** Reads the plain text of [text] (links say "link", no emoji or marks), in phrases with pauses. Stops whatever was reading first. */
+    fun speak(context: Context, text: String) = speakScript(context, text) { natural -> ReadAloudText.phrases(text, natural) }
+
+    /** A Hávamál verse: the verse, 900 ms, "What it means", then the meaning (each line a pause). */
+    fun speakVerse(context: Context, verse: String, means: String) =
+        speakScript(context, verse + "\u0000" + means) { natural -> ReadAloudText.verse(verse, means, natural) }
+
+    /** Several messages one after the other, 700 ms between them. */
+    fun speakMessages(context: Context, texts: List<String>) =
+        speakScript(context, texts.joinToString("\u0000")) { natural -> ReadAloudText.messages(texts, natural) }
+
+    private fun speakScript(context: Context, key: String, script: (Boolean) -> List<ReadAloudText.Phrase>) {
         val app = context.applicationContext
         appContext = app
         // The same text pressed again while it's still being made (nothing heard yet): left to finish.
-        if (_speaking.value && !heard && text == lastText) return
+        if (_speaking.value && !heard && key == lastText) return
         stop()
         // Never while a call has the sound, and never on a locked Muninn.
         if (io.github.ravenor907.muninn.net.call.CallManager.call.value != null) return
         if (io.github.ravenor907.muninn.ui.AppLock.isLocked) return
-        val parts = ReadAloudText.pieces(ReadAloudText.plain(text))
+        val naturalNow = !useDevice(app) && natural(app) && ready(app)
+        // The respelled names only for the natural voices; the device's own voice gets the words as written.
+        val parts = script(naturalNow)
         if (parts.isEmpty()) { io.github.ravenor907.muninn.ui.Ui.say("Nothing to read in this message."); return }
-        lastText = text
+        lastText = key
         heard = false
         val my = token.get()
         // Text with nothing the engine reads (another script only) goes to the phone's own voice.
-        if (!useDevice(app) && natural(app) && ready(app) && parts.any { ReadAloudText.forEngine(it).isNotEmpty() }) {
+        if (naturalNow && parts.any { ReadAloudText.forEngine(it.text).isNotEmpty() }) {
             _speaking.value = true
             takeFocus(app)
-            val dir = voiceDir(app, voice(app))
-            speakNatural(app, my, dir, parts)
+            val v = voice(app)
+            speakNatural(app, my, voiceDir(app, v), parts, tune(app, v), script(false))
             return
         }
         // Not ready yet: the download starts (on the network rules) and the phone's own voice reads meanwhile.
         if (!useDevice(app)) prepare(app)
-        speakDevice(app, parts)
+        speakDevice(app, if (naturalNow) script(false) else parts)
     }
 
     /** Stops reading, at once. */
@@ -349,7 +428,8 @@ object ReadAloud {
         dropFocus()
     }
 
-    private fun speakNatural(app: Context, my: Long, dir: File, parts: List<String>) {
+    private fun speakNatural(app: Context, my: Long, dir: File, parts: List<ReadAloudText.Phrase>, tune: ReadAloudText.Tune,
+                             fallback: List<ReadAloudText.Phrase>) {
         val queue = LinkedBlockingQueue<Pair<FloatArray, Int>>()
         val end = FloatArray(0)
         val failed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -358,16 +438,20 @@ object ReadAloud {
             // Marked while the engine works: a mark left at the next start means it stopped Muninn mid-sentence.
             val mark = File(dir.parentFile, "reading")
             try {
-                val tts = open(dir)
+                val tts = open(dir, tune)
                 try { mark.createNewFile() } catch (_: Exception) {}
+                // One phrase at a time, each given whole (so it keeps its rise and fall), the first played as soon as
+                // it's made while the next is made. Our own pause (scaled by Cadence) goes after each as silence.
                 for (p in parts) {
                     if (token.get() != my) break
                     // Only plain letters, digits and simple punctuation reach the engine (ReadAloudText.forEngine).
-                    val clean = ReadAloudText.forEngine(p)
+                    val clean = ReadAloudText.forEngine(p.text)
                     if (clean.isEmpty()) continue
-                    // The speed picked (read for each piece, so a move of the slider is heard in the next one).
+                    // The speed picked (read for each phrase, so a move of the slider is heard in the next one).
                     val a = tts.generate(clean, 0, ReadAloudText.engineSpeed(speed(app)))
-                    if (a.samples.isNotEmpty()) queue.put(a.samples to a.sampleRate)
+                    if (a.samples.isEmpty()) continue
+                    val said = ReadAloudText.trimSilence(a.samples, a.sampleRate)
+                    queue.put(ReadAloudText.withPause(said, a.sampleRate, ReadAloudText.pauseMs(p.pause, cadence(app))) to a.sampleRate)
                 }
                 mark.delete()
                 // It finished, so it didn't stop Muninn.
@@ -402,7 +486,8 @@ object ReadAloud {
             } finally {
                 if (token.get() == my) {
                     dropFocus()
-                    if (failed.get()) android.os.Handler(android.os.Looper.getMainLooper()).post { if (token.get() == my) speakDevice(app, parts) }
+                    // The device's own voice gets the words as written (no respelling).
+                    if (failed.get()) android.os.Handler(android.os.Looper.getMainLooper()).post { if (token.get() == my) speakDevice(app, fallback) }
                     else _speaking.value = false
                 }
             }
@@ -410,19 +495,21 @@ object ReadAloud {
     }
 
     /** The engine with [dir]'s voice, made once and kept while it's in use. Runs on [synth]. */
-    private fun open(dir: File): com.k2fsa.sherpa.onnx.OfflineTts {
-        (engine as? com.k2fsa.sherpa.onnx.OfflineTts)?.takeIf { engineDir == dir.path }?.let { return it }
+    private fun open(dir: File, tune: ReadAloudText.Tune): com.k2fsa.sherpa.onnx.OfflineTts {
+        // The engine is made again when the voice or its tuning changes.
+        val key = dir.path + "|" + tune.name
+        (engine as? com.k2fsa.sherpa.onnx.OfflineTts)?.takeIf { engineDir == key }?.let { return it }
         unload()
         val vits = com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig(
             model = File(dir, "model.onnx").path, tokens = File(dir, "tokens.txt").path, dataDir = File(dir, "espeak-ng-data").path,
-            noiseScale = 0.667f, noiseScaleW = 0.8f, lengthScale = 1.0f)
+            noiseScale = tune.noise, noiseScaleW = tune.width, lengthScale = 1.0f)
         val cfg = com.k2fsa.sherpa.onnx.OfflineTtsConfig(
             model = com.k2fsa.sherpa.onnx.OfflineTtsModelConfig(vits = vits,
                 numThreads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4), debug = false, provider = "cpu"),
             maxNumSentences = 1, silenceScale = 0.2f)
         val tts = com.k2fsa.sherpa.onnx.OfflineTts(config = cfg)
         engine = tts
-        engineDir = dir.path
+        engineDir = key
         return tts
     }
 
@@ -488,7 +575,7 @@ object ReadAloud {
 
     // ---- the phone's own voice
 
-    private fun speakDevice(app: Context, parts: List<String>) {
+    private fun speakDevice(app: Context, parts: List<ReadAloudText.Phrase>) {
         val t = device
         if (t == null) {
             deviceWaiting = parts
@@ -536,7 +623,7 @@ object ReadAloud {
         if (pick != null) { t.setVoice(pick); true } else false
     } catch (_: Exception) { false }
 
-    private fun sayDevice(app: Context, t: TextToSpeech, parts: List<String>) {
+    private fun sayDevice(app: Context, t: TextToSpeech, parts: List<ReadAloudText.Phrase>) {
         val my = token.get()
         _speaking.value = true
         takeDeviceFocus(app)
@@ -547,8 +634,12 @@ object ReadAloud {
             @Deprecated("Deprecated in Java")
             override fun onError(id: String?) { if (token.get() == my) { _speaking.value = false; dropFocus() } }
         })
+        // Each phrase, then our own pause (scaled by Cadence) as the engine's silence.
+        val cadence = cadence(app)
         parts.forEachIndexed { i, p ->
-            try { t.speak(p, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, if (i == parts.size - 1) "end-$my" else "p$i-$my") } catch (_: Exception) {}
+            try { t.speak(p.text, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, if (i == parts.size - 1) "end-$my" else "p$i-$my") } catch (_: Exception) {}
+            val ms = ReadAloudText.pauseMs(p.pause, cadence)
+            if (i < parts.size - 1 && ms > 0) try { t.playSilentUtterance(ms.toLong(), TextToSpeech.QUEUE_ADD, "s$i-$my") } catch (_: Exception) {}
         }
     }
 

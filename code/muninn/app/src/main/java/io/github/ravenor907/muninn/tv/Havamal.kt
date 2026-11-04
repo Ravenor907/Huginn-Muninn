@@ -3,8 +3,11 @@ package io.github.ravenor907.muninn.tv
 import org.json.JSONObject
 import java.security.MessageDigest
 
-/** One verse of the Hávamál: its stanza number [n], the [verse] (lines separated by newlines) and [means], for a child. */
-data class HavVerse(val n: Int, val verse: String, val means: String)
+/**
+ * One verse of the Hávamál: its stanza number [n], the [verse] (lines separated by newlines), [means] (one sentence a
+ * line) and whether a Kids' Device shows it ([kids]).
+ */
+data class HavVerse(val n: Int, val verse: String, val means: String, val kids: Boolean = true)
 
 /** One part of a translation on its way from a parent's phone to a Kids' Device. */
 data class HavPart(val h: String, val i: Int, val of: Int, val d: String)
@@ -42,12 +45,15 @@ object Havamal {
 
     // ---- the verses
 
-    /** Reads assets/havamal.json: {"translation", "note", "verses": [{"n", "verse", "means"}]}. Throws if it isn't well-formed. */
+    /**
+     * Reads assets/havamal.json: {"translation", "note", "verses": [{"n", "verse", "means", "kids"}]} (all 165 stanzas
+     * since 1.43; "kids" missing reads as true). Throws if it isn't well-formed.
+     */
     fun parse(json: String): List<HavVerse> {
         val a = JSONObject(json).getJSONArray("verses")
         val out = (0 until a.length()).map { i ->
             val o = a.getJSONObject(i)
-            HavVerse(o.getInt("n"), o.getString("verse").trim(), o.getString("means").trim())
+            HavVerse(o.getInt("n"), o.getString("verse").trim(), o.getString("means").trim(), o.optBoolean("kids", true))
         }
         require(out.isNotEmpty() && out.all { it.n > 0 && it.verse.isNotEmpty() && it.means.isNotEmpty() }) { "verses" }
         require(out.map { it.n }.distinct().size == out.size) { "verses" }
@@ -57,18 +63,62 @@ object Havamal {
     /** Which verse shows on [day] (days since 1970-01-01 by the local date): the same all day, cycling through [size]. */
     fun index(day: Long, size: Int): Int = if (size <= 0) 0 else Math.floorMod(day, size.toLong()).toInt()
 
+    /** The verses a Kids' Device shows: only those marked "kids". */
+    fun forKids(verses: List<HavVerse>): List<HavVerse> = verses.filter { it.kids }
+
+    /** The order setting (1.43, the standard app): in order, or a shuffle of this device's own. */
+    const val IN_ORDER = "o"
+    const val RANDOM = "r"
+
+    /**
+     * Which verse shows on [day] with [size] verses: in order ([index]), or [random], a shuffle made from this device's
+     * [seed] that shows every verse once before any comes again (a new shuffle each time round, never starting with the
+     * one the last ended on).
+     */
+    fun pick(day: Long, size: Int, random: Boolean, seed: Long): Int {
+        if (!random || size <= 1) return index(day, size)
+        val round = Math.floorDiv(day, size.toLong())
+        return shuffle(round, size, seed)[Math.floorMod(day, size.toLong()).toInt()]
+    }
+
+    /** Round [round]'s order of [size] verses for [seed]. */
+    fun shuffle(round: Long, size: Int, seed: Long): IntArray {
+        fun plain(r: Long): IntArray {
+            val a = IntArray(size) { it }
+            val rnd = java.util.Random(seed xor (r * -0x61c8864680b583ebL))
+            for (i in size - 1 downTo 1) { val j = rnd.nextInt(i + 1); val t = a[i]; a[i] = a[j]; a[j] = t }
+            return a
+        }
+        val a = plain(round)
+        // No verse twice in a row where one round meets the next.
+        if (size > 1 && a[0] == plain(round - 1)[size - 1]) { val t = a[0]; a[0] = a[1]; a[1] = t }
+        return a
+    }
+
     /**
      * The verses shown before today ([today]), newest first: from the day Daily Hávamál came on ([start]), at most
-     * [EARLIER], today's own left out.
+     * [EARLIER], today's own left out. [pickOf] gives the verse of a day (in order unless given).
      */
-    fun earlier(today: Long, start: Long, size: Int, max: Int = EARLIER): List<Int> {
+    fun earlier(today: Long, start: Long, size: Int, max: Int = EARLIER, pickOf: (Long) -> Int = { index(it, size) }): List<Int> {
         if (size <= 0) return emptyList()
-        val now = index(today, size)
+        val now = pickOf(today)
         val out = LinkedHashSet<Int>()
         var d = today - 1
-        while (d >= start && d >= today - max && out.size < max) { index(d, size).takeIf { it != now }?.let { out.add(it) }; d-- }
+        while (d >= start && d >= today - max && out.size < max) { pickOf(d).takeIf { it != now }?.let { out.add(it) }; d-- }
         return out.toList()
     }
+
+    /** "Next verse": today's verse moved on [skips] in the current order (today only; tomorrow starts from its own). */
+    fun skipped(today: Long, skips: Int, size: Int, random: Boolean, seed: Long): Int = pick(today + skips, size, random, seed)
+
+    /** A day's "Next verse" count kept as "day:n"; another day's reads 0. */
+    fun skipsOn(kept: String?, today: Long): Int {
+        val parts = kept?.split(':') ?: return 0
+        if (parts.size != 2 || parts[0].toLongOrNull() != today) return 0
+        return parts[1].toIntOrNull()?.coerceIn(0, 100_000) ?: 0
+    }
+
+    fun skipsKept(today: Long, n: Int): String = "$today:$n"
 
     /** The text a child sees for [v]: the parent's translation of that stanza when the wording is theirs and it has one. */
     fun wordingOf(v: HavVerse, wording: String, mine: Map<Int, String>?): String =

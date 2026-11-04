@@ -33,8 +33,8 @@ import io.github.ravenor907.muninn.ui.Ui
 
 /**
  * The Read aloud page (consolidation item 8; Settings › Look › Accessibility › Read aloud): the on/off switch, the
- * voice (Female, Alba, the default; Male, northern English; or Device, the phone's own), the speed (50% to 150%, 80%
- * until moved) with Hear a sample, Download the voice now, Allow on mobile data and Delete voices. Until the natural
+ * voice (Female, Alba, the default; Male, northern English; or Device, the phone's own), Speed (70% to 130%) and
+ * Cadence (the pauses, 50% to 200%), both 100% until moved, with Hear a sample, Download the voice now, Allow on mobile data and Delete voices. Until the natural
  * voices are published (no line in voices.sha256) Female and Male can't be picked and one line says "Natural voices
  * aren't ready yet": never a download that can't start.
  */
@@ -87,15 +87,18 @@ internal fun ReadAloudSettings() {
 }
 
 /**
- * Read aloud's speed, right under the voice: a smooth slider from 50% to 150% (80% until moved) with its value shown
- * ("83%"), applied at once while it moves and saved when the finger lifts or the key is let go; Hear a sample reads a
- * short line at that speed.
+ * Read aloud's two sliders, right under the voice, each smooth with its value shown ("83%"), applied at once while it
+ * moves and saved when the finger lifts or the key is let go: Speed (how fast words are spoken, 70% to 130%) and
+ * Cadence (the pauses between phrases and sentences, 50% to 200%; it never stretches words). Hear a sample reads a short
+ * line with both.
  */
 @Composable
 internal fun ReadAloudSpeed() {
     val ctx = LocalContext.current
     var pct by remember { mutableFloatStateOf(ReadAloud.ownSpeed(ctx)) }
+    var cad by remember { mutableFloatStateOf(ReadAloud.ownCadence(ctx)) }
     val shown = ReadAloudText.speedText(pct)
+    val cadShown = ReadAloudText.cadenceText(cad)
     Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Speed", style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
         Text(shown, style = Type.small.copy(color = Palette.textSoft), maxLines = 1)
@@ -106,12 +109,22 @@ internal fun ReadAloudSpeed() {
         Text("Slower", style = Type.small, modifier = Modifier.weight(1f))
         Text("Faster", style = Type.small)
     }
+    Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Cadence", style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f))
+        Text(cadShown, style = Type.small.copy(color = Palette.textSoft), maxLines = 1)
+    }
+    SmoothSlider(cad, { cad = it; ReadAloud.previewCadence(ctx, it) }, { ReadAloud.setCadence(ctx, cad) },
+        ReadAloudText.CADENCE_MIN..ReadAloudText.CADENCE_MAX, 1f, "Pauses between phrases, $cadShown", Modifier.fillMaxWidth())
+    Row(Modifier.fillMaxWidth()) {
+        Text("Shorter pauses", style = Type.small, modifier = Modifier.weight(1f))
+        Text("Longer pauses", style = Type.small)
+    }
     MButton("Hear a sample", Modifier.padding(top = 6.dp), icon = "sound") { ReadAloud.sample(ctx) }
 }
 
 /**
  * The Read aloud row's line under its name (Look › Accessibility), at most 32 letters: "Off", "Female voice, ready",
- * "Male voice, 120%", "Device voice, 80%".
+ * "Male voice, 120%", "Device voice, 100%".
  */
 @Composable
 internal fun readAloudRowValue(): String {
@@ -124,7 +137,7 @@ internal fun readAloudRowValue(): String {
             val v = ReadAloud.ownVoice(ctx)
             val name = if (v == ReadAloudText.DEVICE || !ReadAloud.natural(ctx)) "Device" else if (v == ReadAloudText.MALE) "Male" else "Female"
             val speed = ReadAloudText.speedText(ReadAloud.ownSpeed(ctx))
-            if (name != "Device" && ReadAloud.ready(ctx) && speed == "80%") "$name voice, ready" else "$name voice, $speed"
+            if (name != "Device" && ReadAloud.ready(ctx) && speed == "100%") "$name voice, ready" else "$name voice, $speed"
         }
     }
 }

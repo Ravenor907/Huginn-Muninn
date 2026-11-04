@@ -7,18 +7,55 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QUrl>
 #include <cstdio>
 #include <iterator>
+#include <numeric>
+#include <utility>
 
 namespace {
 const QString kOn = QStringLiteral("dailyVerse/on");
 const QString kHidden = QStringLiteral("dailyVerse/hidden");
 const QString kWording = QStringLiteral("dailyVerse/wording");
 const QString kStart = QStringLiteral("dailyVerse/start");
+const QString kOrder = QStringLiteral("dailyVerse/order");
+const QString kRandomFrom = QStringLiteral("dailyVerse/randomFrom");
+const QString kSeed = QStringLiteral("dailyVerse/seed");
+const QString kSkipDay = QStringLiteral("dailyVerse/skipDay");
+const QString kSkip = QStringLiteral("dailyVerse/skip");
+const QString kInOrder = QStringLiteral("o");
+const QString kRandom = QStringLiteral("r");
+
+// SplitMix64: the same numbers from the same seed on every computer and Qt version (the shuffle must never change
+// under an update, or Earlier verses would).
+quint64 nextRandom(quint64 &x)
+{
+    x += 0x9E3779B97F4A7C15ULL;
+    quint64 z = x;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+QList<int> rawShuffle(quint64 seed, qint64 cycle, int size)
+{
+    QList<int> p(size);
+    std::iota(p.begin(), p.end(), 0);
+    quint64 x = seed ^ (quint64(cycle) * 0xD1B54A32D192ED03ULL);
+    for (int i = size - 1; i > 0; --i)
+        std::swap(p[i], p[int(nextRandom(x) % quint64(i + 1))]);
+    return p;
+}
+
+qint64 floorDiv(qint64 a, qint64 b)
+{
+    const qint64 q = a / b;
+    return (a % b != 0 && (a < 0) != (b < 0)) ? q - 1 : q;
+}
 const QString kBellows = QStringLiteral("b");
 const QString kMine = QStringLiteral("y");
 
@@ -102,14 +139,36 @@ int DailyVerse::indexFor(qint64 day, int size)
 
 QList<int> DailyVerse::earlierFor(qint64 today, qint64 start, int size, int max)
 {
+    if (size <= 0) return {};
+    return earlierBy(today, start, indexFor(today, size), [size](qint64 d) { return indexFor(d, size); }, max);
+}
+
+QList<int> DailyVerse::earlierBy(qint64 today, qint64 start, int now, const std::function<int(qint64)> &at, int max)
+{
     QList<int> out;
-    if (size <= 0) return out;
-    const int now = indexFor(today, size);
     for (qint64 d = today - 1; d >= start && d >= today - max && out.size() < max; --d) {
-        const int i = indexFor(d, size);
-        if (i != now && !out.contains(i)) out.push_back(i);
+        const int i = at(d);
+        if (i >= 0 && i != now && !out.contains(i)) out.push_back(i);
     }
     return out;
+}
+
+QList<int> DailyVerse::shuffled(quint64 seed, qint64 cycle, int size)
+{
+    if (size <= 0) return {};
+    QList<int> p = rawShuffle(seed, cycle, size);
+    // Never the same verse two days running where one cycle ends and the next begins.
+    if (size > 1 && p.first() == rawShuffle(seed, cycle - 1, size).last())
+        std::swap(p[0], p[1]);
+    return p;
+}
+
+int DailyVerse::indexAt(qint64 pos, int size, bool random, quint64 seed)
+{
+    if (size <= 0) return 0;
+    if (!random) return indexFor(pos, size);
+    const qint64 cycle = floorDiv(pos, size);
+    return shuffled(seed, cycle, size).at(int(pos - cycle * size));
 }
 
 QMap<int, QString> DailyVerse::parseImport(const QString &text, const QSet<int> &wanted)
@@ -210,6 +269,55 @@ qint64 DailyVerse::startIn(QSettings &s, qint64 today)
 
 QString DailyVerse::wordingIn(const QSettings &s) { return s.value(kWording).toString() == kMine ? kMine : kBellows; }
 
+QString DailyVerse::orderIn(const QSettings &s) { return s.value(kOrder).toString() == kRandom ? kRandom : kInOrder; }
+
+void DailyVerse::setOrderIn(QSettings &s, const QString &v, qint64 today)
+{
+    const QString pick = v == kRandom ? kRandom : kInOrder;
+    if (pick == orderIn(s)) return;
+    s.setValue(kOrder, pick);
+    // Random's first cycle starts today, so no verse comes again until all have shown. Today's Next verse starts over.
+    if (pick == kRandom) {
+        s.setValue(kRandomFrom, today);
+        seedIn(s);
+    }
+    s.remove(kSkipDay);
+    s.remove(kSkip);
+}
+
+quint64 DailyVerse::seedIn(QSettings &s)
+{
+    bool ok = false;
+    const quint64 have = s.value(kSeed).toString().toULongLong(&ok, 16);
+    if (ok) return have;
+    const quint64 fresh = QRandomGenerator::system()->generate64();
+    s.setValue(kSeed, QString::number(fresh, 16));
+    return fresh;
+}
+
+qint64 DailyVerse::posIn(QSettings &s, qint64 day)
+{
+    if (orderIn(s) != kRandom) return day;
+    bool ok = false;
+    const qint64 from = s.value(kRandomFrom).toLongLong(&ok);
+    return ok ? day - from : day;
+}
+
+int DailyVerse::skipIn(const QSettings &s, qint64 today)
+{
+    bool ok = false, ok2 = false;
+    const qint64 day = s.value(kSkipDay).toLongLong(&ok);
+    const int n = s.value(kSkip).toInt(&ok2);
+    return ok && ok2 && day == today && n > 0 ? n : 0;
+}
+
+void DailyVerse::skipNextIn(QSettings &s, qint64 today)
+{
+    const int n = skipIn(s, today) + 1;
+    s.setValue(kSkipDay, today);
+    s.setValue(kSkip, n);
+}
+
 // ------------------------------------------------------------- what QML uses
 
 bool DailyVerse::verseOn() const { return m_tour || onIn(Settings::store()); }
@@ -240,16 +348,47 @@ QVariantMap DailyVerse::toMap(const Verse &v) const
              { QStringLiteral("first"), firstLine(text) } };
 }
 
+QString DailyVerse::verseOrder() const { return m_tour ? kInOrder : orderIn(Settings::store()); }
+
+void DailyVerse::setVerseOrder(const QString &v)
+{
+    if (m_tour) return;
+    QSettings s = Settings::store();
+    setOrderIn(s, v, dayNumber());
+    Q_EMIT changed();
+}
+
+int DailyVerse::indexOfDay(qint64 day) const
+{
+    const int size = int(m_verses.size());
+    if (size <= 0) return 0;
+    const qint64 today = dayNumber();
+    if (m_tour) return indexFor(day + (day == today ? m_tourSkip : 0), size);
+    QSettings s = Settings::store();
+    const bool random = orderIn(s) == kRandom;
+    const qint64 skip = day == today ? skipIn(s, today) : 0;
+    return indexAt(posIn(s, day) + skip, size, random, random ? seedIn(s) : 0);
+}
+
 QVariantMap DailyVerse::today() const
 {
     if (m_verses.isEmpty()) return {};
-    return toMap(m_verses.at(indexFor(dayNumber(), int(m_verses.size()))));
+    return toMap(m_verses.at(indexOfDay(dayNumber())));
+}
+
+void DailyVerse::nextVerse()
+{
+    if (m_verses.isEmpty()) return;
+    if (m_tour) ++m_tourSkip;
+    else { QSettings s = Settings::store(); skipNextIn(s, dayNumber()); }
+    Q_EMIT changed();
 }
 
 QString DailyVerse::mineLine() const
 {
     if (m_mine.isEmpty()) return QString();
-    return QStringLiteral("Imported: %1 of %2 verses matched").arg(m_mine.size()).arg(m_mineOf > 0 ? m_mineOf : int(m_verses.size()));
+    // Out of every verse there is now (an import made when there were 60 says "of 165" too).
+    return QStringLiteral("Imported: %1 of %2 verses matched").arg(m_mine.size()).arg(m_verses.isEmpty() ? m_mineOf : int(m_verses.size()));
 }
 
 void DailyVerse::setTour(bool v)
@@ -275,7 +414,8 @@ QVariantList DailyVerse::earlier()
     qint64 start = today;
     if (m_tour) start = today - 3;   // the tour shows a few
     else { QSettings s = Settings::store(); start = startIn(s, today); }
-    for (const int i : earlierFor(today, start, int(m_verses.size())))
+    // Each day's verse in the order picked now (In order or Random), newest first, without the one shown today.
+    for (const int i : earlierBy(today, start, indexOfDay(today), [this](qint64 d) { return indexOfDay(d); }))
         out.push_back(toMap(m_verses.at(i)));
     return out;
 }
@@ -349,7 +489,7 @@ bool DailyVerse::selfTest()
     };
     QFile f(QStringLiteral(":/huginn/havamal.json"));
     const QList<Verse> verses = f.open(QIODevice::ReadOnly) ? parse(f.readAll()) : QList<Verse>();
-    check("the shared verses are built in (60, each with what it means)", verses.size() == 60);
+    check("the shared verses are built in (165, each with what it means)", verses.size() == 165);
     bool ordered = !verses.isEmpty(), noDash = true;
     for (qsizetype i = 0; i < verses.size(); ++i) {
         if (i > 0 && verses.at(i).n <= verses.at(i - 1).n) ordered = false;
@@ -359,22 +499,51 @@ bool DailyVerse::selfTest()
     check("in stanza order, no dashes", ordered && noDash);
 
     // The verse of the day: Muninn's rule (days since 1970-01-01, cycling), the same all day, each verse in turn.
+    const int n = 165;
     QSet<int> seen;
-    for (qint64 d = 20400; d < 20460; ++d) seen.insert(indexFor(d, 60));
-    check("every verse in turn", seen.size() == 60 && indexFor(0, 60) == 0 && indexFor(-1, 60) == 59 && indexFor(20460, 60) == indexFor(20400, 60));
+    for (qint64 d = 20400; d < 20400 + n; ++d) seen.insert(indexFor(d, n));
+    check("every verse in turn", seen.size() == n && indexFor(0, n) == 0 && indexFor(-1, n) == n - 1 && indexFor(20400 + n, n) == indexFor(20400, n));
     check("Earlier verses: newest first, only since it came on",
-          earlierFor(20403, 20400, 60) == QList<int>({ indexFor(20402, 60), indexFor(20401, 60), indexFor(20400, 60) })
-              && earlierFor(20400, 20400, 60).isEmpty() && earlierFor(20500, 20400, 60).size() == kEarlier);
+          earlierFor(20403, 20400, n) == QList<int>({ indexFor(20402, n), indexFor(20401, n), indexFor(20400, n) })
+              && earlierFor(20400, 20400, n).isEmpty() && earlierFor(20500, 20400, n).size() == kEarlier);
+
+    // 1.43, Random: each cycle of 165 days shows every verse once, the same for the same seed, another for another
+    // seed, never the same verse two days running at the seam, and days before Random began still give a verse.
+    const quint64 seed = 0x1234ABCDULL;
+    bool cycles = true, seams = true;
+    for (qint64 c = -1; c <= 2; ++c) {
+        QSet<int> once;
+        for (qint64 p = c * n; p < (c + 1) * n; ++p) {
+            const int i = indexAt(p, n, true, seed);
+            if (i < 0 || i >= n) cycles = false;
+            once.insert(i);
+        }
+        cycles = cycles && once.size() == n;
+        seams = seams && indexAt(c * n - 1, n, true, seed) != indexAt(c * n, n, true, seed);
+    }
+    check("Random: every verse once a cycle, no repeat at the seam", cycles && seams);
+    QList<int> a1, a2, b1, inOrder;
+    for (qint64 p = 0; p < 20; ++p) {
+        a1 << indexAt(p, n, true, seed);
+        a2 << indexAt(p, n, true, seed);
+        b1 << indexAt(p, n, true, seed + 1);
+        inOrder << indexAt(p, n, false, seed);
+    }
+    check("Random: the same seed gives the same order, another seed another", a1 == a2 && a1 != b1 && a1 != inOrder
+                                                                                 && inOrder.first() == 0 && inOrder.last() == 19);
+    check("Earlier verses follow the order", earlierBy(20403, 20400, -1, [&](qint64 d) { return indexAt(d - 20400, n, true, seed); })
+                                                 == QList<int>({ a1.at(2), a1.at(1), a1.at(0) }));
 
     // An import keeps only the numbered stanzas on the list.
     if (verses.size() >= 2) {
         QSet<int> wanted;
         for (const Verse &v : verses) wanted.insert(v.n);
         const int a = verses.at(0).n, b = verses.at(1).n;
-        const QString text = QStringLiteral("Title line\n%1. One line\nand another\n\nSt. %2\nThe second one\n999. Not on the list\n").arg(a).arg(b);
+        const QString text = QStringLiteral("Title line\n%1. One line\nand another\n\nSt. %2\nThe second one\n120. Late one\n165) The last\n999. Not on the list\n").arg(a).arg(b);
         const QMap<int, QString> got = parseImport(text, wanted);
-        check("an import keeps the numbered stanzas on the list", got.size() == 2 && got.value(a) == QStringLiteral("One line\nand another")
-                                                                   && got.value(b) == QStringLiteral("The second one"));
+        check("an import keeps the numbered stanzas on the list (any of the 165)", got.size() == 4 && got.value(a) == QStringLiteral("One line\nand another")
+                                                                   && got.value(b) == QStringLiteral("The second one") && got.value(120) == QStringLiteral("Late one")
+                                                                   && got.value(165) == QStringLiteral("The last"));
         check("your translation where it has the stanza, Bellows elsewhere",
               wordingOf(verses.at(0), kMine, got) == got.value(a) && wordingOf(verses.at(2), kMine, got) == verses.at(2).verse
                   && wordingOf(verses.at(0), kBellows, got) == verses.at(0).verse);
@@ -394,6 +563,22 @@ bool DailyVerse::selfTest()
         const bool fresh = shownIn(s, 20400) && startIn(s, 20409) == 20409 && startIn(s, 20402) == 20402 && wordingIn(s) == kBellows;
         check("off until it's turned on", offFirst && onNow);
         check("X hides it until tomorrow; off forgets it", hidden && fresh);
+        // In order until Random is picked; Random starts its cycle that day with one seed kept; Next verse is for
+        // today only.
+        const bool orderFirst = orderIn(s) == kInOrder && posIn(s, 20410) == 20410;
+        setOrderIn(s, kRandom, 20410);
+        const quint64 kept = seedIn(s);
+        const bool randomNow = orderIn(s) == kRandom && posIn(s, 20410) == 0 && posIn(s, 20412) == 2 && seedIn(s) == kept;
+        const bool noSkip = skipIn(s, 20410) == 0;
+        skipNextIn(s, 20410);
+        skipNextIn(s, 20410);
+        const bool skipped = skipIn(s, 20410) == 2 && skipIn(s, 20411) == 0;
+        skipNextIn(s, 20411);
+        const bool nextDay = skipIn(s, 20411) == 1 && skipIn(s, 20410) == 0;
+        setOrderIn(s, kInOrder, 20411);
+        const bool back = orderIn(s) == kInOrder && skipIn(s, 20411) == 0 && posIn(s, 20411) == 20411;
+        check("In order until Random is picked; one seed", orderFirst && randomNow);
+        check("Next verse is for today only", noSkip && skipped && nextDay && back);
     }
     return all;
 }

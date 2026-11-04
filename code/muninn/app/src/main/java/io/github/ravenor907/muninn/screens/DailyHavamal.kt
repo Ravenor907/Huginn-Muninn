@@ -110,6 +110,12 @@ object DailyHav {
     fun setOn(context: Context, on: Boolean) { of(context).setOn(on, today()); rev++ }
     fun hideToday(context: Context) { of(context).hideToday(today()); rev++ }
     fun setWording(context: Context, w: String) { of(context).wording = w; rev++ }
+    /** 1.43: In order or Random, next to the switch. */
+    fun setRandom(context: Context, on: Boolean) { of(context).random = on; rev++ }
+    /** "Next verse": the next one in the current order, today only. */
+    fun next(context: Context) { of(context).next(today()); rev++ }
+    /** This device's own shuffle seed (made once, kept in its settings, never sent). */
+    fun seed(context: Context): Long = of(context).seed { java.security.SecureRandom().nextLong() }
 
     private fun file(app: Muninn) = File(app.filesDir, FILE)
 
@@ -176,7 +182,9 @@ internal fun DailyHavCard(app: Muninn, modifier: Modifier = Modifier) {
     if (verses.isEmpty()) return
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { DailyHav.load(app) } }
     val mine by DailyHav.own.collectAsState()
-    val v = verses[Havamal.index(today, verses.size)]
+    val seed = remember { DailyHav.seed(context) }
+    // Today's verse in the order picked, moved on by "Next verse" (today only).
+    val v = verses[own.shownOn(today, verses.size, seed).coerceIn(0, verses.size - 1)]
     val wording = remember(DailyHav.rev) { own.wording }
     val text = Havamal.wordingOf(v, wording, mine?.stanzas)
     // Kept in DailyHav, not here: a tablet or DeX window crossing the two-pane width builds the chat list again, and
@@ -194,22 +202,29 @@ internal fun DailyHavCard(app: Muninn, modifier: Modifier = Modifier) {
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty(), style = Type.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button) { DailyHav.next(context) }
+            .semantics { contentDescription = "Next verse" }, contentAlignment = Alignment.Center) {
+            MIcon("forward", Palette.textMuted, 18.dp)
+        }
         Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button) { DailyHav.hideToday(context); DailyHav.ci = 0 }
             .semantics { contentDescription = "Hide for today" }, contentAlignment = Alignment.Center) {
             MIcon("close", Palette.textMuted, 18.dp)
         }
     }
     if (open) {
-        val earlier = remember(today, startDay) { Havamal.at(verses, Havamal.earlier(today, startDay ?: today, verses.size)) }
-        DailyHavDialog(v, earlier, wording, mine?.stanzas) { DailyHav.dialogOpen = false; if (DailyHav.ci == 2) DailyHav.ci = 1 }
+        val earlier = remember(today, startDay, DailyHav.rev) {
+            Havamal.at(verses, Havamal.earlier(today, startDay ?: today, verses.size) { d -> own.dayPick(d, verses.size, seed) })
+        }
+        DailyHavDialog(v, earlier, wording, mine?.stanzas, { DailyHav.next(context) }) { DailyHav.dialogOpen = false; if (DailyHav.ci == 2) DailyHav.ci = 1 }
     }
 }
 
-/** The verse, what it means, Read aloud (when this device can speak) and Earlier verses. */
+/** The verse, what it means, Read aloud (when this device can speak), Next verse and Earlier verses. */
 @Composable
-private fun DailyHavDialog(today: HavVerse, earlier: List<HavVerse>, wording: String, mine: Map<Int, String>?, onClose: () -> Unit) {
+private fun DailyHavDialog(today: HavVerse, earlier: List<HavVerse>, wording: String, mine: Map<Int, String>?, onNext: () -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
-    var shown by remember { mutableStateOf(today) }
+    // "Next verse" changes [today]: the view follows it.
+    var shown by remember(today) { mutableStateOf(today) }
     var listing by remember { mutableStateOf(false) }
     fun quiet() { try { ReadAloud.stop() } catch (_: Exception) {} }
     fun close() { quiet(); onClose() }
@@ -246,9 +261,11 @@ private fun DailyHavDialog(today: HavVerse, earlier: List<HavVerse>, wording: St
                 Text(shown.means, style = Type.normal, modifier = Modifier.padding(top = 4.dp))
                 Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (ReadAloud.available) MButton("Read aloud", Modifier.fillMaxWidth(), Kind.Accent, icon = "sound") {
-                        try { ReadAloud.speak(context, text.replace("\n", " ") + ". What it means. " + shown.means) } catch (_: Exception) {}
+                        // The verse, a pause, "What it means", then the meaning (each line a pause).
+                        try { ReadAloud.speakVerse(context, text, shown.means) } catch (_: Exception) {}
                     }
                     if (shown != today) MButton("Today's verse", Modifier.fillMaxWidth()) { quiet(); shown = today }
+                    else MButton("Next verse", Modifier.fillMaxWidth(), icon = "forward") { quiet(); onNext() }
                     MButton("Earlier verses", Modifier.fillMaxWidth()) { quiet(); listing = true }
                     MButton("Close", Modifier.fillMaxWidth()) { close() }
                 }
@@ -280,6 +297,16 @@ internal fun DailyHavSettings(app: Muninn) {
     }
     ToggleRow("Daily Hávamál", "A verse a day at the top of your chats", on) { DailyHav.setOn(context, it) }
     if (!on) return
+    // 1.43: In order, or Random (this device's own shuffle, every verse once before any comes again).
+    val random = remember(DailyHav.rev) { own.random }
+    Text("Order", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
+    ChoiceRow(2, Modifier.padding(vertical = 8.dp), minWidth = 120.dp) { i, m ->
+        val r = i == 1
+        MButton(if (r) "Random" else "In order", m, if (random == r) Kind.Accent else Kind.Normal) {
+            if (r) DailyHav.seed(context)
+            DailyHav.setRandom(context, r)
+        }
+    }
     Text("Wording", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
     val choices = buildList {
         add(Havamal.BELLOWS to Havamal.BELLOWS_NAME)
