@@ -177,7 +177,7 @@ internal fun rememberSavedMedia(app: Muninn, target: VideoSend.Target, onGif: (U
         catch (_: Exception) { Ui.say("This phone has no photo picker.", true) }
     }
     if (picked != null) Dialog(onDismissRequest = { SavedMedia.close(target) },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
         SavedMediaScreen(picked, onChange = { SavedMedia.set(target, it) }, onAddMore = launch, onClose = { SavedMedia.close(target) }) { chosen ->
             SavedMedia.close(target)
             SavedMedia.send(app, target, chosen, onGif)

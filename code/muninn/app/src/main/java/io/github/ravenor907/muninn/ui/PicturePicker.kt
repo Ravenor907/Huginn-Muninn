@@ -90,7 +90,7 @@ fun PicturePicker(onDone: () -> Unit) {
         }
     }
     when {
-        camera -> Dialog(onDismissRequest = { camera = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        camera -> Dialog(onDismissRequest = { camera = false }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = true)) {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 io.github.ravenor907.muninn.screens.CameraScreen(video = false,
                     onPhoto = { jpeg -> picked = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size); camera = false },
