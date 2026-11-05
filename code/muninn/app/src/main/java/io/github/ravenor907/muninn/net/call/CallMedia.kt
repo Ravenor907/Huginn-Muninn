@@ -755,6 +755,7 @@ class CallMedia(
         val pcm = ShortArray(Opus.FRAME)
         var lastSent = 0L
         var frames = 0
+        var zeroFrames = 0
         // The microphone's 20 ms at its own rate (a Kids' TV may run it at 48 kHz).
         val tv = tvGain
         val raw = if (tv != null && tv.captureFrame != Opus.FRAME) ShortArray(tv.captureFrame) else pcm
@@ -764,6 +765,16 @@ class CallMedia(
                 var got = 0
                 while (got < raw.size && !stopped) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) break; got += n }
                 if (got < raw.size) continue
+                // Another app took the microphone (for example a video cast to a Kids' TV): Android hands this app
+                // exact digital zeros, which a real room never gives. After about 250 ms of them, quietly take the
+                // call's audio mode back and restart the same recorder. No message: it must not interrupt.
+                if (raw.all { it.toInt() == 0 }) {
+                    if (++zeroFrames == 12) try {
+                        audio.mode = AudioManager.MODE_IN_COMMUNICATION
+                        rec.stop(); rec.startRecording()
+                    } catch (_: Exception) {}
+                    if (zeroFrames > 12) zeroFrames = 0
+                } else zeroFrames = 0
                 if (tv != null && !tv.capture(raw, pcm)) continue
                 if (muted) continue   // pings go on; no audio while muted (5.5)
                 if (frames++ % 25 == 0) opusTuning().let { (b, l) -> enc.tune(b, l) }   // twice a second

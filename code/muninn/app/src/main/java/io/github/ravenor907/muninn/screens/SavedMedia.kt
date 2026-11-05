@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -219,7 +220,7 @@ private fun SavedMediaScreen(p: SavedMedia.Picked, onChange: (SavedMedia.Picked)
         if (shown.isEmpty()) Text(when (filter) { Photos.Pick.PHOTO -> "No photos picked."; Photos.Pick.VIDEO -> "No videos picked."; else -> "No GIFs picked." },
             style = Type.normal, modifier = Modifier.padding(16.dp))
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)).background(Palette.raised)
-            .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp)) {
+            .navigationBarsPadding().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp)) {
             Text(Photos.Pick.NOTE, style = Type.small.copy(color = Palette.gold))
             Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {

@@ -12,7 +12,7 @@
   {
    "n": 2,
    "verse": "Hail to the giver! a guest has come.\nWhere shall the stranger sit??\nSwift shall he be who, with swords shall try,\nThe proof of his might to make",
-   "means": "A guest has come, so make room for them.\nSomeone who arrives in a hurry, ready to prove themselves, needs a calm and kind welcome.",
+   "means": "A guest has come, so thank the host and find the newcomer a seat quickly.\nDo not leave a stranger waiting, unsure of their place.",
    "kids": true
   },
   {
@@ -78,13 +78,13 @@
   {
    "n": 13,
    "verse": "Over beer the bird of forgetfulness broods,\nAnd steals the minds of men.\nWith the heron's feathers fettered I lay,\nAnd in Gunnloth's house was held",
-   "means": "Too much drink makes people forget themselves.\nThe High One tells of a time it held him captive.",
+   "means": "The High One teaches from his own journey.\nForgetfulness hovers over the ale cup, and he tells of the night in Gunnloth's hall when it held even him.",
    "kids": false
   },
   {
    "n": 14,
    "verse": "Drunk I was, I was dead-drunk,\nWhen with Fjalar wise I was.\n'Tis the best of drinking if back one brings,\nHis wisdom with him home",
-   "means": "The High One once drank far too much.\nThe best drinking is the kind where you still come home with your wits.",
+   "means": "The High One shares a lesson he learned himself.\nThe best drinking is the kind where you bring your wisdom home with you.",
    "kids": false
   },
   {
@@ -504,7 +504,7 @@
   {
    "n": 84,
    "verse": "A man shall trust not the oath of a maid,\nNor the word a woman speaks.\nFor their hearts on a whirling wheel were fashioned,\nAnd fickle their breasts were formed",
-   "means": "This stanza warns against trusting promises too quickly.\nIt reflects the hard feelings of its time.",
+   "means": "This stanza warns against trusting a promise too quickly, especially words spoken in love.",
    "kids": false
   },
   {
@@ -546,7 +546,7 @@
   {
    "n": 91,
    "verse": "Clear now will I speak, for I know them both,\nMen false to women are found.\nWhen fairest we speak, then falsest we think,\nAgainst wisdom we work with deceit",
-   "means": "The High One admits that people can be false in love, saying sweet things while thinking otherwise.\nHonesty matters most.",
+   "means": "The High One speaks plainly, for he knows the hearts of both men and women.\nFair words can hide other thoughts, so he teaches us to look deeper.",
    "kids": false
   },
   {
@@ -576,7 +576,7 @@
   {
    "n": 96,
    "verse": "This found I myself, when I sat in the reeds,\nAnd long my love awaited.\nAs my life the maiden wise I loved,\nYet her I never had",
-   "means": "The High One tells of waiting for a love he never won.\nNot every wish comes true.",
+   "means": "The High One shares his own longing, for a wise maiden he loved and never won.\nEven the wisest know the ache of a wish not granted.",
    "kids": false
   },
   {
@@ -594,25 +594,25 @@
   {
    "n": 99,
    "verse": "Away I hastened, hoping for joy,\nAnd careless of counsel wise.\nWell I believed that soon I should win,\nMeasureless joy with the maid",
-   "means": "The High One hurried away, hopeful and careless of wise advice.",
+   "means": "Full of hope, the High One hurried on, trusting his heart over caution.",
    "kids": false
   },
   {
    "n": 100,
    "verse": "So came I next when night it was,\nThe warriors all were awake.\nWith burning lights and waving brands,\nI learned my luckess way",
-   "means": "When he came back at night, the warriors were all awake with burning torches, and his plan failed.",
+   "means": "When he returned at night, the warriors were all awake, with torches burning and brands waving.\nThe way was barred.",
    "kids": false
   },
   {
    "n": 101,
    "verse": "At morning then, when once more I came,\nAnd all were sleeping still,\nA dog found in the fair one's place,\nBound there upon her bed",
-   "means": "At morning, he found only a dog tied in her place.\nHe had been outwitted.",
+   "means": "At morning, he found only a dog bound in her place.\nThe maiden had matched his cleverness with her own.",
    "kids": false
   },
   {
    "n": 102,
    "verse": "Many fair maids, if a man but tries them,\nFalse to a lover are found.\nThat did I learn when I longed to gain,\nWith wiles the maiden wise.\nFoul scorn was my meed from the crafty maid,\nAnd nought from the woman I won",
-   "means": "The High One learned that clever tricks do not win love.\nHe earned only scorn.\nHonest hearts do better than wiles.",
+   "means": "From this tale the High One draws a lesson for us.\nMany a heart cannot be won by cunning, and he shares what he learned so we may be wiser.",
    "kids": false
   },
   {
@@ -636,7 +636,7 @@
   {
    "n": 106,
    "verse": "Gunnloth gave on a golden stool,\nA drink of the marvelous mead.\nA harsh reward did I let her have,\nFor her heroic heart,\nAnd her spirit troubled sore",
-   "means": "Gunnloth gave him a drink of the marvelous mead of poetry.\nHe repaid her kindness poorly, and her heart was troubled.",
+   "means": "Gunnloth gave the High One a drink of the marvelous mead, upon a golden stool.\nWinning it came at a cost, and the High One honors her brave heart.",
    "kids": false
   },
   {
@@ -648,7 +648,7 @@
   {
    "n": 108,
    "verse": "Hardly, methinks, would I home have come,\nAnd left the giants' land,\nHad not Gunnloth helped me, the maiden good,\nWhose arms about me had been",
-   "means": "The High One admits he would not have escaped without Gunnloth's help.",
+   "means": "The High One honors Gunnloth, the good maiden whose help brought him safely home from the land of the giants.",
    "kids": false
   },
   {
@@ -660,7 +660,7 @@
   {
    "n": 110,
    "verse": "On his ring swore Othin the oath, methinks.\nWho now his troth shall trust??\nSuttung's betrayal he sought with drink,\nAnd Gunnloth to grief he left",
-   "means": "The High One broke his oath on the ring, and left Gunnloth in grief.\nEven the wise can do wrong, and we should learn from it.",
+   "means": "The High One swore by his ring, and outwitted the giant Suttung, to win the mead of poetry for gods and men.\nGunnloth was left in grief, and the stanza remembers the cost of that great gift.",
    "kids": false
   },
   {
@@ -828,13 +828,13 @@
   {
    "n": 138,
    "verse": "Now are Hor's words spoken in the hall,\nKind for the kindred of men,\nCursed for the kindred of giants,\nHail to the speaker, and to him who learns!!\nProfit be his who has them!!\nHail to them who hearken!",
-   "means": "Now the High One's words have been spoken in the hall.\nBlessings on the one who speaks them, and on all who listen and learn.",
+   "means": "Now the High One's words have been spoken in the hall.\nHail to the one who speaks them, and to all who listen and learn.",
    "kids": true
   },
   {
    "n": 139,
    "verse": "I ween that I hung on the windy tree,\nHung there for nights full nine.\nWith the spear I was wounded, and offered I was,\nTo Othin, myself to myself,\nOn the tree that none may ever know,\nWhat root beneath it runs",
-   "means": "The High One tells how he hung on the windy tree for nine nights, wounded and given to himself, to gain wisdom.",
+   "means": "The High One tells how he hung on the windy tree for nine nights, wounded by the spear and offered, himself to himself, on the tree whose roots no one knows.",
    "kids": false
   },
   {
@@ -948,7 +948,7 @@
   {
    "n": 158,
    "verse": "A twelfth I know, if high on a tree,\nI see a hanged man swing.\nSo do I write and color the runes,\nThat forth he fares,\nAnd to me talks",
-   "means": "The twelfth song is a dark rune spell from the old tales.",
+   "means": "The twelfth song lets the High One carve and color the runes,\nso that one who has died may speak,\nand share the wisdom of those who came before.",
    "kids": false
   },
   {
