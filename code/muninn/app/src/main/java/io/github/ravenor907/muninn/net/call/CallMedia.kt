@@ -667,7 +667,12 @@ class CallMedia(
     private var aec: AcousticEchoCanceler? = null
     private var ns: NoiseSuppressor? = null
     private var proximity: PowerManager.WakeLock? = null
+    companion object {
+        /** Calls holding the phone in call mode now; read aloud puts the mode back to normal when this is 0. */
+        @JvmField val liveCalls = java.util.concurrent.atomic.AtomicInteger(0)
+    }
     private var oldMode = AudioManager.MODE_NORMAL
+    @Volatile private var counted = false
     private var mic: Thread? = null
     private var player: Thread? = null
     /** Kids' TV only: the TV's microphone and speaker sound (TvMic, TvVoice). Null on a phone. */
@@ -695,6 +700,7 @@ class CallMedia(
         if (Opus.loadError != null) return false
         oldMode = audio.mode
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (!counted) { counted = true; liveCalls.incrementAndGet() }
         AudioRoute.start(audio, video = video)
         // Kids' TV: the microphone and speaker at the TV's own rate (TvVoice converts); a phone: the call's 16 kHz.
         val tv = io.github.ravenor907.muninn.tv.TvMic.active
@@ -771,7 +777,7 @@ class CallMedia(
                 // exact digital zeros, which a real room never gives. After about 250 ms of them, quietly take the
                 // call's audio mode back and restart the same recorder. No message: it must not interrupt.
                 if (raw.all { it.toInt() == 0 }) {
-                    if (++zeroFrames == 12) try {
+                    if (++zeroFrames == 12 && !stopped) try {
                         audio.mode = AudioManager.MODE_IN_COMMUNICATION
                         rec.stop(); rec.startRecording()
                     } catch (_: Exception) {}
@@ -884,7 +890,10 @@ class CallMedia(
         proximityOn(false)
         if (!externalAudio) try {
             AudioRoute.stop()
-            audio.mode = oldMode
+            // Never hand back call mode: a mode left over from an earlier call would keep the phone in it, and every
+            // sound afterwards (read aloud, videos) would play through call processing and sound robotic.
+            audio.mode = if (oldMode == AudioManager.MODE_IN_COMMUNICATION) AudioManager.MODE_NORMAL else oldMode
+            if (counted) { counted = false; liveCalls.decrementAndGet() }
         } catch (_: Exception) {}
         keys?.wipe()
     }

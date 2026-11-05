@@ -430,6 +430,13 @@ object ReadAloud {
 
     private fun speakNatural(app: Context, my: Long, dir: File, parts: List<ReadAloudText.Phrase>, tune: ReadAloudText.Tune,
                              fallback: List<ReadAloudText.Phrase>) {
+        // No call running but the phone still in call mode (left over from a call): put it back, or the voice plays
+        // through call processing and sounds robotic.
+        try {
+            val am = app.getSystemService(android.media.AudioManager::class.java)
+            if (am != null && io.github.ravenor907.muninn.net.call.CallMedia.liveCalls.get() <= 0 &&
+                am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION) am.mode = android.media.AudioManager.MODE_NORMAL
+        } catch (_: Exception) {}
         val queue = LinkedBlockingQueue<Pair<FloatArray, Int>>()
         val end = FloatArray(0)
         val failed = java.util.concurrent.atomic.AtomicBoolean(false)
