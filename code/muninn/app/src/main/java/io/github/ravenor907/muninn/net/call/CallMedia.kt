@@ -776,7 +776,7 @@ class CallMedia(
                 // Another app took the microphone (for example a video cast to a Kids' TV): Android hands this app
                 // exact digital zeros, which a real room never gives. After about 250 ms of them, quietly take the
                 // call's audio mode back and restart the same recorder. No message: it must not interrupt.
-                if (raw.all { it.toInt() == 0 }) {
+                if (tv == null && raw.all { it.toInt() == 0 }) {
                     if (++zeroFrames == 12 && !stopped) try {
                         audio.mode = AudioManager.MODE_IN_COMMUNICATION
                         rec.stop(); rec.startRecording()
