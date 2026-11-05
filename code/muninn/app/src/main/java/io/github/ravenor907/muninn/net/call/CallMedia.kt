@@ -449,7 +449,7 @@ class CallMedia(
         // Up to 3 UDP paths (Wi-Fi first, then Direct, then the lowest round trip) plus Bluetooth; each distinct
         // destination gets the packet once (the relay once per relayed address, not once per relay path).
         // 1.45: voice also on the relay while it's allocated, next to Wi-Fi or Direct (the receiver keeps the first copy).
-        val dual = only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
+        val dual = DUAL_VOICE && only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
         val rest = only == null && freeFresh(now) && !dual
         for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest, alsoRelay = dual)) when (dst.kind) {
             // Group video goes peer to peer only, never through the relay (it stays on voice there).
@@ -670,6 +670,9 @@ class CallMedia(
     companion object {
         /** Calls holding the phone in call mode now; read aloud puts the mode back to normal when this is 0. */
         @JvmField val liveCalls = java.util.concurrent.atomic.AtomicInteger(0)
+        /** Voice over two paths (1.45): off. With a direct path and the relay both up (a phone calling a TV on home
+         *  Wi-Fi) the copies left the call silent both ways; phone to phone on cellular, relay only, never sent copies. */
+        const val DUAL_VOICE = false
     }
     private var oldMode = AudioManager.MODE_NORMAL
     @Volatile private var counted = false
