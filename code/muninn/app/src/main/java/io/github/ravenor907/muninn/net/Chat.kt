@@ -618,8 +618,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // (a caps probe), and its answer and the probe's own caps put both sides right.
         val lastCaps = prefs.getString(LAST_CAPS, "").orEmpty()
         if (Proto06.capsDropped(lastCaps, Proto06.CAPS)) bg {
-            val body = withApp(c.chatKey, JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps")).toString()
             for (c in contacts.all.value) if (!c.groupOnly && c.chatKey !in id.muted()) try {
+                val body = withApp(c.chatKey, JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps")).toString()
                 probed[c.chatKey] = System.currentTimeMillis()
                 deliver(c.chatKey, envelope("receipt", c.chatKey, body, UUID.randomUUID().toString()), c.mailbox)
             } catch (_: Exception) {}
