@@ -738,7 +738,15 @@ class CallMedia(
         // A TV gets a roomy 200 ms buffer: a weak CPU that falls behind for a moment loses nothing.
         val inBytes = if (io.github.ravenor907.muninn.tv.TvMic.active) maxOf(minIn * 2, micRate / 5 * 2) else maxOf(minIn, Opus.FRAME * 2 * 4)
         val rec = try {
-            AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
+            if (Build.VERSION.SDK_INT >= 30) {
+                // Private capture: no other app (a cast app, the Assistant, a voice search) can take the call's microphone
+                // and leave it recording silence. VOICE_COMMUNICATION (a phone) is private already; a Kids' TV records
+                // from VOICE_RECOGNITION or MIC, which are not, so another app with a screen on top won the microphone.
+                AudioRecord.Builder().setAudioSource(src)
+                    .setAudioFormat(AudioFormat.Builder().setSampleRate(micRate).setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                    .setBufferSizeInBytes(inBytes).setPrivacySensitive(true).build()
+            } else AudioRecord(src, micRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, inBytes)
         } catch (e: Exception) { null }
         if (rec == null || rec.state != AudioRecord.STATE_INITIALIZED) { rec?.release(); return null }
         // Kids' TV: echo canceller, noise suppression and gain (TvVoice), or a louder microphone without it.
@@ -752,7 +760,7 @@ class CallMedia(
         if (ok) return rec
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
         aec = null; ns = null
-        if (tvGain != null) { io.github.ravenor907.muninn.tv.TvMic.release(); tvGain = null }
+        if (tvGain != null) { io.github.ravenor907.muninn.tv.TvMic.release(tvGain); tvGain = null }
         rec.release()
         return null
     }
@@ -764,6 +772,7 @@ class CallMedia(
         var lastSent = 0L
         var frames = 0
         var zeroFrames = 0
+        val errors = CallLogic.MicErrors()
         // The microphone's 20 ms at its own rate (a Kids' TV may run it at 48 kHz).
         val tv = tvGain
         val raw = if (tv != null && tv.captureFrame != Opus.FRAME) ShortArray(tv.captureFrame) else pcm
@@ -771,7 +780,13 @@ class CallMedia(
             // Already recording: openMic started it to know the source works.
             while (!stopped) {
                 var got = 0
-                while (got < raw.size && !stopped) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) break; got += n }
+                var failed = false
+                while (got < raw.size && !stopped) { val n = rec.read(raw, got, raw.size - got); if (n <= 0) { failed = true; break }; got += n }
+                // A read error (the recorder stopped or lost its input) returns at once: without a pause this loop spun at
+                // audio priority and never recovered. Now it waits a moment and, after about half a second of errors,
+                // quietly starts the same recorder again (at most every 2 s). No message: it must not interrupt.
+                if (errors.read(!failed, System.currentTimeMillis()) && !stopped) try { rec.stop(); rec.startRecording() } catch (_: Exception) {}
+                if (failed && !stopped) { try { Thread.sleep(20) } catch (_: InterruptedException) { break } }
                 if (got < raw.size) continue
                 // Another app took the microphone (for example a video cast to a Kids' TV): Android hands this app
                 // exact digital zeros, which a real room never gives. After about 250 ms of them, quietly take the
@@ -886,7 +901,8 @@ class CallMedia(
         if (mic?.isAlive != true) try { record?.release() } catch (_: Exception) {}
         if (player?.isAlive != true) try { track?.release() } catch (_: Exception) {}
         try { aec?.release(); ns?.release() } catch (_: Exception) {}
-        if (tvGain != null) io.github.ravenor907.muninn.tv.TvMic.release()
+        // Only this call's own stage (TvMic.release(a)): never one a newer call has opened since.
+        tvGain?.let { io.github.ravenor907.muninn.tv.TvMic.release(it) }
         proximityOn(false)
         if (!externalAudio) try {
             AudioRoute.stop()

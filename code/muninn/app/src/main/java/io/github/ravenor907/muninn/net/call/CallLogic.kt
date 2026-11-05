@@ -386,6 +386,22 @@ object CallLogic {
     fun dualVoice(audio: Boolean, relayAllocated: Boolean, ultra: Boolean): Boolean = audio && relayAllocated && !ultra
 
     /**
+     * Read errors from a call's microphone (not quiet sound, not digital zeros: a TV's microphone may gate to exact zeros
+     * when the room is quiet). [read] gets each read's outcome; true when the recorder should be started again now:
+     * after [after] errors in a row (about half a second with the 20 ms pause), at most once every [gapMs].
+     */
+    class MicErrors(private val after: Int = 25, private val gapMs: Long = 2_000L) {
+        private var errors = 0
+        private var lastRestart = Long.MIN_VALUE / 2
+        fun read(ok: Boolean, now: Long): Boolean {
+            if (ok) { errors = 0; return false }
+            if (++errors < after || now - lastRestart < gapMs) return false
+            errors = 0; lastRestart = now
+            return true
+        }
+    }
+
+    /**
      * When to ping a path: while punching (the first 15 s, never live yet) every 50 ms for 2 s then every
      * 250 ms; once live every 1 s (keeps NAT and relay mappings open), Wi-Fi and Direct every 250 ms so the relay
      * takes over within a second when they stop (5.8.3); dead ones every 2 s for revival.

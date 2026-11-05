@@ -168,7 +168,8 @@ object TvMic {
         /** One 20 ms frame from the microphone ([captureFrame] samples) into [out] (the call's 20 ms). True if [out] is full. */
         fun capture(input: ShortArray, out: ShortArray): Boolean {
             val p = proc
-            val n = if (p != null) p.capture(input, captureFrame, out) else convert(input, captureFrame, out)
+            // A processor that was closed under a running call gives nothing: the plain conversion keeps the voice going.
+            val n = (if (p != null) p.capture(input, captureFrame, out) else 0).takeIf { it > 0 } ?: convert(input, captureFrame, out)
             if (n < out.size) return false
             gain.process(out, n)
             measure(out, n)
@@ -178,7 +179,8 @@ object TvMic {
         /** One decoded 20 ms frame of the call into [out] ([playFrame] samples) for the speaker. Returns its length. */
         fun render(pcm: ShortArray, out: ShortArray): Int {
             val p = proc ?: return convert(pcm, pcm.size, out)
-            return p.render(pcm, pcm.size, out)
+            // Closed under a running call: 0 would leave the speaker loop writing nothing (no sound, no audio clock).
+            return p.render(pcm, pcm.size, out).takeIf { it > 0 } ?: convert(pcm, pcm.size, out)
         }
 
         /** Without [TvVoice]: a plain copy, or (should the library stop) picking or repeating samples. */
@@ -229,6 +231,15 @@ object TvMic {
         try { callAgc?.release() } catch (_: Exception) {}
         callAgc = null
         call?.close(); call = null
+    }
+
+    /**
+     * Lets [a] go. Only the call's own stage is released: a call (or a source tried and dropped) that ends late never
+     * closes the stage a newer call is using, which would leave that call silent both ways.
+     */
+    @Synchronized fun release(a: CallAudio?) {
+        if (a == null) return
+        if (call === a) release() else a.close()
     }
 
     private fun agc(sessionId: Int): AutomaticGainControl? = try {
