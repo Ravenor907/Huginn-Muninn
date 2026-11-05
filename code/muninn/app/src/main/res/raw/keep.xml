@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The message sound is referenced by name (android.resource://…/raw/raven_message), so keep it. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@raw/raven_message" />

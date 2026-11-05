@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Huginn
+GenericName=Chat and File Sharing
+Comment=Private chat and file sharing, built for a controller
+Exec=huginn
+Icon=io.github.ravenor907.Huginn
+Terminal=false
+Categories=Network;InstantMessaging;FileTransfer;
+Keywords=chat;messages;localsend;file sharing;steam deck;handheld;
+StartupNotify=true

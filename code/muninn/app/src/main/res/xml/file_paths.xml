@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path name="updates" path="updates/" />
+    <!-- "Share the app": a copy of Muninn's own installed APK. -->
+    <cache-path name="app" path="app/" />
+    <!-- Open on a received file (Android 8 and 9, where it's a plain file in Downloads). -->
+    <external-path name="downloads" path="Download/" />
+    <external-files-path name="own-downloads" path="Download/" />
+</paths>

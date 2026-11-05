@@ -1,0 +1,147 @@
+{
+  "about": "Ratchet test vectors. Static keys and SK are those of chat-vectors.json. Ratchet keys are P-256 private keys with these integer values, used in order: Alice 0x1001, 0x1002, ...; Bob 0x2001, 0x2002, .... Alice is A (pubA), Bob is B (pubB). 'messages' are in the order they were encrypted; 'deliver' says who decrypts which message, in that order (out-of-order delivery included). Every header and ciphertext must match exactly, and every decryption must give 'text'.",
+  "pubA": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+  "pubB": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+  "sk": "07343d990063d66b6b715b464ada7da04da14a35b4621719dae8edcca2958eef",
+  "aliceKeys": "0x1001+",
+  "bobKeys": "0x2001+",
+  "messages": [
+    {
+      "from": "A",
+      "text": "hello 1",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "pn": 0,
+        "n": 0
+      },
+      "c": "0s3MyEy3z3Fez0EGLAGjBv4WzKGya6I="
+    },
+    {
+      "from": "A",
+      "text": "hello 2",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "pn": 0,
+        "n": 1
+      },
+      "c": "/ew17PwFX6KnoYAj4N/iEzQIyo+7O1c="
+    },
+    {
+      "from": "B",
+      "text": "reply 1",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEK+xjGAoneaE3beraQIheVpdCcvVEUbHDdwpLSm5QKzpKYXyJ+1G2GozYvvlu1o2TMuwaHw3NgA7Bxn2N6UNzCw==",
+        "pn": 0,
+        "n": 0
+      },
+      "c": "clS4Krntq2SJ5lFCH3K4fDTVUUe0Zoc="
+    },
+    {
+      "from": "A",
+      "text": "after reply",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYNAmD962TSpqw4Mesf1v4MJZwq5T5Ucd1raPqWopd8GZ+cso4plqxii81HXXaonxbvdAT6yDBzboT+Fer4nT4A==",
+        "pn": 2,
+        "n": 0
+      },
+      "c": "jC5u09aMTXFWOkPcCRmspOFF74enX1Rylh7/"
+    },
+    {
+      "from": "A",
+      "text": "late one",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYNAmD962TSpqw4Mesf1v4MJZwq5T5Ucd1raPqWopd8GZ+cso4plqxii81HXXaonxbvdAT6yDBzboT+Fer4nT4A==",
+        "pn": 2,
+        "n": 1
+      },
+      "c": "IqU5lVaOEvo0Pq7j1/T2FrCTh6J557kf"
+    },
+    {
+      "from": "A",
+      "text": "on time",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYNAmD962TSpqw4Mesf1v4MJZwq5T5Ucd1raPqWopd8GZ+cso4plqxii81HXXaonxbvdAT6yDBzboT+Fer4nT4A==",
+        "pn": 2,
+        "n": 2
+      },
+      "c": "O3tynVjGqaWIC7fKFOrXmZLZMSnTNyk="
+    },
+    {
+      "from": "B",
+      "text": "reply 2",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgz7/jVSaCdmtnYYGpbRS53IYnOFrjVCPnNv/+dW3hWboIWagBILiMrFyQPcoUi0wTUsgfVueByjdVybLQKJlvQ==",
+        "pn": 1,
+        "n": 0
+      },
+      "c": "w4FVGCKm+lD0NGWXKM6ehflcBdKw5hQ="
+    },
+    {
+      "from": "B",
+      "text": "reply 3",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgz7/jVSaCdmtnYYGpbRS53IYnOFrjVCPnNv/+dW3hWboIWagBILiMrFyQPcoUi0wTUsgfVueByjdVybLQKJlvQ==",
+        "pn": 1,
+        "n": 1
+      },
+      "c": "NBM8PYywFns+FgDZ2Yz5B/X3wj/phNk="
+    },
+    {
+      "from": "A",
+      "text": "ᚺᚢᚷᛁᚾᚾ unicode ok",
+      "header": {
+        "b": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAED3Xp6Wpb/39Ndc94y9KKyaOjwa1hFmxFwMmpQkLfLE5fmVmo8jp3ziVcpq/GKF2zdKCPJwSrEGhD4tswJ1ClDQ==",
+        "d": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVbnTETZ33lMl0sOri68T7YFNkm0skRR1we+qd9XhaNll6lg6gTsrTOExXisWvM3r6gmWlrtFcFrHS+7oyXTI8A==",
+        "pn": 3,
+        "n": 0
+      },
+      "c": "ugeU2z9tx7Na4ZtrHZuVpqn7c0BH0j/GGOzVvcyX3HA1UkgVh6rJhr+23LWb"
+    }
+  ],
+  "deliver": [
+    [
+      "B",
+      0
+    ],
+    [
+      "B",
+      1
+    ],
+    [
+      "A",
+      2
+    ],
+    [
+      "B",
+      3
+    ],
+    [
+      "B",
+      5
+    ],
+    [
+      "B",
+      4
+    ],
+    [
+      "A",
+      7
+    ],
+    [
+      "A",
+      6
+    ],
+    [
+      "B",
+      8
+    ]
+  ]
+}

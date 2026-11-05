@@ -1,0 +1,722 @@
+{
+ "note": "cap d1, code/shared/docs/protocol.md section 16; written by code/shared/tools/d1_ref.py",
+ "limits": {
+  "default": 7,
+  "longest": 30,
+  "kinds": [
+   "family",
+   "work"
+  ],
+  "dayMs": 86400000
+ },
+ "keys": {
+  "A": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+  "B": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ=="
+ },
+ "states": {
+  "standard": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Family",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500000000,
+    "v": 1,
+    "sig": "MEUCIH91BJTmNcK1uCoY3grFwj6J79nqqzRgKLMaQhTIPK0JAiEAg3juS4h3AsAnfEgqjQe32cKgs/0s/u0dLs7yr7e6++g="
+   },
+   "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500000000,\"v\":1}",
+   "hash": "f1e19baa198e36e362c94e6733c9c06e2d9ff9215848e5c1ccedcf86d3143ec0",
+   "days": 7
+  },
+  "family30": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Family",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500060000,
+    "v": 2,
+    "kind": "family",
+    "days": 30,
+    "sig": "MEUCIQCmIMAomOGtvy3JEGpfkkhQpE5HNULvDJ7RDgO7xGyutQIgPueIa/YFU9i+6yFZK3XW9t3gY6UUmTq9d/Rbb5stwqE="
+   },
+   "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"}],\"days\":30,\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"kind\":\"family\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500060000,\"v\":2}",
+   "hash": "4d90aaeb9b4f3ba2f34c4b3ef2f9530ccfab6a4999f81a14645850f2db6e4be6",
+   "days": 30
+  },
+  "work14": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Family",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "v": 3,
+    "kind": "work",
+    "days": 14,
+    "sig": "MEQCIA3HX+gHxmn6ZQs9rjGNKcsE8IcxhZavXy/KvcJdM9uPAiBOID/joRrKeOzCnqc1TMnW+SnDqkj6p+ADh0eDg7NWsA=="
+   },
+   "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"}],\"days\":14,\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"kind\":\"work\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500120000,\"v\":3}",
+   "hash": "d05863dbb691d930f77d1924e4ef1b22e7b6525e833322a5a1d9e55443dae8a6",
+   "days": 14
+  },
+  "family7": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Family",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500180000,
+    "v": 4,
+    "kind": "family",
+    "sig": "MEYCIQCy1n5aZy2BD0Sej9HUDjS9EXx6wRtbMBuDIT8GUhWyVQIhAJ2YHKHsunD84WdDXB/qjxLwq2Mt4frIctMJ+42aanwl"
+   },
+   "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"kind\":\"family\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500180000,\"v\":4}",
+   "hash": "9b0440be91a3b2886af8a06d693270b811bd77beb78927d95091ce8d8481743c",
+   "days": 7
+  },
+  "standardAgain": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Family",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500240000,
+    "v": 5,
+    "sig": "MEUCIHo2ahnf5LMEYXkKpXSPSq7kxQ0eC7YXP0nD0WU8NYjIAiEA170Vn7x+r+paMLpqoPE1UlNvl8RygA1bm1Zy6zB0mz4="
+   },
+   "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500240000,\"v\":5}",
+   "hash": "824fa3b0460bdc799bb287ce9ec4d065b72df8765c061a59ed35ff069748c583",
+   "days": 7
+  }
+ },
+ "refuse": {
+  "school": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "school",
+   "days": 30,
+   "sig": "MEQCIFutLUSCsycoLFnJ/U1NkBu7OlJhIBscIhS8nW5tOVu5AiA9oV0e8SqJAKXzJvUn75+GyzWR2oAjs52i0EiN6uU9cw=="
+  },
+  "daysAlone": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500000000,
+   "v": 1,
+   "days": 14,
+   "sig": "MEQCIAqgNGNwjeQ7xLUsZsoECsIeWEvr51fGZP/frFGv0UBQAiBe2GWoGF/afgW3yEsQKgTkE6crO72r92SXR4JbDfVnIQ=="
+  },
+  "days6": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "family",
+   "days": 6,
+   "sig": "MEUCIE8WKuAgSyPgpcbvQ6XjTgbhI4JUegjttPDc9hNGwQvgAiEA6Vmygxl11LXPEEUzi//YWKmlICS1Km2Xu9YfkPBAEHg="
+  },
+  "days31": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "family",
+   "days": 31,
+   "sig": "MEUCIQCLa05s3guGYhmJuS+2NUz+QNRVLo0gIe5JiIYkzfuQdAIgfxrXZ6PFvJdgzOYnziBEKmJ7FZiE9kZOyFcoi8DX7lk="
+  },
+  "daysText": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "family",
+   "days": "14",
+   "sig": "MEQCIAdInxECKJDp+L/xixNaiXlsSnQnHFsQlvDXy1Ij0y0pAiBef3b3/uqq8B/AKJEkB5btBHhSpyjWbW/wxN5JJBA97Q=="
+  },
+  "daysTrue": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "family",
+   "days": true,
+   "sig": "MEYCIQD65565Hc+mYWFIQlTtR02yirvf29dsIlG+xMkGtlr8IAIhAIkUlESSGAHcm5bmfYiamzHW2t9pzHki2Kky81dWzWb6"
+  },
+  "kindEmpty": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "",
+   "days": 30,
+   "sig": "MEUCIQCe7giHb9sCF8UG7eQbbHhmy+a992pdeeO7Q5GTp9v/GwIgATKs0/thtHRoQuOs7ABsyFljvIe8YunOsnvd/UHBDEE="
+  },
+  "other": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Family",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "v": 2,
+   "kind": "family",
+   "days": 30,
+   "keep": 7,
+   "sig": "MEQCIC74PIHn9B3Z6xtc6Kpc/POv25A1HSOpTAQ0e359qL18AiBX4Vq+vG+pmznL4z+gT6zJZa8wUE0qNPAGQ9iYsI2b7Q=="
+  }
+ },
+ "accept": [
+  {
+   "current": null,
+   "new": "family30",
+   "accept": true
+  },
+  {
+   "current": "standard",
+   "new": "family30",
+   "accept": true
+  },
+  {
+   "current": "family30",
+   "new": "work14",
+   "accept": true
+  },
+  {
+   "current": "work14",
+   "new": "family7",
+   "accept": true
+  },
+  {
+   "current": "family7",
+   "new": "standardAgain",
+   "accept": true
+  },
+  {
+   "current": "work14",
+   "new": "family30",
+   "accept": false
+  }
+ ],
+ "envelope": [
+  {
+   "o": {
+    "days": 7
+   },
+   "days": 7
+  },
+  {
+   "o": {
+    "days": 30
+   },
+   "days": 30
+  },
+  {
+   "o": {
+    "days": 14
+   },
+   "days": 14
+  },
+  {
+   "o": {},
+   "days": null
+  },
+  {
+   "o": {
+    "days": 6
+   },
+   "days": null
+  },
+  {
+   "o": {
+    "days": 31
+   },
+   "days": null
+  },
+  {
+   "o": {
+    "days": "14"
+   },
+   "days": null
+  },
+  {
+   "o": {
+    "days": true
+   },
+   "days": null
+  },
+  {
+   "o": {
+    "days": 14.5
+   },
+   "days": null
+  },
+  {
+   "o": {
+    "days": null
+   },
+   "days": null
+  },
+  {
+   "o": {
+    "days": 0
+   },
+   "days": null
+  }
+ ],
+ "mine": [
+  {
+   "chosen": 30,
+   "close": true,
+   "days": 30
+  },
+  {
+   "chosen": 14,
+   "close": true,
+   "days": 14
+  },
+  {
+   "chosen": 30,
+   "close": false,
+   "days": 7
+  },
+  {
+   "chosen": 3,
+   "close": true,
+   "days": 7
+  },
+  {
+   "chosen": 90,
+   "close": true,
+   "days": 30
+  },
+  {
+   "chosen": null,
+   "close": true,
+   "days": 7
+  },
+  {
+   "chosen": 7,
+   "close": false,
+   "days": 7
+  }
+ ],
+ "pair": [
+  {
+   "mine": 7,
+   "d1": true,
+   "theirs": 30,
+   "days": 7
+  },
+  {
+   "mine": 30,
+   "d1": true,
+   "theirs": 30,
+   "days": 30
+  },
+  {
+   "mine": 30,
+   "d1": true,
+   "theirs": 14,
+   "days": 14
+  },
+  {
+   "mine": 14,
+   "d1": true,
+   "theirs": 30,
+   "days": 14
+  },
+  {
+   "mine": 30,
+   "d1": true,
+   "theirs": null,
+   "days": 7
+  },
+  {
+   "mine": 30,
+   "d1": false,
+   "theirs": null,
+   "days": 30
+  },
+  {
+   "mine": 30,
+   "d1": false,
+   "theirs": 14,
+   "days": 30
+  },
+  {
+   "mine": 7,
+   "d1": false,
+   "theirs": null,
+   "days": 7
+  }
+ ],
+ "sweep": [
+  {
+   "now": 1762000000000,
+   "days": 7,
+   "times": [
+    1762000000000,
+    1761913600000,
+    1761395200000,
+    1761395199999,
+    1760790400000,
+    1759408000000,
+    1759407999999
+   ],
+   "kept": [
+    true,
+    true,
+    true,
+    false,
+    false,
+    false,
+    false
+   ]
+  },
+  {
+   "now": 1762000000000,
+   "days": 14,
+   "times": [
+    1762000000000,
+    1761913600000,
+    1761395200000,
+    1761395199999,
+    1760790400000,
+    1759408000000,
+    1759407999999
+   ],
+   "kept": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    false
+   ]
+  },
+  {
+   "now": 1762000000000,
+   "days": 30,
+   "times": [
+    1762000000000,
+    1761913600000,
+    1761395200000,
+    1761395199999,
+    1760790400000,
+    1759408000000,
+    1759407999999
+   ],
+   "kept": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false
+   ]
+  }
+ ]
+}

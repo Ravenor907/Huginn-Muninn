@@ -1,0 +1,91 @@
+{
+ "password": "correct horse battery",
+ "wrong": "wrong horse battery",
+ "summary": {
+  "created": "2026-11-02T10:00:00Z",
+  "contacts": 2,
+  "chats": 3,
+  "groups": 1,
+  "folders": 1,
+  "items": 2,
+  "files": true
+ },
+ "v3huginn": {
+  "v": 3,
+  "app": "huginn",
+  "file": "TVVOQjEAAAB+eyJ2IjozLCJzYWx0IjoiQVFFQkFRRUJBUUVCQVFFQkFRRUJBUT09Iiwia2RmIjoic2NyeXB0IiwiTiI6NjU1MzYsInIiOjgsInAiOjIsImNyZWF0ZWQiOiIyMDI2LTExLTAyVDEwOjAwOjAwWiIsImFwcCI6Imh1Z2lubiJ9AgICAgICAgICAgIC/wcfjNdFzHDK7iWPD/dNJ+rWUzS/ddtoRk2cccEutf7IuGmXF+RBciUkoOHzgUF47GlwnjSjxFYX95W5bY5fAEUke5g7MmlSuzlv5vobGOBO+ak2HmtneTPnUhDlZ93O1FYyKEjQ68qtBb+TcPMr6L6htW0ZvDl0JruaWdmkbbzyR90T5eE+zDK0QKYXQUPaTBNiM1MoXcS9SjqeXXMZfbJ5lHRwtQrpyancHeUFY5TSgUzWU4S6+wAO+2diXRF2SeC9OmKzFtJHi7X1JBQjlClhEVqN1ejqNkvBgbOih5hf3CiRQaALmJ+Af6G2MtwSYam1HgBhMJe92UAssYtWRa5x/wnvW2KDc3P1dIiOXNA7/vcZkk9XcgyewOgn8x6zawK4FyX6qwkVybE/GprqZZsSPYWvf79sWjT1hhR5Hss9IGvQ3tbyIeXBlsXUz5S83LEOyUZy3Wnu5sVta6rLRfpUVkfj28A9Tvtsm0sB+/nE/f8tfRHdLnyDZRo+71hW5fnLSPRvHwO+R3tAYT+UPJ0NKIDYZruI8HhhjaDbm+Pnb5AEudmTQNqB6ix8M3MYe7g6pyJr8VMfU/V+QIFh2yq7mdlKC8ottAI/XY/6xUj53Bbkni3oWjpefQwsqKpTHdeT/0hjh2arO8E8BOPyUHfrd1zvJ3dmcS4sFYxwNJTayqHfVvtzc68RMAExG7XRTLuPTXaejrwCwvb3D5x+TPMQ4Qwzya1C2Zo8LSXMUcp2O8EhGWD3FSnzT+DsUjv/skmHIMVQRXL2i4iooBuw255y2GhTyrtTw4NLn2FoA8LpWUKjbLBKvSATe4/DPERfmYAbAZcvoEaZNJkxvP9OYf9qLk5sZ1CZ0HF9wimclwmoPs9sNLmBW/ZiNKqReHChxAUXFj9jwblp10aU4jGkpOR4ZtozySBDFGLiJvlo/jetDPNSagPJ5zl8/zTOxj/qQBgB92xoyb10AAJ6zfVomH6U6XUANmTjeUorbErg66A+NKrusSjtPQryaMp/pPREERdV9GLfdmbXkaD2CUzRdVBJlaCU9Yw77CWpMqquw+ip7PB06SHhyIFTC5xbRjeFllCgs1DLoVsZtl9lFVWZqyNxDUFuYn5fNpfZRTVKCaQZSVGU2/lChmg/lmdL4D4PlwMVCd3z9jSzkQbQlO8EklsbnTDtXhdPlEeYG4tSNhOc5mnVea14QePeEAl4hLCONV270bLFD13Rxq8qAHzUc1z24x7f89cWUP39dddv+8uHwpEa4GafimdvwiJPSPG72Hl1g9EyWTxf0M5i+wOGkX8CyDXVP+RPfPOufxr5KjufxqFQlWaT7HgFXZ74giebfG6oQfd/upjeeODmWPu+pumcQIWHnZi14g+zw9xv1v4j6jZHkSQ7XdsWUnpBYrINBbmqzoqZDljwny0AphUfhIkmLMXzlKgkIJd0wF7hCOxeKLlPPAhMB1XoYZl1bgH9GqnUGvJW1tQT3A5DlXVgUdZZZuHLngNIVrhIUEFjXmhxmCaJMvMeUhy/3k5bSfWOG90qwQSuEe3QF3JABGKpb7GIwo8d7mheXWV0T+ktsCYnYYb8meQUu7alsTYsHipNH75FDj02dBv1u6lXuXzrPgaFLAFUanrH6ujQTH1yBVQ8tDGc8A==",
+  "files": [
+   {
+    "name": "chats.json",
+    "data": "eyJhIjpbeyJ0ZXh0IjoiaGkifV19"
+   },
+   {
+    "name": "photos/p1",
+    "data": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/wABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbHyMnKy8zNzs/Q0dLT1NXW19jZ2tvc3d7f4OHi4+Tl5ufo6err7O3u7/Dx8vP09fb3+Pn6+/z9/v8AAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j5+vv8/f7/"
+   },
+   {
+    "name": "@about.json",
+    "data": "eyJ2IjoxLCJhcHAiOiJodWdpbm4iLCJkZXZpY2UiOiJUZXN0IFBDIiwiY3JlYXRlZCI6IjIwMjYtMTEtMDJUMTA6MDA6MDBaIiwiZmlsZXMiOnRydWV9"
+   },
+   {
+    "name": "@move.json",
+    "data": "eyJ2IjoxLCJtZSI6eyJuYW1lIjoiUmF2ZW4iLCJwdWIiOiIiLCJwcml2IjoiIiwibm9zdHIiOiIifSwiY29udGFjdHMiOlt7ImsiOiJhIiwibiI6IkFubiJ9LHsiayI6ImIiLCJuIjoiQm8ifV0sInJhdGNoZXRzIjp7fSwiY2hhdHMiOnsiYSI6W10sImIiOltdLCJjIjpbXX0sImdyb3VwcyI6W3sicyI6e30sImgiOltdfV0sImdjaGF0cyI6e30sImZvbGRlcnMiOnsiZm9sZGVycyI6W3siaWQiOiJmMSIsIm4iOiJGYW1pbHkiLCJrIjpbImEiXSwiYyI6ZmFsc2V9XSwidG9wIjpbXX19"
+   }
+  ],
+  "device": "Test PC"
+ },
+ "v3muninn": {
+  "v": 3,
+  "app": "muninn",
+  "file": "TVVOQjEAAAB+eyJ2IjozLCJzYWx0IjoiQXdNREF3TURBd01EQXdNREF3TURBdz09Iiwia2RmIjoic2NyeXB0IiwiTiI6NjU1MzYsInIiOjgsInAiOjIsImNyZWF0ZWQiOiIyMDI2LTExLTAyVDEwOjAwOjAwWiIsImFwcCI6Im11bmlubiJ9BAQEBAQEBAQEBAQEN/6gdoBwUbLdv6vyeh+Nf2V0lJXU3sWvEOEbixSzSdPrtVpJS9jNl7tTjYgRIfuHmY0X5vnvjunMN9B8S6Fou0dN6mheyCw6j/Koe51cVEk6KzOElzAOIVBGJzvrNMAxRHpXqHXB3Ys6jyPLWACatQDeOExat0OfNng+BbeJDYXwmAEObj2CNfGRmiqTpNmlO+GZ585d08hQFRlKPuP/RC/jjuoWGBdFl5BZ+hqzuQB4fNY0M3m5zi03BpBfEn3efGxONne8ZKY7taeq/RhPtmF4juyAxbSMF0Xs2V49WDeoQmNrrxyIRfeYPhIf1CMx4v+9J8vyZm/PlyhE6D7GE3l8PiZmF1bjcvZYTm+s56/gwunG+hW4NMs0ydgSQW+k/YkzDxE+htuwlQsocSQiqle/T8AKn69pgiOAhzhX8M9EfpmIcuMyZSLszGh50c6OBodeTdsPrLvHX6NGBEynNPZN2TSP1FkABgnHSyGqbtLzDlfx+GoHytue6KU4Zzejv7hpK3q9tvSzJaSX9uuejqhbmDeYw/Bg4G9aP3tm09NFHeEf6M/Gyk/mKmhRC2aEFkYIQJn2lQ8APXuqcRqUC6y1MulmuW6ayug0zV0sngntFk2IBEIYKcr+YKzPrNdseWbYMGoshZcx6Fa7FJTOrjGeaJ237tLoAAzuQirbK3yPZJ4H4FDoXzOZN/RemblfAoNkmiZU91eP2gaAx+pHBC/yHQKuaQ1pWo8La4wNUCE1uelqFc+I3ueFjEmk8/7GxYVMTl73pOGpGuuhYuJW4ZDPV+c7L/T5/TMMiORj8ZKZ2DYkyD79g7k1CD1xxQFcKpAOOLDMCemtCg7N+jRFb+Go8pXYa7iY9d6KkQgzRAGYN5WTnnTMAXQzKhHbbOaUTrvQpzdYbrQfvhCwluRuvDbEQq178oPnVIyLP0BCKTZIwiE4Wd+9U32UPGZ2je8hN0VJnM9uAO64ZChx2wU4lFqTo1V60SEdCo9gDyDgbaZFop2XFrhBIgOkhSntLYee77vraTLO+xPzOPVlByLhhl1uGXdmGFJOZdihd9NKMhQ0raKwj3EWr1PiYpa58+gENd17tT9TobjP1591wQ6Jf2Hi94K4qM/W5x2IVoHiKytxM8J5bLjL0T6JztVE4PaR40daKB1bqPAQ6n7pgJ81ErsS2XBee8mIE+U0xvU+5yR8n1AALR+XGHe0wttTmwuOkLsF9llyEwDj1YAmebSN9qA8Dpiht8FrfTLRU2tLOiCShQMyDQT36fBuKMRntGnPdjrrSCO5GXoGU4I4/r/w7IywFScuncd5XCZ/2szGWf1dBjO9EA76fEd4SaBarmHhSm84LrkOVS3FcIUGGg7EHPCAxR5MPE/FbOI6jGqvkwIe0SmaRcB8HLfyAmhmxRQyhWUq8iEV0OJnSw+tdq3FAiSGPF/8oIgVv49jAR48lo1FMzMXxapxV+5FNNwqULP61SwS4ne6U1N51Q8I8HiLqp+WMSphFuARd1u/i5M0O0skqt1roD60prRVMTEQ3FiAy08vHOLUSRFaZtGARKpYWFnGZg3uL82f7YJ5s6LPMItXQ78tz66S6vOI31Sc4kFHZccRl1tnOLL7dmu3NMKH+Eu7EsTaXt7niJZ7EGpfQKb8MDtAiP+dvQ==",
+  "files": [
+   {
+    "name": "chats.json",
+    "data": "eyJhIjpbeyJ0ZXh0IjoiaGkifV19"
+   },
+   {
+    "name": "photos/p1",
+    "data": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/wABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp+goaKjpKWmp6ipqqusra6vsLGys7S1tre4ubq7vL2+v8DBwsPExcbHyMnKy8zNzs/Q0dLT1NXW19jZ2tvc3d7f4OHi4+Tl5ufo6err7O3u7/Dx8vP09fb3+Pn6+/z9/v8AAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4/QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4CBgoOEhYaHiImKi4yNjo+QkZKTlJWWl5iZmpucnZ6foKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr/AwcLDxMXGx8jJysvMzc7P0NHS09TV1tfY2drb3N3e3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j5+vv8/f7/"
+   },
+   {
+    "name": "@about.json",
+    "data": "eyJ2IjoxLCJhcHAiOiJtdW5pbm4iLCJkZXZpY2UiOiJUZXN0IHBob25lIiwiY3JlYXRlZCI6IjIwMjYtMTEtMDJUMTA6MDA6MDBaIiwiZmlsZXMiOnRydWV9"
+   },
+   {
+    "name": "@move.json",
+    "data": "eyJ2IjoxLCJtZSI6eyJuYW1lIjoiUmF2ZW4iLCJwdWIiOiIiLCJwcml2IjoiIiwibm9zdHIiOiIifSwiY29udGFjdHMiOlt7ImsiOiJhIiwibiI6IkFubiJ9LHsiayI6ImIiLCJuIjoiQm8ifV0sInJhdGNoZXRzIjp7fSwiY2hhdHMiOnsiYSI6W10sImIiOltdLCJjIjpbXX0sImdyb3VwcyI6W3sicyI6e30sImgiOltdfV0sImdjaGF0cyI6e30sImZvbGRlcnMiOnsiZm9sZGVycyI6W3siaWQiOiJmMSIsIm4iOiJGYW1pbHkiLCJrIjpbImEiXSwiYyI6ZmFsc2V9XSwidG9wIjpbXX19"
+   }
+  ],
+  "device": "Test phone"
+ },
+ "v2huginn": {
+  "v": 2,
+  "app": "huginn",
+  "file": "TVVOQjEAAAB+eyJ2IjoyLCJzYWx0IjoiQlFVRkJRVUZCUVVGQlFVRkJRVUZCUT09Iiwia2RmIjoic2NyeXB0IiwiTiI6NjU1MzYsInIiOjgsInAiOjEsImNyZWF0ZWQiOiIyMDI2LTExLTAyVDEwOjAwOjAwWiIsImFwcCI6Imh1Z2lubiJ9BgYGBgYGBgYGBgYG6eR88qXbxcGdRrvzenemYA7rT43578sONlNbuPVLuFUidizVPw0tyGQnsTIZMK8u0FpkbcD02EoS1E51YrYIUItiS2u9",
+  "files": [
+   {
+    "name": "chats.json",
+    "data": "eyJvbGQiOnRydWV9"
+   },
+   {
+    "name": "contacts.json",
+    "data": "W10="
+   }
+  ]
+ },
+ "v1muninn": {
+  "v": 1,
+  "app": "muninn",
+  "file": "TVVOQjEAAABpeyJ2IjoxLCJzYWx0IjoiQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCdz09Iiwicm91bmRzIjoxMDAwMDAsImNyZWF0ZWQiOiIyMDI2LTExLTAyVDEwOjAwOjAwWiIsImFwcCI6Im11bmlubiJ9CAgICAgICAgICAgI3nCa3QQYVEp1wgb2n60NFjFKOu1zKLk7Cz66SiHj2EhlhXRKRdLea/BWZ6vycN0Da+8KVTrtFeWEw9qauynTd+Ae2yB2",
+  "files": [
+   {
+    "name": "chats.json",
+    "data": "eyJvbGQiOnRydWV9"
+   },
+   {
+    "name": "contacts.json",
+    "data": "W10="
+   }
+  ]
+ }
+}

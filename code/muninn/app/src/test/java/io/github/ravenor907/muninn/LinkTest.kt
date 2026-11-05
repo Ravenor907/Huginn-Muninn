@@ -1,0 +1,333 @@
+package io.github.ravenor907.muninn
+
+import io.github.ravenor907.muninn.net.Chat
+import io.github.ravenor907.muninn.net.ChatCrypto
+import io.github.ravenor907.muninn.net.Link
+import io.github.ravenor907.muninn.net.LinkReplay
+import io.github.ravenor907.muninn.net.LinkWire
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** Linking by QR (protocol.md section 15): history pages and merging, the media checks, the LAN-only rule, code refresh. */
+class LinkTest {
+    private fun item(id: String, t: Long, x: String = "hi") = JSONObject().put("id", id).put("x", x).put("me", false).put("t", t)
+
+    @Test
+    fun historyGoesInPagesOfAtMost100OldestFirst() {
+        val items = (0 until 250).map { item("m$it", it.toLong()) }
+        val pages = LinkWire.pages(items)
+        assertEquals(listOf(100, 100, 50), pages.map { it.size })
+        assertEquals("m0", pages[0][0].getString("id"))
+        assertEquals("m249", pages[2].last().getString("id"))
+        // Long messages make smaller pages, never one too big for an envelope: at most 20 KB of UTF-8 JSON.
+        fun bytes(p: List<JSONObject>) = JSONArray(p).toString().toByteArray(Charsets.UTF_8).size
+        assertEquals(20 * 1024, LinkWire.PAGE_BYTES)
+        val long = (0 until 100).map { item("l$it", it.toLong(), "x".repeat(LinkWire.TEXT_MAX)) }
+        val lp = LinkWire.pages(long)
+        assertTrue(lp.size > 1)
+        assertTrue(lp.all { bytes(it) <= LinkWire.PAGE_BYTES })
+        assertEquals(100, lp.sumOf { it.size })
+        // Counted in bytes, not characters: two bytes a character makes twice as many pages.
+        val wide = (0 until 100).map { item("w$it", it.toLong(), "\u00e9".repeat(LinkWire.TEXT_MAX)) }
+        val wp = LinkWire.pages(wide)
+        assertTrue(wp.all { bytes(it) <= LinkWire.PAGE_BYTES && it.size <= 5 })
+        assertTrue(wp.size > lp.size)
+        assertEquals(100, wp.sumOf { it.size })
+        assertTrue(LinkWire.pages(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun pagesMergeByIdAndNeverWipe() {
+        val a = listOf(Link.M("1", "one", false, 1), Link.M("2", "two", true, 2))
+        val b = listOf(Link.M("3", "three", false, 3))
+        val merged = LinkWire.merge(LinkWire.merge(emptyList(), a), b)
+        assertEquals(listOf("1", "2", "3"), merged.map { it.id })
+        // A later copy of a message replaces it; an empty page changes nothing.
+        val again = LinkWire.merge(merged, listOf(Link.M("2", "Message deleted", true, 2)))
+        assertEquals("Message deleted", again.first { it.id == "2" }.text)
+        assertEquals(3, LinkWire.merge(again, emptyList()).size)
+    }
+
+    @Test
+    fun mediaIsCheckedBySha256AndSize() {
+        val b = ByteArray(500_000) { (it * 7).toByte() }
+        val h = LinkWire.sha256Hex(b)
+        assertEquals(64, h.length)
+        assertTrue(LinkWire.verified(b, h, b.size.toLong()))
+        assertFalse(LinkWire.verified(b, h, b.size + 1L))
+        val bad = b.copyOf().also { it[10] = (it[10] + 1).toByte() }
+        assertFalse(LinkWire.verified(bad, h, b.size.toLong()))
+        // Pieces of 192 KB put back together.
+        val parts = LinkWire.chunks(b)
+        assertEquals(LinkWire.pieces(b.size.toLong()), parts.size)
+        assertTrue(parts.all { it.size <= LinkWire.CHUNK })
+        val f = Link.Media(h, b.size.toLong(), "photo", "photo.jpg")
+        val a = LinkWire.Assembly(f)
+        parts.withIndex().reversed().forEach { (i, p) -> assertTrue(a.add(i, parts.size, p)) }
+        assertArrayEquals(b, a.result())
+        // A piece that doesn't belong, or a changed one, never makes a file.
+        assertFalse(LinkWire.Assembly(f).add(0, parts.size + 1, parts[0]))
+        val wrong = LinkWire.Assembly(f)
+        parts.forEachIndexed { i, p -> wrong.add(i, parts.size, if (i == 0) p.copyOf().also { it[0] = (it[0] + 1).toByte() } else p) }
+        assertNull(wrong.result())
+    }
+
+    @Test
+    fun mediaFieldsAreValidated() {
+        val h = "a".repeat(64)
+        assertNotNull(LinkWire.media(JSONObject().put("h", h).put("s", 10).put("k", "photo").put("nm", "photo.jpg")))
+        assertNull(LinkWire.media(JSONObject().put("h", "A".repeat(64)).put("s", 10).put("k", "photo")))
+        assertNull(LinkWire.media(JSONObject().put("h", h).put("s", LinkWire.MAX_MEDIA + 1).put("k", "photo")))
+        assertNull(LinkWire.media(JSONObject().put("h", h).put("s", 10).put("k", "exe")))
+        assertNull(LinkWire.media(null))
+    }
+
+    @Test
+    fun mediaOnlyOnTheHomeWifi() {
+        assertTrue(LinkWire.lanOk("wifi", directOn = false))
+        assertFalse(LinkWire.lanOk("wifi", directOn = true))
+        assertFalse(LinkWire.lanOk("internet", directOn = false))
+        assertFalse(LinkWire.lanOk("close", directOn = false))
+        assertFalse(LinkWire.lanOk("", directOn = false))
+    }
+
+    @Test
+    fun codeIsMadeAnewBeforeItRunsOut() {
+        val t0 = 1_000_000L
+        assertFalse(LinkWire.refreshDue(t0, t0))
+        assertFalse(LinkWire.refreshDue(t0, t0 + Link.TOKEN_MS - LinkWire.REFRESH_EARLY_MS - 1))
+        assertTrue(LinkWire.refreshDue(t0, t0 + Link.TOKEN_MS - LinkWire.REFRESH_EARLY_MS))
+        assertTrue(LinkWire.REFRESH_EARLY_MS in 1 until Link.TOKEN_MS)
+    }
+
+    private class Fake : Link.Host {
+        val key: String = ChatCrypto.b64(ChatCrypto.newKeyPair().public.encoded)
+        val files = HashMap<String, String>()
+        val bytes = HashMap<String, ByteArray>()
+        val sent = java.util.Collections.synchronizedList(ArrayList<String>())
+        val lanSent = java.util.Collections.synchronizedList(ArrayList<String>())
+        @Volatile var lan = true
+        override fun myKey() = key
+        override fun myMailbox() = "ab".repeat(32)
+        override fun myName() = "Tablet"
+        override fun send(d: Link.Device, json: String) { sent += json }
+        override fun chats(): Map<String, Pair<String, List<Chat.Msg>>> = emptyMap()
+        override fun sendAsMe(peer: String, text: String) = false
+        override fun read(name: String) = files[name]
+        override fun write(name: String, text: String) { files[name] = text }
+        override fun notice(text: String) {}
+        override fun onLan(key: String) = lan
+        override fun sendLan(d: Link.Device, json: String): Boolean { if (lan) lanSent += json; return lan }
+        override fun readBytes(name: String) = bytes[name]
+        override fun writeBytes(name: String, b: ByteArray) { bytes[name] = b }
+        override fun delete(name: String) { bytes.remove(name) }
+    }
+
+    private fun waitFor(what: () -> Boolean) {
+        val until = System.currentTimeMillis() + 5_000
+        while (!what() && System.currentTimeMillis() < until) Thread.sleep(20)
+        assertTrue(what())
+    }
+
+    @Test
+    fun aTabletLinksMergesPagesAndTakesMediaOnlyOnTheLan() {
+        val host = Fake()
+        Link.host = host
+        val code = Link.myLinkCode()
+        assertTrue(Link.isCode(code))
+        val token = JSONObject(String(java.util.Base64.getUrlDecoder().decode(code.removePrefix(Link.PREFIX)))).getString("i")
+        // A newer code doesn't end the one already on screen.
+        Link.myLinkCode()
+        val phone = ChatCrypto.b64(ChatCrypto.newKeyPair().public.encoded)
+        assertFalse(Link.receive(phone, JSONObject().put("t", "hello").put("i", "wrong")))
+        assertTrue(Link.receive(phone, JSONObject().put("t", "hello").put("i", token).put("n", "Phone")))
+        assertEquals(phone, Link.phone.value?.key)
+        assertFalse(Link.phone.value!!.ok)
+        // The token is used up.
+        val other = ChatCrypto.b64(ChatCrypto.newKeyPair().public.encoded)
+        assertFalse(Link.receive(other, JSONObject().put("t", "hello").put("i", token)))
+
+        val now = System.currentTimeMillis()
+        fun page(i: Int, n: Int, vararg ids: String) = JSONObject().put("t", "chat").put("peer", "P").put("n", "Astrid").put("d", 7).put("pg", i).put("pgs", n)
+            .put("msgs", JSONArray().apply { ids.forEachIndexed { k, id -> put(item(id, now - 1000 + k + i * 10)) } })
+        // Nothing shows before the emoji were checked.
+        Link.receive(phone, page(0, 1, "a"))
+        assertTrue(Link.mirror.value.isEmpty())
+        Link.confirm(phone)
+        assertTrue(Link.phone.value!!.ok)
+        assertTrue(host.sent.any { JSONObject(it).optString("t") == "sync" })
+        Link.receive(phone, page(0, 2, "a", "b"))
+        Link.receive(phone, page(1, 2, "c"))
+        assertEquals(listOf("a", "b", "c"), Link.mirror.value["P"]!!.msgs.map { it.id })
+
+        // A photo: asked for on the LAN, its pieces taken only from the LAN, kept once its SHA-256 checks out.
+        val photo = ByteArray(300_000) { (it % 251).toByte() }
+        val h = LinkWire.sha256Hex(photo)
+        val m = item("p", now).put("x", "Photo").put("f", JSONObject().put("h", h).put("s", photo.size).put("k", "photo").put("nm", "photo.jpg"))
+        Link.receive(phone, JSONObject().put("t", "msg").put("peer", "P").put("n", "Astrid").put("m", m).put("d", 7))
+        waitFor { host.lanSent.any { JSONObject(it).optString("t") == "get" && JSONObject(it).optString("h") == h } }
+        val parts = LinkWire.chunks(photo)
+        fun part(i: Int) = JSONObject().put("t", "part").put("h", h).put("i", i).put("n", parts.size).put("b", java.util.Base64.getEncoder().encodeToString(parts[i]))
+        parts.indices.forEach { Link.receive(phone, part(it), lan = false) }
+        assertFalse(h in Link.stored.value)
+        parts.indices.forEach { Link.receive(phone, part(it), lan = true) }
+        assertTrue(h in Link.stored.value)
+        assertArrayEquals(photo, Link.mediaBytes(h))
+        assertEquals(4, Link.mirror.value["P"]!!.msgs.size)
+
+        // The same phone linking again with a new code: back to the emoji, its chats kept, the code used up.
+        val again = JSONObject(String(java.util.Base64.getUrlDecoder().decode(Link.myLinkCode().removePrefix(Link.PREFIX)))).getString("i")
+        assertTrue(Link.receive(phone, JSONObject().put("t", "hello").put("i", again).put("n", "Phone")))
+        assertEquals(phone, Link.phone.value?.key)
+        assertFalse(Link.phone.value!!.ok)
+        assertEquals(4, Link.mirror.value["P"]!!.msgs.size)
+        assertFalse(Link.receive(phone, JSONObject().put("t", "hello").put("i", again).put("n", "Phone")))
+        assertFalse(Link.receive(other, JSONObject().put("t", "hello").put("i", again)))
+        Link.confirm(phone)
+        assertTrue(Link.phone.value!!.ok)
+
+        // Unlinking takes the phone's chats and media away.
+        Link.unlink(phone)
+        assertNull(Link.phone.value)
+        assertTrue(Link.mirror.value.isEmpty())
+        assertTrue(Link.stored.value.isEmpty())
+        assertTrue(host.bytes.isEmpty())
+        Link.host = null
+    }
+
+    @Test
+    fun meCarriesThePhonesNameStatusAndCustomStatus() {
+        val m = LinkWire.readMe(JSONObject().put("t", "me").put("n", "  Ravenor  ").put("st", "dnd").put("cs", "At work"))
+        assertNotNull(m)
+        assertEquals("Ravenor", m!!.name)
+        assertEquals("dnd", m.status)
+        assertEquals("At work", m.custom)
+        assertEquals(0, m.pic.size)
+        assertNull(LinkWire.readMe(JSONObject().put("n", "   ")))
+        assertEquals("online", LinkWire.readMe(JSONObject().put("n", "A").put("st", "busy"))!!.status)
+        assertEquals(40, LinkWire.readMe(JSONObject().put("n", "x".repeat(60)))!!.name.length)
+        // Not a 256x256 JPEG: no picture.
+        assertEquals(0, LinkWire.readMe(JSONObject().put("n", "A").put("pic", "bm90IGEganBlZw=="))!!.pic.size)
+    }
+
+    /** Only small live frames use the internet; history, media and a picture wait for the home Wi-Fi (section 15). */
+    @Test
+    fun historyAndPicturesOnlyOnTheHomeWifi() {
+        fun f(t: String) = JSONObject().put("t", t)
+        listOf("msg", "send", "hello", "unlink", "result", "sync", "setme", "me").forEach { assertTrue(it, LinkWire.internetOk(f(it))) }
+        listOf("chat", "get", "part").forEach { assertFalse(it, LinkWire.internetOk(f(it))) }
+        assertFalse(LinkWire.internetOk(f("me").put("pic", "AAAA")))
+        // Cap l2 (15.2): ping, pong and read are small live frames; the caps token and the device name.
+        listOf("ping", "pong", "read").forEach { assertTrue(it, LinkWire.internetOk(f(it))) }
+        assertTrue(LinkWire.saysL2("l1 l2") && !LinkWire.saysL2("l1") && !LinkWire.saysL2("l20"))
+        assertEquals("Raven PC", LinkWire.deviceName("  Raven \n PC "))
+        // Refresh at most once in 10 minutes.
+        assertTrue(LinkWire.syncDue(0L, 1L))
+        assertFalse(LinkWire.syncDue(1000L, 1000L + LinkWire.REFRESH_EVERY_MS - 1))
+        assertTrue(LinkWire.syncDue(1000L, 1000L + LinkWire.REFRESH_EVERY_MS))
+        assertEquals("Confirm the emoji on your phone", LinkWire.errText("confirm"))
+        assertEquals("Not a contact on your phone", LinkWire.errText("not a contact"))
+    }
+    /** Round 14 (15, "Replay"): stamped frames; a replay, an old one, or an unstamped one from a device that stamps is dropped. */
+    @Test
+    fun linkFramesCantBeReplayed() {
+        val t0 = 1_800_000_000_000L
+        val send = org.json.JSONObject(io.github.ravenor907.muninn.net.LinkReplay.stamp("""{"t":"send","text":"hi"}""", t0))
+        assertEquals(32, send.getString("ln").length)
+        assertEquals(t0, send.getLong("lts"))
+        val r = io.github.ravenor907.muninn.net.LinkReplay()
+        assertTrue(r.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))       // an app before 1.36: taken
+        assertTrue(r.take("PC", send, t0 + 1_000))
+        assertFalse(r.take("PC", send, t0 + 2_000))                                    // the same frame again
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"unlink"}"""), t0 + 3_000))  // unstamped, now that it stamps
+        val unlink = org.json.JSONObject(io.github.ravenor907.muninn.net.LinkReplay.stamp("""{"t":"unlink"}""", t0))
+        assertFalse(r.take("PC", unlink, t0 + io.github.ravenor907.muninn.net.LinkReplay.MAX_AGE_MS + 1))
+        val page = org.json.JSONObject(io.github.ravenor907.muninn.net.LinkReplay.stamp("""{"t":"chat"}""", t0))
+        assertTrue(r.take("PC", page, t0) && r.take("PC", page, t0))                 // history pages: time only
+        val kept = io.github.ravenor907.muninn.net.LinkReplay()
+        kept.load(r.save())
+        assertFalse(kept.take("PC", send, t0 + 5_000))
+        assertFalse(kept.take("PC", org.json.JSONObject("""{"t":"send"}"""), t0))
+        assertTrue(send.getString("ln") != unlink.getString("ln"))
+    }
+
+    /**
+     * Round 16 (cap l4): an unstamped frame never switches the guard off, whatever it says. A device that keeps sending
+     * only unstamped frames is found on an older version, to be linked again; it stamps again or is linked again to clear.
+     */
+    @Test
+    fun anOldUnstampedFrameNeverTurnsTheGuardOff() {
+        val t0 = 1_800_000_000_000L
+        val r = LinkReplay()
+        val send = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"hi"}""", t0))
+        assertTrue(r.take("PC", send, t0))
+        // A relay replays a 1.35-era ping, sync or pong (no l4), then a 1.35-era send and unlink: all dropped.
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping"}"""), t0 + 1))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"sync","caps":"l1 l2 l3"}"""), t0 + 2))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"pong"}"""), t0 + 3))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"send","text":"old"}"""), t0 + 4))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"unlink"}"""), t0 + 5))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping","caps":"l1 l2 l3 l4"}"""), t0 + 6))
+        // Its caps are asked for (not again within PROBE_MS).
+        assertTrue(r.probeDue("PC", t0))
+        assertFalse(r.probeDue("PC", t0 + LinkReplay.PROBE_MS - 1))
+        assertTrue(r.probeDue("PC", t0 + LinkReplay.PROBE_MS))
+        // Not found on an older version yet: all of that came within OLDER_MS.
+        assertFalse(r.found("PC"))
+        assertTrue(r.olderOnes().isEmpty())
+        // A stamped frame starts the count again.
+        assertTrue(r.take("PC", org.json.JSONObject(LinkReplay.stamp("""{"t":"ping","caps":"l4"}""", t0 + 1000)), t0 + 1000))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping"}"""), t0 + LinkReplay.OLDER_MS))
+        assertFalse(r.take("PC", org.json.JSONObject("""{"t":"ping"}"""), t0 + LinkReplay.OLDER_MS + 1))
+        assertFalse(r.found("PC"))
+        // A replayed stamped frame (seen before) doesn't count as a stamped one.
+        assertFalse(r.take("PC", send, t0 + LinkReplay.OLDER_MS + 2))
+        assertFalse(r.found("PC"))
+    }
+
+    @Test
+    fun aDeviceBackOnAnOlderVersionIsFoundAndLinkedAgain() {
+        val t0 = 1_800_000_000_000L
+        val ph = LinkReplay()
+        assertTrue(ph.take("phone", org.json.JSONObject(LinkReplay.stamp("""{"t":"pong","caps":"l4"}""", t0)), t0))
+        // It keeps sending only unstamped frames (pongs to the probe, messages): never taken.
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0 + 1_000))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"pong"}"""), t0 + 2 * 60_000L))
+        assertFalse(ph.found("phone"))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"pong"}"""), t0 + 1_000 + LinkReplay.OLDER_MS))
+        // Found, once; and listed until it is linked again.
+        assertTrue(ph.found("phone"))
+        assertFalse(ph.found("phone"))
+        assertEquals(setOf("phone"), ph.olderOnes())
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0 + 2 * LinkReplay.OLDER_MS))
+        // Kept between runs, and still dropping.
+        val kept = LinkReplay()
+        kept.load(ph.save())
+        assertEquals(setOf("phone"), kept.olderOnes())
+        assertFalse(kept.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        // Linking again (its hello carries the one-time token) is taken, and forget starts over.
+        assertTrue(kept.take("phone", org.json.JSONObject("""{"t":"hello","i":"x"}"""), t0))
+        kept.forget("phone")
+        assertTrue(kept.olderOnes().isEmpty())
+        assertTrue(kept.take("phone", org.json.JSONObject("""{"t":"msg"}"""), t0))
+        // Updated again instead: its first stamped frame clears it, and guards it once more.
+        val again = org.json.JSONObject(LinkReplay.stamp("""{"t":"send","text":"x"}""", t0))
+        assertTrue(ph.take("phone", again, t0))
+        assertTrue(ph.olderOnes().isEmpty())
+        assertFalse(ph.take("phone", again, t0 + 1))
+        assertFalse(ph.take("phone", org.json.JSONObject("""{"t":"send"}"""), t0))
+        assertEquals(3L, LinkReplay.OLDER_FRAMES)
+        assertEquals(10 * 60_000L, LinkReplay.OLDER_MS)
+        assertEquals("Your linked phone is on an older version. Link again to keep using it.", LinkWire.olderText(true))
+        assertEquals("Your linked computer is on an older version. Link again to keep using it.", LinkWire.olderText(false))
+        assertTrue(LinkWire.saysL4("l1 l4"))
+        assertFalse(LinkWire.saysL4("l1 l40"))
+    }
+}

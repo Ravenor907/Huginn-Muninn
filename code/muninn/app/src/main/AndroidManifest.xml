@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <!-- Kids' TV: Muninn also installs on Android TV and Google TV, which have no touchscreen and may have no mic. -->
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Video calls use a camera when there is one; phones and TVs without one still install. -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Finding nearby devices: LocalSend's multicast discovery. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Direct connect: Android 13+ asks for nearby devices, never for location. Android 12 and older only let an
+         app start its own hotspot with Location, which Muninn asks for the first time Direct connect is used,
+         never at setup. Muninn never reads where the phone is. -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation" tools:targetApi="33" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="32" />
+    <!-- Close by: Muninn's own Bluetooth link (Ble), advertising only. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- Tap phones together to add each other: one phone hands its code to the other over NFC (net/Tap). -->
+    <uses-permission android:name="android.permission.NFC" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
+    <!-- Received files go to Downloads. Android 10 and newer need no permission for that (MediaStore);
+         Android 8 and 9 ask for this one the first time a transfer is accepted. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <!-- Updating itself: Android asks the person to confirm each install. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Kids' TV: once Muninn is the installer of record (after the first update a parent confirms),
+         Android 12 and newer let its later self-updates go in without asking (TvUpdate). -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Calls: the call keeps running with the screen off (phone-call and microphone foreground service),
+         rings full screen over the lock screen, and routes audio (earpiece, speaker, headset). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Kids' TV: a parent can let Muninn show over other apps, so a call comes up over a show or a game
+         (Android only lets an app start its call screen from the background with this). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- "Send an app": the apps on the phone that open from a launcher (phone or TV), to list them by name. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
+        <!-- Daily Hávamál on a Kids' Device: Read aloud uses the device's text-to-speech engine, if it has one. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".Muninn"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:largeHeap="true"
+        android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.Muninn">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <!-- The TV home screen's row of apps (Kids' TV). -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+            <!-- A scanned contact QR (muninn://add/CODE, from the add page): opens Add someone. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="muninn" android:host="add" />
+            </intent-filter>
+            <!-- The add page's address itself (the contact QR scanned with the camera, or a shared link):
+                 the code is after "#". Android offers Muninn for it, or opens the page, which has an open button. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="ravenor907.github.io" android:pathPrefix="/Huginn-Muninn/add" />
+            </intent-filter>
+            <!-- "Share" from any app sends with Muninn. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <!-- Long-press the icon: "Lock now" (panic lock). -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- Panic lock: the "Lock now" shortcut opens this, it locks Muninn and closes without a screen. -->
+        <activity
+            android:name=".ui.PanicActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="io.github.ravenor907.muninn.LOCK_NOW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Panic lock: the "Lock Muninn" quick settings tile. -->
+        <service
+            android:name=".ui.PanicTile"
+            android:exported="true"
+            android:icon="@drawable/ic_lock"
+            android:label="@string/tile_lock"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Tap phones together: answers only while the Tap to add screen is open, with a code that works once. -->
+        <service
+            android:name=".net.TapCard"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/tap_card" />
+        </service>
+        <service
+            android:name=".net.MessageService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging|dataSync" />
+        <!-- Reply straight from a message notification. -->
+        <receiver
+            android:name=".net.ReplyReceiver"
+            android:exported="false" />
+        <!-- The relay keepalive check while saving battery. -->
+        <receiver
+            android:name=".net.RelayAlarm"
+            android:exported="false" />
+        <receiver
+            android:name=".net.StartAtBoot"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <!-- 1.45: a Kids' TV keeps itself up to date while it sleeps (tv/TvUpdateService). -->
+        <service
+            android:name=".tv.TvUpdateService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging|dataSync" />
+        <service
+            android:name=".net.NearbyService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- Ultra privacy: Tor (tor-android's TorService) runs in its own process, never in Muninn's. Tor can't start
+             twice in one process, so turning Ultra privacy off ends this process and every start gets a fresh one.
+             Muninn talks to Tor only over its control socket and SOCKS port (net/TorRunner). -->
+        <service
+            android:name="org.torproject.jni.TorService"
+            android:exported="false"
+            android:process=":tor"
+            tools:node="merge" />
+
+        <!-- Calls: the call screen (also over the lock screen for an incoming ring), its service and
+             the Decline / Hang up buttons on the call notification. -->
+        <activity
+            android:name=".screens.CallActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity="io.github.ravenor907.muninn.call"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:theme="@style/Theme.Muninn" />
+        <service
+            android:name=".net.call.CallService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone" />
+        <receiver
+            android:name=".net.call.CallActions"
+            android:exported="false" />
+        <!-- Voice rooms and group calls: their screen (over the lock screen for a group call's ring),
+             service and notification buttons, the same way as a 1:1 call's. -->
+        <activity
+            android:name=".screens.RoomActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity="io.github.ravenor907.muninn.room"
+            android:autoRemoveFromRecents="true"
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:theme="@style/Theme.Muninn" />
+        <service
+            android:name=".net.call.RoomService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall|microphone" />
+        <receiver
+            android:name=".net.call.RoomActions"
+            android:exported="false" />
+        <!-- Kids' TV: the answer from Android's installer for an app a parent approved. -->
+        <receiver
+            android:name=".tv.TvAppInstallResult"
+            android:exported="false" />
+        <!-- Kids' TV: the answer from Android's installer when Muninn updates itself. -->
+        <receiver
+            android:name=".tv.TvInstallResult"
+            android:exported="false" />
+        <!-- Phones and tablets: the answer from Android's installer when Muninn updates itself with its own session
+             (Android 14 and newer), which keeps "Full-screen calls" on (update/FullScreenKeep). -->
+        <receiver
+            android:name=".update.PhoneInstallResult"
+            android:exported="false" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

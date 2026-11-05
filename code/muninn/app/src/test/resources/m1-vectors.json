@@ -1,0 +1,549 @@
+{
+ "note": "cap m1, code/shared/docs/protocol.md section 11; written by code/shared/tools/m1_ref.py",
+ "limits": {
+  "text": 2000,
+  "emoji": 16,
+  "id": 64,
+  "liveWindowMs": 60000
+ },
+ "good": {
+  "rich": [
+   {
+    "text": "On my way"
+   },
+   {
+    "text": "Yes!",
+    "re": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60"
+   },
+   {
+    "text": "multi\nline",
+    "re": "abc_DEF-123"
+   },
+   {
+    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "text": "🙂",
+    "re": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "future": 1
+   }
+  ],
+  "mx": [
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "❤️",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "👍🏽",
+    "ts": 0
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "👨‍👩‍👧‍👦",
+    "ts": 1761500130000
+   },
+   {
+    "t": "edit",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "text": "Fixed the typo",
+    "ts": 1761500130000
+   }
+  ],
+  "live": [
+   {
+    "t": "typing",
+    "on": true,
+    "ts": 1761500130000
+   },
+   {
+    "t": "typing",
+    "on": false,
+    "ts": 1761500130000
+   },
+   {
+    "t": "active",
+    "on": true,
+    "ts": 1761500130000
+   }
+  ],
+  "gmsg": [
+   {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "ch": "main",
+    "id": "0123456789abcdef0123456789abcdef",
+    "sv": 1,
+    "text": "hi",
+    "ts": 1761500130000
+   },
+   {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "ch": "main",
+    "id": "0123456789abcdef0123456789abcdef",
+    "sv": 1,
+    "text": "hi",
+    "ts": 1761500130000,
+    "re": "0123456789abcdef0123456789abcdef"
+   }
+  ],
+  "group": [
+   {
+    "t": "react",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "e": "😂",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "e": "",
+    "ts": 1761500130000
+   },
+   {
+    "t": "edit",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "text": "edited",
+    "ts": 1761500130000
+   }
+  ]
+ },
+ "refuse": {
+  "rich": [
+   {},
+   {
+    "text": ""
+   },
+   {
+    "text": "   "
+   },
+   {
+    "text": 5
+   },
+   {
+    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "text": "hi",
+    "re": ""
+   },
+   {
+    "text": "hi",
+    "re": "has space"
+   },
+   {
+    "text": "hi",
+    "re": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "text": "hi",
+    "re": 7
+   }
+  ],
+  "mx": [
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "❤️"
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "❤️",
+    "ts": -1
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "❤️",
+    "ts": 1.5
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "❤️",
+    "ts": "5"
+   },
+   {
+    "t": "react",
+    "msg": "",
+    "e": "❤️",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": " ",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "a\u0007",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "xxxxxxxxxxxxxxxxx",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "ts": 1761500130000
+   },
+   {
+    "t": "edit",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "text": "",
+    "ts": 1761500130000
+   },
+   {
+    "t": "edit",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "ts": 1761500130000
+   },
+   {
+    "t": "pin",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "ts": 1761500130000
+   },
+   {
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "❤️",
+    "ts": 1761500130000
+   }
+  ],
+  "live": [
+   {
+    "t": "typing",
+    "ts": 1761500130000
+   },
+   {
+    "t": "typing",
+    "on": 1,
+    "ts": 1761500130000
+   },
+   {
+    "t": "active",
+    "on": true
+   },
+   {
+    "t": "away",
+    "on": true,
+    "ts": 1761500130000
+   }
+  ],
+  "gmsg": [
+   {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "ch": "main",
+    "id": "0123456789abcdef0123456789abcdef",
+    "sv": 1,
+    "text": "hi",
+    "ts": 1761500130000,
+    "re": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60"
+   },
+   {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "ch": "main",
+    "id": "0123456789abcdef0123456789abcdef",
+    "sv": 1,
+    "text": "hi",
+    "ts": 1761500130000,
+    "re": "0123456789ABCDEF0123456789ABCDEF"
+   }
+  ],
+  "group": [
+   {
+    "t": "react",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "6f1c2a9e-3b4d-4c55-9a1e-0d2c3b4a5f60",
+    "e": "😂",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "g": "",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "e": "😂",
+    "ts": 1761500130000
+   },
+   {
+    "t": "react",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "x",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "e": "😂",
+    "ts": 1761500130000
+   },
+   {
+    "t": "edit",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "text": " ",
+    "ts": 1761500130000
+   },
+   {
+    "t": "edit",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "text": "x",
+    "ts": -5
+   },
+   {
+    "t": "pin",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "id": "0123456789abcdef0123456789abcdef",
+    "msg": "0123456789abcdef0123456789abcdef",
+    "ts": 1761500130000
+   }
+  ]
+ },
+ "reactions": [
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "A": "❤️"
+   }
+  },
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    },
+    {
+     "from": "A",
+     "e": "😂",
+     "ts": 20
+    }
+   ],
+   "result": {
+    "A": "😂"
+   }
+  },
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "😂",
+     "ts": 20
+    },
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "A": "😂"
+   }
+  },
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    },
+    {
+     "from": "A",
+     "e": "",
+     "ts": 11
+    }
+   ],
+   "result": {}
+  },
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "",
+     "ts": 11
+    },
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    }
+   ],
+   "result": {}
+  },
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    },
+    {
+     "from": "A",
+     "e": "👍",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "A": "❤️"
+   }
+  },
+  {
+   "events": [
+    {
+     "from": "A",
+     "e": "❤️",
+     "ts": 10
+    },
+    {
+     "from": "B",
+     "e": "❤️",
+     "ts": 5
+    },
+    {
+     "from": "C",
+     "e": "😮",
+     "ts": 7
+    },
+    {
+     "from": "B",
+     "e": "",
+     "ts": 9
+    }
+   ],
+   "result": {
+    "A": "❤️",
+    "C": "😮"
+   }
+  }
+ ],
+ "edits": [
+  {
+   "author": "A",
+   "text": "helo",
+   "events": [
+    {
+     "from": "A",
+     "text": "hello",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "text": "hello",
+    "edited": true,
+    "ts": 10
+   }
+  },
+  {
+   "author": "A",
+   "text": "helo",
+   "events": [
+    {
+     "from": "B",
+     "text": "hacked",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "text": "helo",
+    "edited": false,
+    "ts": 0
+   }
+  },
+  {
+   "author": "A",
+   "text": "v0",
+   "events": [
+    {
+     "from": "A",
+     "text": "v2",
+     "ts": 20
+    },
+    {
+     "from": "A",
+     "text": "v1",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "text": "v2",
+    "edited": true,
+    "ts": 20
+   }
+  },
+  {
+   "author": "A",
+   "text": "v0",
+   "events": [
+    {
+     "from": "A",
+     "text": "v1",
+     "ts": 10
+    },
+    {
+     "from": "A",
+     "text": "v1b",
+     "ts": 10
+    }
+   ],
+   "result": {
+    "text": "v1",
+    "edited": true,
+    "ts": 10
+   }
+  }
+ ],
+ "fresh": [
+  {
+   "ts": 1761500200000,
+   "now": 1761500200000,
+   "ok": true
+  },
+  {
+   "ts": 1761500140000,
+   "now": 1761500200000,
+   "ok": true
+  },
+  {
+   "ts": 1761500139999,
+   "now": 1761500200000,
+   "ok": false
+  },
+  {
+   "ts": 1761500260000,
+   "now": 1761500200000,
+   "ok": true
+  },
+  {
+   "ts": 1761500260001,
+   "now": 1761500200000,
+   "ok": false
+  }
+ ]
+}

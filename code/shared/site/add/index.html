@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Add on Muninn</title>
+<meta name="description" content="Someone shared their Muninn code. Muninn (Android) and Huginn (.exe or Flatpak, desktop and handheld) are free private messengers.">
+<link rel="icon" href="../raven.png">
+<style>
+  :root { --ground:#101112; --panel:#17191b; --line:#2a2d30; --text:#e4e1da; --soft:#a9a7a1; --accent:#c8cdd3; --fill:#22262a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--text); font:17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:520px; margin:0 auto; padding:28px 16px 40px; }
+  header { display:flex; align-items:center; gap:14px; margin-bottom:22px; }
+  header img { width:56px; height:56px; }
+  h1 { margin:0; font-size:26px; letter-spacing:.18em; font-weight:500; color:var(--accent); }
+  .runes { color:var(--soft); letter-spacing:.3em; font-size:14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:14px; }
+  h2 { margin:0 0 6px; font-size:20px; font-weight:600; }
+  p { margin:6px 0; color:var(--soft); }
+  .btn { display:block; width:100%; text-align:center; padding:15px; margin-top:12px; border-radius:10px; font-size:18px; font-weight:600;
+         text-decoration:none; color:var(--accent); background:var(--fill); border:1px solid var(--accent); cursor:pointer; }
+  .btn.plain { border-color:var(--line); color:var(--text); background:transparent; }
+  ol { margin:8px 0 0; padding-left:22px; color:var(--soft); }
+  code { display:block; word-break:break-all; background:#0b0c0d; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:13px; color:var(--soft); margin-top:8px; }
+  .hidden { display:none; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row .btn { flex:1 1 200px; width:auto; }
+  .small { font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="../raven.png" alt="">
+    <div><h1 id="brand">MUNINN</h1><div class="runes" id="runes">ᛗᚢᚾᛁᚾᚾ</div></div>
+  </header>
+
+  <div class="panel" id="found">
+    <h2 id="title">Someone shared their Muninn code</h2>
+    <p id="invite" class="hidden"></p>
+    <p id="about">Muninn is a free private messenger for Android: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Huginn, does the same on desktops and handhelds (.exe or Flatpak), and the two talk to each other.</p>
+    <a class="btn" id="open" href="#">I have Muninn: open it</a>
+  </div>
+
+  <div class="panel" id="android">
+    <h2>Don't have Muninn yet?</h2>
+    <p>Get it on this phone, then come back to this page.</p>
+    <a class="btn" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk">Download Muninn for Android</a>
+    <ol>
+      <li>Open the downloaded file. If Android asks, allow installs from your browser. Play Protect may say it doesn't know this app: tap <b>More details</b>, then <b>Install anyway</b>. Muninn updates itself after this.</li>
+      <li>Open Muninn and finish setting up.</li>
+      <li>Come back here and tap <b>I have Muninn: open it</b>. <span id="expiry">The code works for an hour from when it was shared.</span></li>
+    </ol>
+    <p class="small">No internet? Ask them to tap <b>Share the app</b> in Muninn: it sends Muninn itself by Quick Share or Bluetooth.</p>
+  </div>
+
+  <div class="panel" id="desktop">
+    <h2>On a computer or handheld?</h2>
+    <p>Huginn is the companion of Muninn, for desktops and handhelds: get it for Windows or as a Flatpak.</p>
+    <ol>
+      <li>Download Huginn below and open it.</li>
+      <li id="deskstep">Open Huginn, then <b>+</b> and <b>Add someone</b>, then paste the code below.</li>
+    </ol>
+    <div class="row">
+      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn-Windows.zip">Huginn for Windows (.zip)</a>
+      <a class="btn plain" href="https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Huginn.flatpak">Huginn for Linux (Flatpak)</a>
+    </div>
+    <p class="small">Windows: unzip it anywhere and run Huginn.exe, nothing to install. Flatpak: open it to install.</p>
+    <p class="small">The first time, Windows may say "Windows protected your PC", because Huginn.exe has no paid code-signing certificate. Choose <b>More info</b>, then <b>Run anyway</b>. To check the download really came from this project, see <a href="https://github.com/Ravenor907/Huginn-Muninn/blob/main/code/shared/docs/releases.md" style="color:var(--accent)">how to check a download</a>.</p>
+    <p class="small">Updating by hand? Keep the <b>data</b> folder beside Huginn.exe: it holds your identity, contacts and chats.</p>
+  </div>
+
+  <div class="panel" id="manual">
+    <h2>Or add them by hand</h2>
+    <p id="byhand">In Muninn or Huginn, tap <b>+</b> and <b>Add someone</b>, and paste this code (or this whole link):</p>
+    <code id="code"></code>
+    <button class="btn plain" id="copy">Copy code</button>
+  </div>
+
+  <div class="panel hidden" id="none">
+    <h2>No code here</h2>
+    <p>This link is missing its code. Ask them to share their Muninn code again.</p>
+  </div>
+</main>
+<script>
+  // The code is after the "#", which browsers never send to the server: only this page sees it.
+  var code = "";
+  try { code = decodeURIComponent((location.hash || "").slice(1)); } catch (e) { code = ""; }  // a broken % escape: no code
+  // A group invite link (MUNINNG1:) opens the app the same way. (A move code never does: it is only taken in the app.)
+  var group = code.indexOf("MUNINNG1:") === 0;
+  if (code.indexOf("MUNINN1:") !== 0 && !group) {
+    document.getElementById("found").classList.add("hidden");
+    document.getElementById("manual").classList.add("hidden");
+    document.getElementById("none").classList.remove("hidden");
+  } else {
+    document.getElementById("code").textContent = code;
+    var body = group ? code : code.slice("MUNINN1:".length);
+    // Android, also when a tablet's browser asks for the desktop site (then it says "Linux x86_64" and no "Android", but
+    // it has a touch screen, which a Linux computer seldom does).
+    var ua = navigator.userAgent || "";
+    var uad = navigator.userAgentData && navigator.userAgentData.platform || "";
+    var android = /Android/i.test(ua) || /Android/i.test(uad)
+      || (/Linux/i.test(ua) && !/CrOS/i.test(ua) && (navigator.maxTouchPoints || 0) > 1 && matchMedia("(pointer: coarse)").matches);
+    var $ = function (id) { return document.getElementById(id); };
+    if (group) {
+      // The invite's own fields (base64url JSON after "MUNINNG1:"): the group's name and when it stops working.
+      var info = {};
+      try {
+        var b = code.slice("MUNINNG1:".length).replace(/[^A-Za-z0-9_-].*$/, "").replace(/-/g, "+").replace(/_/g, "/");
+        info = JSON.parse(decodeURIComponent(escape(atob(b + "===".slice((b.length + 3) % 4)))));
+      } catch (e) { info = {}; }
+      var name = typeof info.gn === "string" && info.gn ? info.gn : "";
+      $("title").textContent = name ? "You're invited to join " + name : "You're invited to join a group";
+      var when = typeof info.x === "number" ? info.x * 1000 : 0;
+      var expiry = !when ? "" : when - Date.now() > 50 * 365 * 86400000 ? "This invite never expires."
+        : when <= Date.now() ? "This invite has expired. Ask for a new one."
+        : "This invite works until " + new Date(when).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) + ".";
+      $("invite").textContent = "It's a group invite for Muninn and Huginn." + (expiry ? " " + expiry : "");
+      $("invite").classList.remove("hidden");
+      $("expiry").textContent = expiry;
+      $("deskstep").innerHTML = "Open Huginn, then <b>+</b> and <b>Join a group</b>, then paste the code below.";
+      $("byhand").innerHTML = "In Muninn or Huginn, tap <b>+</b> and <b>Join a group</b>, and paste this code (or this whole link):";
+    }
+    if (!android) {
+      // A computer or handheld: a Huginn page. No button or panel that only works on Android, and the code to paste right
+      // under the downloads.
+      // The Android download stays, after Huginn's: someone setting up a phone or tablet from here still finds it.
+      $("open").classList.add("hidden");
+      $("android").querySelector("h2").textContent = "Setting up an Android phone or tablet?";
+      $("android").querySelector("p").textContent = "Get Muninn on it: download it there, or download it here and copy it over.";
+      document.title = group ? "Join on Huginn" : "Add on Huginn";
+      $("brand").textContent = "HUGINN";
+      $("runes").textContent = "ᚺᚢᚷᛁᚾᚾ";
+      $("about").textContent = "Huginn is a free private messenger for desktops and handhelds: messages, photos, voice, groups and calls, end-to-end encrypted. There are no accounts and no phone numbers, and nothing is kept on any server. Its twin, Muninn, does the same on Android, and the two talk to each other.";
+      if (!group) $("title").textContent = "Someone shared their code";
+      $("found").parentNode.insertBefore($("desktop"), $("android"));
+      $("desktop").parentNode.insertBefore($("manual"), $("desktop").nextSibling);
+      $("manual").parentNode.insertBefore($("android"), $("manual").nextSibling);
+      $("manual").querySelector("h2").textContent = "The code to paste";
+    }
+    var store = "https://github.com/Ravenor907/Huginn-Muninn/releases/latest/download/Muninn.apk";
+    document.getElementById("open").href = android
+      ? "intent://add/" + encodeURIComponent(body) + "#Intent;scheme=muninn;package=io.github.ravenor907.muninn;S.browser_fallback_url=" + encodeURIComponent(store) + ";end"
+      : "muninn://add/" + body;
+    document.getElementById("copy").onclick = function () {
+      var b = this;
+      (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(
+        function () { b.textContent = "Copied"; }, function () { b.textContent = "Select the code above and copy it"; });
+    };
+  }
+</script>
+</body>
+</html>

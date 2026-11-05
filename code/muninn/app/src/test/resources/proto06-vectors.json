@@ -1,0 +1,1735 @@
+{
+  "about": "Huginn/Muninn test vectors (code/shared/docs/protocol.md), made by code/shared/tools/proto06_ref.py. Static keys A and B are those of chat-vectors.json; C is the P-256 key with private value 0x33 repeated 32 times, TV 0x44 repeated 32 times. Call ephemeral keys: offerer (A) 0x3001, answerer (B) 0x4001. Signatures here are RFC 6979 (deterministic) so the file never changes; apps may sign with random k and must only verify. 'signed' is the exact UTF-8 text that is signed (domain line, newline, canonical JSON without sig). 'hash' is SHA-256 of the canonical JSON with sig. Packets and keys are hex. Every 'accept' and 'receive' step must give the same result, in the order listed (receive steps share one receiver per side).",
+  "keys": {
+    "A": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "B": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "C": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+    "TV": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+    "mailboxA": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "mailboxB": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+    "mailboxC": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+  },
+  "domains": {
+    "group": "huginn-muninn group v1",
+    "call": "huginn-muninn call v1",
+    "tvconfig": "huginn-muninn tvconfig v1",
+    "tvdisconnect": "huginn-muninn tvdisconnect v1",
+    "room": "huginn-muninn vroom v1"
+  },
+  "canonical": {
+    "good": [
+      {
+        "value": {
+          "b": 1,
+          "a": [
+            true,
+            false,
+            "x"
+          ],
+          "c": {
+            "z": "",
+            "y": 0
+          }
+        },
+        "canonical": "{\"a\":[true,false,\"x\"],\"b\":1,\"c\":{\"y\":0,\"z\":\"\"}}"
+      },
+      {
+        "value": {
+          "name": "Quote \" and back\\slash",
+          "rune": "ᚺᚢᚷᛁᚾᚾ",
+          "slash": "a/b",
+          "big": 9007199254740991
+        },
+        "canonical": "{\"big\":9007199254740991,\"name\":\"Quote \\\" and back\\\\slash\",\"rune\":\"ᚺᚢᚷᛁᚾᚾ\",\"slash\":\"a/b\"}"
+      }
+    ],
+    "refuse": [
+      "{\"t\":\"line\\nbreak\"}",
+      "{\"n\":-1}",
+      "{\"f\":1.5}",
+      "{\"x\":null}",
+      "{\"n\":9007199254740992}"
+    ]
+  },
+  "group": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "states": {
+      "s1": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            }
+          ],
+          "ts": 1761500000000,
+          "v": 1,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "name": "Family",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEUCIH91BJTmNcK1uCoY3grFwj6J79nqqzRgKLMaQhTIPK0JAiEAg3juS4h3AsAnfEgqjQe32cKgs/0s/u0dLs7yr7e6++g="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500000000,\"v\":1}",
+        "hash": "f1e19baa198e36e362c94e6733c9c06e2d9ff9215848e5c1ccedcf86d3143ec0"
+      },
+      "s2": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500060000,
+          "v": 2,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "name": "Family",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+              "n": "Bear",
+              "p": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+            }
+          ],
+          "sig": "MEUCIDJhz468lqAiyCm7R4gqlkRCgYJrgDhWCEg1OEloln1rAiEAviMzjUgI3eBQCykepufIdY5EkEU7t6AjWBjlm4owirc="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"n\":\"Bear\",\"p\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500060000,\"v\":2}",
+        "hash": "f3a1001de47d68db69bc43c79fc8ea8f540a922915d2fd6262d1829bb9df0c00"
+      },
+      "s3a": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500120000,
+          "v": 3,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "name": "Family Hall",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+              "n": "Bear",
+              "p": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+            }
+          ],
+          "sig": "MEUCIQCuH8zl0TSh2jVro6RJXeqvCp+dKNENeX08fjuWymlh2AIgA0tOpltPSO0K1UjEr3leHEzPYIgf6YO0l4vMnEi9+uU="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"n\":\"Bear\",\"p\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\"}],\"name\":\"Family Hall\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500120000,\"v\":3}",
+        "hash": "5625966cbec5daaaced8d94959acd919c0ac5add2edcd15cda758efde31a46a1"
+      },
+      "s3b": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            },
+            {
+              "id": "sLGys7S1trc",
+              "n": "news",
+              "t": "text"
+            }
+          ],
+          "ts": 1761500121000,
+          "v": 3,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "name": "Family",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+              "n": "Bear",
+              "p": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+            }
+          ],
+          "sig": "MEUCIH4mvh3NJ7FIP9gC1Jbi62OiIzikH2gwMVk/RXxlTEBvAiEA5NpvzH5oH0xiMqkZH9KDyqNiuFYc5DfoK5PTvJn5bUo="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"},{\"id\":\"sLGys7S1trc\",\"n\":\"news\",\"t\":\"text\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"n\":\"Bear\",\"p\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\"}],\"name\":\"Family\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500121000,\"v\":3}",
+        "hash": "b7c64d8683fbee4327248e857c389ee51ea14605e5bb80a4552db13a19c02cf3"
+      },
+      "s4c": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500180000,
+          "v": 4,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+          "name": "Mine now",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+              "n": "Bear",
+              "p": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+            }
+          ],
+          "sig": "MEQCIDX222+SZ+/jO4YvSgpvrIYNPeCqk85o2D0+NwXBKM77AiAxyBxCUJxnq3+j7l7JOA75S5+kyiBcADpNzznc8/FvTg=="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"n\":\"Bear\",\"p\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\"}],\"name\":\"Mine now\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500180000,\"v\":4}",
+        "hash": "aaa62bc98ecf2c6f09156cf63d741ecaf938d6ed1dd31222e812c31a615d00a4"
+      },
+      "s4b": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500240000,
+          "v": 4,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "name": "Family Hall",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEUCIQCURVNMcfyoncdVACOh1gyYLEHrpI4WI+o4huxOryu7FQIgNnh2YEAYWqsLv9hBEecSTeBo4ldDSe78RP9oYixCNoQ="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family Hall\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500240000,\"v\":4}",
+        "hash": "cc86c161ae7dc13ff13ec6e9a4f67be1802dda01d74ac1d3583a706b23fb9906"
+      },
+      "s5b": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500300000,
+          "v": 5,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "name": "Family Hall",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEUCIC+OWaKxDqtCYLl6axfia1Wbt19bmn+2Y64B4wvaCGkrAiEAs2AYg7dgFVrigzF+xi8t/UxFYL6sg6fjpWTgInQ+5K8="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family Hall\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1761500300000,\"v\":5}",
+        "hash": "55a632ce1db5e918085afacc1bf461ca73874a043a715051227fac38fc1bebf7"
+      },
+      "s5a": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500300000,
+          "v": 5,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "name": "Family Hall",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEUCIQCSbXs/VbuWnsWLZPn29AHdA0oavg7iMHBi8RhjIxVrxAIgTEMDSHYjB8Sy5V7mGabVFvCOTt22RRZjEhA1JjafFzE="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"name\":\"Family Hall\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1761500300000,\"v\":5}",
+        "hash": "5cab6dd642ae7194ec7ef1daaee54b58e71da657cb0856081aae2b6cbdcb5a1e"
+      },
+      "tampered_s2": {
+        "state": {
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "channels": [
+            {
+              "id": "main",
+              "n": "general",
+              "t": "text"
+            },
+            {
+              "id": "oKGio6Slpqc",
+              "n": "Hangout",
+              "t": "voice"
+            }
+          ],
+          "ts": 1761500060000,
+          "v": 2,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "name": "Family!",
+          "admins": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "members": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Moose",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Raven",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+              "n": "Bear",
+              "p": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+            }
+          ],
+          "sig": "MEUCIDJhz468lqAiyCm7R4gqlkRCgYJrgDhWCEg1OEloln1rAiEAviMzjUgI3eBQCykepufIdY5EkEU7t6AjWBjlm4owirc="
+        },
+        "signed": "huginn-muninn group v1\n{\"admins\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"channels\":[{\"id\":\"main\",\"n\":\"general\",\"t\":\"text\"},{\"id\":\"oKGio6Slpqc\",\"n\":\"Hangout\",\"t\":\"voice\"}],\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"members\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Moose\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Raven\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"n\":\"Bear\",\"p\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\"}],\"name\":\"Family!\",\"owner\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"ts\":1761500060000,\"v\":2}",
+        "hash": "7a16294b53aca8b07842ebb3d37e18692f20925e74cc4135759ea7ee4ba9ccde"
+      }
+    },
+    "accept": [
+      {
+        "current": null,
+        "new": "s1",
+        "accept": true,
+        "why": "first state, signed by one of its own admins"
+      },
+      {
+        "current": "s1",
+        "new": "s2",
+        "accept": true,
+        "why": "higher version"
+      },
+      {
+        "current": "s2",
+        "new": "s1",
+        "accept": false,
+        "why": "not newer"
+      },
+      {
+        "current": "s1",
+        "new": "tampered_s2",
+        "accept": false,
+        "why": "bad signature"
+      },
+      {
+        "current": "s2",
+        "new": "s3a",
+        "accept": true,
+        "why": "higher version"
+      },
+      {
+        "current": "s2",
+        "new": "s3b",
+        "accept": true,
+        "why": "higher version"
+      },
+      {
+        "current": "s3a",
+        "new": "s3b",
+        "accept": false,
+        "why": "the owner's stands"
+      },
+      {
+        "current": "s3b",
+        "new": "s3a",
+        "accept": true,
+        "why": "same version, signed by the owner"
+      },
+      {
+        "current": "s3a",
+        "new": "s3a",
+        "accept": false,
+        "why": "not newer"
+      },
+      {
+        "current": "s3a",
+        "new": "s4c",
+        "accept": false,
+        "why": "signer is not an admin in the current state"
+      },
+      {
+        "current": "s3a",
+        "new": "s4b",
+        "accept": true,
+        "why": "higher version"
+      },
+      {
+        "current": "s4b",
+        "new": "s5b",
+        "accept": false,
+        "why": "only the owner can hand over ownership"
+      },
+      {
+        "current": "s4b",
+        "new": "s5a",
+        "accept": true,
+        "why": "higher version"
+      },
+      {
+        "current": "s1",
+        "new": "s4b",
+        "accept": false,
+        "why": "signer is not an admin in the current state"
+      }
+    ],
+    "conflict": {
+      "a": "s3a",
+      "b": "s3b",
+      "winner": "s3a",
+      "loser": "s3b",
+      "rule": "same version 3: the lower hash wins; the admin whose change lost re-applies it as v4"
+    },
+    "envelopeIds": [
+      {
+        "gid": "000102030405060708090a0b0c0d0e0f",
+        "to": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+        "id": "000102030405060708090a0b0c0d0e0f-3e0f097e"
+      },
+      {
+        "gid": "000102030405060708090a0b0c0d0e0f",
+        "to": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+        "id": "000102030405060708090a0b0c0d0e0f-36cf2a76"
+      },
+      {
+        "gid": "000102030405060708090a0b0c0d0e0f",
+        "to": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+        "id": "000102030405060708090a0b0c0d0e0f-9b610932"
+      }
+    ]
+  },
+  "call": {
+    "callId": "wMHCw8TFxsfIycrLzM3Ozw",
+    "tag": "8cc7",
+    "offerEphPriv": "0x3001",
+    "answerEphPriv": "0x4001",
+    "offer": {
+      "t": "offer",
+      "call": "wMHCw8TFxsfIycrLzM3Ozw",
+      "eph": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEd3pQRGCuawREiiorDbyUkDDlsmyn4OR9yI7owgyKRaRGsqtEy7KoBJEum6k1xBXg10fg5iGUVsMJVjfjdD4weQ==",
+      "sig": "MEUCIGuxNZ4bEjtPEjOcb1rmcTfj218hQqJYs9SkYVHtEQ7yAiEAp5lMYXFXyWnNW2AAYf1cuP8lByDNcsMOYGKnTeKhbdk="
+    },
+    "offerSigned": "huginn-muninn call v1\n{\"call\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"eph\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEd3pQRGCuawREiiorDbyUkDDlsmyn4OR9yI7owgyKRaRGsqtEy7KoBJEum6k1xBXg10fg5iGUVsMJVjfjdD4weQ==\",\"t\":\"offer\"}",
+    "answer": {
+      "t": "answer",
+      "call": "wMHCw8TFxsfIycrLzM3Ozw",
+      "eph": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoLhrB6q8W0/al4Km3H0046m3BjZarxdvEufNbFxOUoj+XaJWwS0taRC94G/5DXZwTYhQfhut+wWBQvXuAzlNiw==",
+      "sig": "MEUCIQDnSHWzgZU929vjpik13nQgPlK+EYWpNrJ0tm4hvXKiagIgLGUxFekdC4F0YCmZOKncbrIlRK6kbakNtHW8gRmHSXk="
+    },
+    "answerSigned": "huginn-muninn call v1\n{\"call\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"eph\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoLhrB6q8W0/al4Km3H0046m3BjZarxdvEufNbFxOUoj+XaJWwS0taRC94G/5DXZwTYhQfhut+wWBQvXuAzlNiw==\",\"t\":\"answer\"}",
+    "ecdh": "c878877b38dd757322e1471edba06ca7461629d8b6d16f6aa7fc19f75f7e0723",
+    "root": "d2cda119fab8367834351c56ab1faeab94f26803629f1c04c56e93e0b215321e",
+    "epochs": [
+      {
+        "epoch": 0,
+        "chain": "d2cda119fab8367834351c56ab1faeab94f26803629f1c04c56e93e0b215321e",
+        "o2aKey": "d75f1ed20f5747584edf3cd7d6a3c689aa5d2848da72661e918a19b6200f8633",
+        "o2aSalt": "720b114c",
+        "a2oKey": "7841ed2a10106a231455224ec5e4b147a62c5ebf65a9184d235f4b00d874e4c6",
+        "a2oSalt": "8b25b6d3"
+      },
+      {
+        "epoch": 1,
+        "chain": "ccda80e37f349f9ab8d9abe0757968e8df0dd8da665f403643852c06a35d9fbe",
+        "o2aKey": "686beca40742d2adf11a39a01bd7ecb58fa0cc6ae8b4ec89f832e14e1f4515c3",
+        "o2aSalt": "0acc5cc2",
+        "a2oKey": "288eb17ac413b6d0ce8194e4af34f2cad142748ec1b443bb3026c2237c369e85",
+        "a2oSalt": "9d419845"
+      },
+      {
+        "epoch": 2,
+        "chain": "dedf32cab867d3f27fb533f53af1a0c3c573b990e25144cbd345f7d5a1350340",
+        "o2aKey": "709a1543c0c677437939388fcb50b6c397f7120cc180681fcd9e36a14b8fdfb4",
+        "o2aSalt": "dd973766",
+        "a2oKey": "359b314446554b70f993aea1065bf0b57e599975077d44e70c2739cebb48cb74",
+        "a2oSalt": "fdf5be06"
+      }
+    ],
+    "frames": [
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 0,
+        "ts": 0,
+        "payload": "f8000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+        "packet": "81008cc70000000000000000ea24fb3b1a3a2796d75f6645e46cc07bd9b324f9c1890aa736f126c6ccdf53dc0716e34aca2e547c9f8e81e1b37795ff0c45a2ca3b0875f0"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 1,
+        "ts": 20,
+        "payload": "f80708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d",
+        "packet": "81008cc700000001000000142d1127d1f90b12acc4481caf1bad040284651b9d5bf17dcf22693cfc860e24ce81b8f7c8a7f3c9a6ac0b223261c37a1bcc136f28affe2fdb"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 2,
+        "ts": 40,
+        "payload": "f80e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031323334",
+        "packet": "81008cc700000002000000280a9bfddb1f28f19cbda25c54fb6638d5d31b1f701a608381a906f558098ff9ad87b9fe1a011c13dd02cb5a805deb355db9fe0740a079216b"
+      },
+      {
+        "dir": "o2a",
+        "type": 1,
+        "seq": 3,
+        "ts": 50,
+        "payload": "0001020304050607",
+        "packet": "81018cc70000000300000032ff5add0c00ea0dea2ad7060d5519621b4f1f0b00fad47ecf"
+      },
+      {
+        "dir": "a2o",
+        "type": 2,
+        "seq": 0,
+        "ts": 51,
+        "payload": "0001020304050607",
+        "packet": "81028cc70000000000000033793622d8959e686c290558bc3dbf91600078c21b98d39b1f"
+      },
+      {
+        "dir": "a2o",
+        "type": 0,
+        "seq": 1,
+        "ts": 60,
+        "payload": "f83f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465",
+        "packet": "81008cc7000000010000003caf2a94cb9598b6d48e7591af5dbb23b0bbbcfa9478c846b96966e6ec6855ca969d5088f4177aea4e5a8616197d1ba8df9851c191ddb472c8"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 16384,
+        "ts": 327700,
+        "payload": "f815161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b",
+        "packet": "81008cc700004000000500142a51ddcea20ad01ccbd39beb68b81eef288dccf8a3e5446fd02b32c9e070387aee028481e214363691241cf09217045ff7be1bfa7faf8c89"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 16383,
+        "ts": 327680,
+        "payload": "f81c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142",
+        "packet": "81008cc700003fff00050000827a35f70b93756cac8d421dd3721e28e4543bd1a527fa9aa6074b948187f00c04388a41b681d92cfa103138734ec2149314a8ba60e3bf0b"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 70000,
+        "ts": 1400000,
+        "payload": "f8232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40414243444546474849",
+        "packet": "81008cc70001117000155cc0cc3a1ce9a09056830c2e392901a2fdfd6f130af8140a8683c47794a2623b14ad6fb4ceeec114dc49ec6ee21d755e93bccb0b52f12fd5df6b"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 32768,
+        "ts": 655360,
+        "payload": "f82a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50",
+        "packet": "81008cc700008000000a0000a7ec3668d991a0d9bcc0e91cd6fedb9974af0872af3bbf9c8103d72b1fd75f14d1629b0ee3922f6e380e983e12a839a542338c2f63aabfb5"
+      },
+      {
+        "dir": "o2a",
+        "type": 0,
+        "seq": 100,
+        "ts": 2000,
+        "payload": "f83132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051525354555657",
+        "packet": "81008cc700000064000007d038698918af1f7209271cad4def7ffd3c0349ac98ee38cfb3bbfeab6ae076832b6f9aabb94a17713229bdd63832c17d488369b721e545c776"
+      }
+    ],
+    "receive": [
+      {
+        "receiver": "B",
+        "frame": 1,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "B",
+        "frame": 0,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "B",
+        "frame": 1,
+        "packet": null,
+        "result": "duplicate"
+      },
+      {
+        "receiver": "B",
+        "frame": null,
+        "packet": "81008cc700000002000000280a9bfddb1f28f19cbda25c54fb6638d5d31b1f701a608381a906f558098ff9ad87b9fe1a011c13dd02cb5a805deb355db9fe0740a079216a",
+        "result": "not authentic"
+      },
+      {
+        "receiver": "B",
+        "frame": null,
+        "packet": "81008cc700000002000000290a9bfddb1f28f19cbda25c54fb6638d5d31b1f701a608381a906f558098ff9ad87b9fe1a011c13dd02cb5a805deb355db9fe0740a079216b",
+        "result": "not authentic"
+      },
+      {
+        "receiver": "B",
+        "frame": 2,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "B",
+        "frame": 3,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "A",
+        "frame": 4,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "A",
+        "frame": 5,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "A",
+        "frame": 5,
+        "packet": null,
+        "result": "duplicate"
+      },
+      {
+        "receiver": "B",
+        "frame": null,
+        "packet": "810073c70000000000000000ea24fb3b1a3a2796d75f6645e46cc07bd9b324f9c1890aa736f126c6ccdf53dc0716e34aca2e547c9f8e81e1b37795ff0c45a2ca3b0875f0",
+        "result": "other call"
+      },
+      {
+        "receiver": "B",
+        "frame": 6,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "B",
+        "frame": 7,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "B",
+        "frame": 8,
+        "packet": null,
+        "result": "too far ahead"
+      },
+      {
+        "receiver": "B",
+        "frame": 9,
+        "packet": null,
+        "result": "ok"
+      },
+      {
+        "receiver": "B",
+        "frame": 10,
+        "packet": null,
+        "result": "too old"
+      },
+      {
+        "receiver": "B",
+        "frame": 6,
+        "packet": null,
+        "result": "too old"
+      },
+      {
+        "receiver": "B",
+        "frame": 9,
+        "packet": null,
+        "result": "duplicate"
+      }
+    ],
+    "c2": {
+      "vp8": "0726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4",
+      "stream": 0,
+      "frame": 65535,
+      "key": true,
+      "rotation": 90,
+      "fragments": [
+        "0003ffff00030726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e6",
+        "0003ffff01030524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4",
+        "0003ffff0203032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4"
+      ],
+      "report": {
+        "loss": 7,
+        "camera": false,
+        "screen": true,
+        "jitter": 80,
+        "kbps": 812,
+        "rtt": 45,
+        "bytes": "07020050032c002d"
+      },
+      "nack": {
+        "stream": 0,
+        "frame": 65535,
+        "indexes": [
+          1
+        ],
+        "bytes": "00ffff0101"
+      },
+      "packets": [
+        {
+          "dir": "o2a",
+          "type": 3,
+          "seq": 40,
+          "ts": 1000,
+          "payload": "0003ffff00030726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e6",
+          "packet": "81038cc700000028000003e8009cc5053147c6c572ef6233f7dc8e916b4e6ab47e1a878ef85f34eec5b5fdcbdf401efcaeb4bac12453e2d704ce0e7f5992ae261a5b35358dbf617de003c0621a4fbb4ecb900b5a86d2ff14ba00e15dc2c7fc2f11d2a4daba16d4c92395b880996d0e31edd315fdc0c7f359807cb34e34d166d674bd27d2fc382a6fa0c55ac4803bce5f7d69982ab7ec3f20d8b76b4d5ac1a4426604d798469a12dd9666c3f65d784464af69f76e2757c024f071eea4a728e26abe1a3fc0277e5ffa5c927c7bf0d9a12d5810d84af0238c8ec093b4951a6e75729544ec8f897e0156e2ad0ad934aba32f79d5f84593e7ac6cf2656e41dae974e90c1486b45e105a1deb328ceddf98dc762b7399b168bc014662c666270f88665192e2137aad8602da277f637edf10ca783b1ff542f64064ea8671a072bfc73923acceb609b67e181a2fa556b30fc2812ce1d112ec30f371a632b75812b252507005fa12e5ea38b354c633517db05dbee9957a3235da6cc460869fc294d561a9567093481d8fc9bce73b28689ba51fdabfc854ef2e119f2298283ba4c9a9c8a846ced53c4444b0ae03cdef0e967492863ee877bbeb8fbbc8bf48c8ffba4ff775fb16aff6f5342633edb2ccf666ffb32e2d52753ab612697455b9fa809681d6903bf19aefda1916d8fd889d019ee519b20bcb9c776e0d09c029239dc9221d4c133ec9005ca095d54bb84bf249a3e0585b93392a64a26034d0847594c638dbe93b10ffd5163d1a6a73d039e1392fec5910925116cd6b558ed258b19f2b048a2cc2d73ac9e4b8113a51bfc8f8cea5c1867b4ba5423dc0a5aef855e206e5c2850e46b0358ea61ecefa0ea10edacea72d36f604917a9eec81d0417dab270bf86f1928ce4fa5c6084414082aecac9ff32375d85f1fbe19b98a6306dc9cfafb0f9dfd3e72a41c55b72e33b161b0f9468a44d508054a55d9a00ef2fa4221bfa7f691003b37dccad3ae52a6efd1d71d64b75846a9aa2eef90791aa463217609665b4c30403382c8dbbacc9e591d092188e87a832af2067d682cc75feca21db4a8bbdb0e451cd46c60f761d8be549534d838a38669766ea94baa433a63d4233d1afa3a0e7c6bcd8db5cdafbaeb35c61b7d3c18fdab92e12991b12318188f7b5f9dd8d6ee4bd3bb3db430f04a24f572cfb2f7d17b771d97a31cf9c9b61b71161579dd84931ef38f64d1c5"
+        },
+        {
+          "dir": "o2a",
+          "type": 3,
+          "seq": 41,
+          "ts": 1000,
+          "payload": "0003ffff01030524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4",
+          "packet": "81038cc700000029000003e84432145730491edf709d2cd147d7486b26d1eb2f0f6957b196713aa56a8b140a904af584b54959c3327dc838d13afe0a689023f254a4c17af7ca779845ab21ea85e4bd8b4fd694d611d4fb3f6fe7b3863e1727a76897ffa5608efa68b88af4a9a42e780495c1a06b2eddeea32998c0ce93c9d7fb8f6c429ca0583fb59d14c6dcee8e82998130b1e58c062bf6f9aff8df520c628df44edd846f37511314084379aecfe5a53222a5e2e719326b61fa83a67a24b251b2f5a210277a1a5f79840b58e87c7a9269fd9071af4d0c369aaabd58c27617731af2d67572fdd376f4ad6185c4888f86e6cdb9c85767b0a577631f91981e8a437df6737e50e439af588aa39f892e326fd17b39a9717487d0864a90d6cb5e73192bc0fbea2f25aa28ab67d07f99ed93e921a167ed536ddd9bf5aaefb0806b720370d91696b19c9096e58894ee36bc30f88687d34ef9c1e8f28affd542fe07492e62e69f913f5f72456b388240f53002944d81337a767597520218633c787b637436dfdc2d6bc454e4ae9d4a8fa3635a24eb722943d91e9027c4694c294164ee2ef4c8f8692beac33c0c216fd70a50f0034a0cdeaefbeda9ad77ce858fc2527cf6552bb2561307c23ad3a3ce2a3b81c2e9694b8aedac0294ff8fd1e5568102f1068490aa61d36df958becc99623781a871213a7087b15da4c62796eec8f60827382134f1ac62089a192d9dd413a94aff9e106493bfa2debb0240d9dfcbb02d82ddbac42621cd3fdfaab752378c25db2c8c4363642151e26aac5b54b0cb83f06487295a56cbac0de0ab203b2d6ac46520f03b5d93dca6ab28b7be7393bcd2f8a914ae4453c260a6ba9a78c902b95ddc8f7287a8e270643cebc0794511105943b6953c61150a2067d0cd763a3427e27df6b4f5746d78e455e3e17f268d79f8043d44e847636aaa77106d04c963b48318371c55783e4dbbdfc60f98e1e184bce404ac521220e9814f5af50713be1b4f5aefbf8cb699fe17df3be07b226d928fdd09100bb94f4d64405c5ad403501ea46b97e72a586343f65d0198b67df99585e5554891751ba40838cf3d50394bc16f24efdda8c8e4257ddb836a88127c9cef3d3e69f27d26de03120f3548c4d471e171ca9ea7c4d66d0247390fada1847a4540396399ea25e0578d91fcbda7b1fc033211f59822fe96714a30af72df62d7c245669091a74176"
+        },
+        {
+          "dir": "o2a",
+          "type": 3,
+          "seq": 42,
+          "ts": 1000,
+          "payload": "0003ffff0203032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4c3e201203f5e7d9cbbdaf91837567594b3d2f1102f4e6d8cabcae90827466584a3c2e1001f3e5d7c9bbad9f81736557493b2d1f00f2e4d6c8baac9e80726456483a2c1e0ff1e3d5c7b9ab9d8f71635547392b1d0ef0e2d4c6b8aa9c8e70625446382a1c0dffe1d3c5b7a99b8d7f61534537291b0cfee0d2c4b6a89a8c7e60524436281a0bfdefd1c3b5a7998b7d6f51433527190afceed0c2b4a6988a7c6e504234261809fbeddfc1b3a597897b6d5f4133251708faecdec0b2a496887a6c5e4032241607f9ebddcfb1a39587796b5d4f31231506f8eadcceb0a29486786a5c4e30221405f7e9dbcdbfa1938577695b4d3f211304f6e8daccbea0928476685a4",
+          "packet": "81038cc70000002a000003e86645e3289768f3105b841b79a75a4fb1e967dde68d2658e4f9b6985ee9eed265e199b37640bd080533a4c1a8da8f0905e910deb40569685c5c6f855dbd72544ec5b7d9d128a250092888b94e201d996786e9930ffc15543754de8ed77dba03e095bb961301db91da5acefd276e5a8eeaca65ee5e39b1cb1b8c6fc23408f09411dff293721d547acc11ff19129e77d686e9a0345e9b44734eef0b692594f7c69175d6f039090f9838a275005018a7f91378e853ae4b2a3e47746ff53efc4fb9ad786c67cc5f943fd14f86cdc8eed9bcae01b5c623eb21a224dfcbd4dee43350a6e7e58fcea57f2d11f2c5a94e0549d5c21370aa575849de41c219c6c96aa7da9240ef4453aa0d54caaa02790bc01ded9aafc51da59732614717788fce4402e94581dfd6883ed73e66eea6a67c5cf97f1f93baa512e1ddc8f85f3e9be4c5af2ffebb96bea65646d0fdb13f0009b50c7f2576b4284b88d4e866d83b1b34a4af90e7c2910e0b3f47013c080be0b9273ef471e410198c4c8810bef867592ddc3b976e08649c4eb4c35abdaea3359d62f614d8196b61b97de9a54da76b3a001ff75ef9d8003b976c9605d6d6b49b6a768cb298658376ff2576ee123dc2a259833e30dfe6d75a645c878c3f7dd0a7905e93cdaeeed9337205cfd24cd5103949b0a487fcd4b168dfe9e6a152dbcab6c91cfc75d354faef152ebf6ceeb3c0e559b64c78ef3e4b3ef4d19e85b92669d198bfc84527b94a69a0f50311f7c3d83ec2b6d307404998ef1cda4db24ac20fff9634817a5eb76498619f8f7d21c955a9b7a51f44e3dd360ee5a0163e104076e234af7d9eb9674b111b22bed2a1ceefbd0586cae9d1e250def2e7099c87394f42668de6f9028a8a525cf4743f5be99f75d496388b7a1ef0e4699dc47ed6dd436552add0bdc5b9327745d4f5e2a67cef81caaa9bd681c3332492df66f224bfccb769e8cf7f8a6ef7b788a7cde728a922e17d609227653c2bdcb18f9c162c870131a4e20803ad8845b4cd811ad2c9061ee6421ee2f0f401bdc2852cca9510a60bc02890ac7dd2e89b9f85b951ce3432cd0aeb9356defe6fbc5f3ee5bd4b6ed3e3e9b7ee830aea9eae4247301f0571aee65513a7c2c3171886c20020c48af72ffb16db53e71f209b59b5446bca04d51afee06c00600201d6d405df6b791ccf6d6763213997407dacc97ec3c0b2"
+        },
+        {
+          "dir": "a2o",
+          "type": 4,
+          "seq": 50,
+          "ts": 2000,
+          "payload": "07020050032c002d",
+          "packet": "81048cc700000032000007d09cc6e7199cbb0435ffcd0829d6e726d88e60ec100c2c3fd0"
+        },
+        {
+          "dir": "a2o",
+          "type": 6,
+          "seq": 51,
+          "ts": 2010,
+          "payload": "00ffff0101",
+          "packet": "81068cc700000033000007dab4285007298423fa92efc4ae5ac919d8698fd98367"
+        },
+        {
+          "dir": "a2o",
+          "type": 5,
+          "seq": 52,
+          "ts": 2020,
+          "payload": "01",
+          "packet": "81058cc700000034000007e429b5b50518034d3653804a9c088762480a"
+        }
+      ]
+    }
+  },
+  "room": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "voiceRoom": "oKGio6Slpqc",
+    "groupCall": "4OHi4-Tl5ufo6err7O3u7w",
+    "maxPeople": 8,
+    "freshPastMs": 60000,
+    "freshAheadMs": 120000,
+    "presenceTtlMs": 1500000,
+    "messages": {
+      "joinB": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEYCIQDPy1LQ9s4jqG81YQAT/LCn5hDQGyGUPZJgu0gHqrXJawIhAIh3vvfmrRmN7VFFcsD7d7Vq2TbvGsP4mBOyIKsRqVCU"
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinC": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500401000,
+          "sig": "MEUCIC39eYU/Rrc3tsQeI/x26krISRYot7/OZIQG5XBJVgPOAiEA16e1ODcSfNVWGSsHwZgvZNNjyprb8pFIvzJz/WMRSuo="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500401000}"
+      },
+      "leaveB": {
+        "msg": {
+          "t": "vleave",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500405000,
+          "sig": "MEYCIQCgp64rRJfIA6BSFZQpSNFq+Xa47FDkThhpEi7w/5iEqAIhAO7gWj7pld6TW88NorhdGyB9IjDhTN0t8NhTQXJ0lw9K"
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vleave\",\"ts\":1761500405000}"
+      },
+      "joinB2": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500406000,
+          "sig": "MEUCIE8HufNlC2ZY1A8KKSMz4pMz8IZ/+ty4Sb0teQFbqoauAiEAhpyi2F590TJ5y1lD+AYOlgT9A1nm8cGXeSmufQe1aRc="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500406000}"
+      },
+      "ringA": {
+        "msg": {
+          "t": "vring",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "4OHi4-Tl5ufo6err7O3u7w",
+          "ts": 1761500400000,
+          "sig": "MEUCIG5ppCoZL7BM4fs0eamIamZdxni7zyZCa9OzON+0ej6bAiEAzX8MDlVql3VyNU6Fc3VS+DQ2l6pLVX8IWoQGQK1cYDY="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"4OHi4-Tl5ufo6err7O3u7w\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vring\",\"ts\":1761500400000}"
+      },
+      "joinA": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "4OHi4-Tl5ufo6err7O3u7w",
+          "ts": 1761500400000,
+          "sig": "MEUCIQChkERNoL0OsztuU5a5cUN52uNdWr73t6m4cFvLGsL82gIgEH1iSOVSYPfyrWQmR9O1Z+qjcl/xB5Xzb+1gXEogn8o="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"4OHi4-Tl5ufo6err7O3u7w\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "declineB": {
+        "msg": {
+          "t": "vdecline",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "4OHi4-Tl5ufo6err7O3u7w",
+          "ts": 1761500403000,
+          "sig": "MEUCIQDgaIpyU5B8f5Vt3oea9WUjBKkKtd+Jqx1nQkyAxlIV9wIgFDAgzBSdPFDmzf+136z2L0OVg3CRhJ6UpCa2VQGM46w="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"4OHi4-Tl5ufo6err7O3u7w\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vdecline\",\"ts\":1761500403000}"
+      },
+      "fullC": {
+        "msg": {
+          "t": "full",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500402000,
+          "sig": "MEUCIQD+vyAQtZ5hl6P8lYdYhSL4GI+ZzwfgcXRKb2DjmMOPHwIgXz7sI8iMzRmCFIv0e3MnJkgKBI+vxSN9pC0eL0idriM="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"full\",\"ts\":1761500402000}"
+      },
+      "joinBnoRoom": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "kJGSk5SVlpc",
+          "ts": 1761500400000,
+          "sig": "MEUCIFsMIGeFUe1jJO239zMBfYEjewQQRWRUm+8kRUiYpf2ZAiEAt+IQrjX/gBmpWeLZgVISngglN5PdwJ+tShjVP1V+N4k="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"kJGSk5SVlpc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinBmain": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "main",
+          "ts": 1761500400000,
+          "sig": "MEQCIGAwWxl16jk9LC63evHIBUXdJ4GAzMHed+/e2KO90uK5AiBIaBl2ZVfDGBuEUa0a7vH56mng2CPGKJL47F5T6i4RoA=="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"main\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinBold": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761499800000,
+          "sig": "MEUCIFF2xpvQ9v68gRHLC8kGzHpbbRo8Fj4X6Abnq6FC+G4sAiEAhyezToIlPzWjAbcUwH5zSkfrthytATqFktjJwp23rUg="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761499800000}"
+      },
+      "joinBextra": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "n": "x",
+          "sig": "MEUCIA+GeucNU1aeQg1iMHF9zl1HELzE5GtHCh1mOqsfyjTjAiEAyU0KTjn2ixISAybjfFWp0UBVGL2x64aKNj8dwgxiAEo="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"n\":\"x\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "joinBcall": {
+        "msg": {
+          "t": "vjoin",
+          "call": "wMHCw8TFxsfIycrLzM3Ozw",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEUCIBMyf7Wi1slMmThH8WqOz2AnBNpwu1PuJp18TzuzQFI7AiEAxuOlDzEynTrqCl/Zh+D+8km0I8RxK6T7kZDI7xKEtyU="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"wMHCw8TFxsfIycrLzM3Ozw\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      },
+      "waveB": {
+        "msg": {
+          "t": "wave",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEQCIEFq4NyT5i/4lCFntEvJBDsDOrrlCI4KpHsgZjLQurdQAiAQG7ZP1wO4zz9h7rWiFcMnFWv8KkucxKZ7gdE/tuBhwQ=="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"wave\",\"ts\":1761500400000}"
+      },
+      "joinAasB": {
+        "msg": {
+          "t": "vjoin",
+          "call": "-",
+          "g": "AAECAwQFBgcICQoLDA0ODw",
+          "ch": "oKGio6Slpqc",
+          "ts": 1761500400000,
+          "sig": "MEUCIHXURCCp5y4OJgoYEkrN5j0YgKNDm/EfapfSqXoW27usAiEAoJ9mf43mwHAFcvJpWVmt94EKB0MnqVhgHaclhW+aWHE="
+        },
+        "signed": "huginn-muninn vroom v1\n{\"call\":\"-\",\"ch\":\"oKGio6Slpqc\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"t\":\"vjoin\",\"ts\":1761500400000}"
+      }
+    },
+    "accept": [
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400500,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "C",
+        "msg": "joinC",
+        "now": 1761500401500,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "leaveB",
+        "now": 1761500405000,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "B",
+        "from": "A",
+        "msg": "ringA",
+        "now": 1761500400100,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "C",
+        "from": "A",
+        "msg": "ringA",
+        "now": 1761500461000,
+        "result": "stale"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "declineB",
+        "now": 1761500403000,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "B",
+        "from": "C",
+        "msg": "fullC",
+        "now": 1761500402000,
+        "result": "ok"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500279000,
+        "result": "stale"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBold",
+        "now": 1761500400000,
+        "result": "stale"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBnoRoom",
+        "now": 1761500400000,
+        "result": "not a voice room"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBmain",
+        "now": 1761500400000,
+        "result": "malformed: room id"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBextra",
+        "now": 1761500400000,
+        "result": "malformed: fields"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "joinBcall",
+        "now": 1761500400000,
+        "result": "malformed: call"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "B",
+        "msg": "waveB",
+        "now": 1761500400000,
+        "result": "malformed: type"
+      },
+      {
+        "state": "s2",
+        "me": "C",
+        "from": "B",
+        "msg": "joinAasB",
+        "now": 1761500400000,
+        "result": "bad signature"
+      },
+      {
+        "state": "s2",
+        "me": "A",
+        "from": "A",
+        "msg": "joinA",
+        "now": 1761500400000,
+        "result": "from myself"
+      },
+      {
+        "state": "s4b",
+        "me": "A",
+        "from": "C",
+        "msg": "joinC",
+        "now": 1761500401000,
+        "result": "sender not a member"
+      },
+      {
+        "state": "s4b",
+        "me": "C",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400000,
+        "result": "not a member"
+      },
+      {
+        "state": null,
+        "me": "A",
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400000,
+        "result": "unknown group"
+      }
+    ],
+    "presence": [
+      {
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500400400,
+        "changed": true,
+        "in": [
+          "B"
+        ]
+      },
+      {
+        "from": "C",
+        "msg": "joinC",
+        "now": 1761500401200,
+        "changed": true,
+        "in": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "leaveB",
+        "now": 1761500405100,
+        "changed": true,
+        "in": [
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "joinBold",
+        "now": 1761500405200,
+        "changed": false,
+        "in": [
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "joinB",
+        "now": 1761500405300,
+        "changed": false,
+        "in": [
+          "C"
+        ]
+      },
+      {
+        "from": "B",
+        "msg": "joinB2",
+        "now": 1761500406100,
+        "changed": true,
+        "in": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "from": null,
+        "msg": null,
+        "now": 1761501901199,
+        "changed": false,
+        "in": [
+          "B",
+          "C"
+        ]
+      },
+      {
+        "from": null,
+        "msg": null,
+        "now": 1761501901201,
+        "changed": false,
+        "in": [
+          "B"
+        ]
+      },
+      {
+        "from": null,
+        "msg": null,
+        "now": 1761501906101,
+        "changed": false,
+        "in": []
+      }
+    ],
+    "glare": [
+      {
+        "a": "A",
+        "b": "B",
+        "wins": "B"
+      },
+      {
+        "a": "B",
+        "b": "C",
+        "wins": "B"
+      },
+      {
+        "a": "C",
+        "b": "A",
+        "wins": "A"
+      }
+    ]
+  },
+  "tv": {
+    "configs": {
+      "cfg1": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 1,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500000000,
+          "quick": [
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            },
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "09PT09PT09M",
+              "text": "Goodnight ᚺ"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEYCIQDixE6VHPEAR39PpxkzYngEVeNBaZyjB3Twi4yuMfHeaAIhAJiA0mgCG2J9VChogVlUDK/1Ap9ipY8yImrXhC3uXXgc"
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"},{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"09PT09PT09M\",\"text\":\"Goodnight ᚺ\"}],\"ts\":1761500000000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":1}",
+        "hash": "07772a667a6fa2cc9507be7563c359848823d918ec5a14fcfc5ea215b999ad1f"
+      },
+      "cfg2": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 2,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": true,
+          "ts": 1761500100000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEUCIBxWvXuHv5L4sTWkiAek7Cpvn7T28YLbVYfYc0+1jFz4AiEAzIG5Q4dySERdQRxK2JJrKh8WpeZ+B+sE9nzm99kxekM="
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":true,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500100000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":2}",
+        "hash": "c928ab3b61107e326c716b4f04ff47f15e18c4bab0e5882baa65d84f1b9e3535"
+      },
+      "cfg3c": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 3,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ=="
+          ],
+          "dictation": true,
+          "ts": 1761500200000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEQCIGi4H+h2Z0XyNHwT0cftUxFqRoqTUDCSUEmUxmVdkCtvAiBr45f/h49Amt1xdVCRi/JPAaDaclgjYqqTf1gV5A+C7g=="
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\",\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":true,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEUadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0BEFInErC1p8/wgWhUhphKlOaDHtrEbnNg+p2DSnqBoQ==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500200000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":3}",
+        "hash": "c77d16bf6e87d247fa66baf621e8a48171b6e6075ff81f19772b1f6e17573c7a"
+      },
+      "cfg3b": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 3,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500200000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "sig": "MEUCIQCPhRLSod8niUPpq6eOp2VmcZyRnIbgFjWYHvOs0d7RYwIgdgx6wgqaklmw6Y4DOW+IvU44pTCU8Jqliwe20OGvz+s="
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500200000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":3}",
+        "hash": "a06fdfeb35d5a08d7122d6dfbe4cc46d4bb842fc7f1576f9ef5e789967d5689e"
+      },
+      "cfg4": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 4,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500250000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "calls": false,
+          "mic": 80,
+          "sig": "MEUCIGIKNv2uxGd02eQXoyvLrfEseZI7nmVlGis1ff/g9r/fAiEA1A9k7mDRCd+0C+PrAfJHORbZ9Y+ZmiXT2h717Dl+c4g="
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"calls\":false,\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"mic\":80,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500250000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":4}",
+        "hash": "ddceb0637f8837de99a05bd26c5b0b29a200024822c91142fee83b4c6163d2ea"
+      },
+      "cfg5": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 5,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500260000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "calls": false,
+          "mic": 80,
+          "nr": 1,
+          "sig": "MEYCIQCQtZpkfSVY7lDDNOygmHVKKE2OHGkdQhV+kt3uKEbvPAIhAOybw+feZGZJbM4T9QlCoXWpI0e8eC2N1msIPF0qxD5r"
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"calls\":false,\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"mic\":80,\"nr\":1,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500260000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":5}",
+        "hash": "bed5af894cc727d5315ec0c0aa86655ac8dd4292695d8f6759f75f11b5d54aa1"
+      },
+      "cfg6": {
+        "config": {
+          "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+          "v": 6,
+          "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+          "parents": [
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+          ],
+          "dictation": false,
+          "ts": 1761500270000,
+          "quick": [
+            {
+              "id": "0tLS0tLS0tI",
+              "text": "I love you"
+            },
+            {
+              "id": "0NDQ0NDQ0NA",
+              "text": "I'm hungry"
+            },
+            {
+              "id": "0dHR0dHR0dE",
+              "text": "Can you come here?"
+            }
+          ],
+          "contacts": [
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+              "n": "Grandma",
+              "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            },
+            {
+              "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+              "n": "Dad",
+              "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          ],
+          "calls": false,
+          "mic": 80,
+          "nr": 1,
+          "upd": false,
+          "sig": "MEUCIGqnZ816BW37UqXd82FjEzmBNVfo3Ez3KQjpJzFHthsdAiEAgAgdH2PLn7R8mApAtn+Tu8XDUOPUmyAm3FRZiEFp9RA="
+        },
+        "signed": "huginn-muninn tvconfig v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"calls\":false,\"contacts\":[{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"n\":\"Grandma\",\"p\":\"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2\"},{\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"n\":\"Dad\",\"p\":\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\"}],\"dictation\":false,\"mic\":80,\"nr\":1,\"parents\":[\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\"],\"quick\":[{\"id\":\"0tLS0tLS0tI\",\"text\":\"I love you\"},{\"id\":\"0NDQ0NDQ0NA\",\"text\":\"I'm hungry\"},{\"id\":\"0dHR0dHR0dE\",\"text\":\"Can you come here?\"}],\"ts\":1761500270000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"upd\":false,\"v\":6}",
+        "hash": "9d3aff99662ec1019b94ee6f32b3c55fe5fe287a90d9e39351109978e3c4dbe0"
+      }
+    },
+    "accept": [
+      {
+        "parents": [
+          "A"
+        ],
+        "current": null,
+        "new": "cfg1",
+        "accept": true,
+        "why": "newer"
+      },
+      {
+        "parents": [
+          "A"
+        ],
+        "current": "cfg1",
+        "new": "cfg2",
+        "accept": true,
+        "why": "newer"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg2",
+        "new": "cfg1",
+        "accept": false,
+        "why": "not newer"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg2",
+        "new": "cfg3c",
+        "accept": false,
+        "why": "not from a parent"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg2",
+        "new": "cfg3b",
+        "accept": true,
+        "why": "newer"
+      },
+      {
+        "parents": [
+          "A"
+        ],
+        "current": "cfg1",
+        "new": "cfg2 with dictation changed after signing",
+        "accept": false,
+        "why": "bad signature"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg3b",
+        "new": "cfg4",
+        "accept": true,
+        "why": "newer"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg4",
+        "new": "cfg5",
+        "accept": true,
+        "why": "newer"
+      },
+      {
+        "parents": [
+          "A",
+          "B"
+        ],
+        "current": "cfg5",
+        "new": "cfg6",
+        "accept": true,
+        "why": "newer"
+      }
+    ],
+    "disconnect": {
+      "msg": {
+        "tv": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==",
+        "v": 3,
+        "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+        "ts": 1761500300000,
+        "sig": "MEYCIQCR7gBJkabbQREHAB5tQzyELBkMtF/RVfCsLuYdRmi+sAIhALyxZXyYtnVxIKRnIjQvIZr178WFBoaBV8N7E+PRHR6n"
+      },
+      "signed": "huginn-muninn tvdisconnect v1\n{\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1761500300000,\"tv\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzaJDay9fJqWu3Sh7iiz0tdbcuCaIO8lz45v2KnwNQ0OFL7Y1GgqNNg1OL3/W5bommZm7A21dF0C+hIQBy33Wg==\",\"v\":3}",
+      "acceptWhenCurrentV": 3,
+      "refuseWhenCurrentV": 4
+    }
+  },
+  "pairKeyAB": "07343d990063d66b6b715b464ada7da04da14a35b4621719dae8edcca2958eef"
+}

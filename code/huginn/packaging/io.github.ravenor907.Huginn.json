@@ -1,0 +1,147 @@
+{
+    "id": "io.github.ravenor907.Huginn",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.10",
+    "sdk": "org.kde.Sdk",
+    "command": "huginn",
+    "finish-args": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--device=all",
+        "--filesystem=xdg-download",
+        "--filesystem=xdg-documents",
+        "--filesystem=xdg-pictures",
+        "--filesystem=xdg-videos:ro",
+        "--filesystem=xdg-music:ro",
+        "--system-talk-name=org.freedesktop.NetworkManager",
+        "--talk-name=org.freedesktop.Flatpak",
+        "--talk-name=org.freedesktop.ScreenSaver",
+        "--talk-name=org.freedesktop.Notifications",
+        "--filesystem=xdg-run/speech-dispatcher:ro",
+        "--socket=pulseaudio",
+        "--system-talk-name=org.bluez",
+        "--system-talk-name=org.freedesktop.UPower",
+        "--env=BLUETOOTH_FORCE_DBUS_LE_VERSION=5.64.0"
+    ],
+    "cleanup": [
+        "/include",
+        "/lib/cmake",
+        "/lib/pkgconfig",
+        "/share/doc",
+        "/share/man",
+        "*.a",
+        "*.la"
+    ],
+    "modules": [
+        {
+            "name": "sherpa-onnx",
+            "buildsystem": "simple",
+            "build-commands": [
+                "mkdir -p /app/lib",
+                "install -Dm755 lib/libsherpa-onnx-c-api.so /app/lib/libsherpa-onnx-c-api.so",
+                "install -Dm644 lib/libonnxruntime.so /app/lib/libonnxruntime.so"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-shared-lib.tar.bz2",
+                    "sha256": "3892d184be41027e18165e67f549cd4e4cdd8dcd73ac5579e97afd55e14e30b6"
+                }
+            ]
+        },
+        {
+            "name": "libevent",
+            "buildsystem": "autotools",
+            "config-opts": [
+                "--disable-static",
+                "--disable-openssl",
+                "--disable-samples",
+                "--disable-libevent-regress"
+            ],
+            "cleanup": [
+                "/bin"
+            ],
+            "post-install": [
+                "install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/libevent/LICENSE"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz",
+                    "sha256": "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"
+                }
+            ]
+        },
+        {
+            "name": "tor",
+            "buildsystem": "autotools",
+            "config-opts": [
+                "--disable-asciidoc",
+                "--disable-manpage",
+                "--disable-html-manual",
+                "--disable-unittests",
+                "--disable-module-relay"
+            ],
+            "cleanup": [
+                "/bin/tor-gencert",
+                "/bin/tor-resolve",
+                "/bin/torify",
+                "/bin/tor-print-ed-signing-cert",
+                "/etc/tor",
+                "/share/tor"
+            ],
+            "post-install": [
+                "install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/tor/LICENSE"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://dist.torproject.org/tor-0.4.9.15.tar.gz",
+                    "mirror-urls": [
+                        "https://archive.torproject.org/tor-package-archive/tor-0.4.9.15.tar.gz"
+                    ],
+                    "sha256": "1911f5b216a6814ed143a08bbcff1c6dc96d2ca3b505df9a21876080a92963f3"
+                }
+            ]
+        },
+        {
+            "name": "huginn",
+            "buildsystem": "cmake-ninja",
+            "subdir": "huginn",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DHUGINN_VERSION=0.1"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../.."
+                },
+                {
+                    "type": "archive",
+                    "url": "https://freedesktop.org/software/pulseaudio/webrtc-audio-processing/webrtc-audio-processing-1.3.tar.xz",
+                    "sha256": "2365e93e778d7b61b5d6e02d21c47d97222e9c7deff9e1d0838ad6ec2e86f1b9",
+                    "dest": "huginn/third_party/webrtc-audio-processing-1.3"
+                },
+                {
+                    "type": "archive",
+                    "url": "https://github.com/abseil/abseil-cpp/archive/20230125.1.tar.gz",
+                    "sha256": "81311c17599b3712069ded20cca09a62ab0bf2a89dfa16993786c8782b7ed145",
+                    "dest": "huginn/third_party/abseil-cpp-20230125.1"
+                },
+                {
+                    "type": "archive",
+                    "url": "https://github.com/xiph/rnnoise/releases/download/v0.2/rnnoise-0.2.tar.gz",
+                    "sha256": "90fce4b00b9ff24c08dbfe31b82ffd43bae383d85c5535676d28b0a2b11c0d37",
+                    "dest": "huginn/third_party/rnnoise-0.2"
+                }
+            ],
+            "make-args": [
+                "-k",
+                "0"
+            ]
+        }
+    ]
+}

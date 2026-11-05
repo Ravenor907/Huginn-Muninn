@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Long-press Muninn's icon: "Lock now" locks it at once (Settings > Panic lock). -->
+    <shortcut
+        android:shortcutId="lock_now"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_lock"
+        android:shortcutShortLabel="@string/shortcut_lock_short"
+        android:shortcutLongLabel="@string/shortcut_lock_long">
+        <intent
+            android:action="io.github.ravenor907.muninn.LOCK_NOW"
+            android:targetPackage="io.github.ravenor907.muninn"
+            android:targetClass="io.github.ravenor907.muninn.ui.PanicActivity" />
+    </shortcut>
+</shortcuts>

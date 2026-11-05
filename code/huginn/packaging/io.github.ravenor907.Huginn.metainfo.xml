@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ravenor907.Huginn</id>
+  <name>Huginn</name>
+  <summary>Private chat and file sharing, built for a controller</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.ravenor907">
+    <name>Ravenor907</name>
+  </developer>
+  <description>
+    <p>Huginn is an end-to-end encrypted chat and file sharing app for handhelds and the desktop. Every action works
+    from a controller, text is typed with Steam's own keyboard, and the layout tightens up for a mouse and keyboard.</p>
+    <ul>
+      <li>Private messages with a fresh key for every message, over Bluetooth, Wi-Fi or the internet</li>
+      <li>Photos and voice messages, read receipts, nicknames and key change warnings</li>
+      <li>File sharing with Muninn and the LocalSend app, plus a QR code and PIN page for any phone</li>
+      <li>A chat lock, panic lock and encrypted backups</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.ravenor907.Huginn.desktop</launchable>
+  <url type="homepage">https://github.com/Ravenor907/Huginn-Muninn</url>
+  <url type="bugtracker">https://github.com/Ravenor907/Huginn-Muninn/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1" date="2026-10-26"/>
+  </releases>
+</component>

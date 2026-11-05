@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tap phones together (net/Tap): Muninn's own application id, F0 followed by "MUNINN" and version 1. -->
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/tap_card"
+    android:requireDeviceUnlock="true">
+    <aid-group android:category="other">
+        <aid-filter android:name="F04D554E494E4E01" />
+    </aid-group>
+</host-apdu-service>

@@ -1,0 +1,1063 @@
+{
+ "note": "caps g2 and g3, code/shared/docs/protocol.md sections 26 and 28; written by code/shared/tools/g2_ref.py",
+ "domain": "huginn-muninn gmod v1",
+ "limits": {
+  "timeouts": [
+   600000,
+   3600000,
+   86400000,
+   604800000
+  ],
+  "longest": 604860000,
+  "maxList": 50,
+  "volume": [
+   0,
+   200,
+   100
+  ]
+ },
+ "keys": {
+  "A": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+  "B": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ=="
+ },
+ "state": {
+  "g": "AAECAwQFBgcICQoLDA0ODw",
+  "v": 1,
+  "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+  "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+  "name": "Folk",
+  "admins": [
+   "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+  ],
+  "members": [
+   {
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "n": "Moose",
+    "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+   },
+   {
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "n": "Raven",
+    "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+   }
+  ],
+  "channels": [
+   {
+    "id": "main",
+    "n": "general",
+    "t": "text"
+   }
+  ],
+  "ts": 1761500000000,
+  "sig": "MEUCIQDy5L7lJH9/ONFiA3ZzJiTPc6kcZ4i8cqNtOeYE16KBTgIgJ/INhttQ8qHtRmaujrgcjLYe+k1gwSrQBwqjuR2sql4="
+ },
+ "records": {
+  "ban": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEUCIEZYUD89j0AuuFHUbn+hEgH/w02zqd/YyYVORRqJ61QsAiEAgLpHfcPwyq5/B1uCCdd8kyvb7K551p1jn13SG8LqXUs="
+   },
+   "signed": "huginn-muninn gmod v1\n{\"a\":\"ban\",\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1762000000000}",
+   "verdict": "ok"
+  },
+  "unban": {
+   "record": {
+    "a": "unban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000001000,
+    "sig": "MEQCIBeX++cfQQIPGunjU5JVTxZErnAitDSpr+sID0GPD5/HAiBnSCdBB/EkMBLWhw0VxbpgJ/+unQwyZsanm0FpHrKPOQ=="
+   },
+   "signed": "huginn-muninn gmod v1\n{\"a\":\"unban\",\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1762000001000}",
+   "verdict": "ok"
+  },
+  "timeout": {
+   "record": {
+    "a": "timeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "until": 1762000600000,
+    "sig": "MEYCIQCY53biDINx/NSWXj6pUVdWHKMeNrj5nznXuX6uqvhwVAIhANRlYUg62VT9b9KL94tdK0S9oybBfMxFsUPe+C7y2C55"
+   },
+   "signed": "huginn-muninn gmod v1\n{\"a\":\"timeout\",\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1762000000000,\"until\":1762000600000}",
+   "verdict": "ok"
+  },
+  "week": {
+   "record": {
+    "a": "timeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "until": 1762604800000,
+    "sig": "MEYCIQCboa/aLWrXVsCzEukalJO0wgYcsTSMkAmeBv14zzUFLgIhAOfmndEkQ+9ng5IgcBdou2QlrhMCpQBX6fNsD5Ikmi1G"
+   },
+   "signed": "huginn-muninn gmod v1\n{\"a\":\"timeout\",\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1762000000000,\"until\":1762604800000}",
+   "verdict": "ok"
+  },
+  "untimeout": {
+   "record": {
+    "a": "untimeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000002000,
+    "sig": "MEUCIQChnynesZxb6sfhqmm3W6Jsb96m8zwnr6qDe6bTk7W7rAIgPHUca8ILO3perGoZQ3Je7NlOgkj9DRJ8NZ3/rj+rqtQ="
+   },
+   "signed": "huginn-muninn gmod v1\n{\"a\":\"untimeout\",\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"ts\":1762000002000}",
+   "verdict": "ok"
+  },
+  "remove": {
+   "record": {
+    "a": "remove",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000003000,
+    "m": "0123456789abcdef0123456789abcdef",
+    "sig": "MEQCIFnU4ebeDp8YbEhQF+V31+aO3OzsO4UtW2wg+UAw9KBcAiApzrQoYqJzoWJ6guHahYCquwISU2Za9bsSLl7hXTC+sQ=="
+   },
+   "signed": "huginn-muninn gmod v1\n{\"a\":\"remove\",\"by\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==\",\"g\":\"AAECAwQFBgcICQoLDA0ODw\",\"k\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==\",\"m\":\"0123456789abcdef0123456789abcdef\",\"ts\":1762000003000}",
+   "verdict": "ok"
+  }
+ },
+ "refuse": {
+  "forged": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "ts": 1762000000000,
+    "sig": "MEUCIB7JRppZp42JiwQxV7Bo0irossKlSioy1bgnXDjaYiE2AiEAxYTwfVRRyvpLzIFii/ro0XJ+2+ybukupu2Kvh1v6E6M="
+   },
+   "verdict": "signer is not an admin"
+  },
+  "forgedAsAdmin": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000005,
+    "sig": "MEQCIHz5iAWsQFs0Wn0Jj9jqU1a8VvAcPyAB0DYUu2ckxSgNAiBEq1FNfLEa+F3Xes8CGS73K4W0F3OEx6kH7Q741A9GoQ=="
+   },
+   "verdict": "bad signature"
+  },
+  "tampered": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000001,
+    "sig": "MEUCIEZYUD89j0AuuFHUbn+hEgH/w02zqd/YyYVORRqJ61QsAiEAgLpHfcPwyq5/B1uCCdd8kyvb7K551p1jn13SG8LqXUs="
+   },
+   "verdict": "bad signature"
+  },
+  "wrongDomain": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEUCIQDZQwVAKHjLegZhCCj3nkaqrqdjH8Gy/7s98PIH6arNPgIgdNauR6h68aIoYsLeaoAcUvl+97yKCLXiO9+WH6KUwS8="
+   },
+   "verdict": "bad signature"
+  },
+  "owner": {
+   "record": {
+    "a": "timeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "ts": 1762000000000,
+    "until": 1762000060000,
+    "sig": "MEUCIQDLqkiWqpF3HCDTfYYyND6j0WTRY1HoiqYhG2AumC2IGgIgTc+3hDY9zc3INK1Rv2PCX+qgIcJFBdmrcazWI03Ohvg="
+   },
+   "verdict": "signer is not an admin"
+  },
+  "tooLong": {
+   "record": {
+    "a": "timeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "until": 1762604860001,
+    "sig": "MEUCIAtSJOdMkqj48bbDc9j3j47HcnsTyzfQeJZkOj9EDv+2AiEArReF5/JETbgc6t4lpDCrK03t1p4ZXQQdEIrx0Hgh44E="
+   },
+   "verdict": "malformed: until"
+  },
+  "untilPast": {
+   "record": {
+    "a": "timeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "until": 1762000000000,
+    "sig": "MEYCIQDkL3RiU56gxsLPW5IcuU0BMNi90c9fYeCTh/LiSWAs9QIhAKyIx/IW3OpvYJNThKYATfy+gXgSA8QrAYBh+2Cd/Rg5"
+   },
+   "verdict": "malformed: until"
+  },
+  "untilOnBan": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "until": 1762000060000,
+    "sig": "MEUCIQCi9JC1CHEP8UoWlPKbskNzpxcCHD7FKhSKB+PtNmiwMwIgV6rbKVITwVtVKwVCz/SRLkbxXeXp3orNitzQ8gD6wEk="
+   },
+   "verdict": "malformed: fields"
+  },
+  "noUntil": {
+   "record": {
+    "a": "timeout",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEUCIERyjgzzq4MDiOnrjTPfJCedJEN8oDD2kgJ7WUxyiw8zAiEAxr7OCTlOtlWOJPUGVIKttLjBjFA9Sas3Mo2oTWHWFh8="
+   },
+   "verdict": "malformed: fields"
+  },
+  "kick": {
+   "record": {
+    "a": "kick",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEUCIQC6P79Q0jrR/jijnMYpsYApML+b5yWyejxNHlSGoBeyYgIgVjSebwo2jdaypCstE1DdvfRUvaVoQkJz62VfQGfbBdA="
+   },
+   "verdict": "malformed: action"
+  },
+  "self": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEQCIApgERavYqoL0T5riXWTSECL63HsaTblu9bn8pRbNwiWAiBAKy1D2fi8hls8LR3tds1LCnrgjMKUWh1oP9nRbHjE3w=="
+   },
+   "verdict": "malformed: self"
+  },
+  "otherGroup": {
+   "record": {
+    "a": "ban",
+    "g": "AQIDBAUGBwgJCgsMDQ4PEA",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEYCIQDdQ13BujHODfsGB9Kmj4q95zzJG+hDtL6p/rWB4eNq3gIhAIbrnAPD0Ygkq1ypmQZIL3hCsIW4P9R0TYaomOWLZXKo"
+   },
+   "verdict": "unknown group"
+  },
+  "extra": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "why": "spam",
+    "sig": "MEUCIDP5BogWcgL7INh56KUJ4sqP4+k1nVM4R3I5Bea9T8M/AiEAhvqeItGYoWwAVpZCvtybl3EnkPSnCArLABDJQhbG/d4="
+   },
+   "verdict": "malformed: fields"
+  },
+  "tsText": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": "1762000000000",
+    "sig": "MEYCIQDAyj2dd1tfON29dYXfWSwl57hO/n/aZ2Sijed/DcnBrQIhAJicudCdff7kQaekL5kTuumWEjkdGeKPQuHAUf3vTMDK"
+   },
+   "verdict": "malformed: ts"
+  },
+  "removeNoMsg": {
+   "record": {
+    "a": "remove",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "sig": "MEUCIGm8s2j7SD5u/W3BjMgW7nizVkJsL03c8zwX+vhN4p71AiEAz5OLY6pPyb8S+NLNhQWWq2wlyJHHq/FRj1BNlbjiFns="
+   },
+   "verdict": "malformed: fields"
+  },
+  "removeBadMsg": {
+   "record": {
+    "a": "remove",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "m": "0123456789ABCDEF0123456789ABCDEF",
+    "sig": "MEQCIHYu8n1FsLErkmei9xBCCMB9RLubc1u9agbiNTr0c/z+AiAggZEniOCCDvUnt/NkCHIQZrcF2yOr6Z37m4RyWkATcA=="
+   },
+   "verdict": "malformed: m"
+  },
+  "msgOnBan": {
+   "record": {
+    "a": "ban",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000000000,
+    "m": "0123456789abcdef0123456789abcdef",
+    "sig": "MEYCIQC+KSQOswpUJhs7Ehnu5X6Vn/HzppuFKufYO/NA9Dej5AIhANA1pWU2dkbFFrq+7haS47dlHiWO6kuYbQ9Sngg5cXBI"
+   },
+   "verdict": "malformed: fields"
+  },
+  "removeByMember": {
+   "record": {
+    "a": "remove",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "ts": 1762000000000,
+    "m": "0123456789abcdef0123456789abcdef",
+    "sig": "MEYCIQDn9FOgMAzYmZaB+ytQMuD4iz0zXCt8PhdrZTeKX7MZqwIhAIck+SDCDrQ5ZB1N7vTyWH2zpYnsyjbs9XrF28QkCA6Y"
+   },
+   "verdict": "signer is not an admin"
+  },
+  "removeTampered": {
+   "record": {
+    "a": "remove",
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "ts": 1762000003000,
+    "m": "ffffffffffffffffffffffffffffffff",
+    "sig": "MEQCIFnU4ebeDp8YbEhQF+V31+aO3OzsO4UtW2wg+UAw9KBcAiApzrQoYqJzoWJ6guHahYCquwISU2Za9bsSLl7hXTC+sQ=="
+   },
+   "verdict": "bad signature"
+  }
+ },
+ "order": [
+  {
+   "cur": null,
+   "new": "ban",
+   "newer": true
+  },
+  {
+   "cur": "ban",
+   "new": "unban",
+   "newer": true
+  },
+  {
+   "cur": "unban",
+   "new": "ban",
+   "newer": false
+  },
+  {
+   "cur": "timeout",
+   "new": "untimeout",
+   "newer": true
+  },
+  {
+   "cur": "untimeout",
+   "new": "week",
+   "newer": false
+  },
+  {
+   "cur": "timeout",
+   "new": "week",
+   "newer": false
+  }
+ ],
+ "admins": {
+  "state": {
+   "g": "AAECAwQFBgcICQoLDA0ODw",
+   "v": 2,
+   "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+   "name": "Folk",
+   "admins": [
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+   ],
+   "members": [
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "n": "Moose",
+     "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+    },
+    {
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "n": "Raven",
+     "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    }
+   ],
+   "channels": [
+    {
+     "id": "main",
+     "n": "general",
+     "t": "text"
+    }
+   ],
+   "ts": 1761500060000,
+   "sig": "MEUCIQCMMoDl0cUSgNf5EZn/FfdfnKT8g1BfKqUgrbjWJthlMgIgMWqKQ6GUq60N+wiWiQ3WHJOLDZ0uKiKyvZ6sscbRs8g="
+  },
+  "refuse": {
+   "ownerByAdmin": {
+    "record": {
+     "a": "ban",
+     "g": "AAECAwQFBgcICQoLDA0ODw",
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "ts": 1762000000000,
+     "sig": "MEUCIB7JRppZp42JiwQxV7Bo0irossKlSioy1bgnXDjaYiE2AiEAxYTwfVRRyvpLzIFii/ro0XJ+2+ybukupu2Kvh1v6E6M="
+    },
+    "verdict": "the owner"
+   },
+   "byAdmin": {
+    "record": {
+     "a": "untimeout",
+     "g": "AAECAwQFBgcICQoLDA0ODw",
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "ts": 1762000000000,
+     "sig": "MEYCIQC1wvdqxkxJZ/Ah6cFYbk0Viy41+6WslWLmH4iBRm/1OAIhAJuE5dIv8P7PcIlPayXI07OchMHYIZXFgHQSDYXVyImn"
+    },
+    "verdict": "the owner"
+   },
+   "removeOwnersByAdmin": {
+    "record": {
+     "a": "remove",
+     "g": "AAECAwQFBgcICQoLDA0ODw",
+     "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+     "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+     "ts": 1762000000000,
+     "m": "0123456789abcdef0123456789abcdef",
+     "sig": "MEYCIQDn9FOgMAzYmZaB+ytQMuD4iz0zXCt8PhdrZTeKX7MZqwIhAIck+SDCDrQ5ZB1N7vTyWH2zpYnsyjbs9XrF28QkCA6Y"
+    },
+    "verdict": "the owner"
+   }
+  }
+ },
+ "active": [
+  {
+   "record": "ban",
+   "now": 1762000000000,
+   "banned": true,
+   "timedOut": false
+  },
+  {
+   "record": "unban",
+   "now": 1762000000000,
+   "banned": false,
+   "timedOut": false
+  },
+  {
+   "record": "timeout",
+   "now": 1762000000000,
+   "banned": false,
+   "timedOut": true
+  },
+  {
+   "record": "timeout",
+   "now": 1762000599999,
+   "banned": false,
+   "timedOut": true
+  },
+  {
+   "record": "timeout",
+   "now": 1762000600000,
+   "banned": false,
+   "timedOut": false
+  },
+  {
+   "record": "week",
+   "now": 1762604799999,
+   "banned": false,
+   "timedOut": true
+  },
+  {
+   "record": "week",
+   "now": 1762604800000,
+   "banned": false,
+   "timedOut": false
+  },
+  {
+   "record": "untimeout",
+   "now": 1762000000000,
+   "banned": false,
+   "timedOut": false
+  },
+  {
+   "record": "remove",
+   "now": 1762000000000,
+   "banned": false,
+   "timedOut": false
+  }
+ ],
+ "volume": [
+  {
+   "in": -5,
+   "out": 0
+  },
+  {
+   "in": 0,
+   "out": 0
+  },
+  {
+   "in": 1,
+   "out": 1
+  },
+  {
+   "in": 100,
+   "out": 100
+  },
+  {
+   "in": 150,
+   "out": 150
+  },
+  {
+   "in": 200,
+   "out": 200
+  },
+  {
+   "in": 201,
+   "out": 200
+  },
+  {
+   "in": 1000,
+   "out": 200
+  },
+  {
+   "in": null,
+   "out": 100
+  },
+  {
+   "in": "150",
+   "out": 100
+  },
+  {
+   "in": true,
+   "out": 100
+  },
+  {
+   "in": 99.5,
+   "out": 100
+  }
+ ],
+ "gain": [
+  {
+   "sample": 1000,
+   "pct": 100,
+   "out": 1000
+  },
+  {
+   "sample": 1000,
+   "pct": 0,
+   "out": 0
+  },
+  {
+   "sample": 1000,
+   "pct": 50,
+   "out": 500
+  },
+  {
+   "sample": -1001,
+   "pct": 50,
+   "out": -500
+  },
+  {
+   "sample": 1001,
+   "pct": 50,
+   "out": 500
+  },
+  {
+   "sample": 30000,
+   "pct": 200,
+   "out": 32767
+  },
+  {
+   "sample": -30000,
+   "pct": 200,
+   "out": -32768
+  },
+  {
+   "sample": 32767,
+   "pct": 150,
+   "out": 32767
+  },
+  {
+   "sample": -32768,
+   "pct": 200,
+   "out": -32768
+  },
+  {
+   "sample": 333,
+   "pct": 33,
+   "out": 109
+  },
+  {
+   "sample": -333,
+   "pct": 33,
+   "out": -109
+  },
+  {
+   "sample": 12345,
+   "pct": 250,
+   "out": 24690
+  },
+  {
+   "sample": 12345,
+   "pct": -10,
+   "out": 0
+  }
+ ],
+ "g3": {
+  "adminsPost": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     },
+     {
+      "id": "KCkqKywtLi8",
+      "n": "rules",
+      "t": "text",
+      "ao": true
+     }
+    ],
+    "ts": 1761500120000,
+    "sig": "MEUCIDRUBPzQngccE6m5PC42cPEI1iWkv5XErK8ZAKSyS6WwAiEAlptkXym9jxAo+MfWWlWlAWPAHGwPwmVXkOFxxSMgnFA="
+   },
+   "verdict": ""
+  },
+  "adminsPostOff": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     },
+     {
+      "id": "KCkqKywtLi8",
+      "n": "rules",
+      "t": "text",
+      "ao": false
+     }
+    ],
+    "ts": 1761500120000,
+    "sig": "MEYCIQCNa7kcXGiosfQyz109BFZryehxKpaqTW0AwSQL2weWCAIhAOIgwpF0AWMwm21G7Arrars4lcVU4HwjRJ3OtDM9X+s0"
+   },
+   "verdict": "channel fields"
+  },
+  "adminsPostVoice": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     },
+     {
+      "id": "KCkqKywtLi8",
+      "n": "Voice",
+      "t": "voice",
+      "ao": true
+     }
+    ],
+    "ts": 1761500120000,
+    "sig": "MEQCIELlaTkUoISWMw+MmFKx3CZhB00ps1XSIOduMvlPvZzGAiAIek9C/cmbANnotSmeZtpf4XjRIObl4W3AVzE1XuPm7Q=="
+   },
+   "verdict": "channel fields"
+  },
+  "adminsPostMain": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text",
+      "ao": true
+     }
+    ],
+    "ts": 1761500120000,
+    "sig": "MEUCIENP3nqlG1nOfutUnWDSN8l4ESAl92INYY2POW+q0UyjAiEAvDk4YicU8ezkFJzc4unjbti9aGou5C8doJp48fMhICg="
+   },
+   "verdict": "main channel first"
+  },
+  "short": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "No spam. Be kind.",
+    "sig": "MEUCIQDCur9+YWFx9r2WPQP81qghDcdmd9gJmlbvrIdC9uWV9AIgdeuTDDMq1jJAlM1YpdCbBCc2QCgkYShTMC3z17oHfWI="
+   },
+   "verdict": ""
+  },
+  "longest": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "sig": "MEYCIQC/xa7NF2AmZ/xirxqpR4SJQ9iz337RF0oO/RpqiT6sdQIhAIVfQGcom4TyUQk/TpvIyxY9CmSQUK7Nr0k8MtHSYAeG"
+   },
+   "verdict": ""
+  },
+  "tooLong": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sig": "MEUCIE8mTGmVOS2qn4UbCkRKAV037XPJOeaV4jXpGHg13JvnAiEA1ciy/EmRNWfUm8tZPzZfZqcMPgSXBX5pLnccYbEK5sk="
+   },
+   "verdict": "about"
+  },
+  "newline": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "No spam.\nBe kind.",
+    "sig": "MEUCIQDy5L7lJH9/ONFiA3ZzJiTPc6kcZ4i8cqNtOeYE16KBTgIgJ/INhttQ8qHtRmaujrgcjLYe+k1gwSrQBwqjuR2sql4="
+   },
+   "verdict": "about"
+  },
+  "empty": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "",
+    "sig": "MEUCIQDS9Z3hei0LxCwMw1npXJgMaBXrtrbeWhff7m4fTpE4nAIgVK1dT0zB31pbDEPXAQ6NhOyWEv9bfjQgsDtoYpU9Kzo="
+   },
+   "verdict": "about"
+  },
+  "blank": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "   ",
+    "sig": "MEYCIQDtiRxIIDmWfrxugQbIUqf2BCvpuWeUFOxifhDrmK+8VwIhAIbtyY7TTrQIW59tpPA06KDogzJwN3PCySpjA97sHs/K"
+   },
+   "verdict": "about"
+  },
+  "number": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": 5,
+    "sig": "MEUCIF3Jnk82T+1niuj0Z63ncPwjD8vnZ2LDP2atjSjgwrzMAiEAijos2O3ruFCaQWFYIakAZrAC8vavY+SIoXM3z+gPsPA="
+   },
+   "verdict": "about"
+  },
+  "paragraphs": {
+   "state": {
+    "g": "AAECAwQFBgcICQoLDA0ODw",
+    "v": 3,
+    "owner": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "by": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+    "name": "Folk",
+    "admins": [
+     "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA=="
+    ],
+    "members": [
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8WYFdzBLrq1QXdOkhYnPNQGF6JU3LfYiHqOhN1V+Rz/dtnVfBb1QfDxTP86ckShQ==",
+      "n": "Moose",
+      "p": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+     },
+     {
+      "k": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAhfmF/C2RDkoJ4+WmZ5pojpPLBUr321s32bluAKC1O0ZSn3ry5dxLS3aPKhaqHZaVvRfx1hZllLyiXxlMG5XlA==",
+      "n": "Raven",
+      "p": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     }
+    ],
+    "channels": [
+     {
+      "id": "main",
+      "n": "general",
+      "t": "text"
+     }
+    ],
+    "ts": 1761500120000,
+    "about": "1. No NSFW 2. No slurs 3. Files under 25 MB",
+    "sig": "MEYCIQChkKy5ReqnQuvFW8wtG06XzmEkCD3FnWd+DixVQBbFXwIhAPbMGXN9DZqexrACw0wxELPSKLFWq7ksW5UXs1o9yVIi"
+   },
+   "verdict": ""
+  }
+ }
+}
