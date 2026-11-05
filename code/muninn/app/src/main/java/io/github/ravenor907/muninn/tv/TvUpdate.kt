@@ -27,7 +27,8 @@ import java.util.concurrent.TimeUnit
  * and signature checks), and installs it with a PackageInstaller session that asks for no tap. Android asks once on
  * the TV (the first update, while another app is Muninn's installer of record): the TV then shows "Ask a grown-up:
  * press OK to update". After Muninn has installed itself once, Android 12 and newer let later updates go in without
- * asking. Never during a call. A failed try comes back after 5 min, 15 min, 1 h, 4 h, then every 12 h.
+ * asking. Never during a call or while sound or video plays. 1.45: on a TV it looks about every 30 minutes, screen
+ * on or off ([TvUpdateService]); on Android 11 and older a download waits for the screen to turn on. A failed try comes back after 5 min, 15 min, 1 h, 4 h, then every 12 h.
  * The parents' phones hear how it goes (cap u1, [TvUpd]): on start, every day, and at each step.
  */
 object TvUpdate {
@@ -47,9 +48,12 @@ object TvUpdate {
     @Volatile private var retry: java.util.concurrent.ScheduledFuture<*>? = null
     /** A downloaded update held back while a call is on. */
     @Volatile private var afterCall: File? = null
+    /** 1.45: Android 11 and older, the screen was off: installed when it next turns on (Android asks there). */
+    @Volatile private var afterScreen: File? = null
+    /** 1.45: how often a Kids' TV looks for an update. */
+    const val CHECK_MS = 30 * 60_000L
     private const val ACTION = "io.github.ravenor907.muninn.tv.INSTALLED"
     private const val DAY = 24 * 60 * 60_000L
-    private const val HOUR = 60 * 60_000L
 
     @Volatile private var daily: java.util.concurrent.ScheduledFuture<*>? = null
     @Volatile private var follow: kotlinx.coroutines.Job? = null
@@ -75,6 +79,8 @@ object TvUpdate {
             }
         } catch (_: Exception) {}
         app.updater.installer = { apk -> install(app, apk); true }
+        // 1.45: on a TV, the quiet service and the 30 minute check keep it going while the TV sleeps.
+        if (KidMode.isTv(app)) TvUpdateService.start(app)
         // The Updater's steps (checking, downloading, done, failed) go to the parents' phones (u1).
         follow = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default + kotlinx.coroutines.SupervisorJob()).launch {
             app.updater.state.collect { st -> try { fromUpdater(app, st) } catch (_: Exception) {} }
@@ -88,17 +94,44 @@ object TvUpdate {
                 val p = prefs(app)
                 // k7 (7.12): a parent who turned automatic checks off turns them off here too; otherwise they stay on.
                 val auto = KidTv.state.value.cfg?.upd ?: true
-                if (auto && (first || now - p.getLong("lastDailyCheck", 0L) >= DAY) && app.power.charging()) {
+                if (auto && (first || now - p.getLong("lastDailyCheck", 0L) >= every(app)) && app.power.charging()) {
                     p.edit().putLong("lastDailyCheck", now).apply()
                     checkNow(app)
                 }
+                // Android 11 and older: one held for the screen, and the screen is on now.
+                if (afterScreen != null && screenIsOn(app)) screenOn(app)
                 if (first || now - p.getLong("lastReport", 0L) >= DAY) {
                     p.edit().putLong("lastReport", now).apply()
                     report(app, null)
                 }
                 first = false
             } catch (_: Exception) {}
-        }, 60_000, HOUR, TimeUnit.MILLISECONDS)
+        }, 60_000, 10 * 60_000L, TimeUnit.MILLISECONDS)
+    }
+
+    /** A TV looks every 30 minutes, a tablet in kids' mode once a day. */
+    private fun every(c: Context) = if (KidMode.isTv(c)) CHECK_MS else DAY
+
+    /** 1.45: the 30 minute background check ([TvUpdateWorker]), also with the screen off. */
+    fun periodic(app: Muninn) {
+        if (!started) return
+        if (KidTv.state.value.cfg?.upd == false) return
+        val p = prefs(app)
+        val now = System.currentTimeMillis()
+        if (now - p.getLong("lastDailyCheck", 0L) < CHECK_MS - 2 * 60_000L) return
+        if (app.updater.state.value.busy) return
+        p.edit().putLong("lastDailyCheck", now).apply()
+        checkNow(app)
+    }
+
+    private fun screenIsOn(c: Context): Boolean =
+        try { c.getSystemService(android.os.PowerManager::class.java)?.isInteractive != false } catch (_: Exception) { true }
+
+    /** The screen turned on: an update held for it goes in now (unless a call or something playing holds it again). */
+    fun screenOn(c: Context) {
+        val apk = afterScreen ?: return
+        afterScreen = null
+        if (apk.exists()) install(c, apk)
     }
 
     /**
@@ -110,7 +143,8 @@ object TvUpdate {
         retry?.cancel(false); retry = null
         follow?.cancel(); follow = null
         app.updater.installer = null
-        waiting = null; afterCall = null; fails = 0
+        waiting = null; afterCall = null; afterScreen = null; fails = 0
+        try { TvUpdateService.stop(app) } catch (_: Exception) {}
         remote.value = null
         state.value = State()
         started = false
@@ -192,6 +226,15 @@ object TvUpdate {
         // Round 17: a group call (voice room) too, or one ringing.
         io.github.ravenor907.muninn.net.call.RoomManager.busy || io.github.ravenor907.muninn.net.call.RoomManager.ring.value != null
 
+    /** 1.45: a call (Muninn's or another app's) or sound or video playing: the install waits. */
+    private fun busy(c: Context): Boolean {
+        if (inCall()) return true
+        return try {
+            val am = c.getSystemService(android.media.AudioManager::class.java)
+            am != null && (am.isMusicActive || am.mode == android.media.AudioManager.MODE_IN_CALL || am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION)
+        } catch (_: Exception) { false }
+    }
+
     fun canInstall(c: Context) = Build.VERSION.SDK_INT < 26 || c.packageManager.canRequestPackageInstalls()
 
     /**
@@ -199,13 +242,15 @@ object TvUpdate {
      * (the TV's prompt opens that setting). During a call it waits for the call to end.
      */
     fun install(c: Context, apk: File) {
-        if (inCall()) {
+        // Android 11 and older can't install without a tap: with the screen off, it waits for the screen to turn on.
+        if (Build.VERSION.SDK_INT < 31 && !screenIsOn(c)) { afterScreen = apk; return }
+        if (busy(c)) {
             val first = afterCall == null
             afterCall = apk
             if (first) timer.schedule(object : Runnable {
                 override fun run() {
                     val held = afterCall ?: return
-                    if (inCall()) { timer.schedule(this, 30, TimeUnit.SECONDS); return }
+                    if (busy(c)) { timer.schedule(this, 30, TimeUnit.SECONDS); return }
                     afterCall = null
                     // Round 17 (TV minor 9): a file Android cleared meanwhile is said (no space), never dropped silently.
                     install(c, held)

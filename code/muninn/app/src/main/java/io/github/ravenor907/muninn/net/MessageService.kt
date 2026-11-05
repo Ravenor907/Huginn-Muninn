@@ -117,6 +117,10 @@ class MessageService : Service() {
 class StartAtBoot : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED ||
-            intent.action == io.github.ravenor907.muninn.tv.SafeStart.TRY_AGAIN) MessageService.start(context)
+            intent.action == io.github.ravenor907.muninn.tv.SafeStart.TRY_AGAIN) {
+            MessageService.start(context)
+            // 1.45: a Kids' TV's quiet update service and its 30 minute check.
+            try { io.github.ravenor907.muninn.tv.TvUpdateService.start(context) } catch (_: Exception) {}
+        }
     }
 }

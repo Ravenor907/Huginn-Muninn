@@ -58,7 +58,7 @@ void Chat::sayHello(const QString &key)
         return;
     m_probed.insert(key, nowMs());
     const QJsonObject r{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}, {QStringLiteral("q"), QStringLiteral("caps")}};
-    deliver(key, envelope(QStringLiteral("receipt"), key, QJsonDocument(r).toJson(QJsonDocument::Compact), QUuid::createUuid().toString(QUuid::WithoutBraces)),
+    deliver(key, envelope(QStringLiteral("receipt"), key, QJsonDocument(withApp(key, r)).toJson(QJsonDocument::Compact), QUuid::createUuid().toString(QUuid::WithoutBraces)),
             mailboxOf(key));
 }
 

@@ -1,6 +1,7 @@
 // Message limits (cap d1, shared/docs/protocol.md section 16), the Chat side: every chat deletes messages
 // older than its limit, with their photos and voice; a Family group's limit rides in its signed
 // state, each side of a 1:1 chat says its own in "days" and the shorter one counts. Limits has the rules.
+#include "appver.h"
 #include "chat.h"
 #include "groupwire.h"
 #include "link.h"
@@ -44,6 +45,19 @@ int Chat::chatDays(const QString &key) const
 }
 
 int Chat::groupDays(const QString &g) const { return Limits::groupDays(m_groups.value(g).state); }
+
+QVariantMap Chat::appInfo(const QString &key) const
+{
+    const QString av = AppVer::clean(m_contacts.value(key).value(QStringLiteral("app")).toString());
+    if (av.isEmpty())
+        return {};
+    const QString mine = AppVer::parse(myApp()).version;
+    const bool old = !mine.isEmpty() && AppVer::older(av, mine);
+    const QStringList more = AppVer::missing(m_caps.value(key), QString::fromLatin1(ChatWire::kCaps).split(QLatin1Char(' '), Qt::SkipEmptyParts));
+    return {{QStringLiteral("app"), av}, {QStringLiteral("older"), old},
+            {QStringLiteral("more"), more.isEmpty() ? QString() : QStringLiteral("Their app doesn't have %1 yet").arg(more.join(QStringLiteral(", ")))},
+            {QStringLiteral("ask"), AppVer::askText(av)}};
+}
 
 QVariantMap Chat::limitInfo(const QString &key) const
 {

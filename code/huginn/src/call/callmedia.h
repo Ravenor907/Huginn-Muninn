@@ -99,6 +99,9 @@ public:
     // A free path (Wi-Fi or Direct) answered a ping within the last 750 ms (so it works both ways,
     // not only towards us past a one-way firewall): the relay rests.
     bool freeFresh() const;
+    // 1.45: a voice packet also goes on the relay next to Wi-Fi or Direct: only voice, only with a relay allocation
+    // already there, never in Ultra privacy.
+    static bool dualVoice(bool audio, bool relayReady, bool ultra) { return audio && relayReady && !ultra; }
     // Round 18 (relay.md "On demand"): the relay carried media (not pings or pongs) within the last ms milliseconds.
     bool relayUsedWithin(qint64 ms) const { return m_relayUsedAt >= 0 && now() - m_relayUsedAt < ms; }
     bool gotMedia() const { return m_gotMedia; }

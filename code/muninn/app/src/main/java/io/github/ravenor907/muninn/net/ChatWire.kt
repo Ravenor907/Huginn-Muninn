@@ -26,6 +26,8 @@ data class Contact(
     /** Local only, set on the press-and-hold sheet: no calls or video from them, no files from them, they don't see when I'm active. */
     val noCalls: Boolean = false, val noFiles: Boolean = false, val hideActive: Boolean = false,
     val boundAt: Long = 0,
+    /** 1.45: their app and platform ([AppVer]), "" until their app says. */
+    val app: String = "",
 ) {
     /** Cap s1: only envelopes sealed with their clear fields are taken from them now. */
     fun bound(now: Long = System.currentTimeMillis()) = Proof.strictSince(boundAt, now)
@@ -132,11 +134,12 @@ object ChatWire {
         .put("go", c.groupOnly).put("cp", c.caps.sorted().joinToString(" "))
         .apply { if (c.days > 0) put("dd", c.days); if (c.keep > 0) put("dk", c.keep); if (c.boundAt > 0) put("sb", c.boundAt) }
         .apply { if (c.noCalls) put("xc", true); if (c.noFiles) put("xf", true); if (c.hideActive) put("xa", true) }
+        .apply { if (c.app.isNotEmpty()) put("av", c.app) }
 
     fun contactFromJson(o: JSONObject) = Contact(o.getString("k"), o.getString("n"), o.optString("p").ifEmpty { null }, o.optBoolean("v"),
         o.optString("i").ifEmpty { null }, o.optBoolean("r"), o.optString("nick").ifEmpty { null }, o.optBoolean("kc"),
         o.optBoolean("go"), Proto06.caps(o.optString("cp")), o.optInt("dd"), o.optInt("dk"),
-        o.optBoolean("xc"), o.optBoolean("xf"), o.optBoolean("xa"), boundAt = o.optLong("sb"))
+        o.optBoolean("xc"), o.optBoolean("xf"), o.optBoolean("xa"), boundAt = o.optLong("sb"), app = AppVer.clean(o.optString("av")))
 
     /** Adding [c] again: never downgrade, and a changed key stays unverified until the code is checked. */
     fun merge(old: Contact, c: Contact): Contact {
@@ -148,7 +151,7 @@ object ChatWire {
             days = if (c.days > 0) c.days else old.days, keep = if (c.keep > 0) c.keep else old.keep,
             // What they may do stays as chosen when they're added again.
             noCalls = old.noCalls || c.noCalls, noFiles = old.noFiles || c.noFiles, hideActive = old.hideActive || c.hideActive,
-            boundAt = Proof.firstBound(old.boundAt, c.boundAt))
+            boundAt = Proof.firstBound(old.boundAt, c.boundAt), app = c.app.ifEmpty { old.app })
     }
 
     /**

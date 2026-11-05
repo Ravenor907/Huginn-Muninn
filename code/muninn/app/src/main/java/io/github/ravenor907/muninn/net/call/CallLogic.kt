@@ -360,11 +360,14 @@ object CallLogic {
      * the lowest round trip. The relay counts as one path however many relay paths are known, and each
      * distinct relayed address in [relayTargets] gets the packet once; each Wi-Fi address once too.
      */
-    fun udpSends(targets: List<Path>, relayTargets: List<InetSocketAddress>, max: Int = 3, restRelay: Boolean = false): List<Dest> {
-        val chosen = targets.filter { it.kind != Kind.BLUETOOTH && !(restRelay && it.kind == Kind.RELAY) }
+    fun udpSends(targets: List<Path>, relayTargets: List<InetSocketAddress>, max: Int = 3, restRelay: Boolean = false,
+                 alsoRelay: Boolean = false): List<Dest> {
+        var chosen = targets.filter { it.kind != Kind.BLUETOOTH && !(restRelay && it.kind == Kind.RELAY) }
             .sortedWith(compareBy({ when (it.kind) { Kind.WIFI -> 0; Kind.DIRECT -> 1; else -> 2 } }, { if (it.rttMs < 0) Long.MAX_VALUE else it.rttMs }))
             .distinctBy { if (it.kind == Kind.RELAY) "relay" else "${it.kind}|${it.addr}" }
             .take(max)
+        // 1.45 (voice over two paths): the relay too, past [max], when it's one of the targets.
+        if (alsoRelay && chosen.none { it.kind == Kind.RELAY }) targets.firstOrNull { it.kind == Kind.RELAY }?.let { chosen = chosen + it }
         val out = LinkedHashSet<Dest>()
         for (p in chosen) when (p.kind) {
             Kind.RELAY -> for (a in relayTargets) out += Dest(Kind.RELAY, a)
@@ -373,6 +376,14 @@ object CallLogic {
         }
         return out.toList()
     }
+
+    /**
+     * 1.45, voice over two paths: a voice packet goes on the relay as well as Wi-Fi or Direct, so a lost packet on one
+     * path is covered by its copy on the other. Only voice (video stays on one path), only with a relay allocation
+     * already there, never in Ultra privacy. The receiver's replay window (5.4, by seq) plays the first copy and drops
+     * the other, as it always has for copies on parallel paths, so no protocol change and no peer version is needed.
+     */
+    fun dualVoice(audio: Boolean, relayAllocated: Boolean, ultra: Boolean): Boolean = audio && relayAllocated && !ultra
 
     /**
      * When to ping a path: while punching (the first 15 s, never live yet) every 50 ms for 2 s then every

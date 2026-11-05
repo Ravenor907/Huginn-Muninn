@@ -191,6 +191,11 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <!-- 1.45: a Kids' TV keeps itself up to date while it sleeps (tv/TvUpdateService). -->
+        <service
+            android:name=".tv.TvUpdateService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging|dataSync" />
         <service
             android:name=".net.NearbyService"
             android:exported="false"

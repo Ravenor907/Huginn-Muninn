@@ -46,6 +46,8 @@
 #include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
+#include "appver.h"
+#include <QCoreApplication>
 #include <cstdio>
 #include <algorithm>
 #include <memory>
@@ -380,11 +382,18 @@ void Chat::start()
             for (const QString &k : m_contacts.keys())
                 if (!isBlocked(k)) {
                     m_probed.insert(k, now());
-                    deliver(k, envelope(QStringLiteral("receipt"), k, compact(r), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(k));
+                    deliver(k, envelope(QStringLiteral("receipt"), k, compact(withApp(k, r)), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(k));
                 }
         }
         if (last != QLatin1String(ChatWire::kCaps))
             m_settings.setValue(QStringLiteral("caps/last"), QLatin1String(ChatWire::kCaps));
+    }
+    // 1.45: a new version of this app: every contact hears it (my keys and "av" in an empty receipt).
+    if (m_settings.value(QStringLiteral("app/last")).toString() != myApp()) {
+        m_settings.setValue(QStringLiteral("app/last"), myApp());
+        for (const QString &k : m_contacts.keys())
+            if (!isBlocked(k))
+                sendKeys(k, true);
     }
     // Restored from a backup: its day keys may be older than what contacts hold, so a new one goes at once to every
     // contact whose app says e1 (an empty receipt with "wk" and "wt").
@@ -980,7 +989,7 @@ void Chat::probeCaps(const QString &key)
         return;
     m_probed.insert(key, now());
     const QJsonObject r{{QStringLiteral("ids"), QJsonArray()}, {QStringLiteral("s"), QStringLiteral("delivered")}, {QStringLiteral("q"), QStringLiteral("caps")}};
-    deliver(key, envelope(QStringLiteral("receipt"), key, compact(r), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(key));
+    deliver(key, envelope(QStringLiteral("receipt"), key, compact(withApp(key, r)), QUuid::createUuid().toString(QUuid::WithoutBraces)), mailboxOf(key));
 }
 
 // ------------------------------------------------------------------ calls
@@ -1049,8 +1058,27 @@ void Chat::nudge(const QString &key, const QString &room, const QByteArray &plai
         m_nostr->publish(box, content, Nostr::kLongestDays);
 }
 
+QString Chat::myApp()
+{
+#ifdef Q_OS_WIN
+    const QString plat = QStringLiteral("Windows");
+#else
+    const QString plat = QStringLiteral("Linux");
+#endif
+    return AppVer::make(QStringLiteral("Huginn"), QCoreApplication::applicationVersion(), plat);
+}
+
+// 1.45: my app and platform ("av"), sealed in an empty receipt, to contacts only. An older app ignores it.
+QJsonObject Chat::withApp(const QString &key, QJsonObject o) const
+{
+    if (isContact(key))
+        o.insert(QStringLiteral("av"), myApp());
+    return o;
+}
+
 QJsonObject Chat::withKeys(const QString &key, QJsonObject o) const
 {
+    o = withApp(key, o);
     // Cap b1: the ring key only to contacts, so a group-only peer (or someone blocked) can't ring this device. 1.42 (as
     // Muninn's round 17): never to a contact whose calls are off here.
     if (m_ringKey && isContact(key) && !isBlocked(key) && callsAllowed(key) && hasCap(key, QLatin1String(RingWire::kRingCap))) {
@@ -2146,8 +2174,16 @@ int Chat::receiveEnvelope(const QJsonObject &o, const QString &via)
         commitPeer();
         m_seen.add(fromKey, sentId, now());
         // Round 14 (1.1): an empty receipt (a caps probe or its answer) is made now: its caps replace what was known.
-        if (a.isEmpty())
+        if (a.isEmpty()) {
             m_openedReplaceCaps = true;
+            // 1.45: their app and platform, only from a contact, only in the known form.
+            const QString av = AppVer::clean(r.value(QStringLiteral("av")).toString());
+            if (!av.isEmpty() && isContact(fromKey) && m_contacts.value(fromKey).value(QStringLiteral("app")).toString() != av) {
+                m_contacts[fromKey].insert(QStringLiteral("app"), av);
+                saveContacts();
+                noteChanged();
+            }
+        }
         // A caps probe: answer with an empty receipt, whose envelope carries our caps.
         // Caps b1 and e1: their ring key and newest day key, from a contact or group peer.
         if (m_peerKeys && (isContact(fromKey) || isGroupPeer(fromKey)))

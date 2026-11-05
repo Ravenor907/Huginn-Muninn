@@ -2,6 +2,7 @@
 #include "../modwire.h"
 #include "../busy.h"
 #include "../settings.h"
+#include "../ultraprivacy.h"
 
 #include "audioio.h"
 #include "turnclient.h"
@@ -216,7 +217,10 @@ void CallMedia::sendOn(Path p, const QByteArray &pkt)
 void CallMedia::sendMedia(const QByteArray &pkt, bool video)
 {
     // Free paths first: while Wi-Fi or Direct carries the call, the relay only gets pings (5.8.3).
-    const bool rest = freeFresh();
+    // 1.45, voice over two paths: voice goes on the relay too while it's allocated (never video, never in Ultra
+    // privacy). The receiver's replay window plays the first copy and drops the other (5.4), as for any parallel path.
+    const bool dual = dualVoice(!video, m_turn && m_turn->ready(), UltraPrivacy::on());
+    const bool rest = freeFresh() && !dual;
     for (int i = 0; i < kPaths; ++i) {
         const Path p = Path(i);
         if (!live(p) || (p == Relay && rest) || (p == Ble && video))

@@ -618,13 +618,18 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         // (a caps probe), and its answer and the probe's own caps put both sides right.
         val lastCaps = prefs.getString(LAST_CAPS, "").orEmpty()
         if (Proto06.capsDropped(lastCaps, Proto06.CAPS)) bg {
-            val body = JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps").toString()
+            val body = withApp(c.chatKey, JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps")).toString()
             for (c in contacts.all.value) if (!c.groupOnly && c.chatKey !in id.muted()) try {
                 probed[c.chatKey] = System.currentTimeMillis()
                 deliver(c.chatKey, envelope("receipt", c.chatKey, body, UUID.randomUUID().toString()), c.mailbox)
             } catch (_: Exception) {}
         }
         if (lastCaps != Proto06.CAPS) prefs.edit().putString(LAST_CAPS, Proto06.CAPS).apply()
+        // 1.45: a new version of this app: every contact hears it (my keys and "av" in an empty receipt).
+        if (prefs.getString(LAST_APP, "") != myApp) {
+            prefs.edit().putString(LAST_APP, myApp).apply()
+            bg { try { announceKeys { !it.groupOnly } } catch (_: Exception) {} }
+        }
         // Auto-delete: check every minute for messages past the chosen age, and for contacts 30 days in the trash.
         bg { emptyOldTrash() }
         bg { while (true) { Thread.sleep(60_000); try { prune(); outbox.sweep(); emptyOldTrash(); sweepCache(); seen.save(); wrapKeys.prune()
@@ -882,7 +887,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (now - (probed[peerKey] ?: 0L) < 3_600_000L) return
         probed[peerKey] = now
         bg {
-            val body = JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps").toString()
+            val body = withApp(peerKey, JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps")).toString()
             deliver(peerKey, envelope("receipt", peerKey, body, UUID.randomUUID().toString()), c?.mailbox ?: _met.value[peerKey]?.mailbox)
         }
     }
@@ -1477,7 +1482,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 // its caps replace what was known, so an app gone back to an older release stops being sent what it dropped.
                 if (a.length() == 0) contacts.get(fromKey)?.let { c ->
                     val fresh = Proto06.replacedCaps(c.caps, ChatWire.capsOf(o), o.has("caps"))
-                    if (fresh != c.caps) contacts.set(c.copy(caps = fresh))
+                    // 1.45: their app and platform, only from a contact, only in the known form.
+                    val av = AppVer.clean(r.optString(AppVer.FIELD)).ifEmpty { c.app }
+                    if (fresh != c.caps || av != c.app) contacts.set(c.copy(caps = fresh, app = av))
                 }
                 // Caps b1 and e1: their ring key and newest day key, from a contact or group peer.
                 if (contacts.get(fromKey) != null) peerKeys.take(fromKey, RingWire.announceOf(r, System.currentTimeMillis() / 1000))
@@ -2041,7 +2048,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun sayHello(peerKey: String) {
         probed[peerKey] = System.currentTimeMillis()
         bg {
-            val body = JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps").toString()
+            val body = withApp(peerKey, JSONObject().put("ids", JSONArray()).put("s", "delivered").put("q", "caps")).toString()
             deliver(peerKey, envelope("receipt", peerKey, body, UUID.randomUUID().toString()), contacts.get(peerKey)?.mailbox ?: _met.value[peerKey]?.mailbox)
         }
     }
@@ -2105,12 +2112,26 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         }
     }
 
+    /** 1.45: this app and platform ([AppVer]), "Muninn 1.45 · Android TV". */
+    val myApp: String get() {
+        val v = try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" } catch (_: Exception) { "" }
+        val tv = try { io.github.ravenor907.muninn.tv.KidMode.isTv(context) } catch (_: Exception) { false }
+        return AppVer.make("Muninn", v, if (tv) "Android TV" else "Android phone/tablet")
+    }
+
+    private fun withApp(peerKey: String, o: JSONObject): JSONObject {
+        if (isContact(peerKey)) try { o.put(AppVer.FIELD, myApp) } catch (_: Exception) {}
+        return o
+    }
+
     /**
      * Caps b1 and e1 (section 23): a receipt to an app that says them carries my ring key and ring mailbox ("rk", "rp")
      * and my day key for the relay wrapping ("wk", "wt").
      */
     private fun withKeys(peerKey: String, o: JSONObject): JSONObject {
         val caps = capsOf(peerKey)
+        // 1.45: my app and platform, sealed in, to contacts only. An older app ignores it.
+        if (isContact(peerKey)) try { o.put(AppVer.FIELD, myApp) } catch (_: Exception) {}
         // The ring key only to contacts (never a group peer or someone met close by), and never to one with calls off.
         if (RingWire.RING_CAP in caps && isContact(peerKey) && callsAllowed(peerKey)) ringKey?.let { r -> try { o.put("rk", r.publicKey).put("rp", r.mailbox) } catch (_: Exception) {} }
         // Cap r2 (1.42): with it, the ring tag that is theirs alone, so a locked phone tells callers apart.
@@ -3481,6 +3502,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val PATH = "/api/huginn/v1/message"
         /** Round 14: the caps this app said when it last started (outside the vault), to notice going back to stable. */
         const val LAST_CAPS = "lastCaps"
+        const val LAST_APP = "lastApp"
         /** The chat page with the Labs reports (and what a report's notification opens). */
         const val LABS_PAGE = "labs"
         const val MAX = 2000

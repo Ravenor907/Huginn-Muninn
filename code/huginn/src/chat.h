@@ -451,6 +451,9 @@ public:
     // after: A day". Call history follows it too (main.cpp, on pruned()).
     qint64 keepCutoff(const QString &key) const;
     Q_INVOKABLE QVariantMap limitInfo(const QString &key) const;
+    // 1.45: a contact's app ({app, older, more, ask}); empty until their app said. myApp: "Huginn 1.45 · Linux".
+    Q_INVOKABLE QVariantMap appInfo(const QString &key) const;
+    static QString myApp();
     Q_INVOKABLE void setKeep(const QString &key, int days);
     // A group's {kind, kindName, type, typeName, line, days, older (names whose apps keep everything), choices,
     // links (invite links allowed), unchecked (Family: members whose safety code isn't checked yet)}; admins change it.
@@ -685,6 +688,7 @@ private:
     // never someone blocked) my ring key and mailbox ("rk", "rp"). To a contact or group peer whose app says n2 (never
     // someone blocked): my nudge key and nudge mailbox ("nk", "np").
     QJsonObject withKeys(const QString &key, QJsonObject o) const;
+    QJsonObject withApp(const QString &key, QJsonObject o) const;
     // An empty receipt with my keys; once per person unless again (a block renewed the ring key, a restore the day key).
     void sendKeys(const QString &key, bool again = false);
     // A 1:1 offer also goes as a ring envelope to their ring mailbox (b1).

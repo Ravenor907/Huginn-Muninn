@@ -1148,6 +1148,23 @@ void voiceChecks()
 }
 }
 
+// 1.45, voice over two paths: when it doubles up, and the receiver playing the first copy and dropping the second.
+void dualVoiceChecks()
+{
+    check(CallMedia::dualVoice(true, true, false) && !CallMedia::dualVoice(false, true, false)
+              && !CallMedia::dualVoice(true, false, false) && !CallMedia::dualVoice(true, true, true),
+          "voice doubles onto the relay only with an allocation, never video, never in Ultra privacy");
+    const QByteArray root(32, char(7)), tag = CallCrypto::tag(QByteArray(16, char(3)));
+    CallCrypto::Keyring ka(root), kb(root);
+    CallCrypto::Sender tx(&ka, CallCrypto::O2A, tag);
+    CallCrypto::Receiver rx(&kb, CallCrypto::O2A, tag);
+    const QByteArray p10 = tx.sealAt(CallCrypto::Audio, 10, 200, QByteArray("abc")), p11 = tx.sealAt(CallCrypto::Audio, 11, 220, QByteArray("def"));
+    CallCrypto::Receiver::Packet got;
+    const QString a1 = rx.open(p10, &got), a2 = rx.open(p10, &got), b1 = rx.open(p11, &got), b2 = rx.open(p11, &got);
+    check(a1.isEmpty() && a2 == QLatin1String("duplicate") && b1.isEmpty() && b2 == QLatin1String("duplicate") && got.payload == QByteArray("def"),
+          "two-path voice: the first copy plays, the second is a duplicate");
+}
+
 bool CallSelfTest::run(const QString &vectorsPath)
 {
     g_fail = 0;
@@ -1168,6 +1185,7 @@ bool CallSelfTest::run(const QString &vectorsPath)
     relayCall();
     lanCallNoLogin();
     voiceChecks();
+    dualVoiceChecks();
     const bool ok = vectors && rooms && stun && jitter && dsp && video && g_fail == 0;
     std::printf("call self-test: %s\n", ok ? "all good" : "FAILED");
     std::fflush(stdout);

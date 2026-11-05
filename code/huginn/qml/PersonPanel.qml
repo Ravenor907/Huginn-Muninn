@@ -101,7 +101,17 @@ Item {
           note: UltraPrivacy.active ? UltraPrivacy.offNote : "Faster. Shares your address" },
         { id: "route", sec: "Safety", label: "Reaching them by", value: routeLine, info: true },
         { id: "introduce", sec: "Safety", label: "Introduce", value: "" }
-    ]
+    ].concat(appRows)
+    // 1.45: their app's version and platform, what it's missing, and a polite ask to update (contacts only).
+    readonly property var appInfo: tour || key === "" || !has("appInfo") ? ({}) : (revision, Chat.chats, Chat.appInfo(key))
+    readonly property var appRows: {
+        const a = appInfo || {}
+        if (!a.app) return []
+        const out = [{ id: "app", sec: "Their app", label: "App", value: a.app + (a.older ? " (Older version)" : ""), info: true }]
+        if (a.more) out.push({ id: "more", sec: "Their app", label: "More", value: a.more, info: true })
+        if (a.older) out.push({ id: "askupdate", sec: "Their app", label: "Ask to update", value: "" })
+        return out
+    }
     // The rows in their framed sections: [{ title, start (the first row's index), rows }].
     readonly property var groups: {
         const out = []
@@ -147,6 +157,8 @@ Item {
         else if (id === "check") PeopleActions.checkCode(k)
         else if (id === "route") PeopleActions.sayRoute(k)
         else if (id === "introduce") PeopleActions.introduce(k)
+        else if (id === "askupdate") { Chat.sendPrivate(k, appInfo.ask); Ui.say("Asked " + shownName + " to update.") }
+        else if (id === "more") Ui.say(appInfo.more + ".")
         else if (id === "direct" && UltraPrivacy.active) Ui.say(UltraPrivacy.offNote + ".")
         else if (id === "direct") { Calls.setTrusted(k, !Calls.trusted(k)); revision++ }
         else if (setters[id] && has(setters[id])) { Chat[setters[id]](k, !isOn(id)); revision++ }

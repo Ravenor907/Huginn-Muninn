@@ -448,8 +448,10 @@ class CallMedia(
         val targets = only?.let { listOf(it) } ?: paths.filter { it.live(now) }.ifEmpty { if (video) emptyList() else paths.filter { it.kind != CallLogic.Kind.DIRECT || directOn } }
         // Up to 3 UDP paths (Wi-Fi first, then Direct, then the lowest round trip) plus Bluetooth; each distinct
         // destination gets the packet once (the relay once per relayed address, not once per relay path).
-        val rest = only == null && freeFresh(now)
-        for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest)) when (dst.kind) {
+        // 1.45: voice also on the relay while it's allocated, next to Wi-Fi or Direct (the receiver keeps the first copy).
+        val dual = only == null && CallLogic.dualVoice(type == CallCrypto.AUDIO, turn != null, io.github.ravenor907.muninn.net.UltraPrivacy.on)
+        val rest = only == null && freeFresh(now) && !dual
+        for (dst in CallLogic.udpSends(targets, peerRelay.targets(), restRelay = rest, alsoRelay = dual)) when (dst.kind) {
             // Group video goes peer to peer only, never through the relay (it stays on voice there).
             CallLogic.Kind.RELAY -> if (!(video && videoNoRelay)) turn?.let { t ->
                 t.send(dst.addr, p)

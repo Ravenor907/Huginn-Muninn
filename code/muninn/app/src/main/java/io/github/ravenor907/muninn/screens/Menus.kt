@@ -682,6 +682,22 @@ internal fun PersonDetails(app: Muninn, key: String, back: () -> Unit) {
                 Text("Reaching $name by: ${routeShort(app.chat.route(key))}", style = Type.small, modifier = Modifier.padding(vertical = 6.dp))
                 if (contact != null) NavRow("Introduce", "To another contact", icon = "people") { introducing = true }
             }
+
+            // 1.45: their app's version and platform, what their app is missing, and a polite ask to update.
+            if (contact != null && contact.app.isNotEmpty()) Framed("Their app") {
+                val AV = io.github.ravenor907.muninn.net.AppVer
+                val mineVer = AV.parse(app.chat.myApp)?.version.orEmpty()
+                val older = mineVer.isNotEmpty() && AV.older(contact.app, mineVer)
+                Text("App: ${contact.app}" + if (older) "  (Older version)" else "", style = Type.normal.copy(color = Palette.text),
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                val miss = AV.missing(contact.caps, io.github.ravenor907.muninn.net.Proto06.caps(io.github.ravenor907.muninn.net.Proto06.CAPS))
+                if (miss.isNotEmpty()) Text("More: their app doesn't have " + miss.joinToString(", ") + " yet.", style = Type.small,
+                    modifier = Modifier.padding(vertical = 4.dp))
+                if (older) NavRow("Ask to update", "Sends them a message", icon = "refresh") {
+                    app.chat.sendPrivate(key, AV.askText(contact.app))
+                    Ui.say("Asked $name to update.")
+                }
+            }
             Spacer(Modifier.height(24.dp))
         }
     }
