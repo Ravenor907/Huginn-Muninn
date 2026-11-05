@@ -362,7 +362,11 @@ object TvCallFocus {
         val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
         request = try {
             AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(attrs)
-                .setOnAudioFocusChangeListener { }.build().also { am.requestAudioFocus(it) }
+                .setOnAudioFocusChangeListener { change ->
+                    // Another app (a cast video, say) took the sound mid-call: quietly take it back and keep the call's
+                    // audio mode, so the TV's microphone stays with the call. No message: it must not interrupt.
+                    if (change < 0) main.postDelayed({ retake(am) }, 300)
+                }.build().also { am.requestAudioFocus(it) }
         } catch (e: Exception) { null }
         // Something still playing a moment later ignores focus: ask its media session to pause.
         if (playing) main.postDelayed({
@@ -370,6 +374,13 @@ object TvCallFocus {
                 key(am, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE); pausedByKey = true
             }
         }, 700)
+    }
+
+    @Synchronized
+    private fun retake(am: AudioManager) {
+        val r = request ?: return
+        try { am.requestAudioFocus(r) } catch (_: Exception) {}
+        try { if (am.mode != AudioManager.MODE_IN_COMMUNICATION) am.mode = AudioManager.MODE_IN_COMMUNICATION } catch (_: Exception) {}
     }
 
     @Synchronized
