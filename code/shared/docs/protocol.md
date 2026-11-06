@@ -93,7 +93,7 @@ Space-separated tokens, in any order. Unknown tokens are ignored. An app without
 | `p2` | profile pictures that always arrive (22.4): `pv` on every envelope, `profile?` and `profile-ok` in room `profile`, a picture marked sent only on its `profile-ok`, and `pask` in room `link`. Needs `p1`. Muninn and Huginn. |
 | `l4` | stamped link frames (section 15, "Replay"): the sender stamps every frame in room `link` with `lts` and `ln`. Like `l1`, only in room `link` (`caps` on `sync`, `ping` and `pong`). Muninn and Huginn. |
 | `k15` | a Kids' Device's read-aloud voice (7.18): config field `voice`, `f` (Female) or `m` (Male). Muninn only. |
-| `f4` | Encrypted file sharing (section 30): Nearby, Trusted direct or Tor (a one-time onion service), never through the relays; every file asks first; `file` messages `wait` and `tor`. Muninn and Huginn. |
+| `f4` | Encrypted file sharing (section 30): Nearby, Trusted direct or Tor (a one-time onion service), never through the message relays; every file asks first; `file` messages `wait` and `tor`. Muninn and Huginn. |
 | `k16` | a Kids' Device's read-aloud speed (7.18): config field `speed`, a whole percent 50 to 150. Sent only when the device and every co-parent say `k16`. Muninn only. |
 | `v3` | picked videos (section 29): a file offer may carry `vid` (a full-size video's length in ms, 1 to 60000), sent straight only to an app that says `v3`; a video message's relay copy may be up to 1280 x 720 and 192 pieces, its pieces paced. Muninn and Huginn. |
 | `h1` | hidden certificates named over the ratchet (21.3, 1.42): `hf` in receipts to contacts, the certificates its Wi-Fi server may show (its lasting one, its hidden one now and the next), so a contact asks a saved address with Nearby off only with one of them pinned. Muninn and Huginn. |
@@ -3545,7 +3545,7 @@ stream. The SHA-256 is checked over the whole file at the end.
 
 ### 30.4 Asking first, and the queue
 
-- **Every file asks first**, with the receiving card: the sender's name and trust badge (Trusted, Family, Contact, Not
+- **A file asks first** (Family and trusted contacts' arrive by themselves, section 32), with the receiving card: the sender's name and trust badge (Trusted, Family, Contact, Not
   trusted), "wants to send you a ZIP file", the name, size and how it comes ("Nearby", "Trusted direct", "Tor, slower
   (about 20 min)" from 100 MB, at about 1 MB/s), Decline and Accept. Programs and archives (`.zip .apk .exe .bat .msi .js
   .scr .cmd .ps1 .vbs .jar .sh .appimage .deb .rpm`) add "Only open this if you were expecting it."
@@ -3561,8 +3561,9 @@ stream. The SHA-256 is checked over the whole file at the end.
 
 ## 32. Media through the call relay (cap f5)
 
-Family groups and trusted contacts get the fewest limits: what they send arrives by itself at full quality. Everyone else's
-files keep the receiving card (section 30) and their size rules. A risky file type keeps its warning either way.
+Family groups and trusted contacts get the fewest limits: what they send arrives by itself at full quality, unless their
+details say Ask. Everyone else's files keep the receiving card (section 30) and their size rules. A risky file type keeps
+its warning either way. What a chat chooses here is kept in the vault, with the chat.
 
 **Caps past 48.** Apps say `f5` at the end of `caps`, after the first 48 tokens. Huginn keeps up to 96 tokens now; an older
 Huginn keeps the first 48 and doesn't know the rest, which is the right answer for it. New tokens always go at the end.

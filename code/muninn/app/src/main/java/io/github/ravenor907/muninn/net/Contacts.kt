@@ -357,7 +357,11 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
                      /** Delete chat: the row stays off the chat list until a message comes or goes again. */
                      val cleared: Set<String> = emptySet(),
                      /** How a chat notifies: [EVERY], [ONE] or [MENTIONS] (groups). None: as Settings › Notifications says. */
-                     val notify: Map<String, String> = emptyMap())
+                     val notify: Map<String, String> = emptyMap(),
+                     /** Send media for this chat ([MediaRoute]); none follows Settings. */
+                     val routes: Map<String, String> = emptyMap(),
+                     /** Family or trusted, set to Ask: their files show the card after all. */
+                     val asks: Set<String> = emptySet())
 
     private val _all = MutableStateFlow(load())
     val all: StateFlow<State> = _all.asStateFlow()
@@ -373,7 +377,9 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
             c?.keys()?.asSequence()?.associateWith { c.getString(it) }?.filterValues { colorOk(it) }.orEmpty(),
             if (p == null) emptyList() else (0 until p.length()).map { p.getString(it) }.distinct(),
             set("hidden"), set("cleared"),
-            n?.keys()?.asSequence()?.associateWith { n.optString(it) }?.filterValues { it in MODES }.orEmpty())
+            n?.keys()?.asSequence()?.associateWith { n.optString(it) }?.filterValues { it in MODES }.orEmpty(),
+            o.optJSONObject("routes").let { r -> r?.keys()?.asSequence()?.associateWith { r.optString(it) }?.filterValues { it in MediaRoute.CHOICES }.orEmpty() },
+            set("asks"))
     } catch (e: Exception) { State() }
 
     private fun set(s: State) {
@@ -382,7 +388,8 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
             write(JSONObject().put("muted", JSONObject(s.muted as Map<*, *>)).put("archived", JSONArray(s.archived.toList()))
                 .put("unread", JSONArray(s.unread.toList())).put("colors", JSONObject(s.colors as Map<*, *>))
                 .put("pinned", JSONArray(s.pinned)).put("hidden", JSONArray(s.hidden.toList())).put("cleared", JSONArray(s.cleared.toList()))
-                .put("notify", JSONObject(s.notify as Map<*, *>)).toString())
+                .put("notify", JSONObject(s.notify as Map<*, *>)).put("routes", JSONObject(s.routes as Map<*, *>))
+                .put("asks", JSONArray(s.asks.toList())).toString())
         } catch (_: Exception) {}
     }
 
@@ -444,6 +451,14 @@ class ChatFlags(private val read: () -> String?, private val write: (String) -> 
         val s = _all.value
         if ((key in s.cleared) != on) set(s.copy(cleared = if (on) s.cleared + key else s.cleared - key))
     }
+
+    /** [key]'s own Send media, or null to follow Settings. */
+    @Synchronized
+    fun setRoute(key: String, c: String?) = set(_all.value.let { it.copy(routes = if (c in MediaRoute.CHOICES) it.routes + (key to c!!) else it.routes - key) })
+
+    /** Family or trusted [key]'s files show the card after all ([on]), or arrive by themselves. */
+    @Synchronized
+    fun setAsk(key: String, on: Boolean) = set(_all.value.let { it.copy(asks = if (on) it.asks + key else it.asks - key) })
 
     /** [key]'s own notifications ([EVERY], [ONE] or [MENTIONS]); "" follows Settings › Notifications. */
     @Synchronized

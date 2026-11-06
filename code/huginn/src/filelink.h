@@ -321,6 +321,7 @@ public:
     // Cap f5 (section 32): their app can carry a file over the call relay; "auto", "fastest" or "tor" for this chat; a
     // login, as a call gets one; the month's relayed media (mb added, 0 only asks; done gets the total in MB, or -1).
     std::function<bool(const QString &peer)> hasF5;
+    std::function<bool(const QString &peer)> asksFirst;   // Family or trusted, but set to Ask in their details
     std::function<QString(const QString &peer, const QString &group)> routeFor;
     std::function<void(std::function<void(const TurnLogin &, const QString &)>)> relayLogin;
     std::function<void(qint64 mb, std::function<void(qint64)>)> relayMeter;

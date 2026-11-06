@@ -726,13 +726,13 @@ internal fun filesAlwaysOffered(app: Muninn, key: String): Boolean =
 
 /**
  * Person details › They can › Send me files: Ask (every file shows the Accept card), Always (theirs arrive without
- * asking; only for trusted and family) or Off. The one place to undo an "Always accept from <name>" tapped on a card.
+ * asking; what trusted and family start on, and only for them) or Off.
  */
 @Composable
 private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
     @Suppress("UNUSED_VARIABLE") val trust by io.github.ravenor907.muninn.net.call.CallManager.trustChanged.collectAsState()
     val offered = filesAlwaysOffered(app, key)
-    var always by remember(key) { mutableStateOf(app.chat.filesAlways(key)) }
+    var always by remember(key) { mutableStateOf(offered && key !in app.chat.flags.all.value.asks) }
     val now = when { !can.files -> "off"; always && offered -> "always"; else -> "ask" }
     val choices = if (offered) listOf("ask" to "Ask", "always" to "Always", "off" to "Off") else listOf("ask" to "Ask", "off" to "Off")
     Text("Send me files", style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(top = 10.dp))
@@ -741,7 +741,7 @@ private fun SendMeFiles(app: Muninn, key: String, can: People.Can) {
         DetailChip(label, now == id, m) {
             People.setCan(key, can.copy(files = id != "off"))
             val a = id == "always"
-            if (a != always) { app.chat.setFilesAlways(key, a); always = a }
+            if (a != always) { app.chat.setFilesAlways(key, a); app.chat.flags.setAsk(key, !a); always = a }
         }
     }
     Text(when (now) { "always" -> "Theirs arrive without asking"; "off" -> "They can't send you files"; else -> "Each file asks you first" },

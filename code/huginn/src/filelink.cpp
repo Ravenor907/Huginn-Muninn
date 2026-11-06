@@ -694,6 +694,7 @@ FileLink::FileLink(Chat *chat, QObject *parent)
     // Cap f4 (section 30). Muninn says the kids' TV caps (k2), Huginn doesn't: what their app runs on, when known.
     hasF4 = [chat](const QString &peer) { return chat->hasCap(peer, QLatin1String(TorFiles::kCap)); };
     hasF5 = [chat](const QString &peer) { return chat->hasCap(peer, QStringLiteral("f5")); };
+    asksFirst = [chat](const QString &peer) { return chat->filesAsk(peer); };
     routeFor = [chat](const QString &peer, const QString &group) { return chat->mediaRoute(group.isEmpty() ? peer : QStringLiteral("g:") + group); };
     deviceWord = [chat](const QString &peer) {
         return !chat->capsKnown(peer) ? QString() : chat->hasCap(peer, QStringLiteral("k2")) ? QStringLiteral("phone") : QStringLiteral("computer");
@@ -1470,7 +1471,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         // Family and trusted contacts' files arrive by themselves, and so does the rest of a file already accepted (cap f3).
         // Everyone else's ask first. Data saver still asks.
         const bool saving = !testLocal && Settings::dataSaverOn();
-        const bool always = mayAlways(x->badge);
+        const bool always = mayAlways(x->badge) && !(asksFirst && asksFirst(from));
         const bool resuming = !partialFor(x).isEmpty();
         if (!(always || resuming) || saving) {
             // Cap f4: the sender hears the card is up ("Waiting for Ana to accept", not "Sends when...").

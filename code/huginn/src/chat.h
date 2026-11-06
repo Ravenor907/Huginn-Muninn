@@ -147,6 +147,9 @@ public:
     QString mediaRoute(const QString &chat) const;
     Q_INVOKABLE QString mediaRouteLabel(const QString &key) const;
     Q_INVOKABLE void cycleMediaRoute(const QString &key);
+    // Family or trusted, set to Ask: their files show the card after all.
+    Q_INVOKABLE bool filesAsk(const QString &key) const;
+    Q_INVOKABLE void setFilesAsk(const QString &key, bool on);
     Q_INVOKABLE QString relayNote() const;
 
     // Messages

@@ -45,13 +45,13 @@ Item {
         if (id === "archive") return has("isArchived") && Chat.isArchived(key)
         return !!hook(getters[id], [key], true)
     }
-    // Send me files: "ask" (a card each time), "always" (only for Trusted and Family) or "off". Off is Chat.filesAllowed,
-    // Always is Chat.filesAlways (FileLink skips the card only while their badge is Trusted or Family).
+    // Send me files: "ask" (a card each time), "always" (what Trusted and Family start on, only for them) or "off". Off is
+    // Chat.filesAllowed; Ask for Trusted or Family is Chat.filesAsk.
     function filesRule() {
         revision; Chat.chats
         if (tour) return "ask"
         if (!hook("filesAllowed", [key], true)) return "off"
-        return hook("filesAlways", [key], false) && canAlways() ? "always" : "ask"
+        return canAlways() && !hook("filesAsk", [key], false) ? "always" : "ask"
     }
     // Their trust badge is Trusted (Trusted direct on) or Family (in one of my Family groups).
     function canAlways() {
@@ -64,6 +64,7 @@ Item {
         if (v === "always" && !canAlways()) { Ui.say("Always is only for Trusted or Family.", true); return }
         if (has("setFilesAllowed")) Chat.setFilesAllowed(key, v !== "off")
         if (has("setFilesAlways")) Chat.setFilesAlways(key, v === "always")
+        if (has("setFilesAsk")) Chat.setFilesAsk(key, v !== "always")
         revision++
     }
     function filesWord(r) { return r === "always" ? "Always" : r === "off" ? "Off" : "Ask" }

@@ -364,6 +364,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun relayLogin() = io.github.ravenor907.muninn.net.call.CallManager.fileRelayLogin()
             override fun relayOver() = meter.over()
             override fun relayUsed(bytes: Long) = meter.add(bytes)
+            override fun asksFirst(peer: String) = peer in flags.all.value.asks
             override fun isKidDevice() = try { io.github.ravenor907.muninn.tv.KidMode.saved(context) } catch (_: Exception) { false }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
             // Cap f2 (section 27): the same Wi-Fi first, group files and their rules, where files go.
@@ -1729,8 +1730,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     var mediaRouteAll: String
         get() = MediaRoute.clean(prefs.getString(ROUTE_ALL, null))
         set(v) { prefs.edit().putString(ROUTE_ALL, MediaRoute.clean(v)).apply() }
-    fun mediaRouteOf(chat: String): String? = prefs.getString(ROUTE_CHAT + chat, null)
-    fun setMediaRoute(chat: String, c: String?) { prefs.edit().apply { if (c == null) remove(ROUTE_CHAT + chat) else putString(ROUTE_CHAT + chat, MediaRoute.clean(c)) }.apply() }
+    fun mediaRouteOf(chat: String): String? = flags.all.value.routes[chat]
+    fun setMediaRoute(chat: String, c: String?) = flags.setRoute(chat, c)
     private fun mediaRoute(chat: String) = MediaRoute.chosen(mediaRouteOf(chat), mediaRouteAll)
     /** What the call relay carried this month (MediaRoute), this device's count and the one all devices report to the Worker. */
     val meter by lazy { RelayMeter(context) }
@@ -3532,7 +3533,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         const val LAST_CAPS = "lastCaps"
         const val LAST_APP = "lastApp"
         private const val ROUTE_ALL = "mediaRoute"
-        private const val ROUTE_CHAT = "mediaRoute:"
         /** The chat page with the Labs reports (and what a report's notification opens). */
         const val LABS_PAGE = "labs"
         const val MAX = 2000

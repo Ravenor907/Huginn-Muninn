@@ -454,9 +454,9 @@ fun AskDialog(a: Ask) {
  * The one way a screen sits between the system bars: status bar, navigation bar (gesture or 3-button, on either side in
  * landscape) and a camera cutout, whichever the device has. The keyboard stays each screen's own (imePadding).
  */
-fun Modifier.fitBars(): Modifier = androidx.compose.ui.composed {
+@Composable
+fun Modifier.fitBars(): Modifier =
     windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.systemBars.union(androidx.compose.foundation.layout.WindowInsets.displayCutout))
-}
 
 /**
  * A row of [count] choices that share the width equally, as many per line as fit at the current text size: all on

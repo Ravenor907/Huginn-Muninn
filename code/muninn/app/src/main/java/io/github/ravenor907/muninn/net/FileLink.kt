@@ -370,6 +370,8 @@ object FileLink {
         fun relayLogin(): io.github.ravenor907.muninn.net.call.TurnCreds.Login? = null
         fun relayOver(): Boolean = false
         fun relayUsed(bytes: Long) {}
+        /** Family or trusted, but set to Ask in their details. */
+        fun asksFirst(peer: String): Boolean = false
     }
 
     @Volatile var host: Host? = null
@@ -936,7 +938,7 @@ object FileLink {
                 val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
                 val badge = h.badge(from)
                 // Family and trusted contacts' files arrive by themselves; a Kids' Device asks unless set to Always.
-                val always = mayAlways(badge) && (!h.isKidDevice() || h.alwaysFrom(from))
+                val always = mayAlways(badge) && !h.asksFirst(from) && (!h.isKidDevice() || h.alwaysFrom(from))
                 // Cap f3: the rest of a file already accepted (it stopped part way) doesn't ask again.
                 val resuming = partialFor(from, inc.sha, size, g) != null
                 val method = methodLabel(if (lan != null) "lan" else if (direct.isNotEmpty()) "direct" else if (relay) "relay" else "tor", size)

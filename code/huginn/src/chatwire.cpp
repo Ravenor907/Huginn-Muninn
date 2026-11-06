@@ -355,9 +355,16 @@ bool ChatWire::selfTest()
         check(present && t.size() == 3 && t.contains(QStringLiteral("zz9")), "caps: any order, extra spaces, unknown tokens kept apart, duplicates once");
         odd.insert(QStringLiteral("caps"), QStringLiteral("r1 g1 c1 c2 k1 k2 k3 k4 k5 k6 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1"));
         check(ChatWire::capsOf(odd, &present).contains(QStringLiteral("s1")), "caps: all of Muninn's tokens are kept");
-        // 1.42: f4 (Encrypted file sharing over Tor) is appended at the end of mine; Muninn's whole list (48, with f4 and
-        // k16 last) is kept, f4 included.
-        check(QString::fromLatin1(kCaps).split(QLatin1Char(' ')).last() == QLatin1String("f4"), "caps: f4 is said, last");
+        // New caps go at the end of the list; Muninn's whole list, past 48 tokens too, is kept.
+        check(QString::fromLatin1(kCaps).split(QLatin1Char(' ')).last() == QLatin1String("f5")
+                  && QString::fromLatin1(kCaps).split(QLatin1Char(' ')).contains(QLatin1String("f4")), "caps: f4 is said, and f5 last");
+        {
+            QStringList many;
+            for (int i = 0; i < 60; ++i)
+                many << QStringLiteral("t%1").arg(i);
+            odd.insert(QStringLiteral("caps"), many.join(QLatin1Char(' ')));
+            check(ChatWire::capsOf(odd, &present).size() == 60, "caps: more than 48 are kept");
+        }
         odd.insert(QStringLiteral("caps"), QStringLiteral("r1 g1 c1 c2 t1 v1 m1 m2 i1 f1 d1 j1 x1 s1 b1 e1 a1 v2 f2 g3 k1 k2 k3 k4 k5 k6 k7 k8 k9 k10 g2 p1 f3 g4 n1 n2 u1 k11 k12 k13 k14 p2 h1 r2 v3 k15 f4 k16"));
         check(ChatWire::capsOf(odd, &present).contains(QStringLiteral("f4")) && ChatWire::capsOf(odd, &present).contains(QStringLiteral("k16")),
               "caps: Muninn's f4 and k16 are kept");

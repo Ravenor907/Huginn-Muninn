@@ -883,30 +883,48 @@ QString Chat::mailboxOf(const QString &key) const
 
 QString Chat::mediaRoute(const QString &chat) const
 {
-    const QString own = m_settings.value(QStringLiteral("mediaRoute/") + chat).toString();
-    if (own == QLatin1String("auto") || own == QLatin1String("fastest") || own == QLatin1String("tor"))
-        return own;
-    return Settings::mediaRouteNow();
+    // Each person's own choice is kept with them, in the vault.
+    const QString own = m_contacts.value(chat).value(QStringLiteral("mediaRoute")).toString();
+    return own.isEmpty() ? Settings::mediaRouteNow() : own;
 }
 
 QString Chat::mediaRouteLabel(const QString &key) const
 {
-    const QString own = m_settings.value(QStringLiteral("mediaRoute/") + key).toString();
+    const QString own = m_contacts.value(key).value(QStringLiteral("mediaRoute")).toString();
     return own == QLatin1String("auto") ? QStringLiteral("Automatic") : own == QLatin1String("fastest") ? QStringLiteral("Fastest")
         : own == QLatin1String("tor") ? QStringLiteral("Most private (Tor)") : QStringLiteral("As in Settings");
 }
 
 void Chat::cycleMediaRoute(const QString &key)
 {
-    const QString k = QStringLiteral("mediaRoute/") + key, own = m_settings.value(k).toString();
+    if (!m_contacts.contains(key))
+        return;
+    const QString k = QStringLiteral("mediaRoute"), own = m_contacts.value(key).value(k).toString();
     if (own.isEmpty())
-        m_settings.setValue(k, QStringLiteral("auto"));
+        m_contacts[key].insert(k, QStringLiteral("auto"));
     else if (own == QLatin1String("auto"))
-        m_settings.setValue(k, QStringLiteral("fastest"));
+        m_contacts[key].insert(k, QStringLiteral("fastest"));
     else if (own == QLatin1String("fastest"))
-        m_settings.setValue(k, QStringLiteral("tor"));
+        m_contacts[key].insert(k, QStringLiteral("tor"));
     else
-        m_settings.remove(k);
+        m_contacts[key].remove(k);
+    saveContacts();
+}
+
+bool Chat::filesAsk(const QString &key) const
+{
+    return m_contacts.value(key).value(QStringLiteral("filesAsk")).toBool();
+}
+
+void Chat::setFilesAsk(const QString &key, bool on)
+{
+    if (!m_contacts.contains(key) || filesAsk(key) == on)
+        return;
+    if (on)
+        m_contacts[key].insert(QStringLiteral("filesAsk"), true);
+    else
+        m_contacts[key].remove(QStringLiteral("filesAsk"));
+    saveContacts();
 }
 
 QString Chat::relayNote() const
