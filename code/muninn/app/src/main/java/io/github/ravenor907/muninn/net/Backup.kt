@@ -22,7 +22,7 @@ object Backup {
     /** Settings that belong to this phone, not to the person: never copied over. */
     private val phoneOnly = setOf("fingerprint", "lockFails", "lockAt", "lockWait", "lockBoot", "lockErase", "unlockRecall", "strongerAsked", "receiveFolder", "recent", "oldToolsGone",
         RESTORED_AT, RESTORE_ANNOUNCE, "lockSeq", "lockLeft", "lockWallEnd", "lockChecking", ERASE_NOTE,
-        "preRelease", "labs", "meterMonth", "meterBytes", "meterShared", "meterWaiting")
+        "preRelease", "labs", io.github.ravenor907.muninn.net.call.CallLogic.TWO_PATHS, "meterMonth", "meterBytes", "meterShared", "meterWaiting")
     /**
      * "Erase after too many tries" belongs to the phone and never comes along, so a backup or move made with it on says
      * so, and the device it's put back on says once that it's off there ([ERASE_NOTE] then set; MainActivity shows it).

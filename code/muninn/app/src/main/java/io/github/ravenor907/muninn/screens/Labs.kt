@@ -82,7 +82,11 @@ object Labs {
         val now = !app.identity.labs
         app.identity.labs = now
         io.github.ravenor907.muninn.net.ActivityLog.on = now
-        if (!now) io.github.ravenor907.muninn.net.ActivityLog.clear()
+        if (!now) {
+            io.github.ravenor907.muninn.net.ActivityLog.clear()
+            // Labs' own switches go off with it.
+            app.getSharedPreferences("muninn", Context.MODE_PRIVATE).edit().putBoolean(io.github.ravenor907.muninn.net.call.CallLogic.TWO_PATHS, false).apply()
+        }
         // Off: back on the Stable channel too (what's installed stays until the next release).
         if (!now) app.identity.preRelease = false
         changed++

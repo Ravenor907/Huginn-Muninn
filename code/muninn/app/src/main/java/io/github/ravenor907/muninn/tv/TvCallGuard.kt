@@ -46,6 +46,7 @@ object TvCallGuard {
     /** The call screen came up. */
     fun shownNow() {
         shown = true
+        left = false   // back on the call: a show paused for it plays again at its end
         touched()
         cancelEnd()
     }
@@ -80,6 +81,12 @@ object TvCallGuard {
                         .setAction(io.github.ravenor907.muninn.screens.CallActivity.SHOW)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
                 } catch (_: Exception) {}
+                // Android didn't let it come back (some versions need more): the TV says so, as before.
+                main.postDelayed({
+                    val still = CallManager.call.value
+                    if (!shown && still != null && still.callId == c.callId && KidCallBack.endsHidden(still.phase))
+                        try { android.widget.Toast.makeText(app, KidCallBack.hiddenText(c.name), android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
+                }, 1_000L)
             }, BACK_MS)
         } else try { android.widget.Toast.makeText(app, KidCallBack.hiddenText(c.name), android.widget.Toast.LENGTH_LONG).show() } catch (_: Exception) {}
         endSoon()

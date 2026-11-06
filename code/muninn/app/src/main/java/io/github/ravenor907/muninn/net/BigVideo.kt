@@ -31,7 +31,9 @@ object BigVideo {
         val r = MediaMetadataRetriever()
         return try {
             r.setDataSource(path)
-            r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { b ->
+            // Decoded small (never a full 4K picture in memory just for the bubble).
+            (if (android.os.Build.VERSION.SDK_INT >= 27) r.getScaledFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 480, 480)
+                else r.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC))?.let { b ->
                 val long = maxOf(b.width, b.height)
                 val s = if (long > 480) Bitmap.createScaledBitmap(b, b.width * 480 / long, b.height * 480 / long, true) else b
                 ByteArrayOutputStream().also { s.compress(Bitmap.CompressFormat.JPEG, 82, it) }.toByteArray()

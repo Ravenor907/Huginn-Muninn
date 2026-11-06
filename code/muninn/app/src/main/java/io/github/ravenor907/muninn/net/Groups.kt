@@ -246,6 +246,9 @@ class Groups(
     fun isMember(g: String, k: String) = synchronized(lock) { groups[g]?.let { !it.readOnly && it.state.has(k) } == true }
     /** A key I share a live group with (or am joining through): group rooms from them are welcome. */
     fun sharesGroup(k: String) = synchronized(lock) { groups.values.any { !it.readOnly && it.state.has(k) } || k in joining.values }
+    /** A group message with id [id] is here, or was deleted here. */
+    fun knownId(id: String): Boolean = synchronized(lock) { chats.values.any { l -> l.any { it.id == id } } || deleted.containsKey(id) }
+
     /** The group of a group message whose envelope id is [env], if I have it already (a copy, or a resend). */
     fun knownEnvelope(env: String): String? {
         val id = env.substringBefore('-')

@@ -1762,23 +1762,38 @@ class Chat(private val context: Context, private val net: LocalSend, private val
      * photo ([group]: that group's main channel). False when it can't be kept (it's saved as a file instead).
      */
     fun inlineVideo(from: String, group: String, file: File, ms: Int, msgId: String = ""): Boolean {
-        // The sender's own id when it said one (the same message on both sides), else a new one here.
-        val theirs = msgId.takeIf { BigVideo.idOk(it) && (group.isEmpty() || Proto06.isLogicalId(it)) }
-        val mid = theirs ?: if (group.isEmpty()) UUID.randomUUID().toString() else Proto06.newLogicalId()
-        // Already here (a copy sent again after its "done" was lost): nothing more to keep, and no second bubble.
-        if (theirs != null && (if (group.isEmpty()) _private.value[from]?.any { it.id == theirs } == true
-                else groups.messages.value[group]?.any { it.id == theirs } == true)) return true
-        if (!storeBigVideo(mid, file)) return false
-        val ok = if (group.isNotEmpty()) groups.addBigVideo(group, from, nameOf(from), mid, ms)
-        else {
-            val name = nameOf(from)
-            addPrivate(from, Msg(mid, from, name, "", false, System.currentTimeMillis(), photo = mid, video = ms, big = true)).also { added ->
-                if (added) { _unread.update { it + from }; arrivals.tryEmit(Triple(contacts.contact(from)?.shown ?: name, "Video", from)) }
-            }
+        // The sender's own id when it said one (the same message on both sides), else a new one here. A 1:1 chat's is a
+        // UUID, a group's a logical id; one whose picture is already kept here (some other message) is never taken.
+        val theirs = msgId.takeIf {
+            BigVideo.idOk(it) && (if (group.isEmpty()) UUID_FORM.matches(it) else Proto06.isLogicalId(it))
         }
-        if (!ok) { File(photosDir, mid).delete(); bigDir(mid).deleteRecursively() }
-        return ok
+        synchronized(bigLocks.getOrPut(theirs ?: "") { Any() }) {
+            try {
+                if (theirs != null) {
+                    val here = if (group.isEmpty()) _private.value[from]?.any { it.id == theirs } == true || deleted.containsKey(theirs)
+                        else groups.knownId(theirs)
+                    // Already here, or deleted here (a copy sent again after its "done" was lost): nothing more, no second bubble.
+                    if (here) return true
+                }
+                val mid = theirs?.takeIf { !File(photosDir, it).exists() && !bigDir(it).exists() }
+                    ?: if (group.isEmpty()) UUID.randomUUID().toString() else Proto06.newLogicalId()
+                if (!storeBigVideo(mid, file)) return false
+                val ok = if (group.isNotEmpty()) groups.addBigVideo(group, from, nameOf(from), mid, ms)
+                else {
+                    val name = nameOf(from)
+                    addPrivate(from, Msg(mid, from, name, "", false, System.currentTimeMillis(), photo = mid, video = ms, big = true)).also { added ->
+                        if (added) { _unread.update { it + from }; arrivals.tryEmit(Triple(contacts.contact(from)?.shown ?: name, "Video", from)) }
+                    }
+                }
+                if (!ok) { File(photosDir, mid).delete(); bigDir(mid).deleteRecursively() }
+                return ok
+            } finally { if (theirs != null) bigLocks.remove(theirs) }
+        }
     }
+    /** One video id kept at a time (two copies arriving at once never undo each other). */
+    private val bigLocks = ConcurrentHashMap<String, Any>()
+    private val UUID_FORM = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
 
     /** My own longer video, in the chat at once ("sending" until a copy arrives). Its id, or null when it can't be kept. */
     fun ownBigVideo(peerOrGroup: String, group: Boolean, file: File, ms: Int): String? {

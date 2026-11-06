@@ -437,8 +437,11 @@ class CallMedia(
     fun anyLive(): Boolean { val now = System.currentTimeMillis(); return paths.any { it.live(now) } }
 
     /** Labs, Voice over two paths, read once per call. Never on a Kids' TV, which has no Labs. */
-    private val twoPaths = try { context.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE).getBoolean(CallLogic.TWO_PATHS, false) &&
-        !io.github.ravenor907.muninn.tv.KidMode.isTv(context) } catch (_: Exception) { false }
+    private val twoPaths = try {
+        val p = context.getSharedPreferences("muninn", android.content.Context.MODE_PRIVATE)
+        // Only while Labs is on (its switch is out of sight otherwise).
+        p.getBoolean("labs", false) && p.getBoolean(CallLogic.TWO_PATHS, false) && !io.github.ravenor907.muninn.tv.KidMode.isTv(context)
+    } catch (_: Exception) { false }
 
     /** A free path (Wi-Fi or Direct) answered a ping within 750 ms (so it works both ways): the relay rests (5.8.3). */
     fun freeFresh(now: Long = System.currentTimeMillis()) =

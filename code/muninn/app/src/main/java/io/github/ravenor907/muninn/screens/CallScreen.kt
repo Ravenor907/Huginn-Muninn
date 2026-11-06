@@ -240,7 +240,7 @@ private fun Buttons(c: CallManager.Ui, video: CallVideo.State, onMessage: (Strin
             if (share.on) Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 Text("Sharing a video · " + io.github.ravenor907.muninn.net.Voice.length(share.atMs.toInt().coerceAtLeast(1)) +
                     (if (share.ms > 0) " of " + io.github.ravenor907.muninn.net.Voice.length(share.ms.toInt()) else ""),
-                    style = Type.normal.copy(color = Palette.text), modifier = Modifier.padding(end = 10.dp))
+                    style = Type.normal.copy(color = Palette.text), modifier = Modifier.weight(1f, fill = false).padding(end = 10.dp))
                 io.github.ravenor907.muninn.ui.MButton(if (share.paused) "Play" else "Pause", icon = if (share.paused) "play" else "pause") {
                     io.github.ravenor907.muninn.net.call.CallShare.pause(!share.paused)
                 }

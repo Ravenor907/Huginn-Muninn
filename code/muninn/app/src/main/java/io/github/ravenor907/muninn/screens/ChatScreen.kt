@@ -1389,7 +1389,7 @@ private fun Conversation(app: Muninn, key: String) {
                     if (m.id !in albums.first) Bubble(m, showName = false, theirName = name, photo = if (m.photo.isNotEmpty()) ({ app.chat.photo(m.photo) }) else null,
                         quote = quoteOf(m.re), onQuote = { jumpTo(m.re) }, me = me, highlight = current == i || m.id == flash,
                         onReply = if (m.failed) null else ({ editing = null; replyTo = m }), onReactions = { sheetFor = m },
-                        onTap = { if (m.mine && m.failed && m.unsent.isEmpty()) app.chat.retry(key, m.id) else if (m.file.isEmpty()) viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
+                        onTap = { if (m.mine && m.failed && m.unsent.isEmpty() && !m.big) app.chat.retry(key, m.id) else if (m.file.isEmpty()) viewing = m }, album = albums.second[m.id], albumBytes = { app.chat.photo(it.photo) }, onAlbumTap = { viewing = it },
                         onVote = { v -> app.chat.vote(key, m.id, v)?.let { Ui.say(it, true) } }, voterName = { if (it == key) name else app.chat.nameOf(it) },
                         folder = io.github.ravenor907.muninn.net.Sharing.folderFor("Muninn", name)) { sheetFor = m }
                 }
@@ -1919,6 +1919,7 @@ private fun Bubble(m: Chat.Msg, showName: Boolean, theirName: String? = null, ph
         !m.mine -> ""
         m.state == "unsending" -> "Removing from their phone"
         m.unsent.isNotEmpty() -> ""
+        m.failed && m.big -> "Not sent. Its card below says why"
         m.failed -> "Not sent yet, tap to retry"
         // Honest ticks: "Delivered" only once their phone has it, else whose phone it's waiting for.
         else -> io.github.ravenor907.muninn.net.Ticks.private(m.state, theirName)
@@ -2980,7 +2981,7 @@ private fun GroupConversation(app: Muninn, g: String) {
                         statusText = if (gm.mine) (if (gm.read.isNotEmpty() || gm.unsent.isNotEmpty()) ""
                             // A longer video goes as files: its own words until a copy arrives.
                             else if (gm.big && gm.state == "sending") "Sending"
-                            else if (gm.big && gm.state == "failed") "Not sent. Tap Retry on its card"
+                            else if (gm.big && gm.state == "failed") "Not sent. Its card below says why"
                             else io.github.ravenor907.muninn.net.Ticks.group(gm.to, gm.delivered) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }) else null,
                         quote = quoteOf(gm.re), onQuote = { jumpTo(gm.re) }, me = me, groupRead = if (gm.mine) gm.read.size else -1,
                         highlight = matches.getOrNull(matchAt) == i || gm.id == flash || (!gm.mine && gm.unsent.isEmpty() && io.github.ravenor907.muninn.net.Rich.mentions(gm.text, app.identity.username)),
