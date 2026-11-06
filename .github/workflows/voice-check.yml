@@ -1,0 +1,44 @@
+name: Voice check
+
+# Each published natural voice reads known sentences and a speech recognizer writes down what it heard, so a voice that says
+# nonsense is caught before anyone hears it. Run by hand, and when the voices or this check change.
+on:
+  workflow_dispatch:
+  push:
+    branches: [beta]
+    paths: ['.github/workflows/voice-check.yml', 'code/shared/tools/voice_check.py', 'code/shared/voices.sha256']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Voices say what they're given
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - name: Get the voices (each checked against code/shared/voices.sha256), the engine and a recognizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip install --quiet sherpa-onnx numpy
+          mkdir -p v
+          grep -E '  voice-(female|male)-[0-9]+\.tar$' code/shared/voices.sha256 | while read -r sum name; do
+            tag=voices-${name##*-}; tag=${tag%.tar}
+            gh release download "$tag" -p "$name" -D v --clobber
+            echo "$sum  v/$name" | sha256sum -c -
+            d="v/${name%.tar}"; mkdir -p "$d"; tar -xf "v/$name" -C "$d"
+          done
+          curl -fsSL --retry 5 -o asr.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2
+          tar -xjf asr.tar.bz2
+      - name: Each voice reads, the recognizer listens
+        shell: bash
+        run: |
+          fail=0
+          for d in v/voice-*/; do
+            n=$(basename "$d")
+            python3 code/shared/tools/voice_check.py "$d" sherpa-onnx-whisper-tiny.en "$n" | tee -a "$GITHUB_STEP_SUMMARY" || fail=1
+          done
+          exit $fail
