@@ -317,7 +317,7 @@ Item {
                                     textFormat: Text.PlainText
                                     width: parent.width
                                     wrapMode: Text.Wrap
-                                    text: "Photos, voice and video messages: " + System.sizeText(panel.info.media || 0) + ". Longer videos stay on this computer; their pictures go.
+                                    text: "Photos, voice and video messages: " + System.sizeText(panel.info.media || 0) + ". Longer videos stay on this computer; their pictures go."
                                     color: Theme.textMuted
                                     font.family: Theme.body; font.pixelSize: Theme.fs(13)
                                 }
