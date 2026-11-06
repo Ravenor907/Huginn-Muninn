@@ -166,11 +166,12 @@ internal fun TransferCard(f: FileLink.Progress, showChat: Boolean, resend: (Stri
                     if (f.canAlways && f.vid == 0) MButton("Always accept from $who") { link.acceptAlways(f.id) }
                     MButton("Decline") { link.decline(f.id) }
                 }
-                link.canResume(f.id) -> {
+                // Only while it moves: a finished card never keeps Pause or Cancel (the moving list clears just after "done").
+                FileText.running(f.state) && link.canResume(f.id) -> {
                     MButton("Resume", kind = Kind.Accent, icon = "play") { link.resume(f.id) }
                     MButton("Cancel", kind = Kind.Danger) { link.cancel(f.id) }
                 }
-                link.canPause(f.id) -> {
+                FileText.running(f.state) && link.canPause(f.id) -> {
                     MButton("Pause", icon = "pause") { link.pause(f.id) }
                     MButton("Cancel", kind = Kind.Danger) { link.cancel(f.id) }
                 }

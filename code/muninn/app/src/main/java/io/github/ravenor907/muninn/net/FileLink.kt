@@ -951,7 +951,7 @@ object FileLink {
                 }
                 val direct = if (trust) CallLogic.directOf(c) else emptyList()
                 val theirs = listOfNotNull(lan) + direct
-                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay)
+                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay))
                 ins[id] = inc
                 val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
                 val badge = h.badge(from)

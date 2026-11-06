@@ -1123,7 +1123,8 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     x->tor = tor;
     x->relay = viaRelay;
     x->family = family;
-    x->punchMs = viaRelay && choice == QLatin1String("fastest") ? kFastestPunchMs : kPunchMs;
+    // The relay can carry it: 3 s for the direct way, then the relay (both ends alike, so neither waits on the other).
+    x->punchMs = viaRelay ? kFastestPunchMs : kPunchMs;
     if (x->lanOnly && sameWifi)
         x->route = route;
     x->state = QStringLiteral("connecting");
@@ -1511,6 +1512,7 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         x->lanOnly = !trust;
         x->tor = tor;
         x->relay = viaRelay;
+        x->punchMs = viaRelay ? kFastestPunchMs : kPunchMs;
         if (x->lanOnly && lan.valid())
             x->route = QStringLiteral("direct");
         x->mine = false;

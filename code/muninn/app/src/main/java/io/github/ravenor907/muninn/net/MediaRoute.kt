@@ -37,7 +37,8 @@ object MediaRoute {
     fun torMay(ultra: Boolean) = ultra
 
     /** How long the direct way gets before the relay is tried. */
-    fun punchMs(choice: String, relay: Boolean) = if (relay && choice == FASTEST) FASTEST_PUNCH_MS else FileLink.PUNCH_MS
+    @Suppress("UNUSED_PARAMETER")
+    fun punchMs(choice: String, relay: Boolean) = if (relay) FASTEST_PUNCH_MS else FileLink.PUNCH_MS
     const val FASTEST_PUNCH_MS = 3_000L
 
     /** Quiet this long on the direct way, it goes on through the relay. */
