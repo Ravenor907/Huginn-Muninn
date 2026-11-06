@@ -201,9 +201,12 @@ object PowerLogic {
     const val DROWSY_MS = 3 * 3_600_000L
     /** A socket that hasn't answered a check within this long is dead and is replaced at once. */
     const val ANSWER_MS = 10_000L
-    /** In the background: one relay socket, not two. Senders post to every relay, so nothing is missed. */
+    /**
+     * In the background: one relay socket, not two. Senders post to every relay, but a relay may not take or keep it (and
+     * a sender stops once two have), so the others are still read when catching up and by the inbox check (1.47).
+     */
     const val AWAY_RELAYS = 1
-    /** Open on screen: the healthiest three of the relays. */
+    /** Before 1.47, open on screen kept the healthiest three; now it keeps every relay. Kept for the battery ranking. */
     const val OPEN_RELAYS = 3
     /** The conversation window: this long after a message is sent or received, every relay and a quick check. */
     const val TALK_MS = 5 * 60_000L
@@ -238,7 +241,9 @@ object PowerLogic {
             // Wi-Fi discovery rest as they would without the room (rooms use neither).
             i.inRoom -> if (i.screenOn) full(Why.ROOM) else Plan(Why.ROOM, null, FAST_PING_MS, if (scan) Radio.LOW else Radio.OFF, wifiAway)
             i.kidsTv -> full(Why.KIDS_TV)
-            i.foreground -> Plan(Why.OPEN, OPEN_RELAYS, FAST_PING_MS, Radio.FULL, wifiOpen)
+            // 1.47 (message RCA): every relay while open, as the label says. With three, a message stored only on the other
+            // two waited until the next catch-up.
+            i.foreground -> Plan(Why.OPEN, null, FAST_PING_MS, Radio.FULL, wifiOpen)
             // Fully manual: nothing at all until Muninn is opened again, charging or not, sharing or not.
             manual(i) -> Plan(Why.EXTREME, 0, AWAY_PING_MS, Radio.OFF, Radio.OFF)
             // Nothing in the background, not even on the charger: Muninn catches up when it's opened.

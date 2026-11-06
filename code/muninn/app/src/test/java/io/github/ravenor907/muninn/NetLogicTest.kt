@@ -3,6 +3,7 @@ package io.github.ravenor907.muninn
 import io.github.ravenor907.muninn.net.Limits
 import io.github.ravenor907.muninn.net.NetLogic
 import io.github.ravenor907.muninn.net.PowerLogic
+import io.github.ravenor907.muninn.net.RelaySpread
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -156,5 +157,105 @@ class NetLogicTest {
         assertFalse(NetLogic.mayHold(500, 0, 10, 500, 4_000_000))
         assertFalse(NetLogic.mayHold(10, 3_999_500, 1_000, 500, 4_000_000))
         assertFalse(NetLogic.mayHold(0, 0, 5_000_000, 500, 4_000_000))
+    }
+
+    // ---- 1.47 message RCA: phone to phone on cellular, the receiver kept relays the message wasn't on
+
+    @Test
+    fun aPhoneListeningOnSomeRelaysReadsTheOthersToo() {
+        // Background: one relay kept open of five. Catching up and the inbox check read all five.
+        assertTrue(NetLogic.sweepAll(keptOpen = 1, live = 1, total = 5))
+        // Before 1.47, open on screen kept three: the other two were never read while the socket answered.
+        assertTrue(NetLogic.sweepAll(keptOpen = 3, live = 3, total = 5))
+        // Every relay kept but one is down: read it when it's back (the sweep opens it).
+        assertTrue(NetLogic.sweepAll(keptOpen = 5, live = 4, total = 5))
+        // Every relay open and live: nothing more to read.
+        assertFalse(NetLogic.sweepAll(keptOpen = 5, live = 5, total = 5))
+        assertFalse(NetLogic.sweepAll(keptOpen = 0, live = 0, total = 0))
+    }
+
+    @Test
+    fun theOpenPlanKeepsEveryRelay() {
+        val open = PowerLogic.plan(PowerLogic.Inputs(foreground = true, screenOn = true))
+        assertEquals(null, open.relays)
+        assertFalse(NetLogic.sweepAll(keptOpen = 5, live = 5, total = 5))
+    }
+
+    @Test
+    fun aClosedInboxRequestIsAskedAgain() {
+        // Closed by the relay (or never finished) on a socket open long enough: asked again.
+        assertTrue(NetLogic.reask(subscribed = false, openAgoMs = NetLogic.REASK_AFTER_MS, askedAgoMs = null))
+        // Open: never.
+        assertFalse(NetLogic.reask(subscribed = true, openAgoMs = 3_600_000L, askedAgoMs = null))
+        // Just opened: its first answer may still be coming.
+        assertFalse(NetLogic.reask(subscribed = false, openAgoMs = 5_000L, askedAgoMs = null))
+        // Asked again a minute ago: not on every check.
+        assertFalse(NetLogic.reask(subscribed = false, openAgoMs = 600_000L, askedAgoMs = 60_000L))
+        assertTrue(NetLogic.reask(subscribed = false, openAgoMs = 600_000L, askedAgoMs = NetLogic.REASK_EVERY_MS))
+        // A clock that went back (negative) doesn't block it.
+        assertTrue(NetLogic.reask(subscribed = false, openAgoMs = 600_000L, askedAgoMs = -5L))
+    }
+
+    @Test
+    fun onlyASignInCloseIsRetriedAtOnce() {
+        assertTrue(NetLogic.authClosed("auth-required: we only serve gift wraps to their recipient"))
+        assertFalse(NetLogic.authClosed("rate-limited: slow down"))
+        assertFalse(NetLogic.authClosed(""))
+    }
+
+    // ---- 1.47: the sender keeps sending the same event to every relay until each has stored it
+
+    private val five = listOf("wss://a", "wss://b", "wss://c", "wss://d", "wss://e")
+
+    @Test
+    fun twoStoringIsNotEnoughEveryRelayStillOwesIt() {
+        val s = RelaySpread()
+        s.add("ev1", five)
+        assertFalse(s.stored("ev1", "wss://a"))
+        assertFalse(s.stored("ev1", "wss://b"))
+        // Held by two (the old stopping point): the other three still get it again.
+        assertEquals(setOf("wss://c", "wss://d", "wss://e"), s.missing("ev1"))
+        assertFalse(s.stored("ev1", "wss://a"))   // an OK again from the same relay changes nothing
+        assertFalse(s.stored("ev1", "wss://c")); assertFalse(s.stored("ev1", "wss://d"))
+        assertTrue(s.stored("ev1", "wss://e"))
+        assertTrue(s.missing("ev1").isEmpty())
+        assertFalse(s.tracked("ev1"))
+    }
+
+    @Test
+    fun refusalsDuplicatesAndRateLimits() {
+        val s = RelaySpread()
+        s.add("ev", listOf("wss://a", "wss://b", "wss://c", "wss://d"))
+        // Rate limited: still owed, tried again later.
+        assertFalse(s.refused("ev", "wss://a", "rate-limited: slow down"))
+        assertTrue("wss://a" in s.missing("ev"))
+        // Unknown or empty reasons may pass later too.
+        assertFalse(s.refused("ev", "wss://a", ""))
+        assertTrue("wss://a" in s.missing("ev"))
+        // A duplicate is stored already.
+        assertFalse(s.refused("ev", "wss://b", "duplicate: already have this event"))
+        // Refused for good: dropped, never sent again.
+        assertFalse(s.refused("ev", "wss://c", "blocked: kind 1059 not accepted"))
+        assertFalse(s.refused("ev", "wss://a", "restricted: not allowed"))
+        assertEquals(setOf("wss://d"), s.missing("ev"))
+        assertTrue(s.refused("ev", "wss://d", "pow: difficulty 20 needed"))
+        assertTrue(RelaySpread.refusedForGood("invalid: bad signature"))
+        assertFalse(RelaySpread.refusedForGood("auth-required: sign in"))
+    }
+
+    @Test
+    fun theRetriesEndAndOldEventsAreLetGo() {
+        assertEquals(10_000L, RelaySpread.retryMs(0))
+        assertEquals(900_000L, RelaySpread.retryMs(RelaySpread.RETRY_MS.size - 1))
+        assertEquals(null, RelaySpread.retryMs(RelaySpread.RETRY_MS.size))
+        // Every try fits inside the first hour, before the old held resend (NetLogic.HELD_AGAIN_MS).
+        assertTrue(RelaySpread.RETRY_MS.sum() < NetLogic.HELD_AGAIN_MS[0])
+        val s = RelaySpread(max = 2)
+        s.add("1", five); s.add("2", five); s.add("3", five)
+        assertFalse(s.tracked("1")); assertTrue(s.tracked("3")); assertEquals(2, s.size())
+        // Untracked (or given up): nothing more to send, an OK for it is harmless.
+        assertTrue(s.stored("1", "wss://a"))
+        s.forget("3"); assertTrue(s.missing("3").isEmpty())
+        s.add("", five); s.add("x", emptyList()); assertEquals(1, s.size())
     }
 }

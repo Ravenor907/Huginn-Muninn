@@ -119,6 +119,12 @@ public:
     static constexpr int kLinkRelays = 0;
     // The relays an event limited to n goes to: the open ones first (in list order), then the rest.
     static QStringList pickRelays(const QStringList &all, const QSet<QString> &live, int n);
+    // 1.47 (message RCA): every relay keeps getting the same event until it has stored it, not only until the first OK:
+    // the wait before try round (0 first), or -1 once every try was used (10 s, 30 s, 1 min, 5 min, 15 min).
+    static qint64 spreadRetryMs(int round);
+    // An "OK false" reason after which that relay will never take the event (blocked, invalid, pow, restricted, error).
+    // "rate-limited", "auth-required" and unknown reasons may pass later; "duplicate" means it has it.
+    static bool refusedForGood(const QString &reason);
     // An event's created_at is up to this many seconds before the real time (section 20.3).
     static constexpr qint64 kBlurS = 600;
     // Round 14: a relay is asked from this long before it last finished sending: the blur plus 30 minutes for a

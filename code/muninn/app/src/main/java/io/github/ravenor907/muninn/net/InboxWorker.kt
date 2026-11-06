@@ -15,7 +15,9 @@ import io.github.ravenor907.muninn.R
 class InboxWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
     override fun doWork(): Result {
         val app = applicationContext as Muninn
-        if (app.visible || app.nostr.listening()) return Result.success()   // already listening
+        // 1.47: listening on every relay already. Listening on only some (one in the background), the others are read here,
+        // since a message may be stored only on relays this phone doesn't keep open.
+        if (app.nostr.listeningAll()) return Result.success()
         // Quiet hours may have ended or the phone charged: the mode in use (and this schedule) catch up first.
         app.power.refresh()
         // "Only when open", chosen or for quiet hours: nothing until Muninn is opened.

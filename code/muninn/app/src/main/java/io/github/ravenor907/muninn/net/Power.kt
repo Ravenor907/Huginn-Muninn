@@ -206,7 +206,8 @@ class Power(private val app: Muninn) {
         caughtUpAt = now
         try {
             app.nostr.reconnectNow()
-            if (!app.nostr.listening()) app.nostr.checkInbox()
+            // 1.47: unless every relay is open, all of them are read now: a message may wait on one this phone doesn't keep open.
+            if (!app.nostr.listeningAll()) app.nostr.checkInbox()
             // Anything of mine still waiting goes again now, so their phone says "Delivered" sooner.
             if (app.ready.value) app.chat.retryAllNow()
         } catch (_: Exception) {}

@@ -16,10 +16,11 @@ class PowerLogicTest {
     private val phoneAway = Inputs(foreground = false, screenOn = false, onWifi = true)
 
     @Test
-    fun openOnScreenIsConnectedThroughTheHealthiestThree() {
+    fun openOnScreenIsConnectedThroughEveryRelay() {
         val p = PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true))
         assertEquals(Why.OPEN, p.why)
-        assertEquals(PowerLogic.OPEN_RELAYS, p.relays)
+        // 1.47: every relay while open (a message may be stored on any of them).
+        assertEquals(null, p.relays)
         assertEquals(PowerLogic.FAST_PING_MS, p.pingMs)
         assertEquals(Radio.FULL, p.radio)
         // Wi-Fi discovery is slow unless files are being shared.
@@ -92,7 +93,7 @@ class PowerLogicTest {
         assertEquals(0, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true)).relays)
         assertEquals(1, PowerLogic.plan(phoneAway.copy(batterySaver = true, doze = true, unrestricted = true)).relays)
         // Open on screen it still works normally.
-        assertEquals(PowerLogic.OPEN_RELAYS, PowerLogic.plan(Inputs(foreground = true, screenOn = true, batterySaver = true)).relays)
+        assertEquals(null, PowerLogic.plan(Inputs(foreground = true, screenOn = true, batterySaver = true)).relays)
     }
 
     @Test
@@ -492,7 +493,7 @@ class PowerLogicTest {
     fun extremeBatterySaverStillFetchesWhileOpenAndKeepsACall() {
         val open = PowerLogic.plan(Inputs(foreground = true, screenOn = true, onWifi = true, extreme = true))
         assertEquals(Why.OPEN, open.why)
-        assertEquals(PowerLogic.OPEN_RELAYS, open.relays)
+        assertEquals(null, open.relays)
         assertEquals(Why.CALL, PowerLogic.plan(phoneAway.copy(extreme = true, inCall = true)).why)
         // A Kids' TV always listens.
         assertEquals(Why.KIDS_TV, PowerLogic.plan(phoneAway.copy(extreme = true, kidsTv = true)).why)

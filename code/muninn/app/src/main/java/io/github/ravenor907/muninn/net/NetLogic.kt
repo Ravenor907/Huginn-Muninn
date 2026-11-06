@@ -99,6 +99,29 @@ object NetLogic {
     fun mayHold(count: Int, total: Long, size: Long, maxCount: Int, maxTotal: Long): Boolean =
         count < maxCount && size >= 0 && total + size <= maxTotal
 
+    /**
+     * 1.47 (message RCA): a sender counts a message as held once [HELD_RELAYS] relays stored it, but those may not be the
+     * relays this phone keeps open (one in the background, chosen by its own health), so what waits on the others has
+     * to be read too: when this phone isn't listening on every relay, catching up and the inbox check read all of them.
+     */
+    fun sweepAll(keptOpen: Int, live: Int, total: Int): Boolean = total > 0 && (keptOpen < total || live < total)
+
+    /** A relay ended the inbox request asking for a sign-in first (NIP-42 "auth-required:"). */
+    fun authClosed(reason: String): Boolean = reason.startsWith("auth-required")
+
+    /** A live socket whose inbox request isn't open (closed by the relay, or never answered) is asked again after this long. */
+    const val REASK_AFTER_MS = 30_000L
+    /** ... and at most this often per relay, so a relay that keeps refusing isn't asked on every check. */
+    const val REASK_EVERY_MS = 120_000L
+
+    /**
+     * The keepalive check: a live socket that still answers but whose inbox request isn't open ([subscribed] false) is
+     * asked for the inbox again, once it has been open [REASK_AFTER_MS] and wasn't asked within [REASK_EVERY_MS]
+     * ([askedAgoMs] null: never asked again). Without this a closed request stayed closed while the socket looked alive.
+     */
+    fun reask(subscribed: Boolean, openAgoMs: Long, askedAgoMs: Long?): Boolean =
+        !subscribed && openAgoMs >= REASK_AFTER_MS && (askedAgoMs == null || askedAgoMs !in 0 until REASK_EVERY_MS)
+
     /** A socket heard from this recently is alive: the keepalive check skips it. */
     const val ALIVE_MS = 60_000L
 
@@ -126,4 +149,66 @@ object NetLogic {
 
     /** Relay-side checks (pings) an hour, from [pings] counted over [ms] connected. */
     fun perHour(pings: Int, ms: Long): Int = if (ms <= 0) 0 else (pings * 3_600_000L / ms).toInt()
+}
+
+/**
+ * 1.47 (message RCA): every relay gets each event, not just the first two that store it. A receiver in the background
+ * listens on one relay chosen by its own health, so the sender keeps sending the same event (same id) to each relay
+ * that hasn't stored it yet, on [RETRY_MS], until each has stored it or refused it for good. "Waiting for their phone"
+ * still starts at the first relay's OK. Plain Kotlin, so the tests check it.
+ */
+class RelaySpread(private val max: Int = MAX) {
+    private val missing = LinkedHashMap<String, MutableSet<String>>()
+
+    /** Event [id] went to [relays]: each one owes an OK. The oldest is let go past [max]. */
+    @Synchronized fun add(id: String, relays: Collection<String>) {
+        if (id.isEmpty() || relays.isEmpty()) return
+        missing[id] = relays.toMutableSet()
+        while (missing.size > max) missing.remove(missing.keys.first())
+    }
+
+    /** [url] stored [id]. True when every relay has it now, or it isn't tracked (nothing more to send). */
+    @Synchronized fun stored(id: String, url: String): Boolean {
+        val m = missing[id] ?: return true
+        m.remove(url)
+        if (m.isEmpty()) { missing.remove(id); return true }
+        return false
+    }
+
+    /**
+     * [url] answered "OK false" with [reason]. A duplicate counts as stored; a rate limit (or a reason that may pass) keeps
+     * it owed; anything else means this relay won't take it, so it's dropped from the list. True when nothing is left.
+     */
+    @Synchronized fun refused(id: String, url: String, reason: String): Boolean {
+        val m = missing[id] ?: return true
+        if (reason.startsWith("duplicate") || refusedForGood(reason)) m.remove(url)
+        if (m.isEmpty()) { missing.remove(id); return true }
+        return false
+    }
+
+    /** The relays that still owe [id] an OK (empty: done or not tracked). */
+    @Synchronized fun missing(id: String): Set<String> = missing[id]?.toSet().orEmpty()
+
+    @Synchronized fun tracked(id: String): Boolean = missing.containsKey(id)
+
+    /** Given up on (all tries used): stops being sent. */
+    @Synchronized fun forget(id: String) { missing.remove(id) }
+
+    @Synchronized fun size(): Int = missing.size
+
+    companion object {
+        const val MAX = 500
+        /** When the relays still owing an OK get the same event again: after 10 s, 30 s, 1 min, 5 min and 15 min, then no more. */
+        val RETRY_MS = longArrayOf(10_000L, 30_000L, 60_000L, 300_000L, 900_000L)
+
+        /** The wait before try [round] (0 first), or null once every try was used. */
+        fun retryMs(round: Int): Long? = RETRY_MS.getOrNull(round)
+
+        /**
+         * NIP-01 "OK false" prefixes after which this relay will never take this event: "blocked", "invalid", "pow" (needs
+         * proof of work), "restricted", "error". "rate-limited", "auth-required" and anything unknown may pass later.
+         */
+        fun refusedForGood(reason: String): Boolean =
+            listOf("blocked", "invalid", "pow", "restricted", "error").any { reason.startsWith("$it:") || reason == it }
+    }
 }
