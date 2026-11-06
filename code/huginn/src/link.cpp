@@ -1473,7 +1473,8 @@ QString Link::photoWith(const QString &hash)
 static QString mediaPhoto(const QVariantMap &m)
 {
     const QString photo = m.value(QStringLiteral("photo")).toString();
-    if (photo.isEmpty() || !m.value(QStringLiteral("unsent")).toString().isEmpty())
+    // A longer video in the chat (bigvideo.h): its blob is only the poster, so it's never offered as the file.
+    if (photo.isEmpty() || !m.value(QStringLiteral("unsent")).toString().isEmpty() || m.value(QStringLiteral("vb")).toBool())
         return QString();
     return photo;
 }
@@ -1484,6 +1485,8 @@ QJsonObject Link::mJson(const QVariantMap &m, int max)
     const QString photo = vstr(m, "photo");
     if (!vstr(m, "unsent").isEmpty()) {
         x = QStringLiteral("Message deleted");
+    } else if (m.value(QStringLiteral("vb")).toBool()) {
+        x = QStringLiteral("Video");   // a longer video: words only, its poster isn't the video
     } else if (m.value(QStringLiteral("voice")).toInt() > 0) {
         x = QStringLiteral("Voice message");
         kind = QStringLiteral("voice");

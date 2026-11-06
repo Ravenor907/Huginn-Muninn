@@ -1570,7 +1570,7 @@ Rectangle {
         const who = !m.mine && !m.system && m.from ? ModActions.items(gid, m.from, isTour, m.name || "Someone") : []
         who.filter(x => !x.person).forEach(x => items.push(x))
         const gone = []
-        if (m.mine && !m.unsent && !readOnly) gone.push({ name: "Unsend", detail: "Removes it for everyone", url: "unsend", danger: true })
+        if (m.mine && !m.unsent && !readOnly && !m.vb) gone.push({ name: "Unsend", detail: "Removes it for everyone", url: "unsend", danger: true })
         // Cap g2 (26.2 "remove"): an admin's Delete for everyone on someone else's message.
         if (!m.mine && !m.unsent && m.from && !readOnly && (isTour || Mod.canModerate(gid, m.from)))
             gone.push({ name: "Delete for everyone", detail: "Shows as Removed by an admin", url: "remove", danger: true })

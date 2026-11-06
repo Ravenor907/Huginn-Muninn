@@ -1,5 +1,6 @@
 #include "filelink.h"
 #include "groupvideo.h"
+#include "bigvideo.h"
 #include "busy.h"
 #include "chat.h"
 #include "call/directpath.h"
@@ -31,6 +32,7 @@
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
 #include <QTcpSocket>
+#include <QPointer>
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QStandardPaths>
@@ -659,6 +661,10 @@ struct FileLink::Xfer {
     // Cap v3 (29.3): mine, a full-size video vid ms long; back sends its relay copy if it can't go straight.
     int vid = 0;
     std::function<void()> back;
+    // Mine: a longer video shown in the chat like a photo (bigvideo.h), its chat and message. Theirs: being kept in the
+    // chat (storing), so it isn't saved as a file.
+    QString bigChat, bigMsg;
+    bool storing = false;
     // Cap f4 (section 30): Tor may carry it; their card is up ("wait"); on Tor now, with its one-time service (mine) or
     // their service's address (theirs), the stream, and its own packet counter; when something last moved; the receiving
     // card's badge and how it comes.
@@ -952,6 +958,10 @@ void FileLink::put(Xfer *x, bool force)
     m.insert(QStringLiteral("canAlways"), !x->mine && mayAlways(x->badge));
     m.insert(QStringLiteral("vid"), x->vid);
     m.insert(QStringLiteral("tor"), x->onTor);
+    // A longer video of mine in the chat as a bubble: its card shows there only once it failed (FileStrip.qml).
+    m.insert(QStringLiteral("bigChat"), x->bigChat);
+    m.insert(QStringLiteral("bigMsg"), x->bigMsg);
+    m.insert(QStringLiteral("bubble"), x->mine && !x->bigMsg.isEmpty() && x->state != QLatin1String("failed"));
     bool found = false;
     for (QVariantMap &e : m_list)
         if (e.value(QStringLiteral("id")).toString() == x->id) {
@@ -1068,6 +1078,10 @@ QString unreadable(const QString &path)
 
 QString FileLink::send(const QString &peer, const QString &path, const QString &group)
 {
+    // Set by linkNext for this one file only.
+    const QString bigChat = m_nextBigChat, bigMsg = m_nextBigMsg;
+    m_nextBigChat.clear();
+    m_nextBigMsg.clear();
     const QFileInfo fi(path);
     if (!fi.isFile() || !fi.isReadable())
         return unreadable(path);
@@ -1087,7 +1101,9 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     if (!hasF1(peer) || (!group.isEmpty() && !(hasF2 && hasF2(peer))) || (m_nextVid == 0 && !f4)) {
         if (m_chat)
             m_chat->probeCaps(peer);   // their app may just not have said yet: it answers with its caps
-        addFailed(peer, name, fi.size(), QStringLiteral("%1 needs the latest Muninn or Huginn. %2.").arg(who(peer), updateText()), path, false, QString(), group);
+        const QString failId = GroupWire::newLogicalId();
+        addFailed(peer, name, fi.size(), QStringLiteral("%1 needs the latest Muninn or Huginn. %2.").arg(who(peer), updateText()), path, false, failId, group);
+        tagBig(failId, bigChat, bigMsg, m_nextVid);
         return QString();
     }
     // The path (30.1): Nearby (their app must know the "lan" candidate), Trusted direct, then Tor. Ultra privacy: never
@@ -1101,7 +1117,9 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     const bool viaRelay = relayMay(choice, ultra, family, peerCan) && !testLocal && !relayStopped();
     const bool tor = f4 && (!torAllowed || torAllowed()) && !testLocal && torMay(ultra);
     if (!sameWifi && !trust && !tor && !viaRelay) {
-        addFailed(peer, name, fi.size(), noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online."), path, false, QString(), group);
+        const QString failId = GroupWire::newLogicalId();
+        addFailed(peer, name, fi.size(), noPathText() + QStringLiteral(". Try again when you're on the same Wi-Fi or online."), path, false, failId, group);
+        tagBig(failId, bigChat, bigMsg, m_nextVid);
         return QString();
     }
     const QString route = sameWifi ? QStringLiteral("direct") : QStringLiteral("internet");
@@ -1110,6 +1128,8 @@ QString FileLink::send(const QString &peer, const QString &path, const QString &
     x->peer = peer;
     x->group = group;
     x->vid = m_nextVid;                 // cap v3: set by sendVideo for this one file
+    x->bigChat = bigChat;
+    x->bigMsg = bigMsg;
     x->back = std::move(m_nextBack);
     m_nextBack = nullptr;
     m_nextVid = 0;
@@ -2461,21 +2481,49 @@ void FileLink::receivedAll(Xfer *x)
             fail(x, QStringLiteral("%1 arrived damaged, so it was thrown away.").arg(x->name));
             return;
         }
-        // The name its .part was given, unless something took that name meanwhile.
-        const QString planned = x->path.chopped(5);
-        const QString final = QFile::exists(planned) ? QDir(x->folder).filePath(freeName(x->folder, x->name)) : planned;
-        if (!QFile::rename(x->path, final)) {
-            QFile::remove(x->path);
-            fail(x, QStringLiteral("%1 couldn't be saved.").arg(x->name));
+        // A video from Family or trusted, up to 3 minutes: in the chat like a photo (bigvideo.h), sealed in the vault, and
+        // its card and the file go. If it can't be kept there, it's saved as a file as before.
+        if (m_chat && !x->storing && BigVideo::inlineOk(x->vid, mayAlways(badge(x->peer)))) {
+            x->storing = true;
+            const QString path = x->path;
+            QPointer<FileLink> me(this);
+            m_chat->inlineVideo(x->peer, x->group, path, x->vid, [me, id, path](bool ok) {
+                if (!me)
+                    return;
+                Xfer *x = me->m_x.value(id);
+                if (ok) {
+                    QFile::remove(path);
+                    me->dropPartial(id);   // stopped meanwhile: no part of it is kept either
+                    if (x)
+                        me->end(x);
+                    me->drop(id);
+                    return;
+                }
+                if (x)
+                    me->savedReceived(x);
+            });
             return;
         }
-        x->name = QFileInfo(final).fileName();
-        x->path = final;
-        x->note.clear();
-        Sharing::markFromInternet(final);   // Windows warns before a program from someone else runs
-        Q_EMIT notice(QStringLiteral("File from %1: %2 · Saved in %3").arg(who(x->peer), x->name, shownFolder(x->folder)));
-        finish(x);
+        savedReceived(x);
     });
+}
+
+void FileLink::savedReceived(Xfer *x)
+{
+    // The name its .part was given, unless something took that name meanwhile.
+    const QString planned = x->path.chopped(5);
+    const QString final = QFile::exists(planned) ? QDir(x->folder).filePath(freeName(x->folder, x->name)) : planned;
+    if (!QFile::rename(x->path, final)) {
+        QFile::remove(x->path);
+        fail(x, QStringLiteral("%1 couldn't be saved.").arg(x->name));
+        return;
+    }
+    x->name = QFileInfo(final).fileName();
+    x->path = final;
+    x->note.clear();
+    Sharing::markFromInternet(final);   // Windows warns before a program from someone else runs
+    Q_EMIT notice(QStringLiteral("File from %1: %2 · Saved in %3").arg(who(x->peer), x->name, shownFolder(x->folder)));
+    finish(x);
 }
 
 QString FileLink::freeName(const QString &folder, const QString &given) const
@@ -2498,6 +2546,15 @@ QString FileLink::freeName(const QString &folder, const QString &given) const
 
 void FileLink::finish(Xfer *x)
 {
+    // A copy of my longer video (in the chat like a photo) arrived: the message says Sent, and the card goes.
+    if (x->mine && !x->bigMsg.isEmpty()) {
+        if (m_chat)
+            m_chat->bigVideoSent(x->bigChat, x->bigMsg);
+        const QString id = x->id;
+        end(x);
+        drop(id);
+        return;
+    }
     x->state = QStringLiteral("done");
     x->paused = x->held = false;
     put(x, true);
@@ -2648,12 +2705,18 @@ QString FileLink::sendVideo(const QString &peer, const QString &path, const QStr
     const bool trust = trusted && trusted(peer) && UltraPrivacy::directAllowed();
     const bool sameWifi = !lanOf(peer).isEmpty() && hasF2 && hasF2(peer);
     if (!hasF1(peer) || (!group.isEmpty() && !(hasF2 && hasF2(peer))) || (!trust && !sameWifi && !relayPlan(peer, group))) {
+        // A link set for this file (linkNext) stays with it: the card below, or the one back makes.
+        const QString bigChat = m_nextBigChat, bigMsg = m_nextBigMsg;
+        m_nextBigChat.clear();
+        m_nextBigMsg.clear();
         if (back) {
             back();
         } else {
+            const QString failId = GroupWire::newLogicalId();
             addFailed(peer, QFileInfo(path).fileName(), QFileInfo(path).size(),
                       QStringLiteral("Can't reach %1 straight. Full-size videos go on the same Wi-Fi, or with Trusted direct on for each other.").arg(who(peer)),
-                      path, false, QString(), group, !trust);
+                      path, false, failId, group, !trust);
+            tagBig(failId, bigChat, bigMsg, qBound(1, vidMs, GroupVideo::kFullMaxMs));
         }
         return QString();
     }
@@ -2684,6 +2747,19 @@ void FileLink::drop(const QString &id)
             m_list.removeAt(i);
             Q_EMIT changed();
             return;
+        }
+}
+
+void FileLink::tagBig(const QString &id, const QString &chat, const QString &msgId, int vid)
+{
+    if (msgId.isEmpty())
+        return;
+    for (QVariantMap &e : m_list)
+        if (e.value(QStringLiteral("id")).toString() == id) {
+            e.insert(QStringLiteral("bigChat"), chat);
+            e.insert(QStringLiteral("bigMsg"), msgId);
+            e.insert(QStringLiteral("vid"), vid);
+            e.insert(QStringLiteral("bubble"), false);   // failed: it shows
         }
 }
 
@@ -2849,17 +2925,27 @@ void FileLink::retry(const QString &id)
 {
     if (!canRetry(id))
         return;
-    QString peer, path, group;
+    QString peer, path, group, bigChat, bigMsg;
+    int vid = 0;
     for (const QVariantMap &e : std::as_const(m_list))
         if (e.value(QStringLiteral("id")).toString() == id) {
             peer = e.value(QStringLiteral("peer")).toString();
             path = e.value(QStringLiteral("path")).toString();
             group = e.value(QStringLiteral("group")).toString();
+            bigChat = e.value(QStringLiteral("bigChat")).toString();
+            bigMsg = e.value(QStringLiteral("bigMsg")).toString();
+            vid = e.value(QStringLiteral("vid")).toInt();
         }
     drop(id);
     if (m_resumable.remove(id))
         saveKept();
+    // A longer video of mine in the chat: it goes again as the same video offer, and its card follows the message again.
+    if (!bigMsg.isEmpty()) {
+        linkNext(bigChat, bigMsg);
+        m_nextVid = qBound(0, vid, GroupVideo::kFullMaxMs);
+    }
     const QString why = send(peer, path, group);
+    m_nextVid = 0;
     if (!why.isEmpty())
         Q_EMIT notice(why);
 }

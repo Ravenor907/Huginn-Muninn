@@ -13,7 +13,7 @@ Column {
     property string peer: ""
     // The chat these cards belong to: their key, or "g:<group>".
     property string where: peer
-    readonly property var items: where === "" ? [] : FileLink.transfers.filter(t => t.where === where && !t.relay)
+    readonly property var items: where === "" ? [] : FileLink.transfers.filter(t => t.where === where && !t.relay && !t.bubble)
     property int focusIndex: -1       // the card the controller is on (-1: none)
     property int focusButton: 0
     visible: items.length > 0

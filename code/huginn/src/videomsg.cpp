@@ -227,8 +227,15 @@ void VideoMsg::discard()
 void VideoMsg::play(const QString &id, QObject *videoOutput)
 {
     stop();
-    m_shown = id == QLatin1String("review") ? m_clip : m_chat->blob(id);
-    if (!MoreWire::isVideo(m_shown)) {
+    // A longer video in the chat (bigvideo.h): read from its sealed pieces as it plays, never whole in memory.
+    QIODevice *big = id == QLatin1String("review") ? nullptr : m_chat->bigVideoDevice(id, this);
+    if (big && !big->open(QIODevice::ReadOnly)) {
+        delete big;
+        big = nullptr;
+    }
+    if (!big)
+        m_shown = id == QLatin1String("review") ? m_clip : m_chat->blob(id);
+    if (!big && !MoreWire::isVideo(m_shown)) {
         m_shown.clear();
         setError(QStringLiteral("This video can't be played."));
         return;
@@ -249,9 +256,14 @@ void VideoMsg::play(const QString &id, QObject *videoOutput)
     m_player->setVideoOutput(videoOutput);
     m_view = videoOutput;
     m_buffer.close();
-    m_buffer.setData(m_shown);
-    m_buffer.open(QIODevice::ReadOnly);
-    m_player->setSourceDevice(&m_buffer, QUrl(QStringLiteral("video.mp4")));
+    if (big) {
+        m_big = big;
+        m_player->setSourceDevice(big, QUrl(QStringLiteral("video.mp4")));
+    } else {
+        m_buffer.setData(m_shown);
+        m_buffer.open(QIODevice::ReadOnly);
+        m_player->setSourceDevice(&m_buffer, QUrl(QStringLiteral("video.mp4")));
+    }
     m_player->play();
     m_playing = id;
     m_paused = false;
@@ -280,6 +292,13 @@ void VideoMsg::stop()
     if (m_player) {
         m_player->stop();
         m_player->setVideoOutput(nullptr);
+        if (m_big)
+            m_player->setSource(QUrl());   // lets go of the pieces' device before it goes
+    }
+    if (m_big) {
+        m_big->close();
+        m_big->deleteLater();
+        m_big = nullptr;
     }
     m_buffer.close();
     m_shown.fill(0);

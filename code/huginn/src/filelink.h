@@ -191,6 +191,10 @@ public:
     // card goes and [back] sends the relay copy. With no [back] (a long video in full), it waits as any file does.
     // [path]: the video itself (never changed or deleted here).
     QString sendVideo(const QString &peer, const QString &path, const QString &group, int vidMs, std::function<void()> back);
+    // A longer video of mine shown in the chat like a photo (bigvideo.h): the next send() or sendVideo() card follows
+    // message [msgId] in [chat] (a contact's key or "g:<group>"). It stays out of the chat's cards unless it fails; once
+    // it's done, the message says Sent and the card goes.
+    void linkNext(const QString &chat, const QString &msgId) { m_nextBigChat = chat; m_nextBigMsg = msgId; }
     // The one way to send (Send file, drag and drop): files to a chat, their key or "g:<group>[:<channel>]". In a group,
     // once to each member, after the group's own file rules said yes. "" when on their way, else why not.
     Q_INVOKABLE QString sendTo(const QString &where, const QVariantList &urls);
@@ -377,6 +381,8 @@ private:
     void onDatagram(Xfer *x);
     void sendAck(Xfer *x);
     void receivedAll(Xfer *x);
+    // A file of theirs that arrived whole and checked: renamed from its .part and saved (its card says where).
+    void savedReceived(Xfer *x);
     // again: false for what trying again can't change (stopped, declined, refused).
     void fail(Xfer *x, const QString &why, bool tell = true, bool again = true);
     // No straight path for a file of mine: a small one goes over the internet route instead, else it fails with why.
@@ -392,6 +398,9 @@ private:
     QString badge(const QString &peer) const;
     int m_nextVid = 0;
     std::function<void()> m_nextBack;
+    QString m_nextBigChat, m_nextBigMsg;
+    // A card (one that failed before it began) follows a longer video's message too, so its Retry stays linked.
+    void tagBig(const QString &id, const QString &chat, const QString &msgId, int vid);
     void drop(const QString &id);
     void finish(Xfer *x);
     void end(Xfer *x);

@@ -366,6 +366,8 @@ QtObject {
     // "voice message".
     function forwardMedia(it, word) {
         if (!it || !it.photo) return
+        // A longer video (vb) stays in this chat: it went as a file, and only its first frame is the message's picture.
+        if (it.vb) { Ui.say("Longer videos can't be forwarded. Save it, then send it as a file.", true); return }
         pickChat("Forward the " + (word || "photo") + " to", (to, name) => {
             const r = Chat.forwardMedia(it.photo, to, it.voice || 0)
             Ui.say(r !== "" ? r : "Sent to " + name + ".", r !== "" && r.indexOf("need") < 0)
@@ -379,7 +381,7 @@ QtObject {
         const word = m.voice ? "voice message" : m.video ? "video" : m.gif ? "GIF" : "photo"
         const text = m.text || ""
         if (!media) { if (text !== "") forwardMenu(text); return }
-        if (text === "") { forwardMedia(m, word); return }
+        if (text === "" || m.vb) { forwardMedia(m, word); return }
         pickChat("Forward to", (to, name) => {
             const r = Chat.forwardMedia(m.photo, to, m.voice || 0)
             if (r !== "" && r.indexOf("need") < 0) { Ui.say(r, true); return }

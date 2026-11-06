@@ -21,6 +21,7 @@
 
 class Ble;
 class FileLink;
+class QIODevice;
 class Labs;
 class Moderation;
 class Link;
@@ -219,6 +220,10 @@ public:
     Q_INVOKABLE QVariantMap sendPickedVideo(const QString &where, const QString &path, bool inFull);
     // Ultra privacy is on: sending videos is off ("Off while Ultra privacy is on"); receiving still works.
     Q_INVOKABLE bool videoSendingOff() const;
+    // A longer video in the chat like a photo (bigvideo.h): photo id [id] is one (its sealed pieces are here), and a
+    // device that plays it piece by piece (nullptr when it isn't here). VideoMsg::play uses it.
+    Q_INVOKABLE bool isBigVideo(const QString &id) const;
+    QIODevice *bigVideoDevice(const QString &id, QObject *parent = nullptr) const;
     Q_INVOKABLE QString sendPoll(const QString &where, const QString &question, const QStringList &answers, bool multi);
     // My vote on a poll ([] takes it back).
     Q_INVOKABLE QString vote(const QString &where, const QString &id, const QVariantList &choices);
@@ -630,6 +635,25 @@ private:
     QList<GroupVideo::Member> videoMembers(const QString &where) const;
     // Cap v3: [k]'s full copy couldn't go straight: they get the relay copy of my group message [gid] after all.
     bool addGroupBlobMember(const QString &g, const QString &gid, const QString &k);
+    // Longer videos in the chat (bigvideo.h, the same as Muninn's Chat.inlineVideo and ownBigVideo). storeBigVideo keeps
+    // the MP4 at [path] as big video [id] (sealed pieces, then its first frame as the poster), one piece per turn of the
+    // event loop; done(false) when it couldn't (nothing is kept then, and [path] is never touched).
+    void storeBigVideo(const QString &id, const QString &path, std::function<void(bool)> done);
+    // A video from Family or trusted [from] that came through FileLink: into the chat with them (or [group]'s main
+    // channel) like a photo. done(false) when it can't be kept: FileLink saves it as a file instead.
+    void inlineVideo(const QString &from, const QString &group, const QString &path, int ms, std::function<void(bool)> done);
+    // My own longer video, in the chat at once ("sending" until a copy arrives): [where] is a contact's key or
+    // "g:<group>". done gets its message id, or "" when it couldn't be kept.
+    void ownBigVideo(const QString &where, const QString &path, int ms, std::function<void(const QString &)> done);
+    // A copy of my big video [msgId] reached someone (FileLink): [chat] is a contact's key or "g:<group>".
+    void bigVideoSent(const QString &chat, const QString &msgId);
+    // Save: the whole video written to [path], piece by piece. False when it isn't all here.
+    bool exportBig(const QString &id, const QString &path) const;
+    void dropBig(const QString &id);
+    // Pieces whose message is gone (its poster deleted with it, by any of the ways messages go): once an hour at most.
+    void sweepBig();
+    QSet<QString> m_bigStoring;
+    qint64 m_bigSwept = 0;
     // Cap v3 (29.4): video relay pieces leave paced, a few a second in all; one queue per key ("member|message").
     GroupVideo::Pacer m_videoPacer;
     QSet<QString> m_paced;

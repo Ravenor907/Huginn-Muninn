@@ -402,7 +402,8 @@ QVariantMap Chat::shared(const QString &where) const
         if (!str(m, "photo").isEmpty() && m.value(QStringLiteral("voice")).toInt() == 0) {
             media << QVariantMap{{QStringLiteral("id"), str(m, "id")}, {QStringLiteral("photo"), str(m, "photo")}, {QStringLiteral("video"), m.value(QStringLiteral("video")).toInt()},
                                  {QStringLiteral("mine"), mine}, {QStringLiteral("name"), name}, {QStringLiteral("time"), m.value(QStringLiteral("time"))},
-                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}, {QStringLiteral("here"), here(str(m, "photo"))}};
+                                 {QStringLiteral("gif"), m.value(QStringLiteral("gif")).toBool()}, {QStringLiteral("here"), here(str(m, "photo"))},
+                                 {QStringLiteral("vb"), m.value(QStringLiteral("vb")).toBool()}};
             continue;
         }
         const QVariantMap lp = m.value(QStringLiteral("lp")).toMap();
@@ -422,10 +423,12 @@ QVariantMap Chat::shared(const QString &where) const
 // path it was saved as, or empty when it isn't on this device or couldn't be written.
 QString Chat::saveMedia(const QString &id)
 {
-    QByteArray b = blob(id);
-    if (b.isEmpty())
+    // A longer video (bigvideo.h): its blob is only the poster, so the video itself is written out piece by piece.
+    const bool big = isBigVideo(id);
+    QByteArray b = big ? QByteArray() : blob(id);
+    if (b.isEmpty() && !big)
         return QString();
-    const bool voice = Photos::isAdts(b), video = !voice && MoreWire::isVideo(b);
+    const bool voice = !big && Photos::isAdts(b), video = big || (!voice && MoreWire::isVideo(b));
     QString dir;
     if (voice || video) {
         const QString downloads = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
@@ -442,6 +445,8 @@ QString Chat::saveMedia(const QString &id)
     QString path = QDir(dir).filePath(stem + QLatin1Char('.') + ext);
     for (int n = 1; QFile::exists(path) && n < 1000; ++n)
         path = QDir(dir).filePath(stem + QStringLiteral(" (%1).").arg(n) + ext);
+    if (big)
+        return exportBig(id, path) ? path : QString();
     QFile f(path);
     const bool ok = f.open(QIODevice::WriteOnly) && f.write(b) == b.size();
     b.fill(0);
@@ -453,6 +458,9 @@ QString Chat::saveMedia(const QString &id)
 // voiceMs: a voice message's length. Empty when it went, else what to say.
 QString Chat::forwardMedia(const QString &id, const QString &to, int voiceMs)
 {
+    // A longer video's blob is only its poster: never sent as if it were the video.
+    if (isBigVideo(id))
+        return QStringLiteral("Longer videos can't be forwarded. Save it, then send it as a file.");
     const QByteArray b = blob(id);
     if (b.isEmpty())
         return QStringLiteral("It isn't on this device, so it can't be forwarded.");

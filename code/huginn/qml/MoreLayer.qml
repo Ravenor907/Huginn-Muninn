@@ -425,7 +425,8 @@ Item {
                 border.color: Theme.accent; border.width: index === more.sharedSel ? Theme.focusWidth : 0
                 Image {
                     anchors.fill: parent
-                    visible: tile.photo && !more.tour
+                    // A longer video (vb) shows its first frame, with the play mark over it.
+                    visible: (tile.photo || (tile.video && tile.here && !!tile.modelData.vb)) && !more.tour
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     // A small cached copy, loaded only for the tiles in view.

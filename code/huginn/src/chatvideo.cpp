@@ -7,10 +7,12 @@
 // made off it, with its location and camera details taken out (GroupVideo::scrub), as Huginn does for pictures. One
 // cleaned copy serves everyone getting it by FileLink.
 #include "settings.h"
+#include "bigvideo.h"
 #include "chat.h"
 #include "filelink.h"
 #include "groupvideo.h"
 #include "groupwire.h"
+#include "moderation.h"
 #include "morewire.h"
 #include "photos.h"
 #include "system.h"
@@ -27,6 +29,8 @@
 #include <QThread>
 #include <QUuid>
 #include <QSet>
+#include <QStorageInfo>
+#include <QTimer>
 #include <algorithm>
 #include <memory>
 
@@ -358,58 +362,352 @@ QVariantMap Chat::sendPickedVideo(const QString &where, const QString &path, boo
             Q_EMIT self->notice(QStringLiteral("The video didn't go: Huginn couldn't take its location and camera details out. It can go as a file."));
             return;
         }
-        const QVariantMap extra{{QStringLiteral("video"), relayMs}};
-        QPointer<Chat> me = self;
-        auto gid = std::make_shared<QString>();
-        if (group && !relayNow.isEmpty())
-            *gid = self->sendGroupBlob(g, ch, clipBytes, 0, extra, relayNow);
-        else if (!group && !relayNow.isEmpty())
-            self->sendBlob(where, clipBytes, 0, extra);
-        for (const QString &k : fullNow) {
-            std::function<void()> back;
-            if (newApps.contains(k)) {
-                // A new app it can't reach directly after all (or that declines a full-size offer, a kids' device): the
-                // same file, when it's 720p or smaller, as the 720p copy through FileLink (Tor).
-                if (smallOk)
-                    back = [me, k, copy, to] {
-                        if (me && me->m_files)
+        // Family and trusted only, up to 3 minutes, every copy full size to an app with the new paths: the video shows in
+        // the chat at once like a photo (bigvideo.h), "sending" until a copy arrives, and each FileLink card follows it
+        // (shown only if it fails). Nothing changes on the wire: an older app sees the same file offer.
+        const bool asBubble = !copy.isEmpty() && smallNow.isEmpty() && relayNow.isEmpty() && !fullNow.isEmpty() && BigVideo::inlineOk(ms, true)
+            && std::all_of(fullNow.cbegin(), fullNow.cend(), [&newApps, &self](const QString &k) { return newApps.contains(k) && self->m_files->mayAlwaysFrom(k); });
+        const QString chatKey = group ? QStringLiteral("g:") + g : where;
+        auto go = [self, where, group, g, ch, newApps, ms, relayMs, smallOk, clipBytes, copy, to, fullNow, smallNow, relayNow, chatKey](const QString &bubble) {
+            if (!self || !self->m_files)
+                return;
+            const QVariantMap extra{{QStringLiteral("video"), relayMs}};
+            QPointer<Chat> me = self;
+            auto gid = std::make_shared<QString>();
+            if (group && !relayNow.isEmpty())
+                *gid = self->sendGroupBlob(g, ch, clipBytes, 0, extra, relayNow);
+            else if (!group && !relayNow.isEmpty())
+                self->sendBlob(where, clipBytes, 0, extra);
+            for (const QString &k : fullNow) {
+                std::function<void()> back;
+                if (newApps.contains(k)) {
+                    // A new app it can't reach directly after all (or that declines a full-size offer, a kids' device): the
+                    // same file, when it's 720p or smaller, as the 720p copy through FileLink (Tor).
+                    if (smallOk)
+                        back = [me, k, copy, to, bubble, chatKey] {
+                            if (!me || !me->m_files)
+                                return;
+                            if (!bubble.isEmpty())
+                                me->m_files->linkNext(chatKey, bubble);
                             me->m_files->send(k, copy, to);
+                        };
+                } else if (!clipBytes.isEmpty()) {
+                    back = [me, group, g, ch, where, clipBytes, extra, k, gid] {
+                        if (!me)
+                            return;
+                        if (!group) {
+                            if (me->hasM2(where))
+                                me->sendBlob(where, clipBytes, 0, extra);
+                        } else if (gid->isEmpty()) {
+                            *gid = me->sendGroupBlob(g, ch, clipBytes, 0, extra, {k});
+                        } else {
+                            me->addGroupBlobMember(g, *gid, k);
+                        }
                     };
-            } else if (!clipBytes.isEmpty()) {
-                back = [me, group, g, ch, where, clipBytes, extra, k, gid] {
-                    if (!me)
-                        return;
-                    if (!group) {
-                        if (me->hasM2(where))
-                            me->sendBlob(where, clipBytes, 0, extra);
-                    } else if (gid->isEmpty()) {
-                        *gid = me->sendGroupBlob(g, ch, clipBytes, 0, extra, {k});
-                    } else {
-                        me->addGroupBlobMember(g, *gid, k);
-                    }
-                };
+                }
+                if (!bubble.isEmpty())
+                    self->m_files->linkNext(chatKey, bubble);
+                self->m_files->sendVideo(k, copy, to, ms, back);
             }
-            self->m_files->sendVideo(k, copy, to, ms, back);
+            // The 720p copy: through FileLink by its best path (Tor when there's no direct one), never the relays.
+            for (const QString &k : smallNow)
+                self->m_files->send(k, copy, to);
+            QStringList parts;
+            if (!fullNow.isEmpty())
+                parts << QStringLiteral("full size to %1").arg(fullNow.size());
+            if (!smallNow.isEmpty())
+                parts << QStringLiteral("a 720p copy to %1").arg(smallNow.size());
+            if (!relayNow.isEmpty())
+                parts << QStringLiteral("a smaller copy to %1 with older apps").arg(relayNow.size());
+            // In the chat as a bubble: it says Sending there, so nothing more is said here.
+            if (!bubble.isEmpty())
+                return;
+            if (!group && !fullNow.isEmpty())
+                Q_EMIT self->notice(QStringLiteral("Sending the video full size."));
+            else if (!group && !smallNow.isEmpty())
+                Q_EMIT self->notice(QStringLiteral("Sending a 720p copy of the video."));
+            else if (!group)
+                Q_EMIT self->notice(QStringLiteral("Sending the video. Its pieces go a few a second, so it can take a few minutes."));
+            else
+                Q_EMIT self->notice(QStringLiteral("Sending the video: ") + parts.join(QStringLiteral(", ")) + QLatin1Char('.'));
+        };
+        if (!asBubble) {
+            go(QString());
+            return;
         }
-        // The 720p copy: through FileLink by its best path (Tor when there's no direct one), never the relays.
-        for (const QString &k : smallNow)
-            self->m_files->send(k, copy, to);
-        QStringList parts;
-        if (!fullNow.isEmpty())
-            parts << QStringLiteral("full size to %1").arg(fullNow.size());
-        if (!smallNow.isEmpty())
-            parts << QStringLiteral("a 720p copy to %1").arg(smallNow.size());
-        if (!relayNow.isEmpty())
-            parts << QStringLiteral("a smaller copy to %1 with older apps").arg(relayNow.size());
-        if (!group && !fullNow.isEmpty())
-            Q_EMIT self->notice(QStringLiteral("Sending the video full size."));
-        else if (!group && !smallNow.isEmpty())
-            Q_EMIT self->notice(QStringLiteral("Sending a 720p copy of the video."));
-        else if (!group)
-            Q_EMIT self->notice(QStringLiteral("Sending the video. Its pieces go a few a second, so it can take a few minutes."));
-        else
-            Q_EMIT self->notice(QStringLiteral("Sending the video: ") + parts.join(QStringLiteral(", ")) + QLatin1Char('.'));
+        // Kept first (a few seconds for a long one), then sent: each card is linked to the message it follows. When it
+        // can't be kept, it goes as before.
+        self->ownBigVideo(chatKey, copy, ms, go);
     });
     t->start();
     return result(true, QStringLiteral("Getting the video ready."));
+}
+
+// ------------------------------------------------------------------ longer videos in the chat (Family and trusted)
+
+bool Chat::isBigVideo(const QString &id) const
+{
+    return m_ready && !id.isEmpty() && !id.contains(QLatin1Char('/')) && QFileInfo::exists(m_vault->path(BigVideo::sizeName(id)));
+}
+
+QIODevice *Chat::bigVideoDevice(const QString &id, QObject *parent) const
+{
+    if (!isBigVideo(id))
+        return nullptr;
+    const qint64 total = m_vault->read(BigVideo::sizeName(id)).trimmed().toLongLong();
+    if (total <= 0)
+        return nullptr;
+    // Read on the media player's own thread too: anyThreadReader never waits on the window's thread.
+    const std::function<QByteArray(const QString &)> read = m_vault->anyThreadReader();
+    return new BigVideo::Device(total, [read, id](int i) { return read(BigVideo::piece(id, i)); }, parent);
+}
+
+void Chat::dropBig(const QString &id)
+{
+    if (id.isEmpty() || id.contains(QLatin1Char('/')))
+        return;
+    const QString dir = m_vault->path(BigVideo::dir(id));
+    const QStringList files = QDir(dir).entryList(QDir::Files | QDir::Hidden);
+    for (const QString &f : files)
+        m_vault->remove(BigVideo::dir(id) + QLatin1Char('/') + f);
+    QDir(dir).removeRecursively();   // anything left over (a save that was cut off)
+}
+
+void Chat::sweepBig()
+{
+    const qint64 t = QDateTime::currentMSecsSinceEpoch();
+    if (!m_ready || m_vault->locked() || t - m_bigSwept < 3600000)
+        return;
+    m_bigSwept = t;
+    const QString photos = m_vault->path(QStringLiteral("photos"));
+    const QStringList dirs = QDir(photos).entryList({QStringLiteral("*.v")}, QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &d : dirs) {
+        const QString id = d.chopped(2);
+        if (!id.isEmpty() && !m_bigStoring.contains(id) && !QFileInfo::exists(photos + QLatin1Char('/') + id))
+            dropBig(id);
+    }
+}
+
+void Chat::storeBigVideo(const QString &id, const QString &path, std::function<void(bool)> done)
+{
+    struct Job {
+        QString id;
+        QFile file;
+        qint64 total = 0, written = 0;
+        int i = 0;
+        std::function<void(bool)> done;
+    };
+    auto job = std::make_shared<Job>();
+    job->id = id;
+    job->done = std::move(done);
+    const QFileInfo fi(path);
+    QStorageInfo disk(QFileInfo(m_vault->path(QStringLiteral("photos"))).absolutePath());
+    disk.refresh();
+    const bool room = !disk.isValid() || disk.bytesAvailable() < 0 || disk.bytesAvailable() >= fi.size() + (qint64(200) << 20);
+    job->file.setFileName(path);
+    if (!m_ready || m_vault->locked() || id.isEmpty() || id.contains(QLatin1Char('/')) || m_bigStoring.contains(id) || !fi.isFile()
+        || fi.size() <= 0 || fi.size() > FileLink::kMaxBytes || !room || !job->file.open(QIODevice::ReadOnly)) {
+        QTimer::singleShot(0, this, [job] { job->done(false); });
+        return;
+    }
+    job->total = fi.size();
+    dropBig(id);
+    m_bigStoring.insert(id);
+    QPointer<Chat> self(this);
+    auto fail = [self, job] {
+        job->file.close();
+        if (self) {
+            self->m_bigStoring.remove(job->id);
+            self->dropBig(job->id);
+            self->m_vault->remove(QStringLiteral("photos/") + job->id);
+        }
+        job->done(false);
+    };
+    // One sealed piece per turn of the event loop, so the window keeps moving while a long video is kept.
+    auto step = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weak = step;
+    *step = [self, job, fail, weak] {
+        if (!self)
+            return;
+        Chat *c = self;
+        if (!c->m_ready || c->m_vault->locked()) {
+            fail();
+            return;
+        }
+        QByteArray chunk = job->file.read(BigVideo::kPiece);
+        if (!chunk.isEmpty()) {
+            const bool ok = c->m_vault->write(BigVideo::piece(job->id, job->i), chunk);
+            job->written += chunk.size();
+            chunk.fill(0);
+            ++job->i;
+            if (!ok || job->written > job->total) {
+                fail();
+                return;
+            }
+            if (const std::shared_ptr<std::function<void()>> next = weak.lock())
+                QTimer::singleShot(0, c, [next] { (*next)(); });
+            return;
+        }
+        job->file.close();
+        if (job->written != job->total || !c->m_vault->write(BigVideo::sizeName(job->id), QByteArray::number(job->total))) {
+            fail();
+            return;
+        }
+        // Its first frame, read from the sealed pieces: the bubble's picture.
+        QIODevice *dev = c->bigVideoDevice(job->id);
+        if (!dev) {
+            fail();
+            return;
+        }
+        BigVideo::poster(dev, c, [self, job, fail](const QByteArray &jpg) {
+            if (!self || !self->m_ready || jpg.isEmpty() || !self->m_vault->write(QStringLiteral("photos/") + job->id, jpg)) {
+                fail();
+                return;
+            }
+            self->m_bigStoring.remove(job->id);
+            job->done(true);
+        });
+    };
+    QTimer::singleShot(0, this, [step] { (*step)(); });
+}
+
+bool Chat::exportBig(const QString &id, const QString &path) const
+{
+    if (!isBigVideo(id))
+        return false;
+    const qint64 total = m_vault->read(BigVideo::sizeName(id)).trimmed().toLongLong();
+    QFile f(path);
+    if (total <= 0 || !f.open(QIODevice::WriteOnly))
+        return false;
+    qint64 done = 0;
+    for (int i = 0; done < total; ++i) {
+        QByteArray b = m_vault->read(BigVideo::piece(id, i));
+        const bool ok = !b.isEmpty() && f.write(b) == b.size();
+        done += b.size();
+        b.fill(0);
+        if (!ok) {
+            f.close();
+            f.remove();
+            return false;
+        }
+    }
+    f.close();
+    if (done != total) {
+        f.remove();
+        return false;
+    }
+    return true;
+}
+
+void Chat::inlineVideo(const QString &from, const QString &group, const QString &path, int ms, std::function<void(bool)> done)
+{
+    if (!m_ready || from.isEmpty() || from == myKey() || (group.isEmpty() && (!isContact(from) || isTrashed(from)))
+        || (!group.isEmpty() && !m_groups.contains(group))) {
+        QTimer::singleShot(0, this, [done] { done(false); });
+        return;
+    }
+    const QString mid = group.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : GroupWire::newLogicalId();
+    const int len = qBound(1, ms, BigVideo::kInlineMaxMs + BigVideo::kSlackMs);
+    QPointer<Chat> self(this);
+    storeBigVideo(mid, path, [self, from, group, mid, len, done](bool ok) {
+        if (!self || !ok) {
+            done(false);
+            return;
+        }
+        Chat *c = self;
+        bool added = false;
+        if (group.isEmpty()) {
+            const QString name = c->nameOf(from);
+            QVariantMap m = c->message(mid, from, name, QString(), false, QString());
+            m.insert(QStringLiteral("photo"), mid);
+            m.insert(QStringLiteral("video"), len);
+            m.insert(QStringLiteral("vb"), true);
+            added = !c->isTrashed(from) && c->addPrivate(from, m);
+            if (added) {
+                c->m_unread.insert(from);
+                Q_EMIT c->arrived(name, QStringLiteral("Video"), from);
+            }
+        } else {
+            // The group's first channel, under the same rules as a photo from them (cap g2 and g3).
+            const auto it = c->m_groups.constFind(group);
+            if (it != c->m_groups.cend() && !it->state.isEmpty() && !it->removed && !it->left && GroupWire::isMember(it->state, from)
+                && !(c->m_mod && c->m_mod->barred(group, from))
+                && !(GroupWire::channel(it->state, QStringLiteral("main")).value(QStringLiteral("ao")).toBool() && !GroupWire::isAdmin(it->state, from))) {
+                const QVariantMap m{{QStringLiteral("id"), mid}, {QStringLiteral("ch"), QStringLiteral("main")}, {QStringLiteral("from"), from},
+                                    {QStringLiteral("name"), c->memberName(group, from)}, {QStringLiteral("text"), QString()},
+                                    {QStringLiteral("mine"), false}, {QStringLiteral("time"), QDateTime::currentMSecsSinceEpoch()},
+                                    {QStringLiteral("via"), QString()}, {QStringLiteral("state"), QString()}, {QStringLiteral("photo"), mid},
+                                    {QStringLiteral("voice"), 0}, {QStringLiteral("unsent"), QString()}, {QStringLiteral("video"), len},
+                                    {QStringLiteral("vb"), true}};
+                c->storeGroupMessage(group, m, true);
+                added = true;
+            }
+        }
+        if (!added) {
+            c->m_vault->remove(QStringLiteral("photos/") + mid);
+            c->dropBig(mid);
+        }
+        done(added);
+    });
+}
+
+void Chat::ownBigVideo(const QString &where, const QString &path, int ms, std::function<void(const QString &)> done)
+{
+    const bool group = where.startsWith(QLatin1String("g:"));
+    const QString g = group ? where.mid(2) : QString();
+    if (!m_ready || where.isEmpty() || (group && !m_groups.contains(g))) {
+        QTimer::singleShot(0, this, [done] { done(QString()); });
+        return;
+    }
+    const QString mid = group ? GroupWire::newLogicalId() : QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const int len = qBound(1, ms, BigVideo::kInlineMaxMs + BigVideo::kSlackMs);
+    QPointer<Chat> self(this);
+    storeBigVideo(mid, path, [self, where, group, g, mid, len, done](bool ok) {
+        if (!self || !ok) {
+            done(QString());
+            return;
+        }
+        Chat *c = self;
+        bool added = false;
+        if (group) {
+            const auto it = c->m_groups.constFind(g);
+            if (it != c->m_groups.cend() && !it->state.isEmpty() && !it->removed && !it->left) {
+                // Local only: each copy went as its own file, so nothing waits in the group's outbox for it.
+                const QVariantMap m{{QStringLiteral("id"), mid}, {QStringLiteral("ch"), QStringLiteral("main")}, {QStringLiteral("from"), c->myKey()},
+                                    {QStringLiteral("name"), c->username()}, {QStringLiteral("text"), QString()}, {QStringLiteral("mine"), true},
+                                    {QStringLiteral("time"), QDateTime::currentMSecsSinceEpoch()}, {QStringLiteral("state"), QStringLiteral("sending")},
+                                    {QStringLiteral("to"), QStringList()}, {QStringLiteral("dlv"), QStringList()}, {QStringLiteral("rd"), QStringList()},
+                                    {QStringLiteral("photo"), mid}, {QStringLiteral("voice"), 0}, {QStringLiteral("unsent"), QString()},
+                                    {QStringLiteral("failed"), false}, {QStringLiteral("video"), len}, {QStringLiteral("vb"), true}};
+                c->storeGroupMessage(g, m, false);
+                added = true;
+            }
+        } else {
+            QVariantMap m = c->message(mid, where, c->username(), QString(), true, QString());
+            m.insert(QStringLiteral("state"), QStringLiteral("sending"));
+            m.insert(QStringLiteral("photo"), mid);
+            m.insert(QStringLiteral("video"), len);
+            m.insert(QStringLiteral("vb"), true);
+            added = c->addPrivate(where, m);
+        }
+        if (!added) {
+            c->m_vault->remove(QStringLiteral("photos/") + mid);
+            c->dropBig(mid);
+        }
+        done(added ? mid : QString());
+    });
+}
+
+void Chat::bigVideoSent(const QString &chat, const QString &msgId)
+{
+    const auto sent = [](QVariantMap &x) {
+        if (x.value(QStringLiteral("mine")).toBool() && str(x, "state") == QLatin1String("sending")) {
+            x.insert(QStringLiteral("state"), QStringLiteral("sent"));
+            x.insert(QStringLiteral("failed"), false);
+        }
+    };
+    if (chat.startsWith(QLatin1String("g:")))
+        updateGroupMessage(chat.mid(2), msgId, sent);
+    else
+        update(chat, msgId, sent);
 }

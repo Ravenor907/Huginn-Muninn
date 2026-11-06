@@ -87,6 +87,7 @@ qt_add_executable(huginn
     src/chatfiles.cpp
     src/linkpreview.cpp src/linkpreview.h
     src/videomsg.cpp src/videomsg.h
+    src/bigvideo.cpp src/bigvideo.h
     src/savedmedia.cpp src/savedmedia.h
     src/groupvideo.cpp src/groupvideo.h src/chatvideo.cpp
     src/thumbs.cpp src/thumbs.h

@@ -1916,7 +1916,8 @@ Rectangle {
         if (m.saved && !m.unsent) extra.push({ name: "Open in folder", icon: "folder", url: "folder" })
         if (m.voice && !m.unsent) extra.push({ name: Voice.playing === m.id ? "Stop" : "Play", icon: "play", url: "play" })
         const gone = []
-        if (openKey !== "" && m.mine && !m.unsent && !m.failed) gone.push({ name: "Unsend", detail: "Removes it for both", url: "unsend", danger: true })
+        // A longer video (vb) went as a file to them, so it can't be unsent; Delete for me still works.
+        if (openKey !== "" && m.mine && !m.unsent && !m.failed && !m.vb) gone.push({ name: "Unsend", detail: "Removes it for both", url: "unsend", danger: true })
         gone.push({ name: openKey === "" ? "Delete" : "Delete for me", url: "delete", danger: true })
         const k = openKey
         // A rare row picked in More acts the same as from the menu itself.

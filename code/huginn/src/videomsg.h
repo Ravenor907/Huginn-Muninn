@@ -86,6 +86,7 @@ private:
     QAudioOutput *m_output = nullptr;
     QPointer<QObject> m_view;
     QBuffer m_buffer;
+    QPointer<QIODevice> m_big;   // a longer video's pieces (Chat::bigVideoDevice) while it plays
     QByteArray m_clip, m_shown;
     int m_clipMs = 0;
     QTimer m_ticker;

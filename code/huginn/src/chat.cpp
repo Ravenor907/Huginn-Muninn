@@ -363,6 +363,7 @@ void Chat::start()
     connect(&m_prune, &QTimer::timeout, this, [this] {
         prune();
         sweepSealed();
+        sweepBig();   // longer videos' pieces whose message is gone (once an hour at most)
         if (m_wrapKeys)
             m_wrapKeys->prune(now() / 1000);
         m_seen.prune(now(), 2 * kDay, 5000);
@@ -2879,7 +2880,8 @@ void Chat::attempt(const QString &key, const QString &id)
     for (const QVariant &v : m_private.value(key))
         if (str(v.toMap(), "id") == id)
             m = v.toMap();
-    if (m.isEmpty())
+    // A longer video in the chat goes only through FileLink, never as message pieces.
+    if (m.isEmpty() || m.value(QStringLiteral("vb")).toBool())
         return;
     Tries &t = m_tries[id];
     t.count++;
@@ -2994,6 +2996,10 @@ void Chat::retryLoop()
             const QString id = str(m, "id");
             if (!m.value(QStringLiteral("mine")).toBool() || m_trash.contains(it.key()))
                 continue;
+            // A longer video in the chat (bigvideo.h) goes only through FileLink (its own cards): never tried or marked
+            // Not sent here.
+            if (m.value(QStringLiteral("vb")).toBool())
+                continue;
             if (str(m, "state") == QLatin1String("sending") && t0 - m.value(QStringLiteral("time")).toLongLong() <= kDay)
                 oldestWaiting = qMax(oldestWaiting, t0 - m.value(QStringLiteral("time")).toLongLong());
             if (str(m, "state") == QLatin1String("unsending")) {
@@ -3074,6 +3080,9 @@ void Chat::retryLoop()
 
 void Chat::retry(const QString &key, const QString &id)
 {
+    for (const QVariant &v : m_private.value(key))
+        if (str(v.toMap(), "id") == id && v.toMap().value(QStringLiteral("vb")).toBool())
+            return;   // a longer video: its FileLink card has Retry
     m_tries.remove(id);
     update(key, id, [](QVariantMap &x) {
         x.insert(QStringLiteral("failed"), false);

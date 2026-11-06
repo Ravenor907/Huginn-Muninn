@@ -46,12 +46,21 @@ Column {
         Text { textFormat: Text.PlainText; text: (parts.m.album || []).length + " photos"; color: Theme.textMuted; font.family: Theme.body; font.pixelSize: Theme.fs(13) }
     }
 
-    // A video message: a dark tile with a play mark and its length. Click to play it.
+    // A video message: a dark tile with a play mark and its length. Click to play it. A longer video from Family or
+    // trusted (vb, src/bigvideo.h) shows its first frame on the tile.
     Rectangle {
         visible: parts.live && parts.m.video > 0 && !!parts.m.photo
         width: Math.min(Theme.px(200), parts.width); height: Math.round(width * 0.75)
         radius: Theme.radius; color: "black"
         border.color: Theme.line; border.width: 1
+        Image {
+            anchors.fill: parent
+            anchors.margins: 1
+            visible: !!parts.m.vb
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            source: !!parts.m.vb && !parts.tour ? "image://thumb/" + parts.m.photo : ""
+        }
         Rectangle {
             anchors.centerIn: parent
             width: Theme.px(52); height: width; radius: width / 2
@@ -61,11 +70,12 @@ Column {
         Text {
             textFormat: Text.PlainText
             anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: Theme.px(8)
-            text: "Video message · " + Voice.length(parts.m.video || 0)
+            text: (parts.m.vb ? "Video · " : "Video message · ") + Voice.length(parts.m.video || 0)
             color: "white"; font.family: Theme.body; font.pixelSize: Theme.fs(13)
+            style: Text.Outline; styleColor: Qt.rgba(0, 0, 0, 0.6)
         }
         Accessible.role: Accessible.Button
-        Accessible.name: "Play the video message, " + Voice.length(parts.m.video || 0)
+        Accessible.name: (parts.m.vb ? "Play the video, " : "Play the video message, ") + Voice.length(parts.m.video || 0)
         HoverHandler { cursorShape: Qt.PointingHandCursor }
         TapHandler { onTapped: parts.host.more.playVideo(parts.m.photo) }
     }
