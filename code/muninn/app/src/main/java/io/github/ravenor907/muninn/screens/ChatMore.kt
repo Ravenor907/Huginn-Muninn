@@ -268,6 +268,9 @@ internal class BytesSource(private val b: ByteArray) : MediaDataSource() {
 /** The first frame of a video message, for its bubble. */
 internal fun videoFrame(bytes: ByteArray?): ImageBitmap? {
     if (bytes == null) return null
+    // A longer video in the chat (BigVideo) keeps its first frame as a picture.
+    if (io.github.ravenor907.muninn.net.BigVideo.isJpeg(bytes))
+        return try { android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() } catch (_: Exception) { null }
     val r = MediaMetadataRetriever()
     return try {
         r.setDataSource(BytesSource(bytes))
@@ -294,7 +297,13 @@ internal fun VideoThumb(m: Chat.Msg, bytes: () -> ByteArray?) {
 
 /** Full screen playback of a video message ([bytes] the decrypted MP4), from memory. [bottom]: a row under Play (the viewer's actions). */
 @Composable
-internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composable () -> Unit)? = null, actions: @Composable () -> Unit = {}) {
+internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composable () -> Unit)? = null, actions: @Composable () -> Unit = {}) =
+    VideoPlayer(bytes, remember(bytes) { bytes?.let { BytesSource(it) } }, close, bottom, actions)
+
+/** [source]: where it plays from (a big video's sealed pieces, or [key]'s bytes in memory); [key] only keys the state. */
+@Composable
+internal fun VideoPlayer(key: Any?, source: MediaDataSource?, close: () -> Unit, bottom: (@Composable () -> Unit)? = null, actions: @Composable () -> Unit = {}) {
+    val bytes = key
     BackHandler { close() }
     var playing by remember { mutableStateOf(true) }
     val player = remember { MediaPlayer() }
@@ -312,7 +321,7 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
             actions()
         }
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            if (bytes == null || failed) Text(if (failed) "This video can't be played on this device." else "This video can't be played.",
+            if (bytes == null || source == null || failed) Text(if (failed) "This video can't be played on this device." else "This video can't be played.",
                 style = Type.normal.copy(color = Color.White), modifier = Modifier.padding(24.dp))
             else AndroidView(factory = { ctx ->
                 SurfaceView(ctx).apply {
@@ -320,7 +329,7 @@ internal fun VideoPlayer(bytes: ByteArray?, close: () -> Unit, bottom: (@Composa
                         override fun surfaceCreated(h: SurfaceHolder) {
                             try {
                                 player.reset()
-                                player.setDataSource(BytesSource(bytes))
+                                player.setDataSource(source!!)
                                 player.setDisplay(h)
                                 player.setOnVideoSizeChangedListener { _, w, hh -> if (w > 0 && hh > 0) ratio = w.toFloat() / hh }
                                 player.setOnPreparedListener { mp ->
@@ -592,7 +601,8 @@ internal fun FileCard(m: Chat.Msg, bytes: () -> ByteArray?, folder: String = "")
 @Composable
 internal fun DirectFiles(peer: String, who: String = "them", resend: (String, java.io.File, String) -> Unit = { _, _, _ -> }) {
     val all by io.github.ravenor907.muninn.net.FileLink.all.collectAsState()
-    val mine = all.values.filter { it.where == peer && !it.relay }.sortedBy { it.time }
+    // A copy of my big video shows on its bubble instead (unless it failed: then its card offers Retry).
+    val mine = all.values.filter { it.where == peer && !it.relay && !io.github.ravenor907.muninn.net.FileLink.inBubble(it) }.sortedBy { it.time }
     if (mine.isEmpty()) return
     val app = LocalContext.current.applicationContext as? io.github.ravenor907.muninn.Muninn
     val scope = androidx.compose.runtime.rememberCoroutineScope()

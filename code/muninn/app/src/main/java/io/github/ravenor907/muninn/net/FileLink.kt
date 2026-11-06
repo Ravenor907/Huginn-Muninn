@@ -297,8 +297,21 @@ object FileLink {
         if (p.state == "done" || p.id in stopped) videoBack.remove(p.id)
         val pace = if (merged.state == "sending" && since != null && !paused && !held)
             (base[p.id] ?: 0L).let { b -> FileText.pace(merged.done - b, merged.size - b, System.currentTimeMillis() - since - (pausedFor[p.id] ?: 0L)) } else ""
+        // A copy of my big video (in the chat like a photo) arrived: the bubble says Sent, and the card goes.
+        if (p.state == "done" && p.mine) bigOf.remove(p.id)?.let { (chat, msgId) ->
+            try { host?.bigVideoSent(chat, msgId) } catch (_: Exception) {}
+            _all.value = _all.value - p.id
+            return
+        }
         _all.value = _all.value + (p.id to merged.copy(paused = paused, held = held, pace = pace))
     }
+
+    /** My big videos' cards (BigVideo): card id to the chat ("g:" and a group, or a key) and the bubble's message id. */
+    private val bigOf = ConcurrentHashMap<String, Pair<String, String>>()
+    /** Card [card] carries a copy of my big video [msgId] in [chat]: the bubble shows it, so the card stays out of the chat unless it fails. */
+    fun linkBig(card: String, chat: String, msgId: String) { bigOf[card] = chat to msgId; refresh(card) }
+    /** A card the chat doesn't show (its big video's bubble does), while it hasn't failed. */
+    fun inBubble(p: Progress) = p.mine && bigOf.containsKey(p.id) && p.state != "failed"
     private fun refresh(id: String) { _all.value[id]?.let { put(it) } }
 
     interface Host {
@@ -371,6 +384,10 @@ object FileLink {
         fun relayOver(): Boolean = false
         fun relayStopped(): Boolean = false
         fun relayUsed(bytes: Long) {}
+        /** A video from Family or trusted (up to 3 minutes) into the chat like a photo; false keeps it a file (BigVideo). */
+        fun inlineVideo(peer: String, group: String, file: File, ms: Int): Boolean = false
+        /** A copy of my big video [msgId] (in [chat]: a key, or "g:" and a group) arrived. */
+        fun bigVideoSent(chat: String, msgId: String) {}
         /** Family or trusted, but set to Ask in their details. */
         fun asksFirst(peer: String): Boolean = false
     }
@@ -393,7 +410,9 @@ object FileLink {
                      /** Cap f4: Tor may carry it. */
                      val tor: Boolean = false,
                      /** Cap f5: the call relay may carry it. */
-                     val relay: Boolean = false, val punchMs: Long = PUNCH_MS) {
+                     val relay: Boolean = false, val punchMs: Long = PUNCH_MS,
+                     /** A video's length in ms (its offer's "vid"), 0 for any other file. */
+                     val vid: Int = 0) {
         val torSeq = java.util.concurrent.atomic.AtomicLong(TorFiles.SEQ_BASE)
         /** Cap f4: the sender's one-time onion service, once its `tor` message came. */
         @Volatile var onion: Pair<String, Int>? = null
@@ -951,7 +970,7 @@ object FileLink {
                 }
                 val direct = if (trust) CallLogic.directOf(c) else emptyList()
                 val theirs = listOfNotNull(lan) + direct
-                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay))
+                val inc = In(from, name, size, p.getString("sha"), p.getString("e"), theirs, g, !trust, lan, tor, relay, MediaRoute.punchMs(here, relay), vid)
                 ins[id] = inc
                 val folder = Sharing.folderFor("Muninn", if (g.isEmpty()) h.nameOf(from) else h.groupName(g))
                 val badge = h.badge(from)
@@ -1467,6 +1486,11 @@ object FileLink {
             }
             put(Progress(id, inc.peer, inc.name, inc.size, false, "sending", inc.size, note = "Checking it", route = route, group = inc.group))
             if (sha256(tmp) != inc.sha) { fail(id, "${inc.name} arrived damaged, so it was thrown away."); return }
+            // A video from Family or trusted, up to 3 minutes: in the chat like a photo, and its card goes.
+            if (BigVideo.inline(inc.vid, mayAlways(h.badge(inc.peer))) && !h.isKidDevice() && h.inlineVideo(inc.peer, inc.group, tmp, inc.vid)) {
+                _all.value = _all.value - id
+                return
+            }
             // In Download/Muninn/<chat name>, never a hidden app folder.
             val chat = if (inc.group.isEmpty()) h.nameOf(inc.peer) else h.groupName(inc.group)
             val folder = Sharing.folderFor("Muninn", chat)

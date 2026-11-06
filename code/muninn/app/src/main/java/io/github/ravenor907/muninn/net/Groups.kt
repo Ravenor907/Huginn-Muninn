@@ -119,6 +119,8 @@ class Groups(
         val gif: Boolean = false,
         /** Round 16: one part of a long message sent in parts: the parts' set id and this one's place (1 = the first). */
         val part: String = "", val partAt: Int = 0,
+        /** A longer video from Family or trusted, kept in pieces (BigVideo); its first frame under [photo]. */
+        val big: Boolean = false,
     )
 
     /** [Companion.readBy]: readers with when they read it (0: not known), then the rest by where the message stands with them. */
@@ -1458,6 +1460,28 @@ class Groups(
     }
 
     private fun addMsg(m: GMsg) { chats[m.g] = (chats[m.g].orEmpty() + m).takeLast(1000) }
+
+    /**
+     * A longer video (BigVideo) shown in group [g]'s main channel: mine ([from] is me, "sending" until a copy arrives) or one
+     * that came through FileLink from Family or trusted [from]. Local only (each copy went as its own file). False if gone.
+     */
+    fun addBigVideo(g: String, from: String, fromName: String, id: String, ms: Int): Boolean = act {
+        val grp = groups[g] ?: return@act false
+        if (grp.readOnly || !grp.state.has(from)) return@act false
+        val mine = from == me
+        val name = if (mine) host.myName else nameIn(grp.state, from, fromName)
+        addMsg(GMsg(id, g, MAIN, from, name, "", mine, now(), photo = id, state = if (mine) "sending" else "", video = ms, big = true))
+        if (!mine) {
+            if (host.held(g, from)) host.heldBy(g, from, name, grp.state.name)
+            else { unread.add(g); host.arrived(g, "$name in ${grp.state.name}", "Video") }
+        }
+        true
+    }
+
+    /** A big video of mine in [g] reached someone: "sent". */
+    fun bigVideoSent(g: String, id: String) = act {
+        chats[g]?.let { l -> chats[g] = l.map { if (it.id == id && it.mine && it.state == "sending") it.copy(state = "sent") else it } }
+    }
     private fun edit(g: String, id: String, f: (GMsg) -> GMsg) { chats[g] = chats[g].orEmpty().map { if (it.id == id) f(it) else it } }
 
     private fun prune() {
@@ -1571,6 +1595,7 @@ class Groups(
             if (m.readAt.isNotEmpty()) put("ra", JSONObject().apply { m.readAt.forEach { (k, v) -> put(k, v) } })
             if (m.noRead.isNotEmpty()) put("nrd", JSONArray(m.noRead.toList()))
             if (m.gif) put("gif", true)
+            if (m.big) put("vb", true)
         }
 
     private fun strings(a: JSONArray?): Set<String> = if (a == null) emptySet() else (0 until a.length()).map { a.getString(it) }.toSet()
@@ -1626,7 +1651,7 @@ class Groups(
                         it.optInt("vd"), it.optString("al"), it.optInt("ai"), it.optInt("an"),
                         More.pollOf(it), More.votesFromJson(it.optJSONObject("vt")), More.previewOf(it),
                         it.optJSONObject("ra")?.let { ra -> ra.keys().asSequence().associateWith { k -> ra.optLong(k) } }.orEmpty(),
-                        strings(it.optJSONArray("nrd")), gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"))
+                        strings(it.optJSONArray("nrd")), gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"), big = it.optBoolean("vb"))
                 } }
             }
             read(OUTS)?.let { text ->

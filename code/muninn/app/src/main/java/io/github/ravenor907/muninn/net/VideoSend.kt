@@ -171,7 +171,8 @@ object VideoSend {
      * them. [vid]: the offer's "vid" (0: a plain file offer, for a kids' device, which declines video offers). [back]:
      * an older app's relay copy if the full copy can't go straight. [file] stays mine.
      */
-    private fun offer(context: Context, chat: Chat, k: String, file: File, name: String, vid: Int, g: String, back: (() -> Unit)?) {
+    private fun offer(context: Context, chat: Chat, k: String, file: File, name: String, vid: Int, g: String, back: (() -> Unit)?,
+                      bubble: String? = null, chatKey: String = "") {
         val clean = chat.cleanFileName(name)
         val size = file.length()
         // One file for every member (a second name for it where the storage allows, else a copy), as Chat.sendVideoFull.
@@ -181,6 +182,7 @@ object VideoSend {
         }
         if (!ok) { if (back != null) back() else FileLink.failed(k, clean, size, "Not enough space on this phone to send it.", group = g); return }
         val card = FileLink.preparing(k, clean, size, g)
+        if (bubble != null) FileLink.linkBig(card, chatKey, bubble)
         if (back != null) FileLink.onNoPath(card, back)
         val why = FileLink.send(k, mine, clean, card, g, vid = vid)
         if (why != null) {
@@ -280,6 +282,10 @@ object VideoSend {
 
         step("Sending", 1f)
         val name = fileName()
+        // Family and trusted only, up to 3 minutes, all full copies: the video shows in the chat at once, like a photo (BigVideo).
+        val bubble = bigFile?.takeIf { small.isEmpty() && relay.isEmpty() && fullNow.isNotEmpty() && fullNow.all { people[it]?.family == true } &&
+            BigVideo.inline(ms, true) }?.let { chat.ownBigVideo(if (t.group) t.g else t.peer, t.group, it, ms) }
+        val chatKey = if (t.group) "g:${t.g}" else t.peer
         // A kids' device declines video offers (FileLink): it gets the 720p copy as a plain file offer.
         val vidOf = { k: String -> if (people[k]?.kid == true) 0 else GroupVideo.vidFor(ms, newApp(k)) }
         if (t.group) {
@@ -301,7 +307,7 @@ object VideoSend {
                             Unit
                         }
                     })
-                    offer(context, chat, k, big, name, vidOf(k), t.g, back)
+                    offer(context, chat, k, big, name, vidOf(k), t.g, back, bubble, chatKey)
                 }
             }
             smallFile?.let { s -> for (k in small) offer(context, chat, k, s, name, vidOf(k), t.g, null) }
@@ -312,7 +318,7 @@ object VideoSend {
             val clipBytes = clip
             when {
                 bigFile != null && k in fullNow -> offer(context, chat, k, bigFile, name, vidOf(k), "",
-                    if (clipBytes == null || newApp(k)) null else ({ chat.sendVideoClip(k, clipBytes, ms)?.let { chat.notices.tryEmit(it) } }))
+                    if (clipBytes == null || newApp(k)) null else ({ chat.sendVideoClip(k, clipBytes, ms)?.let { chat.notices.tryEmit(it) } }), bubble, chatKey)
                 smallFile != null && k in small -> offer(context, chat, k, smallFile, name, vidOf(k), "", null)
                 clipBytes != null && k in relay -> chat.sendVideoClip(k, clipBytes, ms)?.let { notes.add(it) }
             }
@@ -325,12 +331,13 @@ object VideoSend {
             relay.size.takeIf { it > 0 && clip != null }?.let { "a smaller copy to $it with older apps" },
         )
         val head = when {
+            bubble != null && parts.isNotEmpty() -> ""
             parts.isEmpty() -> "That video didn't send."
             !t.group && fullNow.isNotEmpty() -> "Sending full quality."
             !t.group && small.isNotEmpty() -> "Sending a 720p copy."
             !t.group -> "Sending. Its pieces go a few a second, so it can take a few minutes."
             else -> "Sending: " + parts.joinToString(", ") + "."
         }
-        return Sent(parts.isNotEmpty(), (listOf(head) + notes).joinToString(" "))
+        return Sent(parts.isNotEmpty(), (listOf(head) + notes).filter { it.isNotEmpty() }.joinToString(" "))
     }
 }

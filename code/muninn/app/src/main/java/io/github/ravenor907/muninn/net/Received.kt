@@ -102,6 +102,12 @@ object Received {
         try { t.out.write(bytes); t.finish(); t.name to shareUri(context, t) } catch (e: Exception) { t.discard(); null }
     } catch (_: Exception) { null }
 
+    /** Like [save], the bytes written by [write] straight into the new file (a long video never whole in memory). */
+    fun saveStream(context: Context, name: String, under: String, write: (java.io.OutputStream) -> Boolean): Pair<String, String>? = try {
+        val t = create(context, name, under)
+        try { if (write(t.out)) { t.finish(); t.name to shareUri(context, t) } else { t.discard(); null } } catch (e: Exception) { t.discard(); null }
+    } catch (_: Exception) { null }
+
     private fun oldPhoneAllowed(context: Context) =
         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 

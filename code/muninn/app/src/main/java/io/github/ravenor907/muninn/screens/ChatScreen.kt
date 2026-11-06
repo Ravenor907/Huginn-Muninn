@@ -2361,7 +2361,7 @@ private fun groupUnread(msgs: List<Groups.GMsg>): Int {
 private fun asMsg(app: Muninn, m: Groups.GMsg) = Chat.Msg(m.id, m.from,
     if (m.mine) app.identity.username else app.chat.contacts.contact(m.from)?.shown ?: m.name, m.text, m.mine, m.time,
     state = m.state, photo = m.photo, unsent = m.unsent, voice = m.voice, re = m.re, reactions = m.reactions, edited = m.edited,
-    video = m.video, album = m.album, albumAt = m.albumAt, albumOf = m.albumOf, poll = m.poll, votes = m.votes, preview = m.preview, gif = m.gif)
+    video = m.video, album = m.album, albumAt = m.albumAt, albumOf = m.albumOf, poll = m.poll, votes = m.votes, preview = m.preview, gif = m.gif, big = m.big)
 
 /** Two members' faces, one over the other; a group of one or two shows a single circle. */
 @Composable
@@ -3094,7 +3094,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             if (gm.mine && gm.unsent.isEmpty()) io.github.ravenor907.muninn.net.Ticks.groupLines(gm.to, gm.delivered) { k ->
                 s.member(k)?.let { memberName(app, it) } ?: "Someone" }.forEach { add(SheetAction(it, "check", folder = "Info", info = true)) }
             // Cap v3: how far a video's paced relay pieces got, member by member.
-            if (gm.mine && gm.video > 0 && gm.unsent.isEmpty()) pacedVideoLines(gm) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }
+            if (gm.mine && gm.video > 0 && !gm.big && gm.unsent.isEmpty()) pacedVideoLines(gm) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }
                 .forEach { add(SheetAction(it, "video", folder = "Info", info = true)) }
             if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly) add(SheetAction("Unsend", "undo", danger = true) {
                 Ui.sure(Ask("Unsend this message?",

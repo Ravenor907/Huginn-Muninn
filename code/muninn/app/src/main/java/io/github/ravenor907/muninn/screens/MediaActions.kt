@@ -93,6 +93,7 @@ internal fun askDeleteMedia(m: Chat.Msg, delete: () -> Unit) {
 
 /** Save: a photo or GIF to Pictures › Muninn (as the viewer always has), a video or voice message to the chat's folder in Downloads. */
 internal fun saveMedia(context: Context, m: Chat.Msg, bytes: ByteArray?, folder: String) {
+    if (m.big) { saveBig(context, m, folder); return }
     if (bytes == null) { Ui.say("It isn't on this phone, so it can't be saved.", true); return }
     if (m.video == 0 && m.voice == 0) {
         val ok = savePhoto(context, bytes, m.gif)
@@ -104,10 +105,22 @@ internal fun saveMedia(context: Context, m: Chat.Msg, bytes: ByteArray?, folder:
     Ui.say(if (got != null) "${got.first} is in $where." else "Couldn't save it.", got == null)
 }
 
+/** A longer video (BigVideo) written whole into the chat's folder in Downloads, off the main thread. */
+private fun saveBig(context: Context, m: Chat.Msg, folder: String) {
+    val app = context.applicationContext as? Muninn ?: return
+    Ui.say("Saving the video…")
+    Thread {
+        val got = Received.saveStream(context, "Muninn-${System.currentTimeMillis()}.mp4", folder) { out -> app.chat.exportBig(m.photo, out) }
+        val where = if (folder.isEmpty()) Received.shownRoot() else Received.shown(folder)
+        Ui.say(if (got != null) "${got.first} is in $where." else "Couldn't save it.", got == null)
+    }.start()
+}
+
 /** Sends [bytes] of [m] to [to] (a person's key or "g:" and a group) as a new message, the way the chat itself sends one. */
 internal fun forwardMedia(app: Muninn, m: Chat.Msg, bytes: ByteArray, to: String): String? {
     val g = if (to.startsWith("g:")) to.removePrefix("g:") else null
     return when {
+        m.big -> "Longer videos can't be forwarded. Save it, then send it as a file."
         m.video > 0 -> if (g != null) app.chat.sendGroupVideo(g, Proto06.MAIN, bytes, m.video) else app.chat.sendVideo(to, bytes, m.video)
         m.voice > 0 -> {
             if (g != null) { if (!app.chat.sendGroupVoice(g, Proto06.MAIN, bytes, m.voice)) "That didn't send." else null }
@@ -155,7 +168,8 @@ internal fun ForwardMedia(app: Muninn, m: Chat.Msg?, done: () -> Unit) {
         scope.launch {
             val err = withContext(Dispatchers.IO) {
                 val b = app.chat.photo(m.photo)
-                if (b == null) "It isn't on this phone, so it can't be forwarded." else forwardMedia(app, m, b, to)
+                if (m.big) "Longer videos can't be forwarded. Save it, then send it as a file."
+                else if (b == null) "It isn't on this phone, so it can't be forwarded." else forwardMedia(app, m, b, to)
             }
             if (err != null) Ui.say(err, true) else Ui.say("Sent to $name.")
         }
@@ -213,6 +227,8 @@ internal fun MediaViewer(app: Muninn, m: Chat.Msg, a: MediaActions?, close: () -
     if (forwarding) ForwardMedia(app, m) { forwarding = false }
     val bar: (@Composable () -> Unit)? = if (a != null) ({ MediaActionRow(m, bytes, a, { forwarding = true }, close) }) else null
     when {
+        // A longer video (BigVideo) plays from its sealed pieces, never whole in memory.
+        m.big -> VideoPlayer(m.id, remember(m.id) { app.chat.bigSource(m.photo) }, close, bottom = bar)
         m.video > 0 -> VideoPlayer(bytes, close, bottom = bar)
         m.voice > 0 -> Column(Modifier.fillMaxSize().background(Color.Black)) {
             Row(Modifier.fillMaxWidth().padding(12.dp)) { MButton("Back", icon = "back") { close() } }

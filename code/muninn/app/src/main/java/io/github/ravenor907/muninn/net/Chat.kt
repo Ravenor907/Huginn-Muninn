@@ -146,7 +146,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                    /** An animated GIF (cap a1), stored like a photo under [photo]. */
                    val gif: Boolean = false,
                    /** Round 17: a part of a long message ("ps", "pi", "pn", as in groups, 3.8 and 11.2): its set, place and count. */
-                   val part: String = "", val partAt: Int = 0, val partOf: Int = 0)
+                   val part: String = "", val partAt: Int = 0, val partOf: Int = 0,
+                   /** A longer video from Family or trusted (up to 3 minutes, through FileLink): kept in pieces (BigVideo), its first frame under [photo]. */
+                   val big: Boolean = false)
     /** Someone met close by who isn't a contact (yet). */
     data class Met(val name: String, val mailbox: String?, val iSaid: Boolean = false, val theySaid: Boolean = false, val dismissed: Boolean = false,
                    val verified: Boolean = false,
@@ -253,7 +255,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     private fun queueWaiting() {
         val now = System.currentTimeMillis()
         for ((k, list) in _private.value) for (m in list)
-            if (m.mine && (m.state == "unsending" || (m.state.isNotEmpty() && m.unsent.isEmpty() && rank(m.state) < 3 && now - m.time <= DAY))) pending[m.id] = k
+            if (m.mine && !m.big && (m.state == "unsending" || (m.state.isNotEmpty() && m.unsent.isEmpty() && rank(m.state) < 3 && now - m.time <= DAY))) pending[m.id] = k
         wakeRetry()
     }
     private val store = File(context.filesDir, "chats.json")
@@ -365,6 +367,9 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun relayOver() = meter.over()
             override fun relayStopped() = meter.stopped()
             override fun relayUsed(bytes: Long) = meter.add(bytes)
+            override fun inlineVideo(peer: String, group: String, file: File, ms: Int) = this@Chat.inlineVideo(peer, group, file, ms)
+            override fun bigVideoSent(chat: String, msgId: String) =
+                if (chat.startsWith("g:")) this@Chat.bigVideoSent(chat.removePrefix("g:"), true, msgId) else this@Chat.bigVideoSent(chat, false, msgId)
             override fun asksFirst(peer: String) = peer in flags.all.value.asks
             override fun isKidDevice() = try { io.github.ravenor907.muninn.tv.KidMode.saved(context) } catch (_: Exception) { false }
             override fun mayDownload() = (context.applicationContext as? io.github.ravenor907.muninn.Muninn)?.power?.savingData() != true
@@ -452,7 +457,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun days(peer: String) = chatDays(peer)
             override fun emoji(key: String) = try { emojiWith(key) } catch (e: Exception) { "" }
             // A GIF goes to a linked computer as its first frame: a photo, the kinds 15 knows.
-            override fun media(m: Msg): ByteArray? = if (m.photo.isEmpty()) null else photo(m.photo)?.let { if (m.gif) Photos.still(it) else it }
+            override fun media(m: Msg): ByteArray? = if (m.photo.isEmpty() || m.big) null else photo(m.photo)?.let { if (m.gif) Photos.still(it) else it }
             override fun onLan(key: String) = lanTo(key) != null
             override fun sendLan(d: Link.Device, json: String): Boolean {
                 val dev = lanTo(d.key) ?: return false
@@ -1678,6 +1683,94 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     fun photo(photoId: String): ByteArray? = vault.readBytes(File(photosDir, photoId))
 
+    // ------------------------------------------------------------------ longer videos in the chat (Family and trusted)
+
+    /** A big video's pieces: photos/<id>.v/00000..., each sealed like a photo, so it plays without ever being whole in memory. */
+    private fun bigDir(id: String) = File(photosDir, "$id.v")
+
+    /**
+     * Keeps [file] (an MP4) as big video [id]: its first frame as the bubble's picture under photos/<id>, the video in
+     * sealed pieces. False (and nothing kept) when it can't be read or there isn't room.
+     */
+    fun storeBigVideo(id: String, file: File): Boolean {
+        val dir = bigDir(id)
+        try {
+            if (file.length() <= 0 || file.length() > FileLink.MAX_BYTES) return false
+            if (context.filesDir.usableSpace < file.length() * 2 + 50L * 1024 * 1024) return false
+            dir.deleteRecursively(); dir.mkdirs()
+            val buf = ByteArray(BigVideo.PIECE)
+            var i = 0
+            file.inputStream().use { inp ->
+                while (true) {
+                    var n = 0
+                    while (n < buf.size) { val r = inp.read(buf, n, buf.size - n); if (r < 0) break; n += r }
+                    if (n == 0) break
+                    vault.writeBytes(File(dir, BigVideo.pieceName(i++)), buf.copyOf(n))
+                    if (n < buf.size) break
+                }
+            }
+            vault.writeBytes(File(dir, BigVideo.SIZE), file.length().toString().toByteArray())
+            vault.writeBytes(File(photosDir, id), BigVideo.poster(file.absolutePath) ?: BigVideo.BLANK)
+            return true
+        } catch (e: Exception) { dir.deleteRecursively(); File(photosDir, id).delete(); return false }
+    }
+
+    /** Plays big video [id] from its sealed pieces (null when it isn't here). */
+    fun bigSource(id: String): android.media.MediaDataSource? {
+        val dir = bigDir(id)
+        val size = vault.readBytes(File(dir, BigVideo.SIZE))?.let { String(it).toLongOrNull() } ?: return null
+        return BigVideo.Source(size) { i -> vault.readBytes(File(dir, BigVideo.pieceName(i))) }
+    }
+
+    /** Big video [id] written whole into [out] (Save). False when it isn't all here. */
+    fun exportBig(id: String, out: java.io.OutputStream): Boolean {
+        val dir = bigDir(id)
+        val size = vault.readBytes(File(dir, BigVideo.SIZE))?.let { String(it).toLongOrNull() } ?: return false
+        var done = 0L
+        var i = 0
+        while (done < size) { val b = vault.readBytes(File(dir, BigVideo.pieceName(i++))) ?: return false; out.write(b); done += b.size }
+        return true
+    }
+
+    /** Pieces whose message is gone (its picture under photos/ deleted with it, by any of the ways messages go). */
+    private fun sweepBig() {
+        photosDir.listFiles()?.forEach { d -> if (d.isDirectory && d.name.endsWith(".v") && !File(photosDir, d.name.removeSuffix(".v")).exists()) d.deleteRecursively() }
+    }
+
+    /**
+     * A video from Family or trusted [from] that came through FileLink (up to [BigVideo.INLINE_MAX_MS]): into the chat like a
+     * photo ([group]: that group's main channel). False when it can't be kept (it's saved as a file instead).
+     */
+    fun inlineVideo(from: String, group: String, file: File, ms: Int): Boolean {
+        val mid = if (group.isEmpty()) UUID.randomUUID().toString() else Proto06.newLogicalId()
+        if (!storeBigVideo(mid, file)) return false
+        val ok = if (group.isNotEmpty()) groups.addBigVideo(group, from, nameOf(from), mid, ms)
+        else {
+            val name = nameOf(from)
+            addPrivate(from, Msg(mid, from, name, "", false, System.currentTimeMillis(), photo = mid, video = ms, big = true)).also { added ->
+                if (added) { _unread.update { it + from }; arrivals.tryEmit(Triple(contacts.contact(from)?.shown ?: name, "Video", from)) }
+            }
+        }
+        if (!ok) { File(photosDir, mid).delete(); bigDir(mid).deleteRecursively() }
+        return ok
+    }
+
+    /** My own longer video, in the chat at once ("sending" until a copy arrives). Its id, or null when it can't be kept. */
+    fun ownBigVideo(peerOrGroup: String, group: Boolean, file: File, ms: Int): String? {
+        val mid = if (group) Proto06.newLogicalId() else UUID.randomUUID().toString()
+        if (!storeBigVideo(mid, file)) return null
+        val ok = if (group) groups.addBigVideo(peerOrGroup, id.publicKey, id.username, mid, ms)
+        else addPrivate(peerOrGroup, Msg(mid, peerOrGroup, id.username, "", true, System.currentTimeMillis(), state = "sending", photo = mid, video = ms, big = true))
+        if (!ok) { File(photosDir, mid).delete(); bigDir(mid).deleteRecursively(); return null }
+        return mid
+    }
+
+    /** A copy of my big video [msgId] reached someone. */
+    fun bigVideoSent(peerOrGroup: String, group: Boolean, msgId: String) {
+        if (group) groups.bigVideoSent(peerOrGroup, msgId)
+        else update(peerOrGroup, msgId) { if (it.state == "sending") it.copy(state = "sent") else it }
+    }
+
     fun sendPhoto(peerKey: String, jpeg: ByteArray) { sendBlob(peerKey, jpeg, 0) }
 
     /** Several photos at once: an album (cap m2; an app without m2 shows them one by one). */
@@ -2665,6 +2758,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             val m = chats[k]?.firstOrNull { it.id == msgId }
             // A text that can go by the internet: a photo or video's paced pieces take their time, and aren't a delay.
             if (m != null && m.mine && m.state == "sending" && m.photo.isEmpty() && now - m.time <= DAY && backupMailbox(m) != null) oldest = maxOf(oldest ?: 0L, now - m.time)
+            // A big video goes through FileLink (its own cards), never this loop.
+            if (m != null && m.big) { pending.remove(msgId); continue }
             // Deleted, moved to a new key, or the chat is gone: nothing more to send.
             if (m == null) { pending.remove(msgId); if (tries.remove(msgId) != null) { outbox.drop(msgId); outbox.drop(UNSEND + msgId) }; continue }
             if (m.mine && m.state == "unsending") {
@@ -2793,7 +2888,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         val before = map[peer] ?: return@edit false
         var changed = false
         var again = false
-        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true; again = n.mine && (n.state == "sending" || n.state == "unsending") } else it }
+        val after = before.map { if (it.id == msgId) f(it).also { n -> if (n != it) changed = true; again = n.mine && !n.big && (n.state == "sending" || n.state == "unsending") } else it }
         if (changed) map[peer] = after
         if (changed && again) queue(peer, msgId)
         changed
@@ -3335,6 +3430,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (now - cacheSwept < 60 * 60_000L) return
         cacheSwept = now
         Link.prune(now)
+        try { sweepBig() } catch (_: Exception) {}
         for (d in listOf("files", "camera")) File(context.cacheDir, d).listFiles()?.forEach { if (now - it.lastModified() > Limits.DEFAULT * DAY) it.deleteRecursively() }
         // Copies of what was shared into Muninn (Share › Muninn, or picked in Files): gone after a day.
         File(context.cacheDir, "outgoing").listFiles()?.forEach { if (now - it.lastModified() > DAY) it.deleteRecursively() }
@@ -3392,7 +3488,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (gone.isNotEmpty()) { forget(gone); gone.forEach { outbox.drop(it); outbox.drop(UNSEND + it); tries.remove(it) } }
         // Big photos made smaller, outside the lock (decoding takes a moment).
         for (m in _private.value.values.flatten()) {
-            if (m.photo.isEmpty() || m.voice > 0) continue
+            if (m.photo.isEmpty() || m.voice > 0 || m.big) continue
             val f = File(photosDir, m.photo)
             if (f.length() <= shrinkOver) continue
             val bytes = try { photo(m.photo) } catch (e: Exception) { null } ?: continue
@@ -3443,7 +3539,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             re = it.optString("re"), reactions = Rich.reactionsFromJson(it.optJSONObject("rx")), edited = it.optLong("ed"),
             video = it.optInt("vid"), album = it.optString("al"), albumAt = it.optInt("ai"), albumOf = it.optInt("an"),
             poll = More.pollOf(it), votes = More.votesFromJson(it.optJSONObject("vt")), preview = More.previewOf(it), file = it.optString("fn"), saved = it.optString("sv"),
-            gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"), partOf = it.optInt("pn"))
+            gif = it.optBoolean("gif"), part = it.optString("ps"), partAt = it.optInt("pi"), partOf = it.optInt("pn"), big = it.optBoolean("vb"))
     }
 
     /** Cap m2 parts of a stored message (only the ones it has). */
@@ -3457,6 +3553,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (m.saved.isNotEmpty()) o.put("sv", m.saved)
         if (m.gif) o.put("gif", true)
         if (m.part.isNotEmpty()) o.put("ps", m.part).put("pi", m.partAt).put("pn", m.partOf)
+        if (m.big) o.put("vb", true)
     }
 
     private fun save() {
