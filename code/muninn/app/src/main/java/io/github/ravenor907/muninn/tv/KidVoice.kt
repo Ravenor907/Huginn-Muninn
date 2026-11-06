@@ -66,7 +66,7 @@ object KidVoice {
     fun of(c: JSONObject): String? = (c.opt(FIELD) as? String)?.takeIf { it in ReadAloudText.VOICES }
 
     /** What a parent's phone sends: the pick ("" none yet) only to a device with [k15]. */
-    fun toSend(pick: String, k15: Boolean): String? = pick.takeIf { k15 && it in ReadAloudText.VOICES }
+    fun toSend(pick: String, k15: Boolean): String? = pick.takeIf { k15 && it in ReadAloudText.VOICES }?.let { ReadAloudText.voiceOf(it) }   // Male is retired
 
     /**
      * Round 19: and only when every other parent's app reads it too ([others]: each co-parent's caps, null when not a

@@ -79,11 +79,6 @@ class Muninn : Application() {
         identity = Identity(this, vault)
         // Labs: the activity log for bug reports runs only in Labs mode.
         io.github.ravenor907.muninn.net.ActivityLog.on = identity.labs
-        val crashed = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { t, e ->
-            io.github.ravenor907.muninn.net.ActivityLog.add("crash", "${t.name}: ${e.javaClass.simpleName} ${e.message.orEmpty()}")
-            crashed?.uncaughtException(t, e)
-        }
         scope.launch {
             var last = ""
             io.github.ravenor907.muninn.net.call.CallManager.call.collect { u ->

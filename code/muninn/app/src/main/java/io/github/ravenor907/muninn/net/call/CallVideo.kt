@@ -499,7 +499,7 @@ object CallVideo {
     fun onPeerVideo(s: CallSession, camera: Boolean) { if (s === session) update { it.copy(peerCamera = camera) } }
 
     /** A free path came or went: the camera may send another size (5.8.6). */
-    fun onProfile(s: CallSession) { if (s === session && _state.value.cameraOn) rebind() }
+    fun onProfile(s: CallSession) { if (s === session && _state.value.cameraOn && !CallShare.active) rebind() }
 
     // ------------------------------------------------------------------ the peer's picture
 

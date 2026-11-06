@@ -210,6 +210,9 @@ object BackupFormat {
     /** Photos, voice and video messages and other big files: in the backup only when files and pictures are. */
     fun isMedia(name: String): Boolean = name.startsWith("photos/") || name.startsWith("mirror-media/")
 
+    /** A piece of a longer video kept in the chat (photos/<id>.v/...): never in a backup or a move (too big to hold). */
+    fun isBigVideo(name: String): Boolean = name.startsWith("photos/") && name.removePrefix("photos/").contains(".v/")
+
     fun unpack(plain: ByteArray): List<Pair<String, ByteArray>> {
         val b = ByteBuffer.wrap(plain)
         val out = ArrayList<Pair<String, ByteArray>>()

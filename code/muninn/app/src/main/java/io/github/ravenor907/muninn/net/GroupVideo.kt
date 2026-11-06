@@ -229,6 +229,8 @@ object GroupVideo {
     const val RELAY = "relay"
     /** Gets nothing: an older app and a video over 20 seconds, or over 5 minutes with no direct path. */
     const val NONE = "none"
+    /** Gets nothing: a new app with no way to it now (no same Wi-Fi, no trust, no relay, no Tor without Ultra privacy). */
+    const val UNREACHED = "unreached"
 
     /** May take a full copy at all. */
     fun fullOk(m: Member) = m.files && m.v3 && !m.kid && !m.relayOnly
@@ -245,6 +247,7 @@ object GroupVideo {
         fullOk(m) && direct(m, unmetered) && (m.newPath || ms <= OLD_FULL_MAX_MS + SLACK_MS) -> FULL
         m.newPath && m.v3 && m.reach -> if (ms <= SMALL_MAX_MS + SLACK_MS) SMALL else NONE
         ms <= RELAY_MAX_MS + SLACK_MS -> RELAY
+        m.newPath && m.v3 -> UNREACHED
         else -> NONE
     }
 
@@ -265,11 +268,13 @@ object GroupVideo {
         val small = of(SMALL)
         val relay = of(RELAY)
         val none = of(NONE)
+        val unreached = of(UNREACHED)
         return listOfNotNull(
             full.takeIf { it.isNotEmpty() }?.let { "Full quality to ${names(it)}." },
             small.takeIf { it.isNotEmpty() }?.let { "A 720p copy to ${names(it)}." },
             relay.takeIf { it.isNotEmpty() }?.let { "A smaller copy (720p, up to 20 seconds) to ${names(it)}, whose app is older." },
-            none.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: no way to reach them with this one now. Try on the same Wi-Fi." },
+            none.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: their app is older. Ask them to update." },
+            unreached.takeIf { it.isNotEmpty() }?.let { "Not to ${names(it)}: no way to reach them with this one now. Try on the same Wi-Fi." },
         ).joinToString(" ").ifEmpty { "Nobody else is here yet." }
     }
 
@@ -336,7 +341,8 @@ object GroupVideo {
         failed -> "$name: didn't go. Tap Retry on its card, or send it again"
         how == FULL -> "$name: full size (see its card)"
         how == SMALL -> "$name: 720p copy (see its card)"
-        how == NONE -> "$name: not sent (no way to reach them now)"
+        how == NONE -> "$name: not sent (their app is older)"
+        how == UNREACHED -> "$name: not sent (no way to reach them now)"
         total <= 0 || sent >= total -> "$name: smaller copy, sent"
         else -> "$name: smaller copy, ${sent * 100 / total}% sent"
     }

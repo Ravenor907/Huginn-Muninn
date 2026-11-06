@@ -423,7 +423,11 @@ class CallMedia(
             if (lp != lowPower) { lowPower = lp; changed = true }
         }
         if (changed) {
+            // A better path (or the battery back up): the size ladder starts again from the top for it.
+            val capWas = rate[0].cap
+            rung = 0
             rate[0].setCap(profile(VideoWire.CAMERA).capKbps); rate[1].setCap(profile(VideoWire.SCREEN).capKbps)
+            if (rate[0].cap < capWas) rung = VideoWire.rung(rate[0].kbps, rate[0].cap, 0)
             events.onProfile()
         }
         if (c2 && gotFirst && now - lastReport >= 1_000) sendReport()
@@ -465,7 +469,8 @@ class CallMedia(
                 // With copies on, nothing waits on the relay here: over TCP or TLS a slow write would hold up this lock, and
                 // so the free path, the pings and the sound coming in.
                 // Video never goes through the small drop queue: a keyframe burst would lose its start.
-                if (dual) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
+                // With two paths on (Labs), nothing waits on the relay under this lock; otherwise video never meets the drop queue.
+                if (twoPaths) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
                 relayBytes.addAndGet(p.size + RELAY_OVERHEAD.toLong())
                 // Pings and pongs keep a standby relay alive; only what else it carries counts as the relay in use.
                 if (only == null) relayUsedAt = now
@@ -922,7 +927,7 @@ class CallMedia(
         try { lan?.close() } catch (_: Exception) {}
         try { turn?.close() } catch (_: Exception) {}
         try { renewing?.close() } catch (_: Exception) {}
-        relayBytes.getAndSet(0).takeIf { it > 0 }?.let { n -> try { io.github.ravenor907.muninn.net.RelayMeter(context).add(n) } catch (_: Exception) {} }
+        relayBytes.getAndSet(0).takeIf { it > 0 }?.let { n -> try { (context.applicationContext as io.github.ravenor907.muninn.Muninn).chat.meter.add(n) } catch (_: Exception) {} }
         bluetooth?.onMedia(null)
         // Let the audio threads leave read() and write() before their objects go.
         try { mic?.join(500); player?.join(500) } catch (_: InterruptedException) {}

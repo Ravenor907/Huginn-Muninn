@@ -368,6 +368,10 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             override fun relayStopped() = meter.stopped()
             override fun relayUsed(bytes: Long) = meter.add(bytes)
             override fun inlineVideo(peer: String, group: String, file: File, ms: Int) = this@Chat.inlineVideo(peer, group, file, ms)
+            override fun bigVideoFailed(chat: String, msgId: String) {
+                if (chat.startsWith("g:")) groups.bigVideoFailed(chat.removePrefix("g:"), msgId)
+                else update(chat, msgId) { if (it.mine && it.state == "sending") it.copy(failed = true) else it }
+            }
             override fun bigVideoSent(chat: String, msgId: String) =
                 if (chat.startsWith("g:")) this@Chat.bigVideoSent(chat.removePrefix("g:"), true, msgId) else this@Chat.bigVideoSent(chat, false, msgId)
             override fun asksFirst(peer: String) = peer in flags.all.value.asks
@@ -1699,6 +1703,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             if (file.length() <= 0 || file.length() > FileLink.MAX_BYTES) return false
             if (context.filesDir.usableSpace < file.length() * 2 + 50L * 1024 * 1024) return false
             dir.deleteRecursively(); dir.mkdirs()
+            // The picture first: the sweep keeps pieces whose picture is there, so nothing goes while they're written.
+            vault.writeBytes(File(photosDir, id), BigVideo.poster(file.absolutePath) ?: BigVideo.BLANK)
             val buf = ByteArray(BigVideo.PIECE)
             var i = 0
             file.inputStream().use { inp ->
@@ -1711,7 +1717,6 @@ class Chat(private val context: Context, private val net: LocalSend, private val
                 }
             }
             vault.writeBytes(File(dir, BigVideo.SIZE), file.length().toString().toByteArray())
-            vault.writeBytes(File(photosDir, id), BigVideo.poster(file.absolutePath) ?: BigVideo.BLANK)
             return true
         } catch (e: Exception) { dir.deleteRecursively(); File(photosDir, id).delete(); return false }
     }
@@ -1769,7 +1774,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     /** A copy of my big video [msgId] reached someone. */
     fun bigVideoSent(peerOrGroup: String, group: Boolean, msgId: String) {
         if (group) groups.bigVideoSent(peerOrGroup, msgId)
-        else update(peerOrGroup, msgId) { if (it.state == "sending") it.copy(state = "sent") else it }
+        else update(peerOrGroup, msgId) { if (it.state == "sending") it.copy(state = "sent", failed = false) else it }
     }
 
     fun sendPhoto(peerKey: String, jpeg: ByteArray) { sendBlob(peerKey, jpeg, 0) }
@@ -1843,7 +1848,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             FileLink.failed(peerKey, clean, file.length(), "${nameOf(peerKey)} needs the latest Muninn or Huginn. ${FileLink.UPDATE}.", cardId)
             file.delete(); return null
         }
-        FileLink.failed(peerKey, clean, file.length(), "${FileLink.NO_PATH}. Try again when you're on the same Wi-Fi or online.", cardId,
+        FileLink.failed(peerKey, clean, file.length(), FileLink.noPathWhy(peerKey).let { if (it == FileLink.NO_PATH) "$it. Try again when you're on the same Wi-Fi or online." else it }, cardId,
             retry = file.takeIf { f -> f.isFile })
         return null
     }
@@ -1884,7 +1889,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
             FileLink.failed(k, name, file.length(), "${nameOf(k)} needs the latest Muninn or Huginn for files in groups. ${FileLink.UPDATE}.", card, g)
             file.delete(); return
         }
-        FileLink.failed(k, name, file.length(), "${FileLink.NO_PATH}. Try again when you're on the same Wi-Fi or online.", card, g, retry = file.takeIf { it.isFile })
+        FileLink.failed(k, name, file.length(), FileLink.noPathWhy(k).let { if (it == FileLink.NO_PATH) "$it. Try again when you're on the same Wi-Fi or online." else it }, card, g, retry = file.takeIf { it.isFile })
     }
 
     // "Always from this person" (cap f2, on this phone only): their files arrive without asking.
@@ -2819,6 +2824,8 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         /** Tap a message that didn't send: try again now. */
     fun retry(peerKey: String, msgId: String) {
         val m = _private.value[peerKey]?.firstOrNull { it.id == msgId } ?: return
+        // A longer video goes again from its card (Retry), which keeps it a video for their chat.
+        if (m.big) { notices.tryEmit("Tap Retry on its card below to send it again."); return }
         tries.remove(m.id)
         update(peerKey, msgId) { it.copy(failed = false, state = "sending", time = System.currentTimeMillis()) }
         bg { attempt(m) }
@@ -3139,7 +3146,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
         if (!ok) { if (back != null) back() else FileLink.failed(k, clean, size, "Not enough space on this phone to send it.", group = g); return }
         val card = FileLink.preparing(k, clean, size, g)
         if (back != null) FileLink.onNoPath(card, back)
-        if (FileLink.send(k, mine, clean, card, g, vid = ms.coerceIn(1, GroupVideo.FULL_MAX_MS)) != null) {
+        if (FileLink.send(k, mine, clean, card, g, vid0 = ms.coerceIn(1, GroupVideo.FULL_MAX_MS)) != null) {
             mine.delete()
             if (back != null) FileLink.videoFellBack(card)
             else FileLink.failed(k, clean, size, "Can't reach ${nameOf(k)} straight. Full-size videos go on the same Wi-Fi, or with Trusted direct on for each other.", card, g)

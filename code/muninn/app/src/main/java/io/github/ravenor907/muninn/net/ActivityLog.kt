@@ -26,8 +26,25 @@ object ActivityLog {
         }
     }
 
-    /** A short, safe form of an id ("3fa2c1"). */
-    fun id(s: String) = s.filter { it.isLetterOrDigit() }.take(6)
+    /** A short, safe form of an id ("3fa2c1"): its end, since every chat key starts the same. */
+    fun id(s: String) = s.filter { it.isLetterOrDigit() }.takeLast(6)
+
+    /** Labs turned off: nothing kept. */
+    fun clear() = synchronized(lines) { lines.clear() }
+
+    /** Why a file card stopped, as a word (its note can name people and files, which the log never holds). */
+    fun reason(note: String): String = when {
+        note.contains("damaged") -> "damaged"
+        note.contains("space", true) -> "no space"
+        note.contains("Ultra privacy") -> "ultra privacy"
+        note.contains("Declined", true) || note.contains("declined") -> "declined"
+        note.startsWith("Stopped") && note.contains("answer") -> "no answer"
+        note.startsWith("Stopped") -> "stopped"
+        note.contains("Tor") -> "tor"
+        note.contains("update", true) -> "older app"
+        note.contains("reach", true) || note.contains("Wi-Fi") -> "no path"
+        else -> "other"
+    }
 
     /** The newest lines that fit [MAX_CHARS] after [head] (the device and app facts), oldest first. */
     fun dump(head: List<String>): String {

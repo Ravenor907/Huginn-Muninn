@@ -1478,9 +1478,14 @@ class Groups(
         true
     }
 
+    /** A copy of my big video in [g] stopped: "failed" (its card has Retry), unless another copy already arrived. */
+    fun bigVideoFailed(g: String, id: String) = act {
+        chats[g]?.let { l -> chats[g] = l.map { if (it.id == id && it.mine && it.state == "sending") it.copy(state = "failed") else it } }
+    }
+
     /** A big video of mine in [g] reached someone: "sent". */
     fun bigVideoSent(g: String, id: String) = act {
-        chats[g]?.let { l -> chats[g] = l.map { if (it.id == id && it.mine && it.state == "sending") it.copy(state = "sent") else it } }
+        chats[g]?.let { l -> chats[g] = l.map { if (it.id == id && it.mine && (it.state == "sending" || it.state == "failed")) it.copy(state = "sent") else it } }
     }
     private fun edit(g: String, id: String, f: (GMsg) -> GMsg) { chats[g] = chats[g].orEmpty().map { if (it.id == id) f(it) else it } }
 

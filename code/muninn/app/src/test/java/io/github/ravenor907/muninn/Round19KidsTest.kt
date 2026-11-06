@@ -27,7 +27,7 @@ class Round19KidsTest {
         // A co-parent this phone doesn't know (no caps): left out too.
         assertNull(KidVoice.toSend("m", true, listOf(null)))
         // Every co-parent says k15, or there is none: it goes.
-        assertEquals("m", KidVoice.toSend("m", true, listOf(k15)))
+        assertEquals("f", KidVoice.toSend("m", true, listOf(k15)))   // Male is retired: Female goes instead
         assertEquals("f", KidVoice.toSend("f", true, emptyList()))
         // Never to a device without k15, and nothing when none was picked.
         assertNull(KidVoice.toSend("m", false, listOf(k15)))

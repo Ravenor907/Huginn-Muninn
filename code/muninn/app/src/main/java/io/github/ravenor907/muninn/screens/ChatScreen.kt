@@ -1499,12 +1499,13 @@ private fun Conversation(app: Muninn, key: String) {
                 ?.let { add(SheetAction(it, "check", folder = "Info", info = true)) }
             when {
                 // Mine, and it got out: take it back from both phones, or just remove it here.
-                s.mine && s.unsent.isEmpty() && !s.failed -> add(SheetAction("Unsend", "undo", danger = true) {
+                // A longer video (in pieces) went as files: it can't be taken back, only deleted here.
+                s.mine && s.unsent.isEmpty() && !s.failed && !s.big -> add(SheetAction("Unsend", "undo", danger = true) {
                     Ui.sure(Ask("Unsend this message?", "Removes it from both phones.",
                         "Unsend", danger = true, extra = "Delete for me", onExtra = { app.chat.deleteMessage(key, s.id) },
                         onConfirm = { app.chat.unsend(key, s.id) }))
                 })
-                s.mine && s.failed -> add(SheetAction("Try again", "send") { app.chat.retry(key, s.id) })
+                s.mine && s.failed && !s.big -> add(SheetAction("Try again", "send") { app.chat.retry(key, s.id) })
             }
             add(SheetAction("Delete for me", "delete", danger = true) {
                 Ui.sure(Ask("Delete this message?", deletedHereOnly(), "Delete", danger = true, onConfirm = { app.chat.deleteMessage(key, s.id) }))
@@ -3096,7 +3097,7 @@ private fun GroupConversation(app: Muninn, g: String) {
             // Cap v3: how far a video's paced relay pieces got, member by member.
             if (gm.mine && gm.video > 0 && !gm.big && gm.unsent.isEmpty()) pacedVideoLines(gm) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }
                 .forEach { add(SheetAction(it, "video", folder = "Info", info = true)) }
-            if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly) add(SheetAction("Unsend", "undo", danger = true) {
+            if (gm.mine && gm.unsent.isEmpty() && !grp.readOnly && !gm.big) add(SheetAction("Unsend", "undo", danger = true) {
                 Ui.sure(Ask("Unsend this message?",
                     "Removes it from everyone's phone.",
                     "Unsend", danger = true, extra = "Delete for me", onExtra = { app.chat.groups.deleteMessage(g, gm.id) },

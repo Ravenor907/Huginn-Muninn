@@ -409,7 +409,8 @@ object Ui {
         ask.value = a
     }
     fun say(text: String, bad: Boolean = false) {
-        io.github.ravenor907.muninn.net.ActivityLog.add(if (bad) "said (problem)" else "said", text)
+        // Only that something was said, and how many words: what it says can name people or files.
+        io.github.ravenor907.muninn.net.ActivityLog.add(if (bad) "said (problem)" else "said", "${text.split(' ').size} words")
         toast.value = text to bad
     }
 

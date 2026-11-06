@@ -43,7 +43,8 @@ object Backup {
     class Sizes(val all: Long, val media: Long)
     fun sizes(vault: Vault): Sizes {
         var all = 0L; var media = 0L
-        vault.sealedFiles().forEach { (name, f) -> val n = f.length(); all += n; if (BackupFormat.isMedia(name)) media += n }
+        vault.sealedFiles().forEach { (name, f) -> if (BackupFormat.isBigVideo(name)) return@forEach
+            val n = f.length(); all += n; if (BackupFormat.isMedia(name)) media += n }
         return Sizes(all, media)
     }
 
@@ -54,7 +55,8 @@ object Backup {
     fun create(app: Muninn, uri: Uri, password: String, withFiles: Boolean, progress: (Float) -> Unit): Saved {
         val vault = app.vault
         val created = java.time.Instant.now().toString()
-        val entries = vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES && (withFiles || !BackupFormat.isMedia(it.first)) }
+        val entries = vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES && !BackupFormat.isBigVideo(it.first) &&
+            (withFiles || !BackupFormat.isMedia(it.first)) }
             .map { (name, f) -> BackupFormat.Entry(name) { vault.readBytes(f) } } +
             BackupFormat.Entry(PREFS_ENTRY) { prefsJson(app).toByteArray() } +
             BackupFormat.Entry(BackupFormat.SHARED) { MoveCommon.fromMuninn(app).toString().toByteArray() } +
@@ -67,7 +69,7 @@ object Backup {
 
     /** Everything a backup holds, read now (moving to another device, cap x1). */
     fun entries(context: Context, vault: Vault): List<Pair<String, ByteArray>> =
-        vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
+        vault.sealedFiles().filter { it.first != "move-out.bin" && it.first != OWN_VERSES && !BackupFormat.isBigVideo(it.first) }.mapNotNull { (name, f) -> vault.readBytes(f)?.let { name to it } } +
             (PREFS_ENTRY to prefsJson(context).toByteArray())
 
     private class Counting(o: OutputStream) : FilterOutputStream(o) {

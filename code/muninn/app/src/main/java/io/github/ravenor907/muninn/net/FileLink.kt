@@ -290,7 +290,7 @@ object FileLink {
         val old = _all.value[p.id]
         if (old == null || old.state != p.state || old.route != p.route && p.route.isNotEmpty())
             ActivityLog.add("file", "${ActivityLog.id(p.id)} ${if (p.mine) "out" else "in"} ${p.state} ${p.route} ${FileText.size(p.size)}" +
-                (if (p.state == "failed") " (${p.note})" else ""))
+                (if (p.state == "failed") " (${ActivityLog.reason(p.note)})" else ""))
         val merged = if (old == null) p else p.copy(group = p.group.ifEmpty { old.group }, route = p.route.ifEmpty { old.route },
             folder = p.folder.ifEmpty { old.folder }, relay = p.relay || old.relay, time = old.time)
         val paused = p.id in pausedIds
@@ -300,6 +300,11 @@ object FileLink {
         if (p.state == "done" || p.id in stopped) videoBack.remove(p.id)
         val pace = if (merged.state == "sending" && since != null && !paused && !held)
             (base[p.id] ?: 0L).let { b -> FileText.pace(merged.done - b, merged.size - b, System.currentTimeMillis() - since - (pausedFor[p.id] ?: 0L)) } else ""
+        // A copy of my big video stopped: its bubble says Not sent (the card shows, with Retry).
+        if (p.state == "failed" && p.mine && old?.state != "failed") bigOf[p.id]?.let { (chat, msgId) ->
+            againBig[p.id] = chat to msgId
+            try { host?.bigVideoFailed(chat, msgId) } catch (_: Exception) {}
+        }
         // A copy of my big video (in the chat like a photo) arrived: the bubble says Sent, and the card goes.
         if (p.state == "done" && p.mine) bigOf.remove(p.id)?.let { (chat, msgId) ->
             try { host?.bigVideoSent(chat, msgId) } catch (_: Exception) {}
@@ -311,6 +316,11 @@ object FileLink {
 
     /** My big videos' cards (BigVideo): card id to the chat ("g:" and a group, or a key) and the bubble's message id. */
     private val bigOf = ConcurrentHashMap<String, Pair<String, String>>()
+    /** Kept (Retry) cards: a video's length, and my big video's bubble, so Retry sends it the same way (saved with them). */
+    private val againVid = ConcurrentHashMap<String, Int>()
+    private val againBig = ConcurrentHashMap<String, Pair<String, String>>()
+    /** Taken for Retry, waiting for [send]: by the file's path. */
+    private val carry = ConcurrentHashMap<String, Pair<Int, Pair<String, String>?>>()
     /** Card [card] carries a copy of my big video [msgId] in [chat]: the bubble shows it, so the card stays out of the chat unless it fails. */
     fun linkBig(card: String, chat: String, msgId: String) { bigOf[card] = chat to msgId; refresh(card) }
     /** A card the chat doesn't show (its big video's bubble does), while it hasn't failed. */
@@ -391,6 +401,8 @@ object FileLink {
         fun inlineVideo(peer: String, group: String, file: File, ms: Int): Boolean = false
         /** A copy of my big video [msgId] (in [chat]: a key, or "g:" and a group) arrived. */
         fun bigVideoSent(chat: String, msgId: String) {}
+        /** A copy of my big video [msgId] stopped (its card has Retry): the bubble says Not sent. */
+        fun bigVideoFailed(chat: String, msgId: String) {}
         /** Family or trusted, but set to Ask in their details. */
         fun asksFirst(peer: String): Boolean = false
     }
@@ -493,6 +505,10 @@ object FileLink {
             if (f == null || !f.isFile || peer.isEmpty() || o.optLong("time") < oldest || o.optString("note") == "Stopped") { f?.delete(); dropped = true; continue }
             val name = o.optString("name").ifEmpty { "file" }
             if (o.optBoolean("noRetry")) noRetry.add(id)
+            o.optInt("vid", 0).takeIf { it > 0 }?.let { againVid[id] = it }
+            val bc = o.optString("bc"); val bm = o.optString("bm")
+            // My big video's copy was on its way when Muninn closed: its bubble says Not sent, and Retry sends it the same way.
+            if (bc.isNotEmpty() && bm.isNotEmpty()) { againBig[id] = bc to bm; try { host?.bigVideoFailed(bc, bm) } catch (_: Exception) {} }
             o.optInt("tries", 0).takeIf { it > 0 }?.let { retries[f.path] = it }
             val g = o.optString("group")
             again[id] = Triple(peer, f, name)
@@ -517,7 +533,8 @@ object FileLink {
             val p = _all.value[id]
             a.put(JSONObject().put("id", id).put("peer", t.first).put("file", f.name).put("name", t.third).put("group", againGroup[id].orEmpty())
                 .put("time", p?.time ?: f.lastModified()).put("note", if (p?.state == "failed") p.note else "")
-                .apply { if (inVids) put("dir", "videos-out"); if (id in noRetry) put("noRetry", true); retries[f.path]?.let { put("tries", it) } })
+                .apply { if (inVids) put("dir", "videos-out"); if (id in noRetry) put("noRetry", true); retries[f.path]?.let { put("tries", it) }
+                    againVid[id]?.let { put("vid", it) }; (bigOf[id] ?: againBig[id])?.let { (c, m) -> put("bc", c).put("bm", m) } })
         }
         return a
     }
@@ -657,6 +674,9 @@ object FileLink {
         if (!canRetry(id)) return null
         val t = again.remove(id) ?: return null
         directIds.remove(id)
+        val v = againVid.remove(id) ?: 0
+        val b = bigOf.remove(id) ?: againBig.remove(id)
+        if (v > 0 || b != null) carry[t.second.path] = v to b
         _all.value = _all.value - id
         saveKept()
         return t.takeIf { it.second.isFile }
@@ -776,7 +796,22 @@ object FileLink {
         if (h.lanAddress(peer) != null && h.hasF2(peer)) return ""
         if (!h.online()) return NO_PATH
         val direct = h.trusted(peer) && UltraPrivacy.directAllowed
-        return if (direct || (!UltraPrivacy.directAllowed && h.torAllowed()) || relayPlan(peer, "")) "" else NO_PATH
+        return if (direct || (!UltraPrivacy.directAllowed && h.torAllowed()) || relayPlan(peer, "")) "" else noPathWhy(peer)
+    }
+
+    // Tor is Ultra privacy's alone (1.48): when nothing else reaches someone, the words say why and what to do.
+    const val OUTSIDE = "Files reach people outside Family and trusted contacts on the same Wi-Fi, or with Trusted direct on for each other."
+    const val OLDER_FAMILY = "Ask them to update, or send on the same Wi-Fi."
+    const val MONTH_USED = "The relay's free limit is used this month. Send on the same Wi-Fi."
+
+    /** Why nothing reaches [peer] now (online, not on this Wi-Fi): one of the lines above, else [NO_PATH]. */
+    fun noPathWhy(peer: String): String {
+        val h = host ?: return NO_PATH
+        if (!UltraPrivacy.directAllowed) return NO_PATH
+        if (!mayAlways(h.badge(peer))) return OUTSIDE
+        if (!h.hasF5(peer)) return OLDER_FAMILY
+        if (h.relayStopped()) return MONTH_USED
+        return NO_PATH
     }
 
     /** Cap f5: the call relay may carry a file to [peer] now. */
@@ -809,8 +844,12 @@ object FileLink {
      * else why not: "update" (their app is too old: [UPDATE]) or "no path" ([NO_PATH]). [group]: a group's file. [vid]: a
      * full-size video (cap v3; agent V's video path), which also goes to older apps on Nearby or Trusted direct.
      */
-    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId(), group: String = "", vid: Int = 0): String? {
+    fun send(peer: String, file: File, name: String, id: String = Proto06.newLogicalId(), group: String = "", vid0: Int = 0): String? {
         val h = host ?: return "Not ready."
+        // Retry of a video (or of my big video's copy): it goes again as the video, linked to its bubble.
+        val carried = carry.remove(file.path)
+        val vid = if (vid0 == 0 && carried != null) carried.first else vid0
+        carried?.second?.let { (chat, msgId) -> bigOf[id] = chat to msgId }
         if (!h.hasF1(peer)) return "update"
         if (group.isNotEmpty() && !h.hasF2(peer)) return "update"
         val f4 = h.hasF4(peer)
@@ -832,6 +871,7 @@ object FileLink {
         val size = file.length()
         again[id] = Triple(peer, file, name)
         if (group.isNotEmpty()) againGroup[id] = group
+        if (vid > 0) againVid[id] = vid
         put(Progress(id, peer, name, size, true, "connecting", group = group, route = if (lan != null && lanOnly) methodLabel("lan") else ""))
         saveKept()   // closed by Android part way, it comes back as a stopped card with Retry
         work.execute {

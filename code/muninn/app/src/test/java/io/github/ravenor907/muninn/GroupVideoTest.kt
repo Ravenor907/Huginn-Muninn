@@ -129,7 +129,7 @@ class GroupVideoTest {
         assertEquals(GroupVideo.NONE, GroupVideo.delivery(far, unmetered = true, ms = 6 * min))
         // No way to them now (Tor is Ultra privacy's alone): the short relay copy, else nothing.
         assertEquals(GroupVideo.RELAY, GroupVideo.delivery(far.copy(reach = false), unmetered = true, ms = 15_000))
-        assertEquals(GroupVideo.NONE, GroupVideo.delivery(far.copy(reach = false), unmetered = true, ms = min))
+        assertEquals(GroupVideo.UNREACHED, GroupVideo.delivery(far.copy(reach = false), unmetered = true, ms = min))
         // A kids' device gets the 720p path, even close by.
         assertEquals(GroupVideo.SMALL, GroupVideo.delivery(kid, unmetered = true, ms = 10_000))
         // Older apps: full size up to a minute when direct, the relay copy up to 20 s, else nothing.

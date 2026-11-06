@@ -164,7 +164,7 @@ internal fun VideoSendDialog(app: Muninn, target: VideoSend.Target, job: VideoSe
                 tooLong -> MButton("Send as a file", kind = Kind.Accent) { asFile() }
                 shrink -> MButton("Shrink", kind = Kind.Accent) { sendNow() }
                 else -> {
-                    val ready = idle && plan.values.any { it != GroupVideo.NONE }
+                    val ready = idle && plan.values.any { it != GroupVideo.NONE && it != GroupVideo.UNREACHED }
                     MButton("Send", kind = Kind.Accent, enabled = ready) { sendNow() }
                 }
             }

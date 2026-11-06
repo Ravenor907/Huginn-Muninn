@@ -184,12 +184,12 @@ object VideoSend {
         val card = FileLink.preparing(k, clean, size, g)
         if (bubble != null) FileLink.linkBig(card, chatKey, bubble)
         if (back != null) FileLink.onNoPath(card, back)
-        val why = FileLink.send(k, mine, clean, card, g, vid = vid)
+        val why = FileLink.send(k, mine, clean, card, g, vid0 = vid)
         if (why != null) {
             mine.delete()
             if (back != null) FileLink.videoFellBack(card)
             else FileLink.failed(k, clean, size, if (why == "update") "${chat.nameOf(k)}'s app is older. Ask them to update."
-                else "Can't reach ${chat.nameOf(k)} right now. Try again later.", card, g)
+                else FileLink.noPathWhy(k).let { if (it == FileLink.NO_PATH) "Can't reach ${chat.nameOf(k)} right now. Try again later." else it }, card, g)
         }
     }
 

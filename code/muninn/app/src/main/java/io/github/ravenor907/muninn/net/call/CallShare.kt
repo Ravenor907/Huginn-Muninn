@@ -56,16 +56,14 @@ object CallShare {
         val s = CallVideo.shareable() ?: return "Video can't be shared in this call."
         val m = s.mediaNow ?: return "Video can't be shared in this call."
         stop()
-        val ex = MediaExtractor()
-        try { ex.setDataSource(context, uri, null) } catch (e: Exception) { ex.release(); return "That video can't be opened." }
-        val vt = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
-        ex.release()
-        if (vt == null) return "That isn't a video this phone can play."
-        val my = ++run
-        paused = false
-        sendQ.clear(); localQ.clear()
-        startedAt = System.currentTimeMillis()
-        _state.value = State(on = true, name = name)
+        val my: Int
+        synchronized(lock) {
+            my = ++run
+            paused = false
+            sendQ.clear(); localQ.clear()
+            startedAt = System.currentTimeMillis()
+            _state.value = State(on = true, name = name)
+        }
         CallVideo.sharing(true)
         keyWanted = true
         Thread({ videoLoop(context, uri, my, m) }, "muninn-share-video").apply { isDaemon = true; start() }
@@ -76,24 +74,24 @@ object CallShare {
     fun pause(on: Boolean) {
         if (!active || paused == on) return
         synchronized(lock) {
-            if (on) pausedAt = System.currentTimeMillis()
+            if (on) { pausedAt = System.currentTimeMillis(); sendQ.clear(); localQ.clear() }
             else { startedAt += System.currentTimeMillis() - pausedAt; lock.notifyAll() }
             paused = on
+            _state.value = _state.value.copy(paused = on)
         }
-        _state.value = _state.value.copy(paused = on)
     }
 
     fun stop() {
         if (!active) return
-        run++
-        synchronized(lock) { paused = false; lock.notifyAll() }
-        sendQ.clear(); localQ.clear()
-        _state.value = State()
+        synchronized(lock) { run++; paused = false; lock.notifyAll(); sendQ.clear(); localQ.clear(); _state.value = State() }
         CallVideo.sharing(false)
     }
 
     /** The call ended: nothing more to share into. */
-    fun callEnded() { if (active) { run++; sendQ.clear(); localQ.clear(); _state.value = State() } }
+    fun callEnded() { if (active) synchronized(lock) { run++; sendQ.clear(); localQ.clear(); _state.value = State() } }
+
+    /** Changes the state only while share [my] is still the one on (a stopped one never turns it back on). */
+    private fun change(my: Int, f: (State) -> State) { synchronized(lock) { if (alive(my)) _state.value = f(_state.value) } }
 
     private fun alive(my: Int) = run == my
 
@@ -123,11 +121,12 @@ object CallShare {
         var enc: Vp8Encoder? = null
         try {
             ex.setDataSource(context, uri, null)
-            val t = (0 until ex.trackCount).first { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+            val t = (0 until ex.trackCount).firstOrNull { ex.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+                ?: throw IllegalArgumentException("no video")
             ex.selectTrack(t)
             val f = ex.getTrackFormat(t)
             val total = if (f.containsKey(MediaFormat.KEY_DURATION)) f.getLong(MediaFormat.KEY_DURATION) / 1000 else 0L
-            _state.value = _state.value.copy(ms = total)
+            change(my) { it.copy(ms = total) }
             val rotation = if (f.containsKey(MediaFormat.KEY_ROTATION)) f.getInteger(MediaFormat.KEY_ROTATION) else 0
             val d = MediaCodec.createDecoderByType(f.getString(MediaFormat.KEY_MIME)!!)
             dec = d
@@ -152,7 +151,7 @@ object CallShare {
                 if (o < 0) continue
                 if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) { d.releaseOutputBuffer(o, false); break }
                 if (!waitFor(info.presentationTimeUs, my)) { d.releaseOutputBuffer(o, false); break }
-                _state.value = _state.value.copy(atMs = info.presentationTimeUs / 1000)
+                change(my) { it.copy(atMs = info.presentationTimeUs / 1000) }
                 val prof = m.profile(VideoWire.CAMERA)
                 val now = System.currentTimeMillis()
                 // The call's frame rate at most; a frame that's late is dropped rather than queued.
@@ -176,6 +175,8 @@ object CallShare {
                 d.releaseOutputBuffer(o, false)
             }
         } catch (_: Exception) {
+            // Opened on this thread (never the screen's): one that can't be read says so.
+            if (alive(my) && _state.value.atMs == 0L) io.github.ravenor907.muninn.ui.Ui.say("That video can't be played here.", true)
         } finally {
             try { dec?.stop() } catch (_: Exception) {}; try { dec?.release() } catch (_: Exception) {}
             enc?.close(); ex.release()
@@ -205,6 +206,7 @@ object CallShare {
             val pending = ShortArray(frame)
             var have = 0
             var pos = 0.0           // where the resampler stands in the decoded sound
+            var made = 0L           // 20 ms frames made so far (their time in the video)
             var inputDone = false
             while (alive(my)) {
                 if (!holdWhilePaused(my)) break
@@ -239,6 +241,9 @@ object CallShare {
                     pending[have++] = ((a + (b - a) * fr) / ch).toInt().coerceIn(-32768, 32767).toShort()
                     pos += step
                     if (have == frame) {
+                        made++
+                        // Behind the picture (a hiccup somewhere): this frame is dropped, so sound and picture stay together.
+                        if ((made * 20L) < System.currentTimeMillis() - startedAt - 200) { have = 0; continue }
                         val copy = pending.copyOf()
                         // Paced by the call: the microphone loop takes one frame every 20 ms.
                         while (alive(my) && !sendQ.offer(copy, 100, java.util.concurrent.TimeUnit.MILLISECONDS)) { if (!holdWhilePaused(my)) break }
