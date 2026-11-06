@@ -244,6 +244,11 @@ object CallShare {
                         made++
                         // Behind the picture (a hiccup somewhere): this frame is dropped, so sound and picture stay together.
                         if ((made * 20L) < System.currentTimeMillis() - startedAt - 200) { have = 0; continue }
+                        // Never far ahead of the picture either (so a pause leaves them together): at most 60 ms.
+                        while (alive(my) && made * 20L > System.currentTimeMillis() - startedAt + 60) {
+                            if (!holdWhilePaused(my)) break
+                            try { Thread.sleep(10) } catch (_: InterruptedException) { break }
+                        }
                         val copy = pending.copyOf()
                         // Paced by the call: the microphone loop takes one frame every 20 ms.
                         while (alive(my) && !sendQ.offer(copy, 100, java.util.concurrent.TimeUnit.MILLISECONDS)) { if (!holdWhilePaused(my)) break }

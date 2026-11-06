@@ -1478,6 +1478,13 @@ class Groups(
         true
     }
 
+    /** At start: my big videos still "sending" from before are "failed" (a kept copy going again makes them "sent"). */
+    fun failStaleBig() = act {
+        for (g in chats.keys.toList()) chats[g]?.let { l ->
+            if (l.any { it.mine && it.big && it.state == "sending" }) chats[g] = l.map { if (it.mine && it.big && it.state == "sending") it.copy(state = "failed") else it }
+        }
+    }
+
     /** A copy of my big video in [g] stopped: "failed" (its card has Retry), unless another copy already arrived. */
     fun bigVideoFailed(g: String, id: String) = act {
         chats[g]?.let { l -> chats[g] = l.map { if (it.id == id && it.mine && it.state == "sending") it.copy(state = "failed") else it } }

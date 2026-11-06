@@ -449,6 +449,9 @@ QString Chat::saveMedia(const QString &id)
     for (int n = 1; QFile::exists(path) && n < 1000; ++n)
         path = QDir(dir).filePath(stem + QStringLiteral(" (%1).").arg(n) + ext);
     if (big) {
+        QFile hold(path);   // its name taken now, so a second Save right after gets another
+        hold.open(QIODevice::WriteOnly);
+        hold.close();
         exportBig(id, path);
         return QStringLiteral("saving");
     }

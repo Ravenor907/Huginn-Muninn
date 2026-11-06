@@ -2977,8 +2977,11 @@ private fun GroupConversation(app: Muninn, g: String) {
                     // Mine: a check mark and how many have read it, circled; before anyone has, "Sending" or "Delivered".
                     if (!gm.mine && gm.id !in unfolded && sound[gm.from]?.let { it.muted && !it.show } == true) MutedChip { unfolded = unfolded + gm.id }
                     else if (m.id !in gAlbums.first) Bubble(m, showName = true, photo = if (gm.photo.isNotEmpty()) ({ app.chat.photo(gm.photo) }) else null,
-                        statusText = if (gm.mine) (if (gm.read.isNotEmpty() || gm.unsent.isNotEmpty()) "" else
-                            io.github.ravenor907.muninn.net.Ticks.group(gm.to, gm.delivered) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }) else null,
+                        statusText = if (gm.mine) (if (gm.read.isNotEmpty() || gm.unsent.isNotEmpty()) ""
+                            // A longer video goes as files: its own words until a copy arrives.
+                            else if (gm.big && gm.state == "sending") "Sending"
+                            else if (gm.big && gm.state == "failed") "Not sent. Tap Retry on its card"
+                            else io.github.ravenor907.muninn.net.Ticks.group(gm.to, gm.delivered) { k -> s.member(k)?.let { memberName(app, it) } ?: "Someone" }) else null,
                         quote = quoteOf(gm.re), onQuote = { jumpTo(gm.re) }, me = me, groupRead = if (gm.mine) gm.read.size else -1,
                         highlight = matches.getOrNull(matchAt) == i || gm.id == flash || (!gm.mine && gm.unsent.isEmpty() && io.github.ravenor907.muninn.net.Rich.mentions(gm.text, app.identity.username)),
                         onReply = if (grp.readOnly) null else ({ editing = null; replyTo = gm }), onReactions = { sheetFor = gm },

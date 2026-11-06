@@ -1019,6 +1019,11 @@ void Vault::wrongTry(bool lockApp)
 
 void Vault::eraseForTries()
 {
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     if (m_restarting)
         return;
     CrashLog::note(QStringLiteral("vault: erased after too many wrong tries"));
@@ -1627,6 +1632,11 @@ void Vault::finishErase()
 
 void Vault::eraseAll()
 {
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     // Round 19: Tor and the voice engine stop first where main.cpp listens, so their files can go.
     Q_EMIT aboutToErase();
     // What waits to be saved would only bring files back: dropped (the one being written ends first).
@@ -1696,6 +1706,11 @@ void Vault::eraseAll()
 
 void Vault::eraseForRelink()
 {
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     eraseAll();
     // Only yes/no, beside the vault (gone above), and after the portable build emptied its settings. Link::confirm
     // reads it once and removes it; a plain eraseAll removes it too (the "link" group).
@@ -1874,6 +1889,11 @@ void Vault::shareKey()
     QMutexLocker l(&m_shared->lock);
     if (m_shared->key == m_key)
         return;
+    {
+        // Writers on other threads stop before the key changes, never after (no piece lands with the old key).
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     m_shared->key.fill(0);
     m_shared->key = m_key;
     m_shared->key.detach();   // its own copy: wiping one never touches the other
@@ -1928,16 +1948,29 @@ std::function<bool(const QString &, const QByteArray &)> Vault::anyThreadWriter(
             return false;
         const QByteArray sealed = kMagic + Vault::seal(key, data);
         key.fill(0);
-        // Never while the chat folder is being swapped (a restore or a new lock). In this order: the swap may change
-        // the key, which takes writing too.
+        // Written next to its place with no lock held (a slow disk never holds up the window's thread, or call sound),
+        // then moved into place under the locks: never while the chat folder is being swapped (a restore or a new
+        // lock). In this order: the swap may change the key, which takes writing too.
+        const QString file = dir + QLatin1Char('/') + name;
+        const QString tmp = file + QStringLiteral(".keep");
+        QDir().mkpath(QFileInfo(file).absolutePath());
+        {
+            QFile t(tmp);
+            if (!t.open(QIODevice::WriteOnly | QIODevice::Truncate) || t.write(sealed) != sealed.size() || !t.flush()) {
+                t.close();
+                QFile::remove(tmp);
+                return false;
+            }
+            t.close();
+        }
         QMutexLocker hold(&s_swap);
         QMutexLocker w(&shared->writing);
-        if (shared->gen != gen)
+        if (shared->gen != gen || !QFileInfo::exists(QFileInfo(file).absolutePath())) {
+            QFile::remove(tmp);
             return false;
-        const QString file = dir + QLatin1Char('/') + name;
-        QDir().mkpath(QFileInfo(file).absolutePath());
-        QSaveFile f(file);
-        return f.open(QIODevice::WriteOnly) && f.write(sealed) == sealed.size() && f.commit();
+        }
+        QFile::remove(file);
+        return QFile::rename(tmp, file);
     };
 }
 
@@ -3203,6 +3236,11 @@ void Vault::forgetOpened()
 
 void Vault::restoreOpened()
 {
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     if (m_busy || m_opened.empty()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Open the backup again first."));
         return;
@@ -3293,6 +3331,11 @@ Vault::Files Vault::openedFiles(QString *why) const
 
 void Vault::restoreErasing()
 {
+    {
+        // Pieces still being kept on another thread (anyThreadWriter) stop here.
+        QMutexLocker w(&m_shared->writing);
+        ++m_shared->gen;
+    }
     if (m_busy || m_opened.empty()) {
         Q_EMIT done(QStringLiteral("restore"), false, QStringLiteral("Open the backup again first."));
         return;

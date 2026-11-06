@@ -470,7 +470,7 @@ class CallMedia(
                 // so the free path, the pings and the sound coming in.
                 // Video never goes through the small drop queue: a keyframe burst would lose its start.
                 // With two paths on (Labs), nothing waits on the relay under this lock; otherwise video never meets the drop queue.
-                if (twoPaths) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
+                if (twoPaths && type == CallCrypto.AUDIO) t.sendSoon(dst.addr, p) else t.send(dst.addr, p)
                 relayBytes.addAndGet(p.size + RELAY_OVERHEAD.toLong())
                 // Pings and pongs keep a standby relay alive; only what else it carries counts as the relay in use.
                 if (only == null) relayUsedAt = now

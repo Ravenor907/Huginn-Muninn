@@ -303,7 +303,9 @@ object FileLink {
         // A copy of my big video stopped: its bubble says Not sent (the card shows, with Retry).
         if (p.state == "failed" && p.mine && old?.state != "failed") bigOf[p.id]?.let { (chat, msgId) ->
             againBig[p.id] = chat to msgId
-            try { host?.bigVideoFailed(chat, msgId) } catch (_: Exception) {}
+            // Only once no other copy of it is still on its way.
+            val going = bigOf.any { (card, link) -> card != p.id && link.second == msgId && _all.value[card]?.state.let { it != null && FileText.running(it) } }
+            if (!going) try { host?.bigVideoFailed(chat, msgId) } catch (_: Exception) {}
         }
         // A copy of my big video (in the chat like a photo) arrived: the bubble says Sent, and the card goes.
         if (p.state == "done" && p.mine) bigOf.remove(p.id)?.let { (chat, msgId) ->
@@ -807,7 +809,7 @@ object FileLink {
     /** Why nothing reaches [peer] now (online, not on this Wi-Fi): one of the lines above, else [NO_PATH]. */
     fun noPathWhy(peer: String): String {
         val h = host ?: return NO_PATH
-        if (!UltraPrivacy.directAllowed) return NO_PATH
+        if (!UltraPrivacy.directAllowed || !h.online()) return NO_PATH
         if (!mayAlways(h.badge(peer))) return OUTSIDE
         if (!h.hasF5(peer)) return OLDER_FAMILY
         if (h.relayStopped()) return MONTH_USED

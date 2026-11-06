@@ -333,6 +333,20 @@ class Chat(private val context: Context, private val net: LocalSend, private val
 
     init {
         load()
+        // My longer videos still "sending" when Muninn closed: Not sent, until a kept copy goes again (that clears it).
+        try {
+            edit { map ->
+                var changed = false
+                for (k in map.keys.toList()) {
+                    val l = map[k] ?: continue
+                    if (l.none { it.mine && it.big && it.state == "sending" && !it.failed }) continue
+                    map[k] = l.map { if (it.mine && it.big && it.state == "sending") it.copy(failed = true) else it }
+                    changed = true
+                }
+                changed
+            }
+            groups.failStaleBig()
+        } catch (_: Exception) {}
         queueWaiting()
         try { vault.read(s1Store)?.let { JSONObject(it) }?.let { o -> o.keys().forEach { s1Bound[it] = o.optLong(it) } } } catch (_: Exception) {}
         FileLink.resend = { p, file, n, g -> bg {
@@ -2825,7 +2839,7 @@ class Chat(private val context: Context, private val net: LocalSend, private val
     fun retry(peerKey: String, msgId: String) {
         val m = _private.value[peerKey]?.firstOrNull { it.id == msgId } ?: return
         // A longer video goes again from its card (Retry), which keeps it a video for their chat.
-        if (m.big) { notices.tryEmit("Tap Retry on its card below to send it again."); return }
+        if (m.big) { notices.tryEmit("Its card below says what happened, with Retry when it can go again."); return }
         tries.remove(m.id)
         update(peerKey, msgId) { it.copy(failed = false, state = "sending", time = System.currentTimeMillis()) }
         bg { attempt(m) }
