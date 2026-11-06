@@ -447,7 +447,7 @@ QString FileLink::badge(const QString &peer) const
     return QStringLiteral("Not trusted");
 }
 
-QString FileLink::reachNote(const QString &peer) const
+QString FileLink::reachNoteIn(const QString &peer, const QString &group) const
 {
     if (!(hasF4 && hasF4(peer)))
         return updateText();
@@ -457,9 +457,9 @@ QString FileLink::reachNote(const QString &peer) const
         return noPathText();
     const bool direct = trusted && trusted(peer) && UltraPrivacy::directAllowed();
     const bool tor = !UltraPrivacy::directAllowed() && (!torAllowed || torAllowed());
-    if (direct || tor || relayPlan(peer, QString()))
+    if (direct || tor || relayPlan(peer, group))
         return {};
-    const QString why = noPathWhy(peer, QString());
+    const QString why = noPathWhy(peer, group);
     return why.isEmpty() ? noPathText() : why;
 }
 
@@ -686,6 +686,8 @@ struct FileLink::Xfer {
     // chat (storing), so it isn't saved as a file.
     QString bigChat, bigMsg;
     bool storing = false;
+    // Theirs: the sender's message id for it in the chat (the offer's "bm"), or "".
+    QString bm;
     // Cap f4 (section 30): Tor may carry it; their card is up ("wait"); on Tor now, with its one-time service (mine) or
     // their service's address (theirs), the stream, and its own packet counter; when something last moved; the receiving
     // card's badge and how it comes.
@@ -1368,6 +1370,9 @@ void FileLink::sendOffer(Xfer *x, const QJsonArray &cands)
         offer.insert(QStringLiteral("g"), x->group);   // cap f2 (27.2): the group it's for
     if (x->vid > 0)
         offer.insert(QStringLiteral("vid"), x->vid);   // cap v3 (29.3): a full-size video
+    // My longer video's own message id, so their bubble is the same message (reactions, replies, read).
+    if (x->vid > 0 && x->mine && BigVideo::idOk(x->bigMsg))
+        offer.insert(QLatin1String(BigVideo::kField), x->bigMsg);
     if (x->relay)
         offer.insert(QStringLiteral("rl"), 1);         // cap f5: the call relay may carry it
     signal(x->peer, offer);
@@ -1601,6 +1606,8 @@ void FileLink::onSignal(const QString &from, const QJsonObject &p)
         x->sha = jstr(p, "sha");
         x->theirE = jstr(p, "e");
         x->vid = p.value(QStringLiteral("vid")).toInt();
+        if (const QString bm = p.value(QLatin1String(BigVideo::kField)).toString(); BigVideo::idOk(bm))
+            x->bm = bm;
         if (trust)
             x->theirs = directOf(cands);
         if (lan.valid()) {
@@ -2565,7 +2572,7 @@ void FileLink::receivedAll(Xfer *x)
             x->storing = true;
             const QString path = x->path;
             QPointer<FileLink> me(this);
-            m_chat->inlineVideo(x->peer, x->group, path, x->vid, [me, id, path](bool ok) {
+            m_chat->inlineVideo(x->peer, x->group, path, x->vid, x->bm, [me, id, path](bool ok) {
                 if (!me)
                     return;
                 Xfer *x = me->m_x.value(id);

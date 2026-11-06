@@ -11,6 +11,7 @@
 #include <QUdpSocket>
 
 std::function<int(const QString &key, bool room)> CallSession::gainFor;
+std::function<bool(const QString &key)> CallSession::peerIsTv;
 
 namespace
 {
@@ -843,6 +844,7 @@ bool CallSession::startMedia()
     connect(m_media, &CallMedia::speakingChanged, this, &CallSession::speakingChanged);
     connect(m_media, &CallMedia::firstMedia, this, [this] { m_watch.start(); });
     m_media->setMuted(m_muted);
+    m_media->setPeerTv(peerIsTv && peerIsTv(m_peer));
     if (gainFor) {
         const QString peer = m_peer;
         // Mute for me counts in a voice room only; a 1:1 call uses just the volume.

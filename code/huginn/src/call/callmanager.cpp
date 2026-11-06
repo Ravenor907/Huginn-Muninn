@@ -274,7 +274,8 @@ void CallManager::ensureSender()
     m_camera = new VideoSender(VideoSender::Camera, this);
     connect(m_camera, &VideoSender::encoded, this, [this](const QByteArray &vp8, bool key) {
         if (m_session && m_session->media())
-            m_session->media()->sendVideo(VideoWire::Camera, key, 0, vp8);
+            // A shared video carries its own rotation (a phone video is stored sideways); the camera's pictures are upright.
+            m_session->media()->sendVideo(VideoWire::Camera, key, m_share && m_share->active() ? m_share->rotation() : 0, vp8);
     });
     connect(m_camera, &VideoSender::failed, this, [this](const QString &) {
 #ifdef Q_OS_WIN

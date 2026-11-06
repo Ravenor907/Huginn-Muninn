@@ -36,6 +36,9 @@ public:
     bool paused() const { return m_paused; }
     qint64 atMs() const;
     qint64 lengthMs() const;
+    // Degrees clockwise to turn the video upright (0, 90, 180, 270), from its own metadata: a phone video filmed
+    // upright is stored sideways with this set. It goes with each frame, as the camera's rotation does.
+    int rotation() const { return m_rotation; }
 
     // 20 ms of the video's sound at 16 kHz mono: what goes out with the microphone, and what plays here. False: none now.
     bool takeSend(qint16 *pcm320) { return take(m_send, m_sendPrimed, pcm320); }
@@ -58,6 +61,7 @@ private:
     QAudioBufferOutput *m_audio = nullptr;
     bool m_on = false, m_paused = false, m_sawVideo = false;
     qint64 m_lastSecond = -1;
+    int m_rotation = 0;
     std::deque<qint16> m_send, m_here;
     bool m_sendPrimed = false, m_herePrimed = false;
     AudioDsp::Resampler m_resampler;

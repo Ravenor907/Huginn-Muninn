@@ -118,6 +118,9 @@ public:
     // Set by main.cpp: someone's volume here in percent (cap g2: 0 to 200; 0 while muted for me, in a voice room only,
     // as in Muninn: a 1:1 call always uses just the volume). Every call's media asks it.
     static std::function<int(const QString &key, bool room)> gainFor;
+    // Set by main.cpp: whether someone's app is on a TV (their app version says "Android TV"). Labs voice over two paths
+    // never sends copies to a TV.
+    static std::function<bool(const QString &key)> peerIsTv;
     bool useDevices = true;   // false: no microphone or speaker (self-test, voice rooms)
     QJsonObject offerExtra;   // added to the offer: a voice room's "g" and "ch" (section 6)
     std::function<QString(const QString &)> lanHostOverride;   // self-test: where the peer's "Wi-Fi" is

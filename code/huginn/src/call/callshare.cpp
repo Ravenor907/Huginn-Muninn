@@ -2,6 +2,7 @@
 
 #include <QAudioBuffer>
 #include <QAudioFormat>
+#include <QMediaMetaData>
 #include <QMediaPlayer>
 #include <QUrl>
 #include <QVideoSink>
@@ -35,6 +36,7 @@ void CallShare::start(const QString &path)
     m_paused = false;
     m_sawVideo = false;
     m_lastSecond = -1;
+    m_rotation = 0;
     m_send.clear();
     m_here.clear();
     m_sendPrimed = m_herePrimed = false;
@@ -88,6 +90,16 @@ void CallShare::start(const QString &path)
         Q_EMIT changed();
     });
     connect(player, &QMediaPlayer::durationChanged, this, &CallShare::changed);
+    // Its rotation, once the file is read: the nearest quarter turn, clockwise.
+    connect(player, &QMediaPlayer::metaDataChanged, this, [this, player] {
+        if (player != m_player.data())
+            return;
+        const QVariant v = player->metaData().value(QMediaMetaData::Orientation);
+        bool ok = false;
+        const int deg = v.toInt(&ok);
+        const int d = ok ? (deg % 360 + 360) % 360 : 0;
+        m_rotation = ((d + 45) / 90 * 90) % 360;
+    });
     player->setSource(path.startsWith(QLatin1String("file:")) ? QUrl(path) : QUrl::fromLocalFile(path));
     player->play();
     Q_EMIT changed();
@@ -126,6 +138,7 @@ void CallShare::finish()
     }
     m_sink = nullptr;
     m_audio = nullptr;
+    m_rotation = 0;
     m_send.clear();
     m_here.clear();
     m_sendPrimed = m_herePrimed = false;

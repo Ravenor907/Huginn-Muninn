@@ -609,7 +609,8 @@ QtObject {
                 })
             } else if (a === "moveaway") {
                 lockFirst("Move from this device", "Everything moves to the new device, and this one is locked out", "moveaway",
-                          () => Ui.ask("Move from this device", "Only to a device you hold", "", "Next", t => Mover.take(t)))
+                          () => Ui.ask("Move from this device", "Only to a device you hold.\nLonger videos in chats stay on this computer; their pictures move.", "", "Next",
+                                       t => Mover.take(t)))
             }
         })
     }

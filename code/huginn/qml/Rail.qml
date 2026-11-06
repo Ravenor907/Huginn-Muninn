@@ -469,8 +469,10 @@ Rectangle {
                 acceptedButtons: Qt.RightButton
                 onTapped: (point, button) => { if (Ui.main) Ui.main.railMenu(rb.entry, face, point.position.x, point.position.y, false) }
             }
+            // Not on the raven while its 7 second hold for Report a bug is on (Labs): holding it opens that alone.
             TapHandler {
                 acceptedDevices: PointerDevice.TouchScreen
+                enabled: !(rb.entry.kind === "raven" && Settings.labs)
                 onLongPressed: { if (Ui.main) Ui.main.railMenu(rb.entry, face, point.position.x, point.position.y, false) }
             }
         }

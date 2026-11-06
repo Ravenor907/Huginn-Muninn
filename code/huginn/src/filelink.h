@@ -210,7 +210,9 @@ public:
     // ("Ask them to update", "Can't reach them right now", or why with Ultra privacy off: noPathWhy). torWarning: the question before a file over 1 GB that will
     // most likely go over Tor ("" when it needn't ask).
     Q_INVOKABLE bool canReach(const QString &peer) const { return reachNote(peer).isEmpty(); }
-    Q_INVOKABLE QString reachNote(const QString &peer) const;
+    Q_INVOKABLE QString reachNote(const QString &peer) const { return reachNoteIn(peer, QString()); }
+    // The same for a member of [group] ("" for a chat with one person), so that group's own Send media choice counts.
+    QString reachNoteIn(const QString &peer, const QString &group) const;
     Q_INVOKABLE QString torWarning(const QString &peer, double size) const;
     // Whether "Always accept from" may be set for them: their badge is Trusted or Family (Details › Send me files).
     Q_INVOKABLE bool mayAlwaysFrom(const QString &peer) const { return mayAlways(badge(peer)); }

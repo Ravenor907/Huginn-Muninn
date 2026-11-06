@@ -3473,6 +3473,8 @@ sender waits 30 s for an answer (`RELAY_AFTER_MS`). If no answer comes, there's 
 for its rules or space, or the transfer breaks off, the card goes and that member gets the relay copy instead (added to
 the same group message, or a new one). Declined with `why:"no"`: nothing more.
 
+`"bm"` (optional), the sender's message id for the video in the chat.
+
 ### 29.4 Pacing
 
 Group pieces are sealed per member, so a relay copy to six members is about 1150 events. They leave the device paced:

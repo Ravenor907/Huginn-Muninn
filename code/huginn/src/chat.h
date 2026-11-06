@@ -13,6 +13,7 @@
 #include <optional>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QPointer>
 #include <QSet>
 #include <QSettings>
 #include <QTimer>
@@ -144,7 +145,8 @@ public:
     // A new code with an invite good for an hour: a leaked code stops working after that.
     Q_INVOKABLE QString newLink();
     QString netStatus() const;
-    // Send media (Settings › Files, and each chat's own choice): "auto", "fastest" or "tor".
+    // Send media (Settings › Files, and each chat's own choice): "auto" or "fastest". [chat]/[key]: a contact's key, or
+    // "g:<group>" for a group's own choice (kept on this device only). Labels: Automatic, Fastest or As in Settings.
     QString mediaRoute(const QString &chat) const;
     Q_INVOKABLE QString mediaRouteLabel(const QString &key) const;
     Q_INVOKABLE void cycleMediaRoute(const QString &key);
@@ -393,6 +395,9 @@ public:
     Q_INVOKABLE QString createGroup(const QString &name, const QString &kind = QString());
     // Writes everything still waiting to be saved (before Huginn closes or restarts for an update).
     void flushSaves();
+    // Huginn is closing: a longer video still being kept or saved is asked to stop, and waited for (about 2 s in all),
+    // so nothing is cut off mid write.
+    void stopBigThreads();
     // Battery saver: retries and other background checks further apart (main.cpp follows System::batterySaving).
     void setRelaxed(bool relaxed);
     // True when the last save of the groups or folders didn't go through (createGroup and addFolder then return "").
@@ -636,7 +641,8 @@ private:
     bool groupGif(const QString &g, const QString &id) const;      // a group message of mine that is a GIF
     int groupVideoMs(const QString &g, const QString &id) const;   // a group message of mine that is a video: its length
     // Cap v3: one member as a picked video's sender sees them now, and everyone it would go to.
-    GroupVideo::Member videoMember(const QString &key, bool group) const;
+    // [group]: the group it's for ("" for a chat with one person), so that group's own Send media choice counts.
+    GroupVideo::Member videoMember(const QString &key, const QString &group) const;
     QList<GroupVideo::Member> videoMembers(const QString &where) const;
     // Cap v3: [k]'s full copy couldn't go straight: they get the relay copy of my group message [gid] after all.
     bool addGroupBlobMember(const QString &g, const QString &gid, const QString &k);
@@ -645,8 +651,10 @@ private:
     // event loop; done(false) when it couldn't (nothing is kept then, and [path] is never touched).
     void storeBigVideo(const QString &id, const QString &path, std::function<void(bool)> done);
     // A video from Family or trusted [from] that came through FileLink: into the chat with them (or [group]'s main
-    // channel) like a photo. done(false) when it can't be kept: FileLink saves it as a file instead.
-    void inlineVideo(const QString &from, const QString &group, const QString &path, int ms, std::function<void(bool)> done);
+    // channel) like a photo. [msgId]: the sender's own id for it (the offer's "bm"), used when it's valid, so both sides
+    // keep the same message; already in that chat means done(true) with nothing stored again. done(false) when it can't
+    // be kept: FileLink saves it as a file instead.
+    void inlineVideo(const QString &from, const QString &group, const QString &path, int ms, const QString &msgId, std::function<void(bool)> done);
     // My own longer video, in the chat at once ("sending" until a copy arrives): [where] is a contact's key or
     // "g:<group>". done gets its message id, or "" when it couldn't be kept.
     void ownBigVideo(const QString &where, const QString &path, int ms, std::function<void(const QString &)> done);
@@ -669,6 +677,9 @@ private:
     void sweepBig();
     QSet<QString> m_bigStoring;
     qint64 m_bigSwept = 0;
+    // The threads keeping or saving a longer video ("huginn-video-keep", "huginn-video-save"), so closing can wait for them.
+    QList<QPointer<QObject>> m_bigThreads;
+    void trackBigThread(QObject *t);
     // Cap v3 (29.4): video relay pieces leave paced, a few a second in all; one queue per key ("member|message").
     GroupVideo::Pacer m_videoPacer;
     QSet<QString> m_paced;
@@ -888,6 +899,7 @@ private:
     QSettings m_settings;
     // Your chat name and who you blocked: in the vault (prefs.json), read when it opens.
     mutable QJsonObject m_prefs;
+    QString ownMediaRoute(const QString &key) const;   // its own Send media choice, "" for As in Settings
     bool m_prefsLoaded = false;
     mutable QString m_tempName;   // a name for this run only, while the vault isn't open yet
     void loadPrefs();

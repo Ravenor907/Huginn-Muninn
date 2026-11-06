@@ -1,3 +1,4 @@
+#include "appver.h"
 #include "gamepad.h"
 #include "activitylog.h"
 #include "localsend.h"
@@ -721,6 +722,9 @@ int main(int argc, char *argv[])
     auto *mod = new Moderation(chat, &app);
     chat->setModeration(mod);
     CallSession::gainFor = [mod](const QString &k, bool room) { return mod->gainFor(k, room); };
+    CallSession::peerIsTv = [chat](const QString &k) {
+        return AppVer::parse(chat->appInfo(k).value(QStringLiteral("app")).toString()).platform == QLatin1String("Android TV");
+    };
     rooms->barred = [mod](const QString &g, const QString &k) { return mod->barred(g, k); };
     rooms->joinBlock = [mod](const QString &g) { return mod->postBlock(g); };
     // A muted chat: its calls ring silently (shown, without a sound or a notification). A muted group's call is a missed-call line.
@@ -1187,6 +1191,8 @@ int main(int argc, char *argv[])
     if (wifiSelf)
         WifiSelfTest::start(chat, localSend, sound);
     QObject::connect(updater, &Updater::aboutToRestart, chat, &Chat::flushSaves);
+    // A longer video still being kept or saved stops first (waited for, about 2 s), then everything is saved.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::stopBigThreads);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, chat, &Chat::flushSaves);
     // Saved: from here on, a copy that finds this one stuck while closing may ask it to end itself (SingleInstance::markClosing).
     if (!quiet)

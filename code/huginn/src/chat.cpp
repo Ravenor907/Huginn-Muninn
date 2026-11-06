@@ -885,29 +885,50 @@ QString Chat::mailboxOf(const QString &key) const
 
 QString Chat::mediaRoute(const QString &chat) const
 {
-    // Each person's own choice is kept with them, in the vault.
-    const QString own = m_contacts.value(chat).value(QStringLiteral("mediaRoute")).toString();
+    // Each person's own choice is kept with them, in the vault; a group's ("g:<group>") with this device's own choices.
+    const QString own = ownMediaRoute(chat);
     return own == QLatin1String("auto") || own == QLatin1String("fastest") ? own : Settings::mediaRouteNow();
+}
+
+QString Chat::ownMediaRoute(const QString &key) const
+{
+    if (key.startsWith(QLatin1String("g:")))
+        return m_prefs.value(QStringLiteral("groupRoutes")).toObject().value(key.mid(2)).toString();
+    return m_contacts.value(key).value(QStringLiteral("mediaRoute")).toString();
 }
 
 QString Chat::mediaRouteLabel(const QString &key) const
 {
-    const QString own = m_contacts.value(key).value(QStringLiteral("mediaRoute")).toString();
+    const QString own = ownMediaRoute(key);
     return own == QLatin1String("auto") ? QStringLiteral("Automatic") : own == QLatin1String("fastest") ? QStringLiteral("Fastest")
         : QStringLiteral("As in Settings");
 }
 
 void Chat::cycleMediaRoute(const QString &key)
 {
+    // As in Settings, then Automatic, then Fastest, then back.
+    const QString own = ownMediaRoute(key);
+    const QString next = own.isEmpty() ? QStringLiteral("auto") : own == QLatin1String("auto") ? QStringLiteral("fastest") : QString();
+    if (key.startsWith(QLatin1String("g:"))) {
+        const QString g = key.mid(2);
+        if (!m_prefsLoaded || !m_groups.contains(g))
+            return;
+        QJsonObject routes = m_prefs.value(QStringLiteral("groupRoutes")).toObject();
+        if (next.isEmpty())
+            routes.remove(g);
+        else
+            routes.insert(g, next);
+        m_prefs.insert(QStringLiteral("groupRoutes"), routes);
+        savePrefs();
+        return;
+    }
     if (!m_contacts.contains(key))
         return;
-    const QString k = QStringLiteral("mediaRoute"), own = m_contacts.value(key).value(k).toString();
-    if (own.isEmpty())
-        m_contacts[key].insert(k, QStringLiteral("auto"));
-    else if (own == QLatin1String("auto"))
-        m_contacts[key].insert(k, QStringLiteral("fastest"));
-    else
+    const QString k = QStringLiteral("mediaRoute");
+    if (next.isEmpty())
         m_contacts[key].remove(k);
+    else
+        m_contacts[key].insert(k, next);
     saveContacts();
 }
 

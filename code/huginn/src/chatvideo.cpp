@@ -20,6 +20,7 @@
 #include "vault.h"
 
 #include <QDateTime>
+#include <QDeadlineTimer>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -87,11 +88,11 @@ void clearOldVideos()
 }
 }
 
-GroupVideo::Member Chat::videoMember(const QString &key, bool group) const
+GroupVideo::Member Chat::videoMember(const QString &key, const QString &group) const
 {
     GroupVideo::Member m;
     m.k = key;
-    m.files = hasCap(key, QString::fromLatin1(FileLink::kCap)) && (!group || hasCap(key, QStringLiteral("f2")));
+    m.files = hasCap(key, QString::fromLatin1(FileLink::kCap)) && (group.isEmpty() || hasCap(key, QStringLiteral("f2")));
     m.sameWifi = m_files && m_files->lanHost && !m_files->lanHost(key).isEmpty() && hasCap(key, QStringLiteral("f2"));
     // Ultra privacy: never straight over the internet (the same Wi-Fi or Tor only).
     m.trusted = m_files && m_files->trusted && m_files->trusted(key) && UltraPrivacy::directAllowed();
@@ -99,8 +100,8 @@ GroupVideo::Member Chat::videoMember(const QString &key, bool group) const
     m.newPath = hasCap(key, QString::fromLatin1(GroupVideo::kNewPathCap));
     // Family and trusted, with an app that can go through the call relay: full quality, whatever the length and the network,
     // until the relay's month is used up or Data saver says otherwise.
-    m.family = m_files && m_files->relayPlan(key, QString()) && !m_files->relayOver() && !Settings::dataSaverOn();
-    m.reach = m.family || (m_files && m_files->reachNote(key).isEmpty());
+    m.family = m_files && m_files->relayPlan(key, group) && !m_files->relayOver() && !Settings::dataSaverOn();
+    m.reach = m.family || (m_files && m_files->reachNoteIn(key, group).isEmpty());
     return m;
 }
 
@@ -109,7 +110,7 @@ QList<GroupVideo::Member> Chat::videoMembers(const QString &where) const
     QList<GroupVideo::Member> out;
     QString g, ch;
     if (!groupOf(where, &g, &ch)) {
-        out << videoMember(where, false);
+        out << videoMember(where, QString());
         return out;
     }
     const auto it = m_groups.constFind(g);
@@ -117,7 +118,7 @@ QList<GroupVideo::Member> Chat::videoMembers(const QString &where) const
         return out;
     for (const QString &k : GroupWire::keysOf(it->state))
         if (k != myKey())
-            out << videoMember(k, true);
+            out << videoMember(k, g);
     return out;
 }
 
@@ -543,6 +544,8 @@ void Chat::storeBigVideo(const QString &id, const QString &path, std::function<v
             return;
         qint64 written = 0;
         for (int i = 0;; ++i) {
+            if (QThread::currentThread()->isInterruptionRequested())
+                return;   // Huginn is closing: not kept (the pieces so far are swept later)
             QByteArray chunk = f.read(BigVideo::kPiece);
             if (chunk.isEmpty())
                 break;
@@ -555,6 +558,7 @@ void Chat::storeBigVideo(const QString &id, const QString &path, std::function<v
         *ok = written == total;
     });
     t->setObjectName(QStringLiteral("huginn-video-keep"));
+    trackBigThread(t);
     connect(t, &QThread::finished, this, [self, t, id, total, ok, fail, done] {
         t->deleteLater();
         if (!self)
@@ -582,6 +586,28 @@ void Chat::storeBigVideo(const QString &id, const QString &path, std::function<v
     t->start();
 }
 
+void Chat::trackBigThread(QObject *t)
+{
+    m_bigThreads.removeAll(QPointer<QObject>());
+    m_bigThreads << QPointer<QObject>(t);
+}
+
+void Chat::stopBigThreads()
+{
+    m_bigThreads.removeAll(QPointer<QObject>());
+    if (m_bigThreads.isEmpty())
+        return;
+    for (const QPointer<QObject> &p : std::as_const(m_bigThreads))
+        if (auto *t = qobject_cast<QThread *>(p.data()))
+            t->requestInterruption();
+    // About 2 s in all; one still busy after that (a stuck disk) is left behind rather than waited on forever.
+    const QDeadlineTimer until(2000);
+    for (const QPointer<QObject> &p : std::as_const(m_bigThreads))
+        if (auto *t = qobject_cast<QThread *>(p.data()); t && !t->wait(until))
+            qWarning("chat: a video thread didn't stop in time; leaving it");
+    m_bigThreads.clear();
+}
+
 bool Chat::exportBigWith(const std::function<QByteArray(const QString &)> &read, const QString &id, const QString &path)
 {
     if (id.isEmpty() || id.contains(QLatin1Char('/')))
@@ -592,6 +618,11 @@ bool Chat::exportBigWith(const std::function<QByteArray(const QString &)> &read,
         return false;
     qint64 done = 0;
     for (int i = 0; done < total; ++i) {
+        if (QThread::currentThread()->isInterruptionRequested()) {
+            f.close();
+            f.remove();   // Huginn is closing: no half file left behind
+            return false;
+        }
         QByteArray b = read(BigVideo::piece(id, i));
         const bool ok = !b.isEmpty() && f.write(b) == b.size();
         done += b.size();
@@ -621,6 +652,7 @@ void Chat::exportBig(const QString &id, const QString &path)
     auto ok = std::make_shared<bool>(false);
     QThread *t = QThread::create([read, id, path, ok] { *ok = exportBigWith(read, id, path); });
     t->setObjectName(QStringLiteral("huginn-video-save"));
+    trackBigThread(t);
     connect(t, &QThread::finished, this, [this, t, path, ok] {
         t->deleteLater();
         Q_EMIT mediaSaved(*ok ? path : QString());
@@ -628,22 +660,48 @@ void Chat::exportBig(const QString &id, const QString &path)
     t->start();
 }
 
-void Chat::inlineVideo(const QString &from, const QString &group, const QString &path, int ms, std::function<void(bool)> done)
+void Chat::inlineVideo(const QString &from, const QString &group, const QString &path, int ms, const QString &msgId, std::function<void(bool)> done)
 {
     if (!m_ready || from.isEmpty() || from == myKey() || (group.isEmpty() && (!isContact(from) || isTrashed(from)))
         || (!group.isEmpty() && !m_groups.contains(group))) {
         QTimer::singleShot(0, this, [done] { done(false); });
         return;
     }
-    const QString mid = group.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : GroupWire::newLogicalId();
+    // The sender's own id when it said one (the same message on both sides), else a new one here.
+    QString theirs = BigVideo::idOk(msgId) && (group.isEmpty() || GroupWire::isLogicalId(msgId)) ? msgId : QString();
+    // Whether message [id] is in this chat already.
+    const auto here = [](Chat *c, const QString &from, const QString &group, const QString &id) {
+        if (!group.isEmpty())
+            return c->m_gidx.value(id) == group;
+        for (const QVariant &v : c->m_private.value(from))
+            if (v.toMap().value(QStringLiteral("id")).toString() == id)
+                return true;
+        return false;
+    };
+    if (!theirs.isEmpty()) {
+        // Already here (a copy sent again after its "done" was lost), or deleted here: nothing more to keep, no second bubble.
+        if (here(this, from, group, theirs) || m_deleted.contains(theirs)) {
+            QTimer::singleShot(0, this, [done] { done(true); });
+            return;
+        }
+        // The id is used for something else here: a new one, so nothing of that is touched.
+        if (m_gidx.contains(theirs) || isBigVideo(theirs) || QFileInfo::exists(m_vault->path(QStringLiteral("photos/") + theirs)))
+            theirs.clear();
+    }
+    const QString mid = !theirs.isEmpty() ? theirs : group.isEmpty() ? QUuid::createUuid().toString(QUuid::WithoutBraces) : GroupWire::newLogicalId();
     const int len = qBound(1, ms, BigVideo::kInlineMaxMs + BigVideo::kSlackMs);
     QPointer<Chat> self(this);
-    storeBigVideo(mid, path, [self, from, group, mid, len, done](bool ok) {
+    storeBigVideo(mid, path, [self, from, group, mid, len, done, here](bool ok) {
         if (!self || !ok) {
             done(false);
             return;
         }
         Chat *c = self;
+        // Another copy of it got in while this one was being kept: that one stays, and this one counts as done.
+        if (here(c, from, group, mid)) {
+            done(true);
+            return;
+        }
         bool added = false;
         if (group.isEmpty()) {
             const QString name = c->nameOf(from);

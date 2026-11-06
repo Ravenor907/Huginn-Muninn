@@ -1309,6 +1309,8 @@ Rectangle {
             items.push({ name: "Who can invite", icon: "people", detail: invitePanel.membersCanInvite ? "Members too" : "Admins only", url: "invite", check: invitePanel.membersCanInvite })
         // Cap f2: who can send files and the size limit (admins change them).
         items.push({ name: "Files", icon: "file", detail: isTour ? "Everyone can send files" : (Chat.groupFiles(gid).line || ""), url: "files" })
+        // Send media for this group, on this device only: As in Settings, Automatic or Fastest (a press goes to the next).
+        items.push({ name: "Send media", icon: "image", detail: isTour ? "As in Settings" : Chat.mediaRouteLabel("g:" + gid), url: "mediaRoute" })
         if (!readOnly) items.push({ name: "Channels", icon: "hash", url: "channels" })
         // Cap g2: who is banned (Unban) and who is timed out (time left, Cancel). Admins only, in their own section.
         const adminRows = []
@@ -1328,6 +1330,7 @@ Rectangle {
             if (a === "banned") { if (!isTour) bannedMenu(back); return }
             if (a === "timeouts") { if (!isTour) timeoutsMenu(back); return }
             if (a === "files") { if (!isTour) PeopleActions.groupFilesMenu(g, back); return }
+            if (a === "mediaRoute") { if (!isTour) Chat.cycleMediaRoute("g:" + g); Qt.callLater(back); return }
             if (a === "name") Ui.ask("Group name", "Everyone sees it", info.name, "Save", t => tell(Chat.renameGroup(g, t), "Renamed."), false, true)
             else if (a === "about") editAbout(back)
             else if (a === "days") pickGroupLimit(back)

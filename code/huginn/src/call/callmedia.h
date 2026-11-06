@@ -105,6 +105,8 @@ public:
     // 1.45: a voice packet also goes on the relay next to Wi-Fi or Direct: only voice, only with a relay allocation
     // already there, never in Ultra privacy.
     static bool dualVoice(bool audio, bool relayReady, bool ultra) { return audio && relayReady && !ultra; }
+    // The peer's app is on a TV (their app version's platform is "Android TV"): never voice over two paths to it.
+    void setPeerTv(bool tv) { m_peerTv = tv; }
     // Round 18 (relay.md "On demand"): the relay carried media (not pings or pongs) within the last ms milliseconds.
     bool relayUsedWithin(qint64 ms) const { return m_relayUsedAt >= 0 && now() - m_relayUsedAt < ms; }
     bool gotMedia() const { return m_gotMedia; }
@@ -213,6 +215,7 @@ private:
     int m_rtt = 0;
     Stats m_stats;
     bool m_twoPaths = false;   // Labs, Voice over two paths, read once per call
+    bool m_peerTv = false;     // the peer is a TV (setPeerTv): no second copies to it
     // Receiver report: what came in since the last one.
     qint64 m_lastReport = 0;
     qint64 m_lastSlot = -1;

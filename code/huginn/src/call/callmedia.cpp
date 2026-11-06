@@ -219,8 +219,9 @@ void CallMedia::sendMedia(const QByteArray &pkt, bool video)
 {
     // Free paths first: while Wi-Fi or Direct carries the call, the relay only gets pings (5.8.3).
     // Voice over two paths (Labs, off by default): voice goes on the relay too while it's allocated (never video, never in
-    // Ultra privacy). The receiver's replay window plays the first copy and drops the other (5.4), as for any parallel path.
-    const bool dual = m_twoPaths && dualVoice(!video, m_turn && m_turn->ready(), UltraPrivacy::on());
+    // Ultra privacy, never to a TV). The receiver's replay window plays the first copy and drops the other (5.4), as for
+    // any parallel path.
+    const bool dual = m_twoPaths && !m_peerTv && dualVoice(!video, m_turn && m_turn->ready(), UltraPrivacy::on());
     const bool rest = freeFresh() && !dual;
     for (int i = 0; i < kPaths; ++i) {
         const Path p = Path(i);
